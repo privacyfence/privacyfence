@@ -14,6 +14,7 @@ from privacyfence.peek_client import (
     PeekClientError,
     PeekComment,
     PeekPage,
+    PeekRenameResult,
     PeekStats,
     PeekUploadResult,
     PeekVisit,
@@ -53,6 +54,22 @@ def gated_call_spy(monkeypatch):
     return calls
 
 
+class TestHelpers:
+    def test_client_property(self):
+        connector, client = make_connector()
+        assert connector.client is client
+
+    async def test_audit_failure_does_not_break_the_call(self, monkeypatch):
+        connector, client = make_connector()
+        client.list_pages.return_value = []
+
+        def boom():
+            raise OSError("disk full")
+
+        monkeypatch.setattr(peek_module, "get_audit_logger", boom)
+        assert await connector.call("peek_list_pages", {}) == []
+
+
 class TestDispatch:
     async def test_unknown_tool_raises(self):
         connector, _client = make_connector()
@@ -62,9 +79,13 @@ class TestDispatch:
 
 PEEK_SIBLINGS: dict[str, tuple[str, ...]] = {
     "peek_list_pages": ("peek_get_comments", "peek_get_stats"),
-    "peek_get_comments": ("peek_get_stats",),
+    "peek_get_comments": ("peek_add_comment",),
     "peek_get_stats": ("peek_get_comments",),
-    "peek_upload_page": (),
+    "peek_upload_page": ("peek_set_visibility",),
+    "peek_set_visibility": ("peek_upload_page",),
+    "peek_add_comment": ("peek_get_comments",),
+    "peek_delete_page": ("peek_list_pages",),
+    "peek_rename_page": ("peek_list_pages",),
 }
 
 
@@ -470,6 +491,262 @@ class TestUploadPage:
         assert gated_call_spy == []
 
 
+def _comment_result() -> PeekComment:
+    return PeekComment(7, "ann", "Thanks", "element", "#a", "", "2026-10-10T11:07:00Z", 0)
+
+
+def _expect_gate_then_write(spy, write_mock):
+    """The write ran, and only once the gate had been passed."""
+    assert len(spy) == 1
+    write_mock.assert_called_once()
+
+
+async def _assert_stops_before_gate(connector, client, spy, tool, args, write):
+    with pytest.raises(ValueError, match="Not a Peek page slug"):
+        await connector.call(tool, {**args, "slug": "a b"})
+    client.get_page.side_effect = PeekClientError("nope")
+    with pytest.raises(RuntimeError, match="nope"):
+        await connector.call(tool, args)
+    assert spy == []
+    write.assert_not_called()
+
+
+async def _assert_write_needs_gate(monkeypatch, connector, write, tool, args):
+    async def refuse(**kwargs):
+        raise RuntimeError("denied")
+
+    monkeypatch.setattr(peek_module, "gated_call", refuse)
+    with pytest.raises(RuntimeError, match="denied"):
+        await connector.call(tool, args)
+    write.assert_not_called()
+
+
+class TestSetVisibility:
+    async def test_public(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.set_visibility.return_value = "public"
+
+        result = await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "public"})
+
+        assert result == {"slug": "s1", "visibility": "public"}
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup" and call["tool"] == "peek_set_visibility"
+        assert call["preview"] == {
+            "Server": "peek.example.com", "Page": "s1.html",
+            "Link": "https://peek.example.com/p/s1", "Visibility": "private \u2192 public",
+        }
+        client.set_visibility.assert_called_once_with("s1", "public", "")
+
+    async def test_password_never_shown(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.set_visibility.return_value = "password"
+
+        await connector.call(
+            "peek_set_visibility",
+            {"slug": "s1", "visibility": "password", "password": "s3cret"},
+        )
+
+        call = gated_call_spy[0]
+        assert call["preview"]["Password"] == "Set (not shown)"
+        assert "s3cret" not in repr(call)
+        assert client.set_visibility.call_args.args == ("s1", "password", "s3cret")
+
+    @pytest.mark.parametrize("args, message", [
+        ({"visibility": "restricted"}, "visibility must be public, password or private."),
+        ({"visibility": "x"}, "visibility must be public, password or private."),
+        ({"visibility": "password"}, "A password is required"),
+        ({"visibility": "public", "password": "p"}, "password must be empty"),
+        ({"visibility": "password", "password": "x" * 73}, "72 bytes or fewer"),
+        ({"visibility": "password", "password": " p"}, "start or end with a space"),
+    ])
+    async def test_validation(self, gated_call_spy, args, message):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match=message):
+            await connector.call("peek_set_visibility", {"slug": "s1", **args})
+        assert gated_call_spy == []
+        client.get_page.assert_not_called()
+
+    async def test_restricted_page_refused(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = PeekPage(
+            "s1", "S", "ann", 1, "restricted", "https://peek.example.com/p/s1",
+            "2026-01-01T00:00:00Z", 1,
+        )
+        with pytest.raises(ValueError, match="restricted to people granted access"):
+            await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "public"})
+        assert gated_call_spy == []
+        client.set_visibility.assert_not_called()
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_set_visibility",
+            {"slug": "s1", "visibility": "public"}, client.set_visibility,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.set_visibility, "peek_set_visibility",
+            {"slug": "s1", "visibility": "public"},
+        )
+
+
+class TestAddComment:
+    @pytest.mark.parametrize("extra, anchor", [
+        ({}, "Whole page"),
+        ({"selector": "#a"}, "Element #a"),
+        ({"selector": "#a", "element_text": "hi"}, "Text \u201chi\u201d"),
+    ])
+    async def test_anchor_texts(self, gated_call_spy, extra, anchor):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.add_comment.return_value = _comment_result()
+
+        result = await connector.call(
+            "peek_add_comment", {"slug": "s1", "body": "Nice", **extra},
+        )
+
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup" and call["details_text"] == "Nice"
+        assert call["preview"] == {
+            "Server": "peek.example.com", "Page": "s1.html",
+            "Link": "https://peek.example.com/p/s1", "Version": "2", "Anchored to": anchor,
+        }
+        assert result == {
+            "slug": "s1", "version": 2,
+            "comment": {
+                "id": 7, "author": "ann", "body": "Thanks", "anchor_kind": "element",
+                "selector": "#a", "element_text": "", "created_at": "2026-10-10T11:07:00Z",
+            },
+        }
+        client.add_comment.assert_called_once_with(
+            "s1", "Nice", extra.get("selector", ""), extra.get("element_text", ""),
+        )
+
+    async def test_long_body_summary_is_cut(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.add_comment.return_value = _comment_result()
+        await connector.call("peek_add_comment", {"slug": "s1", "body": "b" * 100})
+        assert gated_call_spy[0]["summary"] == "Comment on s1.html: " + "b" * 80 + "\u2026"
+
+    @pytest.mark.parametrize("args, message", [
+        ({"body": "  "}, "body must be 1 to 4000 characters."),
+        ({"body": "x" * 4001}, "body must be 1 to 4000 characters."),
+        ({"body": "x", "selector": "s" * 501}, "selector must be 500 characters or fewer."),
+        ({"body": "x", "selector": "a", "element_text": "t" * 201},
+         "element_text must be 200 characters or fewer."),
+        ({"body": "x", "element_text": "t"}, "element_text needs a selector."),
+    ])
+    async def test_validation(self, gated_call_spy, args, message):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match=message):
+            await connector.call("peek_add_comment", {"slug": "s1", **args})
+        assert gated_call_spy == []
+        client.get_page.assert_not_called()
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_add_comment",
+            {"slug": "s1", "body": "hi"}, client.add_comment,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.add_comment, "peek_add_comment",
+            {"slug": "s1", "body": "hi"},
+        )
+
+
+class TestRenamePage:
+    async def test_rename(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.rename_page.return_value = PeekRenameResult(
+            "renamed", "https://peek.example.com/p/renamed", "Renamed",
+        )
+
+        result = await connector.call("peek_rename_page", {"slug": "s1", "name": "Renamed"})
+
+        assert result == {
+            "old_slug": "s1", "slug": "renamed",
+            "url": "https://peek.example.com/p/renamed", "name": "Renamed",
+        }
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup"
+        assert list(call["preview"]) == ["Server", "Page", "New name", "Link"]
+        assert "keeps redirecting" in call["details_text"]
+        client.rename_page.assert_called_once_with("s1", "Renamed")
+
+    @pytest.mark.parametrize("name", ["", "   ", "n" * 201])
+    async def test_name_validation(self, gated_call_spy, name):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="name must be 1 to 200 characters."):
+            await connector.call("peek_rename_page", {"slug": "s1", "name": name})
+        assert gated_call_spy == []
+        client.get_page.assert_not_called()
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_rename_page",
+            {"slug": "s1", "name": "N"}, client.rename_page,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.rename_page, "peek_rename_page",
+            {"slug": "s1", "name": "N"},
+        )
+
+
+class TestDeletePage:
+    async def test_delete(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+
+        result = await connector.call("peek_delete_page", {"slug": "s1"})
+
+        assert result == {"deleted": "s1"}
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup"
+        assert call["preview"] == {
+            "Server": "peek.example.com", "Page": "s1.html",
+            "Link": "https://peek.example.com/p/s1", "Visibility": "private",
+            "Created": "2026-01-01T00:00:00Z",
+        }
+        client.delete_page.assert_called_once_with("s1")
+
+    def test_spec_is_destructive(self):
+        spec = next(
+            s for s in PeekConnector(None).tool_specs() if s.name == "peek_delete_page"
+        )
+        assert spec.destructive and not spec.read_only
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_delete_page", {"slug": "s1"},
+            client.delete_page,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.delete_page, "peek_delete_page", {"slug": "s1"},
+        )
+
+
 class TestFieldCompleteness:
     async def test_comments_preview_has_no_placeholder(self, monkeypatch, gated_call_spy):
         pages = [{
@@ -508,11 +785,20 @@ class TestEveryToolIsAudited:
             "new1", "https://peek.example.com/p/new1", "private", 1,
             "https://peek.example.com/p/new1/v/1",
         )
+        client.set_visibility.return_value = "public"
+        client.add_comment.return_value = _comment_result()
+        client.rename_page.return_value = PeekRenameResult(
+            "renamed", "https://peek.example.com/p/renamed", "Renamed",
+        )
         await assert_all_tools_leave_an_audit_trail(
             connector, peek_module, monkeypatch, tmp_path,
             arg_overrides={
                 "peek_get_comments": {"slug": "slug1"},
                 "peek_get_stats": {"slug": "slug1"},
                 "peek_upload_page": {"html": "<p>hi</p>"},
+                "peek_set_visibility": {"slug": "slug1", "visibility": "public"},
+                "peek_add_comment": {"slug": "slug1", "body": "hi"},
+                "peek_delete_page": {"slug": "slug1"},
+                "peek_rename_page": {"slug": "slug1", "name": "Renamed"},
             },
         )

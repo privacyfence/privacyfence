@@ -101,8 +101,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
 | [Grist](#grist) | 9 | 2 | 1 | 6 |
-| [Peek](#peek) | 4 | 1 | 2 | 1 |
-| **Total** | **133** | **50** | **25** | **58** |
+| [Peek](#peek) | 8 | 1 | 2 | 5 |
+| **Total** | **137** | **50** | **25** | **62** |
 
 ## Gmail
 
@@ -300,4 +300,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `peek_list_pages` | read | `auto` | List the Peek pages this account can manage, newest first, with each page's link and who can open it. |
 | `peek_get_comments` | read | `review` | Read the reviewers' comments on one Peek page, with what each comment is anchored to. |
 | `peek_get_stats` | read | `review` | Read how often one Peek page was opened, and the names visitors gave. |
+| `peek_add_comment` | write | `popup` | Post a comment on a Peek page under your own Peek account name. |
+| `peek_delete_page` | write | `popup` | Delete a Peek page, with its comments and visit history. |
+| `peek_rename_page` | write | `popup` | Rename a Peek page; its link may change to match the new name, and old links keep redirecting to it in browsers. |
+| `peek_set_visibility` | write | `popup` | Change who can open a Peek page: anyone with the link, anyone with the link and a password, or signed-in Peek accounts only. |
 | `peek_upload_page` | write | `popup` | Publish an HTML page on Peek, or a new version of one of your pages, and get its share link. |

@@ -38,6 +38,19 @@ _SLUG = ToolParam(
     ),
 )
 
+_VISIBILITY_DESC = (
+    "Who can open the page: public (anyone with the link), password (anyone with the link and "
+    "the password) or private (signed-in Peek accounts only)."
+)
+
+_PASSWORD = ToolParam(
+    "password", "str", required=False, default="",
+    description=(
+        "The page password, 1 to 72 bytes. Required with password visibility and empty "
+        "otherwise. It goes to Peek and is never shown on the approval card."
+    ),
+)
+
 _REASON = ToolParam(
     "reason", "str", required=True,
     description="One sentence: why are you calling this tool right now?",
@@ -86,7 +99,8 @@ class PeekConnector(Connector):
                     "anchored to. Comments belong to one version of the page: the latest unless "
                     "you give version. Returns {slug, name, version, comments: [{id, author, "
                     "body, anchor_kind, selector, element_text, created_at, version}]}, where "
-                    "version is the one read. Use peek_get_stats to see how often the page was opened. "
+                    "version is the one read. Use peek_get_stats to see how often the page was opened and "
+                    "peek_add_comment to reply. "
                     "Requires user approval."
                 ),
                 params=[
@@ -166,10 +180,8 @@ class PeekConnector(Connector):
                     ToolParam(
                         "visibility", "str", required=False, default="",
                         description=(
-                            "Who can open the page: public (anyone with the link), password "
-                            "(anyone with the link and the password) or private (signed-in Peek "
-                            "accounts only). Empty means private for a new page; leave it empty "
-                            "with slug."
+                            _VISIBILITY_DESC + " Empty means private for a new page; leave it "
+                            "empty with slug."
                         ),
                     ),
                     ToolParam(
@@ -178,6 +190,90 @@ class PeekConnector(Connector):
                             "The page password, 1 to 72 bytes. Required with password "
                             "visibility and empty otherwise (always empty with slug). It goes "
                             "to Peek and is never shown on the approval card."
+                        ),
+                    ),
+                    _REASON,
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="peek_set_visibility",
+                description=(
+                    "Change who can open a Peek page: anyone with the link, anyone with the link "
+                    "and a password, or signed-in Peek accounts only. Pages restricted to named "
+                    "people are managed in Peek's dashboard. Returns {slug, visibility}. Use "
+                    "peek_upload_page to publish a new version. Requires user approval."
+                ),
+                params=[
+                    _SLUG,
+                    ToolParam("visibility", "str", required=True, description=_VISIBILITY_DESC),
+                    _PASSWORD,
+                    _REASON,
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="peek_add_comment",
+                description=(
+                    "Post a comment on a Peek page under your own Peek account name. It goes on "
+                    "the page's latest version. Copy selector and element_text from a comment "
+                    "returned by peek_get_comments to reply at the same spot. Returns {slug, "
+                    "version, comment: {id, author, body, anchor_kind, selector, element_text, "
+                    "created_at}}. Use peek_get_comments to read the existing comments. "
+                    "Requires user approval."
+                ),
+                params=[
+                    _SLUG,
+                    ToolParam(
+                        "body", "str", required=True,
+                        description="The comment text, 1 to 4000 characters.",
+                    ),
+                    ToolParam(
+                        "selector", "str", required=False, default="",
+                        description=(
+                            "CSS selector of the element to pin the comment to, copied from a "
+                            "comment's selector in peek_get_comments. Empty comments on the "
+                            "whole page."
+                        ),
+                    ),
+                    ToolParam(
+                        "element_text", "str", required=False, default="",
+                        description=(
+                            "Quoted text to anchor the comment to, up to 200 characters, copied "
+                            "from a comment's element_text. Needs selector. Empty anchors to the "
+                            "element, or the page."
+                        ),
+                    ),
+                    _REASON,
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="peek_delete_page",
+                description=(
+                    "Delete a Peek page, with its comments and visit history. Returns "
+                    "{deleted: slug}. Use peek_list_pages to find the slug. Requires user approval."
+                ),
+                params=[_SLUG, _REASON],
+                read_only=False,
+                destructive=True,
+            ),
+            ToolSpec(
+                name="peek_rename_page",
+                description=(
+                    "Rename a Peek page; its link may change to match the new name, and old "
+                    "links keep redirecting to it in browsers. Use the slug it returns from then "
+                    "on; the old slug no longer works in the other Peek tools. Get the current "
+                    "slug from peek_list_pages. Returns {old_slug, slug, url, name}. "
+                    "Requires user approval."
+                ),
+                params=[
+                    _SLUG,
+                    ToolParam(
+                        "name", "str", required=True,
+                        description=(
+                            "The page's new name, 1 to 200 characters, such as Q3 report.html. "
+                            "Peek derives the page's link from it."
                         ),
                     ),
                     _REASON,
@@ -195,6 +291,14 @@ class PeekConnector(Connector):
             return await self._get_stats(**args)
         if tool == "peek_upload_page":
             return await self._upload_page(**args)
+        if tool == "peek_set_visibility":
+            return await self._set_visibility(**args)
+        if tool == "peek_add_comment":
+            return await self._add_comment(**args)
+        if tool == "peek_delete_page":
+            return await self._delete_page(**args)
+        if tool == "peek_rename_page":
+            return await self._rename_page(**args)
         raise ValueError(f"Unknown Peek tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -438,6 +542,147 @@ class PeekConnector(Connector):
             self._client.upload_page, data, name, visibility, password, slug=slug,
         )
         return asdict(result)
+
+    async def _set_visibility(self, slug: str, visibility: str, password: str = "") -> Any:
+        _check_slug(slug)
+        _check_visibility(visibility, password)
+        page = await self._fetch(self._client.get_page, slug)
+        if page.visibility == "restricted":
+            raise ValueError(
+                "This page is restricted to people granted access in Peek. Change who can "
+                "open it in Peek's dashboard (Access)."
+            )
+        preview = {
+            "Server": self._client.host,
+            "Page": page.name,
+            "Link": page.url,
+            "Visibility": f"{page.visibility} \u2192 {visibility}",
+        }
+        if visibility == "password":
+            preview["Password"] = "Set (not shown)"  # nosec B105  # card wording, not a credential
+        await gated_call(
+            connector=self.name,
+            tool="peek_set_visibility",
+            tool_name="Change Peek Page Visibility",
+            summary=f"{page.name}: {page.visibility} \u2192 {visibility}",
+            sender=page.name,
+            raw_data={"slug": slug, "visibility": visibility},
+            filtered_data=None,
+            gate="popup",
+            preview=preview,
+            details_text=(
+                f"Who can open {page.url} changes from {page.visibility} to {visibility}."
+            ),
+            args={"slug": slug, "visibility": visibility},
+        )
+        new_visibility = await self._fetch(
+            self._client.set_visibility, slug, visibility, password,
+        )
+        return {"slug": slug, "visibility": new_visibility}
+
+    async def _add_comment(
+        self, slug: str, body: str, selector: str = "", element_text: str = "",
+    ) -> Any:
+        _check_slug(slug)
+        if not body.strip() or len(body) > 4000:
+            raise ValueError("body must be 1 to 4000 characters.")
+        if len(selector) > 500:
+            raise ValueError("selector must be 500 characters or fewer.")
+        if len(element_text) > 200:
+            raise ValueError("element_text must be 200 characters or fewer.")
+        if element_text and not selector:
+            raise ValueError("element_text needs a selector.")
+        page = await self._fetch(self._client.get_page, slug)
+        excerpt = body[:80] + ("\u2026" if len(body) > 80 else "")
+        kind = "text" if element_text else "element" if selector else "page"
+        await gated_call(
+            connector=self.name,
+            tool="peek_add_comment",
+            tool_name="Comment on Peek Page",
+            summary=f"Comment on {page.name}: {excerpt}",
+            sender=page.name,
+            raw_data={"slug": slug, "body": body},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Server": self._client.host,
+                "Page": page.name,
+                "Link": page.url,
+                "Version": str(page.version),
+                "Anchored to": _anchor_text(kind, selector, element_text),
+            },
+            details_text=body,
+            args={"slug": slug},
+        )
+        comment = await self._fetch(self._client.add_comment, slug, body, selector, element_text)
+        return {
+            "slug": slug,
+            "version": page.version,
+            "comment": {
+                "id": comment.id,
+                "author": comment.author,
+                "body": comment.body,
+                "anchor_kind": comment.anchor_kind,
+                "selector": comment.selector,
+                "element_text": comment.element_text,
+                "created_at": comment.created_at,
+            },
+        }
+
+    async def _rename_page(self, slug: str, name: str) -> Any:
+        _check_slug(slug)
+        if not name.strip() or len(name.strip()) > 200:
+            raise ValueError("name must be 1 to 200 characters.")
+        page = await self._fetch(self._client.get_page, slug)
+        await gated_call(
+            connector=self.name,
+            tool="peek_rename_page",
+            tool_name="Rename Peek Page",
+            summary=f"Rename {page.name} \u2192 {name}",
+            sender=page.name,
+            raw_data={"slug": slug, "name": name},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Server": self._client.host,
+                "Page": page.name,
+                "New name": name,
+                "Link": page.url,
+            },
+            details_text=(
+                f"{page.name} is renamed to {name}. Its link may change to match the new name; "
+                f"the old link {page.url} keeps redirecting to the page in browsers, but tools "
+                "must use the new slug."
+            ),
+            args={"slug": slug},
+        )
+        res = await self._fetch(self._client.rename_page, slug, name)
+        return {"old_slug": slug, "slug": res.slug, "url": res.url, "name": res.name}
+
+    async def _delete_page(self, slug: str) -> Any:
+        _check_slug(slug)
+        page = await self._fetch(self._client.get_page, slug)
+        await gated_call(
+            connector=self.name,
+            tool="peek_delete_page",
+            tool_name="Delete Peek Page",
+            summary=f"Delete {page.name}",
+            sender=page.name,
+            raw_data={"slug": slug},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Server": self._client.host,
+                "Page": page.name,
+                "Link": page.url,
+                "Visibility": page.visibility,
+                "Created": page.created_at,
+            },
+            details_text=f"{page.name} ({page.url}) is deleted with its comments and visit history.",
+            args={"slug": slug},
+        )
+        await self._fetch(self._client.delete_page, slug)
+        return {"deleted": slug}
 
     # ------------------------------------------------------------------ #
     # Helpers

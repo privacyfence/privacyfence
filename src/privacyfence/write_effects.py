@@ -166,6 +166,16 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "peek_upload_page":
         "A new page is published at a new link, open to whoever its visibility allows. A new "
         "version replaces what the page's link shows; earlier versions keep their own links.",
+    "peek_set_visibility":
+        "Who can open the page changes. Its content and comments do not change.",
+    "peek_add_comment":
+        "The comment is posted on the page under your Peek account name. PrivacyFence cannot "
+        "delete it.",
+    "peek_delete_page":
+        "The page, its comments and its visit history are deleted and cannot be restored.",
+    "peek_rename_page":
+        "The page's name changes, and its link may change to match. Old links keep redirecting "
+        "to it.",
 }
 
 # The card's own label for this row -- see card_builder.build_card_html.
