@@ -396,6 +396,45 @@ class TestGristApiKeyActions:
         assert r.json()["grist_auth"]["error"] == "Enter your Grist API key."
 
 
+class TestPeekLoginActions:
+    ACTIONS = ("peek_start_login", "peek_finish_login", "peek_cancel_login")
+
+    def test_all_three_actions_are_allowed_and_non_sensitive(self):
+        for action in self.ACTIONS:
+            assert action in _ALLOWED_ACTIONS
+            assert action in _NON_SENSITIVE_ACTIONS
+            assert action not in _SENSITIVE_ACTIONS
+
+    def test_post_to_peek_start_login_reaches_the_controller(self, client, controller, sessions, monkeypatch):
+        seen = {}
+
+        def fake(base_url=""):
+            seen["base_url"] = base_url
+            return controller.snapshot()
+
+        monkeypatch.setattr(controller, "peek_start_login", fake)
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/peek_start_login", json={"base_url": "https://peek.example.com", "csrf": csrf})
+        assert r.status_code == 200
+        assert seen["base_url"] == "https://peek.example.com"
+
+    def test_post_without_base_url_works(self, client, sessions):
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/peek_start_login", json={"csrf": csrf})
+        assert r.status_code == 200
+        assert r.json()["peek_auth"]["error"] == "Enter the Peek server address, such as https://peek.example.com."
+
+    def test_org_snapshot_carries_the_peek_auth_stub(self, tmp_path, monkeypatch):
+        from tests.unit.web import test_routes_org_settings as org
+
+        org._seed(tmp_path, monkeypatch, "carol")
+        app, org_sessions = org._app()
+        org_client = org._client(app)
+        org._signed_in(org_client, org_sessions, org.ADMIN)
+        body = org_client.get("/settings/privacy").text
+        assert '"peek_auth": {"step": null, "error": "", "user_code": "", "verification_url": "", "pinned_base_url": ""}' in body
+
+
 class TestSensitiveActionsCoverAllAllowedActions:
     """The allowlist-within-the-allowlist (ADR 0034) -- see module
     docstring on why _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS are both

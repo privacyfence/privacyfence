@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Peek connector.** List your Peek pages, read their comments and visit counts after review, and publish pages and new versions, change who can open them, rename, comment on and delete them with approval. Connect with Peek's own sign-in from Settings, the connections page in organization mode, or `privacyfence-app --peek-login`; an organization bundle can pin the Peek server with `--peek-base-url`. Posting comments needs a Peek server with the account comment endpoint.
+
 ## [5.8.1] — 2026-10-11
 
 ### Fixed

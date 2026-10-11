@@ -802,3 +802,38 @@ class TestGristFlags:
             "--sign-key", str(key_path), "--grist-server-url", "https://grist.example.com",
         )
         assert "https://pf.example.com/oauth/callback/grist" in capsys.readouterr().out
+
+
+class TestPeekFlags:
+    def _build(self, tmp_path, *args):
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(["-o", str(out_path), *args]) == 0
+        return json.loads(out_path.read_text())
+
+    def _exit_message(self, tmp_path, *args):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
+        return str(exc.value)
+
+    def test_base_url_is_written_with_the_trailing_slash_stripped(self, tmp_path):
+        bundle = self._build(tmp_path, "--peek-base-url", "https://peek.example.com/")
+        assert bundle["peek"] == {"base_url": "https://peek.example.com"}
+
+    def test_a_peek_only_bundle_is_written(self, tmp_path):
+        bundle = self._build(tmp_path, "--peek-base-url", "https://peek.example.com")
+        assert set(bundle) >= {"peek"} and "google" not in bundle
+
+    def test_http_on_a_remote_host_exits(self, tmp_path):
+        message = self._exit_message(tmp_path, "--peek-base-url", "http://peek.example.com")
+        assert message == "--peek-base-url must be an https:// address (http:// only for localhost)."
+
+    def test_http_localhost_is_allowed(self, tmp_path):
+        bundle = self._build(tmp_path, "--peek-base-url", "http://localhost:7700")
+        assert bundle["peek"]["base_url"] == "http://localhost:7700"
+
+    @pytest.mark.parametrize("url", [
+        "https://peek.example.com?x=1", "https://peek.example.com/#top", "https://user:pw@peek.example.com",
+    ])
+    def test_query_fragment_and_userinfo_exit(self, tmp_path, url):
+        message = self._exit_message(tmp_path, "--peek-base-url", url)
+        assert message == "--peek-base-url must not contain a user name, password, query or fragment."

@@ -71,7 +71,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, google_oauth, grist_auth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
+from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
 from ..calendar_client import SCOPES as _CALENDAR_SCOPES
@@ -114,6 +114,7 @@ SERVICE_LABELS: dict[str, str] = {
     "gmail": "Gmail", "drive": "Drive", "calendar": "Calendar", "contacts": "Contacts", "tasks": "Tasks",
     "apps_script": "Apps Script",
     "slack": "Slack", "salesforce": "Salesforce", "grist": "Grist", "jira": "Jira", "confluence": "Confluence", "telegram": "Telegram",
+    "peek": "Peek",
 }
 
 # service -> org_config.json section name.
@@ -155,9 +156,23 @@ def _grist_connected(principal: Principal, org_config: dict[str, Any] | None) ->
     return True
 
 
+def _peek_pinned_url(org_config: dict[str, Any]) -> str:
+    """The bundle's Peek server address when org mode can offer Peek, else ``""``."""
+    try:
+        return peek_client.bundle_base_url(org_config.get("peek") or {}, org_mode=True)
+    except peek_client.PeekClientError:
+        return ""
+
+
 def _is_connected(principal: Principal, service: str, org_config: dict[str, Any] | None = None) -> bool:
     if service == "grist":
         return _grist_connected(principal, org_config)
+    if service == "peek":
+        try:
+            peek_client.load_token_file(str(paths.user_dir(principal) / _token_files()["peek"]))
+        except peek_client.PeekClientError:
+            return False
+        return True
     if service == "telegram":
         session_file = str(paths.user_dir(principal) / _token_files()["telegram"])
         return os.path.exists(session_file) or os.path.exists(session_file + ".session")
@@ -167,6 +182,8 @@ def _is_connected(principal: Principal, service: str, org_config: dict[str, Any]
 def _is_configured(org_config: dict[str, Any], service: str) -> bool:
     if service == "telegram":
         return telegram_app_credentials() is not None
+    if service == "peek":
+        return _peek_pinned_url(org_config) != ""
     section = org_config.get(_ORG_CONFIG_SECTION[service]) or {}
     if service in GOOGLE_SERVICES:
         return bool(google_oauth.web_client_config(section))
@@ -187,6 +204,7 @@ def _is_configured(org_config: dict[str, Any], service: str) -> bool:
 # ---------------------------------------------------------------------------- #
 
 _PENDING_TTL_SECONDS = 10 * 60
+_PEEK_TTL_SECONDS = 15 * 60
 
 
 @dataclass
@@ -253,6 +271,47 @@ class _TelegramAuthStore:
             return state
 
     def set(self, principal_id: str, state: _TelegramState) -> None:
+        with self._lock:
+            self._states[principal_id] = state
+
+    def clear(self, principal_id: str) -> None:
+        with self._lock:
+            self._states.pop(principal_id, None)
+
+
+_PEEK_EXPIRED = "The sign-in code expired. Start again."
+
+
+@dataclass
+class _PeekState:
+    step: str | None = None  # None | "approve"
+    base_url: str = ""
+    device_code: str = field(default="", repr=False)
+    user_code: str = ""
+    verification_url: str = ""
+    expires_at: float = 0.0
+    error: str = ""
+    created_at: float = field(default_factory=time.time)
+
+
+class _PeekAuthStore:
+    """Principal-keyed, one in-progress Peek device sign-in at a time per principal -- a copy of
+    ``_TelegramAuthStore`` for ``_PeekState``."""
+
+    def __init__(self, ttl: float = _PEEK_TTL_SECONDS) -> None:
+        self._ttl = ttl
+        self._lock = threading.Lock()
+        self._states: dict[str, _PeekState] = {}
+
+    def get(self, principal_id: str) -> _PeekState:
+        with self._lock:
+            state = self._states.get(principal_id)
+            if state is None or (time.time() - state.created_at) > self._ttl:
+                state = _PeekState()
+                self._states[principal_id] = state
+            return state
+
+    def set(self, principal_id: str, state: _PeekState) -> None:
         with self._lock:
             self._states[principal_id] = state
 
@@ -385,6 +444,7 @@ def build_routes(
 ) -> list[Route]:
     attempts = _PendingAuthStore()
     telegram_states = _TelegramAuthStore()
+    peek_states = _PeekAuthStore()
     grist_errors: dict[str, str] = {}  # principal id -> the last API-key form error, cleared on success
     base_url = issuer_url.rstrip("/")
 
@@ -462,6 +522,7 @@ def build_routes(
         telegram_state = telegram_states.get(principal.id)
         html = _render_connect_page(
             principal=principal, org_config=org_config, telegram_state=telegram_state,
+            peek_state=peek_states.get(principal.id),
             flash_connected=request.query_params.get("connected", ""),
             flash_error=request.query_params.get("error", ""),
             grist_error=grist_errors.get(principal.id, ""),
@@ -588,6 +649,75 @@ def build_routes(
         telegram_states.clear(principal.id)
         return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
 
+    async def peek_start(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return _signed_out_redirect()
+        form = await request.form()
+        rejected = _check_form_post(request, form)
+        if rejected is not None:
+            return rejected
+        server = _peek_pinned_url(org_config)
+        if not server:
+            peek_states.set(principal.id, _PeekState(error="Peek is not set up by your organization."))
+        else:
+            try:
+                login = await asyncio.to_thread(peek_client.start_device_login, server)
+            except peek_client.PeekClientError as exc:
+                peek_states.set(principal.id, _PeekState(error=str(exc)))
+            else:
+                peek_states.set(principal.id, _PeekState(
+                    step="approve", base_url=server, device_code=login.device_code, user_code=login.user_code,
+                    verification_url=login.verification_url, expires_at=login.expires_at,
+                ))
+        return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
+
+    async def peek_finish(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return _signed_out_redirect()
+        form = await request.form()
+        rejected = _check_form_post(request, form)
+        if rejected is not None:
+            return rejected
+        state = peek_states.get(principal.id)
+        if state.step == "approve":
+            if time.time() > state.expires_at:
+                peek_states.set(principal.id, _PeekState(error=_PEEK_EXPIRED))
+            else:
+                try:
+                    poll = await asyncio.to_thread(peek_client.poll_device_login, state.base_url, state.device_code)
+                except peek_client.PeekClientError as exc:
+                    peek_states.set(principal.id, _dc_replace(state, error=str(exc)))
+                else:
+                    if poll.status == "approved":
+                        peek_client.save_token_file(
+                            str(paths.user_dir(principal) / _token_files()["peek"]), state.base_url, poll.token,
+                        )
+                        peek_states.clear(principal.id)
+                        connector_registry.evict(principal.id)
+                    elif poll.status == "pending":
+                        peek_states.set(principal.id, _dc_replace(
+                            state,
+                            error="Peek has not recorded your approval yet. Approve the code in Peek, then choose Done.",
+                        ))
+                    elif poll.status == "denied":
+                        peek_states.set(principal.id, _PeekState(error="The sign-in was denied in Peek."))
+                    else:  # expired / consumed
+                        peek_states.set(principal.id, _PeekState(error=_PEEK_EXPIRED))
+        return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
+
+    async def peek_cancel(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return _signed_out_redirect()
+        form = await request.form()
+        rejected = _check_form_post(request, form)
+        if rejected is not None:
+            return rejected
+        peek_states.clear(principal.id)
+        return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
+
     async def grist_connect(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
@@ -630,6 +760,9 @@ def build_routes(
         Route("/connect/telegram/code", telegram_code, methods=["POST"]),
         Route("/connect/telegram/2fa", telegram_2fa, methods=["POST"]),
         Route("/connect/telegram/cancel", telegram_cancel, methods=["POST"]),
+        Route("/connect/peek/start", peek_start, methods=["POST"]),
+        Route("/connect/peek/finish", peek_finish, methods=["POST"]),
+        Route("/connect/peek/cancel", peek_cancel, methods=["POST"]),
         Route("/connect/grist", grist_connect, methods=["POST"]),
     ]
 
@@ -664,6 +797,9 @@ li.service{--cluster-gap:var(--space-xs) var(--space-s);justify-content:space-be
   background:var(--surface);border-radius:9px;color:var(--ink-soft);font-size:13px;font-weight:650}
 li.telegram{--stack-gap:var(--space-s)}
 .pf-telegram-form{--stack-gap:var(--space-xs)}
+li.peek{--stack-gap:var(--space-s)}
+.pf-peek-form{--stack-gap:var(--space-xs)}
+.pf-peek-code{font-family:var(--font-mono);font-size:var(--step-h3);letter-spacing:.12em}
 """
 
 
@@ -760,6 +896,46 @@ def _telegram_box_html(principal: Principal, org_config: dict[str, Any], telegra
     )
 
 
+def _peek_box_html(principal: Principal, org_config: dict[str, Any], peek_state: _PeekState, csrf: str) -> str:
+    server = _peek_pinned_url(org_config)
+    if not server:
+        return _service_row_html(principal, org_config, "peek")
+    connected = _is_connected(principal, "peek")
+    if connected:
+        try:
+            record = peek_client.load_token_file(str(paths.user_dir(principal) / _token_files()["peek"]))
+            peek_client.resolve_server(server, record)
+        except peek_client.PeekClientError:
+            connected = False
+    badge = _CONNECTED_BADGE if connected else '<span class="badge">Not connected</span>'
+    error_html = f'<p class="card card-danger" role="alert">{_esc(peek_state.error)}</p>' if peek_state.error else ""
+    csrf_field = f'<input type="hidden" name="csrf" value="{_esc(csrf)}">'
+    if peek_state.step == "approve":
+        body = (
+            '<div class="pf-peek-form stack">'
+            '<div class="field-help">Open Peek, sign in and approve this code:</div>'
+            f'<strong class="pf-peek-code">{_esc(peek_state.user_code)}</strong>'
+            f'<div class="cluster"><a class="button secondary" href="{_esc(peek_state.verification_url)}" '
+            'target="_blank" rel="noopener noreferrer">Open Peek</a>'
+            f'<form method="post" action="/connect/peek/finish">{csrf_field}'
+            '<button type="submit" class="button primary">Done</button></form>'
+            f'<form method="post" action="/connect/peek/cancel">{csrf_field}'
+            '<button type="submit" class="button secondary">Cancel</button></form></div></div>'
+        )
+    else:
+        body = (
+            f'<form class="pf-peek-form stack" method="post" action="/connect/peek/start">{csrf_field}'
+            f'<div class="field-help">Your organization uses {_esc(server)}.</div>'
+            '<div class="cluster"><button type="submit" class="button primary">'
+            f'{"Reconnect" if connected else "Connect"} Peek</button></div></form>'
+        )
+    return (
+        '<li class="service peek card stack">'
+        f'<div class="pf-service-head cluster"><span class="pf-service-chip">Peek</span>{badge}</div>'
+        f"{error_html}{body}</li>"
+    )
+
+
 def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str = "", error: str = "") -> str:
     bundle = _grist_bundle(org_config)
     error_html = f'<p class="card card-danger" role="alert">{_esc(error)}</p>' if error else ""
@@ -794,10 +970,12 @@ def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str 
 def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
     flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
+    peek_state: _PeekState | None = None,
 ) -> str:
     google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"))
     other_rows = "".join(_service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence"))
     telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf)
+    peek_row = _peek_box_html(principal, org_config, peek_state or _PeekState(), csrf)
     grist_row = _grist_box_html(principal, org_config, csrf, grist_error)
     who = principal.email or principal.display_name or principal.id
 
@@ -808,7 +986,7 @@ def _render_connect_page(
         f'<p class="lead">Signed in as {_esc(who)}. Connecting a service lets PrivacyFence act on it for you, still gated by '
         "the same approval rules as everything else.</p>"
         f"{_flash_html(flash_connected, flash_error)}"
-        f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}{grist_row}</ul>'
+        f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}{peek_row}{grist_row}</ul>'
         '<form class="cluster" method="post" action="/logout">'
         '<button type="submit" class="button secondary">Sign out</button></form>'
         "</div>"

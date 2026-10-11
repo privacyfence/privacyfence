@@ -25,8 +25,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import generate_tools_reference  # noqa: E402
 
-# The only tools that delete: a calendar event, and rows or columns of a spreadsheet.
-DESTRUCTIVE_TOOLS = frozenset({"calendar_delete_event", "drive_sheets_delete_dimensions"})
+# The only tools that delete: a calendar event, rows or columns of a spreadsheet, and a Peek page.
+DESTRUCTIVE_TOOLS = frozenset(
+    {"calendar_delete_event", "drive_sheets_delete_dimensions", "peek_delete_page"}
+)
 
 
 def _all_tool_specs() -> dict[str, ToolSpec]:

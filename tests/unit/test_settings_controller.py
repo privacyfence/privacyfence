@@ -31,6 +31,7 @@ import pytest
 
 from privacyfence import auto_accept, daemon_main, org_mode, resource_names, settings_controller as sc, update_checker
 from privacyfence.auto_accept import ReviewContext
+from privacyfence import peek_client
 from privacyfence.policy import engine as policy_engine
 from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import store as policy_store
@@ -1661,6 +1662,172 @@ class TestTelegramCancelAuth:
         assert controller._telegram_auth is None
 
 
+class TestPeekLogin:
+    @pytest.fixture
+    def recorded(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        return recorded
+
+    @pytest.fixture
+    def opened(self, monkeypatch):
+        opened = []
+        monkeypatch.setattr(sc.webbrowser, "open", lambda url: opened.append(url))
+        return opened
+
+    @staticmethod
+    def _login(**kw):
+        values = dict(
+            device_code="SECRET-DEVICE-CODE", user_code="ABCD-1234",
+            verification_url="https://peek.example.com/cli/verify", interval=2, expires_at=time.time() + 600,
+        )
+        values.update(kw)
+        return peek_client.PeekDeviceLogin(**values)
+
+    def _in_progress(self, controller, **kw):
+        controller._peek_auth = {
+            "step": "approve", "error": "", "base_url": "https://peek.example.com",
+            "device_code": "SECRET-DEVICE-CODE", "user_code": "ABCD-1234",
+            "verification_url": "https://peek.example.com/cli/verify", "expires_at": time.time() + 600, **kw,
+        }
+
+    def test_bad_url_sets_the_error_without_starting_anything(self, controller, monkeypatch):
+        calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda *a: calls.append(a))
+        state = controller.peek_start_login("ftp://peek.example.com")
+        assert state["peek_auth"]["step"] is None
+        assert "https://" in state["peek_auth"]["error"]
+        assert calls == []
+
+    def test_malformed_bundle_section_sets_its_error_without_starting_anything(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"peek": {"base_url": "ftp://x"}})
+        calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda *a: calls.append(a))
+        state = controller.peek_start_login("https://peek.example.com")
+        assert state["peek_auth"]["error"].startswith("Peek organization config is not usable")
+        assert calls == []
+
+    def test_pinned_url_wins_over_the_submitted_one(self, controller, recorded, opened, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"peek": {"base_url": "https://pinned.example.com"}})
+        seen = []
+        monkeypatch.setattr(sc, "peek_start_device_login", lambda url: seen.append(url) or self._login())
+        state = controller.peek_start_login("https://other.example.com")
+        assert state["peek_auth"]["pinned_base_url"] == "https://pinned.example.com"
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert seen == ["https://pinned.example.com"]
+        assert controller._peek_auth["base_url"] == "https://pinned.example.com"
+
+    def test_request_without_base_url_reports_the_missing_address(self, controller):
+        state = controller.peek_start_login()
+        assert state["peek_auth"]["error"].startswith("Enter the Peek server address")
+
+    def test_success_moves_to_approve_without_exposing_the_device_code(self, controller, recorded, opened, monkeypatch):
+        monkeypatch.setattr(sc, "peek_start_device_login", lambda url: self._login())
+        state = controller.peek_start_login("https://peek.example.com")
+        assert "peek" in controller._busy_connectors
+        assert state["peek_auth"]["step"] is None
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert "peek" not in controller._busy_connectors
+        assert opened == ["https://peek.example.com/cli/verify"]
+        snap = controller.snapshot()
+        assert snap["peek_auth"]["step"] == "approve"
+        assert snap["peek_auth"]["user_code"] == "ABCD-1234"
+        assert snap["peek_auth"]["verification_url"] == "https://peek.example.com/cli/verify"
+        assert "SECRET-DEVICE-CODE" not in json.dumps(snap)
+
+    def test_failure_returns_to_no_step_with_the_error(self, controller, recorded, opened, monkeypatch):
+        def boom(url):
+            raise peek_client.PeekClientError("Could not reach Peek at peek.example.com: ConnectionError")
+
+        monkeypatch.setattr(sc, "peek_start_device_login", boom)
+        controller.peek_start_login("https://peek.example.com")
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert controller._peek_auth == {
+            "step": None, "error": "Could not reach Peek at peek.example.com: ConnectionError",
+        }
+        assert opened == []
+        assert "peek" not in controller._busy_connectors
+
+    def test_finish_approved_writes_the_token_file_and_refreshes(self, controller, recorded, monkeypatch, tmp_path):
+        self._in_progress(controller)
+        monkeypatch.setattr(
+            sc, "peek_poll_device_login", lambda base, code: peek_client.PeekLoginPoll("approved", "tok-123"),
+        )
+        refreshes = []
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: refreshes.append(1))
+        controller.peek_finish_login()
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        path = sc.data_dir() / "credentials" / "peek_token.json"
+        assert json.loads(path.read_text()) == {"base_url": "https://peek.example.com", "token": "tok-123"}
+        assert controller._peek_auth is None
+        assert controller.error == ""
+        assert refreshes == [1]
+        assert "peek" not in controller._busy_connectors
+
+    def test_finish_pending_keeps_the_step_with_its_message(self, controller, recorded, monkeypatch):
+        self._in_progress(controller)
+        monkeypatch.setattr(sc, "peek_poll_device_login", lambda base, code: peek_client.PeekLoginPoll("pending"))
+        controller.peek_finish_login()
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert controller._peek_auth["step"] == "approve"
+        assert controller._peek_auth["error"] == (
+            "Peek has not recorded your approval yet. Approve the code in Peek, then choose Done again."
+        )
+
+    @pytest.mark.parametrize("status,message", [
+        ("denied", "The sign-in was denied in Peek."),
+        ("expired", "The sign-in code expired. Start again."),
+        ("consumed", "The sign-in code expired. Start again."),
+    ])
+    def test_finish_terminal_statuses_reset_with_their_message(self, controller, recorded, monkeypatch, status, message):
+        self._in_progress(controller)
+        monkeypatch.setattr(sc, "peek_poll_device_login", lambda base, code: peek_client.PeekLoginPoll(status))
+        controller.peek_finish_login()
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert controller._peek_auth == {"step": None, "error": message}
+
+    def test_finish_past_expiry_resets_without_polling(self, controller, monkeypatch):
+        self._in_progress(controller, expires_at=time.time() - 1)
+        calls = []
+        monkeypatch.setattr(sc, "peek_poll_device_login", lambda *a: calls.append(a))
+        monkeypatch.setattr(sc, "_run_async", lambda *a: calls.append(a))
+        controller.peek_finish_login()
+        assert calls == []
+        assert controller._peek_auth == {"step": None, "error": "The sign-in code expired. Start again."}
+
+    def test_finish_exception_keeps_the_step(self, controller, recorded, monkeypatch):
+        self._in_progress(controller)
+
+        def boom(base, code):
+            raise peek_client.PeekClientError("Could not reach Peek at peek.example.com: Timeout")
+
+        monkeypatch.setattr(sc, "peek_poll_device_login", boom)
+        controller.peek_finish_login()
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert controller._peek_auth["step"] == "approve"
+        assert "Timeout" in controller._peek_auth["error"]
+
+    def test_finish_with_no_sign_in_changes_nothing(self, controller, monkeypatch):
+        calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda *a: calls.append(a))
+        controller.peek_finish_login()
+        assert calls == []
+        assert controller._peek_auth is None
+
+    def test_cancel_clears_the_sign_in(self, controller):
+        self._in_progress(controller)
+        controller.peek_cancel_login()
+        assert controller._peek_auth is None
+        controller.peek_cancel_login()  # no-op
+
+
 class TestTelegramAuthSnapshotState:
     def test_default_state_is_no_step_no_error(self, controller):
         state = controller.snapshot()
@@ -2033,7 +2200,7 @@ class TestSnapshotStructure:
     def test_snapshot_has_one_key_per_page(self, controller):
         state = controller.snapshot()
         assert set(state) == {
-            "error", "general", "connectors", "telegram_auth", "grist_signin", "grist_server_url_pinned",
+            "error", "general", "connectors", "telegram_auth", "peek_auth", "grist_signin", "grist_server_url_pinned",
             "grist_auth", "auto_accept", "privacy", "audit", "about",
         }
 
@@ -2047,6 +2214,13 @@ class TestSnapshotStructure:
         assert row["label"] == "Apps Script"
         assert row["has_org"] is True
         assert row["auth_label"] == "Authenticate…"
+
+    def test_peek_row_needs_no_bundle_in_local_mode(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "peek")
+        assert row["label"] == "Peek"
+        assert row["has_org"] is True
+        assert row["authed"] is False
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()

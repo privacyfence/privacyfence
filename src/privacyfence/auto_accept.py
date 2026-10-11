@@ -135,6 +135,13 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "grist_add_columns":              "grist.add_columns",
     "grist_import_csv":               "grist.import_csv",
     "grist_update_csv":               "grist.update_csv",
+    "peek_get_comments":              "peek.read_comments",
+    "peek_get_stats":                 "peek.read_stats",
+    "peek_upload_page":               "peek.upload_page",
+    "peek_set_visibility":            "peek.set_visibility",
+    "peek_add_comment":               "peek.add_comment",
+    "peek_rename_page":               "peek.rename_page",
+    "peek_delete_page":               "peek.delete_page",
     "contacts_update":                "contacts.edit",
     "contacts_create":                "contacts.create",
     "contacts_add_label":             "contacts.add_label",
@@ -322,6 +329,15 @@ TOOL_TO_GATE: dict[str, str] = {
     "grist_add_columns":               "popup",
     "grist_import_csv":                "popup",
     "grist_update_csv":                "popup",
+    # Peek
+    "peek_list_pages":                 "auto",
+    "peek_get_comments":               "review",
+    "peek_get_stats":                  "review",
+    "peek_upload_page":                "popup",
+    "peek_set_visibility":             "popup",
+    "peek_add_comment":                "popup",
+    "peek_rename_page":                "popup",
+    "peek_delete_page":                "popup",
 }
 
 @dataclass

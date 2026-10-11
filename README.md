@@ -76,6 +76,7 @@ MCP-compatible client can connect. See
 | Jira | Read, create, update, comment on and transition issues |
 | Confluence | Search and read pages and attachments; create and update pages |
 | Grist | List documents and tables; read records after review; add and update records, add tables and columns (nothing is deleted) |
+| Peek | List your shared HTML pages; read comments and visit counts after review; publish pages and new versions, change who can open them, rename, comment on and delete them |
 
 [Connectors](https://privacyfence.eu/connectors/) summarizes what each one reviews and which writes
 need approval; the [Tools reference](https://privacyfence.eu/docs/tools-reference/) lists every

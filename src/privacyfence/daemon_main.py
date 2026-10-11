@@ -78,11 +78,12 @@ import logging
 import os
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import portalocker
 import yaml
@@ -139,6 +140,7 @@ from .connectors.jira import JiraConnector
 from .connectors.salesforce import SalesforceConnector
 from .connectors.slack import SlackConnector
 from .connectors.tasks import TasksConnector
+from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
 from .atlassian_oauth import AtlassianOAuthError
@@ -162,6 +164,14 @@ from .salesforce_client import DEFAULT_REPORT_MAX_PAGES, SalesforceClient, Sales
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .salesforce_client import load_token_file as load_salesforce_token
 from .slack_client import SlackClient, SlackClientError
+from .peek_client import PeekClient, PeekClientError
+from .peek_client import bundle_base_url as peek_bundle_base_url
+from .peek_client import load_token_file as load_peek_token
+from .peek_client import normalize_base_url as peek_normalize_base_url
+from .peek_client import poll_device_login as peek_poll_device_login
+from .peek_client import resolve_server as peek_resolve_server
+from .peek_client import save_token_file as save_peek_token
+from .peek_client import start_device_login as peek_start_device_login
 from .slack_client import authorize_interactive as slack_authorize_interactive
 from .slack_client import load_token_file as load_slack_token
 from .tasks_client import TasksClient, TasksClientError
@@ -187,6 +197,7 @@ TOKEN_FILES: dict[str, str] = {
     "grist": "credentials/grist_token.json",
     "atlassian": "credentials/atlassian_token.json",
     "telegram": "credentials/telegram.session",
+    "peek": "credentials/peek_token.json",
 }
 
 _lock_fd: int | None = None
@@ -1574,6 +1585,20 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.warning("Telegram connector disabled: %s", exc)
             failures["telegram"] = _classify_connector_failure(exc)
 
+    # Peek — a bearer token from Peek's device sign-in, only ever sent to the
+    # server it was issued for (ADR 0152).
+    if enabled("peek"):
+        try:
+            pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=download_mode == "org")
+            record = load_peek_token(_resolve_path(TOKEN_FILES["peek"]))
+            client = PeekClient(peek_resolve_server(pinned, record), record["token"])
+            client.check_connection()
+            logger.info("Peek connector ready for %s", client.host)
+            connectors.append(PeekConnector(client, download_mode=download_mode))
+        except PeekClientError as exc:
+            logger.warning("Peek connector disabled: %s", exc)
+            failures["peek"] = _classify_connector_failure(exc)
+
     # Grist
     if enabled("grist"):
         try:
@@ -1850,6 +1875,38 @@ def run_telegram_setup() -> int:
     asyncio.run(client.authorize_interactive())
     print(f"Telegram session saved to {session_file}")
     return 0
+
+
+def run_peek_login(org_config: dict[str, Any]) -> int:
+    try:
+        pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=False)
+    except PeekClientError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    expired_message = "The Peek sign-in code expired. Run --peek-login again."
+    try:
+        base = pinned or peek_normalize_base_url(input("Peek server address: "))
+        login = peek_start_device_login(base)
+        print(f"Open {login.verification_url} and approve the code {login.user_code}.")
+        while True:
+            time.sleep(login.interval)
+            if time.time() > login.expires_at:
+                print(expired_message, file=sys.stderr)
+                return 1
+            poll = peek_poll_device_login(base, login.device_code)
+            if poll.status == "approved":
+                save_peek_token(_resolve_path(TOKEN_FILES["peek"]), base, poll.token)
+                print(f"Peek sign-in complete. Connected to {urlsplit(base).netloc}.")
+                return 0
+            if poll.status == "denied":
+                print("The Peek sign-in was denied.", file=sys.stderr)
+                return 1
+            if poll.status in ("expired", "consumed"):
+                print(expired_message, file=sys.stderr)
+                return 1
+    except PeekClientError as exc:
+        print(f"Peek sign-in failed: {exc}", file=sys.stderr)
+        return 1
 
 
 # ---------------------------------------------------------------------------- #
@@ -2140,6 +2197,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--atlassian-oauth", action="store_true")
     parser.add_argument("--grist-oauth", action="store_true")
     parser.add_argument("--telegram-setup", action="store_true")
+    parser.add_argument(
+        "--peek-login", action="store_true",
+        help="Sign in to Peek with Peek's device sign-in and save the token.",
+    )
     # The break-glass path from ADR 0013 -- see
     # run_print_sign_in_link() for what it does and what it deliberately does
     # not claim. Documented in --help rather than hidden: it is what the
@@ -2251,7 +2312,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.calendar_oauth or args.tasks_oauth or args.apps_script_oauth
         or args.slack_oauth
         or args.salesforce_oauth or args.atlassian_oauth or args.grist_oauth
-        or args.telegram_setup
+        or args.telegram_setup or args.peek_login
     )
 
     try:
@@ -2286,6 +2347,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_grist_oauth(org_config)
             if args.telegram_setup:
                 return run_telegram_setup()
+            if args.peek_login:
+                return run_peek_login(org_config)
         # ADR 0003 decision 6: only on the path that actually starts the
         # persistent daemon, not any of the one-shot CLI invocations above --
         # an admin password dialog popping up during `--gmail-oauth` would be

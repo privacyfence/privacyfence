@@ -23,7 +23,9 @@ import json
 import logging
 import re
 import threading
+import time
 import uuid
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -67,6 +69,14 @@ from .resource_names import ResourceNameResolver, get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
 from .step_up_config import LiveStepUpConfig, StepUpConfig, set_personal_scope, step_up_scope_fields
 from . import grist_auth, telegram_auth
+from .peek_client import (
+    PeekClientError,
+    bundle_base_url as peek_bundle_base_url,
+    normalize_base_url as peek_normalize_base_url,
+    poll_device_login as peek_poll_device_login,
+    save_token_file as save_peek_token,
+    start_device_login as peek_start_device_login,
+)
 from .tasks_client import TasksClient
 from .update_checker import (
     UpdateCheckResult,
@@ -88,7 +98,7 @@ LICENSE_NAME = "Apache-2.0"
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
-    "slack", "jira", "confluence", "salesforce", "telegram", "grist",
+    "slack", "jira", "confluence", "salesforce", "telegram", "grist", "peek",
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
@@ -642,6 +652,7 @@ class SettingsController:
         # telegram_submit_2fa/telegram_cancel_auth below and _telegram_auth_
         # state's own docstring for the shape.
         self._telegram_auth: dict[str, Any] | None = None
+        self._peek_auth: dict[str, Any] | None = None
         # Pending Grist API-key form error (see grist_connect). Only ever the
         # error text: the key itself is never kept on self.
         self._grist_auth: dict[str, Any] | None = None
@@ -1509,6 +1520,115 @@ class SettingsController:
         return self.snapshot()
 
     # ------------------------------------------------------------------ #
+    # Peek device sign-in (local mode). Settings starts it, opens the
+    # approval page in the browser and polls once when the user chooses
+    # Done. self._peek_auth carries the device code; it never reaches the
+    # snapshot, a log line or an error message. None whenever no Peek
+    # sign-in is in progress.
+    # ------------------------------------------------------------------ #
+
+    def _peek_pinned(self) -> tuple[str, str]:
+        try:
+            return peek_bundle_base_url(self._org_config_or_empty().get("peek") or {}, org_mode=False), ""
+        except PeekClientError as exc:
+            return "", str(exc)
+
+    def _peek_auth_state(self) -> dict[str, Any]:
+        pinned, pinned_error = self._peek_pinned()
+        auth = self._peek_auth or {}
+        return {
+            "step": auth.get("step"),
+            "error": auth.get("error") or pinned_error,
+            "user_code": auth.get("user_code", ""),
+            "verification_url": auth.get("verification_url", ""),
+            "pinned_base_url": pinned,
+        }
+
+    def peek_start_login(self, base_url: str = "") -> dict[str, Any]:
+        pinned, pinned_error = self._peek_pinned()
+        if pinned_error:
+            self._peek_auth = {"step": None, "error": pinned_error}
+            return self.snapshot()
+        try:
+            url = pinned or peek_normalize_base_url(base_url or "")
+        except PeekClientError as exc:
+            self._peek_auth = {"step": None, "error": str(exc)}
+            return self.snapshot()
+        self._busy_connectors.add("peek")
+
+        def work() -> Any:
+            login = peek_start_device_login(url)
+            webbrowser.open(login.verification_url)
+            return login
+
+        def done(ok: bool, result: Any) -> None:
+            self._busy_connectors.discard("peek")
+            if ok:
+                self._peek_auth = {
+                    "step": "approve",
+                    "error": "",
+                    "base_url": url,
+                    "device_code": result.device_code,
+                    "user_code": result.user_code,
+                    "verification_url": result.verification_url,
+                    "expires_at": result.expires_at,
+                }
+            else:
+                self._peek_auth = {"step": None, "error": str(result)}
+            self._push_snapshot()
+
+        _run_async(work, done)
+        return self.snapshot()
+
+    def peek_finish_login(self) -> dict[str, Any]:
+        auth = self._peek_auth
+        if auth is None or auth.get("step") != "approve":
+            return self.snapshot()
+        if time.time() > auth["expires_at"]:
+            self._peek_auth = {"step": None, "error": "The sign-in code expired. Start again."}
+            return self.snapshot()
+        from .daemon_main import TOKEN_FILES
+        base_url = auth["base_url"]
+        device_code = auth["device_code"]
+        self._busy_connectors.add("peek")
+
+        def work() -> str:
+            poll = peek_poll_device_login(base_url, device_code)
+            if poll.status == "approved":
+                save_peek_token(str(data_dir() / TOKEN_FILES["peek"]), base_url, poll.token)
+            return poll.status
+
+        def done(ok: bool, result: Any) -> None:
+            self._busy_connectors.discard("peek")
+            if not ok:
+                if self._peek_auth is not None:
+                    self._peek_auth["error"] = str(result)
+                self._push_snapshot()
+                return
+            if result == "approved":
+                self._peek_auth = None
+                self.error = ""
+                self.refresh_connectors()
+                return
+            if result == "pending":
+                if self._peek_auth is not None:
+                    self._peek_auth["error"] = (
+                        "Peek has not recorded your approval yet. Approve the code in Peek, then choose Done again."
+                    )
+            elif result == "denied":
+                self._peek_auth = {"step": None, "error": "The sign-in was denied in Peek."}
+            else:
+                self._peek_auth = {"step": None, "error": "The sign-in code expired. Start again."}
+            self._push_snapshot()
+
+        _run_async(work, done)
+        return self.snapshot()
+
+    def peek_cancel_login(self) -> dict[str, Any]:
+        self._peek_auth = None
+        return self.snapshot()
+
+    # ------------------------------------------------------------------ #
     # Grist API-key sign-in (local mode). The form posts the key once;
     # it is passed straight to the worker and saved, never stored on self,
     # put in the snapshot or logged.
@@ -1775,6 +1895,7 @@ class SettingsController:
             "general": self._general_state(cfg),
             "connectors": self._connectors_state(cfg, org_config),
             "telegram_auth": self._telegram_auth_state(),
+            "peek_auth": self._peek_auth_state(),
             **self._grist_snapshot_state(org_config),
             "auto_accept": self._auto_accept_state(cfg),
             "privacy": self._privacy_state(cfg),
@@ -1855,8 +1976,8 @@ class SettingsController:
             busy = cname in self._busy_connectors
             if cname == "telegram":
                 has_org = telegram_app_credentials() is not None
-            elif cname == "grist":
-                has_org = True  # an API key needs no bundle in local mode
+            elif cname in ("grist", "peek"):
+                has_org = True  # an API key or token needs no bundle in local mode
             else:
                 has_org = bool(org_config.get(ORG_CONFIG_SERVICE[cname]))
 
