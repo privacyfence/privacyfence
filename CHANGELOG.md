@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grist columns added to an existing table are now data columns.** `grist_add_columns` could leave an "empty column" that PrivacyFence cannot write to until you chose "Convert to data column" in Grist's web interface. The columns now arrive as data columns.
+
 ## [5.9.0] — 2026-10-11
 
 ### Added
