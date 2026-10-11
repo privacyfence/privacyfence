@@ -551,6 +551,7 @@ final_checks:
   - ADRs 0164 and 0165 (or the renumbered pair) exist in docs/adr/, have Status Accepted and are listed in docs/adr/README.md; ADRs 0006, 0008, 0015 and 0037 have an "Amended by 0164" Status line and ADR 0072 an "Amended by 0165" one
   - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
   - pytest tests/integration -v passes locally, including test_mcp_daemon_contract.py and test_shim_mcp_contract.py (the auth stack changed)
+  - Only if `git grep -n "def _personal_data_rule" origin/main -- src/privacyfence/gate.py` matches (the data-sync work merged first), the feature branch has merged origin/main, `_personal_data_rule` reads the token-filtered rule list under a scope (the same filter `_evaluate_auto_accept` uses), and a test in tests/unit/test_gate.py shows a scoped call with personal data denied when the only flagged rule is outside the token's scope
 phases:
   - id: p1-store
     title: The scoped-token store, policy and request scope (scoped_tokens.py)
