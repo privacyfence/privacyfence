@@ -1294,7 +1294,83 @@ class TestUpdateCsv:
         assert kwargs["args"] == {
             "doc_id": DOC_ID, "table_id": "Contacts", "local_path": path, "upload_id": "",
             "sha256": sha_of(text), "key_column": "Name", "create_missing": False,
+            "clear_empty": False,
         }
+
+    async def test_clear_empty_clears_a_value(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": 36}})
+
+        result = await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        assert result["updated"] == 1 and result["unchanged"] == 0
+        assert [c.args[2] for c in client.update_records.call_args_list] == [
+            [(1, {"Score": None})],
+        ]
+        assert gated_call_spy[0]["preview_tables"][0]["rows"] == [
+            ["#1", "Ada", "Score", "36", "(empty)"],
+        ]
+
+    async def test_clear_empty_leaves_already_empty_cells_alone(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score,Born\nAda,,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": None, "Born": ""}})
+
+        result = await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        assert result["updated"] == 0 and result["unchanged"] == 1
+        client.update_records.assert_not_called()
+
+    async def test_clear_empty_off_leaves_values(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": 36}})
+
+        result = await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+
+        assert result["updated"] == 0 and result["unchanged"] == 1
+        client.update_records.assert_not_called()
+        assert "Cells to clear" not in gated_call_spy[0]["preview"]
+
+    async def test_clear_empty_new_rows_get_no_nulls(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nNew,\n")
+        table_server(client, {})
+        client.add_records.return_value = [5]
+
+        await connector.call(
+            "grist_update_csv",
+            {**self.ARGS, "local_path": path, "create_missing": True, "clear_empty": True},
+        )
+
+        client.add_records.assert_called_once_with(DOC_ID, "Contacts", [{"Name": "New"}])
+
+    async def test_clear_empty_is_in_the_approval_args(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": 36}})
+
+        await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        assert gated_call_spy[0]["args"]["clear_empty"] is True
+
+    async def test_card_counts_cleared_cells(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score,Born\nAda,,\nLin,5,\n")
+        table_server(client, {
+            1: {"Name": "Ada", "Score": 36, "Born": 5},
+            2: {"Name": "Lin", "Score": 4, "Born": None},
+        })
+
+        await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        preview = gated_call_spy[0]["preview"]
+        assert preview["Cells to change"] == "3" and preview["Cells to clear"] == "2"
+        keys = list(preview)
+        assert keys.index("Cells to clear") == keys.index("Cells to change") + 1
 
     async def test_dates_render_as_in_the_file_in_both_columns(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Name,Born\nAda,2024-02-29\n")

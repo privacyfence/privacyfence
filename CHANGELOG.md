@@ -47,6 +47,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A Peek page rule in Settings.** A `Peek — page` rule names page slugs: *read* covers `peek_get_comments` and `peek_get_stats`, *update* covers new versions of those pages through `peek_upload_page` (never a brand-new page), and the personal-data checkbox lets a version with personal data through without a card.
 - **`salesforce_export_report` can write the shown text and currency too.** `cell_format: both` writes each column's raw value, its shown text as `<column>.label`, and `<column>.currency` for money columns.
+- **`grist_update_csv` can clear values.** With `clear_empty: true`, an empty CSV cell clears the value in Grist instead of leaving it unchanged. The approval card counts the cells to clear.
 
 ### Changed
 
