@@ -711,6 +711,17 @@ class TestScopedTokens:
         ]
         assert {e["agent_id"] for e in entries} == {"scoped-token:revoked"}
 
+    async def test_create_upload_slot_works_as_usual(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        dispatcher = _dispatcher({})
+        async with self._scoped_session(dispatcher) as (session, _store):
+            result = await session.call_tool(
+                "privacyfence_create_upload_slot", {"filename": "report.pdf", "reason": "attach a file"},
+            )
+        assert result.is_error is False
+        assert result.structured_content["method"] == "PUT"
+
     async def test_check_policy_refuses_a_tool_outside_the_scope(self):
         dispatcher = _dispatcher({"echo": TwoToolConnector()})
         async with self._scoped_session(dispatcher) as (session, _store):
