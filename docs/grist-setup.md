@@ -120,8 +120,9 @@ a larger table, the assistant hands PrivacyFence a CSV file instead, and you app
   `YYYY-MM-DD`, and numbers with a point as the decimal mark.
 - **Update.** `grist_update_csv` matches each row to the record whose key column has the same
   value. The key column must be a Text, Choice, Int or Numeric column, in the header, unique in
-  the file and unique in the table. Only cells that differ change. Rows that match no record are
-  skipped, or added when the assistant sets `create_missing`.
+  the file and unique in the table. It can also be `id`, the Grist record id, for a table that has
+  no other unique column; `create_missing` is not available then. Only cells that differ change.
+  Rows that match no record are skipped, or added when the assistant sets `create_missing`.
 - **Limits.** At most 20000 rows, 100 columns and 50 MB. A file over a limit, or with a cell that
   does not fit its column, is refused before the card is shown, with the line and column of the
   first problems.
