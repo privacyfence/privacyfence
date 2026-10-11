@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -12,7 +13,7 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
-from .. import cursors
+from .. import cursors, export_files, local_files
 from ..salesforce_client import (
     ReportFilter,
     SalesforceClient,
@@ -235,10 +236,54 @@ def _filter_value_summary(values: list[str]) -> str:
     return f"{len(values)} value(s)"
 
 
+_REPORT_ID_DESCRIPTION = (
+    "Salesforce id of the report (starts with '00O'), from "
+    "salesforce_list_reports (its id field)."
+)
+_COLUMNS_DESCRIPTION = (
+    "Comma-separated report column API names to return, a subset of the "
+    "report's own reportMetadata.detailColumns, e.g. "
+    "'OPPORTUNITY.NAME,AMOUNT'. Leave empty for all of the report's "
+    "columns. Columns outside the saved report are rejected."
+)
+_FILTERS_DESCRIPTION = (
+    'JSON array of extra row filters for this run only, ANDed onto the '
+    'report\'s saved filters, e.g. [{"column": "Opportunity.Opp_Id__c", '
+    '"operator": "equals", "value": ["006A...", "006B..."]}]. value is a '
+    'string or a list of strings (a list matches any of them; it is split '
+    'across several filters automatically). operator is one of equals, '
+    'notEqual, lessThan, greaterThan, lessOrEqual, greaterOrEqual, '
+    'contains, notContain, startsWith, includes, excludes, within. Leave '
+    'empty for none.'
+)
+_PAGE_BY_DESCRIPTION = (
+    "Report column API name whose values are unique per row (best an "
+    "auto-number column the report includes), e.g. "
+    "'Opportunity.Opp_Number__c'. Reads every row of the report, page by "
+    "page in order of this column; a grouped report is read as one flat "
+    "table. Leave empty for one run as saved."
+)
+_DESTINATION_DIR = (
+    "Folder on the user's computer to write the file to, absolute or starting with ~/."
+)
+
+
+def _export_cell(cell: dict, cell_format: str) -> Any:
+    if cell_format == "label":
+        return cell.get("label", "")
+    value = cell.get("value")
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict) and "amount" in value:
+        return value["amount"]
+    return cell.get("label", "")
+
+
 class SalesforceConnector(Connector):
     def __init__(self, client: SalesforceClient) -> None:
         self._sf = client
         self.my_email: str = ""
+        self.download_mode: str = "local"
 
     @property
     def client(self) -> SalesforceClient:
@@ -297,36 +342,55 @@ class SalesforceConnector(Connector):
                 ),
                 params=[
                     ToolParam("report_id", "str",
-                              description="Salesforce id of the report (starts with '00O'), from "
-                                          "salesforce_list_reports (its id field)."),
+                              description=_REPORT_ID_DESCRIPTION),
                     ToolParam("columns", "str", required=False, default="",
-                              description="Comma-separated report column API names to return, a subset of the "
-                                          "report's own reportMetadata.detailColumns, e.g. "
-                                          "'OPPORTUNITY.NAME,AMOUNT'. Leave empty for all of the report's "
-                                          "columns. Columns outside the saved report are rejected."),
+                              description=_COLUMNS_DESCRIPTION),
                     ToolParam("filters", "str", required=False, default="",
-                              description='JSON array of extra row filters for this run only, ANDed onto the '
-                                          'report\'s saved filters, e.g. [{"column": "Opportunity.Opp_Id__c", '
-                                          '"operator": "equals", "value": ["006A...", "006B..."]}]. value is a '
-                                          'string or a list of strings (a list matches any of them; it is split '
-                                          'across several filters automatically). operator is one of equals, '
-                                          'notEqual, lessThan, greaterThan, lessOrEqual, greaterOrEqual, '
-                                          'contains, notContain, startsWith, includes, excludes, within. Leave '
-                                          'empty for none.'),
+                              description=_FILTERS_DESCRIPTION),
                     ToolParam("summary_only", "bool", required=False, default=False,
                               description="True to return only groupings and aggregates (totals), with no "
                                           "detail rows: the smallest response. Default false returns detail "
                                           "rows too."),
                     ToolParam("page_by", "str", required=False, default="",
-                              description="Report column API name whose values are unique per row (best an "
-                                          "auto-number column the report includes), e.g. "
-                                          "'Opportunity.Opp_Number__c'. Reads every row of the report, page by "
-                                          "page in order of this column; a grouped report is read as one flat "
-                                          "table. Leave empty for one run as saved."),
+                              description=_PAGE_BY_DESCRIPTION),
                     ToolParam("cursor", "str", required=False, default="",
                               description="Opaque cursor from a previous paged result's next_cursor. Pass it "
                                           "with the same report_id, columns, filters and page_by. Leave empty "
                                           "for the first page."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="salesforce_export_report",
+                description=(
+                    "Write every row of a Salesforce report to a CSV or JSON file on the user's "
+                    "computer, in one approval. Columns are the report's column API names. columns "
+                    "and filters narrow this export as on salesforce_run_report: for example "
+                    '[{"column": "LAST_UPDATE", "operator": "greaterOrEqual", "value": '
+                    '"2026-10-04"}] exports only rows changed since that date. A report of more '
+                    "than 2,000 rows, or a grouped report, needs page_by; the export then reads it "
+                    "page by page internally. Returns {rows, columns, sha256, path, name, "
+                    "size_bytes, delivery}, never the rows; read the file at path. Not available on "
+                    "an organization-managed install. Requires user approval."
+                ),
+                params=[
+                    ToolParam("report_id", "str", description=_REPORT_ID_DESCRIPTION),
+                    ToolParam("columns", "str", required=False, default="",
+                              description=_COLUMNS_DESCRIPTION),
+                    ToolParam("filters", "str", required=False, default="",
+                              description=_FILTERS_DESCRIPTION),
+                    ToolParam("page_by", "str", required=False, default="",
+                              description=_PAGE_BY_DESCRIPTION),
+                    ToolParam("cell_format", "str", required=False, default="value",
+                              description="value (default) writes Salesforce's raw value: dates as "
+                                          "YYYY-MM-DD, amounts as numbers, record ids for name "
+                                          "columns. label writes the text Salesforce shows, such "
+                                          "as $1,200.00."),
+                    ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
+                    ToolParam("file_name", "str", required=False, default="",
+                              description="File name ending in .csv or .json; the ending picks the "
+                                          "format. Empty means <report_id>.csv."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -380,6 +444,8 @@ class SalesforceConnector(Connector):
             return await self._get_record(**args)
         if tool == "salesforce_run_report":
             return await self._run_report(**args)
+        if tool == "salesforce_export_report":
+            return await self._export_report(**args)
         if tool == "salesforce_search":
             return await self._search(**args)
         raise ValueError(f"Unknown Salesforce tool: {tool!r}")
@@ -567,6 +633,112 @@ class SalesforceConnector(Connector):
                 **({"page_by": page_by, "cursor": cursor} if page_by else {}),
             },
         )
+
+    async def _export_report(
+        self, report_id: str, destination_dir: str, columns: str = "", filters: str = "",
+        page_by: str = "", cell_format: str = "value", file_name: str = "",
+    ) -> Any:
+        filter_list = _parse_report_filters(filters)
+        column_list = [c.strip() for c in columns.split(",") if c.strip()]
+        page_by = page_by.strip()
+        if cell_format not in ("value", "label"):
+            raise ValueError("cell_format must be value or label.")
+        destination_dir = export_files.check_destination(destination_dir)
+        file_name, fmt = export_files.export_file_name(file_name, report_id)
+        export_files.refuse_org(
+            "salesforce_export_report", self.download_mode, "salesforce_run_report",
+        )
+
+        results: list[dict] = []
+        if page_by:
+            after: str | None = None
+            remaining: int | None = None
+            while True:
+                page = await self._fetch(
+                    self._sf.run_report_page, report_id, page_by, column_list or None,
+                    filter_list or None, after, len(results), remaining,
+                )
+                results.append(page.result)
+                if page.all_data:
+                    break
+                after = page.keys[-1]
+                remaining = page.row_count - len(page.keys)
+        else:
+            result = await self._fetch(
+                self._sf.run_report, report_id, column_list or None, filter_list or None, False,
+            )
+            if set(result.get("factMap") or {}) != {"T!T"}:
+                raise ValueError(
+                    "salesforce_export_report: this report is grouped; pass page_by to read it "
+                    "as one table"
+                )
+            if result.get("allData") is False:
+                raise ValueError(
+                    "salesforce_export_report: the report has more than 2,000 rows; pass page_by "
+                    "(a column with a unique value per row) to export all of them"
+                )
+            results.append(result)
+        runs = len(results)
+
+        first_metadata = results[0].get("reportMetadata") or {}
+        names = list(first_metadata.get("detailColumns") or [])
+        rows = [
+            [_export_cell(cell, cell_format) for cell in row.get("dataCells") or []]
+            for result in results
+            for row in ((result.get("factMap") or {}).get("T!T") or {}).get("rows") or []
+        ]
+        n = len(rows)
+        report_name = first_metadata.get("name") or report_id
+        data = await asyncio.to_thread(export_files.render, names, rows, fmt)
+        sha256 = hashlib.sha256(data).hexdigest()
+        local_files.check_delivery_size(len(data))
+        saved_to = f"{destination_dir.rstrip('/')}/{file_name}"
+        preview = {"Report": str(report_name), "Report ID": report_id}
+        if column_list:
+            preview["Columns"] = ", ".join(column_list)
+        if filter_list:
+            preview["Filters"] = "; ".join(
+                f"{f.column} {f.operator} {_filter_value_summary(f.values)}" for f in filter_list
+            )
+        if page_by:
+            preview["Paged by"] = page_by
+        preview["Report runs"] = str(runs)
+        await gated_call(
+            connector=self.name,
+            tool="salesforce_export_report",
+            tool_name="Export Salesforce Report",
+            summary=f"Export report: {report_name}",
+            sender="Salesforce",
+            raw_data={"report_id": report_id, "rows": n, "columns": names, "sha256": sha256},
+            filtered_data=None,
+            gate="review",
+            preview=preview,
+            preview_tables=[export_files.sample_table(names, rows)],
+            pii_scan_text=export_files.scan_text(data),
+            new_info={
+                "Rows": f"{n:,}",
+                "Columns": str(len(names)),
+                "Content returned to {agent}": (
+                    "None in the tool result: the rows are written to the file below, where "
+                    "{agent} can open it"
+                ),
+                "Saved to": saved_to,
+            },
+            details_text=export_files.card_details(preview, n, names, saved_to, sha256),
+            delivery="local_disk"
+            if local_files.can_access_user_files(self.download_mode) else "client_bridge",
+            my_email=self.my_email,
+            args={
+                "report_id": report_id, "columns": columns, "filters": filters,
+                "page_by": page_by, "cell_format": cell_format,
+                "destination_dir": destination_dir, "file_name": file_name, "sha256": sha256,
+            },
+        )
+        delivered = local_files.deliver_file(
+            destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
+            download_mode=self.download_mode,
+        )
+        return export_files.export_summary(names, rows, sha256, delivered)
 
     async def _search(
         self, search_term: str, object_types: str = "", account_id: str = "", max_results: int = 20,

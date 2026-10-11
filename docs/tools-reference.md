@@ -97,11 +97,11 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Apps Script](#apps-script) | 4 | 1 | 2 | 1 |
 | [Slack](#slack) | 11 | 6 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
-| [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
+| [Salesforce](#salesforce) | 5 | 1 | 4 | 0 |
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
 | [Grist](#grist) | 10 | 2 | 2 | 6 |
-| **Total** | **130** | **49** | **24** | **57** |
+| **Total** | **131** | **49** | **25** | **57** |
 
 ## Gmail
 
@@ -240,6 +240,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
 | `salesforce_list_reports` | read | `auto` | List Salesforce reports accessible to the user. |
+| `salesforce_export_report` | read | `review` | Write every row of a Salesforce report to a CSV or JSON file on the user's computer, in one approval. |
 | `salesforce_get_record` | read | `review` | Fetch a Salesforce record by object type and id. |
 | `salesforce_run_report` | read | `review` | Run a Salesforce report by id and return the results. |
 | `salesforce_search` | read | `review` | Search Salesforce by name or id across one or more object types — the same mechanism as the search bar at the top of the Salesforce UI. |
