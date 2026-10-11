@@ -107,6 +107,8 @@ _CSV_SAMPLE_ROWS = 20
 _CSV_SCAN_CHARS = 1_000_000
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _CSV_UPLOAD_SOURCE = "uploaded via privacyfence_create_upload_slot"
+# The record id: not in the column list, but grist_update_csv accepts it as key_column.
+_ROW_ID = "id"
 
 
 class GristCsvWriteError(RuntimeError):
@@ -538,7 +540,9 @@ class GristConnector(Connector):
                     ToolParam(
                         "key_column", "str",
                         description="The column id whose value identifies a record, such as "
-                                    "Email. It must be in the CSV header and unique in the table.",
+                                    "Email, or id to match on the Grist record id (as "
+                                    "grist_get_records returns it; not with create_missing). It "
+                                    "must be in the CSV header and unique in the table.",
                     ),
                     _LOCAL_PATH,
                     _UPLOAD_ID,
@@ -904,11 +908,15 @@ class GristConnector(Connector):
         return data, os.path.basename(local_path) if local_path else _CSV_UPLOAD_SOURCE
 
     async def _prepare_csv(
-        self, doc_id: str, table_id: str, local_path: str, upload_id: str,
+        self, doc_id: str, table_id: str, local_path: str, upload_id: str, *, row_id: bool = False,
     ) -> tuple[GristDocument, bytes, str, ParsedCsv]:
+        """With ``row_id``, the header may also name the record id column ``id``, which Grist
+        does not list among the columns; only ``grist_update_csv`` uses it, as the key."""
         data, source = self._read_csv(local_path, upload_id)
         doc = await self._doc_info(doc_id)
         columns = await self._fetch(self._client.list_columns, doc_id, table_id)
+        if row_id:
+            columns = [*columns, GristColumn(_ROW_ID, _ROW_ID, "Int", False)]
         return doc, data, source, parse_csv(data, columns, table_id)
 
     async def _import_csv(
@@ -1015,7 +1023,9 @@ class GristConnector(Connector):
                 filters={key_column: chunk}, limit=len(chunk),
             )
             for record in page.records:
-                key = same_key(record.fields.get(key_column))
+                key = same_key(
+                    record.id if key_column == _ROW_ID else record.fields.get(key_column)
+                )
                 if key in found:
                     raise ValueError(ambiguous)
                 found[key] = record
@@ -1035,7 +1045,15 @@ class GristConnector(Connector):
             validate_identifier(key_column, "column")
         except GristClientError as exc:
             raise ValueError(str(exc)) from exc
-        doc, data, source, parsed = await self._prepare_csv(doc_id, table_id, local_path, upload_id)
+        row_id = key_column == _ROW_ID
+        if row_id and create_missing:
+            raise ValueError(
+                "create_missing cannot be used with key_column id: Grist chooses the id of a "
+                "new record."
+            )
+        doc, data, source, parsed = await self._prepare_csv(
+            doc_id, table_id, local_path, upload_id, row_id=row_id,
+        )
         if key_column not in parsed.column_ids:
             raise ValueError(f"key_column {key_column} is not a column of the CSV file.")
         key_type = parsed.column_types[key_column]

@@ -1390,6 +1390,48 @@ class TestUpdateCsv:
         keys = [canonical_key("grist", "grist_update_csv", c["args"]) for c in gated_call_spy]
         assert len(set(keys)) == 3
 
+    async def test_the_record_id_can_be_the_key(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "id,Score\n1,37\n2,50\n9,1\n")
+        def get_records(doc_id, table_id, *, filters=None, sort="", limit=100, after_id=0):
+            assert filters == {"id": [1, 2, 9]}
+            return GristRecordPage(records=[
+                GristRecord(1, {"Name": "Ada", "Score": 36}), GristRecord(2, {"Score": 50}),
+            ], truncated=False)
+        client.get_records.side_effect = get_records
+
+        result = await connector.call(
+            "grist_update_csv", {**CSV_ARGS, "key_column": "id", "local_path": path},
+        )
+
+        assert result == {
+            "doc_id": DOC_ID, "table_id": "Contacts", "updated": 1, "added": 0,
+            "unchanged": 1, "skipped": 1,
+        }
+        client.update_records.assert_called_once_with(DOC_ID, "Contacts", [(1, {"Score": 37})])
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Key column"] == "id"
+        assert kwargs["preview_tables"][0]["rows"] == [["#1", "1", "Score", "36", "37"]]
+        assert kwargs["preview_tables"][1]["rows"] == [["4", "9"]]
+
+    async def test_the_record_id_key_refuses_create_missing(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "id,Score\n1,37\n")
+        with pytest.raises(ValueError, match="create_missing cannot be used with key_column id"):
+            await connector.call(
+                "grist_update_csv",
+                {**CSV_ARGS, "key_column": "id", "local_path": path, "create_missing": True},
+            )
+        assert gated_call_spy == []
+
+    async def test_import_csv_still_refuses_an_id_column(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "id,Score\n1,37\n")
+        with pytest.raises(ValueError, match="Unknown column"):
+            await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+
+    async def test_the_record_id_is_only_a_column_when_it_is_the_key(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "id,Name\n1,Ada\n")
+        with pytest.raises(ValueError, match="Unknown column"):
+            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+
     async def test_the_key_column_must_be_in_the_file(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Score\n1\n")
         with pytest.raises(ValueError, match="key_column Name is not a column of the CSV file"):
