@@ -44,7 +44,7 @@ class GristCsvError(ValueError):
 @dataclass(frozen=True)
 class CsvRow:
     line: int  # physical file line where the record starts; the header is line 1
-    values: dict[str, Any]  # column id -> coerced value; empty cells are absent
+    values: dict[str, Any]  # column id -> coerced value; empty cells are absent, or None with keep_empty
 
 
 @dataclass(frozen=True)
@@ -165,7 +165,9 @@ def _coerce(text: str, kind: str) -> tuple[Any, str]:
     return None, "not a date in YYYY-MM-DD form."
 
 
-def parse_csv(data: bytes, columns: list[GristColumn], table_id: str) -> ParsedCsv:
+def parse_csv(
+    data: bytes, columns: list[GristColumn], table_id: str, *, keep_empty: bool = False
+) -> ParsedCsv:
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
@@ -205,6 +207,8 @@ def parse_csv(data: bytes, columns: list[GristColumn], table_id: str) -> ParsedC
         values: dict[str, Any] = {}
         for column_id, cell in zip(ids, cells, strict=True):
             if not cell:
+                if keep_empty:
+                    values[column_id] = None
                 continue
             if len(cell) > MAX_CELL_CHARS:
                 errors.append(
@@ -240,7 +244,7 @@ def same_key(value: Any) -> Any:
 
 def key_index(rows: list[CsvRow], key_column: str) -> dict[Any, CsvRow]:
     for row in rows:
-        if key_column not in row.values:
+        if row.values.get(key_column) is None:
             raise GristCsvError(f"Line {row.line}: the key column {key_column} is empty.")
     for row in rows:
         if len(str(row.values[key_column])) > MAX_KEY_CHARS:

@@ -1487,6 +1487,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Salesforce connector ready for %s", merged.get("instance_url"))
             salesforce_connector = SalesforceConnector(salesforce_client)
             salesforce_connector.download_mode = download_mode
+            salesforce_connector.download_config = download_config
+            salesforce_connector.download_base_url = download_base_url
             connectors.append(salesforce_connector)
         except (SalesforceClientError, FileNotFoundError) as exc:
             logger.warning("Salesforce connector disabled: %s", exc)
@@ -1524,6 +1526,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Jira connector ready: %s", info)
             jira_connector = JiraConnector(jira_client)
             jira_connector.my_email = atlassian_token.get("account_email", "")
+            jira_connector.download_mode = download_mode
+            jira_connector.download_config = download_config
+            jira_connector.download_base_url = download_base_url
             connectors.append(jira_connector)
         except (JiraClientError, FileNotFoundError) as exc:
             logger.warning("Jira connector disabled: %s", exc)
@@ -1611,6 +1616,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             grist_client.check_connection()
             grist_connector = GristConnector(grist_client)
             grist_connector.download_mode = download_mode
+            grist_connector.download_config = download_config
+            grist_connector.download_base_url = download_base_url
             connectors.append(grist_connector)
         except GristClientError as exc:
             logger.warning("Grist connector disabled: %s", exc)

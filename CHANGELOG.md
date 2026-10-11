@@ -43,6 +43,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A personal-data checkbox on export, Drive folder and Peek page rules.** On the Grist document, Salesforce report, Jira project, Drive folder and Peek page scopes of the Auto-accept "Add a rule" form, ticking it saves a rule that lets matching exports, file downloads and page uploads move personal data without a prompt. It works the same on a local and an organization-managed install, and the org audit entry says "personal data allowed". A Drive download that comes back inline in the tool result keeps the check.
+- **A Peek page rule in Settings.** A `Peek — page` rule names page slugs: *read* covers `peek_get_comments` and `peek_get_stats`, *update* covers new versions of those pages through `peek_upload_page` (never a brand-new page).
+- **`jira_export_issues` writes a JQL search to a file.** Every issue a query matches, up to 10,000, goes to a CSV or JSON file after one approval, with the standard columns and any extra fields you name; the result holds only counts and a SHA-256. A "this project" search rule covers it, and a query that matches nothing returns without a card.
+- **`salesforce_export_report` can write the shown text and currency too.** `cell_format: both` writes each column's raw value, its shown text as `<column>.label`, and `<column>.currency` for money columns.
+- **`grist_update_csv` can clear values.** With `clear_empty: true`, an empty CSV cell clears the value in Grist instead of leaving it unchanged. The approval card counts the cells to clear.
+- **`privacyfence-sync` runs a data-sync recipe with no AI model.** A separate package (`pip install privacyfence-sync`) that calls the export tools, runs your own scripts on the files, writes back to Grist and publishes a dashboard on Peek, unattended, against a local daemon or an organization server. See [`docs/privacyfence-sync.md`](docs/privacyfence-sync.md).
+- **A `privacyfence-sync` Claude plugin with a recipe-writing skill.** Listed in the repository's plugin marketplace and attached to each stable release as `privacyfence-sync-plugin.zip`, it lets Claude write the recipe, its scripts and the list of rules you need.
+
+### Changed
+
+- **Exports work on an organization-managed install.** `grist_export_records`, `grist_export_sql`, `salesforce_export_report` and `jira_export_issues` no longer refuse there: after approval they return a one-time download link instead of saving a file, unless your organization turned off `download_delivery.allow_disk_staging`.
+
 ## [5.9.1] — 2026-10-11
 
 ### Changed

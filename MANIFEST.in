@@ -4,3 +4,11 @@
 # from the sdist. Absent (a local build without the secrets), this matches nothing and is skipped.
 # See ADR 0040.
 include src/privacyfence/_telegram_credentials.py
+
+# sync/ is the separate privacyfence-sync distribution, published from its own pyproject.toml.
+# setuptools_scm's file finder packages every tracked file, so without this the privacyfence sdist
+# would carry the whole sync/ tree.
+prune sync
+
+# plugins/ holds the privacyfence-sync Claude plugin (ADR 0163), attached to releases as a zip.
+prune plugins

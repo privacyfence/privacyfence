@@ -377,6 +377,14 @@ class TestRequiredChecksList:
             "runs never reports at all, which blocks every merge"
         )
 
+    def test_sync_client_matrix_legs_are_required(self):
+        """The `sync` job's matrix legs report as `Sync client (Python x)`; each must be required."""
+        workflow_path = _SCRIPT_PATH.parents[1] / ".github" / "workflows" / "tests.yml"
+        job = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))["jobs"]["sync"]
+        expected = {f"Sync client (Python {version})" for version in job["strategy"]["matrix"]["python-version"]}
+        actual = {check for check in ubp.REQUIRED_STATUS_CHECKS if check.startswith("Sync client (")}
+        assert actual == expected
+
     def test_website_build_is_required_and_runs_on_every_pull_request(self):
         """`website-build` is the check website-build.yml's job reports. A rename, or a `paths:`
         filter on its `pull_request` trigger, would leave a required check that never reports."""

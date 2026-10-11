@@ -22,7 +22,9 @@ DOCS = REPO / "docs"
 README = (DOCS / "README.md").read_text(encoding="utf-8")
 NAV = build_site.published_nav(README)
 PUBLISHED = {f"{stem}.md" for section in NAV for stem in section.docs}
-ALL_DOCS = {path.name for path in DOCS.glob("*.md")}
+# A plan (docs/*-plan.md) is temporary: CONTRIBUTING.md has it deleted when its work lands, so it is
+# never published and never a contributor doc.
+ALL_DOCS = {path.name for path in DOCS.glob("*.md") if not path.name.endswith("-plan.md")}
 
 
 def test_every_doc_is_published_or_contributor_only():

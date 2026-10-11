@@ -1094,6 +1094,41 @@ class TestOrgModeDownloadDelivery:
         assert "None" in kwargs["new_info"]["Content returned to {agent}"]
         assert "one-time link" in kwargs["new_info"]["Content returned to {agent}"]
 
+    async def test_inline_download_tells_the_gate_content_reaches_the_result(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=1_000)
+        client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=50)
+        client.download_file_bytes.return_value = {
+            "data": b"hello file bytes", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 16,
+        }
+
+        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        assert gated_call_spy[0]["content_reaches_result"] is True
+
+    async def test_staged_download_does_not(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=10)
+        client.get_file_metadata.return_value = make_file(name="big.bin", mime_type="application/octet-stream", size=5_000)
+        client.download_file_bytes.return_value = {
+            "data": b"x" * 5000, "name": "big.bin", "mime_type": "application/octet-stream", "size_bytes": 5000,
+        }
+
+        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        assert gated_call_spy[0]["content_reaches_result"] is False
+
+    async def test_download_approved_as_staged_is_never_returned_inline(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=100)
+        client.get_file_metadata.return_value = make_file(name="f.bin", mime_type="application/octet-stream", size=5_000)
+        client.download_file_bytes.return_value = {
+            "data": b"tiny", "name": "f.bin", "mime_type": "application/octet-stream", "size_bytes": 4,
+        }
+
+        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        assert gated_call_spy[0]["content_reaches_result"] is False
+        assert result["delivery"] == "link"
+        assert "content_base64" not in result
+
     async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
         """An org that opts out of capability links (org_config.json's
         download_delivery.agent_links: false) keeps the

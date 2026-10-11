@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence import export_files
+from privacyfence.org_mode import DownloadDeliveryConfig
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import grist as grist_module
 from privacyfence.connectors.grist import GristConnector
@@ -844,7 +846,7 @@ class TestEveryToolIsAudited:
         csv = tmp_path / "a.csv"
         csv.write_bytes(b"Name\nnew\n")
         monkeypatch.setattr(
-            grist_module.local_files, "deliver_file",
+            grist_module.local_files, "deliver_export",
             lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
         )
 
@@ -1292,7 +1294,83 @@ class TestUpdateCsv:
         assert kwargs["args"] == {
             "doc_id": DOC_ID, "table_id": "Contacts", "local_path": path, "upload_id": "",
             "sha256": sha_of(text), "key_column": "Name", "create_missing": False,
+            "clear_empty": False,
         }
+
+    async def test_clear_empty_clears_a_value(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": 36}})
+
+        result = await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        assert result["updated"] == 1 and result["unchanged"] == 0
+        assert [c.args[2] for c in client.update_records.call_args_list] == [
+            [(1, {"Score": None})],
+        ]
+        assert gated_call_spy[0]["preview_tables"][0]["rows"] == [
+            ["#1", "Ada", "Score", "36", "(empty)"],
+        ]
+
+    async def test_clear_empty_leaves_already_empty_cells_alone(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score,Born\nAda,,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": None, "Born": ""}})
+
+        result = await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        assert result["updated"] == 0 and result["unchanged"] == 1
+        client.update_records.assert_not_called()
+
+    async def test_clear_empty_off_leaves_values(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": 36}})
+
+        result = await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+
+        assert result["updated"] == 0 and result["unchanged"] == 1
+        client.update_records.assert_not_called()
+        assert "Cells to clear" not in gated_call_spy[0]["preview"]
+
+    async def test_clear_empty_new_rows_get_no_nulls(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nNew,\n")
+        table_server(client, {})
+        client.add_records.return_value = [5]
+
+        await connector.call(
+            "grist_update_csv",
+            {**self.ARGS, "local_path": path, "create_missing": True, "clear_empty": True},
+        )
+
+        client.add_records.assert_called_once_with(DOC_ID, "Contacts", [{"Name": "New"}])
+
+    async def test_clear_empty_is_in_the_approval_args(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,\n")
+        table_server(client, {1: {"Name": "Ada", "Score": 36}})
+
+        await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        assert gated_call_spy[0]["args"]["clear_empty"] is True
+
+    async def test_card_counts_cleared_cells(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name,Score,Born\nAda,,\nLin,5,\n")
+        table_server(client, {
+            1: {"Name": "Ada", "Score": 36, "Born": 5},
+            2: {"Name": "Lin", "Score": 4, "Born": None},
+        })
+
+        await connector.call(
+            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+        )
+
+        preview = gated_call_spy[0]["preview"]
+        assert preview["Cells to change"] == "3" and preview["Cells to clear"] == "2"
+        keys = list(preview)
+        assert keys.index("Cells to clear") == keys.index("Cells to change") + 1
 
     async def test_dates_render_as_in_the_file_in_both_columns(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Name,Born\nAda,2024-02-29\n")
@@ -1639,15 +1717,19 @@ def export_records_page(truncated=False):
 def delivered(monkeypatch):
     calls = []
 
-    def fake_deliver(dest_dir, name, data, mime_type, *, download_mode):
+    def fake_deliver(
+        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        download_base_url="",
+    ):
         calls.append({
             "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
-            "download_mode": download_mode,
+            "download_mode": download_mode, "download_config": download_config,
+            "download_base_url": download_base_url,
         })
         return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
                 "delivery": "local_disk"}
 
-    monkeypatch.setattr(grist_module.local_files, "deliver_file", fake_deliver)
+    monkeypatch.setattr(grist_module.local_files, "deliver_export", fake_deliver)
     return calls
 
 
@@ -1777,16 +1859,33 @@ class TestExportRecords:
         assert gated_call_spy == []
         assert delivered == []
 
-    async def test_org_mode_is_refused_before_any_request(self, gated_call_spy, delivered):
+    async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+        cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
+        connector.download_mode = "org"
+        connector.download_config = cfg
+        connector.download_base_url = "https://pf.example"
+
+        await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert delivered[0]["download_mode"] == "org"
+        assert delivered[0]["download_config"] is cfg
+        assert delivered[0]["download_base_url"] == "https://pf.example"
+        assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_org_mode_without_staging_is_refused_before_any_request(self, gated_call_spy, delivered):
         connector, client = export_connector()
         connector.download_mode = "org"
+        connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
-        with pytest.raises(ValueError, match="organization-managed"):
+        with pytest.raises(ValueError, match="allow_disk_staging"):
             await connector.call("grist_export_records", EXPORT_ARGS)
 
         client.get_document.assert_not_called()
         client.get_records.assert_not_called()
         assert gated_call_spy == []
+        assert delivered == []
 
     @pytest.mark.parametrize("name", ["a/b.csv", "notes.txt", ".hidden.csv"])
     async def test_bad_file_name_is_refused_before_any_request(self, gated_call_spy, delivered, name):
@@ -1959,16 +2058,33 @@ class TestExportSql:
         assert call["args"]["file_name"] == "query.csv"
         assert call["delivery"] == "local_disk"
 
-    async def test_org_mode_is_refused_before_any_request(self, gated_call_spy, delivered):
+    async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
+        connector, _client = sql_connector()
+        cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
+        connector.download_mode = "org"
+        connector.download_config = cfg
+        connector.download_base_url = "https://pf.example"
+
+        await connector.call("grist_export_sql", SQL_ARGS)
+
+        assert delivered[0]["download_mode"] == "org"
+        assert delivered[0]["download_config"] is cfg
+        assert delivered[0]["download_base_url"] == "https://pf.example"
+        assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_org_mode_without_staging_is_refused_before_any_request(self, gated_call_spy, delivered):
         connector, client = sql_connector()
         connector.download_mode = "org"
+        connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
-        with pytest.raises(ValueError, match="organization-managed"):
+        with pytest.raises(ValueError, match="allow_disk_staging"):
             await connector.call("grist_export_sql", SQL_ARGS)
 
         client.get_document.assert_not_called()
         client.run_sql.assert_not_called()
         assert gated_call_spy == []
+        assert delivered == []
 
     async def test_deny_writes_nothing(self, monkeypatch, delivered):
         async def denied(**kwargs):

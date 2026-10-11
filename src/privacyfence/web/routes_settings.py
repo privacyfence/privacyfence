@@ -1545,10 +1545,18 @@ def build_org_routes(
             if not verb_enums:
                 return None
             value = _parse_value_list(str(body.get("value") or ""))
-            new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            personal_data = body.get("personal_data") is True
+            new_rules = policy_catalogue.rules_for_catalogue_entry(
+                group, value, verb_enums, personal_data=personal_data,
+            )
             if not new_rules or not auto_accept.add_policy_v2_rules(new_rules):
                 return None
             verb_names = ", ".join(verb.value for verb in verb_enums)
+            if personal_data:
+                return (
+                    f"Added auto-accept rule ({group!r}, allow {verb_names!r}, personal data allowed) "
+                    f"(principal={principal.id})"
+                )
             return f"Added auto-accept rule ({group!r}, allow {verb_names!r}) (principal={principal.id})"
         if action == "remove_policy_rule":
             rule_id = str(body.get("rule_id", ""))

@@ -1015,9 +1015,15 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except JiraClientError as exc:
         results.append(CheckResult("jira", "get_issue", seed_issue_summary, False, str(exc)))
 
+    # export_issues runs before search_issues_page: the unit test for that row reads the last
+    # enhanced_jql call.
+    page_jql = f'project = {project_key} AND summary ~ "{seed_issue_summary}"'
+    # A key lookup is exact; the summary text search can match nothing on a live site.
+    export_jql = f"key = {seed_issue_key}" if seed_issue_key else page_jql
+    results.append(_check_jira_export(client, export_jql, project_key))
+
     # search_issues_page -- the single-request page call the connector's paged
     # search will use; exercised live, nothing recorded.
-    page_jql = f'project = {project_key} AND summary ~ "{seed_issue_summary}"'
     try:
         client.search_issues_page(page_jql, 1, extra=client.resolve_fields(["duedate"]))
         results.append(CheckResult("jira", "search_issues_page", project_key, True, "one page returned"))
@@ -1033,6 +1039,26 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         results.append(CheckResult("jira", "list_fields", project_key, False, str(exc)))
 
     return results
+
+
+def _check_jira_export(client: JiraClient, page_jql: str, project_key: str) -> CheckResult:
+    """Exports the QA seed issue through export_issues and compares its keys with one page read:
+    proves the paging loop and the extra-field request answer on this site. Nothing is recorded."""
+    try:
+        exported = client.export_issues(page_jql, ["duedate"], max_issues=50)
+        paged, _ = client.search_issues_page(page_jql, 50, None, None)
+        export_keys = sorted(i.key for i in exported)
+        page_keys = sorted(i.key for i in paged)
+        if not export_keys or not page_keys:
+            return CheckResult("jira", "export_issues", project_key, False,
+                               "the QA JQL matched no issue")
+        if export_keys != page_keys:
+            return CheckResult("jira", "export_issues", project_key, False,
+                               f"exported keys {export_keys} differ from one page's {page_keys}")
+        return CheckResult("jira", "export_issues", project_key, True,
+                           f"{len(export_keys)} key(s) match one page read")
+    except JiraClientError as exc:
+        return CheckResult("jira", "export_issues", project_key, False, str(exc))
 
 
 def _build_grist_client() -> tuple[GristClient, bool]:

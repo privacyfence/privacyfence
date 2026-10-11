@@ -530,6 +530,47 @@ class TestSearchIssues:
         client._client.enhanced_jql.assert_not_called()
 
 
+def _page(start: int, count: int, token: str | None) -> dict:
+    page: dict = {
+        "issues": [{"key": f"ENG-{i}", "fields": {"summary": "x"}} for i in range(start, start + count)],
+        "isLast": token is None,
+    }
+    if token:
+        page["nextPageToken"] = token
+    return page
+
+
+class TestExportIssues:
+    def test_export_issues_pages_until_the_last_page(self):
+        client = make_client()
+        client._client.get_all_fields.return_value = [STORY_POINTS]
+        client._client.enhanced_jql.side_effect = [_page(1, 100, "t2"), _page(101, 100, "t3"), _page(201, 5, None)]
+
+        issues = client.export_issues("project = ENG", ["Story Points"])
+
+        assert [i.key for i in issues][:2] == ["ENG-1", "ENG-2"]
+        assert len(issues) == 205
+        calls = client._client.enhanced_jql.call_args_list
+        assert [c.kwargs["nextPageToken"] for c in calls] == [None, "t2", "t3"]
+        assert {c.kwargs["limit"] for c in calls} == {100}
+        assert all("customfield_10016" in c.kwargs["fields"] for c in calls)
+
+    def test_export_issues_raises_past_the_limit_without_reading_further(self):
+        client = make_client()
+        client._client.enhanced_jql.side_effect = [_page(1, 100, "t2"), _page(101, 100, "t3"), _page(201, 100, None)]
+
+        with pytest.raises(JiraClientError, match="More than 150 issues match this JQL"):
+            client.export_issues("project = ENG", max_issues=150)
+
+        assert client._client.enhanced_jql.call_count == 2
+
+    def test_export_issues_rejects_empty_jql(self):
+        client = make_client()
+        with pytest.raises(JiraClientError, match="export_issues requires a non-empty JQL"):
+            client.export_issues("")
+        client._client.enhanced_jql.assert_not_called()
+
+
 class TestSearchIssuesPage:
     def test_requires_jql(self):
         client = make_client()

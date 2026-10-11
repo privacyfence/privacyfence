@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61", "wheel", "setuptools_scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "privacyfence-sync"
+dynamic = ["version"]
+description = "Run a PrivacyFence data-sync recipe as a plain MCP client, with no AI model involved."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = ["mcp>=2.2,<3.0.0", "httpx2>=2.5", "pyyaml>=6"]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio", "pytest-cov"]
+
+[project.scripts]
+privacyfence-sync = "privacyfence_sync.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+root = ".."
+fallback_version = "0.0.0.dev0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
