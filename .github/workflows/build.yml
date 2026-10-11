@@ -913,6 +913,14 @@ jobs:
         run: |
           python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
 
+      # The recipe-writing skill, zipped as a Claude plugin with the release version stamped in
+      # (ADR 0163). Stable only, like the attach step below that uploads it.
+      - name: Build the privacyfence-sync plugin zip (stable only)
+        if: steps.release.outputs.channel == 'stable'
+        run: |
+          python3 scripts/build_sync_plugin.py --version "${{ steps.release.outputs.version }}" \
+            --out release-assets/privacyfence-sync-plugin.zip
+
       # Only a stable tag also gets a public GitHub Release with attached binaries -- alpha/beta/rc
       # stop at the private R2 upload each build job already did (see scripts/r2_release.py's
       # module docstring for why). One call, the complete file set -- see this job's own top
@@ -930,6 +938,7 @@ jobs:
             release-assets/privacyfence_*.deb
             release-assets/sbom-python.cdx.json
             release-assets/sbom-shim-npm.cdx.json
+            release-assets/privacyfence-sync-plugin.zip
           body_path: release-notes.md
           prerelease: false
 
