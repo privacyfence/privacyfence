@@ -1917,7 +1917,7 @@ class TestAddPolicyRule:
         assert rules[0]["allow_personal_data"] is True
 
     def test_add_policy_rule_personal_data_on_an_unsupported_group_adds_nothing(self, controller):
-        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"], personal_data=True)
+        state = controller.add_policy_rule("gmail.label", "Label_1", ["read"], personal_data=True)
 
         assert state["auto_accept"]["rules"] == []
         assert policy_store.AUTO_ACCEPT_CONFIG_KEY not in controller._load_config()

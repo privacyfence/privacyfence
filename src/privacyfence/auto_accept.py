@@ -357,6 +357,7 @@ PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
     "salesforce_export_report",
     "jira_export_issues",
     "peek_upload_page",
+    "drive_download_file",
 })
 
 @dataclass

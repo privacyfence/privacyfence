@@ -50,6 +50,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`jira_export_issues` writes a JQL search to a file.** Every issue a query matches, up to 10,000, goes to a CSV or JSON file after one approval, with the standard columns and any extra fields you name; the result holds only counts and a SHA-256. A "this project" search rule covers it, and a query that matches nothing returns without a card.
 - **`grist_update_csv` can clear values.** With `clear_empty: true`, an empty CSV cell clears the value in Grist instead of leaving it unchanged. The approval card counts the cells to clear.
 - **A personal-data checkbox on the Auto-accept "Add a rule" form.** For the Grist document, Salesforce report, Jira project and Peek page scopes, ticking it saves a rule that lets matching calls move personal data without a prompt. It works the same on a local and an organization-managed install, and the org audit entry says "personal data allowed".
+- **A personal-data checkbox on Drive folder rules, for downloads delivered as a file.** Ticking it on a Drive folder rule lets `drive_download_file` skip the personal-data confirmation when the file is saved or staged behind a one-time link; on an organization install, a file small enough to come back inline in the tool result keeps the check, and a download approved as a link is never returned inline.
 
 ### Changed
 
