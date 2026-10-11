@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.8.0] — 2026-10-11
+
 ### Changed
 
 - **Clearer Grist rule verb.** On Settings → Auto-accept, the Grist document rule's `create` chip now reads "create (add records)", so it is clear that it covers adding records.
@@ -3232,7 +3234,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.7.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.8.0...HEAD
+[5.8.0]: https://github.com/privacyfence/privacyfence/compare/v5.7.0...v5.8.0
 [5.7.0]: https://github.com/privacyfence/privacyfence/compare/v5.6.1...v5.7.0
 [5.6.1]: https://github.com/privacyfence/privacyfence/compare/v5.6.0...v5.6.1
 [5.6.0]: https://github.com/privacyfence/privacyfence/compare/v5.5.0...v5.6.0
