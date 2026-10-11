@@ -212,6 +212,8 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "confluence_create_page": Verb.CREATE,
     "confluence_update_page": Verb.UPDATE,
     "telegram_get_messages": Verb.READ,
+    "peek_get_comments": Verb.READ,
+    "peek_get_stats": Verb.READ,
     "telegram_search_messages": Verb.SEARCH,
     "telegram_send_message": Verb.SEND,
     "tasks_create_task": Verb.CREATE,
