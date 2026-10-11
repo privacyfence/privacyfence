@@ -46,6 +46,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`salesforce_export_report` can write the shown text and currency too.** `cell_format: both` writes each column's raw value, its shown text as `<column>.label`, and `<column>.currency` for money columns.
+- **`grist_update_csv` can clear values.** With `clear_empty: true`, an empty CSV cell clears the value in Grist instead of leaving it unchanged. The approval card counts the cells to clear.
 
 ### Changed
 
