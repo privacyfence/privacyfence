@@ -2048,6 +2048,13 @@ class TestSnapshotStructure:
         assert row["has_org"] is True
         assert row["auth_label"] == "Authenticate…"
 
+    def test_peek_row_needs_no_bundle_in_local_mode(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "peek")
+        assert row["label"] == "Peek"
+        assert row["has_org"] is True
+        assert row["authed"] is False
+
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()
         auto_accept_state = state["auto_accept"]

@@ -88,7 +88,7 @@ LICENSE_NAME = "Apache-2.0"
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
-    "slack", "jira", "confluence", "salesforce", "telegram", "grist",
+    "slack", "jira", "confluence", "salesforce", "telegram", "grist", "peek",
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
@@ -1855,8 +1855,8 @@ class SettingsController:
             busy = cname in self._busy_connectors
             if cname == "telegram":
                 has_org = telegram_app_credentials() is not None
-            elif cname == "grist":
-                has_org = True  # an API key needs no bundle in local mode
+            elif cname in ("grist", "peek"):
+                has_org = True  # an API key or token needs no bundle in local mode
             else:
                 has_org = bool(org_config.get(ORG_CONFIG_SERVICE[cname]))
 
