@@ -1,0 +1,16 @@
+{
+  "startAt": 0,
+  "maxResults": 1,
+  "total": 2,
+  "isLast": false,
+  "values": [
+    {
+      "id": "2",
+      "name": "PrivacyFence QA [QATEST]",
+      "objectSchemaKey": "PFQA",
+      "description": "Synthetic QA schema",
+      "objectCount": 7,
+      "objectTypeCount": 3
+    }
+  ]
+}

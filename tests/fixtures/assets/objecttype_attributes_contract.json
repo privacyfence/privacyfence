@@ -1,0 +1,90 @@
+[
+  {
+    "id": "70",
+    "name": "Name",
+    "type": 0,
+    "minimumCardinality": 1,
+    "maximumCardinality": 1,
+    "label": true,
+    "system": false,
+    "defaultType": {
+      "id": 0,
+      "name": "Text"
+    }
+  },
+  {
+    "id": "71",
+    "name": "Account",
+    "type": 1,
+    "minimumCardinality": 0,
+    "maximumCardinality": 1,
+    "label": false,
+    "system": false,
+    "referenceObjectTypeId": "5",
+    "referenceObjectType": {
+      "id": "5",
+      "name": "Account"
+    },
+    "referenceType": {
+      "id": "1",
+      "name": "Reference"
+    }
+  },
+  {
+    "id": "72",
+    "name": "Owner",
+    "type": 2,
+    "minimumCardinality": 0,
+    "maximumCardinality": 1,
+    "label": false,
+    "system": false
+  },
+  {
+    "id": "73",
+    "name": "Tags",
+    "type": 0,
+    "minimumCardinality": 0,
+    "maximumCardinality": -1,
+    "label": false,
+    "system": false,
+    "defaultType": {
+      "id": 0,
+      "name": "Text"
+    }
+  },
+  {
+    "id": "74",
+    "name": "Status",
+    "type": 7,
+    "minimumCardinality": 0,
+    "maximumCardinality": 1,
+    "label": false,
+    "system": false
+  },
+  {
+    "id": "75",
+    "name": "Key",
+    "type": 0,
+    "minimumCardinality": 0,
+    "maximumCardinality": 1,
+    "label": false,
+    "system": true,
+    "defaultType": {
+      "id": 0,
+      "name": "Text"
+    }
+  },
+  {
+    "id": "76",
+    "name": "Created",
+    "type": 0,
+    "minimumCardinality": 0,
+    "maximumCardinality": 1,
+    "label": false,
+    "system": true,
+    "defaultType": {
+      "id": 6,
+      "name": "DateTime"
+    }
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "id": "123",
+  "label": "PrivacyFence QA seed contract [QATEST]",
+  "objectKey": "PFQA-123",
+  "objectType": {
+    "id": "7",
+    "name": "Contract",
+    "objectSchemaId": "2"
+  },
+  "created": "2026-01-05T10:00:00.000Z",
+  "updated": "2026-02-01T09:30:00.000Z"
+}
