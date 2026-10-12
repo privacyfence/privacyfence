@@ -54,6 +54,13 @@ class TestMissingOperations:
         assert outdated.missing_operations(rule) == frozenset()
         assert outdated.missing_tools(rule) == ()
 
+    def test_a_move_rule_is_not_widened_by_the_copy_verb(self):
+        rule = PolicyRule(
+            id="r", predicate="move_within_approved_folders", value=["F1", "F2"],
+            operations=frozenset({"drive.move_file"}),
+        )
+        assert outdated.missing_operations(rule) == frozenset()
+
     def test_a_verb_the_rule_does_not_have_contributes_nothing(self):
         read_only = _rule("grist.document", ["DOC1"], [Verb.READ])
         assert outdated.missing_operations(read_only) == frozenset()

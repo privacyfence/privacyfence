@@ -112,6 +112,7 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ("drive_docs_edit_content", _drive_ctx("drive_docs_edit_content", document_id="f1")),
     ("drive_add_comment", _drive_ctx("drive_add_comment", file_id="f1")),
     ("drive_move_file", _drive_ctx("drive_move_file", file_id="f1", destination_folder_id="D9")),
+    ("drive_copy_file", _drive_ctx("drive_copy_file", file_id="f1", destination_folder_id="D9")),
     ("drive_upload_file", make_ctx(connector="drive", tool="drive_upload_file", args={"parent_folder_id": "FOLDER1"})),
     ("calendar_create_event", make_ctx(connector="calendar", args={"calendar_id": "primary"})),
     ("calendar_update_event", make_ctx(connector="calendar", args={"calendar_id": "primary", "event_id": "e"})),
@@ -309,6 +310,22 @@ class TestProposalsAgainstTheV1Tables:
         assert move.value == ["D9", "FOLDER1"]
         assert scopes.SCOPE_SELECTORS["move_within_approved_folders"].matches(move.value, ctx) is True
 
+    def test_a_copy_proposal_names_both_the_source_and_the_destination_folder(self):
+        ctx = _drive_ctx("drive_copy_file", file_id="f1", destination_folder_id="D9")
+        copy = next(p for p in propose.proposals_for("drive_copy_file", ctx)
+                    if p.scope.id == "move_within_approved_folders")
+        assert copy.value == ["D9", "FOLDER1"]
+        assert copy.operation == "drive.copy_file"
+        assert copy.verb == Verb.COPY
+        assert scopes.SCOPE_SELECTORS["move_within_approved_folders"].matches(copy.value, ctx) is True
+
+    def test_a_move_proposal_offers_a_copy_widening_over_the_same_folders(self):
+        ctx = _drive_ctx("drive_move_file", file_id="f1", destination_folder_id="D9")
+        move = next(p for p in propose.proposals_for("drive_move_file", ctx)
+                    if p.scope.id == "move_within_approved_folders")
+        (widening,) = [w for w in move.widenings if w.verb == Verb.COPY]
+        assert set(widening.pairs) == {("move_within_approved_folders", "drive.copy_file")}
+
     def test_a_move_with_no_destination_or_no_source_folder_is_not_proposed(self):
         no_destination = _drive_ctx("drive_move_file", file_id="f1")
         orphan = make_ctx(connector="drive", tool="drive_move_file", args={"destination_folder_id": "D9"},
@@ -404,6 +421,7 @@ class TestOneWriter:
 
     SANDBOX_WRITE_VERBS = (
         Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE, Verb.CREATE, Verb.MOVE,
+        Verb.COPY,
     )
 
     def test_popup_and_settings_produce_identical_rules(self):

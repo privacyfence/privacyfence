@@ -18,7 +18,7 @@ from privacyfence.policy.registry import Verb
 from ...helpers import make_ctx
 
 _FILE = SimpleNamespace(id="f1", parent_ids=["FOLDER1"], owners=["me@corp.com"])
-_WRITE_VERBS = (Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE, Verb.CREATE, Verb.MOVE)
+_WRITE_VERBS = (Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE, Verb.CREATE, Verb.MOVE, Verb.COPY)
 
 
 def _drive_write_ctx():
@@ -81,12 +81,13 @@ class TestRuleVerbsAndCoverage:
         assert describe.covered_tools(rule) == ("drive_get_file_content",)
 
     def test_covered_tools_counts_the_sandbox_folders_real_width(self):
-        """The width a surface has to state: one "Write auto-accept" toggle, thirteen operation keys,
+        """The width a surface has to state: one "Write auto-accept" toggle, fourteen operation keys,
         and the tools behind them."""
         rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], _WRITE_VERBS)
         tools = {tool for rule in rules for tool in describe.covered_tools(rule)}
-        assert len(tools) == 13
+        assert len(tools) == 14
         assert "drive_sheets_delete_dimensions" in tools
+        assert "drive_copy_file" in tools
 
     def test_a_narrow_proposal_covers_one_tool(self):
         proposal = propose.proposals_for("drive_sheets_write_range", _drive_write_ctx())[0]
@@ -179,5 +180,5 @@ class TestConfirmationText:
         proposal = propose.proposals_for("drive_sheets_write_range", _drive_write_ctx())[0]
         widenings = [w for w in proposal.widenings if w.verb in _WRITE_VERBS]
         text = describe.confirmation_text(proposal, widenings)
-        assert "Covers 13 tools:" in text
+        assert "Covers 14 tools:" in text
         assert "delete" in text

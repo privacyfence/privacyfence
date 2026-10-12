@@ -580,8 +580,11 @@ For each representative read, list, search, create, update, send or upload tool:
   `drive_sheets_format_range` shows a disclosure caption, and a second call of the same operation
   on the same file within 300 seconds is auto-accepted with rule `session_temp_accept`.
   `drive_sheets_add_sheet`, `drive_sheets_rename_sheet`, `drive_sheets_delete_dimensions`,
-  `drive_write_file_content`, `drive_write_doc_content`, `drive_upload_file` and `drive_move_file`
-  never arm it.
+  `drive_write_file_content`, `drive_write_doc_content`, `drive_upload_file`, `drive_copy_file` and
+  `drive_move_file` never arm it.
+- **Copy.** `drive_copy_file` on a QA file into a subfolder of the `PrivacyFence QA Sandbox`
+  folder shows a card with the file, its current → destination folder and the copy's name. Approve
+  it, then confirm the copy appears in the subfolder and the original stays where it was.
 - **Always allow on a read.** Always allow on `drive_sheets_get_values` for a sheet you own
   proposes `i_am_owner`; if the sheet is also in an approved folder, the card offers a separate
   folder button rather than picking one.

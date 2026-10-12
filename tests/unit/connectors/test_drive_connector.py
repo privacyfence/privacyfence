@@ -123,6 +123,7 @@ class TestDispatch:
 DRIVE_SIBLINGS = {
     "drive_list_files": ("drive_list_folder", "drive_get_file_metadata"),
     "drive_list_folder": ("drive_list_files",),
+    "drive_copy_file": ("drive_list_folder",),
     "drive_get_file_metadata": ("drive_get_file_content",),
     "drive_get_file_content": ("drive_download_file",),
     "drive_download_file": ("drive_get_file_content",),
@@ -1356,6 +1357,67 @@ class TestWriteToolsGateAndPreview:
         await connector.call("drive_move_file", {"file_id": "f1", "destination_folder_id": "folderB"})
 
         assert gated_call_spy[0]["preview"]["Folder"] == "folderA → Archive"
+
+    async def test_copy_file_preview_and_gate_arguments(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.side_effect = [
+            make_file(parent_ids=["folderA"]),
+            make_file(id="folderA", name="Inbox", mime_type="application/vnd.google-apps.folder"),
+            make_file(id="folderB", name="Archive", mime_type="application/vnd.google-apps.folder"),
+        ]
+        client.copy_file.return_value = {"id": "c1"}
+
+        result = await connector.call("drive_copy_file", {"file_id": "f1", "destination_folder_id": "folderB"})
+
+        assert result == {"id": "c1"}
+        kwargs = gated_call_spy[0]
+        assert kwargs["gate"] == "popup"
+        preview = kwargs["preview"]
+        assert set(preview) == {"File", "Owner", "Folder", "Copy name"}
+        assert preview["Folder"] == "Inbox → Archive"
+        assert preview["Copy name"] == preview["File"]
+        assert kwargs["details_text"] == (
+            "A copy of the file will be created in the destination folder and you will own it; "
+            "the original is unchanged."
+        )
+        assert kwargs["raw_data"]["destination_folder_id"] == "folderB"
+        assert kwargs["args"] == {"file_id": "f1", "destination_folder_id": "folderB"}
+        client.copy_file.assert_called_once_with("f1", "folderB", "")
+
+    async def test_copy_file_preview_shows_the_given_name(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.side_effect = [make_file(), DriveClientError("nope")]
+        client.copy_file.return_value = {"id": "c1"}
+
+        await connector.call(
+            "drive_copy_file", {"file_id": "f1", "destination_folder_id": "folderB", "name": "Report v2"}
+        )
+
+        assert gated_call_spy[0]["preview"]["Copy name"] == "Report v2"
+        assert gated_call_spy[0]["preview"]["Folder"] == "(unknown) → folderB"
+        client.copy_file.assert_called_once_with("f1", "folderB", "Report v2")
+
+    async def test_copy_file_refuses_a_folder_before_any_popup(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = make_file(
+            id="d1", name="Docs", mime_type="application/vnd.google-apps.folder"
+        )
+
+        with pytest.raises(ValueError, match="not folders"):
+            await connector.call("drive_copy_file", {"file_id": "d1", "destination_folder_id": "folderB"})
+
+        assert gated_call_spy == []
+        client.copy_file.assert_not_called()
+
+    async def test_copy_file_is_not_recorded_as_an_own_write(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.side_effect = [make_file(), DriveClientError("nope")]
+        client.copy_file.return_value = {"id": "c1"}
+
+        await connector.call("drive_copy_file", {"file_id": "f1", "destination_folder_id": "folderB"})
+
+        assert "c1" not in connector.session_created_ids
+        assert "c1" not in connector.own_write_revisions
 
     async def test_add_comment_gate_popup(self, gated_call_spy):
         connector, client = make_connector()

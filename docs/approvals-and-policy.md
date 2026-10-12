@@ -367,7 +367,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 | Scope | Kind | Value | Predicate(s) | Matches when |
 |---|---|---|---|---|
-| Drive folder | identity | folder ids | `approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, `move_within_approved_folders` | the file's direct parent is one of the folders (not recursive). For an upload or new file, the destination folder. For a move, both the file's current folder and the destination must be among them |
+| Drive folder | identity | folder ids | `approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, `move_within_approved_folders` | the file's direct parent is one of the folders (not recursive). For an upload or new file, the destination folder. For a move or a copy, both the file's current folder and the destination must be among them |
 | Drive file | identity | file ids | `drive.file` | the file is one of these |
 | Drive file type | attribute | MIME types | `file_type_allowlist` | the file has one of these MIME types |
 | Drive files I own | attribute | — | `i_am_owner`, `created_by_me` | you are an owner of the file |
@@ -440,13 +440,13 @@ condition needs the fetched item, so `privacyfence_check_policy` reports a rule 
 
 ### Verbs
 
-Settings and the confirmation dialog describe operations with 18 verbs in four families, colour-coded
+Settings and the confirmation dialog describe operations with 19 verbs in four families, colour-coded
 so a risky verb stands out:
 
 | Family | Verbs |
 |---|---|
 | read | read, download, search |
-| write | create, update, format, restructure, comment, label, move, archive, complete, transition, configure |
+| write | create, update, format, restructure, comment, label, move, copy, archive, complete, transition, configure |
 | send | send, draft, share |
 | destructive | delete |
 
@@ -462,7 +462,7 @@ calls of the same tool on the same file for **5 minutes**, without a card:
 The card says so above its buttons ("Approving this also allows further calls like this to the same
 file for a few minutes without asking again."). The window is not a rule: it is never written to
 `settings.yaml` and ends when PrivacyFence restarts. Deleting rows or columns, adding or renaming a
-sheet, replacing a whole file or document, uploading and moving never open one.
+sheet, replacing a whole file or document, uploading, copying and moving never open one.
 
 ---
 

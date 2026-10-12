@@ -90,7 +90,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Connector | Tools | `auto` | `review` | `popup` |
 |---|---:|---:|---:|---:|
 | [Gmail](#gmail) | 20 | 5 | 3 | 12 |
-| [Google Drive](#google-drive-including-sheets-and-docs) | 23 | 7 | 3 | 13 |
+| [Google Drive](#google-drive-including-sheets-and-docs) | 24 | 7 | 3 | 14 |
 | [Google Calendar](#google-calendar) | 14 | 6 | 1 | 7 |
 | [Google Contacts](#google-contacts) | 7 | 3 | 0 | 4 |
 | [Google Tasks](#google-tasks) | 8 | 3 | 0 | 5 |
@@ -102,7 +102,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **141** | **50** | **29** | **62** |
+| **Total** | **142** | **50** | **29** | **63** |
 
 ## Gmail
 
@@ -144,6 +144,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `drive_get_file_content` | read | `review` | Fetch the content of a Drive file by id. |
 | `drive_sheets_get_values` | read | `review` | Read a range of cells from a spreadsheet: display values by default, or the underlying values, or formulas instead of computed results, and optionally cell formatting alongside them. |
 | `drive_add_comment` | write | `popup` | Add a comment to a Drive file. |
+| `drive_copy_file` | write | `popup` | Copy a Drive file into a folder. |
 | `drive_docs_edit_content` | write | `popup` | Replace one occurrence of existing text in a Google Doc with new Markdown, without touching the rest of the document. |
 | `drive_docs_format_content` | write | `popup` | Apply formatting (bold, italic, highlight, text color) to existing text in a Google Doc, located the same way as drive_docs_edit_content, without changing the text itself. |
 | `drive_move_file` | write | `popup` | Move a Drive file to a different folder. |

@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Copy a Drive file into another folder.** The new `drive_copy_file` tool copies a file after your approval; folders cannot be copied. A Drive folder rule auto-approves a copy only when it has the new *copy* verb and names both the file's folder and the destination.
+
 ### Fixed
 
 - **Device serial numbers no longer count as credit card numbers.** A 13-digit serial such as `1912401001297` in a Salesforce report's notes passed the card checksum by chance and raised the personal-data confirmation. A number now also needs a length a card starting with that digit can have, so a 13-digit run counts only when it starts with 4, 5 or 6.

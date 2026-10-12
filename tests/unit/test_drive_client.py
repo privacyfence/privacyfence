@@ -774,6 +774,53 @@ class TestMoveFile:
             client.move_file("f1", "dest")
 
 
+class TestCopyFile:
+    RAW = {"id": "c1", "name": "Copy", "mimeType": "text/plain", "webViewLink": "https://x/c1"}
+
+    def test_missing_ids_raise(self):
+        client = make_client(MagicMock())
+        with pytest.raises(DriveClientError, match="requires file_id"):
+            client.copy_file("", "dest")
+        with pytest.raises(DriveClientError, match="requires file_id"):
+            client.copy_file("f1", "")
+
+    def test_body_without_a_name_only_sets_the_parent(self):
+        service = MagicMock()
+        service.files.return_value.copy.return_value.execute.return_value = self.RAW
+        make_client(service).copy_file("f1", "dest")
+        kwargs = service.files.return_value.copy.call_args.kwargs
+        assert kwargs["fileId"] == "f1"
+        assert kwargs["body"] == {"parents": ["dest"]}
+        assert kwargs["supportsAllDrives"] is True
+
+    def test_body_with_a_name_sets_it(self):
+        service = MagicMock()
+        service.files.return_value.copy.return_value.execute.return_value = self.RAW
+        make_client(service).copy_file("f1", "dest", "N")
+        kwargs = service.files.return_value.copy.call_args.kwargs
+        assert kwargs["body"] == {"parents": ["dest"], "name": "N"}
+        assert kwargs["supportsAllDrives"] is True
+
+    def test_returns_the_copy_and_its_source(self):
+        service = MagicMock()
+        service.files.return_value.copy.return_value.execute.return_value = self.RAW
+        result = make_client(service).copy_file("f1", "dest")
+        assert result == {
+            "id": "c1",
+            "name": "Copy",
+            "mime_type": "text/plain",
+            "web_view_link": "https://x/c1",
+            "source_file_id": "f1",
+            "parent": "dest",
+        }
+
+    def test_api_error_becomes_drive_client_error(self):
+        service = MagicMock()
+        service.files.return_value.copy.return_value.execute.side_effect = http_error(403)
+        with pytest.raises(DriveClientError, match="copy_file"):
+            make_client(service).copy_file("f1", "dest")
+
+
 class TestAddComment:
     def test_empty_file_id_raises(self):
         client = make_client(MagicMock())
