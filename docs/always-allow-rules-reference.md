@@ -49,7 +49,9 @@ the request on the card, once.
 
 | Tool | Always allow buttons |
 |---|---|
+| `assets_get_connected_tickets` | this schema |
 | `assets_get_object` | this schema |
+| `assets_get_related_objects` | this schema |
 | `assets_search_objects` | this schema |
 
 ### Calendar

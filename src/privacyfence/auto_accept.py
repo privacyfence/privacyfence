@@ -161,6 +161,8 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "jira_transition_issue":          "jira.transition_issue",
     "assets_get_object":              "assets.read_object",
     "assets_search_objects":          "assets.read_object",
+    "assets_get_related_objects":     "assets.read_object",
+    "assets_get_connected_tickets":   "assets.read_object",
     "confluence_get_page":            "confluence.read_page",
     "confluence_get_page_by_title":   "confluence.read_page",
     "confluence_download_attachment": "confluence.download_attachment",
@@ -351,6 +353,8 @@ TOOL_TO_GATE: dict[str, str] = {
     "assets_list_attributes":          "auto",
     "assets_search_objects":           "review",
     "assets_get_object":               "review",
+    "assets_get_related_objects":      "review",
+    "assets_get_connected_tickets":    "review",
     # Peek
     "peek_list_pages":                 "auto",
     "peek_get_comments":               "review",
