@@ -68,7 +68,7 @@ dependencies = [
     # pin, unlike its neighbours: it bundles PDFium, a C parser that is handed attacker-supplied
     # files before a human has decided anything, so a new version is a deliberate bump, never
     # something a fresh resolve picks up on its own.
-    "pypdfium2==5.13.0",
+    "pypdfium2==5.14.0",
     # text_extraction.py's DOCX/PPTX parsing: that content is an
     # attacker-controlled attachment fetched and parsed pre-approval, so its
     # embedded XML parts get defusedxml's stdlib-compatible ElementTree
@@ -271,7 +271,7 @@ test = [
 # build never installs the package or its runtime dependencies. See
 # docs/adr/0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md.
 docs = [
-    "zensical==0.0.67",
+    "zensical==0.0.69",
 ]
 # Static analysis gate. ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
 # [tool.bandit] below); mypy runs in CI twice, both blocking:
