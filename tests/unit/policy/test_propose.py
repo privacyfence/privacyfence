@@ -271,6 +271,23 @@ class TestProposalsAgainstTheV1Tables:
             ("approved_report_ids", ["R1"]),
         ]
 
+    def test_assets_reads_are_offered_this_schema(self):
+        from types import SimpleNamespace
+
+        one = make_ctx(connector="assets", args={"object_id": "1"}, raw_data=SimpleNamespace(schema_id="2"))
+        proposals = propose.proposals_for("assets_get_object", one)
+        assert [(p.scope.predicate, p.scope.hint, p.value) for p in proposals] == [
+            ("approved_schema_ids", "this schema", ["2"]),
+        ]
+        many = make_ctx(
+            connector="assets", args={"aql": "x"},
+            raw_data=[SimpleNamespace(schema_id="5"), SimpleNamespace(schema_id="2"), SimpleNamespace(schema_id="5")],
+        )
+        proposals = propose.proposals_for("assets_search_objects", many)
+        assert [(p.scope.predicate, p.scope.hint, p.value) for p in proposals] == [
+            ("approved_schema_ids_all_results", "this schema", ["2", "5"]),
+        ]
+
     def test_an_ungoverned_or_unknown_tool_proposes_nothing(self):
         assert propose.proposals_for("drive_list_files", make_ctx()) == []
         assert propose.proposals_for("not_a_tool", make_ctx()) == []

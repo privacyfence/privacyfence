@@ -184,6 +184,20 @@ def _jira_result_project_keys(ctx: ReviewContext) -> Any:
     return sorted(keys) or NO_VALUE
 
 
+def _assets_schema_ids(ctx: ReviewContext) -> Any:
+    """The schema id of the one object a read returns (the first, when ``raw_data`` is a list)."""
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    schema_id = str(getattr(items[0], "schema_id", "") or "") if items else ""
+    return [schema_id] if schema_id else NO_VALUE
+
+
+def _assets_result_schema_ids(ctx: ReviewContext) -> Any:
+    """Every schema present across a search's results -- ``approved_schema_ids_all_results``' value."""
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    ids = {s for item in items if (s := str(getattr(item, "schema_id", "") or ""))}
+    return sorted(ids) or NO_VALUE
+
+
 def _confluence_space_keys(ctx: ReviewContext) -> Any:
     raw = ctx.raw_data
     space_key = ctx.args.get("space_key") or (raw.get("space_key") if isinstance(raw, dict) else "") or ""
@@ -341,6 +355,9 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     _scope("approved_project_keys_all_results", "jira.project", "jira", (Verb.SEARCH,), _jira_result_project_keys, "this project"),
     _scope("i_am_reporter", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm reporter", group="jira.my_issues/reporter"),
     _scope("i_am_assignee", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm assignee", group="jira.my_issues/assignee"),
+    # ── Assets ────────────────────────────────────────────────────────────────────────────────
+    _scope("approved_schema_ids", "assets.schema", "assets", (Verb.READ,), _assets_schema_ids, "this schema"),
+    _scope("approved_schema_ids_all_results", "assets.schema", "assets", (Verb.SEARCH,), _assets_result_schema_ids, "this schema"),
     # ── Confluence ────────────────────────────────────────────────────────────────────────────
     _scope(
         "approved_space_keys", "confluence.space", "confluence",

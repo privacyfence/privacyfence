@@ -105,6 +105,8 @@ DATA_DEPENDENT_RULES: frozenset[str] = frozenset({
     "approved_channel_all_results",
     "approved_chats_all_results",
     "approved_project_keys_all_results",
+    "approved_schema_ids",
+    "approved_schema_ids_all_results",
     "non_private_event",
 })
 
@@ -417,6 +419,27 @@ class V1Reference:
         items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
         keys = [getattr(i, "key", "") or "" for i in items]
         return bool(keys) and all("-" in k and k.rsplit("-", 1)[0].upper() in allowed for k in keys)
+
+    # ── Assets ────────────────────────────────────────────────────────────
+
+    def _rule_approved_schema_ids(self, value, ctx):
+        if not value:
+            return False
+        allowed = {str(v) for v in (value if isinstance(value, list) else [value])}
+        items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+        if len(items) != 1:
+            return False
+        schema_id = str(getattr(items[0], "schema_id", "") or "")
+        return bool(schema_id) and schema_id in allowed
+
+    def _rule_approved_schema_ids_all_results(self, value, ctx):
+        if not value:
+            return False
+        allowed = {str(v) for v in (value if isinstance(value, list) else [value])}
+        if not isinstance(ctx.raw_data, list):
+            return False
+        ids = [str(getattr(i, "schema_id", "") or "") for i in ctx.raw_data]
+        return bool(ids) and all(i and i in allowed for i in ids)
 
     def _rule_i_am_reporter(self, _v, ctx):
         raw = ctx.raw_data

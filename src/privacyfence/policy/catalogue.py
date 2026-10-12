@@ -99,6 +99,8 @@ VALUE_HINTS: dict[str, str] = {
     "label_name_allowlist": "Newsletters, Receipts",
     "approved_project_keys": "MYPROJ, OTHERPROJ",
     "approved_project_keys_all_results": "MYPROJ, OTHERPROJ",
+    "approved_schema_ids": "2, 5",
+    "approved_schema_ids_all_results": "2, 5",
     "approved_space_keys": "TEAM, DOCS",
     "approved_chats": "123456789, -100987654321",
     "approved_chats_all_results": "123456789, -100987654321",
@@ -111,6 +113,7 @@ PERSONAL_DATA_GROUPS: dict[str, str] = {
     "grist.document": "Exports may include personal data",
     "salesforce.report": "Exports may include personal data",
     "jira.project": "Exports may include personal data",
+    "assets.schema": "Exports may include personal data",
     "peek.page": "New versions may include personal data",
     "drive.folder": "Downloads may include personal data",
 }

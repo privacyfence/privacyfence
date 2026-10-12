@@ -79,6 +79,13 @@ def _resolve_jira_project(client: Any, resource_id: str) -> str | None:
         return None
 
 
+def _resolve_assets_schema(client: Any, resource_id: str) -> str | None:
+    try:
+        return client.get_schema(resource_id).name or None
+    except Exception:
+        return None
+
+
 def _resolve_confluence_space(client: Any, resource_id: str) -> str | None:
     try:
         return _find_by(client.list_spaces(), "key", resource_id)
@@ -235,6 +242,16 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
             )),
         },
         resolver=_resolve_jira_project,
+    ),
+    GrantResourceType(
+        connector="assets", config_key="schemas",
+        capabilities={
+            "read": GrantCapability("Read auto-accept", (
+                ("assets.read_object", "approved_schema_ids"),
+                ("assets.read_object", "approved_schema_ids_all_results"),
+            )),
+        },
+        resolver=_resolve_assets_schema,
     ),
     GrantResourceType(
         connector="confluence", config_key="spaces",
