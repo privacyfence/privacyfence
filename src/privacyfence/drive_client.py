@@ -24,7 +24,8 @@ import os
 import re as _re
 import threading
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
 from google.auth.transport.requests import AuthorizedSession, Request
@@ -35,6 +36,7 @@ from googleapiclient.http import MediaIoBaseDownload
 from .google_http import authorized_http
 from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
+from .text_extraction import EXTRACTABLE_MIME_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +71,50 @@ _FILE_FIELDS = (
     "owners(emailAddress), shared, webViewLink, parents, driveId, thumbnailLink"
 )
 
+# Fields requested for a file's saved versions (revisions.list).
+_REVISION_FIELDS = "id, mimeType, modifiedTime, keepForever, size, lastModifyingUser(displayName, emailAddress)"
+
+# How an earlier version of a Google-native file is exported. CSV covers only
+# the first tab, so a Sheet comes back as xlsx and every tab survives; the Docs
+# API cannot read an old revision, so a Doc comes back as plain text, not the
+# Markdown get_file_content renders.
+_REVISION_EXPORTS = {
+    "application/vnd.google-apps.document": "text/plain",
+    "application/vnd.google-apps.spreadsheet": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ),
+    "application/vnd.google-apps.presentation": "text/plain",
+}
+
+# Text is cut to 100,000 characters by the connector, so more is never needed.
+_REVISION_TEXT_MAX_BYTES = 400_000
+# Extraction needs the whole file; same figure as the connector's full-fetch cap.
+_REVISION_EXTRACT_MAX_BYTES = 20_000_000
+
+# Hosts a revision export link may point at, so the user's token is never sent
+# anywhere else.
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+_REVISION_EXPORT_HOSTS = frozenset({"docs.google.com", "www.googleapis.com"})
+
 # Cap on how much we'll read back from a thumbnailLink fetch. It's meant to be
 # a small preview image Drive generated, not a full download -- if a response
 # somehow exceeds this, something is wrong (not actually a thumbnail) and we'd
 # rather fail than buffer an unbounded amount of memory.
 _THUMBNAIL_MAX_BYTES = 1_048_576
+
+
+def _parse_utc(value: str) -> datetime | None:
+    """Parse an ISO 8601 / RFC 3339 time as UTC; a bare date is midnight UTC."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def resolve_download_name(metadata: Any) -> str:
@@ -1146,6 +1187,19 @@ class DriveFile:
 
 
 @dataclass
+class DriveRevision:
+    """One saved version of a Drive file (metadata only)."""
+
+    id: str
+    modified_time: str = ""
+    author_name: str = ""
+    author_email: str = ""
+    size: int = 0  # bytes, 0 for Google Docs/Sheets/Slides (Drive reports none)
+    keep_forever: bool = False
+    before_cutoff: bool = False  # True only for the baseline entry list_revisions adds
+
+
+@dataclass
 class DriveFileContent:
     """A Drive file's content after fetching.
 
@@ -1160,6 +1214,13 @@ class DriveFileContent:
     all (Markdown has no syntax for that whatsoever, so every text color is
     reported). Each entry is ``{"text": <run's own text>, "hex": "#rrggbb"}``.
     Empty for every other file type.
+
+    The four ``revision_*``/``content_mime_type`` fields are set only by
+    ``get_revision_content``. ``revision_id`` and ``revision_modified_time``
+    name the version read. ``content_mime_type`` is the type of
+    ``content_bytes`` when it differs from ``file.mime_type`` (the xlsx export
+    of a Sheet version). ``revision_size`` is the version's size as Drive
+    reports it, set when the content was deliberately not downloaded.
     """
 
     file: DriveFile
@@ -1168,6 +1229,10 @@ class DriveFileContent:
     truncated: bool = False
     highlights: list[dict] = field(default_factory=list)
     text_colors: list[dict] = field(default_factory=list)
+    revision_id: str = ""
+    revision_modified_time: str = ""
+    content_mime_type: str = ""
+    revision_size: int = 0
 
 
 class DriveClient:
@@ -1618,6 +1683,176 @@ class DriveClient:
         data = b"".join(chunks)
         logger.info("fetch_thumbnail: %d bytes, mime_type=%s", len(data), mime_type)
         return {"data": data, "mime_type": mime_type}
+
+    def list_revisions(
+        self, file_id: str, modified_after: str = "", max_results: int = 50
+    ) -> list[DriveRevision]:
+        """List a file's saved versions, newest first.
+
+        The API has no ordering or filter parameter, so every page is read and
+        the result is sorted by parsed time. With ``modified_after`` the result
+        holds the versions saved at or after it, then the newest version saved
+        before it, marked ``before_cutoff``, as the side to compare against.
+        ``max_results`` bounds the versions after the cutoff, not that entry.
+        """
+        if not file_id:
+            raise DriveClientError("list_revisions requires a non-empty file_id")
+        max_results = self._clamp_max_results(max_results)
+        cutoff: datetime | None = None
+        if modified_after:
+            cutoff = _parse_utc(modified_after)
+            if cutoff is None:
+                raise DriveClientError("list_revisions: modified_after is not a valid time")
+
+        service = self._get_service()
+        revisions: list[DriveRevision] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            kwargs: dict = {
+                "fileId": file_id,
+                "pageSize": 1000,
+                "fields": f"nextPageToken,revisions({_REVISION_FIELDS})",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                response = service.revisions().list(**kwargs).execute()
+            except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+                raise DriveClientError(f"list_revisions({file_id}) failed: {exc}") from exc
+            revisions.extend(self._parse_revision(r) for r in response.get("revisions", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        else:
+            raise DriveClientError(
+                f"list_revisions({file_id}): more than {MAX_PAGES * 1000:,} versions; "
+                "the newest cannot be reached"
+            )
+
+        # Compare parsed times: as strings "...09:12Z" sorts after "...09:12:44Z".
+        timed = [(_parse_utc(r.modified_time), r) for r in revisions]
+        timed.sort(key=lambda pair: (pair[0] is not None, pair[0] or _EPOCH))
+
+        if cutoff is None:
+            result = [r for _, r in timed][-max_results:][::-1]
+        else:
+            after = [r for t, r in timed if t is not None and t >= cutoff]
+            before = [r for t, r in timed if t is not None and t < cutoff]
+            result = after[-max_results:][::-1]
+            if before:
+                result.append(replace(before[-1], before_cutoff=True))
+        logger.info("list_revisions %s: %d revision(s)", file_id, len(result))
+        return result
+
+    def _fetch_url_capped(self, url: str, max_bytes: int) -> bytes:
+        """GET an authorized Google URL, stopping once more than ``max_bytes`` is read.
+
+        Returns what was read, at most one chunk over the cap, so a caller can
+        tell the content was cut.
+        """
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme != "https" or parts.hostname not in _REVISION_EXPORT_HOSTS:
+            raise DriveClientError("refusing to fetch a revision export from an unexpected host")
+        try:
+            session = AuthorizedSession(self._load_credentials())
+            chunks: list[bytes] = []
+            total = 0
+            with session.get(url, stream=True) as resp:
+                resp.raise_for_status()
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > max_bytes:
+                        break
+        except DriveClientError:
+            raise
+        except Exception as exc:
+            raise DriveClientError(f"revision export failed: {exc}") from exc
+        return b"".join(chunks)
+
+    def get_revision_content(self, file_id: str, revision_id: str) -> DriveFileContent:
+        """Fetch the content of one earlier saved version of a file.
+
+        A Doc or Slides version is exported as plain text and a Sheet version
+        as xlsx (every tab); a text file or an extractable binary is
+        downloaded from the revision; other binaries and Google-native types
+        with no export are not downloaded -- the result carries only
+        ``revision_size``. Content is capped and ``truncated`` says so.
+        """
+        if not file_id:
+            raise DriveClientError("get_revision_content requires a non-empty file_id")
+        if not revision_id:
+            raise DriveClientError("get_revision_content requires a non-empty revision_id")
+
+        metadata = self.get_file_metadata(file_id)
+        service = self._get_service()
+        try:
+            raw = (
+                service.revisions()
+                .get(fileId=file_id, revisionId=revision_id, fields="id,modifiedTime,size,exportLinks")
+                .execute()
+            )
+        except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+            raise DriveClientError(
+                f"get_revision_content({file_id}, {revision_id}) failed: {exc}"
+            ) from exc
+        revision_fields = {
+            "revision_id": raw.get("id", revision_id),
+            "revision_modified_time": raw.get("modifiedTime", ""),
+        }
+
+        mime = metadata.mime_type
+        if mime in _REVISION_EXPORTS:
+            export_mime = _REVISION_EXPORTS[mime]
+            url = (raw.get("exportLinks") or {}).get(export_mime)
+            if not url:
+                raise DriveClientError(
+                    f"revision {revision_id} of {file_id} has no {export_mime} export"
+                )
+            cap = _REVISION_TEXT_MAX_BYTES if export_mime == "text/plain" else _REVISION_EXTRACT_MAX_BYTES
+            data = self._fetch_url_capped(url, cap)
+            content_mime = export_mime
+        elif mime.startswith("application/vnd.google-apps."):
+            raise DriveClientError(f"an earlier version of a {mime} file cannot be read")
+        elif mime.startswith("text/") or mime in EXTRACTABLE_MIME_TYPES:
+            cap = _REVISION_TEXT_MAX_BYTES if mime.startswith("text/") else _REVISION_EXTRACT_MAX_BYTES
+            try:
+                data = self._download(
+                    service.revisions().get_media(fileId=file_id, revisionId=revision_id), cap
+                )
+            except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+                raise DriveClientError(
+                    f"get_revision_content({file_id}, {revision_id}) failed: {exc}"
+                ) from exc
+            content_mime = mime
+        else:
+            try:
+                size = int(raw.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            logger.info("get_revision_content %s: not downloaded (%d bytes)", file_id, size)
+            return DriveFileContent(file=metadata, revision_size=size, **revision_fields)
+
+        truncated = len(data) > cap
+        if truncated:
+            data = data[:cap]
+        content = DriveFileContent(
+            file=metadata, truncated=truncated, content_mime_type=content_mime, **revision_fields
+        )
+        if content_mime.startswith("text/"):
+            content.content_text = data.decode("utf-8", errors="replace")
+        else:
+            content.content_bytes = data
+        logger.info(
+            "get_revision_content %s: revision %s, %d bytes (truncated=%s)",
+            file_id,
+            content.revision_id,
+            len(data),
+            truncated,
+        )
+        return content
 
     def list_folder(self, folder_id: str, max_results: int = 50) -> list[DriveFile]:
         """List the direct children of a folder."""
@@ -2720,6 +2955,22 @@ class DriveClient:
             if buffer.tell() > max_bytes:
                 break
         return buffer.getvalue()
+
+    @staticmethod
+    def _parse_revision(raw: dict[str, Any]) -> DriveRevision:
+        try:
+            size = int(raw.get("size", 0) or 0)
+        except (TypeError, ValueError):
+            size = 0
+        author = raw.get("lastModifyingUser") or {}
+        return DriveRevision(
+            id=raw.get("id", ""),
+            modified_time=raw.get("modifiedTime", ""),
+            author_name=author.get("displayName", ""),
+            author_email=author.get("emailAddress", ""),
+            size=size,
+            keep_forever=bool(raw.get("keepForever", False)),
+        )
 
     @staticmethod
     def _parse_file(raw: dict[str, Any]) -> DriveFile:

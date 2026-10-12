@@ -1,4 +1,4 @@
-# ADR 0168: A Drive copy is its own verb, governed by the move folder scope
+# ADR 0170: A Drive copy is its own verb, governed by the move folder scope
 
 ## Status
 

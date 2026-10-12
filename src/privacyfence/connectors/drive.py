@@ -5,6 +5,7 @@ import asyncio
 import binascii
 import json
 import logging
+import re
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -61,6 +62,11 @@ _EXTRACT_FULL_FETCH_MAX_BYTES = 20_000_000
 # org mode's inline-download limit: two thirds of the ~150,000-character
 # tool result claude.ai and Claude Desktop accept (ADR 0092).
 _EXTRACTED_TEXT_MAX_CHARS = 100_000
+
+# modified_after: YYYY-MM-DD, or an RFC 3339 UTC time ending in Z.
+_MODIFIED_AFTER_PATTERN = (
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?Z)?"
+)
 
 
 # Parameter descriptions shared by many tools (kept in one place so they stay in step).
@@ -221,6 +227,36 @@ class DriveConnector(Connector):
                 read_only=True,
             ),
             ToolSpec(
+                name="drive_list_revisions",
+                description=(
+                    "List the saved versions (revision history) of a Drive file by id: when each "
+                    "was saved and by whom. Returns a list of {id, modified_time, author_name, "
+                    "author_email, size, keep_forever, before_cutoff}, newest first: at most "
+                    "max_results (default 50, capped at 1000) plus the before_cutoff entry, read "
+                    "across pages. Google merges a Doc's, Sheet's or Slides' frequent edits into "
+                    "fewer versions, and does not say which cell or paragraph each one changed. If "
+                    "the user's privacy settings hide file metadata, each entry is only {id, "
+                    "before_cutoff}. Use drive_get_revision_content to read one version's text, "
+                    "and drive_get_file_metadata for the file's current details. Auto-approved."
+                ),
+                params=[
+                    ToolParam("file_id", "str", description=_FILE_ID_HELP),
+                    ToolParam("modified_after", "str", required=False, default="", description=(
+                        "Only versions saved at or after this UTC time, as YYYY-MM-DD or an RFC "
+                        "3339 time such as 2026-10-05T00:00:00Z. The newest version saved before "
+                        "it is added last, marked before_cutoff, as the 'before' side to compare "
+                        "against. Empty returns the newest versions with no cutoff."
+                    )),
+                    ToolParam("max_results", "int", required=False, default=50, description=(
+                        "Most versions to return, newest first, not counting the before_cutoff "
+                        "entry. Default 50, capped at 1000. Older versions past the cap are left "
+                        "out."
+                    )),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
                 name="drive_list_folder",
                 description=(
                     "List the direct children of a Drive folder by id. Returns a list of files in "
@@ -283,6 +319,32 @@ class DriveConnector(Connector):
                 ),
                 params=[
                     ToolParam("file_id", "str", description=_FILE_ID_HELP),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="drive_get_revision_content",
+                description=(
+                    "Fetch the content of one earlier saved version of a Drive file, by file id "
+                    "and revision id. A Google Doc or Slides version comes back as plain text (not "
+                    "the Markdown drive_get_file_content gives), a Sheet version as a Markdown "
+                    "table per tab, a PDF, .docx, .pptx or .xlsx version as its extracted text, a "
+                    ".zip as its list of entries, and a text file as its text; other files, such "
+                    "as images, only get a placeholder with their size. Returns {file_id, "
+                    "revision_id, modified_time, content}, plus 'truncated': true when content was "
+                    "cut to fit; content may be redacted by the user's privacy settings. To "
+                    "compare with the current version, read the newest revision from "
+                    "drive_list_revisions with this tool rather than mixing in "
+                    "drive_get_file_content's different format. Requires user approval."
+                ),
+                params=[
+                    ToolParam("file_id", "str", description=_FILE_ID_HELP),
+                    ToolParam("revision_id", "str", description=(
+                        "Id of the version to read, from drive_list_revisions; the newest entry "
+                        "there is the current version, so read it the same way to compare like "
+                        "with like."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -828,6 +890,10 @@ class DriveConnector(Connector):
             return await self._get_file_metadata(**args)
         if tool == "drive_get_file_content":
             return await self._get_file_content(**args)
+        if tool == "drive_list_revisions":
+            return await self._list_revisions(**args)
+        if tool == "drive_get_revision_content":
+            return await self._get_revision_content(**args)
         if tool == "drive_list_folder":
             return await self._list_folder(**args)
         if tool == "drive_create_blank_file":
@@ -904,6 +970,24 @@ class DriveConnector(Connector):
         if category_policy("drive_privacy", "file_metadata") == "allow":
             return asdict(drive_file)
         return {"id": drive_file.id}
+
+    async def _list_revisions(
+        self, file_id: str, modified_after: str = "", max_results: int = 50
+    ) -> Any:
+        # Auto-approved per ADR 0168: the same class of metadata drive_get_file_metadata
+        # returns without a card.
+        if modified_after and not re.fullmatch(_MODIFIED_AFTER_PATTERN, modified_after):
+            raise ValueError(
+                "drive_list_revisions: 'modified_after' must be YYYY-MM-DD or an RFC 3339 "
+                "UTC time ending in Z, e.g. 2026-10-05T00:00:00Z"
+            )
+        t0 = time.time()
+        revisions = await self._fetch(self._drive.list_revisions, file_id, modified_after, max_results)
+        self._auto_audit("drive_list_revisions", "List Drive File Versions",
+                         f"List versions: {file_id}", f"{len(revisions)} version(s)", t0)
+        if category_policy("drive_privacy", "file_metadata") == "allow":
+            return [asdict(r) for r in revisions]
+        return [{"id": r.id, "before_cutoff": r.before_cutoff} for r in revisions]
 
     async def _list_folder(self, folder_id: str, max_results: int = 50) -> Any:
         t0 = time.time()
@@ -1074,6 +1158,82 @@ class DriveConnector(Connector):
             my_email=self.my_email,
             session_created_ids=self.session_created_ids,
             args={"file_id": file_id},
+        )
+
+    async def _get_revision_content(self, file_id: str, revision_id: str) -> Any:
+        content = await self._fetch(self._drive.get_revision_content, file_id, revision_id)
+        drive_file = content.file
+        name = getattr(drive_file, "name", None) or file_id
+        owners = getattr(drive_file, "owners", [])
+        size = getattr(drive_file, "size", "")
+        modified = getattr(drive_file, "modified_time", "")
+        extract_mime = content.content_mime_type or getattr(drive_file, "mime_type", "")
+        extracted = ""
+        if content.content_bytes and extract_mime in EXTRACTABLE_MIME_TYPES and not content.truncated:
+            extracted = await asyncio.to_thread(
+                extract_text, content.content_bytes, extract_mime, _EXTRACTED_TEXT_MAX_CHARS,
+            )
+        if extracted:
+            raw_text = extracted
+        elif content.content_text:
+            raw_text = content.content_text
+        elif content.content_bytes:
+            raw_text = f"[no text could be extracted from this version ({len(content.content_bytes)} bytes)]"
+        elif content.revision_size:
+            raw_text = (
+                f"[binary content — {content.revision_size} bytes; an earlier version of this "
+                "file type cannot be read as text]"
+            )
+        else:
+            raw_text = "(no content)"
+        text = apply_text("drive_privacy", "file_content", raw_text)
+        full_length = len(text)
+        # A JSON length is at least the character count, so this slice is safe and
+        # bounds the search below.
+        text = text[:_EXTRACTED_TEXT_MAX_CHARS]
+        text, cut = _truncate_to_json_chars(text, _EXTRACTED_TEXT_MAX_CHARS)
+        truncated = cut or content.truncated or full_length > _EXTRACTED_TEXT_MAX_CHARS
+        version_display = apply_text(
+            "drive_privacy", "file_metadata", content.revision_modified_time or content.revision_id
+        )
+        preview = {
+            "File": apply_text("drive_privacy", "file_metadata", name) or "(unknown)",
+            "Version": version_display or "(unknown)",
+            "Owner": apply_text("drive_privacy", "file_metadata", ", ".join(owners) if owners else "") or "(unknown)",
+            "Size": apply_text("drive_privacy", "file_metadata", str(size) if size else "") or "(unknown)",
+            "Modified": apply_text("drive_privacy", "file_metadata", str(modified) if modified else "") or "(unknown)",
+        }
+        filtered: dict[str, Any] = {
+            "file_id": file_id,
+            "revision_id": content.revision_id or revision_id,
+            "modified_time": apply_text("drive_privacy", "file_metadata", content.revision_modified_time),
+            "content": text,
+        }
+        if truncated:
+            filtered["truncated"] = True
+        return await gated_call(
+            connector=self.name,
+            tool="drive_get_revision_content",
+            tool_name="Read Earlier Drive File Version",
+            summary=f"Read version {content.revision_modified_time or revision_id} of \"{name}\"",
+            sender=", ".join(owners) or "(unknown)",
+            # .file is the current DriveFile, so folder and owner rules match.
+            raw_data=content,
+            filtered_data=filtered,
+            gate="review",
+            preview=preview,
+            details_text=text,
+            pii_scan_text=text,
+            visibility={
+                "File metadata": category_policy("drive_privacy", "file_metadata"),
+                "Document content": category_policy("drive_privacy", "file_content"),
+            },
+            pdf_bytes=b"",
+            # An earlier version was never PrivacyFence's own write.
+            pii_already_reviewed=False,
+            my_email=self.my_email,
+            session_created_ids=self.session_created_ids,
+            args={"file_id": file_id, "revision_id": revision_id},
         )
 
     async def _sheets_get_values(

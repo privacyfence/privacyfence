@@ -159,6 +159,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "gmail_update_filter": Verb.CONFIGURE,
     "gmail_create_label": Verb.CREATE,
     "drive_get_file_content": Verb.READ,
+    "drive_get_revision_content": Verb.READ,
     "drive_download_file": Verb.DOWNLOAD,
     "drive_write_file_content": Verb.UPDATE,
     "drive_write_doc_content": Verb.UPDATE,
