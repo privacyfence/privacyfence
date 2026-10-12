@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import httpx2
+from mcp.shared.exceptions import MCPError
 
 from .auth import DEFAULT_CALLBACK_PORT, FileTokenStorage, login_hint, storage_path
 from .client import (
@@ -121,6 +122,14 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(str(exc), 2)
     except httpx2.HTTPError as exc:
         return _fail(f"cannot reach the server: {exc}", 2)
+    except MCPError as exc:
+        # The MCP client turns an HTTP error on the handshake (a bad or revoked token, a wrong URL,
+        # a server error) into this generic error, so name the usual causes.
+        return _fail(
+            f"the server refused the connection ({exc.message}); check that the token in "
+            "$PRIVACYFENCE_TOKEN (or --token-env) is valid and that the server URL is right",
+            2,
+        )
 
 
 if __name__ == "__main__":

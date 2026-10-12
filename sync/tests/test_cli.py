@@ -11,6 +11,7 @@ import pytest
 from conftest import RecipeWriter
 
 from mcp.shared.auth import OAuthToken
+from mcp.shared.exceptions import MCPError
 
 from privacyfence_sync import cli
 from privacyfence_sync.auth import FileTokenStorage, storage_path
@@ -246,6 +247,16 @@ def test_sign_in_error_exits_4(write_recipe: RecipeWriter, daemon: Daemon, capsy
     daemon.session = FakeSession(enter_error=SignInError("Not signed in to http://x/mcp"))
     assert cli.main(["run", simple(write_recipe)]) == 4
     assert capsys.readouterr().err == "privacyfence-sync: Not signed in to http://x/mcp\n"
+
+
+def test_refused_handshake_exits_2_with_a_hint(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session = FakeSession(enter_error=MCPError(code=-32603, message="Server returned an error response"))
+    assert cli.main(["run", simple(write_recipe)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("privacyfence-sync: the server refused the connection (Server returned an error response)")
+    assert "token" in err
 
 
 def test_errors_wrapped_in_a_task_group_are_unwrapped(
