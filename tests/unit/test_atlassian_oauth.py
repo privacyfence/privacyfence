@@ -165,6 +165,51 @@ class TestAuthorizeInteractiveBuildUrl:
         assert "read%3Ajira-work" in captured["authorize_url"] or "read:jira-work" in captured["authorize_url"]
 
 
+    def test_assets_scopes_reach_the_authorize_url(self, monkeypatch, tmp_path):
+        captured = capture_run_browser_oauth(monkeypatch)
+        monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response({"access_token": "t"}))
+        monkeypatch.setattr(
+            atlassian_oauth_module, "_fetch_accessible_resources",
+            lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
+        )
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
+
+        atlassian_oauth_module.authorize_interactive(
+            "ci", "cs", str(tmp_path / "token.json"),
+            scopes=atlassian_oauth_module.scopes_for(assets=True),
+        )
+
+        assert "read%3Acmdb-object%3Ajira" in captured["authorize_url"]
+
+
+class TestAssetsScopes:
+    def test_scopes_for_without_assets_is_the_default_list(self):
+        scopes = atlassian_oauth_module.scopes_for(assets=False)
+        assert scopes == atlassian_oauth_module.DEFAULT_SCOPES
+        assert scopes is not atlassian_oauth_module.DEFAULT_SCOPES
+        assert "read:cmdb-object:jira" not in scopes
+
+    def test_scopes_for_with_assets_appends_the_assets_scopes(self):
+        scopes = atlassian_oauth_module.scopes_for(assets=True)
+        assert scopes == atlassian_oauth_module.DEFAULT_SCOPES + atlassian_oauth_module.ASSETS_SCOPES
+        assert "read:cmdb-object:jira" in scopes
+
+    def test_explicit_true_wins_over_a_bundle_without_the_flag(self):
+        cfg = {"connectors": {"assets": {"enabled": True}}}
+        assert atlassian_oauth_module.assets_enabled(cfg, {}) is True
+
+    def test_explicit_false_wins_over_the_bundle_flag(self):
+        cfg = {"connectors": {"assets": {"enabled": False}}}
+        assert atlassian_oauth_module.assets_enabled(cfg, {"atlassian": {"assets": True}}) is False
+
+    def test_bundle_flag_is_the_default(self):
+        assert atlassian_oauth_module.assets_enabled({}, {"atlassian": {"assets": True}}) is True
+
+    def test_off_when_neither_says_so(self):
+        assert atlassian_oauth_module.assets_enabled({}, {}) is False
+        assert atlassian_oauth_module.assets_enabled({"connectors": {"assets": {}}}, {"atlassian": {}}) is False
+
+
 # ---------------------------------------------------------------------------- #
 # authorize_interactive: exchange closure
 # ---------------------------------------------------------------------------- #
@@ -308,9 +353,25 @@ class TestAuthorizeInteractiveTokenAssembly:
 
         assert result == {
             "access_token": "tok", "refresh_token": "rt", "cloud_id": "cloud1",
-            "site_url": "https://x.atlassian.net", "account_email": "me@x.com",
+            "site_url": "https://x.atlassian.net", "account_email": "me@x.com", "scopes": [],
         }
         assert load_token_file(token_file) == result
+
+    def test_scopes_are_the_union_over_resources_with_the_chosen_id(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch, {"access_token": "t"},
+            [
+                {"id": "c1", "url": "https://a.atlassian.net", "scopes": ["read:jira-work", "offline_access"]},
+                {"id": "c1", "url": "https://a.atlassian.net", "scopes": ["read:page:confluence", "read:jira-work"]},
+                {"id": "c2", "url": "https://b.atlassian.net", "scopes": ["read:cmdb-object:jira"]},
+            ],
+        )
+
+        result = atlassian_oauth_module.authorize_interactive(
+            "ci", "cs", str(tmp_path / "token.json"), pick_resource=lambda rs: rs[0],
+        )
+
+        assert result["scopes"] == ["offline_access", "read:jira-work", "read:page:confluence"]
 
     def test_multiple_resources_without_pick_resource_raises(self, monkeypatch, tmp_path):
         self._setup(

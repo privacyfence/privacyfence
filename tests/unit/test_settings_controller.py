@@ -1292,6 +1292,36 @@ class TestAuthenticateAtlassian:
         assert controller.error
         assert run_async_calls == []
 
+    @pytest.mark.parametrize(("yaml_text", "org", "expect_assets"), [
+        ("", {"client_id": "ci"}, False),
+        ("connectors:\n  assets:\n    enabled: true\n", {"client_id": "ci"}, True),
+        ("", {"client_id": "ci", "assets": True}, True),
+        ("connectors:\n  assets:\n    enabled: false\n", {"client_id": "ci", "assets": True}, False),
+    ])
+    def test_authorize_scopes_include_assets_only_when_enabled(
+        self, controller, monkeypatch, tmp_path, yaml_text, org, expect_assets,
+    ):
+        config_path = tmp_path / "assets-settings.yaml"
+        config_path.write_text(yaml_text)
+        controller._config_path = str(config_path)
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
+        captured = {}
+
+        def fake_authorize(**kwargs):
+            captured.update(kwargs)
+            return {"site_url": "https://acme.atlassian.net"}
+
+        monkeypatch.setattr(sc, "atlassian_authorize_interactive", fake_authorize)
+
+        controller._authenticate_atlassian({"atlassian": org})
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert ("read:cmdb-object:jira" in captured["scopes"]) is expect_assets
+        assert "read:jira-work" in captured["scopes"]
+
     def test_success_marks_busy_for_both_jira_and_confluence(self, controller, monkeypatch):
         recorded = []
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))

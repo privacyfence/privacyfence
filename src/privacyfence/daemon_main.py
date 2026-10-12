@@ -143,7 +143,7 @@ from .connectors.tasks import TasksConnector
 from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
-from .atlassian_oauth import AtlassianOAuthError
+from .atlassian_oauth import AtlassianOAuthError, assets_enabled, scopes_for
 from .atlassian_users import AtlassianUserDirectory
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
@@ -1850,7 +1850,7 @@ def _cli_pick_atlassian_resource(resources: list[dict[str, Any]]) -> dict[str, A
         print("Invalid choice, try again.")
 
 
-def run_atlassian_oauth(org_config: dict[str, Any]) -> int:
+def run_atlassian_oauth(org_config: dict[str, Any], config: dict[str, Any] | None = None) -> int:
     atlassian_org = org_config.get("atlassian") or {}
     if not atlassian_org.get("client_id") or not atlassian_org.get("client_secret"):
         print("No Atlassian organization config installed.", file=sys.stderr)
@@ -1860,6 +1860,7 @@ def run_atlassian_oauth(org_config: dict[str, Any]) -> int:
             client_id=atlassian_org["client_id"],
             client_secret=atlassian_org["client_secret"],
             token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+            scopes=scopes_for(assets=assets_enabled(config or {}, org_config)),
             pick_resource=_cli_pick_atlassian_resource,
         )
     except AtlassianOAuthError as exc:
@@ -2397,7 +2398,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.salesforce_oauth:
                 return run_salesforce_oauth(org_config)
             if args.atlassian_oauth:
-                return run_atlassian_oauth(org_config)
+                return run_atlassian_oauth(org_config, config)
             if args.grist_oauth:
                 return run_grist_oauth(org_config)
             if args.telegram_setup:

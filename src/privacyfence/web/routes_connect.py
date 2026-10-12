@@ -377,7 +377,11 @@ def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri:
         if not atlassian_org.get("client_id"):
             raise _NotConfigured(service)
         verifier, challenge = org_identity.generate_pkce_pair()
-        return atlassian_oauth.build_authorize_url(atlassian_org["client_id"], redirect_uri, state, challenge), verifier
+        scopes = atlassian_oauth.scopes_for(assets=atlassian_oauth.assets_enabled({}, org_config))
+        return (
+            atlassian_oauth.build_authorize_url(atlassian_org["client_id"], redirect_uri, state, challenge, scopes),
+            verifier,
+        )
 
     raise _NotConfigured(service)
 

@@ -88,6 +88,7 @@ from .update_checker import (
 )
 from .webauthn_stepup import has_credentials as _has_webauthn_credentials
 from .webauthn_stepup import observe_step_up_requirement
+from .atlassian_oauth import assets_enabled, scopes_for
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .slack_client import authorize_interactive as slack_authorize_interactive
@@ -1373,11 +1374,15 @@ class SettingsController:
             )
             return resources[idx] if idx is not None else resources[0]
 
+        cfg = self._load_config()
+        scopes = scopes_for(assets=assets_enabled(cfg, org_config))
+
         def work() -> dict[str, Any]:
             return atlassian_authorize_interactive(
                 client_id=atlassian_org["client_id"],
                 client_secret=atlassian_org.get("client_secret", ""),
                 token_file=token_file,
+                scopes=scopes,
                 pick_resource=pick_resource,
             )
 

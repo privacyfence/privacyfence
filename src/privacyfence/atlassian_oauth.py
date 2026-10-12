@@ -65,6 +65,29 @@ DEFAULT_SCOPES: list[str] = [
     "offline_access",
 ]
 
+# Requested only when Jira Assets is switched on (see ``scopes_for``), so Jira
+# and Confluence users who never enable it keep their current consent.
+ASSETS_SCOPES: list[str] = [
+    "read:cmdb-schema:jira", "read:cmdb-type:jira", "read:cmdb-attribute:jira",
+    "read:cmdb-object:jira",
+    # The Assets workspace id comes from Jira Service Management's
+    # /rest/servicedeskapi/assets/workspace, which is behind a JSM scope.
+    "read:servicedesk-request",
+]
+
+
+def scopes_for(*, assets: bool) -> list[str]:
+    return DEFAULT_SCOPES + ASSETS_SCOPES if assets else list(DEFAULT_SCOPES)
+
+
+def assets_enabled(config: dict[str, Any], org_config: dict[str, Any]) -> bool:
+    """Assets is off unless switched on. An explicit connectors.assets.enabled wins;
+    otherwise the org bundle's atlassian.assets flag is the default."""
+    explicit = ((config.get("connectors") or {}).get("assets") or {}).get("enabled")
+    if explicit is not None:
+        return bool(explicit)
+    return bool((org_config.get("atlassian") or {}).get("assets", False))
+
 
 class AtlassianOAuthError(Exception):
     """Raised for unrecoverable Atlassian OAuth problems."""
@@ -163,6 +186,7 @@ def resolve_resource_and_save(
         "cloud_id": cloud_id,
         "site_url": resource.get("url", ""),
         "account_email": _fetch_account_email(access_token, cloud_id),
+        "scopes": sorted({s for r in resources if r.get("id") == cloud_id for s in r.get("scopes") or []}),
     }
     save_token_file(token_file, token_record)
     logger.info("Atlassian OAuth complete for site %s", token_record["site_url"])
