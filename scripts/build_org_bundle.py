@@ -26,6 +26,10 @@ full PrivacyFence install.
 for every install of this bundle — a deliberate per-organization choice, see
 docs/how-it-works.md's "Unattended sessions" section.
 
+--enable-scoped-tokens lets each person create scoped AI client tokens in
+Settings (--scoped-token-max-days N caps how long one lasts, 1-365); without
+it the feature is off in organization mode (ADR 0165).
+
 Example:
     python3 scripts/build_org_bundle.py \\
         --org-name "Acme Corp" \\
@@ -93,6 +97,16 @@ def _peek_url(value: str) -> str:
     if parts.username is not None or parts.password is not None or parts.query or parts.fragment:
         raise SystemExit("--peek-base-url must not contain a user name, password, query or fragment.")
     return url
+
+
+def _scoped_token_days(value: str) -> int:
+    try:
+        days = int(value)
+    except ValueError:
+        days = 0
+    if not 1 <= days <= 365:
+        raise argparse.ArgumentTypeError("must be a whole number of days from 1 to 365.")
+    return days
 
 
 def _canonical_payload_bytes(bundle: dict[str, Any]) -> bytes:
@@ -406,6 +420,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly turn unattended sessions back off (useful with --merge).",
     )
 
+    scoped = parser.add_argument_group("Scoped AI client tokens (org mode)")
+    scoped_toggle = scoped.add_mutually_exclusive_group()
+    scoped_toggle.add_argument(
+        "--enable-scoped-tokens", action="store_true",
+        help="Let each person create scoped tokens in Settings: named, expiring bearer tokens for "
+             "one AI client, limited to the tools and auto-accept rules they pick (ADR 0165). "
+             "Off by default -- a deliberate per-organization opt-in.",
+    )
+    scoped_toggle.add_argument(
+        "--disable-scoped-tokens", action="store_true",
+        help="Explicitly turn scoped tokens back off (useful with --merge).",
+    )
+    scoped.add_argument(
+        "--scoped-token-max-days", type=_scoped_token_days, metavar="N", default=None,
+        help="The longest a scoped token may last, in days (1-365). Default: 90.",
+    )
+
     downloads = parser.add_argument_group(
         "Download delivery (org mode)",
     )
@@ -602,6 +633,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.disable_unattended_sessions:
         bundle["unattended_sessions"] = {"enabled": False}
 
+    if args.enable_scoped_tokens or args.disable_scoped_tokens or args.scoped_token_max_days is not None:
+        scoped_section: dict[str, Any] = dict(bundle.get("scoped_tokens") or {})
+        if args.enable_scoped_tokens:
+            scoped_section["enabled"] = True
+        elif args.disable_scoped_tokens:
+            scoped_section["enabled"] = False
+        if args.scoped_token_max_days is not None:
+            scoped_section["max_days"] = args.scoped_token_max_days
+        bundle["scoped_tokens"] = scoped_section
+
     if args.mode == "org":
         if not args.server_issuer_url:
             raise SystemExit("--mode org requires --server-issuer-url.")
@@ -771,9 +812,13 @@ def main(argv: list[str] | None = None) -> int:
         bundle["audit_forwarding"] = forwarding_section
 
     services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "peek") if k in bundle]
-    if not services and "unattended_sessions" not in bundle and "mode" not in bundle:
+    if (
+        not services and "unattended_sessions" not in bundle and "scoped_tokens" not in bundle
+        and "mode" not in bundle
+    ):
         raise SystemExit(
-            "No service, --mode, or --enable/disable-unattended-sessions flags given — nothing to write."
+            "No service, --mode, or --enable/disable-unattended-sessions or -scoped-tokens flags "
+            "given — nothing to write."
         )
 
     if bundle.get("mode") == "org" and not args.sign_key:
@@ -793,6 +838,8 @@ def main(argv: list[str] | None = None) -> int:
     summary = ", ".join(services) or "none"
     if "unattended_sessions" in bundle:
         summary += f", unattended_sessions.enabled={bundle['unattended_sessions']['enabled']}"
+    if "scoped_tokens" in bundle:
+        summary += f", scoped_tokens={bundle['scoped_tokens']}"
     if "mode" in bundle:
         summary += f", mode={bundle['mode']}"
     if "step_up" in bundle:

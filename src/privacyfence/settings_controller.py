@@ -19,6 +19,7 @@ flows, grant name resolution) runs on a background thread via
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -51,6 +52,7 @@ from .paths import authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
+from .policy import outdated as policy_outdated
 from .policy import propose as policy_propose
 from .policy import registry as policy_registry
 from .policy import store as policy_store
@@ -500,6 +502,8 @@ def _rule_row(rule: PolicyRule, usage: dict[str, Any], *, resolved_value: str) -
             for verb in policy_describe.rule_verbs(rule)
         ],
         "covered_tools": list(policy_describe.covered_tools(rule)),
+        # Tools the rule's verbs imply but its stored operations do not reach (ADR 0166).
+        "missing_tools": list(policy_outdated.missing_tools(rule)),
         "match_count": usage.get("count", 0),
         "last_matched": _relative_time(usage["last_matched"]) if usage else "",
         "never_matched": not usage,
@@ -1712,7 +1716,9 @@ class SettingsController:
     # _rules_for_catalogue_entry) these two actions build on.
     # ------------------------------------------------------------------ #
 
-    def add_policy_rule(self, group: str, value: str, verbs: list) -> dict[str, Any]:
+    def add_policy_rule(
+        self, group: str, value: str, verbs: list, personal_data: bool = False,
+    ) -> dict[str, Any]:
         """The Auto-accept page's "Add rule" form. ``group`` is one of ``_policy_scope_catalogue()``'s
         own ids; ``verbs`` is whichever of that group's own verb checkboxes were checked, as their
         v2 verb strings. Additive only, like every other rule here: a submission that names a
@@ -1722,11 +1728,16 @@ class SettingsController:
         needed. Silently does nothing for an unrecognized group, a group none of the requested verbs
         govern, or (for the one valued extra scope, ``apps_script.project``) a value-needing scope
         submitted with none -- see ``_rules_for_catalogue_entry``'s own docstring.
+        ``personal_data`` sets the rule's ``allow_personal_data`` flag (ADR 0157) and is accepted
+        only for a group in ``catalogue.PERSONAL_DATA_GROUPS``; for any other group the submission
+        adds nothing.
         """
         verb_enums = _parse_verbs(verbs)
         if not verb_enums:
             return self.snapshot()
-        new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value), verb_enums)
+        new_rules = _rules_for_catalogue_entry(
+            group, _parse_value_list(value), verb_enums, personal_data=personal_data,
+        )
         if not new_rules:
             return self.snapshot()
         cfg = self._load_config()
@@ -1747,6 +1758,25 @@ class SettingsController:
         if len(remaining) == len(existing):
             return self.snapshot()
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(remaining)
+        self._save_and_reload_policy_v2(cfg)
+        return self.snapshot()
+
+    def update_policy_rule(self, rule_id: str) -> dict[str, Any]:
+        """The Auto-accept page's "Update rule" button (ADR 0166): adds to this rule the operations
+        its own verbs imply today and it lacks (tools added after it was saved). The id is kept, so
+        anything that references it keeps working. What is added is ``policy.outdated``'s answer
+        and nothing from the client; an unknown id or a rule with nothing missing writes nothing."""
+        cfg = self._load_config()
+        existing = policy_store.compile_rules_from_config(cfg)
+        target = next((rule for rule in existing if rule.id == rule_id), None)
+        missing = policy_outdated.missing_operations(target) if target is not None else frozenset()
+        if target is None or not missing:
+            return self.snapshot()
+        updated = [
+            dataclasses.replace(rule, operations=rule.operations | missing) if rule is target else rule
+            for rule in existing
+        ]
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(updated)
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 

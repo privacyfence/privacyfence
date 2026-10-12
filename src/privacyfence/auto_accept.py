@@ -151,6 +151,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "contacts_remove_label":          "contacts.remove_label",
     "jira_get_issue":                 "jira.read_issue",
     "jira_search_issues_with_fields": "jira.read_issue",
+    "jira_export_issues":             "jira.read_issue",
     "jira_create_issue":              "jira.create_issue",
     "jira_add_comment":               "jira.add_comment",
     "jira_update_issue":              "jira.update_issue",
@@ -292,6 +293,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "jira_refresh_user_cache":         "auto",
     "jira_get_issue":                  "review",
     "jira_search_issues_with_fields":  "review",
+    "jira_export_issues":              "review",
     "jira_create_issue":               "popup",
     "jira_add_comment":                "popup",
     "jira_update_issue":               "popup",
@@ -345,6 +347,18 @@ TOOL_TO_GATE: dict[str, str] = {
     "peek_rename_page":                "popup",
     "peek_delete_page":                "popup",
 }
+
+# The tools a rule's allow_personal_data flag applies to (ADR 0157): each one's result carries no
+# row (the data goes to a file or to a page the user's own rule names), so the PII scan, which
+# guards the model's context, is not what protects their data.
+PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
+    "grist_export_records",
+    "grist_export_sql",
+    "salesforce_export_report",
+    "jira_export_issues",
+    "peek_upload_page",
+    "drive_download_file",
+})
 
 @dataclass
 class ReviewContext:
@@ -580,6 +594,38 @@ def remove_policy_v2_rule(rule_id: str) -> bool:
     return True
 
 
+def update_policy_v2_rule(rule_id: str) -> frozenset[str]:
+    """Add to the rule with this stable id the operations its own verbs imply today and it lacks
+    (``policy.outdated``, ADR 0166), and return the keys added -- empty when the id is unknown or
+    nothing is missing, in which case nothing is written. The id, value, conditions and
+    ``allow_personal_data`` are kept; what is added is computed here, never taken from a caller."""
+    import dataclasses
+
+    from .policy import outdated
+    from .policy import store as policy_store
+
+    state = _REGISTRY.get()
+    if state.config_path is None:
+        raise RuntimeError("auto_accept config path not initialized")
+    with state.write_lock:
+        with open(state.config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        existing = policy_store.compile_rules_from_config(cfg)
+        target = next((rule for rule in existing if rule.id == rule_id), None)
+        missing = outdated.missing_operations(target) if target is not None else frozenset()
+        if target is None or not missing:
+            return frozenset()
+        updated = [
+            dataclasses.replace(rule, operations=rule.operations | missing) if rule is target else rule
+            for rule in existing
+        ]
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(updated)
+        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
+        set_policy_v2_store_rules(updated)
+    notify_rules_changed()
+    return missing
+
+
 def set_rules_changed_listener(callback: Callable[[], None] | None) -> None:
     """Register (or, with ``None``, clear) *the* single-slot listener -- kept for the one caller
     that predates the multi-listener support below (settings_controller.py's own menu-bar refresh)
@@ -626,6 +672,7 @@ def notify_rules_changed() -> None:
 
 
 __all__ = [
+    "PERSONAL_DATA_RULE_TOOLS",
     "ReviewContext",
     "TEMP_ACCEPT_ELIGIBLE_OPERATIONS",
     "TEMP_ACCEPT_TTL_SECONDS",

@@ -53,6 +53,7 @@ from .atlassian_users import (
 logger = logging.getLogger(__name__)
 
 MAX_PAGES = 10
+EXPORT_MAX_ISSUES = 10_000
 # The fields _parse_issue reads for a search result; description is left out on purpose.
 SEARCH_FIELDS = ("summary", "status", "issuetype", "priority", "assignee", "reporter", "labels", "created", "updated")
 # Keys a simplified field value never carries: links back into the API, avatars, and email addresses.
@@ -415,6 +416,29 @@ class JiraClient:
             raise JiraClientError(f"search_issues failed: {exc}") from exc
         issues = issues[:max_results]
         logger.info("search_issues jql=%r returned %d issue(s)", jql, len(issues))
+        return issues
+
+    def export_issues(
+        self, jql: str, fields: list[str] | None = None, max_issues: int = EXPORT_MAX_ISSUES
+    ) -> list[JiraIssue]:
+        """Every issue ``jql`` matches, in pages of 100, for ``jira_export_issues``. Raises once
+        more than ``max_issues`` match, before reading further."""
+        if not jql:
+            raise JiraClientError("export_issues requires a non-empty JQL query")
+        extra = self.resolve_fields(fields) if fields else None
+        issues: list[JiraIssue] = []
+        page_token: str | None = None
+        while True:
+            page, page_token = self.search_issues_page(jql, 100, page_token, extra)
+            issues.extend(page)
+            if len(issues) > max_issues:
+                raise JiraClientError(
+                    f"More than {max_issues:,} issues match this JQL. Narrow it, for example "
+                    "with updated >= -7d, and export in parts."
+                )
+            if not page_token:
+                break
+        logger.info("export_issues jql=%r returned %d issue(s)", jql, len(issues))
         return issues
 
     def get_issue(self, issue_key: str, fields: list[str] | None = None) -> JiraIssue:

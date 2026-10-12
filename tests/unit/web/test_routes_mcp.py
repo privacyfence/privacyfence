@@ -12,6 +12,9 @@ without spawning a real process.
 from __future__ import annotations
 
 import contextlib
+import json
+import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import anyio
@@ -24,8 +27,11 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.connection import Connection
 
+from privacyfence import scoped_tokens
+from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
+from privacyfence.scoped_tokens import ScopedToken, ScopedTokenStore
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.mcp_tools import META_TOOL_NAMES
 from privacyfence.web import routes_mcp as rm
@@ -539,6 +545,201 @@ class TestMetaTools:
             )
         assert result.is_error is False
         assert result.structured_content == {"a1": "unknown"}
+
+
+# --------------------------------------------------------------------------- #
+# Scoped tokens (ADR 0164): what a client holding one sees and may call
+# --------------------------------------------------------------------------- #
+
+class TwoToolConnector(EchoConnector):
+    """``echo_say`` is in the test token's scope, ``echo_shout`` is not."""
+
+    def tool_specs(self) -> list[ToolSpec]:
+        return [*super().tool_specs(), ToolSpec(name="echo_shout", description="Shouts.", read_only=True)]
+
+
+def _scoped_token(*, days: float = 42.5) -> ScopedToken:
+    return ScopedToken(
+        id="st-0123456789ab", label="sales-sync", digest="", principal_id=LOCAL_PRINCIPAL.id,
+        principal_email="", principal_display_name="", created_at=time.time(),
+        expires_at=time.time() + days * 86400, rule_ids=frozenset({"r-1", "r-2"}),
+        tools=frozenset({"echo_say", "gmail_list_messages"}),
+    )
+
+
+class _OneTokenStore(ScopedTokenStore):
+    """A store holding one token -- or none, once ``revoked`` is set."""
+
+    def __init__(self, token: ScopedToken) -> None:
+        super().__init__(lambda: [])
+        self.token = token
+        self.revoked = False
+
+    def get(self, principal_id: str, token_id: str) -> ScopedToken | None:
+        token = self.token
+        if self.revoked or (principal_id, token_id) != (token.principal_id, token.id):
+            return None
+        return token
+
+
+class _ScopedVerifier(TokenVerifier):
+    """Like ``_OrgVerifier``, but mints the AccessToken mcp_auth.ScopedTokenVerifier gives a
+    scoped token."""
+
+    def __init__(self, token: ScopedToken) -> None:
+        self._token = token
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if token != TOKEN:
+            return None
+        t = self._token
+        return AccessToken(
+            token=token, client_id=f"scoped:{t.id}", scopes=["scoped"], expires_at=int(t.expires_at),
+            subject=t.principal_id,
+            claims={"email": "", "display_name": "", "is_admin": False, "scoped_token_id": t.id},
+        )
+
+
+class TestScopedTokens:
+    @pytest.fixture(autouse=True)
+    def _audit(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        self._audit_dir = tmp_path
+
+    def _audit_entries(self) -> list[dict]:
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    @contextlib.asynccontextmanager
+    async def _scoped_session(self, dispatcher: McpDispatcher, *, days: float = 42.5):
+        store = _OneTokenStore(_scoped_token(days=days))
+        scoped_tokens.set_store(store)
+        async with _connected_session(dispatcher, verifier=_ScopedVerifier(store.token)) as session:
+            yield session, store
+
+    async def test_tools_list_shows_only_scoped_tools_and_meta_tools(self):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, _store):
+            result = await session.list_tools()
+        assert {t.name for t in result.tools} == {"echo_say"} | rm.SCOPED_META_TOOLS
+
+    async def test_an_out_of_scope_tool_is_refused_and_audited(self):
+        connector = TwoToolConnector()
+        dispatcher = _dispatcher({"echo": connector})
+        async with self._scoped_session(dispatcher) as (session, _store):
+            refused = await session.call_tool("echo_shout", {"reason": "loud"})
+            allowed = await session.call_tool("echo_say", {"message": "hi"})
+
+        assert refused.is_error is True
+        assert refused.content[0].text == "Request denied: this token may not call echo_shout."
+        assert allowed.is_error is False
+        assert connector.calls == [("echo_say", {"message": "hi"})]
+        [entry] = self._audit_entries()
+        assert (entry["decision"], entry["connector"], entry["tool"]) == ("denied_scoped_token", "echo", "echo_shout")
+        assert entry["summary"] == "Tool not in scoped token 'sales-sync'"
+        assert entry["claude_reason"] == "loud"
+        assert (entry["agent_id"], entry["agent_source"]) == ("scoped-token:st-0123456789ab", "override")
+
+    async def test_status_reports_the_token_and_its_expiry(self):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, store):
+            result = await session.call_tool("privacyfence_status", {"reason": "start of run"})
+
+        assert result.is_error is False
+        content = result.structured_content
+        assert content["token"] == {
+            "label": "sales-sync",
+            "expires_at": datetime.fromtimestamp(store.token.expires_at, tz=timezone.utc).isoformat(),
+            "days_left": 43, "expiring_soon": False, "rules": 2, "tools": 2,
+        }
+        assert "expires in" not in content["message"]
+
+    async def test_status_warns_when_the_token_expires_soon(self):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher, days=4.5) as (session, _store):
+            result = await session.call_tool("privacyfence_status", {"reason": "start of run"})
+
+        content = result.structured_content
+        assert (content["token"]["days_left"], content["token"]["expiring_soon"]) == (5, True)
+        assert content["message"].endswith(" This token expires in 5 day(s); ask its owner for a new one.")
+
+    async def test_begin_unattended_needs_no_admin_opt_in(self):
+        dispatcher = _dispatcher({})  # unattended_sessions_enabled defaults False
+        async with self._scoped_session(dispatcher) as (session, _store):
+            begin = await session.call_tool("privacyfence_begin_unattended_session", {"reason": "scheduled"})
+            end = await session.call_tool("privacyfence_end_unattended_session", {"reason": "done"})
+
+        assert begin.structured_content == {"unattended": True, "scoped_token": True}
+        # Ending one does not leave deny-only: a scoped call always is.
+        assert end.structured_content == {"unattended": True, "scoped_token": True}
+
+    @pytest.mark.parametrize("name", [
+        "privacyfence_list_policy", "privacyfence_propose_policy_change", "privacyfence_await_approval",
+    ])
+    async def test_list_policy_and_propose_are_not_offered_and_are_refused(self, name):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, _store):
+            listed = {t.name for t in (await session.list_tools()).tools}
+            result = await session.call_tool(name, {"reason": "curious", "operation": "remove", "rule_id": "r-1"})
+
+        assert name not in listed
+        assert result.is_error is True
+        assert result.content[0].text == f"Request denied: this token may not call {name}."
+        [entry] = self._audit_entries()
+        assert (entry["decision"], entry["connector"], entry["tool"]) == ("denied_scoped_token", "mcp", name)
+
+    async def test_a_revoked_scope_lists_nothing_and_refuses_every_call(self):
+        connector = TwoToolConnector()
+        dispatcher = _dispatcher({"echo": connector})
+        async with self._scoped_session(dispatcher) as (session, store):
+            store.revoked = True
+            listed = await session.list_tools()
+            results = [
+                await session.call_tool("echo_say", {"message": "hi"}),
+                await session.call_tool("privacyfence_status", {"reason": "start of run"}),
+            ]
+
+        assert listed.tools == []
+        assert [r.is_error for r in results] == [True, True]
+        assert {r.content[0].text for r in results} == {"Request denied: this token is no longer valid."}
+        assert connector.calls == []
+        entries = self._audit_entries()
+        assert [(e["decision"], e["connector"], e["tool"]) for e in entries] == [
+            ("denied_scoped_token", "echo", "echo_say"), ("denied_scoped_token", "mcp", "privacyfence_status"),
+        ]
+        assert {e["agent_id"] for e in entries} == {"scoped-token:revoked"}
+
+    async def test_create_upload_slot_works_as_usual(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        dispatcher = _dispatcher({})
+        async with self._scoped_session(dispatcher) as (session, _store):
+            result = await session.call_tool(
+                "privacyfence_create_upload_slot", {"filename": "report.pdf", "reason": "attach a file"},
+            )
+        assert result.is_error is False
+        assert result.structured_content["method"] == "PUT"
+
+    async def test_check_policy_refuses_a_tool_outside_the_scope(self):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, _store):
+            refused = await session.call_tool(
+                "privacyfence_check_policy", {"connector": "echo", "tool": "gmail_send_message", "reason": "plan"},
+            )
+            allowed = await session.call_tool(
+                "privacyfence_check_policy", {"connector": "echo", "tool": "gmail_list_messages", "reason": "plan"},
+            )
+
+        assert refused.is_error is True
+        assert refused.content[0].text == "This token may not call gmail_send_message."
+        assert allowed.is_error is False
+        assert allowed.structured_content["gate"] == "auto"
+        decisions = [(e["decision"], e["tool"], e["claude_reason"]) for e in self._audit_entries()]
+        assert decisions == [
+            ("denied_scoped_token", "gmail_send_message", "plan"), ("policy_check", "gmail_list_messages", "plan"),
+        ]
 
 
 # --------------------------------------------------------------------------- #

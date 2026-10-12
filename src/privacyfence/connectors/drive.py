@@ -1291,6 +1291,7 @@ class DriveConnector(Connector):
             session_created_ids=self.session_created_ids,
             args={"file_id": file_id, "destination_dir": destination_dir},
             delivery=delivery,
+            content_reaches_result=(delivery == "inline_base64"),
         )
         if self.download_mode != "org":
             if direct_write:
@@ -1309,16 +1310,23 @@ class DriveConnector(Connector):
             return local_files.deliver_file(
                 destination_dir, name, data, mime_type, download_mode=self.download_mode,
             )
-        return await self._deliver_org_download(file_id, drive_file.size, cfg)
+        # The estimate the gate was told about is binding (ADR 0157): a file approved as "not
+        # inline" is never returned inline because its real size turned out smaller.
+        return await self._deliver_org_download(
+            file_id, drive_file.size, cfg, allow_inline=(delivery == "inline_base64"),
+        )
 
-    async def _deliver_org_download(self, file_id: str, metadata_size: int, cfg: DownloadDeliveryConfig) -> Any:
+    async def _deliver_org_download(
+        self, file_id: str, metadata_size: int, cfg: DownloadDeliveryConfig, allow_inline: bool,
+    ) -> Any:
         """org mode's own delivery, once approval is granted -- inline
         (base64, in the tool result) for anything under ``cfg.
         inline_max_bytes`` (the whole tool result, base64 included -- ADR
         0092), else a one-time staged link, else (staging disabled for this
-        org) a clear refusal. Never writes to this daemon's own disk except
+        org) a clear refusal. ``allow_inline`` false (the gate was told the content does not reach
+        the result) skips the inline branch. Never writes to this daemon's own disk except
         via download_staging.py's own encrypted-at-rest store."""
-        if not cfg.allow_disk_staging and not cfg.fits_inline(metadata_size):
+        if not cfg.allow_disk_staging and not (allow_inline and cfg.fits_inline(metadata_size)):
             # Bail before ever fetching bytes -- metadata_size (already
             # known, no extra round trip) already rules out inline, and
             # staging is off for this org, so there's nothing productive a
@@ -1331,9 +1339,10 @@ class DriveConnector(Connector):
         mime_type: str = result["mime_type"]
         size_bytes: int = result["size_bytes"]
 
-        inline = cfg.inline_result(name, mime_type, data)
-        if inline is not None:
-            return inline
+        if allow_inline:
+            inline = cfg.inline_result(name, mime_type, data)
+            if inline is not None:
+                return inline
 
         if not cfg.allow_disk_staging:
             raise RuntimeError(cfg.over_inline_limit_message(f"\"{name}\"", size_bytes))

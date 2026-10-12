@@ -286,6 +286,8 @@ The script writes `org_config.json` with mode `0600` and prints what it contains
 | `--step-up-rp-name NAME` | `PrivacyFence` | The name shown in the operating system's passkey prompt. |
 | `--idp-step-up-acr-value ACR` | none | `acr_values` sent when step-up asks the identity provider for a fresh sign-in (repeatable). Without it, the request uses `prompt=login` and `max_age=0` only. |
 | `--enable-unattended-sessions` / `--disable-unattended-sessions` | off | Let an AI client declare a scheduled, unattended run (`privacyfence_begin_unattended_session`). The declaration is advisory and grants nothing by itself; see [how it works](how-it-works.md). |
+| `--enable-scoped-tokens` / `--disable-scoped-tokens` | off | Let each person create scoped tokens in Settings: named bearer tokens for `/mcp` limited to chosen rules and tools, deny-only, shown once. Written as `scoped_tokens.enabled`. A scoped token lives until it expires unless revoked, so when someone leaves, run `privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`. |
+| `--scoped-token-max-days N` | 90 | The longest a scoped token may last, 1-365 days. Written as `scoped_tokens.max_days`. |
 | `--downloads-inline-max-bytes BYTES` | `100000` | A file is returned inside the tool result when the whole result, base64 included, fits this size (a file of about 75 KB by default). `0` sends every file through a download link ([section 13](#13-file-delivery)). |
 | `--downloads-link-ttl-seconds SECONDS` | `300` | How long a download link stays valid. |
 | `--downloads-disable-staging` | staging on | Refuse a file too large to return inline instead of staging it on disk. |
@@ -897,7 +899,13 @@ nothing is written to disk. With `--downloads-inline-max-bytes 0`, every file go
 
 Staged files live under `users/<principal>/downloads/` in the data directory. Expired files are
 removed the next time that person stages or claims a download, and every staged file is removed
-when the daemon starts. The approval gate, not the delivery channel, is where the privacy decision
+when the daemon starts. The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`,
+`jira_export_issues`) use the same staged link: after the approval the file is staged and the tool
+result carries the link, with no `destination_dir`. They respect `allow_disk_staging` and are
+refused before any request when it is off
+([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
+
+The approval gate, not the delivery channel, is where the privacy decision
 is made; see [ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)
 and [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md).
 

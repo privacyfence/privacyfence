@@ -19,6 +19,7 @@ from .. import export_files, local_files
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
+from ..org_mode import DownloadDeliveryConfig
 from ..grist_csv import KEY_TYPES, CsvRow, ParsedCsv, key_index, parse_csv, same_key
 from ..grist_client import (
     GristAccessDenied,
@@ -347,6 +348,14 @@ def _csv_cell_text(value: Any, column_type: str) -> str:
     return _cell_text(value)
 
 
+def _cell_differs(new: Any, current: Any) -> bool:
+    """Whether a CSV cell changes a record's value. An empty CSV cell (``None``) only differs
+    from a value that is neither ``None`` nor ``""``."""
+    if new is None:
+        return current is not None and current != ""
+    return same_key(new) != same_key(current)
+
+
 def _export_value(value: Any, column_type: str) -> Any:
     is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
     if column_type == "Date" and is_number:
@@ -402,6 +411,8 @@ class GristConnector(Connector):
     def __init__(self, client: GristClient) -> None:
         self._client = client
         self.download_mode: str = "local"
+        self.download_config: DownloadDeliveryConfig | None = None
+        self.download_base_url: str = ""
 
     @property
     def client(self) -> GristClient:
@@ -495,7 +506,7 @@ class GristConnector(Connector):
                     "Up to 50000 records. Returns {rows, columns, sha256, path, name, size_bytes, "
                     "delivery}, never the records; read the file at path, which may be a numbered "
                     "name if a file of that name exists. Use grist_get_records to look at a few "
-                    "records. Not available on an organization-managed install. "
+                    "records. " + export_files.ORG_DELIVERY_SENTENCE + " "
                     "Requires user approval."
                 ),
                 params=[
@@ -524,8 +535,8 @@ class GristConnector(Connector):
                     "written as Grist stores them: dates as seconds since 1970, true/false as "
                     "1/0. Grist runs SQL only for people who can copy the whole document. Up to "
                     "50000 rows. Returns {rows, columns, sha256, path, name, size_bytes, "
-                    "delivery}, never the rows. Not available on an organization-managed "
-                    "install. Requires user approval."
+                    "delivery}, never the rows. " + export_files.ORG_DELIVERY_SENTENCE + " "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam("doc_id", "str", description=_DOC_ID_DESCRIPTION),
@@ -658,8 +669,8 @@ class GristConnector(Connector):
                 description=(
                     "Update records of one table of a Grist document from a CSV file, in one "
                     "approval: each row is matched to the record whose key_column has the same "
-                    "value, and only cells that differ change. Empty cells change nothing. Rows "
-                    "that match no record are skipped, or added when create_missing is true. "
+                    "value, and only cells that differ change. Empty cells change nothing, "
+                    "unless clear_empty is true. Rows that match no record are skipped, or added when create_missing is true. "
                     "Provide exactly one of local_path or upload_id, as for grist_import_csv. "
                     "Returns {doc_id, table_id, updated, added, unchanged, skipped}. Use "
                     "grist_update_records to change a few records by id. Requires user approval."
@@ -680,6 +691,12 @@ class GristConnector(Connector):
                         "create_missing", "bool", required=False, default=False,
                         description="Add rows whose key matches no record. Default false: they "
                                     "are skipped.",
+                    ),
+                    ToolParam(
+                        "clear_empty", "bool", required=False, default=False,
+                        description="True to clear a value when its CSV cell is empty. Default "
+                                    "false: an empty cell leaves the value unchanged. Columns "
+                                    "not in the CSV are never touched.",
                     ),
                     _REASON,
                 ],
@@ -833,7 +850,11 @@ class GristConnector(Connector):
         filters = _parse_filter(filter)
         destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, table_id)
-        export_files.refuse_org("grist_export_records", self.download_mode, "grist_get_records")
+        export_files.refuse_org_without_staging(
+            "grist_export_records", self.download_mode,
+            (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
+            "grist_get_records",
+        )
 
         doc = await self._doc_info(doc_id)
         columns = await self._fetch(self._client.list_columns, doc_id, table_id)
@@ -852,7 +873,7 @@ class GristConnector(Connector):
         data = await asyncio.to_thread(export_files.render, names, rows, fmt)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = f"{destination_dir.rstrip('/')}/{file_name}"
+        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
         preview = {
             "Server": self._client.host,
             "Document": doc.name,
@@ -885,17 +906,19 @@ class GristConnector(Connector):
                 "Saved to": saved_to,
             },
             details_text=export_files.card_details(preview, n, names, saved_to, sha256),
-            delivery="local_disk"
-            if local_files.can_access_user_files(self.download_mode) else "client_bridge",
+            delivery="staged_link" if self.download_mode == "org"
+            else "local_disk" if local_files.can_access_user_files(self.download_mode)
+            else "client_bridge",
             my_email="",
             args={
                 "doc_id": doc_id, "table_id": table_id, "filter": filter,
                 "destination_dir": destination_dir, "file_name": file_name, "sha256": sha256,
             },
         )
-        delivered = local_files.deliver_file(
+        delivered = local_files.deliver_export(
             destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
-            download_mode=self.download_mode,
+            download_mode=self.download_mode, download_config=self.download_config,
+            download_base_url=self.download_base_url,
         )
         return export_files.export_summary(names, rows, sha256, delivered)
 
@@ -911,7 +934,11 @@ class GristConnector(Connector):
         values = _parse_sql_args(args)
         destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, "query")
-        export_files.refuse_org("grist_export_sql", self.download_mode, "grist_get_records")
+        export_files.refuse_org_without_staging(
+            "grist_export_sql", self.download_mode,
+            (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
+            "grist_get_records",
+        )
 
         doc = await self._doc_info(doc_id)
         # Sent to Grist's own SQL endpoint, never to a local database; _validate_sql has
@@ -934,7 +961,7 @@ class GristConnector(Connector):
         data = await asyncio.to_thread(export_files.render, names, rows, fmt)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = f"{destination_dir.rstrip('/')}/{file_name}"
+        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
         preview = {
             "Server": self._client.host,
             "Document": doc.name,
@@ -968,17 +995,19 @@ class GristConnector(Connector):
                 + "\n\nQuery:\n" + sql
                 + "\n\nArguments: " + json.dumps(values, ensure_ascii=False)
             ),
-            delivery="local_disk"
-            if local_files.can_access_user_files(self.download_mode) else "client_bridge",
+            delivery="staged_link" if self.download_mode == "org"
+            else "local_disk" if local_files.can_access_user_files(self.download_mode)
+            else "client_bridge",
             my_email="",
             args={
                 "doc_id": doc_id, "sql": sql, "args": args, "destination_dir": destination_dir,
                 "file_name": file_name, "sha256": sha256,
             },
         )
-        delivered = local_files.deliver_file(
+        delivered = local_files.deliver_export(
             destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
-            download_mode=self.download_mode,
+            download_mode=self.download_mode, download_config=self.download_config,
+            download_base_url=self.download_base_url,
         )
         return export_files.export_summary(names, rows, sha256, delivered)
 
@@ -1204,15 +1233,18 @@ class GristConnector(Connector):
 
     async def _prepare_csv(
         self, doc_id: str, table_id: str, local_path: str, upload_id: str, *, row_id: bool = False,
+        keep_empty: bool = False,
     ) -> tuple[GristDocument, bytes, str, ParsedCsv]:
         """With ``row_id``, the header may also name the record id column ``id``, which Grist
-        does not list among the columns; only ``grist_update_csv`` uses it, as the key."""
+        does not list among the columns; only ``grist_update_csv`` uses it, as the key. With
+        ``keep_empty``, an empty cell is parsed as ``None`` (``grist_update_csv`` ``clear_empty``,
+        ADR 0162)."""
         data, source = self._read_csv(local_path, upload_id)
         doc = await self._doc_info(doc_id)
         columns = await self._fetch(self._client.list_columns, doc_id, table_id)
         if row_id:
             columns = [*columns, GristColumn(_ROW_ID, _ROW_ID, "Int", False)]
-        return doc, data, source, parse_csv(data, columns, table_id)
+        return doc, data, source, parse_csv(data, columns, table_id, keep_empty=keep_empty)
 
     async def _import_csv(
         self, doc_id: str, table_id: str, local_path: str = "", upload_id: str = "",
@@ -1332,7 +1364,7 @@ class GristConnector(Connector):
 
     async def _update_csv(
         self, doc_id: str, table_id: str, key_column: str, local_path: str = "",
-        upload_id: str = "", create_missing: bool = False,
+        upload_id: str = "", create_missing: bool = False, clear_empty: bool = False,
     ) -> Any:
         try:
             validate_doc_id(doc_id)
@@ -1347,7 +1379,7 @@ class GristConnector(Connector):
                 "new record."
             )
         doc, data, source, parsed = await self._prepare_csv(
-            doc_id, table_id, local_path, upload_id, row_id=row_id,
+            doc_id, table_id, local_path, upload_id, row_id=row_id, keep_empty=clear_empty,
         )
         if key_column not in parsed.column_ids:
             raise ValueError(f"key_column {key_column} is not a column of the CSV file.")
@@ -1372,8 +1404,7 @@ class GristConnector(Connector):
                 continue
             changes = {
                 column: value for column, value in row.values.items()
-                if column != key_column
-                and same_key(value) != same_key(record.fields.get(column))
+                if column != key_column and _cell_differs(value, record.fields.get(column))
             }
             if not changes:
                 unchanged += 1
@@ -1387,6 +1418,7 @@ class GristConnector(Connector):
             adds = unmatched
         skipped = 0 if create_missing else len(unmatched)
         u, a, m, c = len(updates), len(adds), len(unmatched), len(changed_cells)
+        cleared = sum(1 for *_, new in changed_cells if new is None)
 
         n = len(parsed.rows)
         sha256 = hashlib.sha256(data).hexdigest()
@@ -1399,7 +1431,8 @@ class GristConnector(Connector):
             "rows": [
                 [
                     f"#{rec_id}", _csv_cell_text(key, key_type), column,
-                    _csv_cell_text(old, types[column]), _csv_cell_text(new, types[column]),
+                    _csv_cell_text(old, types[column]),
+                    "(empty)" if new is None else _csv_cell_text(new, types[column]),
                 ]
                 for rec_id, key, column, old, new in shown
             ],
@@ -1420,6 +1453,7 @@ class GristConnector(Connector):
             "Key column": key_column,
             "Records to update": str(u),
             "Cells to change": str(c),
+            **({"Cells to clear": f"{cleared:,}"} if clear_empty else {}),
             "Unchanged rows": str(unchanged),
             "Rows with no match": f"{m} (will be added)" if create_missing else f"{m} (skipped)",
         })
@@ -1444,7 +1478,7 @@ class GristConnector(Connector):
             args={
                 "doc_id": doc_id, "table_id": table_id, "local_path": local_path,
                 "upload_id": upload_id, "sha256": sha256, "key_column": key_column,
-                "create_missing": create_missing,
+                "create_missing": create_missing, "clear_empty": clear_empty,
             },
         )
         # ADR 0102: the upload slot is consumed only now, once the gate has passed.
@@ -1464,10 +1498,13 @@ class GristConnector(Connector):
             for update_chunk in update_chunks:
                 await self._fetch(self._client.update_records, doc_id, table_id, update_chunk)
                 u_done += len(update_chunk)
-            for add_chunk in _chunks(adds, lambda row: row.values):
-                await self._fetch(
-                    self._client.add_records, doc_id, table_id, [row.values for row in add_chunk],
-                )
+            # A new record gets no explicit nulls: an empty cell is simply left out.
+            add_fields = [
+                {column: value for column, value in row.values.items() if value is not None}
+                for row in adds
+            ]
+            for add_chunk in _chunks(add_fields, lambda fields: fields):
+                await self._fetch(self._client.add_records, doc_id, table_id, add_chunk)
                 a_done += len(add_chunk)
         except RuntimeError as exc:
             raise GristCsvWriteError(

@@ -118,7 +118,9 @@ a larger table, the assistant hands PrivacyFence a CSV file instead, and you app
   shows them. The delimiter is a comma, a semicolon or a tab. Formula columns and columns of
   other types than Text, Numeric, Int, Bool, Date, Choice and Any cannot be written.
 - **Cells.** An empty cell is left out: an import leaves the column at Grist's default, and an
-  update does not change the cell. An update therefore cannot clear a cell. Dates are written as
+  update does not change the cell, unless `clear_empty` is true on `grist_update_csv`: then an
+  empty cell clears the value (the card counts them as "Cells to clear"). Columns that are not in
+  the CSV are never touched, and a row added by `create_missing` gets no empty values. Dates are written as
   `YYYY-MM-DD`, and numbers with a point as the decimal mark.
 - **Update.** `grist_update_csv` matches each row to the record whose key column has the same
   value. The key column must be a Text, Choice, Int or Numeric column, in the header, unique in

@@ -22,6 +22,7 @@ everything downstream of "that second user now has an isolated, empty account": 
 connect their own connectors, and a personal `/settings` page. Both are next steps, not gaps in
 this phase's own guarantee, and the plan's own §3.1 says as much: *"A new user starts with the
 packaged default policy and no connectors."*
+Amended by [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md).
 
 ## Context
 

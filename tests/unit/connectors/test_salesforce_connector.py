@@ -22,6 +22,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence import export_files
+from privacyfence.org_mode import DownloadDeliveryConfig
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import salesforce as salesforce_module
 from privacyfence.connectors.salesforce import SalesforceConnector
@@ -935,7 +937,7 @@ class TestEveryToolIsAudited:
         client.search.return_value = [SalesforceRecord(object_type="Account", id="001", fields={})]
         client.run_report.return_value = export_run(make_rows(2))
         monkeypatch.setattr(
-            salesforce_module.local_files, "deliver_file",
+            salesforce_module.local_files, "deliver_export",
             lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
         )
 
@@ -960,15 +962,19 @@ EXPORT_ARGS = {"report_id": REPORT_ID, "destination_dir": "~/out"}
 def delivered(monkeypatch):
     calls = []
 
-    def fake_deliver(dest_dir, name, data, mime_type, *, download_mode):
+    def fake_deliver(
+        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        download_base_url="",
+    ):
         calls.append({
             "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
-            "download_mode": download_mode,
+            "download_mode": download_mode, "download_config": download_config,
+            "download_base_url": download_base_url,
         })
         return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
                 "delivery": "local_disk"}
 
-    monkeypatch.setattr(salesforce_module.local_files, "deliver_file", fake_deliver)
+    monkeypatch.setattr(salesforce_module.local_files, "deliver_export", fake_deliver)
     return calls
 
 
@@ -984,6 +990,17 @@ def amount_run(**metadata):
     cells[1] = {"value": {"amount": 1200.0, "currency": "USD"}, "label": "$1,200.00"}
     cells[2] = {"value": None, "label": "-"}
     cells[3] = {"value": ["x"], "label": "X list"}
+    return result
+
+
+def both_run():
+    result = export_run(make_rows(1))
+    cells = result["factMap"]["T!T"]["rows"][0]["dataCells"]
+    cells[1] = {"value": {"amount": 10.5, "currency": "EUR"}, "label": "EUR 10.50"}
+    cells[2] = {"value": "001A", "label": "Acme"}
+    result["reportExtendedMetadata"] = {"detailColumnInfo": {
+        COLUMNS[1]: {"dataType": "currency"}, COLUMNS[2]: {"dataType": "string"},
+    }}
     return result
 
 
@@ -1072,14 +1089,77 @@ class TestExportReport:
         assert row[COLUMNS[2]] == "-"
         assert gated_call_spy[0]["args"]["cell_format"] == "label"
 
-    async def test_bad_cell_format_is_refused_before_any_request(self, gated_call_spy, delivered):
+    async def test_unknown_cell_format_names_all_three(self, gated_call_spy, delivered):
         connector, client = export_connector()
 
-        with pytest.raises(ValueError, match="cell_format must be value or label"):
+        with pytest.raises(ValueError, match="cell_format must be value, label or both"):
             await connector.call("salesforce_export_report", {**EXPORT_ARGS, "cell_format": "raw"})
 
         client.run_report.assert_not_called()
         assert gated_call_spy == []
+
+    async def test_both_writes_value_label_and_currency_columns(self, gated_call_spy, delivered):
+        result = both_run()
+        connector, _client = export_connector(result)
+
+        await connector.call(
+            "salesforce_export_report",
+            {**EXPORT_ARGS, "cell_format": "both", "file_name": "r.json"},
+        )
+
+        rows = json.loads(delivered[0]["data"])
+        assert list(rows[0]) == [
+            KEY, f"{KEY}.label", COLUMNS[1], f"{COLUMNS[1]}.label", f"{COLUMNS[1]}.currency",
+            COLUMNS[2], f"{COLUMNS[2]}.label", COLUMNS[3], f"{COLUMNS[3]}.label",
+        ]
+        assert rows[0][COLUMNS[1]] == 10.5
+        assert rows[0][f"{COLUMNS[1]}.label"] == "EUR 10.50"
+        assert rows[0][f"{COLUMNS[1]}.currency"] == "EUR"
+        assert rows[0][COLUMNS[2]] == "001A"
+        assert rows[0][f"{COLUMNS[2]}.label"] == "Acme"
+        assert gated_call_spy[0]["args"]["cell_format"] == "both"
+
+    async def test_both_adds_currency_only_for_money_columns(self, gated_call_spy, delivered):
+        connector, _client = export_connector(both_run())
+
+        await connector.call(
+            "salesforce_export_report", {**EXPORT_ARGS, "cell_format": "both"},
+        )
+
+        header = delivered[0]["data"].decode("utf-8").splitlines()[0].split(",")
+        assert [h for h in header if h.endswith(".currency")] == [f"{COLUMNS[1]}.currency"]
+
+    async def test_both_columns_do_not_depend_on_the_data(self, gated_call_spy, delivered):
+        result = both_run()
+        for row in result["factMap"]["T!T"]["rows"]:
+            row["dataCells"][1] = {"value": None, "label": "-"}
+        connector, _client = export_connector(result)
+
+        await connector.call(
+            "salesforce_export_report", {**EXPORT_ARGS, "cell_format": "both"},
+        )
+
+        lines = delivered[0]["data"].decode("utf-8").splitlines()
+        assert f"{COLUMNS[1]}.currency" in lines[0].split(",")
+        assert lines[1].split(",")[2:5] == ["", "-", ""]
+
+    async def test_value_and_label_formats_are_unchanged(self, gated_call_spy, delivered):
+        connector, _client = export_connector(amount_run())
+
+        for cell_format in ("value", "label"):
+            await connector.call(
+                "salesforce_export_report",
+                {**EXPORT_ARGS, "cell_format": cell_format, "file_name": "r.json"},
+            )
+
+        value_row, label_row = (json.loads(call["data"])[0] for call in delivered)
+        assert list(value_row) == COLUMNS
+        assert value_row[COLUMNS[1]] == 1200.0
+        assert value_row[COLUMNS[2]] is None
+        assert value_row[COLUMNS[3]] == "X list"
+        assert list(label_row) == COLUMNS
+        assert label_row[COLUMNS[1]] == "$1,200.00"
+        assert label_row[COLUMNS[2]] == "-"
 
     async def test_filters_are_passed_to_each_run(self, gated_call_spy, delivered):
         connector, client = export_connector()
@@ -1126,16 +1206,33 @@ class TestExportReport:
 
         assert gated_call_spy[0]["delivery"] == "local_disk"
 
-    async def test_org_mode_is_refused_before_any_request(self, gated_call_spy, delivered):
+    async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+        cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
+        connector.download_mode = "org"
+        connector.download_config = cfg
+        connector.download_base_url = "https://pf.example"
+
+        await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert delivered[0]["download_mode"] == "org"
+        assert delivered[0]["download_config"] is cfg
+        assert delivered[0]["download_base_url"] == "https://pf.example"
+        assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_org_mode_without_staging_is_refused_before_any_request(self, gated_call_spy, delivered):
         connector, client = export_connector()
         connector.download_mode = "org"
+        connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
-        with pytest.raises(ValueError, match="organization-managed"):
+        with pytest.raises(ValueError, match="allow_disk_staging"):
             await connector.call("salesforce_export_report", EXPORT_ARGS)
 
         client.run_report.assert_not_called()
         client.run_report_page.assert_not_called()
         assert gated_call_spy == []
+        assert delivered == []
 
     async def test_deny_writes_nothing(self, monkeypatch, delivered):
         async def denied(**kwargs):

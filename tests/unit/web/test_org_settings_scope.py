@@ -134,3 +134,13 @@ def test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_setting
     # principal who (like LOCAL_PRINCIPAL) isn't an admin, is still denied
     # -- the two modes' answers genuinely differ for the same action name.
     assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=ORG_MODE) is False
+
+
+@pytest.mark.parametrize("action", ["add_policy_rule", "remove_policy_rule", "update_policy_rule"])
+def test_a_rule_write_is_per_principal_and_routed_in_both_modes(action):
+    """Widening a stored rule needs no more authority than adding one: the signed-in principal's
+    own rules, in either mode, and no administrator (ADR 0166)."""
+    assert ACTION_SCOPES[action].modes == frozenset({LOCAL_MODE, ORG_MODE})
+    assert ACTION_SCOPES[action].admin_only is False
+    assert is_action_permitted(action, _ADMIN, mode=ORG_MODE) is True
+    assert is_action_permitted(action, _NON_ADMIN, mode=ORG_MODE) is True

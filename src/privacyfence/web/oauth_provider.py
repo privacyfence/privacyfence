@@ -81,7 +81,7 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
-from .. import org_identity
+from .. import org_identity, scoped_tokens
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..principal import Principal
@@ -607,7 +607,10 @@ class OrgOAuthProvider:
         """Every token chain belonging to one principal, in memory *and* on
         disk -- the OAuth half of ``OrgSessionStore.destroy_all_for``'s "sign
         out everywhere", and the reason refresh-token persistence doesn't
-        quietly outlive a revocation. Returns how many refresh chains were removed.
+        quietly outlive a revocation. The principal's scoped tokens go too
+        (ADR 0165): they are bearer credentials for the same person and would
+        otherwise outlive it until they expire. Returns how many refresh
+        chains and scoped tokens were removed.
 
         Not part of the SDK's provider protocol; this is PrivacyFence's own,
         same as ``handle_idp_callback``.
@@ -620,7 +623,7 @@ class OrgOAuthProvider:
         # _revoke_pair_locked), so what's left there are the records this
         # process never rehydrated -- they have no in-memory counterpart to
         # find by subject, and only the store itself can enumerate them.
-        return len(mine) + self._sealed.discard_all_for(principal_id)
+        return len(mine) + self._sealed.discard_all_for(principal_id) + scoped_tokens.get_store().revoke_all(principal_id)
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         with self._lock:

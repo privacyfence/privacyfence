@@ -12,6 +12,7 @@ doubles as the CSRF value every mutating request below sends.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import time
@@ -26,6 +27,7 @@ from starlette.testclient import TestClient
 from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, update_checker
 from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
+from privacyfence.policy import store as policy_store
 from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
 from privacyfence.web import routes_settings as rs
@@ -239,6 +241,18 @@ class TestActionDispatch:
         assert r.status_code == 200
         rules = r.json()["auto_accept"]["rules"]
         assert any(row["connector"] == "gmail" for row in rules)
+
+    def test_add_policy_rule_passes_personal_data(self):
+        controller = sc.SettingsController.__new__(sc.SettingsController)
+        with patch.object(sc.SettingsController, "add_policy_rule", autospec=True) as add_rule:
+            rs._call_action(
+                controller, "add_policy_rule",
+                {"group": "grist.document", "value": "DOC1", "verbs": ["read"], "personal_data": True},
+            )
+
+        add_rule.assert_called_once_with(
+            controller, group="grist.document", value="DOC1", verbs=["read"], personal_data=True,
+        )
 
     def test_bad_argument_type_is_400_not_500(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -584,6 +598,36 @@ class TestSensitiveActionStepUp:
         principal, summary = recorded[1]
         assert "Changed setting" in summary
         assert "toggle_pii_detection" in summary
+
+    def test_update_policy_rule_is_sensitive_and_needs_step_up(self, controller, sessions):
+        """Widening a stored rule changes what a future write auto-accepts, so it demands the same
+        fresh passkey assertion ``add_policy_rule`` does, and applies nothing without it."""
+        assert "update_policy_rule" in _SENSITIVE_ACTIONS
+        self._enroll()
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
+        cfg = controller._load_config()
+        (rule,) = policy_store.compile_rules_from_config(cfg)
+        stale = dataclasses.replace(rule, operations=rule.operations - {"grist.import_csv"})
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config([stale])
+        controller._save_and_reload_policy_v2(cfg)
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/update_policy_rule", json={"rule_id": stale.id, "csrf": csrf})
+
+        assert r.status_code == 428
+        (after,) = policy_store.compile_rules_from_config(controller._load_config())
+        assert after.operations == stale.operations
+
+    def test_update_policy_rule_with_an_unknown_id_is_harmless(self, client, sessions):
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/update_policy_rule", json={"rule_id": "r-does-not-exist", "csrf": csrf})
+
+        assert r.status_code == 200
+        assert r.json()["auto_accept"]["rules"] == []
 
     def test_with_a_credential_offers_webauthn_options(self, controller, sessions):
         self._enroll()
@@ -1425,6 +1469,231 @@ class TestAiClientTokenRoutes:
         assert "window.confirm('Rotate the AI client token?" in page
 
 
+def _scoped_token(token_id: str = "st-0123456789ab", label: str = "sales-sync"):
+    from privacyfence.scoped_tokens import ScopedToken
+
+    return ScopedToken(
+        id=token_id, label=label, digest="d" * 64, principal_id=LOCAL_PRINCIPAL.id, principal_email="",
+        principal_display_name="", created_at=1.0, expires_at=2.0, rule_ids=frozenset({"r1", "r2"}),
+        tools=frozenset({"gmail_list_messages", "drive_list_files", "tasks_list_tasks"}),
+    )
+
+
+def _scoped_wiring(calls: list, *, ok: bool = True, reason: str = "", create_error: str = "", known: bool = True):
+    from privacyfence.scoped_tokens import ScopedTokenError
+
+    secret = "pfst_" + "A" * 43
+
+    def _create(label, days, rule_ids, tools):
+        calls.append(("create", label, days, rule_ids, tools))
+        if create_error:
+            raise ScopedTokenError(create_error)
+        return _scoped_token(label=label), secret
+
+    def _revoke(token_id):
+        calls.append(("revoke", token_id))
+        return _scoped_token(token_id) if known else None
+
+    return rs.ScopedTokenWiring(
+        store_create=_create,
+        store_revoke=_revoke,
+        store_revoke_all=lambda: calls.append(("revoke_all",)) or 3,
+        send_secret=lambda s: calls.append(("send", s)) or (ok, reason),
+        page_data=lambda: {"tokens": []},
+    )
+
+
+class TestScopedTokenRoutes:
+    """The Scoped tokens section's three routes (ADR 0164): create, revoke
+    and revoke all take the rotate route's gates, answer with no secret and
+    no page state, and audit without naming the secret."""
+
+    SECRET = "pfst_" + "A" * 43
+    CREATE = "/api/settings/scoped_tokens/create"
+    REVOKE = "/api/settings/scoped_tokens/revoke"
+    REVOKE_ALL = "/api/settings/scoped_tokens/revoke_all"
+    BODY = {
+        "label": "sales-sync", "days": 90, "rule_ids": ["r2", "r1"],
+        "tools": ["gmail_list_messages", "drive_list_files"], "confirmed": True,
+    }
+
+    def _client(self, controller, sessions, *, wiring_kwargs=None, **kwargs):
+        calls: list = []
+        app = create_app(
+            controller, sessions=sessions, scoped_tokens=_scoped_wiring(calls, **(wiring_kwargs or {})), **kwargs,
+        )
+        return TestClient(app, base_url=ORIGIN), calls
+
+    @pytest.fixture
+    def _data_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    def _enroll_passkey(self):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def test_the_routes_are_absent_without_the_wiring(self, client, sessions):
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **self.BODY})
+        assert r.status_code in (404, 405)
+
+    def test_create_copies_through_the_companion_and_returns_no_secret(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **self.BODY})
+        assert r.status_code == 200
+        assert r.json() == {"created": {"id": "st-0123456789ab", "label": "sales-sync", "expires_at": 2.0}}
+        assert self.SECRET not in r.text
+        assert calls == [
+            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"]),
+            ("send", self.SECRET),
+        ]
+
+    @pytest.mark.usefixtures("_data_dir")
+    @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL])
+    def test_create_needs_confirmation_a_human_session_and_the_passkey(self, controller, sessions, path):
+        body = {**self.BODY, "token_id": "st-0123456789ab"}
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        unconfirmed = {k: v for k, v in body.items() if k != "confirmed"}
+        r = client.post(path, json={"csrf": csrf, **unconfirmed})
+        assert r.status_code == 400
+        assert r.json() == {"error": "confirmation required"}
+        assert calls == []
+
+        client, calls = self._client(controller, sessions, require_human_session=True)
+        session_id = sessions.create(provenance=PROVENANCE_UNATTESTED)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        r = client.post(path, json={"csrf": session_id, **body})
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+        assert calls == []
+
+        self._enroll_passkey()
+        client, calls = self._client(
+            controller, sessions,
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True), step_up_origin=ORIGIN,
+        )
+        csrf = _authed(client, sessions)
+        first = client.post(path, json={"csrf": csrf, **body})
+        assert first.status_code == 428
+        assert "webauthn_options" in first.json()
+        assert calls == []
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post(path, json={"csrf": csrf, **body, "webauthn_assertion": {"id": "Y3JlZC0x"}})
+        assert second.status_code == 200
+        assert calls
+
+    @pytest.mark.usefixtures("_data_dir")
+    def test_the_passkey_is_bound_to_the_exact_request(self, controller, sessions):
+        self._enroll_passkey()
+        client, calls = self._client(
+            controller, sessions,
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True), step_up_origin=ORIGIN,
+        )
+        csrf = _authed(client, sessions)
+        assert client.post(self.CREATE, json={"csrf": csrf, **self.BODY}).status_code == 428
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            other = client.post(
+                self.CREATE,
+                json={"csrf": csrf, **{**self.BODY, "tools": ["gmail_list_threads"]}, "webauthn_assertion": {"id": "Y3JlZC0x"}},
+            )
+        assert other.status_code != 200
+        assert calls == []
+
+    def test_a_create_the_companion_could_not_take_is_undone(self, controller, sessions):
+        client, calls = self._client(
+            controller, sessions,
+            wiring_kwargs={"ok": False, "reason": "PrivacyFence could not reach its companion app."},
+        )
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **self.BODY})
+        assert r.status_code == 503
+        assert r.json() == {
+            "error": "The token was not created: PrivacyFence could not reach its companion app.",
+        }
+        assert calls[-1] == ("revoke", "st-0123456789ab")
+        assert self.SECRET not in r.text
+
+    def test_create_shows_the_validation_text(self, controller, sessions):
+        client, calls = self._client(
+            controller, sessions, wiring_kwargs={"create_error": "You already have a token with that name."},
+        )
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **self.BODY})
+        assert r.status_code == 400
+        assert r.json() == {"error": "You already have a token with that name."}
+        assert [c[0] for c in calls] == ["create"]
+
+    @pytest.mark.parametrize("field,value", [
+        ("label", 5), ("days", "90"), ("days", True), ("rule_ids", "r1"), ("tools", [1]),
+    ])
+    def test_a_wrong_typed_create_is_a_400(self, controller, sessions, field, value):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, field: value}})
+        assert r.status_code == 400
+        assert calls == []
+
+    def test_revoke_and_revoke_all_take_the_same_gates(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.REVOKE, json={"csrf": csrf, "token_id": "st-0123456789ab", "confirmed": True})
+        assert r.status_code == 200
+        r = client.post(self.REVOKE_ALL, json={"csrf": csrf, "confirmed": True})
+        assert r.status_code == 200
+        assert calls == [("revoke", "st-0123456789ab"), ("revoke_all",)]
+        assert client.post(self.REVOKE, json={"csrf": "wrong", "token_id": "x", "confirmed": True}).status_code == 401
+        assert client.post(self.REVOKE, json={"csrf": csrf, "confirmed": True}).status_code == 400
+        client.cookies.clear()
+        assert client.post(self.REVOKE_ALL, json={"csrf": csrf, "confirmed": True}).status_code == 401
+
+    def test_revoke_of_an_unknown_token_is_404(self, controller, sessions):
+        client, _calls = self._client(controller, sessions, wiring_kwargs={"known": False})
+        csrf = _authed(client, sessions)
+        r = client.post(self.REVOKE, json={"csrf": csrf, "token_id": "st-nope", "confirmed": True})
+        assert r.status_code == 404
+        assert r.json() == {"error": "No such token."}
+
+    def test_audit_summaries_name_the_token_and_never_the_secret(self, controller, sessions, monkeypatch):
+        recorded: list = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+        client, _calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        client.post(self.CREATE, json={"csrf": csrf, **self.BODY})
+        client.post(self.REVOKE, json={"csrf": csrf, "token_id": "st-0123456789ab", "confirmed": True})
+        client.post(self.REVOKE_ALL, json={"csrf": csrf, "confirmed": True})
+        assert [p for p, _s in recorded] == [LOCAL_PRINCIPAL] * 3
+        assert [s for _p, s in recorded] == [
+            "Created scoped token 'sales-sync' (st-0123456789ab), 90 days, 2 rule(s), 3 tool(s)",
+            "Revoked scoped token 'sales-sync' (st-0123456789ab)",
+            "Revoked all scoped tokens (3)",
+        ]
+        assert all(self.SECRET not in s for _p, s in recorded)
+
+    def test_the_shim_reloads_after_these_routes_instead_of_rendering_state(self, controller, sessions):
+        client, _calls = self._client(controller, sessions)
+        _authed(client, sessions)
+        page = client.get("/settings").text
+        for route in ("create", "revoke", "revoke_all"):
+            assert f"['{route}'," in page
+        assert "url = '/api/settings/scoped_tokens/' + scopedRoutes[action][0]; rest.confirmed = true;" in page
+        assert (
+            "Create this token? It is copied to your clipboard once and cannot be shown again." in page
+        )
+        assert "Revoke this token? Clients using it stop working at once." in page
+        assert "Revoke all your scoped tokens?" in page
+        assert "if (res.ok && scopedAction) { window.location.reload(); }" in page
+        assert page.index("window.location.reload()") < page.index("window.__pfRender(res.state)")
+
+
 class TestAuditLogDownload:
     def test_nothing_to_export_is_404(self, client, sessions):
         _authed(client, sessions)
@@ -1616,7 +1885,7 @@ class TestBespokeRoutesAreClassified:
 
     def test_every_post_route_is_the_generic_dispatcher_sensitive_or_explicitly_exempt(self, controller, sessions):
         # With ai_client, so the two optional token routes are built too.
-        routes = build_routes(controller, sessions=sessions, ai_client=_ai_client([], []))
+        routes = build_routes(controller, sessions=sessions, ai_client=_ai_client([], []), scoped_tokens=_scoped_wiring([]))
         checked_any_bespoke = False
         for route in routes:
             methods = getattr(route, "methods", None) or set()
