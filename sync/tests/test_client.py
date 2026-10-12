@@ -146,7 +146,7 @@ def _patch_transport(monkeypatch: pytest.MonkeyPatch, log: list[str], *, init_fa
     seen: dict[str, Any] = {}
 
     def fake_stream(url: str, *, http_client: Any) -> _Ctx:
-        seen["url"], seen["headers"] = url, http_client.headers
+        seen["url"], seen["headers"], seen["timeout"] = url, http_client.headers, http_client.timeout
         return _Ctx(("r", "w"), log, "stream")
 
     monkeypatch.setattr(client_mod, "streamable_http_client", fake_stream)
@@ -164,6 +164,15 @@ async def test_context_manager_opens_and_closes(monkeypatch: pytest.MonkeyPatch)
     assert client_mod._seen["url"] == "http://x/mcp"  # type: ignore[attr-defined]
     assert client_mod._seen["headers"]["authorization"] == "Bearer tok"  # type: ignore[attr-defined]
     await client.__aexit__()
+
+
+async def test_session_client_keeps_the_mcp_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_transport(monkeypatch, [])
+    async with connect_token("http://x/mcp", "tok"):
+        pass
+    timeout = client_mod._seen["timeout"]  # type: ignore[attr-defined]
+    assert timeout.connect == 30.0
+    assert timeout.read == 300.0
 
 
 async def test_failed_initialize_closes_the_transport(monkeypatch: pytest.MonkeyPatch) -> None:

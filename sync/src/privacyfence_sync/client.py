@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 from mcp.types import TextContent
 
 if TYPE_CHECKING:
@@ -51,7 +52,15 @@ class SyncClient:
     async def __aenter__(self) -> SyncClient:
         stack = AsyncExitStack()
         try:
-            http = await stack.enter_async_context(httpx2.AsyncClient(auth=self._auth, headers=self._headers))
+            # A client handed to the transport gets none of the MCP timeouts; httpx's own 5 s read
+            # timeout would cut a tool call that is silent for longer (a 10 MB Drive download).
+            http = await stack.enter_async_context(
+                httpx2.AsyncClient(
+                    auth=self._auth,
+                    headers=self._headers,
+                    timeout=httpx2.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT),
+                )
+            )
             read, write = await stack.enter_async_context(streamable_http_client(self._server_url, http_client=http))
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
