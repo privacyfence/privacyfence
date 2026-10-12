@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.1.1] — 2026-10-12
+
+### Fixed
+
+- **`privacyfence-sync` no longer drops a step that takes more than 5 seconds.** A step whose tool call stayed silent that long, such as downloading a 10 MB Drive file, ended with "the server refused the connection" even though the server was still working. The connection now allows up to 5 minutes of silence, as the MCP client's own defaults do.
+
 ## [6.1.0] — 2026-10-12
 
 ### Added
@@ -3292,7 +3298,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...HEAD
+[6.1.1]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...v6.1.1
 [6.1.0]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...v6.0.0
 [5.9.1]: https://github.com/privacyfence/privacyfence/compare/v5.9.0...v5.9.1
