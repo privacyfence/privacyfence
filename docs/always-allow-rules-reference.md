@@ -49,6 +49,7 @@ the request on the card, once.
 
 | Tool | Always allow buttons |
 |---|---|
+| `assets_export_objects` | this schema |
 | `assets_get_connected_tickets` | this schema |
 | `assets_get_object` | this schema |
 | `assets_get_related_objects` | this schema |

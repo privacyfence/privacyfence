@@ -1,6 +1,7 @@
 """Tests for the Jira Assets connector: auto-approved schema tools and reviewed object reads."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ from privacyfence.policy.engine import PolicyRule
 from privacyfence.connectors import assets as assets_module
 from privacyfence.connectors.assets import AssetsConnector
 from privacyfence.gate import GateDeniedError
+from privacyfence.org_mode import DownloadDeliveryConfig
+from privacyfence import export_files
 
 from ...helpers import (
     assert_all_tools_leave_an_audit_trail,
@@ -135,6 +138,7 @@ class TestDispatch:
             "assets_list_schemas", "assets_list_object_types", "assets_list_attributes",
             "assets_search_objects", "assets_get_object",
             "assets_get_related_objects", "assets_get_connected_tickets",
+            "assets_export_objects",
         ]
 
     def test_gates_and_operations(self):
@@ -567,10 +571,11 @@ ASSETS_SIBLINGS: dict[str, tuple[str, ...]] = {
     "assets_list_schemas": ("assets_list_object_types",),
     "assets_list_object_types": ("assets_list_schemas", "assets_list_attributes"),
     "assets_list_attributes": ("assets_list_object_types", "assets_search_objects"),
-    "assets_search_objects": ("assets_get_object",),
+    "assets_search_objects": ("assets_get_object", "assets_export_objects"),
     "assets_get_object": ("assets_search_objects", "assets_get_related_objects"),
     "assets_get_related_objects": ("assets_get_object",),
     "assets_get_connected_tickets": ("assets_get_object",),
+    "assets_export_objects": ("assets_search_objects",),
 }
 
 
@@ -589,7 +594,17 @@ class TestAuditTrail:
         client.get_object.return_value = make_object()
         client.related_objects.return_value = make_graph()
         client.connected_tickets.return_value = []
-        await assert_all_tools_leave_an_audit_trail(connector, assets_module, monkeypatch, tmp_path)
+        client.export_objects.return_value = [make_object()]
+        monkeypatch.setattr(
+            assets_module.local_files, "deliver_export",
+            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
+        )
+        await assert_all_tools_leave_an_audit_trail(
+            connector, assets_module, monkeypatch, tmp_path,
+            arg_overrides={"assets_export_objects": {
+                "aql": "objectType = Contract", "destination_dir": "/tmp/x", "file_name": "",
+            }},
+        )
 
 
 class TestSchemaAutoAccept:
@@ -701,3 +716,237 @@ class TestSchemaAutoAccept:
 
         assert result["tickets"][0]["key"] == "PFQA-9"
         assert self._entries(tmp_path)[-1]["decision"] == "auto_accepted"
+
+
+EXPORT_ARGS = {"aql": "objectType = Contract", "destination_dir": "~/out"}
+
+
+@pytest.fixture
+def delivered(monkeypatch):
+    calls = []
+
+    def fake_deliver(
+        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        download_base_url="",
+    ):
+        calls.append({
+            "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
+            "download_mode": download_mode, "download_config": download_config,
+            "download_base_url": download_base_url,
+        })
+        return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
+                "delivery": "local_disk"}
+
+    monkeypatch.setattr(assets_module.local_files, "deliver_export", fake_deliver)
+    return calls
+
+
+class TestExportObjects:
+    @staticmethod
+    def _setup(objects=None):
+        connector, client = make_connector()
+        client.export_objects.return_value = (
+            [make_object(), make_object(id="124", key="PFQA-124", label="Second",
+                                        attributes={"Name": ["Second"], "Mail": ["x@example.com"]})]
+            if objects is None else objects
+        )
+        return connector, client
+
+    async def test_result_is_summary_only(self, gated_call_spy, delivered):
+        connector, client = self._setup()
+
+        result = await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        client.export_objects.assert_called_once_with("objectType = Contract")
+        assert set(result) == {"rows", "columns", "sha256", "path", "name", "size_bytes", "delivery"}
+        assert result["rows"] == 2
+        assert "ACME support contract" not in json.dumps(result)
+        assert delivered[0]["name"] == "assets-objects.csv"
+
+    async def test_csv_columns_and_multi_value_cells(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+
+        result = await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert result["columns"] == ["id", "key", "label", "type", "Name", "Tags", "Account", "Mail"]
+        lines = delivered[0]["data"].decode("utf-8").splitlines()
+        assert lines[0] == "id,key,label,type,Name,Tags,Account,Mail"
+        assert lines[1] == "123,PFQA-123,ACME support contract,Contract,ACME support contract,a; b,ACME Ltd (PFQA-45),"
+        assert lines[2] == "124,PFQA-124,Second,Contract,Second,,,x@example.com"
+        assert delivered[0]["mime_type"] == export_files.MIME_TYPES["csv"]
+
+    async def test_json_format_follows_the_file_name(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+
+        await connector.call("assets_export_objects", {**EXPORT_ARGS, "file_name": "out.json"})
+
+        assert delivered[0]["name"] == "out.json"
+        rows = json.loads(delivered[0]["data"].decode("utf-8"))
+        assert rows[0]["key"] == "PFQA-123"
+        assert rows[0]["Tags"] == "a; b"
+
+    async def test_approval_args_carry_sha256(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+
+        await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        call = gated_call_spy[0]
+        assert call["gate"] == "review"
+        assert call["tool"] == "assets_export_objects"
+        assert call["sender"] == "Jira Assets"
+        assert call["filtered_data"] is None
+        assert call["args"]["sha256"] == hashlib.sha256(delivered[0]["data"]).hexdigest()
+        assert call["new_info"]["Saved to"] == "~/out/assets-objects.csv"
+        assert call["new_info"]["Rows"] == "2"
+        assert call["delivery"] == "local_disk"
+        assert call["preview"] == {"AQL": "objectType = Contract",
+                                   "Attributes": "Name, Tags, Account, Mail"}
+        assert "ACME support contract" in call["pii_scan_text"]
+
+    async def test_raw_data_carries_ids_only(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+
+        await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        raw = gated_call_spy[0]["raw_data"]
+        assert [(o.id, o.key, o.schema_id) for o in raw] == [("123", "PFQA-123", "2"), ("124", "PFQA-124", "2")]
+        assert all(set(vars(o)) == {"id", "key", "schema_id"} for o in raw)
+
+    async def test_empty_result_writes_no_file_and_shows_no_card(
+        self, gated_call_spy, delivered, tmp_path,
+    ):
+        init_audit_logger(str(tmp_path))
+        connector, _client = self._setup(objects=[])
+
+        result = await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert result["rows"] == 0
+        assert result["sha256"] is None
+        assert result["delivery"] == "none"
+        assert result["columns"] == ["id", "key", "label", "type"]
+        assert gated_call_spy == []
+        assert delivered == []
+        assert audit_lines(tmp_path)[0]["decision"] == "auto_accepted"
+
+    async def test_over_ten_thousand_objects_reaches_the_agent_as_runtime_error(
+        self, gated_call_spy, delivered,
+    ):
+        connector, client = self._setup()
+        client.export_objects.side_effect = AssetsClientError(
+            "The AQL query matches more than 10,000 objects; narrow it and export in parts.")
+
+        with pytest.raises(RuntimeError, match="more than 10,000 objects"):
+            await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert gated_call_spy == []
+        assert delivered == []
+
+    async def test_deny_writes_nothing(self, denying_gate, delivered):
+        connector, _client = self._setup()
+
+        with pytest.raises(PermissionError):
+            await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert delivered == []
+
+    async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+        cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
+        connector.download_mode = "org"
+        connector.download_config = cfg
+        connector.download_base_url = "https://pf.example"
+
+        await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert delivered[0]["download_mode"] == "org"
+        assert delivered[0]["download_config"] is cfg
+        assert delivered[0]["download_base_url"] == "https://pf.example"
+        assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_org_mode_without_staging_is_refused_before_any_request(
+        self, gated_call_spy, delivered,
+    ):
+        connector, client = self._setup()
+        connector.download_mode = "org"
+        connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
+
+        with pytest.raises(ValueError, match="assets_search_objects"):
+            await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        client.export_objects.assert_not_called()
+        assert gated_call_spy == []
+        assert delivered == []
+
+
+class TestExportAutoAccept:
+    """The schema all-results rule covers the export; PII needs allow_personal_data (ADR 0157)."""
+
+    PII = "DE89370400440532013000"
+
+    @staticmethod
+    def _rule(*, allow_personal_data=False):
+        auto_accept.set_policy_v2_store_rules(policy_store.merge_rules([PolicyRule(
+            id="", predicate="approved_schema_ids_all_results", value=["2"],
+            operations=frozenset({"assets.read_object"}), allow_personal_data=allow_personal_data,
+        )]))
+
+    @pytest.fixture(autouse=True)
+    def _clear_rules(self):
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    async def test_schema_all_results_rule_auto_accepts(self, tmp_path, delivered):
+        init_audit_logger(str(tmp_path))
+        self._rule()
+        connector, client = make_connector()
+        client.export_objects.return_value = [make_object(schema_id="2"), make_object(id="124", schema_id="2")]
+
+        result = await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert result["rows"] == 2
+        assert len(delivered) == 1
+        assert audit_lines(tmp_path)[0]["decision"] == "auto_accepted"
+
+    async def test_mixed_schemas_still_need_a_card(self, tmp_path, delivered, monkeypatch):
+        from privacyfence import gate
+
+        init_audit_logger(str(tmp_path))
+        self._rule()
+        popups: list[Any] = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(1) or "deny", None))
+        connector, client = make_connector()
+        client.export_objects.return_value = [make_object(schema_id="2"), make_object(id="124", schema_id="3")]
+
+        with pytest.raises(GateDeniedError):
+            await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert len(popups) == 1
+        assert delivered == []
+
+    async def test_personal_data_needs_a_rule_with_allow_personal_data(
+        self, tmp_path, delivered, monkeypatch,
+    ):
+        from privacyfence import gate
+
+        init_audit_logger(str(tmp_path))
+        popups: list[Any] = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(1) or "deny", None))
+        monkeypatch.setattr(gate, "show_pii_confirmation_popup", lambda *a, **k: False)
+        connector, client = make_connector()
+        client.export_objects.return_value = [make_object(
+            schema_id="2", attributes={"Name": ["ACME"], "IBAN": [self.PII]})]
+
+        self._rule(allow_personal_data=False)
+        with pytest.raises(GateDeniedError):
+            await connector.call("assets_export_objects", EXPORT_ARGS)
+        assert delivered == []
+
+        self._rule(allow_personal_data=True)
+        result = await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert result["rows"] == 1
+        assert len(delivered) == 1
+        last = audit_lines(tmp_path)[-1]
+        assert last["decision"] == "auto_accepted"
+        assert last["pii_detected"] is True
