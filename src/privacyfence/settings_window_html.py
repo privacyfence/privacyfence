@@ -176,6 +176,12 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-st-list { margin: 0 0 var(--space-xs); padding-left: var(--space-s); }
 .pf-st-form { display: flex; flex-direction: column; gap: var(--space-xs); }
 .pf-st-chip { cursor: default; }
+/* Rule picker: one rule per line; a rule with long verbs wraps and grows taller instead of overflowing. */
+.pf-st-rules { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
+.pf-st-rules .pf-chip {
+  max-width: 100%; box-sizing: border-box; white-space: normal; justify-content: flex-start; text-align: left;
+  padding: var(--space-2xs) 14px; line-height: 1.4; overflow-wrap: anywhere; border-radius: var(--radius-s);
+}
 .pf-st-warn { color: var(--ink); border-color: var(--control-line); }
 .pf-st-expired { color: var(--muted); }
 .pf-st-meta { color: var(--muted); font-weight: 400; margin-left: 0.35em; }
@@ -874,6 +880,16 @@ _JS = r"""
       html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
         dataAttr('remove_policy_rule', { rule_id: r.id }) + '>✕ Remove</div>';
       html += '</div>';
+      // Tools added after this rule was saved: its verbs name them, its stored operations do not
+      // reach them. Widening is only ever this explicit, confirmed click (ADR 0166).
+      if (r.missing_tools && r.missing_tools.length) {
+        var missingNames = r.missing_tools.join(', ');
+        html += '<div class="pf-st-notice pf-aa-missing" role="status">Newer tools aren\'t covered yet: ' +
+          esc(missingNames) + '. ' +
+          '<span class="pf-link" role="button" tabindex="0" aria-label="Update rule" data-confirm="' +
+          esc('Add ' + missingNames + ' to this rule? These tools will be auto-accepted wherever the rule matches.') +
+          '" ' + dataAttr('update_policy_rule', { rule_id: r.id }) + '>Update rule</span></div>';
+      }
       // Per-rule usage -- "Matched 42x, last 3 days ago" or, for a rule that has never
       // fired, a distinct stale badge nudging toward the Remove link right above it.
       html += '<div class="pf-aa-usage' + (r.never_matched ? ' pf-aa-usage-stale' : '') + '">' +
@@ -1242,8 +1258,10 @@ _JS = r"""
     html += '<div class="pf-hint">A rule sets which documents, reports, projects or pages the token may use, and what it may do there. ' +
       'Pick the tools below as well: a tool that needs approval works only where a selected rule covers it.</div>';
     if (SCOPED.rules.length === 0) { html += '<div class="pf-hint">You have no Auto-accept rules.</div>'; }
-    html += '<div class="pf-chips">';
-    SCOPED.rules.forEach(function (r) {
+    html += '<div class="pf-chips pf-st-rules">';
+    SCOPED.rules.slice().sort(function (a, b) {
+      return a.title.localeCompare(b.title, undefined, {sensitivity: 'base'});
+    }).forEach(function (r) {
       var on = !!ui.stRules[r.id];
       var allows = r.verbs.length ? 'allows ' + r.verbs.join(', ') : '';
       html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
@@ -1799,6 +1817,8 @@ _JS = r"""
       // A toggle's checkbox: keep it showing what Python says (the next
       // render), not the browser's own flip -- see toggleHtml.
       if (actionEl.tagName === 'INPUT' && actionEl.type === 'checkbox') e.preventDefault();
+      var confirmText = actionEl.getAttribute('data-confirm');
+      if (confirmText && !window.confirm(confirmText)) return;
       var action = actionEl.getAttribute('data-action');
       var payload = {};
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }

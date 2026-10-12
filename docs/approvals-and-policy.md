@@ -306,6 +306,14 @@ and add a narrower one; rules are not edited in place. When a passkey is require
 (`step_up.require_passkey`), adding or removing a rule asks for it (see
 [Security and compliance](security-and-compliance.md)).
 
+A rule keeps the tools it covered when you saved it. When a release adds a tool that belongs to a
+verb the rule already has (for example `grist_import_csv` under a Grist document rule that allows
+*create*), the rule's row says "Newer tools aren't covered yet" and names them, and the call is
+denied until you click **Update rule** and confirm. That adds only those tools, keeps the rule and
+anything that refers to it (scoped tokens, the audit log) unchanged, and asks for the passkey like
+adding a rule. Nothing widens a rule on its own at startup, upgrade or load. See
+[ADR 0166](adr/0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md).
+
 **From the AI system — `privacyfence_propose_policy_change`.** The AI system can propose adding,
 replacing or removing a rule. `privacyfence_list_policy` shows it the current rules and the scope
 catalogue, and `privacyfence_check_policy` predicts whether a call would run without a card. A
