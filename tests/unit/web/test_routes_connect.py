@@ -307,6 +307,21 @@ class TestOAuthStart:
             assert qs["redirect_uri"] == f"{ISSUER}/oauth/callback/atlassian"
 
 
+    @pytest.mark.parametrize(("assets_flag", "expect_assets"), [(False, False), (True, True)])
+    def test_atlassian_authorize_url_carries_assets_scopes_only_when_the_bundle_says_so(
+        self, assets_flag, expect_assets,
+    ):
+        org_config = dict(_ORG_CONFIG)
+        org_config["atlassian"] = {**_ORG_CONFIG["atlassian"], "assets": assets_flag}
+        app, sessions, _registry = _app(org_config=org_config)
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/oauth/start/jira", cookies={org_session.SESSION_COOKIE: session_id})
+        qs = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))
+        scopes = qs["scope"].split(" ")
+        assert ("read:cmdb-object:jira" in scopes) is expect_assets
+        assert "read:jira-work" in scopes
+
+
 # ---------------------------------------------------------------------------- #
 # /oauth/callback/{service}
 # ---------------------------------------------------------------------------- #

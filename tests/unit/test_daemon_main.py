@@ -2480,6 +2480,26 @@ class TestAtlassianOauthRunner:
         assert daemon_main.run_atlassian_oauth({}) == 1
         assert "No Atlassian organization config" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(("config", "org_extra", "expect_assets"), [
+        (None, {}, False),
+        ({"connectors": {"assets": {"enabled": True}}}, {}, True),
+        (None, {"assets": True}, True),
+        ({"connectors": {"assets": {"enabled": False}}}, {"assets": True}, False),
+    ])
+    def test_authorize_scopes_include_assets_only_when_enabled(self, monkeypatch, config, org_extra, expect_assets):
+        captured = {}
+
+        def fake_authorize(**kw):
+            captured.update(kw)
+            return {"site_url": "https://acme.atlassian.net"}
+
+        monkeypatch.setattr(daemon_main, "atlassian_authorize_interactive", fake_authorize)
+        org = {"atlassian": {"client_id": "ci", "client_secret": "cs", **org_extra}}
+
+        assert daemon_main.run_atlassian_oauth(org, config) == 0
+        assert ("read:cmdb-object:jira" in captured["scopes"]) is expect_assets
+        assert "read:jira-work" in captured["scopes"]
+
     def test_success_prints_site_url_and_returns_0(self, monkeypatch, capsys):
         monkeypatch.setattr(
             daemon_main, "atlassian_authorize_interactive",
@@ -3333,7 +3353,7 @@ class TestMain:
     def test_oauth_flag_dispatches_to_the_right_runner(self, monkeypatch, flag, runner_name):
         self._patch_config(monkeypatch)
         calls = []
-        monkeypatch.setattr(daemon_main, runner_name, lambda org_config: calls.append(1) or 0)
+        monkeypatch.setattr(daemon_main, runner_name, lambda org_config, *a: calls.append(1) or 0)
 
         result = daemon_main.main([flag])
 

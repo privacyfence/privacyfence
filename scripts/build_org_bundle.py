@@ -248,6 +248,10 @@ def build_parser() -> argparse.ArgumentParser:
     atlassian = parser.add_argument_group("Atlassian (Jira + Confluence)")
     atlassian.add_argument("--atlassian-client-id")
     atlassian.add_argument("--atlassian-client-secret")
+    atlassian.add_argument(
+        "--atlassian-assets", action="store_true",
+        help="Request Jira Assets permissions at Atlassian sign-in (the app must have the read:cmdb-* scopes)",
+    )
 
     grist = parser.add_argument_group("Grist")
     grist.add_argument(
@@ -605,6 +609,10 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.atlassian_client_id and args.atlassian_client_secret):
             raise SystemExit("--atlassian-client-id and --atlassian-client-secret must be given together.")
         bundle["atlassian"] = {"client_id": args.atlassian_client_id, "client_secret": args.atlassian_client_secret}
+        if args.atlassian_assets:
+            bundle["atlassian"]["assets"] = True
+    elif args.atlassian_assets:
+        raise SystemExit("--atlassian-assets needs --atlassian-client-id and --atlassian-client-secret.")
 
     if (
         args.grist_server_url or args.grist_client_id or args.grist_client_secret or args.grist_auth_server_url
