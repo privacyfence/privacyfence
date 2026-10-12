@@ -7,15 +7,37 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from ..assets_client import AssetsClient, AssetsClientError
+from ..assets_client import AssetsClient, AssetsClientError, AssetsObject
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
-from ..gate import current_reason
+from ..gate import current_reason, gated_call
 from ..org_mode import DownloadDeliveryConfig
 
 logger = logging.getLogger(__name__)
 
 _REASON = "One sentence: why are you calling this tool right now?"
+
+_SENDER = "Jira Assets"
+_MAX_CARD_ATTRIBUTES = 8
+_MAX_CELL_CHARS = 120
+
+
+def _cell(text: str) -> str:
+    return text if len(text) <= _MAX_CELL_CHARS else text[:_MAX_CELL_CHARS - 1] + "…"
+
+
+def _joined(values: list[str]) -> str:
+    return "; ".join(values)
+
+
+def _scan_text(objects: list[AssetsObject]) -> str:
+    return "\n".join(v for o in objects for values in o.attributes.values() for v in values)
+
+
+def _details_line(obj: AssetsObject) -> str:
+    return f"{obj.key} — {obj.label}: " + "; ".join(
+        f"{name}: {_joined(values)}" for name, values in obj.attributes.items()
+    )
 
 
 class AssetsConnector(Connector):
@@ -74,11 +96,47 @@ class AssetsConnector(Connector):
                     "attributes reference other object types. Returns a list of {id, name, kind, "
                     "value_type, reference_type_id, reference_type_name, reference_kind, "
                     "min_cardinality, max_cardinality, is_label}; system attributes are left out. "
-                    "Use assets_list_object_types to find the type id. Auto-approved."
+                    "Use assets_list_object_types to find the type id, and assets_search_objects to read "
+                    "objects of that type. Auto-approved."
                 ),
                 params=[
                     ToolParam("object_type_id", "str",
                               description="Numeric id of the object type, as assets_list_object_types "
+                                          "returns it in id."),
+                    ToolParam("reason", "str", required=True, description=_REASON),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="assets_search_objects",
+                description=(
+                    "Search Jira Assets objects with an AQL query and return them with their "
+                    "attribute values. Returns a list of {id, key, label, type, type_id, schema_id, "
+                    "created, updated, attributes, references}, at most max_results entries. "
+                    "Use assets_get_object to read one object by id, and assets_list_attributes "
+                    "to see which attributes a type has. Requires user approval."
+                ),
+                params=[
+                    ToolParam("aql", "str",
+                              description="AQL query, for example: objectType = \"Contract\" AND "
+                                          "Name LIKE \"ACME\". At most 4000 characters."),
+                    ToolParam("max_results", "int", required=False, default=25,
+                              description="Maximum number of objects to return, 1 to 100. Default 25."),
+                    ToolParam("reason", "str", required=True, description=_REASON),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="assets_get_object",
+                description=(
+                    "Read one Jira Assets object with every attribute value and its outbound "
+                    "references. Returns {id, key, label, type, type_id, schema_id, created, "
+                    "updated, attributes, references}. Use assets_search_objects to find the "
+                    "object id. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_id", "str",
+                              description="Numeric id of the object, as assets_search_objects "
                                           "returns it in id."),
                     ToolParam("reason", "str", required=True, description=_REASON),
                 ],
@@ -93,6 +151,10 @@ class AssetsConnector(Connector):
             return await self._list_object_types(**args)
         if tool == "assets_list_attributes":
             return await self._list_attributes(**args)
+        if tool == "assets_search_objects":
+            return await self._search_objects(**args)
+        if tool == "assets_get_object":
+            return await self._get_object(**args)
         raise ValueError(f"Unknown Assets tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -147,6 +209,64 @@ class AssetsConnector(Connector):
                          f"List attributes: object type {object_type_id}",
                          f"{len(data)} attribute(s)", t0)
         return data
+
+    # ------------------------------------------------------------------ #
+    # Review gate (reads)
+    # ------------------------------------------------------------------ #
+
+    async def _search_objects(self, aql: str, max_results: int = 25) -> Any:
+        limit = max(1, min(int(max_results), 100))
+        objects = await self._fetch(self._assets.search_objects, aql, limit)
+        names: list[str] = []
+        for o in objects:
+            for name in o.attributes:
+                if name not in names and len(names) < _MAX_CARD_ATTRIBUTES:
+                    names.append(name)
+        rows = [
+            [_cell(o.key), _cell(o.label), _cell(o.type_name),
+             *(_cell(_joined(o.attributes.get(n, []))) for n in names)]
+            for o in objects
+        ]
+        return await gated_call(
+            connector=self.name,
+            tool="assets_search_objects",
+            tool_name="Search Jira Assets",
+            summary=f"AQL: {aql[:120]}",
+            sender=_SENDER,
+            raw_data=objects,
+            filtered_data=[o.to_dict() for o in objects],
+            gate="review",
+            preview={"Query": aql[:200], "Objects": str(len(objects))},
+            details_text="\n".join(_details_line(o) for o in objects) or "(no matches)",
+            pii_scan_text=_scan_text(objects),
+            preview_tables=[{"headers": ["Key", "Label", "Type", *names], "rows": rows}] if objects else [],
+            table_only=True,
+            my_email=self.my_email,
+            args={"aql": aql, "max_results": limit},
+        )
+
+    async def _get_object(self, object_id: str) -> Any:
+        obj = await self._fetch(self._assets.get_object, object_id)
+        return await gated_call(
+            connector=self.name,
+            tool="assets_get_object",
+            tool_name="Read Jira Assets Object",
+            summary=f"{obj.key}: {obj.label}",
+            sender=_SENDER,
+            raw_data=obj,
+            filtered_data=obj.to_dict(),
+            gate="review",
+            preview={"Key": obj.key, "Label": obj.label, "Type": obj.type_name,
+                     "Schema": obj.schema_id},
+            details_text=_details_line(obj),
+            pii_scan_text=_scan_text([obj]),
+            preview_tables=[{
+                "headers": ["Attribute", "Value"],
+                "rows": [[name, _cell(_joined(values))] for name, values in obj.attributes.items()],
+            }] if obj.attributes else [],
+            my_email=self.my_email,
+            args={"object_id": object_id},
+        )
 
     # ------------------------------------------------------------------ #
     # Helpers

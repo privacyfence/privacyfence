@@ -100,10 +100,10 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Salesforce](#salesforce) | 5 | 1 | 4 | 0 |
 | [Jira](#jira) | 13 | 6 | 3 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
-| [Jira Assets](#jira-assets) | 3 | 3 | 0 | 0 |
+| [Jira Assets](#jira-assets) | 5 | 3 | 2 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **147** | **54** | **30** | **63** |
+| **Total** | **149** | **54** | **32** | **63** |
 
 ## Gmail
 
@@ -292,6 +292,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `assets_list_attributes` | read | `auto` | List the attribute definitions of one Jira Assets object type, including which attributes reference other object types. |
 | `assets_list_object_types` | read | `auto` | List the object types in one Jira Assets schema. |
 | `assets_list_schemas` | read | `auto` | List the Jira Assets object schemas on the connected Atlassian site. |
+| `assets_get_object` | read | `review` | Read one Jira Assets object with every attribute value and its outbound references. |
+| `assets_search_objects` | read | `review` | Search Jira Assets objects with an AQL query and return them with their attribute values. |
 
 ## Grist
 
