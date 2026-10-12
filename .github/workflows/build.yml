@@ -248,7 +248,7 @@ jobs:
       # actually stops the job here; nothing is written on a passing run.
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-packaged-smoke-failure-diagnostics
           path: test-results/
@@ -264,7 +264,7 @@ jobs:
 
       - name: Upload pkg smoke failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-pkg-smoke-failure-diagnostics
           path: test-results/
@@ -277,7 +277,7 @@ jobs:
       # after *both* smoke tests above, so a broken .pkg stops this job before its carrier
       # reaches `finalize-release`.
       - name: Upload DMG as artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PrivacyFence-dmg
           path: dist/PrivacyFence-*.dmg
@@ -295,7 +295,7 @@ jobs:
           cp -p "dist/PrivacyFence-${{ steps.release.outputs.version }}.mcpb" dist/release-mcpb/PrivacyFence.mcpb
 
       - name: Upload .mcpb as artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PrivacyFence-mcpb
           path: dist/release-mcpb/PrivacyFence.mcpb
@@ -361,7 +361,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
@@ -527,7 +527,7 @@ jobs:
       # test_deb_packaged_lifecycle.py's real system install).
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-packaged-smoke-failure-diagnostics
           path: test-results/
@@ -535,7 +535,7 @@ jobs:
           retention-days: 30
 
       - name: Upload installer as artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PrivacyFence-windows-installer
           path: dist/PrivacyFence-*-setup.exe
@@ -669,7 +669,7 @@ jobs:
       # manifest`) both land under the same test-results/ tree either way.
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-deb-failure-diagnostics
           path: test-results/
@@ -677,7 +677,7 @@ jobs:
           retention-days: 30
 
       - name: Upload .deb as artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PrivacyFence-deb
           path: dist/privacyfence_*.deb
@@ -718,7 +718,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
@@ -769,7 +769,7 @@ jobs:
         working-directory: mcpb/shim
 
       - name: Upload SBOMs as workflow artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PrivacyFence-sbom
           path: |
@@ -893,7 +893,7 @@ jobs:
       # directly under `release-assets/` rather than one subdirectory per artifact name, matching
       # the flat file list the "Attach release assets" step below references.
       - name: Download build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: PrivacyFence-*
           path: release-assets
