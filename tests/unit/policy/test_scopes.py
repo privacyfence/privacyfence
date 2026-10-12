@@ -199,6 +199,19 @@ FIXTURES: dict[str, list] = {
         (["ENG"], make_ctx(raw_data=[])),
         ([], make_ctx(raw_data=[SimpleNamespace(key="ENG-1")])),
     ],
+    "approved_schema_ids": [
+        (["2"], make_ctx(raw_data=SimpleNamespace(schema_id="2"))),
+        (["2"], make_ctx(raw_data=[SimpleNamespace(schema_id="2")])),
+        (["2"], make_ctx(raw_data=SimpleNamespace(schema_id="3"))),
+        (["2"], make_ctx(raw_data=[])),
+        ([], make_ctx(raw_data=SimpleNamespace(schema_id="2"))),
+    ],
+    "approved_schema_ids_all_results": [
+        (["2", "5"], make_ctx(raw_data=[SimpleNamespace(schema_id="2"), SimpleNamespace(schema_id="5")])),
+        (["2", "5"], make_ctx(raw_data=[SimpleNamespace(schema_id="2"), SimpleNamespace(schema_id="3")])),
+        (["2"], make_ctx(raw_data=[])),
+        ([], make_ctx(raw_data=[SimpleNamespace(schema_id="2")])),
+    ],
     "i_am_reporter": [
         (None, make_ctx(my_email="me@example.com", raw_data=SimpleNamespace(reporter="me@example.com"))),
         (None, make_ctx(my_email="me@example.com", raw_data={"reporter": "me@example.com"})),
@@ -325,7 +338,7 @@ class TestVocabularyCompleteness:
         condition_predicates = {p for v1_names in V1_CONDITION_NAMES.values() for p in v1_names}
         covered = set(SCOPE_SELECTORS) | condition_predicates
         assert covered == ARGS_ONLY_RULES | DATA_DEPENDENT_RULES
-        assert len(ARGS_ONLY_RULES | DATA_DEPENDENT_RULES) == 48
+        assert len(ARGS_ONLY_RULES | DATA_DEPENDENT_RULES) == 50
 
     def test_scope_type_to_predicates_round_trips(self):
         by_type = scope_type_to_predicates()

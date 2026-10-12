@@ -19,8 +19,11 @@ from privacyfence.assets_client import (
     AssetsSchema,
 )
 from privacyfence.audit_log import current_week, init_audit_logger
+from privacyfence.policy import store as policy_store
+from privacyfence.policy.engine import PolicyRule
 from privacyfence.connectors import assets as assets_module
 from privacyfence.connectors.assets import AssetsConnector
+from privacyfence.gate import GateDeniedError
 
 from ...helpers import (
     assert_all_tools_leave_an_audit_trail,
@@ -399,3 +402,74 @@ class TestAuditTrail:
         client.search_objects.return_value = []
         client.get_object.return_value = make_object()
         await assert_all_tools_leave_an_audit_trail(connector, assets_module, monkeypatch, tmp_path)
+
+
+class TestSchemaAutoAccept:
+    """A stored per-schema rule lets a read through without a card (plan 3.6)."""
+
+    @staticmethod
+    def _rule(predicate):
+        auto_accept.set_policy_v2_store_rules(policy_store.merge_rules([PolicyRule(
+            id="", predicate=predicate, value=["2"], operations=frozenset({"assets.read_object"}),
+        )]))
+
+    @pytest.fixture(autouse=True)
+    def _clear_rules(self):
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    @staticmethod
+    def _entries(tmp_path):
+        return audit_lines(tmp_path)
+
+    async def test_get_object_in_an_approved_schema_skips_the_card(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        self._rule("approved_schema_ids")
+        connector, client = make_connector()
+        client.get_object.return_value = make_object(schema_id="2")
+
+        result = await connector.call("assets_get_object", {"object_id": "123"})
+
+        assert result["key"] == "PFQA-123"
+        assert self._entries(tmp_path)[-1]["decision"] == "auto_accepted"
+
+    async def test_get_object_in_another_schema_still_needs_a_card(self, tmp_path, monkeypatch):
+        from privacyfence import gate
+
+        init_audit_logger(str(tmp_path))
+        self._rule("approved_schema_ids")
+        popups: list[Any] = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(1) or "deny", None))
+        connector, client = make_connector()
+        client.get_object.return_value = make_object(schema_id="3")
+
+        with pytest.raises(GateDeniedError):
+            await connector.call("assets_get_object", {"object_id": "123"})
+
+        assert len(popups) == 1
+
+    async def test_mixed_schema_search_still_needs_a_card(self, tmp_path, monkeypatch):
+        from privacyfence import gate
+
+        init_audit_logger(str(tmp_path))
+        self._rule("approved_schema_ids_all_results")
+        popups: list[Any] = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(1) or "deny", None))
+        connector, client = make_connector()
+        client.search_objects.return_value = [make_object(schema_id="2"), make_object(id="124", key="PFQA-124", schema_id="3")]
+
+        with pytest.raises(GateDeniedError):
+            await connector.call("assets_search_objects", {"aql": "x"})
+
+        assert len(popups) == 1
+
+    async def test_search_in_approved_schemas_skips_the_card(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        self._rule("approved_schema_ids_all_results")
+        connector, client = make_connector()
+        client.search_objects.return_value = [make_object(schema_id="2"), make_object(id="124", key="PFQA-124", schema_id="2")]
+
+        result = await connector.call("assets_search_objects", {"aql": "x"})
+
+        assert len(result) == 2
+        assert self._entries(tmp_path)[-1]["decision"] == "auto_accepted"

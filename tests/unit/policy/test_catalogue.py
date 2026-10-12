@@ -105,6 +105,7 @@ class TestRulesForCatalogueEntry:
         labelled = {e["id"] for e in catalogue.scope_catalogue() if "personal_data_label" in e}
         assert labelled == set(catalogue.PERSONAL_DATA_GROUPS) == {
             "grist.document", "salesforce.report", "jira.project", "peek.page", "drive.folder",
+            "assets.schema",
         }
 
     def test_peek_page_read_compiles_comments_and_stats(self):

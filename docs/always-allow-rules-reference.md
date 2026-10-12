@@ -49,8 +49,8 @@ the request on the card, once.
 
 | Tool | Always allow buttons |
 |---|---|
-| `assets_get_object` |  |
-| `assets_search_objects` |  |
+| `assets_get_object` | this schema |
+| `assets_search_objects` | this schema |
 
 ### Calendar
 
