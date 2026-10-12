@@ -130,6 +130,7 @@ from .secure_files import (
     audit_directory_permissions,
 )
 from .connectors.apps_script import AppsScriptConnector
+from .connectors.assets import AssetsConnector
 from .connectors.calendar import CalendarConnector
 from .connectors.confluence import ConfluenceConnector
 from .connectors.contacts import ContactsConnector
@@ -148,6 +149,7 @@ from .atlassian_users import AtlassianUserDirectory
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
 from .calendar_client import CalendarClient, CalendarClientError
+from .assets_client import AssetsClient, AssetsClientError
 from .confluence_client import ConfluenceClient, ConfluenceClientError
 from .connector_host import ConnectorHost
 from .contacts_client import ContactsClient, ContactsClientError
@@ -1556,6 +1558,30 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         except (ConfluenceClientError, FileNotFoundError) as exc:
             logger.warning("Confluence connector disabled: %s", exc)
             failures["confluence"] = _classify_connector_failure(exc)
+
+    # Jira Assets — off unless switched on (connectors.assets.enabled, else the
+    # bundle's atlassian.assets), so it is guarded by assets_enabled(), not enabled().
+    if assets_enabled(config, org_config):
+        try:
+            if not atlassian_org.get("client_id"):
+                raise AssetsClientError("Atlassian organization config not installed")
+            if not atlassian_token:
+                raise AssetsClientError("Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+            assets_client = AssetsClient(
+                config=atlassian_config,
+                token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+            )
+            assets_client.check_connection()
+            logger.info("Jira Assets connector ready")
+            assets_connector = AssetsConnector(assets_client)
+            assets_connector.my_email = atlassian_token.get("account_email", "")
+            assets_connector.download_mode = download_mode
+            assets_connector.download_config = download_config
+            assets_connector.download_base_url = download_base_url
+            connectors.append(assets_connector)
+        except (AssetsClientError, FileNotFoundError) as exc:
+            logger.warning("Jira Assets connector disabled: %s", exc)
+            failures["assets"] = _classify_connector_failure(exc)
 
     # Telegram — the sole exception to browser OAuth (MTProto has no
     # equivalent for full user-session access). api_id/api_hash identify the

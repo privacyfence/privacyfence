@@ -115,13 +115,15 @@ gmail:
   # its API. Shown in the approval popup with the rest of the draft.
   append_signature_to_drafts: false
 
-# Enable/disable individual connectors (all enabled by default — this section
-# is only needed to turn one off). Toggled automatically when you use
+# Enable/disable individual connectors (all enabled by default except Jira Assets, which is off
+# unless switched on here or by the organization bundle's atlassian.assets; this section is
+# otherwise only needed to turn one off). Toggled automatically when you use
 # Disable/Enable in PrivacyFence Settings. Enabling here isn't enough on its
 # own: a connector also needs its organization config installed AND to be
 # authenticated (both from PrivacyFence Settings) before it actually runs.
 # connectors:
 #   telegram: { enabled: false }
+#   assets: { enabled: true }   # Jira Assets (read-only). Needs the Atlassian app's read:cmdb-* scopes; after switching it on, use Authenticate… once.
 
 pii_detection:
   # Extra confirmation gate, on top of the normal Allow once/Deny popup:
