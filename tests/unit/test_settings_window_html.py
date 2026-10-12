@@ -270,6 +270,16 @@ class TestAutoAcceptTemplate:
         assert "data-aa-verb-toggle" in html
         assert "data-aa-add" in html
 
+    def test_move_copy_needs_two_ids_hint_and_block(self):
+        html = build_html(_make_state())
+        assert "function aaPairHint(group)" in html
+        assert "['move', 'copy']" in html
+        assert "Enter at least two ids, separated by a comma." in html
+        assert "pf-aa-pair-hint" in html
+        # The invalid state disables the button and the submit path refuses too.
+        assert "pairHint && pairHint.invalid ? ' aria-disabled=\"true\"'" in html
+        assert "if (submitHint && submitHint.invalid) return;" in html
+
     def test_personal_data_chip_is_rendered_for_a_group_with_a_label(self):
         html = build_html(_make_state())
         assert "group.personal_data_label" in html
