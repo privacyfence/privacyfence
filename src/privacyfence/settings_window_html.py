@@ -98,6 +98,8 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-detail-subtitle { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.55; }
 .pf-group-title { font-size: 13px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: var(--space-2xs); }
 .pf-hint { font-size: var(--step-small); color: var(--muted); line-height: 1.5; }
+.pf-aa-pair-hint { margin: var(--space-s) 0; }
+.pf-aa-pair-invalid { color: var(--warning); }
 /* The Connect an AI client page's command sample (ADR 0104): scrolls inside itself, never the page. */
 .pf-ai-command { margin: var(--space-s) 0; padding: var(--space-s); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface-soft); overflow-x: auto; font-size: var(--step-small); }
 .pf-ai-url { user-select: all; }
@@ -927,6 +929,11 @@ _JS = r"""
       });
       html += '</div>';
     }
+    var pairHint = aaPairHint(group);
+    if (pairHint) {
+      html += '<div class="pf-hint pf-aa-pair-hint' + (pairHint.invalid ? ' pf-aa-pair-invalid' : '') +
+        '" role="status">' + esc(pairHint.text) + '</div>';
+    }
     if (group && group.personal_data_label) {
       var pdOn = !!ui.aaPersonalData;
       html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (pdOn ? ' on' : '') +
@@ -934,7 +941,8 @@ _JS = r"""
         esc(group.personal_data_label) + '" data-aa-personal-data="1">' + esc(group.personal_data_label) +
         '</div></div>';
     }
-    html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Add rule" data-aa-add="1">Add rule</div></div>';
+    html += '<div><div class="button primary" role="button" aria-label="Add rule" data-aa-add="1"' +
+      (pairHint && pairHint.invalid ? ' aria-disabled="true"' : ' tabindex="0"') + '>Add rule</div></div>';
     html += '</div>';
 
     html += '</div>';
@@ -1846,9 +1854,34 @@ _JS = r"""
   // the selected group id is actually tracked there (see renderAutoAccept). Client-side no-ops
   // (rather than posting nothing useful) when no verb is checked -- add_policy_rule itself would
   // also just no-op, but skipping the round trip is cheap and avoids a pointless snapshot re-push.
+  // A move or a copy auto-accepts only when the source AND the destination are both in the one
+  // rule's value list (policy/scopes.py `move_within_approved_folders`), so a rule that names a
+  // single folder for either verb can never match a move or copy out of it. Returns null when the
+  // form isn't about a valued scope with move/copy checked; otherwise {text, invalid}, where
+  // invalid blocks "Add rule" until the field holds at least two distinct comma-separated ids.
+  function aaPairHint(group) {
+    if (!group || !group.needs_value) return null;
+    var checked = ui.aaCheckedVerbs || {};
+    var verbs = ['move', 'copy'].filter(function (v) { return checked[v] && group.verbs.indexOf(v) >= 0; });
+    if (!verbs.length) return null;
+    var seen = {};
+    String(ui.aaValue || '').split(',').forEach(function (v) { v = v.trim(); if (v) seen[v] = true; });
+    var count = Object.keys(seen).length;
+    var what = verbs.join(' and ');
+    if (count >= 2) {
+      return { invalid: false, text: 'A ' + what + ' is auto-accepted only when both its source and its destination are in this list.' };
+    }
+    return { invalid: true, text: 'A ' + what + ' is auto-accepted only when both its source folder and its destination ' +
+      'folder are in the same rule. Enter at least two ids, separated by a comma.' };
+  }
+
   function submitAddPolicyRule() {
     var checked = Object.keys(ui.aaCheckedVerbs || {}).filter(function (v) { return ui.aaCheckedVerbs[v]; });
     if (!ui.aaGroup || checked.length === 0) return;
+    var submitGroup = null;
+    pyState.auto_accept.scope_groups.forEach(function (g) { if (g.id === ui.aaGroup) submitGroup = g; });
+    var submitHint = aaPairHint(submitGroup);
+    if (submitHint && submitHint.invalid) return;
     var valueInput = document.querySelector('[data-aa-value]');
     post('add_policy_rule', { group: ui.aaGroup, value: valueInput ? valueInput.value : '', verbs: checked,
       personal_data: !!ui.aaPersonalData });

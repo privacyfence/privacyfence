@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The Settings "Add a rule" form now explains and checks move and copy rules.** A move or copy is auto-accepted only when both its source and destination folder are in the same rule, so a rule naming a single folder could never match. Ticking Move or Copy now shows a hint, and "Add rule" stays disabled until the Value field holds at least two comma-separated ids.
+
 ## [6.1.1] — 2026-10-12
 
 ### Fixed
