@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,6 +14,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
 from ..org_mode import DownloadDeliveryConfig
+from .. import export_files, local_files
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,21 @@ _REASON = "One sentence: why are you calling this tool right now?"
 _SENDER = "Jira Assets"
 _MAX_CARD_ATTRIBUTES = 8
 _MAX_CELL_CHARS = 120
+
+_DESTINATION_DIR = (
+    "Folder on the user's computer to write the file to, absolute or starting with ~/."
+)
+
+_EXPORT_COLUMNS = ["id", "key", "label", "type"]
+
+
+# The schema-scope matcher reads .schema_id from raw_data; an export's raw_data carries ids and
+# no attribute value (ADR 0159).
+@dataclass(frozen=True)
+class _ExportedObject:
+    id: str
+    key: str
+    schema_id: str
 
 
 def _cell(text: str) -> str:
@@ -113,8 +131,9 @@ class AssetsConnector(Connector):
                     "Search Jira Assets objects with an AQL query and return them with their "
                     "attribute values. Returns a list of {id, key, label, type, type_id, schema_id, "
                     "created, updated, attributes, references}, at most max_results entries. "
-                    "Use assets_get_object to read one object by id, and assets_list_attributes "
-                    "to see which attributes a type has. Requires user approval."
+                    "Use assets_get_object to read one object by id, assets_export_objects to write "
+                    "a large result to a file, and assets_list_attributes to see which attributes a "
+                    "type has. Requires user approval."
                 ),
                 params=[
                     ToolParam("aql", "str",
@@ -184,6 +203,29 @@ class AssetsConnector(Connector):
                 ],
                 read_only=True,
             ),
+            ToolSpec(
+                name="assets_export_objects",
+                description=(
+                    "Write every Jira Assets object an AQL query matches, up to 10,000, to a CSV or "
+                    "JSON file on the user's computer, in one approval. Columns: id, key, label, type, "
+                    "then every attribute name; a multi-value cell joins its values with \"; \". "
+                    "Returns {rows, columns, sha256, path, name, size_bytes, delivery}, never the "
+                    "objects. A query matching no object writes no file and returns rows 0. "
+                    "Use assets_search_objects to read a few objects in the reply. "
+                    + export_files.ORG_DELIVERY_SENTENCE + " Requires user approval."
+                ),
+                params=[
+                    ToolParam("aql", "str",
+                              description="AQL query selecting the objects to export, for example: "
+                                          "objectType = \"Contract\". At most 4000 characters."),
+                    ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
+                    ToolParam("file_name", "str", required=False, default="",
+                              description="File name ending in .csv or .json, which picks the format. "
+                                          "Empty means assets-objects.csv."),
+                    ToolParam("reason", "str", required=True, description=_REASON),
+                ],
+                read_only=True,
+            ),
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
@@ -201,6 +243,8 @@ class AssetsConnector(Connector):
             return await self._get_related_objects(**args)
         if tool == "assets_get_connected_tickets":
             return await self._get_connected_tickets(**args)
+        if tool == "assets_export_objects":
+            return await self._export_objects(**args)
         raise ValueError(f"Unknown Assets tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -412,6 +456,78 @@ class AssetsConnector(Connector):
             my_email=self.my_email,
             args={"object_id": object_id},
         )
+
+    async def _export_objects(
+        self, aql: str, destination_dir: str, file_name: str = "",
+    ) -> Any:
+        t0 = time.time()
+        destination_dir = export_files.check_destination(destination_dir)
+        file_name, fmt = export_files.export_file_name(file_name, "assets-objects")
+        export_files.refuse_org_without_staging(
+            "assets_export_objects", self.download_mode,
+            (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
+            "assets_search_objects",
+        )
+        objects = await self._fetch(self._assets.export_objects, aql)
+        names: list[str] = []
+        for o in objects:
+            for name in o.attributes:
+                if name not in names:
+                    names.append(name)
+        columns = [*_EXPORT_COLUMNS, *names]
+        if not objects:
+            self._auto_audit("assets_export_objects", "Export Jira Assets Objects",
+                             f"Export: {aql[:80]}", "0 object(s)", t0)
+            return {
+                "rows": 0, "columns": columns, "sha256": None, "delivery": "none",
+                "note": "No object matches this AQL, so no file was written.",
+            }
+        rows = [
+            [o.id, o.key, o.label, o.type_name, *(_joined(o.attributes.get(n, [])) for n in names)]
+            for o in objects
+        ]
+        data = await asyncio.to_thread(export_files.render, columns, rows, fmt)
+        sha256 = hashlib.sha256(data).hexdigest()
+        local_files.check_delivery_size(len(data))
+        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
+        preview = {"AQL": aql[:200], "Attributes": ", ".join(names) or "none"}
+        await gated_call(
+            connector=self.name,
+            tool="assets_export_objects",
+            tool_name="Export Jira Assets Objects",
+            summary=f"Export: {aql[:80]}",
+            sender=_SENDER,
+            raw_data=[_ExportedObject(o.id, o.key, o.schema_id) for o in objects],
+            filtered_data=None,
+            gate="review",
+            preview=preview,
+            preview_tables=[export_files.sample_table(columns, rows)],
+            pii_scan_text=export_files.scan_text(data),
+            new_info={
+                "Rows": f"{len(rows):,}",
+                "Columns": str(len(columns)),
+                "Content returned to {agent}": (
+                    "None in the tool result: the rows are written to the file below, where "
+                    "{agent} can open it"
+                ),
+                "Saved to": saved_to,
+            },
+            details_text=export_files.card_details(preview, len(rows), columns, saved_to, sha256),
+            delivery="staged_link" if self.download_mode == "org"
+            else "local_disk" if local_files.can_access_user_files(self.download_mode)
+            else "client_bridge",
+            my_email=self.my_email,
+            args={
+                "aql": aql, "destination_dir": destination_dir,
+                "file_name": file_name, "sha256": sha256,
+            },
+        )
+        delivered = local_files.deliver_export(
+            destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
+            download_mode=self.download_mode, download_config=self.download_config,
+            download_base_url=self.download_base_url,
+        )
+        return export_files.export_summary(columns, rows, sha256, delivered)
 
     # ------------------------------------------------------------------ #
     # Helpers

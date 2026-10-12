@@ -212,6 +212,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "assets_search_objects": Verb.SEARCH,
     "assets_get_related_objects": Verb.SEARCH,
     "assets_get_connected_tickets": Verb.READ,
+    "assets_export_objects": Verb.SEARCH,
     "jira_get_issue": Verb.READ,
     "jira_search_issues_with_fields": Verb.SEARCH,
     "jira_export_issues": Verb.SEARCH,
