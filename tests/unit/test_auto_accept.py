@@ -38,8 +38,11 @@ from privacyfence.auto_accept import (
     remove_rules_changed_listener,
     set_rules_changed_listener,
     temp_accept_key,
+    update_policy_v2_rule,
 )
+from privacyfence.policy import catalogue
 from privacyfence.policy import store as policy_store
+from privacyfence.policy.registry import Verb
 from privacyfence.policy.engine import PolicyRule, evaluate
 from privacyfence.policy.resource_registry import DRIVE_SANDBOX_WRITE_TARGETS
 
@@ -308,6 +311,49 @@ class TestRulesChangedListener:
         config_path.write_text(yaml.dump({}), encoding="utf-8")
         init_config_path(str(config_path))
         assert remove_policy_v2_rule("no-such-rule") is False
+
+    def test_update_policy_v2_rule_adds_the_missing_operations_and_fires_listener(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        read_and_create = frozenset({"grist.read_records", "grist.add_records", "grist.update_records"})
+        add_policy_v2_rules([PolicyRule(
+            id="x", predicate="grist.document", value=["DOC1"], operations=read_and_create,
+            allow_personal_data=True,
+        )])
+        (stored,) = auto_accept.get_policy_v2_rules()
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        added = update_policy_v2_rule(stored.id)
+
+        assert "grist.import_csv" in added
+        assert not added & read_and_create
+        (updated,) = auto_accept.get_policy_v2_rules()
+        assert (updated.id, updated.value, updated.allow_personal_data) == (stored.id, ["DOC1"], True)
+        assert updated.operations == stored.operations | added
+        assert auto_accept.get_policy_v2_store_rules() == [updated]
+        assert calls == [1]
+
+    def test_update_policy_v2_rule_is_a_no_op_for_an_unknown_id_or_a_complete_rule(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        add_policy_v2_rules(catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [Verb.READ]))
+        (stored,) = auto_accept.get_policy_v2_rules()
+        before = config_path.read_text(encoding="utf-8")
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        assert update_policy_v2_rule("no-such-rule") == frozenset()
+        assert update_policy_v2_rule(stored.id) == frozenset()
+
+        assert config_path.read_text(encoding="utf-8") == before
+        assert calls == []
+
+    def test_update_policy_v2_rule_requires_an_initialized_config_path(self):
+        with pytest.raises(RuntimeError, match="not initialized"):
+            update_policy_v2_rule("some-id")
 
     def test_set_rules_changed_listener_replaces_the_previous_one(self):
         first_calls, second_calls = [], []
