@@ -13,10 +13,13 @@ from privacyfence.assets_client import (
     AssetsAttributeDef,
     AssetsClient,
     AssetsClientError,
+    AssetsEdge,
+    AssetsGraph,
     AssetsObject,
     AssetsObjectType,
     AssetsReference,
     AssetsSchema,
+    AssetsTicket,
 )
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.policy import store as policy_store
@@ -96,6 +99,27 @@ def make_object(**overrides):
     return AssetsObject(**defaults)
 
 
+def make_graph(**overrides):
+    contract = make_object()
+    account = make_object(id="45", key="PFQA-45", label="ACME Ltd", type_id="5", type_name="Account",
+                          attributes={"Name": ["ACME Ltd"]}, references={})
+    other = make_object(id="46", key="PFQA-46", label="Other", type_name="Account",
+                        attributes={"Name": ["Other"], "Mail": ["x@example.com"]}, references={})
+    defaults = dict(
+        root_id="123", objects=[contract, account, other],
+        edges=[AssetsEdge("123", "45", "Account")], truncated=False,
+    )
+    defaults.update(overrides)
+    return AssetsGraph(**defaults)
+
+
+def make_ticket(**overrides):
+    defaults = dict(key="PFQA-9", summary="Renew the contract", status="Open",
+                    issue_type="Task", priority="High")
+    defaults.update(overrides)
+    return AssetsTicket(**defaults)
+
+
 class TestDispatch:
     async def test_unknown_tool_raises(self):
         connector, _client = make_connector()
@@ -110,6 +134,7 @@ class TestDispatch:
         assert names == [
             "assets_list_schemas", "assets_list_object_types", "assets_list_attributes",
             "assets_search_objects", "assets_get_object",
+            "assets_get_related_objects", "assets_get_connected_tickets",
         ]
 
     def test_gates_and_operations(self):
@@ -339,6 +364,165 @@ class TestGetObject:
         assert gated_call_spy == []
 
 
+class TestGetRelatedObjects:
+    async def test_approved_traversal_returns_the_graph_and_builds_the_card(self, gated_call_spy):
+        connector, client = make_connector()
+        connector.my_email = "me@example.com"
+        client.related_objects.return_value = make_graph()
+
+        result = await connector.call(
+            "assets_get_related_objects", {"object_id": "123", "direction": "outbound", "depth": 2})
+
+        client.related_objects.assert_called_once_with("123", "outbound", 2, 50)
+        assert result["root_id"] == "123"
+        assert [o["key"] for o in result["objects"]] == ["PFQA-123", "PFQA-45", "PFQA-46"]
+        assert result["edges"] == [{"from": "123", "to": "45", "attribute": "Account"}]
+        assert result["truncated"] is False
+        kw = gated_call_spy[0]
+        assert kw["gate"] == "review"
+        assert kw["tool"] == "assets_get_related_objects"
+        assert kw["tool_name"] == "Read Linked Jira Assets Objects"
+        assert kw["sender"] == "Jira Assets"
+        assert kw["summary"] == "PFQA-123: 2 linked objects"
+        assert kw["raw_data"] == client.related_objects.return_value.objects
+        assert kw["my_email"] == "me@example.com"
+        assert kw["table_only"] is True
+        assert kw["args"] == {"object_id": "123", "direction": "outbound", "depth": 2,
+                              "max_objects": 50}
+
+    async def test_card_has_one_table_per_object_type_and_an_edges_table(self, gated_call_spy):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph()
+        await connector.call("assets_get_related_objects", {"object_id": "123"})
+        tables = gated_call_spy[0]["preview_tables"]
+        assert [t["headers"] for t in tables] == [
+            ["Key", "Label", "Name", "Tags", "Account"],
+            ["Key", "Label", "Name", "Mail"],
+            ["From", "Attribute", "To"],
+        ]
+        assert tables[1]["rows"] == [["PFQA-45", "ACME Ltd", "ACME Ltd", ""],
+                                     ["PFQA-46", "Other", "Other", "x@example.com"]]
+        assert tables[2]["rows"] == [["PFQA-123", "Account", "PFQA-45"]]
+
+    async def test_graph_without_edges_has_no_edges_table(self, gated_call_spy):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph(objects=[make_object()], edges=[])
+        await connector.call("assets_get_related_objects", {"object_id": "123"})
+        kw = gated_call_spy[0]
+        assert len(kw["preview_tables"]) == 1
+        assert kw["summary"] == "PFQA-123: 0 linked objects"
+
+    async def test_truncated_passes_through(self, gated_call_spy):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph(truncated=True)
+        result = await connector.call("assets_get_related_objects", {"object_id": "123"})
+        assert result["truncated"] is True
+
+    async def test_preview_holds_only_metadata_keys(self, gated_call_spy):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph()
+        await connector.call("assets_get_related_objects", {"object_id": "123"})
+        preview = gated_call_spy[0]["preview"]
+        assert preview == {"Root": "PFQA-123", "Direction": "both", "Depth": "1", "Objects": "2"}
+
+    async def test_pii_scan_text_holds_every_attribute_value_of_every_object(self, gated_call_spy):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph()
+        await connector.call("assets_get_related_objects", {"object_id": "123"})
+        scan = gated_call_spy[0]["pii_scan_text"].split("\n")
+        assert "x@example.com" in scan and "ACME Ltd" in scan and "a" in scan
+
+    @pytest.mark.parametrize("depth,objects,expected", [(0, 0, (1, 1)), (9, 900, (3, 200)), (2, 40, (2, 40))])
+    async def test_depth_and_max_objects_are_clamped(self, gated_call_spy, depth, objects, expected):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph()
+        await connector.call("assets_get_related_objects",
+                             {"object_id": "123", "depth": depth, "max_objects": objects})
+        client.related_objects.assert_called_once_with("123", "both", *expected)
+
+    async def test_denied_traversal_propagates(self, denying_gate):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph()
+        with pytest.raises(PermissionError):
+            await connector.call("assets_get_related_objects", {"object_id": "123"})
+        client.related_objects.assert_called_once()
+        assert denying_gate[0]["gate"] == "review"
+
+    async def test_client_error_becomes_runtime_error(self, gated_call_spy):
+        connector, client = make_connector()
+        client.related_objects.side_effect = AssetsClientError(
+            "direction must be outbound, inbound or both")
+        with pytest.raises(RuntimeError, match="direction must be"):
+            await connector.call("assets_get_related_objects",
+                                 {"object_id": "123", "direction": "sideways"})
+        assert gated_call_spy == []
+
+
+class TestGetConnectedTickets:
+    async def test_approved_read_returns_tickets_and_builds_the_card(self, gated_call_spy):
+        connector, client = make_connector()
+        connector.my_email = "me@example.com"
+        client.get_object.return_value = make_object()
+        client.connected_tickets.return_value = [make_ticket(), make_ticket(key="PFQA-10", summary="Second")]
+
+        result = await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+
+        client.get_object.assert_called_once_with("123")
+        client.connected_tickets.assert_called_once_with("123")
+        assert result == {
+            "object": {"id": "123", "key": "PFQA-123", "label": "ACME support contract",
+                       "type": "Contract"},
+            "tickets": [
+                {"key": "PFQA-9", "summary": "Renew the contract", "status": "Open",
+                 "issue_type": "Task", "priority": "High"},
+                {"key": "PFQA-10", "summary": "Second", "status": "Open",
+                 "issue_type": "Task", "priority": "High"},
+            ],
+        }
+        kw = gated_call_spy[0]
+        assert kw["gate"] == "review"
+        assert kw["tool_name"] == "Read Jira Assets Object Tickets"
+        assert kw["sender"] == "Jira Assets"
+        assert kw["summary"] == "PFQA-123: 2 tickets"
+        assert kw["raw_data"] == [client.get_object.return_value]
+        assert kw["my_email"] == "me@example.com"
+        assert kw["args"] == {"object_id": "123"}
+        assert kw["preview"] == {"Object": "PFQA-123", "Tickets": "2"}
+        assert kw["preview_tables"] == [{
+            "headers": ["Key", "Summary", "Status", "Type", "Priority"],
+            "rows": [["PFQA-9", "Renew the contract", "Open", "Task", "High"],
+                     ["PFQA-10", "Second", "Open", "Task", "High"]],
+        }]
+        assert kw["pii_scan_text"] == "Renew the contract\nSecond"
+
+    async def test_no_tickets_still_shows_a_card_without_a_table(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_object.return_value = make_object()
+        client.connected_tickets.return_value = []
+        result = await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+        assert result["tickets"] == []
+        kw = gated_call_spy[0]
+        assert kw["preview_tables"] == []
+        assert kw["details_text"] == "(no connected tickets)"
+
+    async def test_denied_read_propagates(self, denying_gate):
+        connector, client = make_connector()
+        client.get_object.return_value = make_object()
+        client.connected_tickets.return_value = []
+        with pytest.raises(PermissionError):
+            await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+
+    @pytest.mark.parametrize("failing", ["get_object", "connected_tickets"])
+    async def test_client_error_becomes_runtime_error(self, gated_call_spy, failing):
+        connector, client = make_connector()
+        client.get_object.return_value = make_object()
+        client.connected_tickets.return_value = []
+        getattr(client, failing).side_effect = AssetsClientError("boom")
+        with pytest.raises(RuntimeError, match="boom"):
+            await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+        assert gated_call_spy == []
+
+
 FIXTURES = Path(__file__).parent.parent.parent / "fixtures" / "assets"
 
 
@@ -384,7 +568,9 @@ ASSETS_SIBLINGS: dict[str, tuple[str, ...]] = {
     "assets_list_object_types": ("assets_list_schemas", "assets_list_attributes"),
     "assets_list_attributes": ("assets_list_object_types", "assets_search_objects"),
     "assets_search_objects": ("assets_get_object",),
-    "assets_get_object": ("assets_search_objects",),
+    "assets_get_object": ("assets_search_objects", "assets_get_related_objects"),
+    "assets_get_related_objects": ("assets_get_object",),
+    "assets_get_connected_tickets": ("assets_get_object",),
 }
 
 
@@ -401,6 +587,8 @@ class TestAuditTrail:
         client.list_attributes.return_value = []
         client.search_objects.return_value = []
         client.get_object.return_value = make_object()
+        client.related_objects.return_value = make_graph()
+        client.connected_tickets.return_value = []
         await assert_all_tools_leave_an_audit_trail(connector, assets_module, monkeypatch, tmp_path)
 
 
@@ -472,4 +660,44 @@ class TestSchemaAutoAccept:
         result = await connector.call("assets_search_objects", {"aql": "x"})
 
         assert len(result) == 2
+        assert self._entries(tmp_path)[-1]["decision"] == "auto_accepted"
+
+    async def test_traversal_in_approved_schemas_skips_the_card(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        self._rule("approved_schema_ids_all_results")
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph(objects=[
+            make_object(schema_id="2"), make_object(id="45", key="PFQA-45", schema_id="2")])
+
+        result = await connector.call("assets_get_related_objects", {"object_id": "123"})
+
+        assert len(result["objects"]) == 2
+        assert self._entries(tmp_path)[-1]["decision"] == "auto_accepted"
+
+    async def test_traversal_reaching_another_schema_still_needs_a_card(self, tmp_path, monkeypatch):
+        from privacyfence import gate
+
+        init_audit_logger(str(tmp_path))
+        self._rule("approved_schema_ids_all_results")
+        popups: list[Any] = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(1) or "deny", None))
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph(objects=[
+            make_object(schema_id="2"), make_object(id="45", key="PFQA-45", schema_id="3")])
+
+        with pytest.raises(GateDeniedError):
+            await connector.call("assets_get_related_objects", {"object_id": "123"})
+
+        assert len(popups) == 1
+
+    async def test_connected_tickets_of_an_approved_object_skip_the_card(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        self._rule("approved_schema_ids")
+        connector, client = make_connector()
+        client.get_object.return_value = make_object(schema_id="2")
+        client.connected_tickets.return_value = [make_ticket()]
+
+        result = await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+
+        assert result["tickets"][0]["key"] == "PFQA-9"
         assert self._entries(tmp_path)[-1]["decision"] == "auto_accepted"

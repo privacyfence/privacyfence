@@ -210,6 +210,8 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "contacts_remove_label": Verb.LABEL,
     "assets_get_object": Verb.READ,
     "assets_search_objects": Verb.SEARCH,
+    "assets_get_related_objects": Verb.SEARCH,
+    "assets_get_connected_tickets": Verb.READ,
     "jira_get_issue": Verb.READ,
     "jira_search_issues_with_fields": Verb.SEARCH,
     "jira_export_issues": Verb.SEARCH,

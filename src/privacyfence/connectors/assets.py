@@ -132,7 +132,49 @@ class AssetsConnector(Connector):
                     "Read one Jira Assets object with every attribute value and its outbound "
                     "references. Returns {id, key, label, type, type_id, schema_id, created, "
                     "updated, attributes, references}. Use assets_search_objects to find the "
-                    "object id. Requires user approval."
+                    "object id, and assets_get_related_objects to follow its links. "
+                    "Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_id", "str",
+                              description="Numeric id of the object, as assets_search_objects "
+                                          "returns it in id."),
+                    ToolParam("reason", "str", required=True, description=_REASON),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="assets_get_related_objects",
+                description=(
+                    "Read the Jira Assets objects linked to one object, following references "
+                    "outbound, inbound or both, up to three hops. Returns {root_id, objects, "
+                    "edges: [{from, to, attribute}], truncated}, with depth 1 to 3 and at most 200 "
+                    "objects; truncated true means that limit was hit. Use assets_get_object to read "
+                    "only the object itself. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_id", "str",
+                              description="Numeric id of the object to start from, as "
+                                          "assets_search_objects returns it in id."),
+                    ToolParam("direction", "str", required=False, default="both",
+                              description="Which links to follow: outbound (references the object "
+                                          "holds), inbound (objects referencing it) or both."),
+                    ToolParam("depth", "int", required=False, default=1,
+                              description="How many hops to follow, 1 to 3. Default 1."),
+                    ToolParam("max_objects", "int", required=False, default=50,
+                              description="Most objects to return, root included, 1 to 200. "
+                                          "Default 50."),
+                    ToolParam("reason", "str", required=True, description=_REASON),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="assets_get_connected_tickets",
+                description=(
+                    "List the Jira tickets connected to one Jira Assets object. "
+                    "Returns {object: {id, key, label, type}, tickets: [{key, summary, status, "
+                    "issue_type, priority}]}. Use assets_get_object to read the object itself. "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam("object_id", "str",
@@ -155,6 +197,10 @@ class AssetsConnector(Connector):
             return await self._search_objects(**args)
         if tool == "assets_get_object":
             return await self._get_object(**args)
+        if tool == "assets_get_related_objects":
+            return await self._get_related_objects(**args)
+        if tool == "assets_get_connected_tickets":
+            return await self._get_connected_tickets(**args)
         raise ValueError(f"Unknown Assets tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -264,6 +310,105 @@ class AssetsConnector(Connector):
                 "headers": ["Attribute", "Value"],
                 "rows": [[name, _cell(_joined(values))] for name, values in obj.attributes.items()],
             }] if obj.attributes else [],
+            my_email=self.my_email,
+            args={"object_id": object_id},
+        )
+
+    async def _get_related_objects(
+        self, object_id: str, direction: str = "both", depth: int = 1, max_objects: int = 50,
+    ) -> Any:
+        depth = max(1, min(int(depth), 3))
+        max_objects = max(1, min(int(max_objects), 200))
+        graph = await self._fetch(
+            self._assets.related_objects, object_id, direction, depth, max_objects)
+        keys = {o.id: o.key for o in graph.objects}
+        root_key = keys.get(graph.root_id, graph.root_id)
+        linked = max(len(graph.objects) - 1, 0)
+        by_type: dict[str, list[AssetsObject]] = {}
+        for o in graph.objects:
+            by_type.setdefault(o.type_name, []).append(o)
+        tables: list[dict[str, Any]] = []
+        for objs in by_type.values():
+            names: list[str] = []
+            for o in objs:
+                for name in o.attributes:
+                    if name not in names and len(names) < _MAX_CARD_ATTRIBUTES:
+                        names.append(name)
+            tables.append({
+                "headers": ["Key", "Label", *names],
+                "rows": [
+                    [_cell(o.key), _cell(o.label),
+                     *(_cell(_joined(o.attributes.get(n, []))) for n in names)]
+                    for o in objs
+                ],
+            })
+        if graph.edges:
+            tables.append({
+                "headers": ["From", "Attribute", "To"],
+                "rows": [
+                    [_cell(keys.get(e.source_id, e.source_id)), _cell(e.attribute),
+                     _cell(keys.get(e.target_id, e.target_id))]
+                    for e in graph.edges
+                ],
+            })
+        return await gated_call(
+            connector=self.name,
+            tool="assets_get_related_objects",
+            tool_name="Read Linked Jira Assets Objects",
+            summary=f"{root_key}: {linked} linked objects",
+            sender=_SENDER,
+            raw_data=graph.objects,
+            filtered_data={
+                "root_id": graph.root_id,
+                "objects": [o.to_dict() for o in graph.objects],
+                "edges": [
+                    {"from": e.source_id, "to": e.target_id, "attribute": e.attribute}
+                    for e in graph.edges
+                ],
+                "truncated": graph.truncated,
+            },
+            gate="review",
+            preview={"Root": root_key, "Direction": direction, "Depth": str(depth),
+                     "Objects": str(linked)},
+            details_text="\n".join(_details_line(o) for o in graph.objects),
+            pii_scan_text=_scan_text(graph.objects),
+            preview_tables=tables,
+            table_only=True,
+            my_email=self.my_email,
+            args={"object_id": object_id, "direction": direction, "depth": depth,
+                  "max_objects": max_objects},
+        )
+
+    async def _get_connected_tickets(self, object_id: str) -> Any:
+        obj = await self._fetch(self._assets.get_object, object_id)
+        tickets = await self._fetch(self._assets.connected_tickets, object_id)
+        return await gated_call(
+            connector=self.name,
+            tool="assets_get_connected_tickets",
+            tool_name="Read Jira Assets Object Tickets",
+            summary=f"{obj.key}: {len(tickets)} tickets",
+            sender=_SENDER,
+            raw_data=[obj],
+            filtered_data={
+                "object": {"id": obj.id, "key": obj.key, "label": obj.label, "type": obj.type_name},
+                "tickets": [
+                    {"key": t.key, "summary": t.summary, "status": t.status,
+                     "issue_type": t.issue_type, "priority": t.priority}
+                    for t in tickets
+                ],
+            },
+            gate="review",
+            preview={"Object": obj.key, "Tickets": str(len(tickets))},
+            details_text="\n".join(
+                f"{t.key} — {t.summary} ({t.status}, {t.issue_type}, {t.priority})"
+                for t in tickets
+            ) or "(no connected tickets)",
+            pii_scan_text="\n".join(t.summary for t in tickets),
+            preview_tables=[{
+                "headers": ["Key", "Summary", "Status", "Type", "Priority"],
+                "rows": [[_cell(t.key), _cell(t.summary), _cell(t.status), _cell(t.issue_type),
+                          _cell(t.priority)] for t in tickets],
+            }] if tickets else [],
             my_email=self.my_email,
             args={"object_id": object_id},
         )
