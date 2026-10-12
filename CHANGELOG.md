@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.0.0] — 2026-10-12
+
 ### Added
 
 - **Update a rule that predates newer tools.** When a release adds a tool to a verb a saved auto-accept rule already has (for example `grist_import_csv` under a Grist document rule), Settings → Auto-accept now says "Newer tools aren't covered yet" on that rule and offers **Update rule**, which adds just those tools after you confirm (and use your passkey, where one is required). Rules are never widened without that click.
@@ -3278,7 +3280,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...v6.0.0
 [5.9.1]: https://github.com/privacyfence/privacyfence/compare/v5.9.0...v5.9.1
 [5.9.0]: https://github.com/privacyfence/privacyfence/compare/v5.8.1...v5.9.0
 [5.8.1]: https://github.com/privacyfence/privacyfence/compare/v5.8.0...v5.8.1
