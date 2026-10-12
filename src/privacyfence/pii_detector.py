@@ -97,8 +97,35 @@ def _card_grouping_valid(candidate: str) -> bool:
     return all(n == 4 for n in lengths[:-1]) and 1 <= lengths[-1] <= 4
 
 
+# Lengths a card number starting with each digit can have: UATP (1, 15
+# digits); Mastercard 2-series and Mir (2); Amex, Diners Club and JCB (3);
+# Visa (4); Mastercard and Maestro (5, 6); Discover and UnionPay (6); RuPay
+# (8). Keyed on the first digit only, so it needs no BIN list. A 13-digit
+# run is a card only if it starts with 4, 5 or 6: Luhn alone passes one
+# random number in ten, and a device serial such as "1912401001297" passes
+# it by chance. See ADR 0167.
+_CARD_LENGTHS_BY_FIRST_DIGIT: dict[str, range | tuple[int, ...]] = {
+    "1": (15,),
+    "2": range(16, 20),
+    "3": range(14, 20),
+    "4": range(13, 20),
+    "5": range(13, 20),
+    "6": range(13, 20),
+    "8": (16,),
+}
+
+
+def _card_prefix_length_valid(candidate: str) -> bool:
+    digits = re.sub(r"\D", "", candidate)
+    return bool(digits) and len(digits) in _CARD_LENGTHS_BY_FIRST_DIGIT.get(digits[0], ())
+
+
 def _credit_card_valid(candidate: str) -> bool:
-    return _luhn_valid(candidate) and _card_grouping_valid(candidate)
+    return (
+        _luhn_valid(candidate)
+        and _card_grouping_valid(candidate)
+        and _card_prefix_length_valid(candidate)
+    )
 
 
 def _iban_valid(candidate: str) -> bool:

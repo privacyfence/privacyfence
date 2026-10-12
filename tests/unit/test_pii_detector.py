@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from privacyfence.pii_detector import (
     _card_grouping_valid,
+    _card_prefix_length_valid,
     _iban_valid,
     _luhn_valid,
     _redact_value,
@@ -67,6 +68,31 @@ class TestCardGroupingValid:
 
     def test_inconsistent_grouping_fails(self):
         assert _card_grouping_valid("41 111111 111 11111") is False
+
+
+class TestCardPrefixLengthValid:
+    def test_sixteen_digit_visa_passes(self):
+        assert _card_prefix_length_valid("4111 1111 1111 1111") is True
+
+    def test_thirteen_digit_visa_passes(self):
+        assert _card_prefix_length_valid("4222222222222") is True
+
+    def test_fifteen_digit_amex_passes(self):
+        assert _card_prefix_length_valid("3714 496353 98431") is True
+
+    def test_fifteen_digit_uatp_passes(self):
+        assert _card_prefix_length_valid("100000000000000") is True
+
+    def test_thirteen_digits_starting_with_1_fails(self):
+        assert _card_prefix_length_valid("1912401001297") is False
+
+    def test_thirteen_digits_starting_with_2_or_3_fails(self):
+        assert _card_prefix_length_valid("2121401002000") is False
+        assert _card_prefix_length_valid("3000000000000") is False
+
+    def test_no_network_starts_with_0_7_or_9(self):
+        for first in "079":
+            assert _card_prefix_length_valid(first + "0" * 15) is False
 
 
 class TestIbanValid:
@@ -130,6 +156,17 @@ class TestNoFalsePositivesOnPlainText:
         assert detect_categories("CDOT - RSU RMA (sn: 2149401002920)") == []
         assert detect_categories("Shipped OB4 SN: 2149401003365 to site") == []
 
+    def test_luhn_valid_thirteen_digit_serial_is_not_a_credit_card(self):
+        # Passes Luhn by chance; no card network issues a 13-digit number starting with 1.
+        assert _luhn_valid("1912401001297")
+        assert detect_categories("2x SN: 1912401001421 , 1912401001297") == []
+
+    def test_salesforce_report_float_amounts_are_not_credit_cards(self):
+        # Luhn-valid once the decimal point is dropped (5255611585807386), or in
+        # the fraction alone (6712368728113).
+        for amount in ("525.5611585807386", "521.6235216276569", "512.2508751458575", "3783.6712368728113"):
+            assert detect_categories('{"amount":' + amount + "}") == []
+
     def test_grist_record_with_long_floats_is_not_flagged(self):
         text = "Record 3831\nOpportunity_Name: Renewal\nAmount_USD: 0.6838738069560423\nAmount_HUF: 14908.8288798133"
         assert detect_categories(text) == []
@@ -158,6 +195,9 @@ class TestLanguageAgnosticPatterns:
 
     def test_card_number_rendered_as_whole_float_is_still_flagged(self):
         assert detect_categories("Card 379354508162306.0") == ["Credit card number"]
+
+    def test_thirteen_digit_visa_is_flagged(self):
+        assert detect_categories("Card: 4222222222222") == ["Credit card number"]
 
     def test_valid_amex_4_6_5_grouping_is_flagged(self):
         assert detect_categories("Amex: 3714 496353 98431") == ["Credit card number"]

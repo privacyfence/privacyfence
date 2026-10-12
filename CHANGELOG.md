@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Device serial numbers no longer count as credit card numbers.** A 13-digit serial such as `1912401001297` in a Salesforce report's notes passed the card checksum by chance and raised the personal-data confirmation. A number now also needs a length a card starting with that digit can have, so a 13-digit run counts only when it starts with 4, 5 or 6.
+
 ## [6.0.0] — 2026-10-12
 
 ### Added
