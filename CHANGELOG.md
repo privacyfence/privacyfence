@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Drive version history.** `drive_list_revisions` lists a file's saved versions with when and by whom each was saved, filtered by date, without a card; `drive_get_revision_content` reads an earlier version's text after review, and the rules that already let the AI read a file also cover its earlier versions. Google does not say which cell an edit changed, so the AI compares versions itself.
+
 ### Fixed
 
 - **Device serial numbers no longer count as credit card numbers.** A 13-digit serial such as `1912401001297` in a Salesforce report's notes passed the card checksum by chance and raised the personal-data confirmation. A number now also needs a length a card starting with that digit can have, so a 13-digit run counts only when it starts with 4, 5 or 6.
