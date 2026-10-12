@@ -343,6 +343,10 @@ TOOL_TO_GATE: dict[str, str] = {
     "grist_add_columns":               "popup",
     "grist_import_csv":                "popup",
     "grist_update_csv":                "popup",
+    # Jira Assets
+    "assets_list_schemas":             "auto",
+    "assets_list_object_types":        "auto",
+    "assets_list_attributes":          "auto",
     # Peek
     "peek_list_pages":                 "auto",
     "peek_get_comments":               "review",
