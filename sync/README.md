@@ -587,7 +587,7 @@ Exit codes:
 |---|---|
 | 0 | Every step succeeded, or a script step said there was nothing to do (exit 10) |
 | 1 | The recipe, a command-line argument, a reference or a template is wrong |
-| 2 | A tool call, a file transfer or a script failed |
+| 2 | A tool call, a file transfer or a script failed, or the server refused the connection |
 | 3 | PrivacyFence denied a step (in an unattended run: no rule covers it) |
 | 4 | Not signed in, the sign-in expired, or no token |
 
