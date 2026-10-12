@@ -21,6 +21,7 @@ popup, so there's nothing to prioritize or exclude.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import time
@@ -29,7 +30,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from privacyfence import auto_accept, daemon_main, org_mode, resource_names, settings_controller as sc, update_checker
+from privacyfence import auto_accept, daemon_main, org_mode, resource_names, scoped_tokens, settings_controller as sc, update_checker
+from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
 from privacyfence import peek_client
 from privacyfence.policy import engine as policy_engine
@@ -1991,6 +1993,121 @@ class TestRemovePolicyRule:
         controller.remove_policy_rule("r-does-not-exist")
 
         assert controller._load_config() == before
+
+
+class TestUpdatePolicyRule:
+    """update_policy_rule widens a stored rule to the operations its verbs imply today (ADR 0166).
+    It is the only thing that does: what it adds comes from ``policy.outdated``, never the client."""
+
+    def _stale_grist_rule(self, controller):
+        """A Grist document rule as saved before the CSV tools existed: the verbs are still
+        read/create/update, the operation list lacks ``grist.import_csv``."""
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"], personal_data=True)
+        cfg = controller._load_config()
+        (rule,) = policy_store.compile_rules_from_config(cfg)
+        stale = dataclasses.replace(rule, operations=rule.operations - {"grist.import_csv"})
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config([stale])
+        controller._save_and_reload_policy_v2(cfg)
+        return stale
+
+    def test_row_carries_the_missing_tools(self, controller):
+        stale = self._stale_grist_rule(controller)
+
+        (row,) = controller.snapshot()["auto_accept"]["rules"]
+
+        assert row["id"] == stale.id
+        assert row["missing_tools"] == ["grist_import_csv"]
+        assert "grist_import_csv" not in row["covered_tools"]
+
+    def test_row_has_no_missing_tools_for_a_complete_rule(self, controller):
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
+
+        (row,) = controller.snapshot()["auto_accept"]["rules"]
+
+        assert row["missing_tools"] == []
+
+    def test_update_adds_exactly_the_missing_operations(self, controller):
+        stale = self._stale_grist_rule(controller)
+
+        state = controller.update_policy_rule(stale.id)
+
+        (rule,) = policy_store.compile_rules_from_config(controller._load_config())
+        assert rule.operations == stale.operations | {"grist.import_csv"}
+        (row,) = state["auto_accept"]["rules"]
+        assert row["missing_tools"] == []
+        assert "grist_import_csv" in row["covered_tools"]
+
+    def test_update_keeps_the_id_the_value_and_the_personal_data_flag(self, controller):
+        stale = self._stale_grist_rule(controller)
+
+        controller.update_policy_rule(stale.id)
+
+        (rule,) = policy_store.compile_rules_from_config(controller._load_config())
+        assert rule.id == stale.id
+        assert rule.value == stale.value
+        assert rule.conditions == stale.conditions
+        assert rule.allow_personal_data is True
+        assert [r.id for r in policy_store.compile_rules_from_config(controller._load_config())] == [stale.id]
+
+    def test_update_leaves_other_rules_untouched(self, controller):
+        stale = self._stale_grist_rule(controller)
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        before = {r.id: r for r in policy_store.compile_rules_from_config(controller._load_config())}
+
+        controller.update_policy_rule(stale.id)
+
+        after = {r.id: r for r in policy_store.compile_rules_from_config(controller._load_config())}
+        assert after.keys() == before.keys()
+        for rule_id, rule in before.items():
+            if rule_id != stale.id:
+                assert after[rule_id] == rule
+
+    def test_an_unknown_id_is_a_no_op_and_does_not_save(self, controller, monkeypatch):
+        self._stale_grist_rule(controller)
+        before = controller._load_config()
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.update_policy_rule("r-does-not-exist")
+
+        assert saved == []
+        assert controller._load_config() == before
+
+    def test_a_rule_with_nothing_missing_is_a_no_op_and_does_not_save(self, controller, monkeypatch):
+        state = controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
+        rule_id = state["auto_accept"]["rules"][0]["id"]
+        before = controller._load_config()
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.update_policy_rule(rule_id)
+
+        assert saved == []
+        assert controller._load_config() == before
+
+    def test_loading_and_snapshotting_never_widen_a_stale_rule(self, controller):
+        stale = self._stale_grist_rule(controller)
+
+        controller.snapshot()
+        controller.refresh_connectors()
+
+        (rule,) = policy_store.compile_rules_from_config(controller._load_config())
+        assert rule.operations == stale.operations
+
+    def test_a_token_scoped_to_the_rule_still_has_it_after_the_update(self, controller):
+        stale = self._stale_grist_rule(controller)
+        token = scoped_tokens.ScopedToken(
+            id="st-000000000000", label="sync", digest="d", principal_id="local", principal_email="",
+            principal_display_name="", created_at=0.0, expires_at=1e12,
+            rule_ids=frozenset({stale.id}), tools=frozenset({"grist_import_csv"}),
+        )
+        assert "grist.import_csv" not in {op for r in gate_module._rules_in_scope(token) for op in r.operations}
+
+        controller.update_policy_rule(stale.id)
+
+        (in_scope,) = gate_module._rules_in_scope(token)
+        assert in_scope.id == stale.id
+        assert "grist.import_csv" in in_scope.operations
 
 
 class TestAutoAcceptRuleUsage:
