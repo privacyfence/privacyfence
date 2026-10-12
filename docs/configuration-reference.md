@@ -72,7 +72,7 @@ organization server.
 | `privacy.categories.thread_history` | `allow` | Earlier messages in a thread |
 | `drive_privacy.default_policy` | `block` | Drive, Sheets and Docs: any category not listed below |
 | `drive_privacy.categories.file_content` | `allow` | Document text or bytes |
-| `drive_privacy.categories.file_metadata` | `allow` | Name, owners, times, sharing, from `drive_get_file_metadata` |
+| `drive_privacy.categories.file_metadata` | `allow` | Name, owners, times, sharing, from `drive_get_file_metadata`; the version list from `drive_list_revisions` and the version time `drive_get_revision_content` returns |
 | `drive_privacy.categories.file_list` | `allow` | Names and ids in list and search results |
 | `drive_privacy.categories.folder_structure` | `allow` | Folder listings |
 | `slack_privacy.default_policy` | `block` | Slack: any category not listed below |

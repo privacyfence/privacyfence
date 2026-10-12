@@ -13,6 +13,7 @@ import json
 import os
 import ssl
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ from privacyfence.drive_client import (
     DriveClient,
     DriveClientError,
     DriveFile,
+    DriveRevision,
     InlineRun,
     _col_letters_to_index,
     _docs_content_elements_to_markdown,
@@ -2657,6 +2659,349 @@ class TestFetchThumbnail:
 
         with pytest.raises(DriveClientError, match="fetch_thumbnail failed"):
             client.fetch_thumbnail("https://signed.example/thumb")
+
+
+class TestParseUtc:
+    def test_z_time(self):
+        parsed = drive_client_module._parse_utc("2026-10-05T09:12:44.123Z")
+        assert parsed == datetime(2026, 10, 5, 9, 12, 44, 123000, tzinfo=timezone.utc)
+
+    def test_bare_date_is_midnight_utc(self):
+        assert drive_client_module._parse_utc("2026-10-05") == datetime(2026, 10, 5, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("value", ["", "yesterday", "2026-13-45"])
+    def test_invalid_or_empty_is_none(self, value):
+        assert drive_client_module._parse_utc(value) is None
+
+
+def _rev(rev_id, time, **extra):
+    raw = {"id": rev_id, "modifiedTime": time}
+    raw.update(extra)
+    return raw
+
+
+class TestListRevisions:
+    @staticmethod
+    def _service(pages):
+        service = MagicMock()
+        service.revisions.return_value.list.return_value.execute.side_effect = pages
+        return service
+
+    def test_empty_file_id_raises(self):
+        client = make_client(MagicMock())
+        with pytest.raises(DriveClientError, match="non-empty file_id"):
+            client.list_revisions("")
+
+    def test_two_pages_combined_newest_first(self):
+        service = self._service([
+            {"revisions": [_rev("1", "2026-10-01T10:00:00Z")], "nextPageToken": "tok"},
+            {"revisions": [_rev("2", "2026-10-02T10:00:00Z")]},
+        ])
+        result = make_client(service).list_revisions("f1")
+        assert [r.id for r in result] == ["2", "1"]
+        calls = service.revisions.return_value.list.call_args_list
+        assert calls[0].kwargs["pageSize"] == 1000
+        assert calls[0].kwargs["fileId"] == "f1"
+        assert "pageToken" not in calls[0].kwargs
+        assert calls[1].kwargs["pageToken"] == "tok"
+        assert "nextPageToken" in calls[0].kwargs["fields"]
+
+    def test_over_budget_page_token_raises(self):
+        pages = [{"revisions": [], "nextPageToken": "more"}] * drive_client_module.MAX_PAGES
+        with pytest.raises(DriveClientError, match="more than 10,000 versions"):
+            make_client(self._service(pages)).list_revisions("f1")
+
+    def test_sorts_by_parsed_time_not_string(self):
+        # As strings "09:12Z" sorts after "09:12:44Z"; parsed, it is earlier.
+        service = self._service([{"revisions": [
+            _rev("late", "2026-10-05T09:12:44Z"),
+            _rev("early", "2026-10-05T09:12Z"),
+        ]}])
+        result = make_client(service).list_revisions("f1")
+        assert [r.id for r in result] == ["late", "early"]
+
+    def test_fractional_revision_counts_as_after_a_minute_cutoff(self):
+        service = self._service([{"revisions": [
+            _rev("old", "2026-10-05T09:00:00Z"),
+            _rev("new", "2026-10-05T09:12:44.123Z"),
+        ]}])
+        result = make_client(service).list_revisions("f1", modified_after="2026-10-05T09:12Z")
+        assert [(r.id, r.before_cutoff) for r in result] == [("new", False), ("old", True)]
+
+    def test_cutoff_adds_baseline_last(self):
+        service = self._service([{"revisions": [
+            _rev("1", "2026-10-01T00:00:00Z"),
+            _rev("2", "2026-10-03T00:00:00Z"),
+            _rev("3", "2026-10-06T00:00:00Z"),
+            _rev("4", "2026-10-07T00:00:00Z"),
+        ]}])
+        result = make_client(service).list_revisions("f1", modified_after="2026-10-05T00:00:00Z")
+        assert [(r.id, r.before_cutoff) for r in result] == [("4", False), ("3", False), ("2", True)]
+
+    def test_no_baseline_when_nothing_is_older(self):
+        service = self._service([{"revisions": [_rev("1", "2026-10-06T00:00:00Z")]}])
+        result = make_client(service).list_revisions("f1", modified_after="2026-10-01")
+        assert [(r.id, r.before_cutoff) for r in result] == [("1", False)]
+
+    def test_bare_date_cutoff_is_midnight_utc(self):
+        service = self._service([{"revisions": [
+            _rev("before", "2026-10-04T23:59:59Z"),
+            _rev("at", "2026-10-05T00:00:00Z"),
+        ]}])
+        result = make_client(service).list_revisions("f1", modified_after="2026-10-05")
+        assert [(r.id, r.before_cutoff) for r in result] == [("at", False), ("before", True)]
+
+    def test_max_results_keeps_the_newest(self):
+        service = self._service([{"revisions": [_rev(str(i), f"2026-10-0{i}T00:00:00Z") for i in range(1, 6)]}])
+        result = make_client(service).list_revisions("f1", max_results=2)
+        assert [r.id for r in result] == ["5", "4"]
+
+    def test_max_results_does_not_count_the_baseline(self):
+        service = self._service([{"revisions": [_rev(str(i), f"2026-10-0{i}T00:00:00Z") for i in range(1, 6)]}])
+        result = make_client(service).list_revisions("f1", modified_after="2026-10-03", max_results=1)
+        assert [(r.id, r.before_cutoff) for r in result] == [("5", False), ("2", True)]
+
+    def test_unparsable_cutoff_raises_before_any_call(self):
+        service = self._service([])
+        with pytest.raises(DriveClientError, match="not a valid time"):
+            make_client(service).list_revisions("f1", modified_after="last monday")
+        service.revisions.return_value.list.assert_not_called()
+
+    def test_revision_without_modified_time_sorts_first_and_is_never_a_cutoff_match(self):
+        service = self._service([{"revisions": [
+            _rev("timed", "2026-10-06T00:00:00Z"),
+            {"id": "untimed"},
+        ]}])
+        client = make_client(service)
+        assert [r.id for r in client.list_revisions("f1")] == ["timed", "untimed"]
+
+        service = self._service([{"revisions": [
+            _rev("timed", "2026-10-06T00:00:00Z"),
+            {"id": "untimed"},
+        ]}])
+        result = make_client(service).list_revisions("f1", modified_after="2026-10-01")
+        assert [r.id for r in result] == ["timed"]
+
+    def test_parse_revision_maps_every_field(self):
+        revision = DriveClient._parse_revision({
+            "id": "r1", "modifiedTime": "2026-10-05T00:00:00Z", "size": "42", "keepForever": True,
+            "lastModifyingUser": {"displayName": "Ada", "emailAddress": "ada@example.com"},
+        })
+        assert revision == DriveRevision(
+            id="r1", modified_time="2026-10-05T00:00:00Z", author_name="Ada",
+            author_email="ada@example.com", size=42, keep_forever=True,
+        )
+
+    def test_parse_revision_tolerates_a_bad_size_and_no_author(self):
+        revision = DriveClient._parse_revision({"id": "r1", "size": "many"})
+        assert revision.size == 0
+        assert revision.author_name == "" and revision.author_email == ""
+
+    def test_api_error_becomes_drive_client_error(self):
+        service = MagicMock()
+        service.revisions.return_value.list.return_value.execute.side_effect = http_error(403)
+        with pytest.raises(DriveClientError, match=r"list_revisions\(f1\) failed"):
+            make_client(service).list_revisions("f1")
+
+
+class _FailingResponse(_FakeStreamResponse):
+    def raise_for_status(self):
+        raise RuntimeError("403 Forbidden")
+
+
+_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+class TestGetRevisionContent:
+    @staticmethod
+    def _service(mime, revision=None, size=0):
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = {
+            "id": "f1", "name": "File", "mimeType": mime, "size": str(size),
+        }
+        service.revisions.return_value.get.return_value.execute.return_value = (
+            {"id": "r1", "modifiedTime": "2026-10-05T09:00:00Z"} if revision is None else revision
+        )
+        return service
+
+    @staticmethod
+    def _fake_url_fetch(monkeypatch, client, chunks):
+        fake_session = MagicMock()
+        fake_session.get.return_value = _FakeStreamResponse(chunks)
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
+        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
+        return fake_session
+
+    def test_empty_file_id_raises(self):
+        with pytest.raises(DriveClientError, match="non-empty file_id"):
+            make_client(MagicMock()).get_revision_content("", "r1")
+
+    def test_empty_revision_id_raises(self):
+        with pytest.raises(DriveClientError, match="non-empty revision_id"):
+            make_client(MagicMock()).get_revision_content("f1", "")
+
+    def test_sheet_revision_is_fetched_as_xlsx_through_its_export_link(self, monkeypatch):
+        url = "https://docs.google.com/spreadsheets/export?id=f1&revision=r1&format=xlsx"
+        service = self._service(_SHEET_MIME, {
+            "id": "r1", "modifiedTime": "2026-10-05T09:00:00Z",
+            "exportLinks": {_XLSX_MIME: url, "text/csv": "https://docs.google.com/csv"},
+        })
+        client = make_client(service)
+        session = self._fake_url_fetch(monkeypatch, client, [b"PK\x03", b"\x04xlsx"])
+
+        content = client.get_revision_content("f1", "r1")
+
+        assert content.content_bytes == b"PK\x03\x04xlsx"
+        assert content.content_text == ""
+        assert content.content_mime_type == _XLSX_MIME
+        assert content.revision_id == "r1"
+        assert content.revision_modified_time == "2026-10-05T09:00:00Z"
+        assert content.truncated is False
+        assert session.get.call_args.args == (url,)
+        assert service.revisions.return_value.get.call_args.kwargs["fields"] == "id,modifiedTime,size,exportLinks"
+
+    def test_doc_revision_is_text(self, monkeypatch):
+        service = self._service("application/vnd.google-apps.document", {
+            "id": "r1", "modifiedTime": "t",
+            "exportLinks": {"text/plain": "https://docs.google.com/document/export?format=txt"},
+        })
+        client = make_client(service)
+        self._fake_url_fetch(monkeypatch, client, [b"hello ", b"world"])
+        content = client.get_revision_content("f1", "r1")
+        assert content.content_text == "hello world"
+        assert content.content_bytes == b""
+        assert content.content_mime_type == "text/plain"
+
+    def test_missing_export_link_raises(self):
+        service = self._service(_SHEET_MIME, {"id": "r1", "exportLinks": {"text/csv": "https://docs.google.com/x"}})
+        with pytest.raises(DriveClientError, match="has no .*spreadsheetml.sheet export"):
+            make_client(service).get_revision_content("f1", "r1")
+
+    def test_revision_without_any_export_links_raises(self):
+        service = self._service(_SHEET_MIME, {"id": "r1"})
+        with pytest.raises(DriveClientError, match="has no .* export"):
+            make_client(service).get_revision_content("f1", "r1")
+
+    def test_drawing_raises(self):
+        service = self._service("application/vnd.google-apps.drawing")
+        with pytest.raises(DriveClientError, match="cannot be read"):
+            make_client(service).get_revision_content("f1", "r1")
+
+    def test_pdf_blob_is_downloaded_from_the_revision(self, monkeypatch):
+        service = self._service("application/pdf")
+        monkeypatch.setattr(drive_client_module, "MediaIoBaseDownload", fake_downloader_class([b"%PDF-1.4"]))
+        content = make_client(service).get_revision_content("f1", "r1")
+        assert content.content_bytes == b"%PDF-1.4"
+        assert content.content_mime_type == "application/pdf"
+        service.revisions.return_value.get_media.assert_called_once_with(fileId="f1", revisionId="r1")
+
+    def test_text_blob_is_text(self, monkeypatch):
+        service = self._service("text/plain")
+        monkeypatch.setattr(drive_client_module, "MediaIoBaseDownload", fake_downloader_class([b"v1 text"]))
+        content = make_client(service).get_revision_content("f1", "r1")
+        assert content.content_text == "v1 text"
+        assert content.content_bytes == b""
+
+    def test_image_is_not_downloaded(self):
+        service = self._service("image/png", {"id": "r1", "modifiedTime": "t", "size": "2048"})
+        content = make_client(service).get_revision_content("f1", "r1")
+        assert content.revision_size == 2048
+        assert content.content_bytes == b"" and content.content_text == ""
+        assert content.revision_id == "r1"
+        service.revisions.return_value.get_media.assert_not_called()
+
+    def test_image_with_unparsable_size_reports_zero(self):
+        service = self._service("image/png", {"id": "r1", "size": "big"})
+        assert make_client(service).get_revision_content("f1", "r1").revision_size == 0
+
+    def test_revision_id_falls_back_to_the_requested_one(self):
+        service = self._service("image/png", {})
+        content = make_client(service).get_revision_content("f1", "r9")
+        assert content.revision_id == "r9"
+        assert content.revision_modified_time == ""
+
+    def test_text_download_is_truncated_at_the_cap(self, monkeypatch):
+        service = self._service("text/plain")
+        monkeypatch.setattr(drive_client_module, "_REVISION_TEXT_MAX_BYTES", 10)
+        monkeypatch.setattr(drive_client_module, "MediaIoBaseDownload", fake_downloader_class([b"a" * 30]))
+        content = make_client(service).get_revision_content("f1", "r1")
+        assert content.truncated is True
+        assert content.content_text == "a" * 10
+
+    def test_export_is_truncated_at_the_cap(self, monkeypatch):
+        service = self._service("application/vnd.google-apps.presentation", {
+            "id": "r1", "exportLinks": {"text/plain": "https://docs.google.com/p"},
+        })
+        monkeypatch.setattr(drive_client_module, "_REVISION_TEXT_MAX_BYTES", 4)
+        client = make_client(service)
+        self._fake_url_fetch(monkeypatch, client, [b"abc", b"defg", b"never read"])
+        content = client.get_revision_content("f1", "r1")
+        assert content.truncated is True
+        assert content.content_text == "abcd"
+
+    def test_get_error_becomes_drive_client_error(self):
+        service = self._service("text/plain")
+        service.revisions.return_value.get.return_value.execute.side_effect = http_error(404)
+        with pytest.raises(DriveClientError, match=r"get_revision_content\(f1, r1\) failed"):
+            make_client(service).get_revision_content("f1", "r1")
+
+    def test_get_media_error_becomes_drive_client_error(self, monkeypatch):
+        service = self._service("application/pdf")
+        service.revisions.return_value.get_media.side_effect = http_error(403)
+        with pytest.raises(DriveClientError, match=r"get_revision_content\(f1, r1\) failed"):
+            make_client(service).get_revision_content("f1", "r1")
+
+
+class TestFetchUrlCapped:
+    def test_stops_once_over_the_cap(self, monkeypatch):
+        client = make_client(MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
+        fake_session = MagicMock()
+        fake_session.get.return_value = _FakeStreamResponse([b"aaaa", b"", b"bbbb", b"cccc"])
+        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
+        assert client._fetch_url_capped("https://docs.google.com/x", 5) == b"aaaabbbb"
+
+    @pytest.mark.parametrize("url", [
+        "https://evil.example/export",
+        "http://docs.google.com/export",
+        "https://docs.google.com.evil.example/export",
+        "https://www.googleapis.com@evil.example/export",
+    ])
+    def test_refuses_a_non_google_host(self, url, monkeypatch):
+        client = make_client(MagicMock())
+        session_factory = MagicMock()
+        monkeypatch.setattr(drive_client_module, "AuthorizedSession", session_factory)
+        with pytest.raises(DriveClientError, match="unexpected host"):
+            client._fetch_url_capped(url, 100)
+        session_factory.assert_not_called()
+
+    def test_accepts_the_googleapis_host(self, monkeypatch):
+        client = make_client(MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
+        fake_session = MagicMock()
+        fake_session.get.return_value = _FakeStreamResponse([b"ok"])
+        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
+        assert client._fetch_url_capped("https://www.googleapis.com/drive/v3/x", 100) == b"ok"
+
+    def test_credential_error_is_reraised_unchanged(self, monkeypatch):
+        client = make_client(MagicMock())
+
+        def no_credentials():
+            raise DriveClientError("not signed in")
+
+        monkeypatch.setattr(client, "_load_credentials", no_credentials)
+        with pytest.raises(DriveClientError, match="^not signed in$"):
+            client._fetch_url_capped("https://docs.google.com/x", 100)
+
+    def test_http_error_becomes_drive_client_error(self, monkeypatch):
+        client = make_client(MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
+        fake_session = MagicMock()
+        fake_session.get.return_value = _FailingResponse([b"x"])
+        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
+        with pytest.raises(DriveClientError, match="revision export failed"):
+            client._fetch_url_capped("https://docs.google.com/x", 100)
 
 
 # ---------------------------------------------------------------------------- #

@@ -47,6 +47,7 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ("gmail_download_attachment", make_ctx(my_email="me@corp.com", raw_data=_FROM_ACME, args={"message_id": "m1"})),
     ("gmail_archive_message", make_ctx(my_email="me@corp.com", raw_data=_FROM_ACME, args={"message_id": "m1"})),
     ("drive_get_file_content", _drive_ctx("drive_get_file_content", file_id="f1")),
+    ("drive_get_revision_content", _drive_ctx("drive_get_revision_content", file_id="f1", revision_id="r1")),
     ("drive_download_file", _drive_ctx("drive_download_file", file_id="f1")),
     ("drive_sheets_get_values", _drive_ctx("drive_sheets_get_values", spreadsheet_id="f1")),
     (

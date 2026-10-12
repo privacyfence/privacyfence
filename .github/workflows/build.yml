@@ -982,7 +982,7 @@ jobs:
           exit $failed
 
       # The `stable` branch is what the Claude Cowork / Claude Code plugin marketplace follows to
-      # get the latest stable release instead of `main` (ADR 0168). Last on purpose: a failure
+      # get the latest stable release instead of `main` (ADR 0169). Last on purpose: a failure
       # here must never hold back the release manifest or the download routes above. A plain
       # fast-forward push: a release that does not descend from the previous one fails loudly
       # instead of silently rewriting `stable`.

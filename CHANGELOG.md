@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Drive version history.** `drive_list_revisions` lists a file's saved versions with when and by whom each was saved, filtered by date, without a card; `drive_get_revision_content` reads an earlier version's text after review, and the rules that already let the AI read a file also cover its earlier versions. Google does not say which cell an edit changed, so the AI compares versions itself.
 - **A `stable` branch that follows the latest stable release.** Each stable release moves it to the release's commit, so adding the plugin marketplace as `privacyfence/privacyfence#stable` in Claude Cowork or Claude Code gets the latest stable `privacyfence-sync` plugin instead of whatever is on `main`.
 
 ### Fixed

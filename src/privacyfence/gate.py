@@ -268,6 +268,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "drive_sheets_get_values": WIDE, "slack_get_channel_history": WIDE,
     "slack_get_thread_replies": WIDE, "slack_search_messages": WIDE,
     "drive_get_file_content": WIDE,
+    "drive_get_revision_content": WIDE,
     "gmail_create_draft": WIDE, "gmail_reply_draft": WIDE,
     "drive_sheets_write_range": WIDE, "drive_upload_file": WIDE,
     "jira_create_issue": WIDE, "confluence_create_page": WIDE,

@@ -1,4 +1,4 @@
-# ADR 0168: A `stable` branch follows the latest stable release for the plugin marketplace
+# ADR 0169: A `stable` branch follows the latest stable release for the plugin marketplace
 
 ## Status
 
