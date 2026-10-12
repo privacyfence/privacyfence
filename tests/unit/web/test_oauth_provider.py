@@ -23,7 +23,9 @@ from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
 from privacyfence import org_identity as oi
+from privacyfence import paths, scoped_tokens
 from privacyfence.org_mode import AuthzPolicyConfig
+from privacyfence.principal import Principal
 from privacyfence.web import oauth_provider as op
 
 IDP_CALLBACK_URL = "https://pf.example.com/oauth/idp/callback"
@@ -52,6 +54,8 @@ def _params(*, state="orig-state", redirect_uri="https://claude.example.com/call
 
 
 def _provider(tmp_path, monkeypatch, *, policy: AuthzPolicyConfig | None = None) -> op.OrgOAuthProvider:
+    # revoke_all_for_principal also reaches the scoped-token store, under data_dir().
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
     monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
     return op.OrgOAuthProvider(_idp(), idp_callback_url=IDP_CALLBACK_URL, policy=policy)
@@ -668,6 +672,24 @@ class TestRefreshTokenSurvivesARestart:
         assert await provider.load_refresh_token(client, bob.refresh_token) is not None
         assert await provider.verify_token(alice.access_token) is None
         assert _provider(tmp_path, monkeypatch)._sealed.record_count == 1
+
+    async def test_revoke_all_for_principal_revokes_scoped_tokens_too(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await _drive_full_flow(provider, monkeypatch, client, claims={"sub": "alice"})
+        store = scoped_tokens.ScopedTokenStore(lambda: [])
+        scoped_tokens.set_store(store)
+        policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+        for principal_id, label in (("alice", "sales-sync"), ("alice", "nightly"), ("bob", "sales-sync")):
+            store.create(
+                Principal(id=principal_id), label=label, days=90, rule_ids=[], tools=["gmail_list_messages"],
+                policy=policy,
+            )
+
+        # One refresh chain plus two scoped tokens.
+        assert provider.revoke_all_for_principal("alice") == 3
+        assert store.tokens_for(Principal(id="alice")) == []
+        assert [t.label for t in store.tokens_for(Principal(id="bob"))] == ["sales-sync"]
 
     async def test_revoke_all_for_principal_reaches_records_this_process_never_loaded(
         self, tmp_path, monkeypatch,

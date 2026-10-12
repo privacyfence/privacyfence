@@ -151,6 +151,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "contacts_remove_label":          "contacts.remove_label",
     "jira_get_issue":                 "jira.read_issue",
     "jira_search_issues_with_fields": "jira.read_issue",
+    "jira_export_issues":             "jira.read_issue",
     "jira_create_issue":              "jira.create_issue",
     "jira_add_comment":               "jira.add_comment",
     "jira_update_issue":              "jira.update_issue",
@@ -292,6 +293,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "jira_refresh_user_cache":         "auto",
     "jira_get_issue":                  "review",
     "jira_search_issues_with_fields":  "review",
+    "jira_export_issues":              "review",
     "jira_create_issue":               "popup",
     "jira_add_comment":                "popup",
     "jira_update_issue":               "popup",
@@ -345,6 +347,18 @@ TOOL_TO_GATE: dict[str, str] = {
     "peek_rename_page":                "popup",
     "peek_delete_page":                "popup",
 }
+
+# The tools a rule's allow_personal_data flag applies to (ADR 0157): each one's result carries no
+# row (the data goes to a file or to a page the user's own rule names), so the PII scan, which
+# guards the model's context, is not what protects their data.
+PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
+    "grist_export_records",
+    "grist_export_sql",
+    "salesforce_export_report",
+    "jira_export_issues",
+    "peek_upload_page",
+    "drive_download_file",
+})
 
 @dataclass
 class ReviewContext:
@@ -626,6 +640,7 @@ def notify_rules_changed() -> None:
 
 
 __all__ = [
+    "PERSONAL_DATA_RULE_TOOLS",
     "ReviewContext",
     "TEMP_ACCEPT_ELIGIBLE_OPERATIONS",
     "TEMP_ACCEPT_TTL_SECONDS",

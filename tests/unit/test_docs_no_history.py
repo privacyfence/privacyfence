@@ -31,6 +31,7 @@ PUBLISHED_DOCS = (
     "README.md",
     "SECURITY.md",
     "docs/getting-started.md",
+    "docs/privacyfence-sync.md",
     "docs/install-macos.md",
     "docs/install-windows.md",
     "docs/install-linux.md",

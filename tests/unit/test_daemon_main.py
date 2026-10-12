@@ -3878,3 +3878,85 @@ class TestPrintMcpToken:
         monkeypatch.setattr(daemon_main, "run_print_mcp_token", lambda: 0)
 
         assert daemon_main.main(["--print-mcp-token"]) == 0
+
+
+class TestRevokeScopedTokens:
+    """``privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`` (ADR 0165): the administrator takes
+    back everything one person holds, from the server's command line."""
+
+    @pytest.fixture
+    def store(self, tmp_path, monkeypatch):
+        from privacyfence import paths, scoped_tokens
+        from privacyfence.principal import Principal
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        alice = Principal(id="alice", email="alice@example.com")
+        (tmp_path / "users" / "alice").mkdir(parents=True)
+        made = scoped_tokens.ScopedTokenStore(lambda: [alice])
+        policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30)
+        monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
+        for label in ("one", "two"):
+            made.create(alice, label=label, days=5, rule_ids=[], tools=["gmail_get_message"], policy=policy)
+        return made, alice
+
+    def test_revoke_scoped_tokens_revokes_and_reports_the_count(self, store, tmp_path, capsys):
+        from privacyfence import scoped_tokens
+
+        made, alice = store
+        assert daemon_main.run_revoke_scoped_tokens("alice") == 0
+        assert capsys.readouterr().out == "Revoked 2 scoped token(s) for alice.\n"
+        # The file is what a running daemon re-reads on the token's next use.
+        fresh = scoped_tokens.ScopedTokenStore(lambda: [alice])
+        fresh.load()
+        assert fresh.tokens_for(alice) == []
+        assert made.tokens_for(alice) == []
+        assert daemon_main.run_revoke_scoped_tokens("alice") == 0
+        assert capsys.readouterr().out == "Revoked 0 scoped token(s) for alice.\n"
+
+    @pytest.mark.parametrize("principal_id", ["nobody", "../escape", "", "users"])
+    def test_revoke_scoped_tokens_for_an_unknown_account_exits_1_and_creates_no_folder(
+        self, store, tmp_path, capsys, principal_id,
+    ):
+        before = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+
+        assert daemon_main.run_revoke_scoped_tokens(principal_id) == 1
+
+        captured = capsys.readouterr()
+        assert "No such account." in captured.err
+        assert captured.out == ""
+        assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")) == before
+
+    def test_revoke_scoped_tokens_runs_after_the_runtime_identity_check(self, monkeypatch):
+        from privacyfence import privilege_separation
+
+        calls: list[str] = []
+
+        def _check():
+            calls.append("identity")
+
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _check)
+        monkeypatch.setattr(daemon_main, "load_config", lambda path: pytest.fail("read config"))
+        monkeypatch.setattr(
+            daemon_main, "run_revoke_scoped_tokens", lambda principal_id: calls.append(principal_id) or 0,
+        )
+
+        assert daemon_main.main(["--revoke-scoped-tokens", "alice"]) == 0
+        assert calls == ["identity", "alice"]
+
+        # On a separated install the check refuses the wrong account first, and nothing is revoked.
+        def _refuse():
+            raise privilege_separation.PrivilegeSeparationError("wrong account")
+
+        calls.clear()
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
+        assert daemon_main.main(["--revoke-scoped-tokens", "alice"]) != 0
+        assert calls == []
+
+    def test_local_is_always_a_known_account(self, tmp_path, monkeypatch, capsys):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        assert daemon_main.run_revoke_scoped_tokens("local") == 0
+        assert capsys.readouterr().out == "Revoked 0 scoped token(s) for local.\n"

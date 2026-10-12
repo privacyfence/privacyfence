@@ -9,6 +9,7 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-07-13 in
 considered"). Implemented. The mechanism is described in
 [`docs/TECHNICAL_REFERENCE.md`](https://github.com/privacyfence/privacyfence/blob/5deef1d8/docs/TECHNICAL_REFERENCE.md)'s "Scheduled / unattended Cowork tasks"
 section. That section covers the mechanism but not the rejected alternatives recorded here.
+Amended by [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md).
 
 ## Context
 

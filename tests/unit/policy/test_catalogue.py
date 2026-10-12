@@ -101,6 +101,49 @@ class TestRulesForCatalogueEntry:
         # back -- proving this is a real, persistable PolicyRule, not just a plain construction.
         assert rules == store.merge_rules(rules)
 
+    def test_personal_data_label_only_on_the_listed_groups(self):
+        labelled = {e["id"] for e in catalogue.scope_catalogue() if "personal_data_label" in e}
+        assert labelled == set(catalogue.PERSONAL_DATA_GROUPS) == {
+            "grist.document", "salesforce.report", "jira.project", "peek.page", "drive.folder",
+        }
+
+    def test_peek_page_read_compiles_comments_and_stats(self):
+        rules = catalogue.rules_for_catalogue_entry("peek.page", ["dash"], [Verb.READ])
+        assert len(rules) == 1
+        assert rules[0].predicate == "peek.page"
+        assert rules[0].operations == frozenset({"peek.read_comments", "peek.read_stats"})
+
+    def test_peek_page_update_compiles_upload_only(self):
+        rules = catalogue.rules_for_catalogue_entry("peek.page", ["dash"], [Verb.CREATE])
+        assert len(rules) == 1
+        assert rules[0].operations == frozenset({"peek.upload_page"})
+
+    def test_peek_page_offers_the_personal_data_label(self):
+        entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "peek.page")
+        assert entry["personal_data_label"] == "New versions may include personal data"
+
+    @pytest.mark.parametrize("group", ["grist.document", "jira.project"])
+    def test_personal_data_sets_the_flag_on_every_compiled_rule(self, group):
+        verbs = [Verb.READ, Verb.SEARCH] if group == "jira.project" else [Verb.READ]
+        rules = catalogue.rules_for_catalogue_entry(group, ["x1"], verbs, personal_data=True)
+        assert rules
+        assert all(rule.allow_personal_data for rule in rules)
+        if group == "jira.project":
+            assert {rule.predicate for rule in rules} == {
+                "approved_project_keys", "approved_project_keys_all_results",
+            }
+
+    def test_personal_data_on_another_group_compiles_nothing(self):
+        assert catalogue.rules_for_catalogue_entry(
+            "apps_script.project", ["script1"], [Verb.READ], personal_data=True,
+        ) == []
+
+    def test_flagged_rule_ids_differ_from_plain_ones(self):
+        plain = catalogue.rules_for_catalogue_entry("grist.document", ["d1"], [Verb.READ])
+        flagged = catalogue.rules_for_catalogue_entry("grist.document", ["d1"], [Verb.READ], personal_data=True)
+        assert plain[0].id != flagged[0].id
+        assert flagged[0].id == store.rule_id_for_rule(flagged[0])
+
 
 def test_grist_chips_name_the_csv_and_export_tools_they_cover():
     entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "grist.document")
@@ -109,7 +152,7 @@ def test_grist_chips_name_the_csv_and_export_tools_they_cover():
         "create": "create (add records, import CSV)",
         "update": "update (records, CSV)",
     }
-    assert all("verb_labels" not in e for e in catalogue.scope_catalogue() if e["id"] != "grist.document")
+    assert {e["id"] for e in catalogue.scope_catalogue() if "verb_labels" in e} == {"grist.document", "peek.page"}
 
 
 @pytest.mark.parametrize("verb, tools", [

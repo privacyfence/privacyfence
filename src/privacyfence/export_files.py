@@ -40,12 +40,28 @@ def check_destination(destination_dir: str) -> str:
     return stripped
 
 
-def refuse_org(tool: str, download_mode: str, alternative: str) -> None:
-    if download_mode == "org":
+ORG_SAVED_TO = "A one-time download link (destination_dir is ignored on an organization-managed install)"
+ORG_DELIVERY_SENTENCE = (
+    "On an organization-managed install nothing is saved to destination_dir: the result carries "
+    "a one-time download_url instead."
+)
+
+
+def refuse_org_without_staging(
+    tool: str, download_mode: str, allow_disk_staging: bool, alternative: str,
+) -> None:
+    if download_mode == "org" and not allow_disk_staging:
         raise ValueError(
-            f"{tool} writes a file on your computer, which an organization-managed install "
-            f"cannot do. Use {alternative} instead."
+            f"{tool} delivers its file through a one-time download link on an organization-managed "
+            "install, and this organization has turned off staging files on the server "
+            f"(download_delivery.allow_disk_staging). Use {alternative} instead."
         )
+
+
+def saved_to(destination_dir: str, file_name: str, download_mode: str) -> str:
+    if download_mode == "org":
+        return ORG_SAVED_TO
+    return f"{destination_dir.rstrip('/')}/{file_name}"
 
 
 def csv_cell(value: Any) -> str:

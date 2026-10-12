@@ -120,6 +120,8 @@ and `columns` is a comma-separated list of the report's own column API names, su
 `OPPORTUNITY_ID` for the IDs only (use the name `reportMetadata.detailColumns` shows for your
 report). An approved-report rule covers the export of that report, and the PII gate still
 applies. `salesforce.report_max_pages` caps the runs an export may use.
+
+`cell_format` chooses what each cell holds: `value` (the default) writes the raw value, `label` the text shown in Salesforce, and `both` writes each column twice, the raw value under the column's name and the shown text as `<column>.label`, plus `<column>.currency` for money columns. The column set is the same on every run, whatever the data.
 See [ADR 0155](adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.md).
 
 ## Troubleshooting

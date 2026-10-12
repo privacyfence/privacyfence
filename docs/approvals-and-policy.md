@@ -387,10 +387,25 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Contacts label | identity | label names | `label_name_allowlist` | the label being applied or removed is one of these |
 | Apps Script project | identity | script ids | `apps_script.project` | the script is one of these |
 | Grist document | identity | document ids | `grist.document` | the document is one of these |
+| Peek page | identity | page slugs | `peek.page` | the call names one of these slugs. A call without a slug (publishing a new page) never matches |
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
-A Grist document rule and an approved-report rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`) for the same document or report; the PII gate still applies to them.
+A Grist document rule, an approved-report rule and a Jira project search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) for the same document, report or project; the PII gate still applies to them unless the rule allows personal data (below).
+
+**Peek page.** A Peek page rule names page slugs and is set only in Settings; the card offers no "Always allow" button for Peek. *Read* covers `peek_get_comments` and `peek_get_stats` for those pages, and *update* covers `peek_upload_page` with one of those slugs, which publishes a new version. It never covers a new page, a visibility change, a rename or a delete.
+
+#### Letting personal data through
+
+The [PII check](#the-pii-check) keeps personal data out of the AI system's context. The tools below send their data to a file or to a page instead, and their result holds no row, so a rule can let them through. On the **Add a rule** form in **Settings → Auto-accept**, the scopes listed here show a checkbox:
+
+| Scope | Checkbox | The rule then lets through |
+|---|---|---|
+| Grist document, Salesforce report, Jira project | Exports may include personal data | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` |
+| Peek page | New versions may include personal data | `peek_upload_page` with the page's slug |
+| Drive folder | Downloads may include personal data | `drive_download_file`, when the file is saved or handed over through a one-time link |
+
+Under such a rule a matching call runs without a card or a second confirmation even when the scan finds personal data, in an unattended session too. Every other tool still scans, and a flagged rule matches nothing it did not match before. A Drive folder rule's box never applies to a download whose content comes back inside the tool result (an organization install returns a small file inline); that download keeps the check. The checkbox exists only in Settings, behind your passkey: `privacyfence_propose_policy_change` cannot set it. A rule with the box ticked is a separate rule from the same scope without it, and Settings shows it with "personal data allowed in exports, file downloads and page uploads". The audit log records the call as auto-accepted by that rule, with the categories found; on an organization install, adding the rule is audited as "personal data allowed". See [ADR 0157](adr/0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) and [ADR 0158](adr/0158-peek-rules-name-pages-and-cover-only-new-versions.md).
 
 ### Conditions
 

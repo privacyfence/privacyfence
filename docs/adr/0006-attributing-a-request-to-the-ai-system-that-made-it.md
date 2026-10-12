@@ -24,6 +24,7 @@ discovering a year later that it meant nothing.
 
 Sequenced against the multi-system rollout it exists for: organization mode first, local models
 after. That ordering is load-bearing here and not incidental — see *What org mode already has*.
+Amended by [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md).
 
 ## Context
 

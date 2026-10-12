@@ -98,11 +98,11 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Slack](#slack) | 11 | 6 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
 | [Salesforce](#salesforce) | 5 | 1 | 4 | 0 |
-| [Jira](#jira) | 12 | 6 | 2 | 4 |
+| [Jira](#jira) | 13 | 6 | 3 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **140** | **50** | **28** | **62** |
+| **Total** | **141** | **50** | **29** | **62** |
 
 ## Gmail
 
@@ -256,6 +256,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `jira_list_projects` | read | `auto` | List Jira projects accessible to the user (key, name, type, lead). |
 | `jira_refresh_user_cache` | read | `auto` | Re-fetch the names of every Atlassian account id PrivacyFence has cached. |
 | `jira_search_issues` | read | `auto` | Search Jira issues using JQL. |
+| `jira_export_issues` | read | `review` | Write every issue a JQL query matches, up to 10,000, to a CSV or JSON file on the user's computer, in one approval. |
 | `jira_get_issue` | read | `review` | Fetch full details of a Jira issue by key (e.g. PROJ-123), including description and comments. |
 | `jira_search_issues_with_fields` | read | `review` | Search Jira issues using JQL and add extra fields to each one: custom fields such as Story Points or Sprint, or built-in ones such as due date or fix versions. |
 | `jira_add_comment` | write | `popup` | Add a comment to an existing Jira issue. |

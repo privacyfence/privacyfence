@@ -157,6 +157,7 @@ from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, canonical_key
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
+    PERSONAL_DATA_RULE_TOOLS,
     TOOL_TO_OPERATION,
     ReviewContext,
     add_policy_v2_rules,
@@ -173,6 +174,7 @@ from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
+from .scoped_tokens import ScopedToken, current_token_scope
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -259,7 +261,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "salesforce_export_report": WIDE,
     "grist_get_records": WIDE, "grist_export_records": WIDE, "grist_export_sql": WIDE, "grist_add_records": WIDE, "grist_update_records": WIDE,
     "grist_import_csv": WIDE, "grist_update_csv": WIDE,
-    "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
+    "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "jira_export_issues": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "peek_get_comments": WIDE, "peek_get_stats": WIDE, "peek_upload_page": WIDE,
     "peek_add_comment": WIDE,
@@ -688,8 +690,12 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
     ``policy.store.rule_id_for``) is the canonical id an audit entry records (ADR 0074). An empty
     ``matched_rule_id`` on an ``"auto_accepted"`` audit entry means the temp-accept grace window
     matched, not a rule row.
+
+    Under a scoped token (ADR 0164) only the token's own rules count, and the temp-accept window
+    is never consulted: a person's "Allow once" armed it for their own session, not for the token.
     """
-    rules = get_policy_v2_store_rules()
+    scope = current_token_scope()
+    rules = _rules_in_scope(scope)
     try:
         matched = policy_engine.find_matching_rule(rules, operation_key, ctx)
     except Exception:
@@ -697,21 +703,52 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
         matched = None
     if matched is not None:
         return True, matched.id, matched.id
-    if is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
+    if scope is None and is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
         return True, "session_temp_accept", ""
     return False, "", ""
+
+
+def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]:
+    """Every cached rule for an unscoped call; only the token's own rules under a scoped token
+    (ADR 0164). A rule id the token keeps but the person has since removed or changed simply
+    matches nothing."""
+    rules = get_policy_v2_store_rules()
+    if scope is None:
+        return rules
+    return [rule for rule in rules if rule.id in scope.rule_ids]
+
+
+def _personal_data_rule(
+    tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
+) -> policy_engine.PolicyRule | None:
+    """The stored rule with ``allow_personal_data`` that covers this call, for a tool in
+    ``PERSONAL_DATA_RULE_TOOLS`` only (ADR 0157); ``None`` for every other tool, when the result
+    carries the content itself (``content_reaches_result``), or when no such rule matches."""
+    if tool not in PERSONAL_DATA_RULE_TOOLS or content_reaches_result:
+        return None
+    # Under a scoped token only the token's own rules count, flagged ones included (ADR 0164).
+    rules = [rule for rule in _rules_in_scope(current_token_scope()) if rule.allow_personal_data]
+    if not rules:
+        return None
+    try:
+        return policy_engine.find_matching_rule(rules, operation_key, ctx)
+    except Exception:
+        logger.warning("Policy evaluation raised for op=%r", operation_key, exc_info=True)
+        return None
 
 
 def preflight_auto_accept(operation_key: str, args: dict, my_email: str = "") -> tuple[str, str, str, str]:
     """Preflight counterpart of ``_evaluate_auto_accept`` above, backing
     ``privacyfence_check_policy``'s own prediction. Returns ``(verdict, matched_rule,
     matched_rule_id, reason)`` -- ``matched_rule``/``matched_rule_id`` are the same value here for
-    the same reason ``_evaluate_auto_accept`` above returns them equal.
+    the same reason ``_evaluate_auto_accept`` above returns them equal. Under a scoped token it
+    predicts from the token's rules alone, without the temp-accept window, as that function does.
     """
+    scope = current_token_scope()
     try:
         verdict, rule_id, reason = policy_engine.preflight(
-            get_policy_v2_store_rules(), operation_key, args, my_email=my_email,
-            is_temp_accepted=is_temp_accepted,
+            _rules_in_scope(scope), operation_key, args, my_email=my_email,
+            is_temp_accepted=is_temp_accepted if scope is None else None,
         )
     except Exception:
         logger.warning("Policy preflight raised for op=%r", operation_key, exc_info=True)
@@ -890,6 +927,9 @@ async def gated_call(
         # exception" paragraph). Set only when the caller can prove nothing has touched this exact
         # content since PrivacyFence's own last write to it. Anything else -- no matching auto-
         # accept rule, a popup-gate write, upload_pii_scan_text -- is unaffected.
+    content_reaches_result: bool = False,  # True when this call's result carries the content
+        # itself (an inline download), so a rule's allow_personal_data flag does not apply
+        # (ADR 0157).
     my_email: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
@@ -1044,6 +1084,19 @@ async def gated_call(
         )
 
     try:
+        if pii_forces_confirmation or upload_pii_categories:
+            personal_data_rule = _personal_data_rule(tool, operation_key, ctx, content_reaches_result)
+            if personal_data_rule is not None:
+                audit(
+                    decision="auto_accepted", auto_accept_rule=personal_data_rule.id,
+                    rule_id=personal_data_rule.id, pii_detected=True,
+                )
+                logger.info(
+                    "Auto-accepted with personal data: %s/%s rule=%r",
+                    connector, tool, personal_data_rule.id,
+                )
+                return filtered_data
+
         auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:
@@ -1083,7 +1136,13 @@ async def gated_call(
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
                 return filtered_data
 
-            if is_unattended():
+            scope = current_token_scope()
+            if scope is not None:
+                # A scoped token is deny-only (ADR 0164): never a card, never
+                # a pending approval -- the same point, for the same reason,
+                # as the unattended denial below.
+                _deny_scoped(audit, connector, tool, scope=scope, pii_categories=pii_forces_confirmation)
+            elif is_unattended():
                 # No rule matched, or one did but the PII gate still routed
                 # this to a human (see module docstring) -- either way,
                 # nobody's here to answer a popup. Fail this one step now,
@@ -1216,7 +1275,10 @@ async def gated_call(
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
                 return filtered_data
 
-            if is_unattended():
+            scope = current_token_scope()
+            if scope is not None:
+                _deny_scoped(audit, connector, tool, scope=scope, pii_categories=upload_pii_categories)
+            elif is_unattended():
                 _deny_unattended(audit, connector, tool, pii_categories=upload_pii_categories)
 
             async def _interact(approval: PendingApproval | None) -> tuple[str, str]:
@@ -1384,7 +1446,20 @@ async def propose_policy_change(
     named by ``group`` cannot govern, or a value-needing group given none. This is write-time
     validation: a rule the UI cannot render or remove is refused here rather than silently
     persisted.
+
+    Refused first of all (``GateDeniedError``) under a scoped token (ADR 0164), before any
+    validation, so a scoped client learns nothing about the person's rules from it.
     """
+    scope = current_token_scope()
+    if scope is not None:
+        # Defence in depth: the tool is not offered to a scoped token.
+        _audit(
+            created_at=time.time(), request_id=uuid.uuid4().hex[:12], connector="policy", tool="",
+            tool_name="", summary=f"Policy change refused for scoped token {scope.label!r}", sender="",
+            decision="denied_scoped_token", auto_accept_rule="", pii_detected=False, claude_reason=reason,
+        )
+        raise GateDeniedError("Request denied: a scoped token cannot change PrivacyFence's rules.")
+
     if operation not in ("add", "update", "remove"):
         raise ValueError(f"Unknown operation: {operation!r}")
 
@@ -1493,6 +1568,33 @@ def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[s
     raise GateDeniedError(
         "Request denied: this connection is in an unattended session and no auto-accept rule "
         "matches this call, so it can't be approved without a human present."
+    )
+
+
+def _deny_scoped(audit, connector: str, tool: str, *, scope: ScopedToken, pii_categories: list[str]) -> None:
+    """Fail-fast path for a call made with a scoped token (ADR 0164) that none of the token's
+    rules auto-accepted (or that the PII gate routed to a human anyway): denied at once, before
+    any card or pending approval, like ``_deny_unattended``. Logs the token's id, never its
+    secret. Always raises."""
+    audit(decision="denied_scoped_token", auto_accept_rule="", pii_detected=bool(pii_categories))
+    logger.warning(
+        "Scoped token %s: denying %s/%s without prompting -- none of its rules matched%s",
+        scope.id, connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "",
+    )
+    raise GateDeniedError(
+        "Request denied: this call uses a scoped token, and none of the token's rules covers it."
+    )
+
+
+def audit_scoped_refusal(connector: str, tool: str, scope: ScopedToken, summary: str) -> None:
+    """The audit row for a scoped-token call refused before it reached any gate (a tool outside
+    the token's tools, or a revoked token -- web/routes_mcp.py). The agent fields, filled from
+    ``current_agent()``, name the token (ADR 0164); ``scope`` is logged by id, never a secret."""
+    logger.warning("Scoped token %s: refused %s/%s -- %s", scope.id, connector, tool, summary)
+    _audit(
+        created_at=time.time(), request_id=uuid.uuid4().hex[:12], connector=connector, tool=tool,
+        tool_name="", summary=summary, sender="", decision="denied_scoped_token",
+        auto_accept_rule="", pii_detected=False, claude_reason=current_reason(),
     )
 
 
