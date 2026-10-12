@@ -43,8 +43,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.1.0] — 2026-10-12
+
 ### Added
 
+- **Copy a Drive file into another folder.** The new `drive_copy_file` tool copies a file after your approval; folders cannot be copied. A Drive folder rule auto-approves a copy only when it has the new *copy* verb and names both the file's folder and the destination.
 - **Drive version history.** `drive_list_revisions` lists a file's saved versions with when and by whom each was saved, filtered by date, without a card; `drive_get_revision_content` reads an earlier version's text after review, and the rules that already let the AI read a file also cover its earlier versions. Google does not say which cell an edit changed, so the AI compares versions itself.
 - **A `stable` branch that follows the latest stable release.** Each stable release moves it to the release's commit, so adding the plugin marketplace as `privacyfence/privacyfence#stable` in Claude Cowork or Claude Code gets the latest stable `privacyfence-sync` plugin instead of whatever is on `main`.
 
@@ -3289,7 +3292,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...HEAD
+[6.1.0]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...v6.0.0
 [5.9.1]: https://github.com/privacyfence/privacyfence/compare/v5.9.0...v5.9.1
 [5.9.0]: https://github.com/privacyfence/privacyfence/compare/v5.8.1...v5.9.0

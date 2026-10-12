@@ -59,6 +59,7 @@ _TEMP_ACCEPT_EXCLUDED_OPERATIONS: frozenset[str] = frozenset({
     # One-shot actions on a file, not a burst of repeated calls against it.
     "drive.upload_file",
     "drive.move_file",
+    "drive.copy_file",
 })
 
 # Write operations expected to be called repeatedly against the same file in
@@ -103,6 +104,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "drive_write_doc_content":        "drive.write_doc",
     "drive_upload_file":              "drive.upload_file",
     "drive_move_file":                "drive.move_file",
+    "drive_copy_file":                "drive.copy_file",
     "drive_add_comment":              "drive.comment_file",
     "drive_sheets_get_values":        "sheets.read_values",
     "drive_sheets_write_range":       "sheets.write_range",
@@ -228,6 +230,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "drive_upload_file":               "popup",
     "drive_write_doc_content":         "popup",
     "drive_move_file":                 "popup",
+    "drive_copy_file":                 "popup",
     "drive_add_comment":               "popup",
     "drive_sheets_create":             "auto",
     "drive_sheets_get_metadata":       "auto",

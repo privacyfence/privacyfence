@@ -35,7 +35,7 @@ GATES: frozenset[str] = frozenset({"auto", "review", "popup"})
 
 
 class Verb(str, Enum):
-    """The eighteen verbs a rule can allow, grouped by family below."""
+    """The nineteen verbs a rule can allow, grouped by family below."""
 
     READ = "read"
     DOWNLOAD = "download"
@@ -47,6 +47,7 @@ class Verb(str, Enum):
     COMMENT = "comment"
     LABEL = "label"
     MOVE = "move"
+    COPY = "copy"
     ARCHIVE = "archive"
     COMPLETE = "complete"
     TRANSITION = "transition"
@@ -72,8 +73,8 @@ class ScopeSubject(str, Enum):
     """What object(s) a verb's scope is measured against, and with what quantifier.
 
     Most verbs measure a single item, but a handful quantify over more than one -- `search`
-    requires every result to be in scope, `move` requires both the source and the destination, and
-    `draft` requires every recipient. These are the cases that go wrong when a selector checks only
+    requires every result to be in scope, `move` and `copy` require both the source and the
+    destination, and `draft` requires every recipient. These are the cases that go wrong when a selector checks only
     one of the objects -- a folder grant approving a move out of the folder because only the source
     was checked, or a channel rule needing a twin predicate to cover a search. This column records
     the quantifier; it is metadata, and each scope selector is what actually enforces it.
@@ -103,6 +104,7 @@ VERB_FAMILY: dict[Verb, VerbFamily] = {
     Verb.COMMENT: VerbFamily.WRITE,
     Verb.LABEL: VerbFamily.WRITE,
     Verb.MOVE: VerbFamily.WRITE,
+    Verb.COPY: VerbFamily.WRITE,
     Verb.ARCHIVE: VerbFamily.WRITE,
     Verb.COMPLETE: VerbFamily.WRITE,
     Verb.TRANSITION: VerbFamily.WRITE,
@@ -124,6 +126,7 @@ VERB_SCOPE_SUBJECT: dict[Verb, ScopeSubject] = {
     Verb.COMMENT: ScopeSubject.ITEM,
     Verb.LABEL: ScopeSubject.LABEL_APPLIED,
     Verb.MOVE: ScopeSubject.SOURCE_AND_DESTINATION,
+    Verb.COPY: ScopeSubject.SOURCE_AND_DESTINATION,
     Verb.ARCHIVE: ScopeSubject.ITEM,
     Verb.COMPLETE: ScopeSubject.LIST,
     Verb.TRANSITION: ScopeSubject.PROJECT,
@@ -162,6 +165,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "drive_write_doc_content": Verb.UPDATE,
     "drive_upload_file": Verb.CREATE,
     "drive_move_file": Verb.MOVE,
+    "drive_copy_file": Verb.COPY,
     "drive_add_comment": Verb.COMMENT,
     "drive_sheets_get_values": Verb.READ,
     "drive_sheets_write_range": Verb.UPDATE,

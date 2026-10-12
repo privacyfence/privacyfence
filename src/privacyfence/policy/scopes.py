@@ -183,9 +183,9 @@ def _approved_folder_matches(value: Any, ctx: ReviewContext) -> bool:
 
 
 def _move_within_approved_folders_matches(value: Any, ctx: ReviewContext) -> bool:
-    """A move stays inside the approved set only if it both starts and ends there: checking the
-    source alone would let a folder grant auto-approve moving a file out of that folder into any
-    folder the account can write to."""
+    """A move or a copy stays inside the approved set only if it both starts and ends there: checking
+    the source alone would let a folder grant auto-approve moving or copying a file out of that
+    folder into any folder the account can write to."""
     if not _approved_folder_matches(value, ctx):
         return False
     raw = ctx.raw_data

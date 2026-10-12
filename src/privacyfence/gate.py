@@ -284,7 +284,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "gmail_create_filter": NARROW, "gmail_update_filter": NARROW, "gmail_create_label": NARROW,
     "drive_write_doc_content": WIDE, "drive_write_file_content": WIDE,
     "drive_docs_edit_content": WIDE,
-    "drive_move_file": NARROW, "drive_sheets_add_sheet": NARROW,
+    "drive_move_file": NARROW, "drive_copy_file": NARROW, "drive_sheets_add_sheet": NARROW,
     "drive_sheets_rename_sheet": NARROW, "drive_sheets_delete_dimensions": NARROW,
     "drive_sheets_format_range": NARROW, "drive_sheets_insert_dimensions": NARROW,
     "drive_add_comment": WIDE,

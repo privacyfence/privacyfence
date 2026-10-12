@@ -171,6 +171,7 @@ DRIVE_SANDBOX_WRITE_TARGETS: tuple[tuple[str, str], ...] = (
     ("drive.comment_file", "approved_sandbox_folder"),
     ("drive.upload_file", "parent_folder_allowlist"),
     ("drive.move_file", "move_within_approved_folders"),
+    ("drive.copy_file", "move_within_approved_folders"),
 )
 
 GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (

@@ -424,6 +424,26 @@ class DriveConnector(Connector):
                 ],
             ),
             ToolSpec(
+                name="drive_copy_file",
+                description=(
+                    "Copy a Drive file into a folder. The original stays where it is, unchanged. "
+                    "Returns {id, name, mime_type, web_view_link, source_file_id, parent}, where id "
+                    "is the new copy's id. Folders cannot be copied. Get the destination's id from "
+                    "drive_list_folder. Requires user approval."
+                ),
+                params=[
+                    ToolParam("file_id", "str", description="Id of the file to copy, from " + _FILE_ID_SOURCES + "."),
+                    ToolParam("destination_folder_id", "str", description=(
+                        "Id of the folder to put the copy in, from drive_list_folder or "
+                        "drive_list_files."
+                    )),
+                    ToolParam("name", "str", required=False, default="", description=(
+                        "Name for the copy. Empty keeps the original file's name."
+                    )),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+            ),
+            ToolSpec(
                 name="drive_add_comment",
                 description=(
                     "Add a comment to a Drive file. Returns {file_id, comment_id, content}, "
@@ -886,6 +906,8 @@ class DriveConnector(Connector):
             return await self._write_doc_content(**args)
         if tool == "drive_move_file":
             return await self._move_file(**args)
+        if tool == "drive_copy_file":
+            return await self._copy_file(**args)
         if tool == "drive_add_comment":
             return await self._add_comment(**args)
         if tool == "drive_list_shared_drives":
@@ -1835,17 +1857,12 @@ class DriveConnector(Connector):
         await self._note_own_write(file_id, result.get("modified_time", ""))
         return result
 
-    async def _move_file(self, file_id: str, destination_folder_id: str) -> Any:
-        drive_file = await self._fetch(self._drive.get_file_metadata, file_id)
-        name = getattr(drive_file, "name", file_id)
-        owners = getattr(drive_file, "owners", [])
-        # "Folder": old → new -- a move always changes the folder (that's
-        # the whole point of the call), so this is always a diff, not
-        # conditional on whether anything changed the way Event/Start/etc.
-        # are elsewhere. Best-effort on both lookups: some folders (e.g. a
-        # Shared Drive root) aren't fetchable as a regular file, and a file
-        # with no recorded parent shows "(unknown)" rather than blocking
-        # the popup on a name lookup that can't succeed either way.
+    async def _folder_names(self, drive_file: Any, destination_folder_id: str) -> tuple[str, str]:
+        """``(current, destination)`` folder names for a move or copy preview.
+
+        Best-effort on both lookups: some folders (e.g. a Shared Drive root) aren't fetchable as a
+        regular file, and a file with no recorded parent shows "(unknown)" rather than blocking the
+        popup on a name lookup that can't succeed either way."""
         current_parent_id = (getattr(drive_file, "parent_ids", None) or [None])[0]
         if current_parent_id:
             try:
@@ -1860,6 +1877,17 @@ class DriveConnector(Connector):
             destination_name = getattr(destination_folder, "name", "") or destination_folder_id
         except RuntimeError:
             destination_name = destination_folder_id
+        return current_name, destination_name
+
+    async def _move_file(self, file_id: str, destination_folder_id: str) -> Any:
+        drive_file = await self._fetch(self._drive.get_file_metadata, file_id)
+        name = getattr(drive_file, "name", file_id)
+        owners = getattr(drive_file, "owners", [])
+        # "Folder": old → new -- a move always changes the folder (that's
+        # the whole point of the call), so this is always a diff, not
+        # conditional on whether anything changed the way Event/Start/etc.
+        # are elsewhere.
+        current_name, destination_name = await self._folder_names(drive_file, destination_folder_id)
         preview = {
             "File": name, "Owner": ", ".join(owners) or "(unknown)",
             "Folder": f"{current_name} → {destination_name}",
@@ -1880,6 +1908,41 @@ class DriveConnector(Connector):
             args={"file_id": file_id, "destination_folder_id": destination_folder_id},
         )
         return await self._fetch(self._drive.move_file, file_id, destination_folder_id)
+
+    async def _copy_file(self, file_id: str, destination_folder_id: str, name: str = "") -> Any:
+        drive_file = await self._fetch(self._drive.get_file_metadata, file_id)
+        if getattr(drive_file, "mime_type", "") == "application/vnd.google-apps.folder":
+            raise ValueError("drive_copy_file copies files, not folders: Google Drive cannot copy a folder.")
+        source_name = getattr(drive_file, "name", file_id)
+        owners = getattr(drive_file, "owners", [])
+        copy_name = name or source_name
+        current_name, destination_name = await self._folder_names(drive_file, destination_folder_id)
+        preview = {
+            "File": source_name, "Owner": ", ".join(owners) or "(unknown)",
+            "Folder": f"{current_name} → {destination_name}",
+            "Copy name": copy_name,
+        }
+        await gated_call(
+            connector=self.name,
+            tool="drive_copy_file",
+            tool_name="Copy Drive File",
+            summary=f"Copy \"{source_name}\" to another folder",
+            sender=", ".join(owners) or "(unknown)",
+            raw_data={"file": drive_file, "destination_folder_id": destination_folder_id},
+            filtered_data=None,
+            gate="popup",
+            preview=preview,
+            details_text=(
+                "A copy of the file will be created in the destination folder and you will own it; "
+                "the original is unchanged."
+            ),
+            my_email=self.my_email,
+            session_created_ids=self.session_created_ids,
+            args={"file_id": file_id, "destination_folder_id": destination_folder_id},
+        )
+        # Not recorded as an own write: PrivacyFence did not write the copy's content and no popup
+        # showed it, so reading it later must still get the personal-data check.
+        return await self._fetch(self._drive.copy_file, file_id, destination_folder_id, name)
 
     async def _add_comment(self, file_id: str, comment: str) -> Any:
         drive_file = await self._fetch(self._drive.get_file_metadata, file_id)

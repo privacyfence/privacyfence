@@ -2401,6 +2401,31 @@ class DriveClient:
         logger.info("move_file: file_id=%s dest=%s", file_id, destination_folder_id)
         return {"file_id": file_id, "new_parent": destination_folder_id}
 
+    def copy_file(self, file_id: str, destination_folder_id: str, name: str = "") -> dict:
+        """Copy a file into a folder; the original is left where it is."""
+        if not file_id or not destination_folder_id:
+            raise DriveClientError("copy_file requires file_id and destination_folder_id")
+        service = self._get_service()
+        body: dict[str, Any] = {"parents": [destination_folder_id]}
+        if name:
+            body["name"] = name
+        try:
+            result = service.files().copy(
+                fileId=file_id, body=body, fields=_FILE_FIELDS, supportsAllDrives=True
+            ).execute()
+        except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+            raise DriveClientError(f"copy_file({file_id}) failed: {exc}") from exc
+        parsed = self._parse_file(result)
+        logger.info("copy_file: file_id=%s new_id=%s dest=%s", file_id, parsed.id, destination_folder_id)
+        return {
+            "id": parsed.id,
+            "name": parsed.name,
+            "mime_type": parsed.mime_type,
+            "web_view_link": parsed.web_view_link,
+            "source_file_id": file_id,
+            "parent": destination_folder_id,
+        }
+
     def add_comment(self, file_id: str, comment: str) -> dict:
         """Add a comment to a file."""
         if not file_id:

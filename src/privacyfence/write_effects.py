@@ -98,6 +98,7 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "drive_write_file_content":
         "The file's contents are replaced. The previous version stays in Drive's version history.",
     "drive_move_file": "The file moves to another folder. It is not copied and not deleted.",
+    "drive_copy_file": "A copy of the file is created in the destination folder. The original is not moved or changed.",
     "drive_add_comment": "A comment is added, visible to everyone with access to the file.",
     "drive_sheets_write_range":
         "Every cell in that range is overwritten. The previous values survive only in "

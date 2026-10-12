@@ -129,7 +129,7 @@ class TestVerbVocabulary:
         assert VERB_FAMILY[Verb.SHARE] == VerbFamily.SEND
         for verb in (
             Verb.CREATE, Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT,
-            Verb.LABEL, Verb.MOVE, Verb.ARCHIVE, Verb.COMPLETE, Verb.TRANSITION, Verb.CONFIGURE,
+            Verb.LABEL, Verb.MOVE, Verb.COPY, Verb.ARCHIVE, Verb.COMPLETE, Verb.TRANSITION, Verb.CONFIGURE,
         ):
             assert VERB_FAMILY[verb] == VerbFamily.WRITE
 
@@ -138,6 +138,7 @@ class TestVerbVocabulary:
         # of these wrong describes a rule as allowing more (or other) objects than it can match.
         assert VERB_SCOPE_SUBJECT[Verb.SEARCH] == ScopeSubject.EVERY_RESULT
         assert VERB_SCOPE_SUBJECT[Verb.MOVE] == ScopeSubject.SOURCE_AND_DESTINATION
+        assert VERB_SCOPE_SUBJECT[Verb.COPY] == ScopeSubject.SOURCE_AND_DESTINATION
         assert VERB_SCOPE_SUBJECT[Verb.DRAFT] == ScopeSubject.EVERY_RECIPIENT
 
 

@@ -173,6 +173,7 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | Tool | Always allow buttons |
 |---|---|
 | `drive_add_comment` | this folder |
+| `drive_copy_file` | these folders |
 | `drive_docs_edit_content` | this folder |
 | `drive_docs_format_content` | this folder |
 | `drive_move_file` | these folders |

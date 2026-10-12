@@ -27,7 +27,7 @@ item?* -- answered by the selector registry (`policy/scopes.py`) itself:
 key that was just gated. Everything beyond that is a named ``Widening``: one per verb the same scope
 can govern, ordered narrowest family first, each carrying exactly the ``(predicate, operation)``
 pairs it adds. Taking every write-family widening on a ``drive.folder`` proposal reproduces the
-sandbox-folder grant's thirteen operation keys exactly -- which is the point: the width a grant
+sandbox-folder grant's fourteen operation keys exactly -- which is the point: the width a grant
 always had is something the user is shown and chooses, rather than something one boolean hides.
 
 **What the popup deliberately does not propose.** Several operation groups are configurable only
@@ -112,8 +112,8 @@ def _folder_ids(ctx: ReviewContext) -> Any:
 
 
 def _move_folder_ids(ctx: ReviewContext) -> Any:
-    """Both ends of a move: the file's current folder(s) and ``destination_folder_id``. A rule for
-    a move must name both, because ``move_within_approved_folders`` matches only when the source and
+    """Both ends of a move or a copy: the file's current folder(s) and ``destination_folder_id``. A
+    rule for a move or a copy must name both, because ``move_within_approved_folders`` matches only when the source and
     the destination are in its set."""
     parents = _folder_ids(ctx)
     destination = ctx.args.get("destination_folder_id", "") or ""
@@ -289,7 +289,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
         _folder_ids, "this folder",
     ),
     _scope("parent_folder_allowlist", "drive.folder", "drive", (Verb.CREATE,), _args_values("parent_folder_id"), "this folder"),
-    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE,), _move_folder_ids, "these folders"),
+    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE, Verb.COPY), _move_folder_ids, "these folders"),
     _scope("i_am_owner", "drive.owned_by_me", "drive", (Verb.READ, Verb.DOWNLOAD), _no_value_needed, "if I own it"),
     # ── Gmail ─────────────────────────────────────────────────────────────────────────────────
     _scope("i_am_sender", "gmail.sender", "gmail", (Verb.READ, Verb.DOWNLOAD, Verb.ARCHIVE), _no_value_needed, "if I'm sender"),

@@ -1886,9 +1886,9 @@ class TestPolicyScopeCatalogue:
     def test_drive_folder_entry_unions_verbs_across_every_predicate_in_the_group(self):
         entry = next(e for e in sc._policy_scope_catalogue() if e["id"] == "drive.folder")
         # approved_folder (read/download) + approved_sandbox_folder (update/format/restructure/
-        # comment/delete) + parent_folder_allowlist (create) + move_within_approved_folders (move).
+        # comment/delete) + parent_folder_allowlist (create) + move_within_approved_folders (move, copy).
         assert set(entry["verbs"]) == {
-            "read", "download", "update", "format", "restructure", "comment", "delete", "create", "move",
+            "read", "download", "update", "format", "restructure", "comment", "delete", "create", "move", "copy",
         }
 
 
