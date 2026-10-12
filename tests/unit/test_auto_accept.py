@@ -62,6 +62,7 @@ class TestToolToOperationMapping:
 
     def test_calendar_create_out_of_office_maps_to_clean_operation_key(self):
         assert TOOL_TO_OPERATION["calendar_create_out_of_office"] == "calendar.out_of_office"
+        assert TOOL_TO_OPERATION["drive_get_revision_content"] == "drive.read_file_contents"
 
     def test_calendar_set_working_location_maps_to_clean_operation_key(self):
         assert TOOL_TO_OPERATION["calendar_set_working_location"] == "calendar.working_location"
