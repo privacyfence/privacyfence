@@ -78,7 +78,7 @@ class TestRuleVerbsAndCoverage:
         rule = PolicyRule(id="r", predicate="file_type_allowlist", value=["text/plain"],
                           operations=frozenset({"drive.read_file_contents"}))
         assert describe.rule_verbs(rule) == (Verb.READ,)
-        assert describe.covered_tools(rule) == ("drive_get_file_content",)
+        assert describe.covered_tools(rule) == ("drive_get_file_content", "drive_get_revision_content")
 
     def test_covered_tools_counts_the_sandbox_folders_real_width(self):
         """The width a surface has to state: one "Write auto-accept" toggle, thirteen operation keys,

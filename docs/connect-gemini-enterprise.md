@@ -116,7 +116,8 @@ people rarely ask for, for example:
 
 - `calendar_list_colors`, `calendar_set_event_color`, `calendar_get_event_visibility`,
   `calendar_set_event_visibility`, `calendar_set_working_location`;
-- `drive_sheets_insert_dimensions`, `drive_sheets_delete_dimensions`, `drive_sheets_rename_sheet`;
+- `drive_sheets_insert_dimensions`, `drive_sheets_delete_dimensions`, `drive_sheets_rename_sheet`,
+  `drive_list_revisions`, `drive_get_revision_content`;
 - `gmail_update_filter`.
 
 Keep `privacyfence_status`, `privacyfence_await_approval` and `privacyfence_check_policy`.

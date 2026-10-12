@@ -40,7 +40,13 @@ from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE, public_message
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import drive as drive_module
 from privacyfence.connectors.drive import DriveConnector
-from privacyfence.drive_client import DriveClient, DriveClientError, DriveFile, DriveFileContent
+from privacyfence.drive_client import (
+    DriveClient,
+    DriveClientError,
+    DriveFile,
+    DriveFileContent,
+    DriveRevision,
+)
 from privacyfence.local_files import LocalFileAccessError
 from privacyfence.privacy_filter import init_privacy_filter
 
@@ -124,6 +130,8 @@ DRIVE_SIBLINGS = {
     "drive_list_files": ("drive_list_folder", "drive_get_file_metadata"),
     "drive_list_folder": ("drive_list_files",),
     "drive_get_file_metadata": ("drive_get_file_content",),
+    "drive_list_revisions": ("drive_get_revision_content", "drive_get_file_metadata"),
+    "drive_get_revision_content": ("drive_list_revisions", "drive_get_file_content"),
     "drive_get_file_content": ("drive_download_file",),
     "drive_download_file": ("drive_get_file_content",),
     "drive_create_blank_file": ("drive_sheets_create", "drive_write_doc_content", "drive_upload_file"),
@@ -2544,6 +2552,242 @@ class TestFieldCompleteness:
         assert_no_placeholder_fields(gated_call_spy[0]["preview"])
 
 
+def _make_revision(rev_id="r1", **overrides):
+    defaults = dict(
+        id=rev_id, modified_time="2026-10-05T09:00:00Z", author_name="Ada",
+        author_email="ada@example.com", size=0, keep_forever=False,
+    )
+    defaults.update(overrides)
+    return DriveRevision(**defaults)
+
+
+def _make_xlsx_bytes() -> bytes:
+    import io
+
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Budget"
+    workbook.active.append(["item", "cost"])
+    workbook.active.append(["rent", 100])
+    workbook.create_sheet("Notes").append(["second tab marker"])
+    buf = io.BytesIO()
+    workbook.save(buf)
+    return buf.getvalue()
+
+
+class TestListRevisions:
+    async def test_auto_accepts_and_writes_the_audit_entry(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.list_revisions.return_value = [_make_revision("r2"), _make_revision("r1", before_cutoff=True)]
+
+        result = await connector.call(
+            "drive_list_revisions", {"file_id": "f1", "modified_after": "2026-10-01", "max_results": 5},
+        )
+
+        assert result == [asdict(_make_revision("r2")), asdict(_make_revision("r1", before_cutoff=True))]
+        client.list_revisions.assert_called_once_with("f1", "2026-10-01", 5)
+        text = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8")
+        entries = text.splitlines()
+        assert len(entries) == 1
+        assert '"decision": "auto_accepted"' in entries[0]
+        assert "2 version(s)" in entries[0]
+        assert "Ada" not in text and "ada@example.com" not in text
+
+    @pytest.mark.parametrize("policy", ["redact", "block"])
+    async def test_metadata_privacy_collapses_each_entry_to_id_and_cutoff_flag(self, tmp_path, policy):
+        init_audit_logger(str(tmp_path))
+        init_privacy_filter({"drive_privacy": {"categories": {"file_metadata": policy}}})
+        connector, client = make_connector()
+        client.list_revisions.return_value = [_make_revision("r2"), _make_revision("r1", before_cutoff=True)]
+
+        result = await connector.call("drive_list_revisions", {"file_id": "f1"})
+
+        assert result == [{"id": "r2", "before_cutoff": False}, {"id": "r1", "before_cutoff": True}]
+
+    @pytest.mark.parametrize("value", [
+        "yesterday", "2026-10-05T00:00:00", "2026-10-05T00:00:00+02:00", "2026-10-5", "2026-10-05T25",
+    ])
+    async def test_invalid_modified_after_raises_before_any_client_call(self, value):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="modified_after"):
+            await connector.call("drive_list_revisions", {"file_id": "f1", "modified_after": value})
+        client.list_revisions.assert_not_called()
+
+    @pytest.mark.parametrize("value", [
+        "", "2026-10-05", "2026-10-05T09:12Z", "2026-10-05T09:12:44Z", "2026-10-05T09:12:44.123Z",
+    ])
+    async def test_valid_modified_after_forms_reach_the_client(self, tmp_path, value):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.list_revisions.return_value = []
+        assert await connector.call("drive_list_revisions", {"file_id": "f1", "modified_after": value}) == []
+        client.list_revisions.assert_called_once_with("f1", value, 50)
+
+
+class TestGetRevisionContent:
+    XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    @staticmethod
+    def _content(**overrides):
+        defaults = dict(
+            file=make_file(), content_text="old text", revision_id="r1",
+            revision_modified_time="2026-10-05T09:00:00Z",
+        )
+        defaults.update(overrides)
+        return DriveFileContent(**defaults)
+
+    async def test_goes_through_the_review_gate_with_the_current_file(self, gated_call_spy):
+        connector, client = make_connector()
+        content = self._content()
+        client.get_revision_content.return_value = content
+
+        result = await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+
+        client.get_revision_content.assert_called_once_with("f1", "r1")
+        kwargs = gated_call_spy[0]
+        assert kwargs["connector"] == "drive"
+        assert kwargs["tool"] == "drive_get_revision_content"
+        assert kwargs["gate"] == "review"
+        assert kwargs["raw_data"].file == make_file()
+        assert kwargs["preview"]["Version"] == "2026-10-05T09:00:00Z"
+        assert kwargs["preview"]["File"] == "Q3 Report.gdoc"
+        assert kwargs["args"] == {"file_id": "f1", "revision_id": "r1"}
+        assert kwargs["pii_already_reviewed"] is False
+        assert kwargs["pdf_bytes"] == b""
+        assert kwargs["details_text"] == kwargs["pii_scan_text"] == "old text"
+        assert result == {
+            "file_id": "f1", "revision_id": "r1", "modified_time": "2026-10-05T09:00:00Z",
+            "content": "old text",
+        }
+
+    async def test_preview_never_carries_content(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(content_text="SECRET BODY")
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        assert "SECRET BODY" not in json.dumps(gated_call_spy[0]["preview"])
+
+    async def test_xlsx_bytes_are_extracted_per_tab(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(
+            file=make_file(mime_type="application/vnd.google-apps.spreadsheet"),
+            content_text="", content_bytes=_make_xlsx_bytes(), content_mime_type=self.XLSX_MIME,
+        )
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        text = gated_call_spy[0]["filtered_data"]["content"]
+        assert "rent" in text and "second tab marker" in text
+
+    async def test_extractable_blob_without_text_gets_a_placeholder(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(
+            file=make_file(mime_type="application/pdf"), content_text="",
+            content_bytes=b"not a pdf", content_mime_type="application/pdf",
+        )
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        assert gated_call_spy[0]["filtered_data"]["content"] == (
+            "[no text could be extracted from this version (9 bytes)]"
+        )
+
+    async def test_truncated_bytes_are_not_extracted(self, gated_call_spy, monkeypatch):
+        connector, client = make_connector()
+        monkeypatch.setattr(drive_module, "extract_text", MagicMock(side_effect=AssertionError("must not run")))
+        client.get_revision_content.return_value = self._content(
+            file=make_file(mime_type="application/pdf"), content_text="",
+            content_bytes=b"%PDF-cut", content_mime_type="application/pdf", truncated=True,
+        )
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        kwargs = gated_call_spy[0]
+        assert "no text could be extracted" in kwargs["filtered_data"]["content"]
+        assert kwargs["filtered_data"]["truncated"] is True
+
+    async def test_revision_size_gets_the_binary_placeholder(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(
+            file=make_file(mime_type="image/png"), content_text="", revision_size=2048,
+        )
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        assert gated_call_spy[0]["filtered_data"]["content"] == (
+            "[binary content — 2048 bytes; an earlier version of this file type cannot be read as text]"
+        )
+
+    async def test_no_content_placeholder(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(content_text="")
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        assert gated_call_spy[0]["filtered_data"]["content"] == "(no content)"
+
+    async def test_file_content_block_replaces_the_text(self, gated_call_spy):
+        init_privacy_filter({"drive_privacy": {"categories": {"file_content": "block"}}})
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(content_text="confidential v1")
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        kwargs = gated_call_spy[0]
+        assert "confidential v1" not in kwargs["details_text"]
+        assert kwargs["filtered_data"]["content"] == "[BLOCKED BY PRIVACY FILTER]"
+
+    async def test_file_metadata_block_replaces_version_and_modified_time(self, gated_call_spy):
+        init_privacy_filter({"drive_privacy": {"categories": {"file_metadata": "block"}}})
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content()
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Version"] == "[BLOCKED BY PRIVACY FILTER]"
+        assert kwargs["filtered_data"]["modified_time"] == "[BLOCKED BY PRIVACY FILTER]"
+        assert kwargs["filtered_data"]["content"] == "old text"  # file_content is a separate category
+
+    async def test_version_falls_back_to_the_revision_id_then_unknown(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(revision_modified_time="")
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        assert gated_call_spy[0]["preview"]["Version"] == "r1"
+
+        client.get_revision_content.return_value = self._content(revision_modified_time="", revision_id="")
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r9"})
+        kwargs = gated_call_spy[1]
+        assert kwargs["preview"]["Version"] == "(unknown)"
+        assert kwargs["filtered_data"]["revision_id"] == "r9"
+        assert kwargs["summary"] == 'Read version r9 of "Q3 Report.gdoc"'
+
+    async def test_missing_file_facts_show_unknown(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(
+            file=make_file(name="", owners=[], size=0, modified_time=""),
+        )
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        kwargs = gated_call_spy[0]
+        assert kwargs["sender"] == "(unknown)"
+        assert {kwargs["preview"][k] for k in ("Owner", "Size", "Modified")} == {"(unknown)"}
+
+    async def test_text_over_the_cap_is_cut_and_marked_truncated(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(content_text="a" * 100_001)
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        filtered = gated_call_spy[0]["filtered_data"]
+        assert len(filtered["content"]) == 100_000
+        assert filtered["truncated"] is True
+
+    async def test_text_at_the_cap_is_not_marked_truncated(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(content_text="a" * 100_000)
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        assert "truncated" not in gated_call_spy[0]["filtered_data"]
+
+    async def test_escape_heavy_text_is_cut_to_the_json_length(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(content_text='"' * 60_000)
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        filtered = gated_call_spy[0]["filtered_data"]
+        assert len(filtered["content"]) == 50_000
+        assert filtered["truncated"] is True
+
+    async def test_client_reported_truncation_is_passed_on(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_revision_content.return_value = self._content(truncated=True)
+        await connector.call("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"})
+        assert gated_call_spy[0]["filtered_data"]["truncated"] is True
+
+
 class TestEveryToolIsAudited:
     async def test_every_declared_tool_leaves_an_audit_trail(self, monkeypatch, tmp_path):
         connector, client = make_connector()
@@ -2553,6 +2797,8 @@ class TestEveryToolIsAudited:
         # real DriveFile back.
         client.get_file_metadata.return_value = make_file()
         client.download_file.return_value = {"name": "f.txt", "path": "/tmp/f.txt", "size_bytes": 100}
+        client.get_revision_content.return_value = DriveFileContent(file=make_file(), content_text="v1")
+        client.list_revisions.return_value = []
 
         await assert_all_tools_leave_an_audit_trail(
             connector, drive_module, monkeypatch, tmp_path,

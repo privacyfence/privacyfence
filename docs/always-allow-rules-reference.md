@@ -65,6 +65,7 @@ the request on the card, once.
 |---|---|
 | `drive_download_file` | this folder, if I own it |
 | `drive_get_file_content` | this folder, if I own it |
+| `drive_get_revision_content` | this folder, if I own it |
 | `drive_sheets_get_values` | this folder, if I own it |
 
 ### Gmail
