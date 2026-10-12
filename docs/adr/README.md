@@ -256,3 +256,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148 |
 | [0167](0167-a-card-number-must-have-a-length-its-first-digit-allows.md) | A card number must have a length its first digit allows | Accepted |
 | [0168](0168-earlier-drive-file-versions-are-read-under-the-file-read-rule.md) | Earlier Drive file versions are read under the file-read rule | Accepted |
+| [0169](0169-a-stable-branch-follows-the-latest-stable-release-for-the-plugin-marketplace.md) | A `stable` branch follows the latest stable release for the plugin marketplace | Accepted |
