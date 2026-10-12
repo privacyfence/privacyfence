@@ -1,0 +1,138 @@
+<title>Jira Assets Rollout Steps</title>
+<style>
+/* Layout: one reading column, each step item a numbered checklist with a time chip. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1b2330; --muted: #5a6577;
+  --line: #d9dee6; --accent: #1f5fbf; --accent-soft: #e5eefb; --done: #2e7d4f;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --surface: #1a2029; --fg: #e4e8ef; --muted: #9aa5b6;
+  --line: #2c3542; --accent: #7fa9ec; --accent-soft: #1d2a3e; --done: #6cc496; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e4e8ef; --muted: #9aa5b6;
+  --line: #2c3542; --accent: #7fa9ec; --accent-soft: #1d2a3e; --done: #6cc496; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--font-body); padding-inline: 16px; padding-block: 32px 64px; }
+main { max-width: 760px; margin: 0 auto; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: 1.9rem; }
+h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+h3 { font-size: 1.2rem; }
+p { margin: 0; max-width: 65ch; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code { font-family: var(--font-mono); font-size: .88em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--font-mono); font-size: .85em; background: var(--accent-soft); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+.lede { color: var(--muted); }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; display: grid; gap: 12px; min-width: 0; }
+.item-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
+.chip { font-family: var(--font-mono); font-size: .78rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.why { color: var(--muted); font-size: .92rem; }
+ol.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: s; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; counter-increment: s; }
+ol.steps li > div { min-width: 0; }
+ol.steps li > div::before { content: counter(s) ". "; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+ol.steps input { margin-top: 5px; width: 16px; height: 16px; accent-color: var(--done); }
+ol.steps li.checked > div { color: var(--muted); }
+.see { font-size: .9rem; color: var(--muted); }
+.result { border-left: 3px solid var(--done); padding: 6px 12px; background: var(--accent-soft); border-radius: 0 6px 6px 0; font-size: .93rem; }
+.none { color: var(--muted); font-style: italic; }
+@media (prefers-reduced-motion: no-preference) { ol.steps li > div { transition: color .15s; } }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+
+<main>
+  <header style="display:grid;gap:8px">
+    <h1>Jira Assets connector: your steps</h1>
+    <p class="lede">The read-only Jira Assets connector is built by <code>/implement</code> on <code>feature/jira-assets-connector</code>. No phase needs anything from you. Everything below happens after the last phase merges and before the pull request does. Ticks are remembered in this browser.</p>
+  </header>
+
+  <section style="display:grid;gap:14px">
+    <h2>Before implementation</h2>
+    <p class="none">Nothing. Run <code>/implement</code> on the plan straight away.</p>
+  </section>
+
+  <section style="display:grid;gap:18px">
+    <h2>After implementation</h2>
+
+    <article class="item" id="ma1">
+      <div class="item-head"><h3>ma1 · Add the Assets scopes to your Atlassian app</h3><span class="chip">~10 min</span></div>
+      <p class="why">Atlassian refuses the sign-in if PrivacyFence asks for a scope the app does not have. Do this for the app in your QA bundle and for the app in your real bundle.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><div>Open <a href="https://developer.atlassian.com/console/myapps/">developer.atlassian.com → My apps</a> and click the OAuth 2.0 app whose client id is in your QA <code>org_config.json</code>.</div></li>
+        <li><input type="checkbox" id="ma1-2"><div>Go to <b>Permissions</b>. Next to <b>Jira API</b>, click <b>Configure</b>, then <b>Edit Scopes</b>, then the <b>Granular scopes</b> tab.<div class="see">Type <code>cmdb</code> in the filter.</div></div></li>
+        <li><input type="checkbox" id="ma1-3"><div>Tick these four scopes and save: <code>read:cmdb-schema:jira</code>, <code>read:cmdb-type:jira</code>, <code>read:cmdb-attribute:jira</code>, <code>read:cmdb-object:jira</code>.<div class="see">Leave every write and delete cmdb scope unticked.</div></div></li>
+        <li><input type="checkbox" id="ma1-4"><div>Back on <b>Permissions</b>, find <b>Jira Service Management API</b>. Click <b>Add</b> (or <b>Configure</b> if it is already added), open <b>Classic scopes</b>, tick <code>read:servicedesk-request</code> and save.<div class="see">PrivacyFence needs this scope to find the site's Assets workspace id.</div></div></li>
+        <li><input type="checkbox" id="ma1-5"><div>Repeat steps 1–4 for the app behind your real (production) bundle, if it is a different app.</div></li>
+      </ol>
+      <p class="result">Done when both apps list the four <code>read:cmdb-*:jira</code> scopes and <code>read:servicedesk-request</code> under Permissions. The scope table is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/jira-assets-connector/docs/atlassian-setup.md">docs/atlassian-setup.md</a>, in its Jira Assets section.</p>
+    </article>
+
+    <article class="item" id="ma2">
+      <div class="item-head"><h3>ma2 · Seed the QA site's Assets workspace</h3><span class="chip">~25 min</span></div>
+      <p class="why">The live recording reads only these synthetic <code>[QATEST]</code> objects, never anything real.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma2-1"><div>On the QA Atlassian site, open <b>Assets</b> from the Jira top bar. If Assets is missing, the site needs Jira Service Management with Assets; see <a href="https://support.atlassian.com/jira-service-management-cloud/docs/what-is-assets/">What is Assets</a>.</div></li>
+        <li><input type="checkbox" id="ma2-2"><div>Create an empty object schema named <code>PrivacyFence QA [QATEST]</code> with key <code>PFQA</code>.</div></li>
+        <li><input type="checkbox" id="ma2-3"><div>Add three object types: <code>Account</code>, <code>Contract</code> and <code>Asset</code>. Give <code>Contract</code> an <b>Object</b> attribute named <code>Account</code> that references Account. Give <code>Asset</code> an Object attribute named <code>Contract</code> that references Contract.</div></li>
+        <li><input type="checkbox" id="ma2-4"><div>Create 2 accounts, 2 contracts (each linked to an account) and 3 assets (each linked to a contract). Put <code>[QATEST]</code> in every name. Name one contract exactly <code>PrivacyFence QA seed contract [QATEST]</code>.</div></li>
+        <li><input type="checkbox" id="ma2-5"><div>Open the issue <code>PrivacyFence QA seed issue [QATEST]</code> in the <code>PFQA</code> Jira project and link the seed contract to it with an Assets field, so the connected-tickets read has something to return.</div></li>
+        <li><input type="checkbox" id="ma2-6"><div>On the runner, add the <code>assets:</code> block to <code>qa_environment.yaml</code>, copied from <code>tests/fixtures/qa_environment.yaml.example</code> on the feature branch. Fill in <code>seed_object_key</code> (the seed contract's key, such as <code>PFQA-12</code>) if you know it.</div></li>
+      </ol>
+      <p class="result">Done when the PFQA schema shows 7 objects, and opening the seed contract shows its account and its linked Jira issue. The full checklist is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/jira-assets-connector/docs/connector-qa.md">docs/connector-qa.md</a>, under "Seed: Jira Assets".</p>
+    </article>
+
+    <article class="item" id="ma3">
+      <div class="item-head"><h3>ma3 · Re-grant the runner's Atlassian token with Assets</h3><span class="chip">~15 min</span></div>
+      <p class="why">The runner's current token was granted before the Assets scopes existed. Until it is re-granted, every live Assets call says “needs an extra Atlassian permission”.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma3-1"><div>In a checkout of <code>feature/jira-assets-connector</code>, rebuild the QA bundle with the new flag. Add <code>--atlassian-assets</code> to the <code>scripts/build_org_bundle.py</code> command you used before. The client id and secret come from the same place as last time; never paste them into chat.</div></li>
+        <li><input type="checkbox" id="ma3-2"><div>Run <code>.venv/bin/python scripts/qa_authenticate_connectors.py --org-config org_config.qa.json --only atlassian</code>.<div class="see">Atlassian's consent screen now also lists Assets and Jira Service Management permissions. Pick the QA site.</div></div></li>
+        <li><input type="checkbox" id="ma3-3"><div>Copy the refreshed <code>credentials/atlassian_token.json</code> and the new bundle to the runner, as <a href="https://github.com/privacyfence/privacyfence/blob/feature/jira-assets-connector/docs/connector-qa.md#self-hosted-runner">docs/connector-qa.md → Self-hosted runner</a> describes. Keep mode 600.</div></li>
+      </ol>
+      <p class="result">Done when the token file on the runner has a <code>"scopes"</code> list that contains <code>read:cmdb-object:jira</code>.</p>
+    </article>
+
+    <article class="item" id="ma4">
+      <div class="item-head"><h3>ma4 · Hand back to the PR session for the live recording</h3><span class="chip">~2 min of yours</span></div>
+      <p class="why">Recording fixtures and running the live check are CI dispatches the PR session runs itself. They can only start once ma3 is done.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma4-1"><div>Paste this into the session that is driving the pull request:<pre>ma3 is done: the runner's Atlassian token has the Assets scopes. Register check_assets in CONNECTOR_CHECKS and EXPECTED_FIXTURES, dispatch qa-record-fixture.yml with connector=assets against the PR branch, pull and review the fixtures, then dispatch connector-live-check.yml and link the run in the PR.</pre></div></li>
+        <li><input type="checkbox" id="ma4-2"><div>Read the fixture diff the session points you to. It must hold only <code>[QATEST]</code> names, with no real tenant URL, account id or email.</div></li>
+      </ol>
+      <p class="result">Report back by ticking ma4 in the PR body, with the link to the green <code>connector-live-check</code> run.</p>
+    </article>
+
+    <article class="item" id="ma5">
+      <div class="item-head"><h3>ma5 · Try it on your real contracts</h3><span class="chip">~10 min</span></div>
+      <p class="why">Your real data is the only proof that the linked-object card is usable on a deep structure.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma5-1"><div>Install a build from the PR branch. Open PrivacyFence <b>Settings → Connectors</b>, switch <b>Jira Assets</b> on, and click <b>Authenticate…</b>. Accept the extra Atlassian permissions.</div></li>
+        <li><input type="checkbox" id="ma5-2"><div>In Claude, ask: “Which account does contract &lt;a real contract&gt; belong to, and which assets are linked to it?”</div></li>
+        <li><input type="checkbox" id="ma5-3"><div>Check the approval card <b>Read Linked Jira Assets Objects</b>: one table per object type, an edges table, and nothing you did not expect. Approve it.</div></li>
+        <li><input type="checkbox" id="ma5-4"><div>Optional: on the next card, click <b>Always allow → this schema</b>. Ask again and confirm that no card appears.</div></li>
+      </ol>
+      <p class="result">Report back in the PR as one line: <code>ma5: pass</code>, or <code>ma5: fail – &lt;what was wrong&gt;</code>.</p>
+    </article>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY = "pf-jira-assets-steps";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  document.querySelectorAll('ol.steps input[type="checkbox"]').forEach(function (box) {
+    var li = box.closest("li");
+    box.checked = !!state[box.id];
+    li.classList.toggle("checked", box.checked);
+    box.addEventListener("change", function () {
+      state[box.id] = box.checked;
+      li.classList.toggle("checked", box.checked);
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    });
+  });
+})();
+</script>
