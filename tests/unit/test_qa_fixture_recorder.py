@@ -838,6 +838,158 @@ class TestCheckConfluence:
 DUEDATE_FIELD = {"id": "duedate", "name": "Due date", "custom": False, "schema": {"type": "date"}}
 
 
+class _FakeAssetsClient:
+    """Stands in for AssetsClient: every read goes through ``_request`` as the real one does."""
+
+    def __init__(self, label="PrivacyFence QA seed contract [QATEST]", schemas=None, search_labels=None):
+        from privacyfence.assets_client import AssetsObject, AssetsSchema
+        self._obj_cls = AssetsObject
+        self._label = label
+        self._schemas = schemas if schemas is not None else [
+            {"id": "2", "name": "QA", "objectSchemaKey": "PFQA"},
+            {"id": "9", "name": "Real CMDB", "objectSchemaKey": "REAL"},
+        ]
+        self._schema_cls = AssetsSchema
+        self._search_labels = search_labels
+        self.checked = False
+        self.searches: list[str] = []
+
+    def _request(self, fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    def check_connection(self):
+        self.checked = True
+
+    def _obj(self, oid, label):
+        return self._obj_cls(id=oid, key=f"PFQA-{oid}", label=label, type_id="7", type_name="Contract",
+                             schema_id="2", created="c", updated="u", attributes={}, references={})
+
+    def list_schemas(self, max_results=100):
+        page = self._request(lambda: {"values": self._schemas, "isLast": True})
+        return [self._schema_cls(id=v["id"], name=v["name"], key=v["objectSchemaKey"], description="",
+                                 object_count=0, object_type_count=0) for v in page["values"]]
+
+    def search_objects(self, aql, max_results=25):
+        self.searches.append(aql)
+        labels = self._search_labels if self._search_labels is not None else [self._label]
+        values = [{"id": str(i + 1), "label": lab} for i, lab in enumerate(labels)]
+        self._request(lambda: {"values": values, "isLast": True})
+        return [self._obj(str(i + 1), lab) for i, lab in enumerate(labels)]
+
+    def get_object(self, object_id):
+        self._request(lambda: {"id": object_id, "label": self._label})
+        self._request(lambda: [{"objectTypeAttributeId": "1"}])
+        return self._obj(object_id, self._label)
+
+
+class TestCheckAssets:
+    def _run(self, monkeypatch, client, record=True, cfg=None):
+        monkeypatch.setattr(recorder, "_build_assets_client", lambda: client)
+        return recorder.check_assets(record=record, manifest={"assets": cfg or {}})
+
+    def test_all_three_fixtures_record(self, monkeypatch):
+        client = _FakeAssetsClient()
+        results = self._run(monkeypatch, client)
+        assert [r.method for r in results] == ["list_schemas", "get_object", "aql_search"]
+        assert all(r.ok for r in results)
+        assert client.checked
+        assert [r.fixture_relpath for r in results] == ["list_schemas.json", "get_object.json", "aql_search.json"]
+        get_object = results[1]
+        assert set(get_object.raw) == {"object", "attributes"}
+        assert client.searches[-1] == "objectSchemaId = 2"
+
+    def test_list_schemas_is_filtered_to_the_qa_key(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeAssetsClient())
+        kept = results[0].raw["values"]
+        assert len(kept) == 1
+        assert kept[0]["objectSchemaKey"] == "PFQA"
+
+    def test_record_off_records_nothing(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeAssetsClient(), record=False)
+        assert all(r.ok and r.raw is None for r in results)
+
+    def test_seed_key_is_looked_up_by_key(self, monkeypatch):
+        client = _FakeAssetsClient()
+        self._run(monkeypatch, client, cfg={"seed_object_key": "PFQA-5"})
+        assert client.searches[0] == 'Key = "PFQA-5"'
+
+    def test_missing_schema_stops_after_list_schemas(self, monkeypatch):
+        client = _FakeAssetsClient(schemas=[{"id": "9", "name": "Real", "objectSchemaKey": "REAL"}])
+        results = self._run(monkeypatch, client)
+        assert len(results) == 1
+        assert not results[0].ok
+        assert "not in list_schemas" in results[0].note
+        assert results[0].raw is None
+
+    def test_seed_object_not_found(self, monkeypatch):
+        client = _FakeAssetsClient(search_labels=[])
+        results = self._run(monkeypatch, client)
+        get_object = next(r for r in results if r.method == "get_object")
+        assert not get_object.ok
+        assert "no object found" in get_object.note
+
+    def test_untagged_seed_object_is_refused(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeAssetsClient(label="A real contract"))
+        get_object = next(r for r in results if r.method == "get_object")
+        assert not get_object.ok and get_object.raw is None
+        assert "does not carry" in get_object.note
+
+    def test_untagged_search_results_are_refused(self, monkeypatch):
+        client = _FakeAssetsClient(search_labels=["Seed [QATEST]", "Real one"])
+        results = self._run(monkeypatch, client)
+        aql = next(r for r in results if r.method == "aql_search")
+        assert not aql.ok and aql.raw is None
+        assert "do not carry" in aql.note
+
+    def test_empty_search_is_not_ok(self, monkeypatch):
+        class Empty(_FakeAssetsClient):
+            def search_objects(self, aql, max_results=25):
+                self.searches.append(aql)
+                if aql.startswith("objectSchemaId = 2 AND"):
+                    return [self._obj("1", self._label)]
+                return []
+
+        results = self._run(monkeypatch, Empty())
+        aql = next(r for r in results if r.method == "aql_search")
+        assert not aql.ok and "matched no object" in aql.note
+
+    def test_client_errors_become_failed_rows(self, monkeypatch):
+        from privacyfence.assets_client import AssetsClientError
+
+        class Broken(_FakeAssetsClient):
+            def list_schemas(self, max_results=100):
+                raise AssetsClientError("boom")
+
+        results = self._run(monkeypatch, Broken())
+        assert len(results) == 1 and not results[0].ok and results[0].note == "boom"
+
+        class BrokenSearch(_FakeAssetsClient):
+            def search_objects(self, aql, max_results=25):
+                raise AssetsClientError("nope")
+
+        results = self._run(monkeypatch, BrokenSearch())
+        assert [r.ok for r in results] == [True, False, False]
+
+    def test_connection_failure_is_one_failed_row(self, monkeypatch):
+        from privacyfence.assets_client import AssetsClientError
+
+        class NoWorkspace(_FakeAssetsClient):
+            def check_connection(self):
+                raise AssetsClientError("no Assets workspace")
+
+        results = self._run(monkeypatch, NoWorkspace())
+        assert len(results) == 1 and "no Assets workspace" in results[0].note
+
+    def test_not_registered_yet(self):
+        assert "assets" not in recorder.CONNECTOR_CHECKS
+        assert "assets" not in recorder.EXPECTED_FIXTURES
+
+    def test_build_assets_client_uses_the_atlassian_token(self, monkeypatch):
+        monkeypatch.setattr(recorder, "_load_atlassian_config", lambda: (
+            {"access_token": "t", "cloud_id": "c", "scopes": ["read:cmdb-object:jira"]}, "/tmp/tok"))
+        assert recorder._build_assets_client()._jira_url.endswith("/c")
+
+
 class TestCheckJira:
     def _client(self) -> JiraClient:
         client = JiraClient(config={"access_token": "t", "cloud_id": "c1", "site_url": "https://acme.atlassian.net"})
