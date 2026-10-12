@@ -2829,7 +2829,7 @@ class TestGetRevisionContent:
     def _fake_url_fetch(monkeypatch, client, chunks):
         fake_session = MagicMock()
         fake_session.get.return_value = _FakeStreamResponse(chunks)
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
         monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
         return fake_session
 
@@ -2956,7 +2956,7 @@ class TestGetRevisionContent:
 class TestFetchUrlCapped:
     def test_stops_once_over_the_cap(self, monkeypatch):
         client = make_client(MagicMock())
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
         fake_session = MagicMock()
         fake_session.get.return_value = _FakeStreamResponse([b"aaaa", b"", b"bbbb", b"cccc"])
         monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
@@ -2978,7 +2978,7 @@ class TestFetchUrlCapped:
 
     def test_accepts_the_googleapis_host(self, monkeypatch):
         client = make_client(MagicMock())
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
         fake_session = MagicMock()
         fake_session.get.return_value = _FakeStreamResponse([b"ok"])
         monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
@@ -2996,7 +2996,7 @@ class TestFetchUrlCapped:
 
     def test_http_error_becomes_drive_client_error(self, monkeypatch):
         client = make_client(MagicMock())
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
         fake_session = MagicMock()
         fake_session.get.return_value = _FailingResponse([b"x"])
         monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
