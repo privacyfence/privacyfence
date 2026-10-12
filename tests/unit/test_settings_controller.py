@@ -852,6 +852,31 @@ class TestConnectorEnableDisable:
         assert cfg["connectors"]["gmail"]["enabled"] is True
         assert refresh_calls == [1, 1]
 
+    def test_jira_assets_row_is_off_by_default_and_enable_turns_it_on(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"atlassian": {"client_id": "ci"}})
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["label"] == "Jira Assets"
+        assert row["enabled"] is False
+        assert row["has_org"] is True
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
+
+        controller.enable_connector("assets")
+
+        assert controller._load_config()["connectors"]["assets"]["enabled"] is True
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["enabled"] is True
+
+    def test_jira_assets_row_follows_the_bundle_flag_unless_explicitly_disabled(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"atlassian": {"client_id": "ci", "assets": True}})
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["enabled"] is True
+
+        controller.disable_connector("assets")
+
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["enabled"] is False
+
     def test_disable_is_idempotent(self, controller, monkeypatch):
         monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
 
@@ -1024,7 +1049,8 @@ class TestAuthenticateDispatch:
         ("contacts", "_authenticate_google"), ("calendar", "_authenticate_google"),
         ("tasks", "_authenticate_google"), ("apps_script", "_authenticate_google"), ("slack", "_authenticate_slack"),
         ("salesforce", "_authenticate_salesforce"), ("jira", "_authenticate_atlassian"),
-        ("confluence", "_authenticate_atlassian"), ("grist", "_authenticate_grist"),
+        ("confluence", "_authenticate_atlassian"), ("assets", "_authenticate_atlassian"),
+        ("grist", "_authenticate_grist"),
     ])
     def test_dispatches_to_the_right_per_service_method(self, controller, monkeypatch, cname, method):
         calls = []
@@ -1322,7 +1348,7 @@ class TestAuthenticateAtlassian:
         assert ("read:cmdb-object:jira" in captured["scopes"]) is expect_assets
         assert "read:jira-work" in captured["scopes"]
 
-    def test_success_marks_busy_for_both_jira_and_confluence(self, controller, monkeypatch):
+    def test_success_marks_busy_for_jira_confluence_and_assets(self, controller, monkeypatch):
         recorded = []
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(sc, "atlassian_authorize_interactive", lambda **kw: {"site_url": "https://acme.atlassian.net"})
@@ -1331,13 +1357,14 @@ class TestAuthenticateAtlassian:
 
         controller._authenticate_atlassian({"atlassian": {"client_id": "ci"}})
 
-        assert {"jira", "confluence"} <= controller._busy_connectors
+        assert {"jira", "confluence", "assets"} <= controller._busy_connectors
         assert wait_until(lambda: recorded)
         _drain_run_async(recorded)
 
         assert refresh_calls == [1]
         assert "jira" not in controller._busy_connectors
         assert "confluence" not in controller._busy_connectors
+        assert "assets" not in controller._busy_connectors
 
     def test_no_approval_ui_registered_falls_back_to_the_first_resource(self, controller, monkeypatch):
         # _pick_resource_index's own "no registry" case (approval_ui.py's
