@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A `stable` branch that follows the latest stable release.** Each stable release moves it to the release's commit, so adding the plugin marketplace as `privacyfence/privacyfence#stable` in Claude Cowork or Claude Code gets the latest stable `privacyfence-sync` plugin instead of whatever is on `main`.
+
 ### Fixed
 
 - **Device serial numbers no longer count as credit card numbers.** A 13-digit serial such as `1912401001297` in a Salesforce report's notes passed the card checksum by chance and raised the personal-data confirmation. A number now also needs a length a card starting with that digit can have, so a 13-digit run counts only when it starts with 4, 5 or 6.

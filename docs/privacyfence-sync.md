@@ -60,14 +60,16 @@ Then run it without `--attended` and no card should appear.
 The `privacyfence-sync` plugin gives Claude a skill that writes recipes, their scripts, dashboard
 templates and the list of rules for you, and ports an existing data-sync skill.
 
-- **Claude Code:** `/plugin marketplace add privacyfence/privacyfence`, then
+- **Claude Code:** `/plugin marketplace add privacyfence/privacyfence#stable`, then
   `/plugin install privacyfence-sync@privacyfence`.
-- **Claude Cowork and claude.ai:** download `privacyfence-sync-plugin.zip` from the
+- **Claude Cowork:** Plugins → Add → Add marketplace, and enter `privacyfence/privacyfence#stable`.
+- **Claude Cowork and claude.ai, by file:** download `privacyfence-sync-plugin.zip` from the
   [latest release](https://github.com/privacyfence/privacyfence/releases/latest) and upload it as a
   plugin.
 
-The marketplace follows the repository's main branch and can be newer than the `privacyfence-sync`
-you installed. When the two differ, prefer the release zip that matches your version.
+`#stable` is a branch that each stable release moves to its own commit, so the marketplace follows the
+latest stable release. Without `#stable` it follows `main`, which can be newer than the
+`privacyfence-sync` you installed. For an exact version, use the release zip or `#v<version>`.
 
 ## The recipe format
 
