@@ -75,6 +75,7 @@ MCP-compatible client can connect. See
 | Salesforce | Read records, search, run reports (read-only) |
 | Jira | Read, create, update, comment on and transition issues |
 | Confluence | Search and read pages and attachments; create and update pages |
+| Jira Assets | Browse object schemas, object types and attribute definitions (read-only) |
 | Grist | List documents and tables; read records after review; add and update records, add tables and columns (nothing is deleted) |
 | Peek | List your shared HTML pages; read comments and visit counts after review; publish pages and new versions, change who can open them, rename, comment on and delete them |
 

@@ -53,6 +53,7 @@ CONNECTOR_TITLES: dict[str, str] = {
     "salesforce": "Salesforce",
     "jira": "Jira",
     "confluence": "Confluence",
+    "assets": "Jira Assets",
     "grist": "Grist",
     "peek": "Peek",
 }
@@ -70,6 +71,7 @@ CONNECTOR_SHORT: dict[str, str] = {
     "salesforce": "Salesforce",
     "jira": "Jira",
     "confluence": "Confluence",
+    "assets": "Jira Assets",
     "grist": "Grist",
     "peek": "Peek",
 }
