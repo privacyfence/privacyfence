@@ -837,3 +837,45 @@ class TestPeekFlags:
     def test_query_fragment_and_userinfo_exit(self, tmp_path, url):
         message = self._exit_message(tmp_path, "--peek-base-url", url)
         assert message == "--peek-base-url must not contain a user name, password, query or fragment."
+
+
+class TestScopedTokenFlags:
+    """--enable/--disable-scoped-tokens and --scoped-token-max-days write the bundle's
+    ``scoped_tokens`` section (ADR 0165), the way --enable-unattended-sessions writes its own."""
+
+    @staticmethod
+    def _build(tmp_path, *flags):
+        out_path = tmp_path / "org_config.json"
+        rc = build_org_bundle.main(["-o", str(out_path), *flags])
+        assert rc == 0
+        return json.loads(out_path.read_text())
+
+    def test_enable_and_disable_scoped_tokens_flags(self, tmp_path):
+        assert self._build(tmp_path, "--enable-scoped-tokens")["scoped_tokens"] == {"enabled": True}
+        assert self._build(tmp_path, "--disable-scoped-tokens")["scoped_tokens"] == {"enabled": False}
+        with_cap = self._build(tmp_path, "--enable-scoped-tokens", "--scoped-token-max-days", "30")
+        assert with_cap["scoped_tokens"] == {"enabled": True, "max_days": 30}
+        # Not written unless asked for.
+        assert "scoped_tokens" not in self._build(tmp_path, "--enable-unattended-sessions")
+        with pytest.raises(SystemExit):
+            build_org_bundle.main(["-o", str(tmp_path / "x.json"), "--enable-scoped-tokens", "--disable-scoped-tokens"])
+
+    def test_merge_keeps_the_other_scoped_token_key(self, tmp_path):
+        self._build(tmp_path, "--enable-scoped-tokens", "--scoped-token-max-days", "30")
+        merged = self._build(tmp_path, "--merge", "--disable-scoped-tokens")
+        assert merged["scoped_tokens"] == {"enabled": False, "max_days": 30}
+        assert self._build(tmp_path, "--merge", "--scoped-token-max-days", "60")["scoped_tokens"] == {
+            "enabled": False, "max_days": 60,
+        }
+
+    @pytest.mark.parametrize("value,ok", [("1", True), ("365", True), ("0", False), ("366", False), ("many", False)])
+    def test_scoped_token_max_days_range(self, tmp_path, value, ok):
+        args = ["-o", str(tmp_path / "org_config.json"), "--enable-scoped-tokens", "--scoped-token-max-days", value]
+        if ok:
+            assert build_org_bundle.main(args) == 0
+            assert json.loads((tmp_path / "org_config.json").read_text())["scoped_tokens"]["max_days"] == int(value)
+        else:
+            with pytest.raises(SystemExit) as excinfo:
+                build_org_bundle.main(args)
+            assert excinfo.value.code == 2
+            assert not (tmp_path / "org_config.json").exists()

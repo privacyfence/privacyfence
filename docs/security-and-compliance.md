@@ -218,6 +218,33 @@ companion asks you to confirm first, because a new code invalidates the old one.
 A wrong code consumes nothing: the stored code stays valid for the next attempt. A correct code is
 marked used and removes every passkey enrolled for you, so you can enroll a new one straight away.
 
+## Scoped tokens
+
+A scoped token is a bearer credential for `/mcp` that a person creates in Settings, in both modes,
+for one client or job. It has a name, an expiry (90 days by default) and a scope.
+
+- **What a scope limits.** The tools the client sees and may call, and the auto-accept rules a call
+  may use. A call that no rule of the token auto-accepts is denied at once (`denied_scoped_token` in
+  the audit log). Nothing outside the scope can be reached.
+- **Deny-only.** A scoped call never gets an approval card and never leaves a pending approval, and
+  the temporary "Allow once" window does not apply to it. It cannot change rules, read the full
+  rule list or wait for an approval.
+- **Stored as a hash.** The secret is `pfst_` plus random characters; only its SHA-256 is kept, in
+  `scoped_tokens.json` under `authority/`. A malformed file fails closed: the tokens stop working.
+  It is accepted only on `/mcp`.
+- **Attested agent.** The audit log records the call as the agent `scoped-token:<id>`, named after
+  the token, with source `override`. It is attested because a person created the credential, and it
+  outranks an organization pin for that call
+  ([ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).
+- **Local mode** copies the secret to the clipboard through the companion once. **Organization
+  mode** shows it once in the browser, and only after the administrator turns scoped tokens on
+  (`scoped_tokens.enabled`) and sets the longest lifetime (`scoped_tokens.max_days`).
+- **Revoking.** A person revokes one token, or all, in Settings (with a passkey wherever the
+  install requires one). An administrator revokes every token of one person with
+  `privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`. A scoped token outlives an OAuth sign-in
+  (which ends within 30 days), so offboarding a person includes running that command
+  ([ADR 0165](adr/0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md)).
+
 ## Privilege separation
 
 Every packaged install runs the daemon under a dedicated service account and keeps its data in a
@@ -250,7 +277,7 @@ Layout under the system root (POSIX modes; Windows expresses the same with NTFS 
 | --- | --- | --- | --- |
 | *(root)* | Everything below | service account, `0711`: anyone may traverse, nobody else may list | Owner `Administrators`; inheritance removed; service account, `SYSTEM`, `Administrators` full; `Users` traverse only |
 | `privilege-separation.json` | The marker: platform, account names, recorded owner | `0644` | Adds `Users` read |
-| `authority/` | `config/settings.yaml` (policy, rules, PII settings); `webauthn_credentials.json`; `webauthn_recovery_code.json`; `step_up_state.json`; `mcp_token`; `logs/audit/` (audit log and its `.audit_chain.key`) | service account, `0700` | Service account, `SYSTEM`, `Administrators` only |
+| `authority/` | `config/settings.yaml` (policy, rules, PII settings); `webauthn_credentials.json`; `webauthn_recovery_code.json`; `step_up_state.json`; `mcp_token`; `scoped_tokens.json` (hashes of scoped tokens); `logs/audit/` (audit log and its `.audit_chain.key`) | service account, `0700` | Service account, `SYSTEM`, `Administrators` only |
 | `credentials/` | Connector OAuth tokens and the Telegram session | service account, `0700` | As root |
 | `org/`, `logs/`, `downloads/`, `uploads/`, caches | Organization config, daemon logs, staged files | service account, `0700` | As root |
 | `users/os-<id>/` | Another OS account's own data, with its own `authority/` ([ADR 0008](adr/0008-one-principal-per-os-user.md)) | service account, `0700` | As root |
@@ -330,8 +357,9 @@ The only verified identity is an organization pin. A pin applies to one OAuth re
 it does not follow a client that registers again under the same name, and it lapses when the
 registration expires. Every pin and unpin is audited
 ([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)).
-In local mode every AI client of one OS account holds the same MCP token, so nothing can tell them
-apart. An `agent_overrides:` entry only relabels the recorded name and never makes it verified
+In local mode the AI clients of one OS account share that account's MCP token, so nothing can tell
+them apart, except a client that holds its own [scoped token](#scoped-tokens): its calls are
+recorded as the attested agent `scoped-token:<id>`. An `agent_overrides:` entry only relabels the recorded name and never makes it verified
 ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)).
 
 No name, verified or not, changes an outcome: it selects no rule and releases nothing. The card

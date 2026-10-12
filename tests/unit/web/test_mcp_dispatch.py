@@ -16,16 +16,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import pytest
 
-from privacyfence import local_files
+from privacyfence import local_files, scoped_tokens
 from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedback
-from privacyfence.gate import is_unattended
+from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
+from privacyfence.scoped_tokens import ScopedToken
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
 from ...helpers import policy_rules
@@ -59,6 +61,40 @@ class FakeConnector(Connector):
         if self._error:
             raise self._error
         return self._result
+
+
+_SCOPE = ScopedToken(
+    id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
+    principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
+    rule_ids=frozenset(), tools=frozenset({"gmail_tool"}),
+)
+
+
+class ScopeAwareConnector(Connector):
+    """Records the scoped token each call ran under; denies a scoped call, as the gate would
+    for one none of the token's rules covers, unless ``allow_scoped``."""
+
+    def __init__(self, name: str, *, delay: float = 0.0, allow_scoped: bool = False):
+        self._name = name
+        self._delay = delay
+        self._allow_scoped = allow_scoped
+        self.seen_scopes: list[str | None] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def tool_specs(self) -> list[ToolSpec]:
+        return [ToolSpec(name=f"{self._name}_tool", description="t", read_only=True)]
+
+    async def call(self, tool: str, args: dict) -> object:
+        scope = scoped_tokens.current_token_scope()
+        self.seen_scopes.append(scope.id if scope is not None else None)
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if scope is not None and not self._allow_scoped:
+            raise GateDeniedError("Request denied: this call uses a scoped token.")
+        return "full-token result" if scope is None else "scoped result"
 
 
 class UnattendedAwareConnector(Connector):
@@ -174,6 +210,42 @@ class TestCall:
         # Both principals' calls actually reached the connector -- neither
         # was served the other's cached result.
         assert len(connector.calls) == 2
+
+    async def test_a_scoped_call_never_reuses_an_unscoped_result(self):
+        # Within the dedupe window, a scoped call must reach the gate itself rather than be
+        # handed what a full-token call with the same arguments got (ADR 0164).
+        connector = ScopeAwareConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        unscoped = await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        with scoped_tokens.token_scope(_SCOPE), pytest.raises(GateDeniedError):
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        assert unscoped == "full-token result"
+        assert connector.seen_scopes == [None, _SCOPE.id]
+
+    async def test_an_unscoped_call_never_reuses_a_scoped_denial(self):
+        # The scoped call is still in flight when the identical unscoped one arrives -- the case
+        # where the dispatcher hands a caller someone else's future.
+        connector = ScopeAwareConnector("gmail", delay=0.05)
+        dispatcher = _dispatcher({"gmail": connector})
+
+        async def scoped_call():
+            with scoped_tokens.token_scope(_SCOPE):
+                return await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+
+        scoped, unscoped = await asyncio.gather(
+            scoped_call(), dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}), return_exceptions=True,
+        )
+        assert isinstance(scoped, GateDeniedError)
+        assert unscoped == "full-token result"
+        assert sorted(connector.seen_scopes, key=str) == sorted([_SCOPE.id, None], key=str)
+
+    async def test_two_identical_scoped_calls_still_dedupe(self):
+        connector = ScopeAwareConnector("gmail", allow_scoped=True)
+        dispatcher = _dispatcher({"gmail": connector})
+        with scoped_tokens.token_scope(_SCOPE):
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        assert connector.seen_scopes == [_SCOPE.id]
 
     async def test_dedupe_still_applies_within_the_same_principal(self):
         connector = FakeConnector("gmail", result="r")
