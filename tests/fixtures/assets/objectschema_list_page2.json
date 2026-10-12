@@ -1,0 +1,16 @@
+{
+  "startAt": 1,
+  "maxResults": 1,
+  "total": 2,
+  "isLast": true,
+  "values": [
+    {
+      "id": "3",
+      "name": "Second QA schema [QATEST]",
+      "objectSchemaKey": "PFQB",
+      "description": "",
+      "objectCount": 0,
+      "objectTypeCount": 1
+    }
+  ]
+}
