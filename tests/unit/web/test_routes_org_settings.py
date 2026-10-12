@@ -39,6 +39,7 @@ type is a ``policy/scopes.py`` scope.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import threading
@@ -148,7 +149,7 @@ class TestAuthRequired:
         assert r.headers["location"] == "/login?next=/settings/privacy"
 
     @pytest.mark.parametrize("action", [
-        "add_policy_rule", "remove_policy_rule",
+        "add_policy_rule", "remove_policy_rule", "update_policy_rule",
         "set_default_policy", "toggle_pii_detection",
     ])
     def test_writes_are_a_json_401_when_signed_out(self, action):
@@ -677,6 +678,130 @@ class TestAddRule:
         csrf = _signed_in(client, sessions, ALICE)
         r = _post_action(client, "toggle_update_check", {}, csrf)
         assert r.status_code == 404
+
+
+def _stale_grist_rule():
+    """A Grist document rule as saved before the CSV tools existed: its verbs still imply
+    ``grist.import_csv``, its operations lack it."""
+    (rule,) = _catalogue_rules_for("grist.document", ["read", "create", "update"], ["DOC1"])
+    return dataclasses.replace(rule, operations=rule.operations - {"grist.import_csv"})
+
+
+def _catalogue_rules_for(group: str, verbs: list[str], value: list | None = None) -> list:
+    return policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs(verbs))
+
+
+class TestUpdateRule:
+    """update_policy_rule in organization mode: the same widening as local mode, on the signed-in
+    principal's own rules only, and audited with the rule and the operations added (ADR 0166)."""
+
+    def test_adds_the_missing_operations_and_keeps_the_id(self, tmp_path, monkeypatch):
+        stale = _stale_grist_rule()
+        _seed(tmp_path, monkeypatch, "alice", rules=[stale])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = _post_action(client, "update_policy_rule", {"rule_id": stale.id}, csrf)
+
+        assert r.status_code == 200
+        with principal_scope(ALICE):
+            (rule,) = auto_accept.get_policy_v2_rules()
+        assert rule.id == stale.id
+        assert rule.operations == stale.operations | {"grist.import_csv"}
+        (row,) = r.json()["auto_accept"]["rules"]
+        assert row["missing_tools"] == []
+
+    def test_the_audit_entry_names_the_rule_and_the_operations_added(self, tmp_path, monkeypatch):
+        stale = _stale_grist_rule()
+        _seed(tmp_path, monkeypatch, "alice", rules=[stale])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        _post_action(client, "update_policy_rule", {"rule_id": stale.id}, csrf)
+
+        assert recorded == [
+            f"Updated auto-accept rule {stale.id!r}, added grist.import_csv (principal=alice)",
+        ]
+
+    def test_an_unknown_id_is_harmless_and_not_audited(self, tmp_path, monkeypatch):
+        stale = _stale_grist_rule()
+        _seed(tmp_path, monkeypatch, "alice", rules=[stale])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        r = _post_action(client, "update_policy_rule", {"rule_id": "r-doesnotexist"}, csrf)
+
+        assert r.status_code == 200
+        assert recorded == []
+        with principal_scope(ALICE):
+            (rule,) = auto_accept.get_policy_v2_rules()
+        assert rule.operations == stale.operations
+
+    def test_a_complete_rule_is_not_rewritten_or_audited(self, tmp_path, monkeypatch):
+        (full,) = _catalogue_rules_for("grist.document", ["read", "create", "update"], ["DOC1"])
+        _seed(tmp_path, monkeypatch, "alice", rules=[full])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        r = _post_action(client, "update_policy_rule", {"rule_id": full.id}, csrf)
+
+        assert r.status_code == 200
+        assert recorded == []
+
+    def test_a_second_principal_cannot_widen_the_first_principals_rule(self, tmp_path, monkeypatch):
+        stale = _stale_grist_rule()
+        _seed(tmp_path, monkeypatch, "alice", rules=[stale])
+        _seed(tmp_path, monkeypatch, "bob", rules=[])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, BOB)
+
+        r = _post_action(client, "update_policy_rule", {"rule_id": stale.id}, csrf)
+
+        assert r.status_code == 200
+        assert "grist.import_csv" not in _on_disk_rules(tmp_path, "alice")[0]["operations"]
+
+    def test_wrong_csrf_is_rejected(self, tmp_path, monkeypatch):
+        stale = _stale_grist_rule()
+        _seed(tmp_path, monkeypatch, "alice", rules=[stale])
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+
+        r = _post_action(client, "update_policy_rule", {"rule_id": stale.id}, "not-the-real-token")
+
+        assert r.status_code == 401
+        assert "grist.import_csv" not in _on_disk_rules(tmp_path, "alice")[0]["operations"]
+
+    def test_forbidden_when_the_scope_denies_it(self, tmp_path, monkeypatch):
+        stale = _stale_grist_rule()
+        _seed(tmp_path, monkeypatch, "alice", rules=[stale])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+
+        def _deny(action, principal, *, mode):
+            recorded.append(action)
+            return False
+
+        monkeypatch.setattr(ros, "is_action_permitted", _deny)
+
+        r = _post_action(client, "update_policy_rule", {"rule_id": stale.id}, csrf)
+
+        assert r.status_code == 403
+        assert recorded == ["update_policy_rule"]
+        assert "grist.import_csv" not in _on_disk_rules(tmp_path, "alice")[0]["operations"]
 
 
 class TestRemoveRule:

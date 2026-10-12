@@ -248,6 +248,20 @@ class TestAutoAcceptTemplate:
         assert "remove_policy_rule" in html
         assert "data-aa-expand" in html
 
+    def test_update_rule_notice_and_button_are_wired_to_missing_tools(self):
+        """The row shows the notice and the "Update rule" button only when ``missing_tools`` is
+        non-empty; the DOM behaviour is proved in tests/integration/test_settings_update_rule_browser.py."""
+        html = build_html(_make_state())
+        assert "r.missing_tools && r.missing_tools.length" in html
+        assert "Newer tools aren\\'t covered yet" in html
+        assert "dataAttr('update_policy_rule', { rule_id: r.id })" in html
+
+    def test_update_rule_confirm_names_the_tools(self):
+        html = build_html(_make_state())
+        assert "data-confirm" in html
+        assert "'Add ' + missingNames + ' to this rule?" in html
+        assert "window.confirm(confirmText)" in html
+
     def test_add_rule_form_fields_wired(self):
         html = build_html(_make_state())
         assert "add_policy_rule" in html

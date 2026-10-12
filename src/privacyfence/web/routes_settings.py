@@ -224,7 +224,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------- #
 
 _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
-    "add_policy_rule", "remove_policy_rule",
+    "add_policy_rule", "remove_policy_rule", "update_policy_rule",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
     "toggle_pii_detection", "toggle_pii_category",
     # Changes *what gets gated* the same way every other entry here
@@ -1333,7 +1333,7 @@ _SCOPED_TOKENS_DISABLED = (
 )
 
 _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
-    "add_policy_rule", "remove_policy_rule",
+    "add_policy_rule", "remove_policy_rule", "update_policy_rule",
     "toggle_pii_detection", "toggle_pii_category",
     "set_default_policy", "set_category_policy",
     "pin_agent_client", "unpin_agent_client",
@@ -1872,6 +1872,15 @@ def build_org_routes(
             if not auto_accept.remove_policy_v2_rule(rule_id):
                 return None
             return f"Removed auto-accept rule {rule_id!r} (principal={principal.id})"
+        if action == "update_policy_rule":
+            rule_id = str(body.get("rule_id", ""))
+            added = auto_accept.update_policy_v2_rule(rule_id)
+            if not added:
+                return None
+            return (
+                f"Updated auto-accept rule {rule_id!r}, added {', '.join(sorted(added))} "
+                f"(principal={principal.id})"
+            )
         if action == "set_step_up_scope":
             return _set_step_up_scope(principal, body)
         if action == "pin_agent_client":
