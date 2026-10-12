@@ -99,7 +99,7 @@ ol.steps li.checked > div { color: var(--muted); }
       <div class="item-head"><h3>ma4 · Hand back to the PR session for the live recording</h3><span class="chip">~2 min of yours</span></div>
       <p class="why">Recording fixtures and running the live check are CI dispatches the PR session runs itself. They can only start once ma3 is done.</p>
       <ol class="steps">
-        <li><input type="checkbox" id="ma4-1"><div>Paste this into the session that is driving the pull request:<pre>ma3 is done: the runner's Atlassian token has the Assets scopes. Register check_assets in CONNECTOR_CHECKS and EXPECTED_FIXTURES, dispatch qa-record-fixture.yml with connector=assets against the PR branch, pull and review the fixtures, then dispatch connector-live-check.yml and link the run in the PR.</pre></div></li>
+        <li><input type="checkbox" id="ma4-1"><div>Paste this into the session that is driving the pull request:<pre>ma3 is done: the runner's Atlassian token has the Assets scopes. Register check_assets in CONNECTOR_CHECKS and EXPECTED_FIXTURES, dispatch qa-record-fixture.yml with connector=assets against the PR branch, pull and review the fixtures, add TestLiveFixtureParsing for them in tests/unit/test_assets_client.py, then dispatch connector-live-check.yml and link the run in the PR.</pre></div></li>
         <li><input type="checkbox" id="ma4-2"><div>Read the fixture diff the session points you to. It must hold only <code>[QATEST]</code> names, with no real tenant URL, account id or email.</div></li>
       </ol>
       <p class="result">Report back by ticking ma4 in the PR body, with the link to the green <code>connector-live-check</code> run.</p>

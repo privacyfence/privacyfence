@@ -28,7 +28,9 @@ No tracking issue: the request came from the maintainer in a planning session.
   (:83-102) always sends `scopes or DEFAULT_SCOPES` with `prompt=consent`. Its three callers rely
   on the default:
   - `settings_controller._authenticate_atlassian`, which calls `atlassian_authorize_interactive`
-    at `settings_controller.py:1376-1381`;
+    at `settings_controller.py:1376-1381`. That name is only an import alias of
+    `atlassian_oauth.authorize_interactive` (`settings_controller.py:91`, `daemon_main.py:148`),
+    which already takes `scopes` and forwards it (`atlassian_oauth.py:176-189`);
   - `daemon_main.run_atlassian_oauth` (`daemon_main.py:~1855`);
   - `web/routes_connect._build_authorize_url` (`routes_connect.py:375-380`).
 
@@ -71,7 +73,7 @@ No tracking issue: the request came from the maintainer in a planning session.
   `99b771a8` touched:
   - `tests/unit/test_website_connector_pages.py:27-41` (`CONNECTORS` must equal the modules in
     `connectors/`);
-  - `tests/unit/test_website_connectors_page.py:84-89` (the totals, plus `len(REFERENCE) == 13`
+  - `tests/unit/test_website_connectors_page.py:55-60` (the totals, plus `len(REFERENCE) == 13`
     and "Thirteen connectors");
   - `tests/unit/connectors/test_readme_manifest_alignment.py:23-41` (`CONNECTOR_CLASSES`);
   - `scripts/generate_tools_reference.py:44-75` (`CONNECTOR_TITLES`, `CONNECTOR_SHORT`; a missing
@@ -80,8 +82,21 @@ No tracking issue: the request came from the maintainer in a planning session.
   - `scripts/pyinstaller_common.py:83-84`, checked by `test_pyinstaller_hidden_imports.py`;
   - `tests/helpers.py:75` `assert_tool_definitions_complete` (ADR 0115), run for every connector by
     `tests/unit/web/test_tool_schema_portability.py:50`;
-  - `test_systemic_gate_invariants.py` and `test_connector_tool_annotations.py`, which discover
-    connectors automatically.
+  - `tests/unit/test_systemic_gate_invariants.py` and `tests/unit/test_connector_tool_annotations.py`,
+    which discover connectors automatically; the first also requires `pii_scan_text=` on every
+    `gate="review"` `gated_call` (`TestPiiScanTextOnEveryReviewGatedTool`, :225);
+  - `tests/unit/test_generate_always_allow_reference.py`, which fails when
+    `docs/always-allow-rules-reference.md` is not regenerated after any review or popup tool is
+    added (`scripts/generate_always_allow_reference.py`, no per-connector title map);
+  - `tests/unit/test_docs_configuration_reference.py:129-145`, which requires every
+    `build_org_bundle.py` option to be documented in `docs/configuration-reference.md`;
+  - `tests/unit/policy/test_scopes.py:315-328`, which requires every `SCOPE_SELECTORS` entry to
+    have a v1 counterpart in `tests/unit/policy/_v1_reference.py` and pins the count at 48
+    (precedent: commit 8facf006 added `approved_project_keys_all_results` that way).
+- **Settings toggle and example config.** `enable_connector`/`disable_connector` write an explicit
+  `connectors.<name>.enabled` bool through `_set_connector_enabled` (`settings_controller.py:1157-1176`).
+  `src/privacyfence/resources/settings.yaml.example:118-124` has only a commented `connectors:`
+  example saying "all enabled by default".
 - **QA recorder.** `scripts/qa_fixture_recorder.py`'s `CONNECTOR_CHECKS` (:1992) and
   `EXPECTED_FIXTURES` (:2019) must have equal keys (an import-time assert at :2041).
   `tests/unit/test_qa_fixture_recorder.py:2099-2130` (`TestFixturePresence`) fails unless every
@@ -116,7 +131,6 @@ ASSETS_SCOPES: list[str] = [
     # /rest/servicedeskapi/assets/workspace, which is behind a JSM scope.
     "read:servicedesk-request",
 ]
-ASSETS_REQUIRED_SCOPE = "read:cmdb-object:jira"
 
 def scopes_for(*, assets: bool) -> list[str]:
     return DEFAULT_SCOPES + ASSETS_SCOPES if assets else list(DEFAULT_SCOPES)
@@ -130,12 +144,14 @@ def assets_enabled(config: dict[str, Any], org_config: dict[str, Any]) -> bool:
     return bool((org_config.get("atlassian") or {}).get("assets", False))
 ```
 
-- `build_authorize_url`, `authorize_interactive` and `atlassian_authorize_interactive` already
-  take `scopes`. Each of the three callers passes
-  `scopes=scopes_for(assets=assets_enabled(<config>, org_config))`:
-  - Settings uses its loaded config;
-  - the CLI `run_atlassian_oauth` gets a new `config: dict[str, Any]` parameter, passed by its
-    caller in `daemon_main`;
+- `build_authorize_url` and `authorize_interactive` (imported elsewhere as
+  `atlassian_authorize_interactive`) already take `scopes`. Each of the three callers imports
+  `from .atlassian_oauth import assets_enabled, scopes_for` (`..atlassian_oauth` in `web/`) and
+  passes `scopes=scopes_for(assets=assets_enabled(<config>, org_config))`:
+  - Settings: `cfg = self._load_config()` in `_authenticate_atlassian`;
+  - the CLI: `def run_atlassian_oauth(org_config: dict[str, Any], config: dict[str, Any] | None = None) -> int`,
+    using `config or {}`; `main()` (`daemon_main.py:2400`) calls `run_atlassian_oauth(org_config, config)`
+    (`config` is loaded at :2374);
   - org-mode `/connect` has only the bundle, so it passes `{}` as config.
 - `resolve_resource_and_save` adds a sixth key to the token record. Its value is the union of the
   `scopes` of every accessible resource whose `id` equals the chosen `cloud_id`:
@@ -147,7 +163,8 @@ def assets_enabled(config: dict[str, Any], org_config: dict[str, Any]) -> bool:
   Atlassian sign-in (the app must have the read:cmdb-* scopes)"). When it is given, the bundle's
   `atlassian` section gets `"assets": true`. Giving it without the client id and secret is a
   `SystemExit("--atlassian-assets needs --atlassian-client-id and --atlassian-client-secret.")`.
-- A token record without `ASSETS_REQUIRED_SCOPE` in `scopes` (every token made before this
+- `assets_client.py` defines `ASSETS_REQUIRED_SCOPE = "read:cmdb-object:jira"`. A token record
+  without it in `scopes` (every token made before this
   change, and every token made while Assets was off) makes `AssetsClient` raise
   `AssetsClientError(NEEDS_ASSETS_PERMISSION)`, with
   `NEEDS_ASSETS_PERMISSION = "Jira Assets needs an extra Atlassian permission. Use Authenticate… on Jira Assets in PrivacyFence Settings."`.
@@ -166,7 +183,11 @@ Rejected:
 
 ### 3.3 Client (`assets_client.py`)
 
-Plain `requests` with a Bearer header, timeout 30. It does not use atlassian-python-api.
+Plain `requests`, not atlassian-python-api: `self._session = requests.Session()` with the Bearer
+header; `_send(method, url, params=None, json=None)` calls
+`self._session.request(method, url, params=params, json=json, timeout=30)`; `_try_refresh` updates
+`self._session.headers`. Tokens are written only through `atlassian_oauth.save_token_file`, so
+`TOKEN_WRITE_SITES` in `test_systemic_gate_invariants.py` stays unchanged.
 
 - `AssetsClient(config: dict[str, Any], token_file: str | None = None)`. `config` is the same
   merged `atlassian_config` the Jira client gets, so it has `access_token`, `refresh_token`,
@@ -259,9 +280,10 @@ class AssetsTicket:            # GET objectconnectedtickets/{objectId}/tickets -
 - Each item of `entry["objectAttributeValues"]`:
   - with `referencedObject` → an `AssetsReference(id, objectKey, label)` under `references[name]`,
     **and** `"<label> (<key>)"` under `attributes[name]`;
-  - with `user` → `atlassian_users.mask_emails(user["displayName"])` (use the existing
-    `mask_emails` helper that `jira_client.simplify_field_value` uses, from wherever it is defined);
-    an email address is never kept;
+  - with `user` → `mask_emails(user.get("displayName") or "", user.get("key") or "") or UNKNOWN_USER_LABEL`,
+    both imported from `privacyfence.atlassian_users` (`mask_emails(name, account_id)` is at
+    `atlassian_users.py:61`; Assets' user object carries the account id in `key`); an email
+    address is never kept;
   - with `status` → `status["name"]`;
   - with `group` → `group["name"]`;
   - otherwise `displayValue` if present and non-empty, else `str(value)`.
@@ -306,7 +328,16 @@ Descriptions follow ADR 0115:
 - every parameter except `reason` has a description of at least 20 characters;
 - the whole description is at most 1024 characters.
 
-The sibling map for `TestToolDefinitions` is `ASSETS_SIBLINGS`, covering every pair of tools below.
+The sibling map for `TestToolDefinitions` is `ASSETS_SIBLINGS` (all names carry the `assets_`
+prefix; each phase adds only its own rows):
+
+- p3: `list_schemas → (list_object_types,)`, `list_object_types → (list_schemas, list_attributes)`,
+  `list_attributes → (list_object_types,)`;
+- p4: `list_attributes` also gets `search_objects`; `search_objects → (get_object,)`,
+  `get_object → (search_objects,)`;
+- p6: `get_object` also gets `get_related_objects`; `get_related_objects → (get_object,)`,
+  `get_connected_tickets → (get_object,)`;
+- p7: `search_objects` also gets `export_objects`; `export_objects → (search_objects,)`.
 
 | Tool | Gate | Verb | Params (name type default) | Returns |
 |---|---|---|---|---|
@@ -336,18 +367,23 @@ The summaries (first sentences) are fixed:
 |---|---|---|---|---|
 | `assets_search_objects` | `Search Jira Assets` | `f"AQL: {aql[:120]}"` | the `list[AssetsObject]` | `preview={"Query": aql[:200], "Objects": str(n)}`, one table (headers Key, Label, Type, then attribute names in first-seen order up to 8; cells cut to 120 chars), `table_only=True`, `pii_scan_text` holds every attribute value joined by newlines |
 | `assets_get_object` | `Read Jira Assets Object` | `f"{key}: {label}"` | the `AssetsObject` | `preview={"Key", "Label", "Type", "Schema": schema_id}`, a two-column table Attribute/Value, `pii_scan_text` as above |
-| `assets_get_related_objects` | `Read Linked Jira Assets Objects` | `f"{root key}: {n} linked objects"` | `graph.objects` (root included) | `preview={"Root", "Direction", "Depth", "Objects": str(n)}`, a table per object type (Key, Label, then up to 8 attributes), then an edges table (From, Attribute, To) |
+| `assets_get_related_objects` | `Read Linked Jira Assets Objects` | `f"{root key}: {n} linked objects"` | `graph.objects` (root included) | `preview={"Root", "Direction", "Depth", "Objects": str(n)}`, a table per object type (Key, Label, then up to 8 attributes), then an edges table (From, Attribute, To); `pii_scan_text` holds every attribute value of every object in `graph.objects`, joined by newlines |
 | `assets_get_connected_tickets` | `Read Jira Assets Object Tickets` | `f"{key}: {n} tickets"` | `[the AssetsObject]` (the object is fetched first so the schema rule can match) | `preview={"Object": key, "Tickets": str(n)}`, table Key/Summary/Status/Type/Priority, `pii_scan_text` holds the summaries |
-| `assets_export_objects` | `Export Jira Assets Objects` | as `jira_export_issues` | a list of `AssetsReference`-like refs carrying `id`, `key`, `schema_id` (no attribute value; ADR 0159) | as `jira_export_issues`, through `export_files.card_details` and `sample_table` |
+| `assets_export_objects` | `Export Jira Assets Objects` | as `jira_export_issues` | `[_ExportedObject(o.id, o.key, o.schema_id) for o in objects]`, where `_ExportedObject` is a private frozen dataclass in connectors/assets.py, as `_ExportedIssue` is (connectors/jira.py:274); no attribute value (ADR 0159) | as `jira_export_issues`, through `export_files.card_details` and `sample_table` |
 
-`preview` dicts carry metadata only (§2.7). Every reviewed tool is `WIDE` in `gate._TOOL_LAYOUT`.
+Every review card passes `sender="Jira Assets"`. `args` is the tool's own arguments without
+`reason`, as a dict. `details_text` is `"\n".join` of
+`f"{key} — {label}: " + "; ".join(f"{name}: {value}" ...)` per object. No `new_info`, except on the
+export, which copies Jira's `new_info`. `preview` dicts carry metadata only (§2.7). Every reviewed tool is `WIDE` in `gate._TOOL_LAYOUT`.
 An AQL that matches nothing returns `[]` from `assets_search_objects` with a card, as
 `jira_search_issues_with_fields` does. `assets_export_objects` writes no file and returns
 `rows: 0` without a card, as `jira_export_issues` does.
 
 Export columns are `id, key, label, type`, then every attribute name in first-seen order. A
 multi-value cell is its values joined with `"; "`. CSV or JSON is picked from the `file_name`
-suffix through the same `export_files` helpers `jira_export_issues` uses.
+suffix through the same `export_files` helpers `jira_export_issues` uses:
+`export_files.export_file_name(file_name, "assets-objects")`, and
+`refuse_org_without_staging` names `"assets_search_objects"` as the alternative tool.
 
 ### 3.5 Linked-object traversal
 
@@ -390,20 +426,29 @@ Rejected:
     matches when its `schema_id` is in the rule's values;
   - `approved_schema_ids_all_results`: matches when `raw_data` is a non-empty list and every
     item's `schema_id` is in the rule's values.
-  - Add both to `NEW_SCOPE_SELECTORS` (where `grist.document` is) if that is where new selectors
-    are registered today. Otherwise add them next to the Jira entries in `SCOPE_SELECTORS`. Copy
-    whichever list `apps_script.project` or `grist.document` is in.
+  - Add both to `SCOPE_SELECTORS`, after `approved_project_keys_all_results` (scopes.py:476-479),
+    with `resolves_from=ResolvesFrom.FETCHED`. Each reads `getattr(item, "schema_id", "")` from
+    `ctx.raw_data`, which is one object or a list of them. Not `NEW_SCOPE_SELECTORS`:
+    `propose._candidate_value` (propose.py:515) and `test_propose.py:188-190` consult only
+    `SCOPE_SELECTORS`.
+  - `tests/unit/policy/_v1_reference.py` gets both names in `DATA_DEPENDENT_RULES` and
+    `_rule_approved_schema_ids` / `_rule_approved_schema_ids_all_results` with the same bodies;
+    `test_scopes.py` gets `FIXTURES` for both (match, mismatch, empty `raw_data`, empty value) and
+    its count goes from 48 to 50 (:328).
 - `policy/propose.py` gets two value extractors. `_assets_schema_ids(ctx)` returns the schema id
   of `ctx.raw_data` (an object, or the first of a list). `_assets_result_schema_ids(ctx)` returns
   the sorted distinct schema ids of every item. It also gets two `PROPOSABLE_SCOPES` entries:
   - `_scope("approved_schema_ids", "assets.schema", "assets", (Verb.READ,), _assets_schema_ids, "this schema")`
   - `_scope("approved_schema_ids_all_results", "assets.schema", "assets", (Verb.SEARCH,), _assets_result_schema_ids, "this schema")`
-- `policy/catalogue.py`: `VALUE_HINTS["approved_schema_ids"] = "2, 5"`,
+- `policy/catalogue.py` (and add `"assets.schema"` to the hard-coded set in
+  `test_catalogue.py::test_personal_data_label_only_on_the_listed_groups`, :106-108):
+  `VALUE_HINTS["approved_schema_ids"] = "2, 5"`,
   `VALUE_HINTS["approved_schema_ids_all_results"] = "2, 5"` and
   `PERSONAL_DATA_GROUPS["assets.schema"] = "Exports may include personal data"`.
 - `policy/resource_registry.py`:
-  - `_resolve_assets_schema(client, resource_id) -> str | None` returns
-    `client.get_schema(resource_id).name`, or `None` on `AssetsClientError`;
+  - `_resolve_assets_schema(client, resource_id) -> str | None`:
+    `try: return client.get_schema(resource_id).name or None` / `except Exception: return None`
+    (resource_registry.py imports no client module, :136-138);
   - add `GrantResourceType(connector="assets", config_key="schemas", capabilities={"read": GrantCapability("Read auto-accept", (("assets.read_object", "approved_schema_ids"), ("assets.read_object", "approved_schema_ids_all_results")))}, resolver=_resolve_assets_schema)`,
     following the Jira entry's field names and order.
 - Schema, type and attribute listings are `auto` with a connector-written `_auto_audit`, on the
@@ -411,38 +456,57 @@ Rejected:
 
 ### 3.7 Wiring
 
-- `daemon_main.build_connectors` gets a block after Confluence's, guarded by
-  `atlassian_oauth.assets_enabled(config, org_config)` and not by `enabled("assets")`. It builds
-  `AssetsClient(atlassian_config, token_file=<the same path Jira uses>)`, calls
-  `check_connection()`, constructs `AssetsConnector`, sets `my_email`, `download_mode`,
-  `download_config` and `download_base_url` exactly as the Jira block does, and records failures
-  as `failures["assets"] = _classify_connector_failure(exc)`.
+- `daemon_main.build_connectors` (which has `org_config` as a parameter, :1285) gets a block
+  after Confluence's, guarded by `assets_enabled(config, org_config)` and not by
+  `enabled("assets")`. Inside its `try`:
+  `if not atlassian_org.get("client_id"): raise AssetsClientError("Atlassian organization config not installed")`,
+  then `if not atlassian_token: raise AssetsClientError("Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings.")`
+  (as Jira's pre-checks at :1516-1519 do), then
+  `AssetsClient(config=atlassian_config, token_file=_resolve_path(TOKEN_FILES["atlassian"]))`,
+  `check_connection()`, `AssetsConnector(client)`, `my_email = atlassian_token.get("account_email", "")`
+  and `download_mode`, `download_config` and `download_base_url` exactly as the Jira block sets
+  them. It catches `(AssetsClientError, FileNotFoundError)` and records
+  `failures["assets"] = _classify_connector_failure(exc)`.
 - `settings_controller.py`:
   - `ALL_CONNECTORS` gets `"assets"` after `"confluence"`;
   - `_CONNECTOR_LABEL_OVERRIDES["assets"] = "Jira Assets"`;
   - `ORG_CONFIG_SERVICE["assets"] = "atlassian"`;
   - `_connectors_state` uses `assets_enabled(cfg, org_config)` for `"assets"`;
-  - the authenticate dispatch (:1232) sends `"assets"` to `_authenticate_atlassian`, which adds
-    and discards `"assets"` in `_busy_connectors` beside jira and confluence.
+  - the authenticate dispatch (:1239-1240) sends `"assets"` to `_authenticate_atlassian`, which
+    adds and discards `"assets"` in `_busy_connectors` beside jira and confluence.
 
-  If the connector toggle handler writes `enabled = not <current>`, it must read the current value
-  through `assets_enabled` for `"assets"`.
-- `src/privacyfence/resources/settings.yaml.example` gets an `assets:` entry under `connectors:`,
-  with `enabled: false` and a comment: "Jira Assets (read-only). Needs the Atlassian app's
-  read:cmdb-* scopes; after switching it on, use Authenticate… once."
+  Enable and Disable already write an explicit `connectors.assets.enabled`; they need no change.
+- `src/privacyfence/resources/settings.yaml.example` (:118-124): the comment's first line becomes
+  `# Enable/disable individual connectors (all enabled by default except Jira Assets, which is off`
+  `# unless switched on here or by the organization bundle's atlassian.assets; this section is`
+  `# otherwise only needed to turn one off).`, and a commented line is added under
+  `#   telegram: { enabled: false }`:
+  `#   assets: { enabled: true }   # Jira Assets (read-only). Needs the Atlassian app's read:cmdb-* scopes; after switching it on, use Authenticate… once.`
+  It stays commented, so `test_docs_configuration_reference.py` reads it as the documented
+  `connectors.<name>.enabled`.
 - Org-mode `/connect` gets no new card. The Atlassian cards request the Assets scopes when the
   bundle says `"assets": true` (3.2).
-- `scripts/generate_tools_reference.py`: `CONNECTOR_TITLES["assets"] = "Jira Assets"` and
-  `CONNECTOR_SHORT["assets"] = "Jira Assets"`.
+- `scripts/generate_tools_reference.py`: `"assets": "Jira Assets"` inserted immediately after
+  `"confluence"` in both `CONNECTOR_TITLES` and `CONNECTOR_SHORT` (the summary order follows them,
+  and `test_one_card_per_connector` compares orders). Regenerate with
+  `python3 scripts/generate_tools_reference.py` (no arguments).
 - `scripts/pyinstaller_common.py` gets `"privacyfence.connectors.assets"`.
 - Website and README:
   - `website/connectors/jira-confluence/index.html` gets an Assets section;
   - the README Connectors table gets a `Jira Assets` row;
   - `tests/unit/test_website_connector_pages.py`
     `CONNECTORS["assets"] = ("/connectors/jira-confluence/", "atlassian-setup", "Jira Assets")`;
-  - `/connectors/` gets a new card;
-  - the totals copy changes from "Thirteen connectors" to "Fourteen connectors";
+  - `/connectors/` gets a new card immediately after the Confluence card, `id="jira-assets"`
+    (the tools-reference anchor of "Jira Assets");
+  - the totals copy changes from "Thirteen connectors" to "Fourteen connectors", and
+    `website/compare/mcp-gateways/index.html:62` from "thirteen connectors" to "fourteen connectors";
+  - `website/_partials/other-connectors.html` does not change: its one "Jira and Confluence" link
+    already points to the shared page;
   - `test_website_connectors_page.py` changes from `len(REFERENCE) == 13` to `== 14`.
+
+Out of scope: the connector lists in `mcpb/manifest.json.tmpl:5-6`, `debian/control:27` and
+`scripts/build_site.py:1119` (Grist and Peek are not there either), and a connector icon (optional
+per guidelines §3; grist, peek and apps_script have none).
 
 ### 3.8 QA recorder
 
@@ -453,8 +517,9 @@ Rejected:
   - `seed_object_label: "PrivacyFence QA seed contract [QATEST]"`.
 - It records three fixtures:
   - `list_schemas.json`, filtered to the QA schema;
-  - `get_object.json`, the seed object's `object/{id}` plus `object/{id}/attributes` calls,
-    taken from `RawCapture.calls`;
+  - `get_object.json`, `{"object": calls[0], "attributes": calls[1]}` from `RawCapture.calls`,
+    with `client.check_connection()` called before entering `RawCapture` so the lazy workspace
+    lookup is not among the calls;
   - `aql_search.json`, from `objectSchemaId = <id>` with max 5.
 - `check_assets` is written and unit-tested in phase p9, but it is **not** added to
   `CONNECTOR_CHECKS` or `EXPECTED_FIXTURES` there. `TestFixturePresence` would fail until a live
@@ -517,6 +582,8 @@ Only **after** implementation. No phase needs anything from the user. The step-b
      `"assets": ("list_schemas.json", "get_object.json", "aql_search.json")` to `EXPECTED_FIXTURES`;
    - dispatches `qa-record-fixture.yml` with `connector=assets` against the PR branch, pulls,
      and reviews the fixture diff for identifying content;
+   - adds `TestLiveFixtureParsing` to `tests/unit/test_assets_client.py`, replaying
+     `tests/fixtures/live/assets/*.json` through the real parsers;
    - dispatches `connector-live-check.yml` and links the run in the PR.
 
    These are dispatches from the `ci.dispatchable` table, not manual steps. They are listed here
@@ -544,19 +611,18 @@ worker stops with `status=blocked`.
 - **AQL `outboundReferences()` syntax on Cloud.** If the inbound query is rejected live, inbound
   traversal falls back to `GET object/{id}/referenceinfo` per frontier object. That change goes
   on the PR branch, not into a phase.
+- **Granted-scope source.** If ma4 shows `read:cmdb-object:jira` missing from the accessible
+  resources' `scopes`, every token would stay at `NEEDS_ASSETS_PERMISSION`. The PR-branch fix is to
+  record the token response's space-separated `scope` field instead: add a `granted_scope: str = ""`
+  parameter to `resolve_resource_and_save`, passed `response.get("scope", "")` from
+  `authorize_interactive` and from `routes_connect.py:430`.
 - **Duplicate accessible resources.** If `resolve_resource_and_save` does not see the duplicate
   per-scope-family entries that 3.2 assumes, the union is still correct: one entry gives the same
   result.
 - **Stop conditions per phase:**
-  - p1 stops if `atlassian_authorize_interactive` (the name `settings_controller` imports) does not
-    accept a `scopes` keyword and forwarding one needs a signature change outside
-    `atlassian_oauth.py`.
-  - p1 stops if `run_atlassian_oauth`'s caller has no `config` dict in scope.
   - p3 stops if `tool_specs()` cannot be called with `AssetsConnector(None)`; `connector_catalog`
     requires that.
-  - p5 stops if `NEW_SCOPE_SELECTORS` and `SCOPE_SELECTORS` have a contract that 3.6 does not
-    match: for example, if selectors need an ARGS source or there is no FETCHED variant.
-  - p8 stops if `org_config` is not in scope where `build_connectors` is.
+  - p5 stops if adding the two selectors needs a change to `ScopeSelector` itself.
 - **Website copy.** The `/connectors/` card markup must match the regex in
   `test_website_connectors_page.py`. Copy the Peek card and change only its id, name and numbers.
 
@@ -607,6 +673,7 @@ phases:
       - src/privacyfence/daemon_main.py
       - src/privacyfence/web/routes_connect.py
       - scripts/build_org_bundle.py
+      - docs/configuration-reference.md
       - tests/unit/test_atlassian_oauth.py
       - tests/unit/test_jira_client.py
       - tests/unit/test_confluence_client.py
@@ -617,7 +684,7 @@ phases:
     brief: |
       Read docs/jira-assets-connector-plan.md "Current state" and 3.2 first. Do not add an assets
       connector, Settings row or daemon block here (phase p8 does).
-      1. In src/privacyfence/atlassian_oauth.py, add ASSETS_SCOPES, ASSETS_REQUIRED_SCOPE,
+      1. In src/privacyfence/atlassian_oauth.py, add ASSETS_SCOPES,
          scopes_for(*, assets: bool) and assets_enabled(config, org_config) exactly as in plan
          3.2, after DEFAULT_SCOPES. Leave DEFAULT_SCOPES unchanged.
       2. In resolve_resource_and_save, add the "scopes" key to token_record (the sorted union
@@ -625,34 +692,41 @@ phases:
       3. In JiraClient._try_refresh (jira_client.py:276-283) and ConfluenceClient._try_refresh
          (confluence_client.py, the save_token_file dict), add
          "scopes": self._config.get("scopes", []) to the saved dict.
-      4. Pass scopes=atlassian_oauth.scopes_for(assets=atlassian_oauth.assets_enabled(cfg, org_config))
-         at the three authorize call sites:
-         - settings_controller._authenticate_atlassian (:1376-1381): load the config the same
-           way _connectors_state's caller does;
-         - daemon_main.run_atlassian_oauth: add a `config: dict[str, Any]` parameter and update
-           its caller;
-         - web/routes_connect._build_authorize_url (:375-380): pass assets_enabled({}, org_config).
-         If atlassian_authorize_interactive / authorize_interactive does not already accept
-         `scopes` and forward it to build_authorize_url, add the keyword in atlassian_oauth.py
-         only. STOP with status=blocked if forwarding it needs a change in any other module.
+      4. Pass scopes=scopes_for(assets=assets_enabled(cfg, org_config)) at the three authorize
+         call sites, importing `from .atlassian_oauth import assets_enabled, scopes_for`
+         (`..atlassian_oauth` in web/), exactly as plan 3.2's callers bullet says:
+         - settings_controller._authenticate_atlassian (:1376-1381): cfg = self._load_config();
+         - daemon_main.run_atlassian_oauth: the new signature
+           `(org_config, config: dict[str, Any] | None = None)`, using `config or {}`; main()
+           (:2400) passes `config`;
+         - web/routes_connect._build_authorize_url (:375-380): assets_enabled({}, org_config).
+         atlassian_authorize_interactive is an alias of authorize_interactive, which already
+         forwards `scopes`; do not change its signature.
       5. In scripts/build_org_bundle.py, add --atlassian-assets as in plan 3.2 (the argument
-         group, the "assets": true key, and the SystemExit text).
+         group, the "assets": true key, and the SystemExit text). In
+         docs/configuration-reference.md's bundle-options table, after the
+         --atlassian-client-id row (:247), add:
+         `--atlassian-assets` | off | `atlassian.assets` | Request the Jira Assets scopes at
+         Atlassian sign-in; needs `--atlassian-client-id`/`--atlassian-client-secret`.
       6. Tests:
          - tests/unit/test_atlassian_oauth.py: scopes_for both ways; assets_enabled with explicit
            true, explicit false, bundle flag only, and neither; the token record's scopes union
            over two resources with the same id and one with a different id; build_authorize_url
            with scopes_for(assets=True) contains "read:cmdb-object:jira".
-         - test_jira_client.py and test_confluence_client.py: a refresh keeps "scopes" (extend
-           the existing refresh tests).
+         - test_jira_client.py and test_confluence_client.py: a refresh keeps "scopes". The
+           exact-dict assertions at test_atlassian_oauth.py:309-312, test_jira_client.py:355-357
+           and test_confluence_client.py:300-302 gain the "scopes" key ([] for the refresh
+           tests, the resources' scope union for authorize_interactive).
+         - test_daemon_main.py:3333: the lambda becomes `lambda org_config, *a: calls.append(1) or 0`;
+           the one-argument calls at :2480-2512 keep working through the default.
          - test_settings_controller.py, test_daemon_main.py and web/test_routes_connect.py: the
            authorize URL or call carries the Assets scopes only when assets_enabled is true.
-         - The build_org_bundle test file (find it with `grep -rln build_org_bundle tests/unit`):
-           the flag sets "assets": true, and the flag without client id/secret exits with the
+         - tests/unit/test_build_org_bundle.py: the flag sets "assets": true, and the flag without client id/secret exits with the
            exact message.
       No changelog line in this phase (p10 writes it).
     acceptance:
       - "python3 -m pytest tests/unit/test_atlassian_oauth.py tests/unit/test_jira_client.py tests/unit/test_confluence_client.py -q passes"
-      - "python3 -m pytest tests/unit/test_settings_controller.py tests/unit/test_daemon_main.py tests/unit/web/test_routes_connect.py -q passes"
+      - "python3 -m pytest tests/unit/test_settings_controller.py tests/unit/test_daemon_main.py tests/unit/web/test_routes_connect.py tests/unit/test_build_org_bundle.py tests/unit/test_docs_configuration_reference.py -q passes"
       - "grep -n \"def assets_enabled\" src/privacyfence/atlassian_oauth.py matches"
       - "grep -c '\"scopes\": self._config.get(\"scopes\", \\[\\])' src/privacyfence/jira_client.py src/privacyfence/confluence_client.py shows 1 for each file"
       - "ruff check . passes, and python3 -m mypy src/privacyfence passes"
@@ -718,7 +792,7 @@ phases:
       - website/connectors/index.html
       - website/connectors/jira-confluence/index.html
       - website/how-it-works/index.html
-      - website/_partials/other-connectors.html
+      - website/compare/mcp-gateways/index.html
       - tests/unit/connectors/test_assets_connector.py
       - tests/unit/connectors/test_readme_manifest_alignment.py
       - tests/unit/test_website_connector_pages.py
@@ -728,46 +802,50 @@ phases:
       website, README and generator bullets). The pattern commit is Peek's 99b771a8 (git show
       --stat 99b771a8); copy its file set and shapes.
       1. Create src/privacyfence/connectors/assets.py: class AssetsConnector with name "assets",
-         a constructor taking `client: AssetsClient | None` (with my_email, download_mode,
-         download_config and download_base_url attributes as in JiraConnector.__init__,
-         connectors/jira.py:318-323), tool_specs() returning only assets_list_schemas,
+         `def __init__(self, client: AssetsClient) -> None` storing it in `self._assets`, a
+         `@property def client(self) -> AssetsClient: return self._assets` (Settings resolves
+         schema names through it, settings_controller.py:802-807), and my_email, download_mode,
+         download_config and download_base_url attributes, all as in JiraConnector
+         (connectors/jira.py:317-327); tool_specs() returning only assets_list_schemas,
          assets_list_object_types and assets_list_attributes, and call() dispatching them.
-         tool_specs() must work on AssetsConnector(None). STOP with status=blocked if
-         connector_catalog needs anything more.
+         tool_specs() must work on AssetsConnector(None) (connector_catalog.py:39 passes None
+         under a type: ignore). STOP with status=blocked if connector_catalog needs anything more.
       2. Implement the three tools as Jira's auto tools are (_fetch with AssetsClientError ->
          RuntimeError; _auto_audit; see connectors/jira.py:649-694 and :1131-1157). Return the
          dict shapes from plan 3.4. assets_list_attributes leaves out is_system rows. Clamp
          max_results to 1..100.
       3. Add the three tools as "auto" to auto_accept.TOOL_TO_GATE, next to the Jira rows.
-      4. Add CONNECTOR_TITLES["assets"] and CONNECTOR_SHORT["assets"] = "Jira Assets" in
-         scripts/generate_tools_reference.py. Regenerate docs/tools-reference.md with that
-         script (its own --help says how) and commit the output.
+      4. In scripts/generate_tools_reference.py, insert "assets": "Jira Assets" immediately
+         after "confluence" in both CONNECTOR_TITLES and CONNECTOR_SHORT. Run
+         `python3 scripts/generate_tools_reference.py` (no arguments) and commit the output.
       5. Add "privacyfence.connectors.assets" to scripts/pyinstaller_common.py next to the
          confluence entry.
       6. README.md Connectors table: add a "Jira Assets" row after Confluence, worded like it.
          docs/README.md: add the connector next to Jira/Confluence.
       7. Website:
-         - add a /connectors/ card for Jira Assets, copied from the Peek card, with the counts
-           from the regenerated tools-reference summary row;
-         - update every total ("N tools", "N connector tools") and change "Thirteen connectors"
-           to "Fourteen connectors";
+         - add a /connectors/ card for Jira Assets immediately after the Confluence card,
+           copied from the Peek card, with id="jira-assets" and the counts from the
+           regenerated tools-reference summary row;
+         - update every total ("N tools", "N connector tools"), change "Thirteen connectors"
+           to "Fourteen connectors", and change "thirteen connectors" to "fourteen connectors"
+           in website/compare/mcp-gateways/index.html:62;
          - add a short "Jira Assets" section to website/connectors/jira-confluence/index.html
            (read-only, off by default, schema reads auto, object reads reviewed);
-         - add it to website/_partials/other-connectors.html if Jira and Confluence are listed
-           there.
+         - leave website/_partials/other-connectors.html unchanged.
       8. Tests:
          - tests/unit/test_website_connector_pages.py: CONNECTORS["assets"] as in plan 3.7.
          - tests/unit/test_website_connectors_page.py: 13 -> 14 and "Fourteen connectors".
          - test_readme_manifest_alignment.py: add AssetsConnector to CONNECTOR_CLASSES.
          - New tests/unit/connectors/test_assets_connector.py: TestDispatch (an unknown tool
            raises ValueError); one test per auto tool (shape, clamp, audit entry with
-           decision="auto_accepted"); RuntimeError on AssetsClientError; TestToolDefinitions
-           with ASSETS_SIBLINGS covering the three tools, as JIRA_SIBLINGS does
+           decision="auto_accepted", and gated_call patched to fail so it is never called);
+           RuntimeError on AssetsClientError; TestToolDefinitions with the p3 rows of
+           ASSETS_SIBLINGS from plan 3.4, as JIRA_SIBLINGS does
            (test_jira_connector.py:113-127); assert_all_tools_leave_an_audit_trail.
     acceptance:
       - "python3 -m pytest tests/unit/connectors/test_assets_connector.py tests/unit/connectors/test_readme_manifest_alignment.py -q passes"
       - "python3 -m pytest tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_docs_tools_reference.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/web/test_tool_schema_portability.py -q passes"
-      - "python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/connectors/test_connector_tool_annotations.py -q passes"
+      - "python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/test_connector_tool_annotations.py -q passes"
       - "grep -n \"Fourteen connectors\" website/connectors/index.html matches"
       - "ruff check . passes"
 
@@ -781,6 +859,7 @@ phases:
       - src/privacyfence/policy/registry.py
       - src/privacyfence/gate.py
       - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
       - website/connectors/index.html
       - website/how-it-works/index.html
       - tests/unit/connectors/test_assets_connector.py
@@ -800,8 +879,10 @@ phases:
       3. policy/registry.TOOL_TO_VERB: assets_get_object -> Verb.READ,
          assets_search_objects -> Verb.SEARCH.
       4. gate._TOOL_LAYOUT: both WIDE.
-      5. Extend ASSETS_SIBLINGS to all five tools. Regenerate docs/tools-reference.md, and
-         update the /connectors/ card counts and totals.
+      5. Add the p4 rows of ASSETS_SIBLINGS (plan 3.4). Run
+         `python3 scripts/generate_tools_reference.py` and
+         `python3 scripts/generate_always_allow_reference.py`, commit both outputs, and update
+         the /connectors/ card counts and totals.
       6. Tests in test_assets_connector.py, as test_jira_connector.py's TestGetIssue and
          TestSearchIssuesWithFields do (§2.8: gate path, whether the client was called, the
          result, the decision, the audit entry):
@@ -809,12 +890,16 @@ phases:
          - the preview dict holds only metadata keys;
          - the PII scan text holds the attribute values;
          - an empty search still shows a card;
-         - AssetsClientError -> RuntimeError.
+         - AssetsClientError -> RuntimeError;
+         - TestFieldCompleteness (as in test_jira_connector.py:1582): run
+           tests/fixtures/assets/object_contract.json + object_contract_attributes.json through
+           the real _parse_object and the real assets_get_object card building, checked with
+           assert_no_placeholder_fields.
          Add the two tools to any parametrised list in test_gate.py or
          policy/test_registry.py that enumerates reviewed tools and fails without them.
     acceptance:
       - "python3 -m pytest tests/unit/connectors/test_assets_connector.py tests/unit/test_gate.py tests/unit/policy/test_registry.py -q passes"
-      - "python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py -q passes"
+      - "python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py -q passes"
       - "grep -n '\"assets_get_object\": *\"assets.read_object\"' src/privacyfence/auto_accept.py matches"
       - "ruff check . passes"
 
@@ -829,6 +914,7 @@ phases:
       - src/privacyfence/policy/resource_registry.py
       - docs/always-allow-rules-reference.md
       - tests/unit/policy/test_scopes.py
+      - tests/unit/policy/_v1_reference.py
       - tests/unit/policy/test_propose.py
       - tests/unit/policy/test_catalogue.py
       - tests/unit/policy/test_resource_registry.py
@@ -838,25 +924,26 @@ phases:
       Read plan 3.6. Copy the Jira project entries: scopes.py:273-305 and :472-487,
       propose.py:168-191 and :336-343, catalogue.py:89-113, and resource_registry.py:75 and
       :224-237.
-      1. scopes.py: add the two selectors as plan 3.6 says (FETCHED, reading .schema_id from
-         raw_data). Register them in the list where grist.document / apps_script.project are
-         (NEW_SCOPE_SELECTORS) if that list is for selectors that propose card buttons; else
-         register them next to Jira's. STOP with status=blocked if selectors cannot read
-         raw_data (no FETCHED source).
+      1. scopes.py: add the two selectors to SCOPE_SELECTORS after
+         approved_project_keys_all_results (:476-479), with resolves_from=ResolvesFrom.FETCHED,
+         reading .schema_id from raw_data, as plan 3.6 says. In tests/unit/policy/_v1_reference.py
+         add both names to DATA_DEPENDENT_RULES and add _rule_approved_schema_ids /
+         _rule_approved_schema_ids_all_results with the same bodies (precedent: git show
+         8facf006). STOP with status=blocked if this needs a change to ScopeSelector itself.
       2. propose.py: add _assets_schema_ids, _assets_result_schema_ids and the two
          PROPOSABLE_SCOPES entries, verbatim from plan 3.6.
       3. catalogue.py: add the VALUE_HINTS and PERSONAL_DATA_GROUPS entries from plan 3.6.
       4. resource_registry.py: add _resolve_assets_schema and the GrantResourceType from plan
          3.6.
-      5. If scripts/generate_always_allow_reference.py has a per-connector title map, add
-         "assets": "Jira Assets". Regenerate docs/always-allow-rules-reference.md.
+      5. Run `python3 scripts/generate_always_allow_reference.py` and commit the output.
       6. Tests:
-         - scopes: both selectors match, do not match, and an empty list never matches
-           all_results;
+         - test_scopes.py: FIXTURES entries for both (match, mismatch, empty raw_data, empty
+           value), and the count at :328 goes from 48 to 50;
          - propose: the button label "this schema" appears for both tools, with the right
            values;
-         - catalogue entries;
-         - resource name resolution, including None on AssetsClientError;
+         - test_catalogue.py: add "assets.schema" to the expected set in
+           test_personal_data_label_only_on_the_listed_groups (:106-108);
+         - resource name resolution, including None when get_schema raises;
          - in test_assets_connector.py, an end-to-end auto-accept: a stored approved_schema_ids
            rule for schema "2" lets assets_get_object of a schema-2 object through without a
            card, and a schema-3 object still shows one; the same for
@@ -889,12 +976,14 @@ phases:
            {root_id, objects: [to_dict()], edges: [{"from", "to", "attribute"}], truncated};
          - assets_get_connected_tickets calls client.get_object first, then
            client.connected_tickets, and passes [object] as raw_data;
+         - pii_scan_text of both is as plan 3.4's card table says;
          - the description of assets_get_related_objects states the bounds (depth 1-3, up to
            200 objects) and that truncated true means the limit was hit.
       2. auto_accept: both -> "assets.read_object" and "review". registry: related -> SEARCH,
          connected tickets -> READ. gate._TOOL_LAYOUT: both WIDE.
-      3. Extend ASSETS_SIBLINGS. Regenerate docs/tools-reference.md and
-         docs/always-allow-rules-reference.md. Update the /connectors/ card counts and totals.
+      3. Add the p6 rows of ASSETS_SIBLINGS (plan 3.4). Run both generators
+         (generate_tools_reference.py, generate_always_allow_reference.py), commit the output,
+         and update the /connectors/ card counts and totals.
       4. Tests:
          - approve and deny for each tool;
          - the card has one table per object type plus the edges table;
@@ -906,7 +995,7 @@ phases:
          - the preview holds metadata only;
          - AssetsClientError -> RuntimeError.
     acceptance:
-      - "python3 -m pytest tests/unit/connectors/test_assets_connector.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py -q passes"
+      - "python3 -m pytest tests/unit/connectors/test_assets_connector.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py -q passes"
       - "grep -n '\"assets_get_related_objects\": *\"review\"' src/privacyfence/auto_accept.py matches"
       - "ruff check . passes"
 
@@ -932,18 +1021,20 @@ phases:
       implementation (grep "_export_issues" in connectors/jira.py) and commit be27441f
       (git show --stat be27441f).
       1. Add the ToolSpec, worded like Jira's, with params aql, destination_dir (reuse the
-         _DESTINATION_DIR text pattern) and file_name. Copy the implementation:
+         _DESTINATION_DIR text pattern) and file_name (default via
+         export_files.export_file_name(file_name, "assets-objects")). Copy the implementation:
          - client.export_objects(aql);
          - an empty result returns rows 0 with no card and no file;
-         - otherwise build the columns and rows per plan 3.4, then gated_call with raw_data
-           carrying id, key and schema_id only, export_files.card_details / sample_table /
+         - otherwise build the columns and rows per plan 3.4, then gated_call with
+           raw_data=[_ExportedObject(o.id, o.key, o.schema_id) for o in objects] (a private
+           frozen dataclass, as _ExportedIssue at connectors/jira.py:274), export_files.card_details / sample_table /
            scan_text, and export_files.render;
-         - org delivery exactly as Jira's (refuse_org_without_staging, saved_to,
-           export_summary).
+         - org delivery exactly as Jira's (refuse_org_without_staging naming
+           "assets_search_objects" as the alternative, saved_to, export_summary).
       2. auto_accept: "assets.read_object", "review", and add to PERSONAL_DATA_RULE_TOOLS.
          registry: Verb.SEARCH. gate._TOOL_LAYOUT: WIDE.
-      3. Extend ASSETS_SIBLINGS. Regenerate both generated docs, and update the card counts and
-         totals.
+      3. Add the p7 rows of ASSETS_SIBLINGS (plan 3.4). Run both generators, commit the
+         output, and update the card counts and totals.
       4. Tests, copied from Jira's TestExportIssues:
          - CSV and JSON content;
          - multi-value cells joined with "; ";
@@ -957,7 +1048,7 @@ phases:
          tools or PERSONAL_DATA_RULE_TOOLS fails without it.
     acceptance:
       - "python3 -m pytest tests/unit/connectors/test_assets_connector.py tests/unit/test_gate.py tests/unit/policy/test_propose.py -q passes"
-      - "python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py -q passes"
+      - "python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py -q passes"
       - "grep -n '\"assets_export_objects\"' src/privacyfence/auto_accept.py shows the TOOL_TO_OPERATION, TOOL_TO_GATE and PERSONAL_DATA_RULE_TOOLS lines"
       - "ruff check . passes"
 
@@ -974,19 +1065,16 @@ phases:
     brief: |
       Read plan 3.7's daemon_main and settings_controller bullets. This phase runs in parallel
       with p4-p7 and must not touch connectors/assets.py.
-      1. daemon_main.build_connectors: add the Assets block after Confluence's (:1537-1558),
-         guarded by atlassian_oauth.assets_enabled(config, org_config). STOP with
-         status=blocked if org_config is not in scope there. Build AssetsClient with the same
-         atlassian_config and token file Jira uses, call check_connection(), construct
-         AssetsConnector, and set my_email/download_* exactly as the Jira block does. On failure,
-         set failures["assets"] = _classify_connector_failure(exc). Add the imports beside
-         Jira's.
+      1. daemon_main.build_connectors: add the Assets block after Confluence's (:1537-1558)
+         exactly as plan 3.7's daemon_main bullet spells it out (guard, the two pre-check
+         raises, construction, my_email, download_*, the except clause). Import AssetsClient,
+         AssetsClientError and AssetsConnector beside Jira's imports, and assets_enabled from
+         .atlassian_oauth (p1 already imports it there).
       2. settings_controller.py: make the ALL_CONNECTORS, _CONNECTOR_LABEL_OVERRIDES,
          ORG_CONFIG_SERVICE, _connectors_state, authenticate-dispatch and
-         _authenticate_atlassian busy-set changes from plan 3.7. Find the connector enable/disable
-         toggle handler (grep '"enabled"' in settings_controller.py). If it derives the current
-         state with a default of True, make "assets" use assets_enabled instead.
-      3. resources/settings.yaml.example: add the connectors.assets entry from plan 3.7.
+         _authenticate_atlassian busy-set changes from plan 3.7. Enable/Disable need no change.
+      3. resources/settings.yaml.example: make the comment change and add the commented
+         assets line exactly as plan 3.7 says.
       4. Tests:
          - daemon: assets is not built by default; it is built when connectors.assets.enabled
            is true or the bundle flag is set; a token without the scope records failures["assets"]
@@ -996,7 +1084,7 @@ phases:
            Atlassian flow with the Assets scopes and marks jira, confluence and assets busy.
          Update any test that asserts the full ALL_CONNECTORS list or a connector-row count.
     acceptance:
-      - "python3 -m pytest tests/unit/test_daemon_main.py tests/unit/test_settings_controller.py -q passes"
+      - "python3 -m pytest tests/unit/test_daemon_main.py tests/unit/test_settings_controller.py tests/unit/test_docs_configuration_reference.py -q passes"
       - "grep -n '\"assets\"' src/privacyfence/settings_controller.py shows the ALL_CONNECTORS, label override and ORG_CONFIG_SERVICE entries"
       - "ruff check . and python3 -m mypy src/privacyfence pass"
 
@@ -1013,7 +1101,8 @@ phases:
       Read plan 3.8 and 3.9's connector-qa bullet. Copy check_jira (scripts/qa_fixture_recorder.py:957
       onward) and its _build_jira_client helper.
       1. Add _build_assets_client() and check_assets(record, manifest) recording the three
-         fixtures named in plan 3.8 with RawCapture, through redact() and
+         fixtures named in plan 3.8 with RawCapture (call client.check_connection() before
+         entering it; get_object.json is {"object": calls[0], "attributes": calls[1]}), through redact() and
          deidentify_structural_fields() as check_jira does. Filter list_schemas to the QA
          schema key. Do NOT add "assets" to CONNECTOR_CHECKS or EXPECTED_FIXTURES; put a
          one-line comment above check_assets saying it is registered once its live fixtures
