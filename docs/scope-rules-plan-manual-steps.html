@@ -51,6 +51,7 @@ a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offs
       <li><input type="checkbox" id="s7"><label for="s7">Run the sync recipe that exports or downloads data containing names, unattended, as you normally do.<span class="see">It completes without a card or a denial.</span></label></li>
       <li><input type="checkbox" id="s8"><label for="s8">In a plain Claude session (no scoped token), ask Claude to download a file with personal data from the Rolling 12M Cashflow folder.<span class="see">A review card appears. Rules no longer let personal data through on their own.</span></label></li>
       <li><input type="checkbox" id="s9"><label for="s9">On any Drive folder row, click <b>Edit verbs</b>, add <b>update</b>, click <b>Save verbs</b>, confirm, and pass the passkey check if it asks. Then edit it again and remove <b>update</b>.<span class="see">The row's chips and "Unblocks N tools" count change after each save. The row id stays the same, so tokens that list it keep working.</span></label></li>
+      <li><input type="checkbox" id="s10"><label for="s10">In <b>Scoped tokens</b>, click <b>Duplicate</b> on your sync token. Then tick and untick a rule in the New token form, and click <b>Clear form</b>.<span class="see">The form fills with the same rules, tools, days and personal-data box, named with a number (for example "Daily sync 2"). The Tools list shows only tools the selected rules cover, plus a collapsed list of tools that need no rule. Nothing is created until you click Create token.</span></label></li>
     </ol>
     <div class="report">Report back by pasting this into the PR, with pass or fail on each line and a note for any fail:
 <pre>Upgrade check
@@ -60,7 +61,8 @@ a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offs
 - sync token has "personal data allowed": pass/fail
 - unattended sync export with personal data ran: pass/fail
 - plain Claude download with personal data got a card: pass/fail
-- Edit verbs add and remove worked: pass/fail</pre></div>
+- Edit verbs add and remove worked: pass/fail
+- Duplicate pre-fills the form, tools follow the rules: pass/fail</pre></div>
   </section>
 </main>
 <script>

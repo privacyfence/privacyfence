@@ -28,6 +28,11 @@ After this change:
    flagged rule get the flag. The conversion never widens what an unscoped call can auto-accept.
    Rule usage history ("Matched 11x") is kept.
 
+6. **Scoped token form.** Each token gets a **Duplicate** button that fills the New token form
+   from it, with a numbered name (`Daily sync` → `Daily sync 2`), so a replacement is quick to
+   create even though a token cannot be edited. The form's tool list shows only the tools the
+   selected rules cover, plus the tools that need no rule.
+
 Decisions taken with the maintainer while planning:
 
 - An existing rule that covers only part of a merged verb (for example an "update" rule without the
@@ -716,6 +721,64 @@ config they re-read.
 - **The popup's "Always allow"** (`gate.py:1191`, `:1323`) is unchanged: it still calls
   `add_policy_v2_rules(rules_for_proposal(chosen))`.
 
+### 3.8 Scoped token form: Duplicate, and tools filtered by the chosen rules
+
+A token cannot be edited, by design (ADR 0164). These two changes make creating a replacement
+quick. Both are client-side only, in the Scoped tokens section of `settings_window_html.py`
+(`renderScopedTokens`, `scopedTokenRow`, `scopedToolCoverage`, `scopedToolStatus`, and the click
+handlers at :1800-1805). The page data `scoped_token_page_data` already carries everything they
+need: each token's `label`, `created_at`, `expires_at`, `rules[].id`/`missing`, `tools` and
+`allow_personal_data`, plus `SCOPED.rules[].tools` and `SCOPED.auto_tools`.
+
+**1. Duplicate.**
+
+- Each token row gets a **`Duplicate`** button (`data-st-duplicate="<token id>"`, `aria-label`
+  `"Duplicate <label>"`), before **Revoke**. Expired tokens have it too, since duplicating is how
+  you renew one.
+- Clicking it fills the New token form:
+  - `ui.stLabel` is `scopedDuplicateLabel(t.label)`;
+  - `ui.stDays` is `Math.min(SCOPED.max_days, Math.max(1, Math.round((t.expires_at -
+    t.created_at) / 86400)))`;
+  - `ui.stRules` is the token's rule ids that are not `missing`;
+  - `ui.stTools` is the token's tools;
+  - `ui.stPersonalData` is the token's `allow_personal_data`.
+
+  It re-renders, scrolls the form into view, and focuses the Name field. Nothing is created until
+  **Create token** is clicked, which goes through the usual confirmation and passkey step.
+- `scopedDuplicateLabel(label)`:
+  - If the label ends in a space and a number (`/^(.*) (\d+)$/`), the base is the part before it
+    and `n` is that number plus 1. Otherwise the base is the whole label and `n` is 2.
+  - The candidate is `base + ' ' + n`; while another token already has that label, increment `n`.
+  - If the candidate is longer than 60 characters (the name limit, `scoped_tokens.LABEL_RE`), cut
+    `base` from the end (then trim trailing spaces) until it fits.
+  - Examples: `Daily sync` → `Daily sync 2`; `Daily sync 2` → `Daily sync 3`; `Daily sync` when
+    `Daily sync 2` exists → `Daily sync 3`.
+- Notices, shown above the form while it holds a duplicate (`ui.stDuplicateOf` is set to the
+  source token id, and cleared by a successful create or by **Clear form**):
+  - When some of the token's rules are `missing`: **`<n> of this token's rules no longer exist and
+    were left out.`**
+  - When any duplicated rule has `limited_to` (3.6): **`The new token gets these rules as they are
+    now. The original only allowed part of them; check the tools below before creating it.`**
+- A **`Clear form`** link (`data-st-clear`) resets the form to its defaults: empty name, default
+  days, no rules, no tools, flag off, `stDuplicateOf` null.
+
+**2. The rule list filters the tool list.**
+
+- The Tools part shows, grouped by connector as today:
+  - the tools covered by a selected rule (`scopedToolCoverage()`), with their "covered by …"
+    text;
+  - the tools that need no rule (`SCOPED.auto_tools`) of connectors that have a covered tool;
+  - any ticked tool that is neither of these. It stays visible with today's "no selected rule
+    covers it" status and the existing uncovered notice, so deselecting a rule never silently
+    drops a tool.
+- A connector with nothing to show is left out.
+- The no-rule tools of all other connectors go in one collapsed `<details data-st-other-tools>`
+  with the summary **`Tools that need no rule, from other connectors (<count>)`**. A token for a
+  job that needs only such tools can still be made.
+- With no rule selected, the hint **`Select a rule to see the tools it covers.`** replaces the
+  covered groups, and the collapsed section still lists every no-rule tool.
+- "Add the tools these rules cover" stays as it is.
+
 ## 4. ADRs
 
 Written in the last phase. Each one is `Accepted`, `Implemented`, and dated the day of the phase.
@@ -803,7 +866,7 @@ verify_after_merge:
 final_checks:
   - docs/scope-rules-plan.md and docs/scope-rules-plan-manual-steps.html are deleted and nothing links to them
   - ADRs 0171, 0172, 0173 and 0174 exist, are Accepted, and are listed in docs/adr/README.md; ADRs 0074, 0157, 0164, 0166 and 0170 carry a one-line Status pointer to the ADR that amends them
-  - CHANGELOG.md has the four entries under "## [Unreleased]" and no new version heading
+  - CHANGELOG.md has the five entries under "## [Unreleased]" and no new version heading
   - build.yml was dispatched on the feature branch head (it runs tests/packaged_policy_probe.py through the packaged smoke tests) and the green run is linked in the PR
 phases:
   - id: p1-nine-verbs
@@ -1370,9 +1433,54 @@ phases:
       - python3 -m pytest tests/integration/test_settings_edit_verbs_browser.py -v passes and no test reports SKIPPED
       - ruff check . passes and python3 -m pytest tests/unit -q passes
 
-  - id: p10-retire
-    title: ADRs, reference docs, changelog, delete the plan
+  - id: p10-token-form-duplicate-and-filter
+    title: Scoped token form — Duplicate button and tools filtered by the chosen rules
     depends_on: [p9-edit-verbs]
+    complexity: S
+    touches:
+      - src/privacyfence/settings_window_html.py
+      - tests/unit/test_settings_window_html.py
+      - tests/integration/test_settings_scoped_token_form_browser.py
+    brief: |
+      Read docs/scope-rules-plan.md section 3.8; it is the whole spec, including every string and
+      data attribute. Only settings_window_html.py changes.
+      1. Add the ui state keys `stPersonalData` (if p2 named it differently, use p2's name) and
+         `stDuplicateOf` next to `stLabel` (:338).
+      2. scopedTokenRow: add the Duplicate button before Revoke.
+      3. Add scopedDuplicateLabel(label) and duplicateScopedToken(tokenId) exactly as 3.8 says.
+         Wire `data-st-duplicate` and `data-st-clear` in the click handler block next to
+         data-st-rule (:1800-1805).
+      4. renderScopedTokens:
+         - the two duplicate notices and the Clear form link;
+         - the filtered Tools part, with the collapsed other-connectors section and the no-rule
+           hint.
+         On a successful create, the existing reset also clears stDuplicateOf and
+         stPersonalData.
+      5. Tests:
+         - tests/unit/test_settings_window_html.py:
+           - the data-st-duplicate, data-st-clear and data-st-other-tools hooks are present;
+           - the notice strings and summary text are present;
+           - a small JS-free assertion that scopedDuplicateLabel's regex is in the page.
+         - A new tests/integration/test_settings_scoped_token_form_browser.py, modelled on
+           tests/integration/test_settings_update_rule_browser.py. Use a page with two tokens
+           ("Daily sync", "Daily sync 2") and two rules on different connectors. Test:
+           - test_duplicate_prefills_the_form: name "Daily sync 3", rules, tools, days, flag;
+           - test_duplicate_of_expired_token_is_offered;
+           - test_missing_rule_is_left_out_with_notice;
+           - test_tools_follow_the_selected_rules: only covered and same-connector no-rule tools
+             are shown;
+           - test_ticked_tool_stays_visible_when_its_rule_is_deselected;
+           - test_other_no_rule_tools_are_collapsed;
+           - test_clear_form_resets.
+    acceptance:
+      - python3 -m pytest tests/integration/test_settings_scoped_token_form_browser.py -v passes and no test reports SKIPPED (use PRIVACYFENCE_TEST_CHROMIUM if the session hook exported it)
+      - python3 -m pytest tests/unit/test_settings_window_html.py -q passes
+      - grep -n "Tools that need no rule, from other connectors" src/privacyfence/settings_window_html.py matches
+      - ruff check . passes and python3 -m pytest tests/unit -q passes
+
+  - id: p11-retire
+    title: ADRs, reference docs, changelog, delete the plan
+    depends_on: [p10-token-form-duplicate-and-filter]
     complexity: S
     touches:
       - docs/adr/**
@@ -1414,10 +1522,14 @@ phases:
          - Tell the user to tick "Let exports, downloads and page uploads carry personal data"
            on the recipe's token instead of on the rule.
          - Fix any matching line in its SKILL.md and docs/privacyfence-sync.md.
-      6. Search the docs that mention scoped tokens (docs/configuration-reference.md,
+      6. docs/connect-claude-code.md, both "### Scoped tokens" sections (:70, :97): add one
+         sentence each on Duplicate (a token can't be edited; Duplicate fills the form from it so
+         you can create a replacement and revoke the old one) and on the tool list following the
+         selected rules (3.8).
+      7. Search the docs that mention scoped tokens (docs/configuration-reference.md,
          how-it-works.md, org-mode-setup-guide.md, connect-claude-code.md) for the personal-data
          rule flag and verb names, and fix what you find.
-      7. CHANGELOG.md, under "## [Unreleased]", in its existing subsection style:
+      8. CHANGELOG.md, under "## [Unreleased]", in its existing subsection style:
          - "Auto-accept rules now use nine verbs: read, download, search, add, update,
            restructure, move, send and delete. Grist and Peek verbs no longer carry bracketed
            labels."
@@ -1427,10 +1539,13 @@ phases:
            exactly the access they had. Downgrading is not supported: an older version ignores
            the merged rules and drops them if it saves rules; restore the backup file instead."
          - "A rule's verbs can now be edited on the Auto-accept page."
+         - "Scoped tokens can be duplicated: Duplicate fills the New token form from an existing
+           token, with a numbered name. The token form now lists only the tools the selected
+           rules cover, plus the tools that need no rule."
          - "Personal data in exports, file downloads and Peek uploads is now allowed per scoped
            token instead of per rule. Tokens that used such a rule keep it; calls made without
            a token always stop for review when personal data is found."
-      8. Delete docs/scope-rules-plan.md and docs/scope-rules-plan-manual-steps.html.
+      9. Delete docs/scope-rules-plan.md and docs/scope-rules-plan-manual-steps.html.
          `grep -rn "scope-rules-plan" .` must match nothing.
     acceptance:
       - test -e docs/scope-rules-plan.md fails and grep -rn "scope-rules-plan" --include=*.md --include=*.py --include=*.html . matches nothing
