@@ -12,7 +12,9 @@ import pytest
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
-from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
+from privacyfence.policy import scope_rows
+from privacyfence.policy.registry import Verb
+from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
 from privacyfence.web.csp import build_csp
 from privacyfence.web.server import (
     DEFAULT_PORT,
@@ -1900,7 +1902,12 @@ class TestScopedTokenWiring:
         rule = PolicyRule(
             id="r-sender", predicate="i_am_sender", value=None, operations=frozenset({"gmail.read_message"}),
         )
+        row = scope_rows.ScopeRow(
+            id="r-sender", scope=None, value=None, verbs=frozenset({Verb.READ}), predicate="i_am_sender",
+            operations=frozenset({"gmail.read_message"}),
+        )
         monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [row])
         return rule
 
     def test_the_scoped_token_wiring_is_built_only_with_an_mcp_endpoint(self, tmp_path, monkeypatch):
@@ -1931,7 +1938,12 @@ class TestScopedTokenWiring:
             id="r-doc", predicate="grist.document", value=["8CAN8gKdxY7z"],
             operations=frozenset({"grist.read_records", "grist.update_csv"}),
         )
+        row = scope_rows.ScopeRow(
+            id="r-doc", scope="grist.document", value=["8CAN8gKdxY7z"], verbs=frozenset({Verb.READ, Verb.UPDATE}),
+            operations=frozenset({"grist.read_records", "grist.update_csv"}),
+        )
         monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [row])
 
         class _Names:
             def cached_name(self, rt, resource_id):
@@ -1953,6 +1965,7 @@ class TestScopedTokenWiring:
 
         self._store(tmp_path, monkeypatch)
         monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [])
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
         data = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()
 
         assert "grist_list_tables" in data["auto_tools"]
@@ -2021,4 +2034,43 @@ class TestScopedTokenWiring:
         assert "gmail_list_messages" in data["tools"][1]["tools"]
 
         monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
+        monkeypatch.setattr("privacyfence.auto_accept.get_policy_rows", lambda: [])
         assert wiring.page_data()["tokens"][0]["rules"] == [{"id": rule.id, "missing": True}]
+
+
+def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
+    """A token carries the pairs its rule had when it was made; a row extended afterwards is wider
+    than that limit, and the token list says which tools the token is still limited to."""
+    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence.policy import catalogue as policy_catalogue
+    from privacyfence.policy.registry import Verb
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+
+    def page():
+        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
+        return {t["label"]: t["rules"][0] for t in data["tokens"]}
+
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+        auto_accept.add_policy_v2_rules(policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.READ]))
+        store.create(alice, label="before", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
+        assert "limited_to" not in page()["before"]
+
+        auto_accept.add_policy_v2_rules(
+            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.DOWNLOAD])
+        )
+        store.create(alice, label="after", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
+        entries = page()
+
+    assert "drive_download_file" not in entries["before"]["limited_to"]
+    assert entries["before"]["limited_to"]
+    assert "limited_to" not in entries["after"]

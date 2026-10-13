@@ -100,12 +100,13 @@ from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..policy import describe
+from ..policy import scope_rows
 from ..policy import propose as policy_propose
-from ..policy.engine import PolicyRule
+from ..policy.registry import TOOL_REGISTRY
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
 from ..resource_names import get_resolver
-from ..settings_controller import SettingsController, cached_rule_value, set_main_dispatcher
+from ..settings_controller import SettingsController, cached_row_value, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from ..web_push import PushNotifier, PushSubscriptionStore
@@ -286,20 +287,48 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     )
 
 
-def _scoped_rule_entry(rule: PolicyRule, value_display: str) -> dict[str, Any]:
-    """One rule as the scoped token form shows it: ``title`` says which resource it covers,
+def _scoped_rule_entry(row: scope_rows.ScopeRow, value_display: str) -> dict[str, Any]:
+    """One row as the scoped token form shows it: ``title`` says which resource it covers,
     ``verbs`` what it allows there, ``tools`` which tools those verbs govern."""
-    connectors = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    compiled = scope_rows.compile_row(row)
+    connectors = sorted({policy_propose.connector_of_operation(op) for op in row.operations})
     connector = describe.connector_label(connectors[0]) if connectors else ""
-    scope_type = describe.scope_type_of(rule)
-    subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip() if scope_type else rule.predicate
+    scope_type = describe.scope_type_of(compiled[0]) if compiled else ""
+    if scope_type:
+        subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip()
+    else:
+        subject = compiled[0].predicate if compiled else (row.predicate or row.scope or "")
     return {
-        "id": rule.id,
+        "id": row.id,
         "title": f"{connector} — {subject}" if connector else subject,
-        "verbs": [verb.value for verb in describe.rule_verbs(rule)],
-        "sentence": describe.rule_sentence(rule, value_display=value_display or None),
-        "tools": list(describe.covered_tools(rule)),
+        "verbs": [verb.value for verb in sorted(row.verbs, key=policy_propose.verb_sort_key)],
+        "sentence": describe.row_sentence(row, value_display=value_display or None),
+        "tools": sorted({tool for rule in compiled for tool in describe.covered_tools(rule)}),
     }
+
+
+def _limited_tools(row: scope_rows.ScopeRow, limit: frozenset[tuple[str, str]]) -> list[str]:
+    """The tools of ``row`` whose ``(predicate, operation)`` pair is in a token's ``limit``."""
+    return sorted({
+        entry.tool
+        for rule in scope_rows.compile_row(row)
+        for entry in TOOL_REGISTRY.values()
+        if entry.operation in rule.operations and entry.verb is not None
+        and entry.tool in describe.covered_tools(rule) and (rule.predicate, entry.operation) in limit
+    })
+
+
+def _token_rule_entry(
+    token: ScopedToken, rule_id: str, rows: dict[str, scope_rows.ScopeRow], rules: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if rule_id not in rules:
+        return {"id": rule_id, "missing": True}
+    entry = {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
+    limit = token.rule_limits.get(rule_id)
+    # A token's limit is narrower than the row when some of the row's pairs are not in it.
+    if limit is not None and scope_rows.pairs_of(rows.values(), rule_id) - limit:
+        entry["limited_to"] = _limited_tools(rows[rule_id], limit)
+    return entry
 
 
 def scoped_token_page_data(
@@ -312,15 +341,15 @@ def scoped_token_page_data(
     ADR 0165). Must not be called under another principal's scope.
 
     Each rule's resource ids are shown by the names the Auto-accept page has
-    cached (``cached_rule_value``), so the two pages name a rule alike. A
+    cached (``cached_row_value``), so the two pages name a rule alike. A
     rule's ``title`` names what it covers without its verbs, which the form
     shows separately; ``auto_tools`` are the tools that need no rule at all.
     """
     now = time.time()
     with principal_scope(principal):
         resolver = get_resolver()
-        rules = {rule.id: _scoped_rule_entry(rule, cached_rule_value(rule, resolver))
-                 for rule in auto_accept.get_policy_v2_store_rules()}
+        rows = {row.id: row for row in auto_accept.get_policy_rows()}
+        rules = {row.id: _scoped_rule_entry(row, cached_row_value(row, resolver)) for row in rows.values()}
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
         connector = name.split("_", 1)[0]
@@ -334,12 +363,7 @@ def scoped_token_page_data(
             "id": token.id, "label": token.label, "created_at": token.created_at,
             "expires_at": token.expires_at, "days_left": days_left,
             "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
-            "rules": [
-                {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
-                if rule_id in rules
-                else {"id": rule_id, "missing": True}
-                for rule_id in sorted(token.rule_ids)
-            ],
+            "rules": [_token_rule_entry(token, rule_id, rows, rules) for rule_id in sorted(token.rule_ids)],
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
         })

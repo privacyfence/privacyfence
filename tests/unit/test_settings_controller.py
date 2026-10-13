@@ -2235,6 +2235,42 @@ class TestAutoAcceptRuleUsage:
         assert row["never_matched"] is True
 
 
+class TestScopeRowState:
+    """The Auto-accept page reads scope rows (ADR 0172), not one entry per stored predicate."""
+
+    FOLDER = "2RollingCashflowFolder"
+
+    def _v2_cfg(self):
+        return {"auto_accept": {"version": 2, "rules": [
+            {"id": "r-narrow", "predicate": "approved_folder", "value": [self.FOLDER],
+             "operations": ["drive.download_file"], "conditions": []},
+            {"id": "r-flagged", "predicate": "approved_folder", "value": [self.FOLDER],
+             "operations": ["drive.read_file_contents", "drive.download_file"], "conditions": [],
+             "allow_personal_data": True},
+        ]}}
+
+    def test_screenshot_case_renders_one_row(self, controller):
+        state = controller._auto_accept_state(self._v2_cfg())
+        (row,) = state["rules"]
+        assert [v["verb"] for v in row["verbs"]] == ["read", "download"]
+        assert row["scope"] == "drive.folder"
+        assert "read" in row["scope_verbs"] and "download" in row["scope_verbs"]
+        assert row["sentence"].endswith("allow read, download")
+
+    def test_usage_sums_former_ids(self, controller):
+        usage = {
+            "r-narrow": {"count": 2, "last_matched": "2026-07-06T12:00:00+00:00"},
+            "r-flagged": {"count": 3, "last_matched": "2026-07-08T12:00:00+00:00"},
+            "r-unrelated": {"count": 9, "last_matched": "2026-07-09T12:00:00+00:00"},
+        }
+        rows = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
+        state = sc._auto_accept_state_from_rows(rows, usage, resolve_value=lambda row: "v")
+        (row,) = state["rules"]
+        assert row["match_count"] == 5
+        assert row["never_matched"] is False
+        assert row["last_matched"] == sc._relative_time("2026-07-08T12:00:00+00:00")
+
+
 class TestResolvedRuleValue:
     """Rule values resolve through the shared cached-name machinery, reusing
     RULE_NAME_TO_RESOURCE_TYPE for a predicate whose value is an opaque resource id."""

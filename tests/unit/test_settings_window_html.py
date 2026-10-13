@@ -253,7 +253,7 @@ class TestAutoAcceptTemplate:
         non-empty; the DOM behaviour is proved in tests/integration/test_settings_update_rule_browser.py."""
         html = build_html(_make_state())
         assert "r.missing_tools && r.missing_tools.length" in html
-        assert "Newer tools aren\\'t covered yet" in html
+        assert "These verbs also cover tools this rule doesn\\'t allow yet" in html
         assert "dataAttr('update_policy_rule', { rule_id: r.id })" in html
 
     def test_update_rule_confirm_names_the_tools(self):

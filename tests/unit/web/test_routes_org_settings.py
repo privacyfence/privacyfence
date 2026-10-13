@@ -1415,6 +1415,11 @@ class TestScopedTokenRoutes:
         assert r.status_code == 200
         [token] = store.tokens_for(ALICE)
         assert token.allow_personal_data is True
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        assert any(f"({token.id})" in text and ", personal data allowed (principal=alice)" in text for text in summaries)
 
     def test_a_token_without_the_flag_does_not_allow_personal_data(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
@@ -1422,6 +1427,10 @@ class TestScopedTokenRoutes:
         assert self._post(client, "create", {**self.BODY, "confirmed": True}, csrf).status_code == 200
         [token] = store.tokens_for(ALICE)
         assert token.allow_personal_data is False
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            assert not any("personal data allowed" in e.summary for e in get_audit_logger().recent_entries(20))
 
     def test_a_non_bool_personal_data_flag_is_a_400(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)

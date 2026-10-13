@@ -116,6 +116,38 @@ class TestSentences:
                           conditions=(("not_private", None),))
         assert describe.rule_sentence(rule) == "Calendar - anything: allow read - when not private"
 
+    def test_row_sentence_for_a_folder_row(self):
+        from privacyfence.policy import scope_rows
+        row = scope_rows.ScopeRow(
+            id="r-1", scope="drive.folder", value=["F"], verbs=frozenset({Verb.READ, Verb.DOWNLOAD}),
+            operations=frozenset({"drive.read_file_contents", "drive.download_file"}),
+        )
+        assert describe.row_sentence(row) == "Drive - folder F: allow read, download"
+        assert describe.row_sentence(row, "Budget") == "Drive - folder Budget: allow read, download"
+
+    def test_row_sentence_for_a_custom_row_matches_its_compiled_rule(self):
+        from privacyfence.policy import scope_rows
+        row = scope_rows.ScopeRow(
+            id="r-2", scope=None, value=None, verbs=frozenset(), predicate="i_am_owner",
+            operations=frozenset({"drive.read_file_contents"}),
+        )
+        assert describe.row_sentence(row) == "Drive - owned by me: allow read"
+
+    def test_row_sentence_for_a_condition_row_names_the_condition(self):
+        from privacyfence.policy import scope_rows
+        scope = next(
+            g for g, entries in propose.SCOPES_BY_GROUP.items()
+            if entries[0].condition and entries[0].connector == "calendar"
+        )
+        entry = propose.SCOPES_BY_GROUP[scope][0]
+        row = scope_rows.ScopeRow(
+            id="r-3", scope=scope, value=None, verbs=frozenset({Verb.READ}),
+            operations=scope_rows.implied_operations(scope, [Verb.READ]),
+        )
+        sentence = describe.row_sentence(row)
+        assert sentence.startswith("Calendar - ")
+        assert sentence.endswith(" - when " + entry.condition[0].replace("_", " "))
+
     def test_a_dual_scope_predicate_resolves_against_the_rules_own_connector(self):
         """`label_name_allowlist` serves `gmail.label` and `contacts.label`; which one it is
         depends on the operations the rule actually carries."""

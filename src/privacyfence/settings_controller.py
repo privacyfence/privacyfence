@@ -51,7 +51,6 @@ from .paths import authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
-from .policy import outdated as policy_outdated
 from .policy import propose as policy_propose
 from .policy import registry as policy_registry
 from .policy import scope_rows as policy_scope_rows
@@ -476,57 +475,65 @@ def _rule_usage_map() -> dict[str, Any]:
     ``principal_scope`` sets), so this already reads whichever principal is
     currently scoped when called, local mode's single ``LOCAL_PRINCIPAL``
     or an org caller's own ``with principal_scope(principal):``
-    block -- see ``_auto_accept_state_from_rules`` below, this function's
+    block -- see ``_auto_accept_state_from_rows`` below, this function's
     only caller."""
     log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
     return AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
 
 
-def _rule_row(rule: PolicyRule, usage: dict[str, Any], *, resolved_value: str) -> dict[str, Any]:
-    connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+def _rule_row(row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolved_value: str) -> dict[str, Any]:
+    """One stored scope row as the Auto-accept page's row. ``usage`` maps ids to rule usage; the
+    row's count is summed over its own id and every ``former_ids`` entry (the v2 rules merged into
+    it), and ``last_matched`` is the latest of them."""
+    compiled = policy_scope_rows.compile_rows([row])
+    operations = row.operations
+    connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in operations})
     connector = connectors_of_rule[0] if connectors_of_rule else ""
+    matches = [usage[i] for i in (row.id, *row.former_ids) if usage.get(i)]
+    count = sum(m.get("count", 0) for m in matches)
+    last = max((m["last_matched"] for m in matches if m.get("last_matched")), default=None)
+    covered = sorted({tool for rule in compiled for tool in policy_describe.covered_tools(rule)})
     return {
-        "id": rule.id,
-        "sentence": policy_describe.rule_sentence(rule, value_display=resolved_value),
+        "id": row.id,
+        "sentence": policy_describe.row_sentence(row, value_display=resolved_value),
         "connector": connector,
         "connector_label": policy_describe.connector_label(connector) if connector else "",
-        "scope_type": policy_describe.scope_type_of(rule),
+        "scope": row.scope,
+        "scope_verbs": [v.value for v in policy_scope_rows.scope_verbs(row.scope)],
+        "scope_type": policy_describe.scope_type_of(compiled[0]) if compiled else "",
         "value": resolved_value,
         # Raw (unresolved) value, for the page's right-click-to-copy affordance -- the
         # resolved "value" field above may show a friendly name instead of the id/key a
         # user would actually want to paste elsewhere.
-        "value_ids": [str(v) for v in rule.value] if isinstance(rule.value, list) else (
-            [str(rule.value)] if rule.value else []
+        "value_ids": [str(v) for v in row.value] if isinstance(row.value, list) else (
+            [str(row.value)] if row.value else []
         ),
         "verbs": [
             {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
-            for verb in policy_describe.rule_verbs(rule)
+            for verb in sorted(row.verbs, key=policy_propose.verb_sort_key)
         ],
-        "covered_tools": list(policy_describe.covered_tools(rule)),
-        # Tools the rule's verbs imply but its stored operations do not reach (ADR 0166).
-        "missing_tools": list(policy_outdated.missing_tools(rule)),
-        "match_count": usage.get("count", 0),
-        "last_matched": _relative_time(usage["last_matched"]) if usage else "",
-        "never_matched": not usage,
+        "covered_tools": covered,
+        # Tools the row's verbs imply but its stored operations do not reach (ADR 0166).
+        "missing_tools": list(policy_scope_rows.missing_tools(row)),
+        "match_count": count,
+        "last_matched": _relative_time(last) if last else "",
+        "never_matched": not matches,
     }
 
 
-def _auto_accept_state_from_rules(
-    rules: list[PolicyRule], usage_by_rule_id: dict[str, Any], *,
-    resolve_value: Callable[[PolicyRule], str],
+def _auto_accept_state_from_rows(
+    rows: list[policy_scope_rows.ScopeRow], usage_by_rule_id: dict[str, Any], *,
+    resolve_value: Callable[[policy_scope_rows.ScopeRow], str],
 ) -> dict[str, Any]:
     """The Auto-accept page's state, factored out of ``SettingsController.
     _auto_accept_state`` (ADR 0032) so web/routes_settings.py's own org-mode
-    state builder can share it. ``resolve_value`` renders one rule's value; both modes
-    pass ``cached_rule_value`` (resource ids shown by their cached names), and differ only
+    state builder can share it. ``resolve_value`` renders one row's value; both modes
+    pass ``cached_row_value`` (resource ids shown by their cached names), and differ only
     in how a missing name gets resolved -- local's ``_resolved_rule_value`` in the background
     with a snapshot push, org's ``web/routes_settings.py`` ``_await_rule_names`` before the
     render, since org mode has no live push."""
     catalogue = _policy_scope_catalogue()
-    rule_rows = [
-        _rule_row(rule, usage_by_rule_id.get(rule.id) or {}, resolved_value=resolve_value(rule))
-        for rule in rules
-    ]
+    rule_rows = [_rule_row(row, usage_by_rule_id, resolved_value=resolve_value(row)) for row in rows]
     rule_rows.sort(key=lambda row: row["sentence"])
     connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
                          | {entry["connector"] for entry in catalogue})
@@ -551,6 +558,16 @@ def cached_rule_value(rule: PolicyRule, resolver: ResourceNameResolver) -> str:
     if rt is None:
         return ", ".join(str_values)
     return ", ".join(resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
+
+
+def cached_row_value(row: policy_scope_rows.ScopeRow, resolver: ResourceNameResolver) -> str:
+    """``cached_rule_value`` for a scope row: applied to its first compiled rule, or the raw value
+    when the row compiles to nothing."""
+    compiled = policy_scope_rows.compile_row(row)
+    if compiled:
+        return cached_rule_value(compiled[0], resolver)
+    values = row.value if isinstance(row.value, list) else ([row.value] if row.value else [])
+    return ", ".join(str(v) for v in values)
 
 
 # ---------------------------------------------------------------------------- #
@@ -2076,19 +2093,21 @@ class SettingsController:
         principal's own ``logs/audit/`` directory, the same way ``_audit_state`` builds "Recent
         decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
         different principal's logger by the time this renders (org mode)."""
-        rules = policy_store.compile_rules_from_config(cfg)
-        return _auto_accept_state_from_rules(rules, _rule_usage_map(), resolve_value=self._resolved_rule_value)
+        rows = policy_scope_rows.rows_from_config(cfg)
+        return _auto_accept_state_from_rows(rows, _rule_usage_map(), resolve_value=self._resolved_rule_value)
 
-    def _resolved_rule_value(self, rule: PolicyRule) -> str:
-        """A rule's own value, as a comma-separated display string, resolving each id through the
+    def _resolved_rule_value(self, row: policy_scope_rows.ScopeRow) -> str:
+        """A row's own value, as a comma-separated display string, resolving each id through the
         same cached-name machinery the old grant rows used (``RULE_NAME_TO_RESOURCE_TYPE``,
         ``resource_names.py``) wherever the predicate names an opaque resource id -- a Drive folder,
         a Jira project key, and so on -- rather than showing the raw id, kicking off a background
         resolve for anything not cached yet (``_resolve_names_async``)."""
-        rt, str_values = rule_resource_ids(rule)
-        if rt is not None:
-            self._resolve_names_async(rt, str_values, self._client_for(rt.connector))
-        return cached_rule_value(rule, self._resolver)
+        compiled = policy_scope_rows.compile_row(row)
+        if compiled:
+            rt, str_values = rule_resource_ids(compiled[0])
+            if rt is not None:
+                self._resolve_names_async(rt, str_values, self._client_for(rt.connector))
+        return cached_row_value(row, self._resolver)
 
     def _privacy_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         return _privacy_state_from_config(cfg)
