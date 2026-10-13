@@ -356,7 +356,7 @@ class ScopedTokenWiring:
     clipboard, so no response from this module ever carries it;
     ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
 
-    store_create: Callable[[str, int, list[str], list[str]], tuple[ScopedToken, str]]
+    store_create: Callable[[str, int, list[str], list[str], bool], tuple[ScopedToken, str]]
     store_revoke: Callable[[str], ScopedToken | None]
     store_revoke_all: Callable[[], int]
     send_secret: Callable[[str], tuple[bool, str]]
@@ -374,7 +374,13 @@ def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
         return None
     if not all(isinstance(name, str) for name in (*rule_ids, *tools)):
         return None
-    return {"label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools)}
+    allow_personal_data = payload.get("allow_personal_data", False)
+    if not isinstance(allow_personal_data, bool):
+        return None
+    return {
+        "label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools),
+        "allow_personal_data": allow_personal_data,
+    }
 
 
 def _scoped_revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1195,6 +1201,7 @@ def build_routes(
         try:
             token, secret = await run_in_threadpool(
                 scoped_tokens.store_create, bound["label"], bound["days"], bound["rule_ids"], bound["tools"],
+                bound["allow_personal_data"],
             )
         except ScopedTokenError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1716,6 +1723,7 @@ def build_org_routes(
                     lambda: store.create(
                         principal, label=bound["label"], days=bound["days"], rule_ids=bound["rule_ids"],
                         tools=bound["tools"], policy=token_policy,
+                        allow_personal_data=bound["allow_personal_data"],
                     ),
                 )
             except ScopedTokenError as exc:

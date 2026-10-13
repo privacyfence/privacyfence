@@ -54,6 +54,7 @@ class ScopedToken:
     expires_at: float
     rule_ids: frozenset[str]
     tools: frozenset[str]
+    allow_personal_data: bool = False  # ADR 0173: exports, downloads and page uploads may carry personal data
 
     def days_left(self, now: float) -> int:
         return max(0, math.ceil((self.expires_at - now) / _SECONDS_PER_DAY))
@@ -111,7 +112,7 @@ def policy_from_org_config(org_config: dict, *, org_mode: bool) -> ScopedTokenPo
 
 
 def _to_json(token: ScopedToken) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "id": token.id,
         "label": token.label,
         "digest": token.digest,
@@ -122,6 +123,9 @@ def _to_json(token: ScopedToken) -> dict[str, Any]:
         "rule_ids": sorted(token.rule_ids),
         "tools": sorted(token.tools),
     }
+    if token.allow_personal_data:
+        data["allow_personal_data"] = True
+    return data
 
 
 def _from_json(principal_id: str, raw: Any) -> ScopedToken:
@@ -136,6 +140,7 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         expires_at=float(raw["expires_at"]),
         rule_ids=frozenset(str(r) for r in raw["rule_ids"]),
         tools=frozenset(str(t) for t in raw["tools"]),
+        allow_personal_data=raw.get("allow_personal_data", False) is True,
     )
 
 
@@ -218,6 +223,7 @@ class ScopedTokenStore:
         rule_ids: Iterable[str],
         tools: Iterable[str],
         policy: ScopedTokenPolicy,
+        allow_personal_data: bool = False,
         now: float | None = None,
     ) -> tuple[ScopedToken, str]:
         if not policy.enabled:
@@ -262,6 +268,7 @@ class ScopedTokenStore:
                 expires_at=created + days * _SECONDS_PER_DAY,
                 rule_ids=rules,
                 tools=tool_set,
+                allow_personal_data=allow_personal_data,
             )
             self._tokens[principal.id] = [*existing, token]
             self._write(principal)

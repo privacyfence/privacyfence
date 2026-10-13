@@ -710,6 +710,14 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_the_form_offers_the_personal_data_checkbox_and_the_list_shows_its_badge(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "Let exports, downloads and page uploads carry personal data" in html
+        assert "Only for calls made with this token, and only for Drive downloads delivered as a file, Grist, " in html
+        assert "Other calls still stop for review when personal data is found." in html
+        assert "allow_personal_data: !!ui.stPersonalData" in html
+        assert "personal data allowed" in html
+
     def test_rules_show_their_resource_with_the_verbs_as_a_detail(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "esc(r.title) +" in html
