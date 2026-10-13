@@ -292,6 +292,7 @@ class AssetsClient:
             try:
                 refresh_token = load_token_file(self._token_file).get("refresh_token") or refresh_token
             except AtlassianOAuthError:
+                # An unreadable token file is not fatal: refresh with the token already in config.
                 pass
         if not client_id or not client_secret or not refresh_token:
             return False
