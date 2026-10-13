@@ -179,19 +179,22 @@ update_check:
 # card. Managed from PrivacyFence Settings' "Auto-accept" page, the approval
 # card's "Always allow" button, or privacyfence_propose_policy_change -- all
 # three write this section. Prefer them over hand-editing: they validate each
-# rule and mint its "id" from (predicate, value, conditions), which is what
-# the Auto-accept page's usage counts are keyed on. Each rule is a scope
-# ("predicate" + "value": which resources it trusts), the operations it
-# covers, and optional conditions that must also hold. See "Always-allow and
-# policy rules" in docs/approvals-and-policy.md for every scope and condition.
+# row and mint its "id". Rules are stored one per scope: a scoped row names a
+# "scope" and its "value" (which resources it trusts), the "verbs" it allows
+# and the "operations" they cover, and its id comes from (scope, value), so it
+# stays the same when verbs are added. A custom row ("predicate" instead of
+# "scope", plus optional "conditions" that must also hold) keeps the id it was
+# written with. See "Always-allow and policy rules" in
+# docs/approvals-and-policy.md for every scope and condition.
 auto_accept:
-  version: 2
+  version: 3
   rules:
     # Auto-accept contact edits that don't touch emails/phones (name,
     # organization, or notes-only changes).
     - id: r-d76028ec0b
       predicate: always_allow
       value: null
+      verbs: [update]
       operations: [contacts.edit]
       conditions: [[no_contact_info_change, null]]
 

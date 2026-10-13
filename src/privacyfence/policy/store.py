@@ -200,6 +200,11 @@ def compile_rules_from_config(cfg: dict[str, Any]) -> list[PolicyRule]:
     section = cfg.get(AUTO_ACCEPT_CONFIG_KEY) if isinstance(cfg, dict) else None
     if not isinstance(section, dict):
         return []
+    if section.get("version") == 3:
+        # scope_rows imports catalogue, which imports this module.
+        from . import scope_rows
+
+        return scope_rows.compile_rows(scope_rows.rows_from_section(section))
     raw_rules = section.get("rules")
     if not isinstance(raw_rules, list):
         return []
