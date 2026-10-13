@@ -51,6 +51,7 @@ from privacyfence.pii_detector import init_pii_detection
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import TOOL_REGISTRY, Verb
@@ -4332,3 +4333,63 @@ class TestDenyFeedback:
         assert str(excinfo.value) == self.DEFAULT
         assert approval.deny_feedback == DenialFeedback()
         assert read_audit_entries(audit_dir)[-1]["deny_note_chars"] == 0
+
+
+class TestRuleLimits:
+    """A token's ``rule_limits`` (3.4) narrow a rule it carries to the (predicate, operation) pairs
+    it had when it was made or upgraded; they never widen it."""
+
+    @staticmethod
+    def _install(*rules):
+        auto_accept.set_policy_v2_store_rules(list(rules))
+
+    @staticmethod
+    def _limited(rule_ids, limits):
+        return dataclasses.replace(_scoped_token(rule_ids=rule_ids), rule_limits=limits)
+
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    def test_rule_limits_narrow_a_token_to_its_former_rules(self):
+        rule = PolicyRule(
+            id="r-in", predicate="gmail.anything", value=None,
+            operations=frozenset({"gmail.read_message", "gmail.read_thread"}),
+        )
+        self._install(rule)
+        token = self._limited(["r-in"], {"r-in": frozenset({("gmail.anything", "gmail.read_message")})})
+
+        (narrowed,) = gate._rules_in_scope(token)
+
+        assert narrowed.operations == {"gmail.read_message"}
+        assert (narrowed.id, narrowed.predicate) == ("r-in", "gmail.anything")
+        assert gate._rules_in_scope(None) == [rule]
+        assert gate._rules_in_scope(_scoped_token(rule_ids=["r-in"])) == [rule]  # no limit: used whole
+
+    def test_rule_limits_drop_a_rule_left_empty(self):
+        rule = _gmail_read_rule("r-in")
+        self._install(rule)
+
+        assert gate._rules_in_scope(self._limited(["r-in"], {"r-in": frozenset()})) == []
+        other_pairs = {"r-in": frozenset({("gmail.other", "gmail.read_message")})}
+        assert gate._rules_in_scope(self._limited(["r-in"], other_pairs)) == []
+
+    def test_adding_a_verb_to_a_row_does_not_widen_an_existing_token(self):
+        scope, value = "drive.folder", ["FOLDER1"]
+        row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, value), scope=scope, value=value, verbs=frozenset({Verb.READ}),
+            operations=scope_rows.implied_operations(scope, [Verb.READ]),
+        )
+        before = scope_rows.compile_rows([row])
+        token = self._limited([row.id], {row.id: scope_rows.pairs_of([row], row.id)})
+
+        (widened,) = scope_rows.set_verbs([row], row.id, [Verb.READ, Verb.DOWNLOAD]) or [None]
+        after = scope_rows.compile_rows([widened])
+        assert {(r.predicate, op) for r in after for op in r.operations} > token.rule_limits[row.id]
+        self._install(*after)
+
+        scoped = gate._rules_in_scope(token)
+
+        assert {(r.predicate, op) for r in scoped for op in r.operations} == token.rule_limits[row.id]
+        assert {(r.predicate, op) for r in before for op in r.operations} == token.rule_limits[row.id]
