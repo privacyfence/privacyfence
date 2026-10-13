@@ -192,6 +192,44 @@ class TestStore:
         )
         assert loaded == token
 
+    def test_create_stores_allow_personal_data_and_defaults_to_false(self):
+        store = _store()
+        plain, _ = _create(store, label="plain")
+        flagged, _ = _create(store, label="flagged", allow_personal_data=True)
+        assert plain.allow_personal_data is False
+        assert flagged.allow_personal_data is True
+        assert REVOKED_SCOPE.allow_personal_data is False
+
+    def test_allow_personal_data_round_trips_and_is_written_only_when_true(self, tmp_path):
+        store = _store()
+        plain, _ = _create(store, label="plain")
+        flagged, _ = _create(store, label="flagged", allow_personal_data=True)
+        entries = {e["label"]: e for e in json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]}
+        assert "allow_personal_data" not in entries["plain"]
+        assert entries["flagged"]["allow_personal_data"] is True
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", plain.id) == plain
+        assert restarted.get("local", flagged.id) == flagged
+
+    def test_old_file_without_the_key_loads_as_false(self, tmp_path):
+        token, _ = _create(_store(), allow_personal_data=True)
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        del data["tokens"][0]["allow_personal_data"]
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).allow_personal_data is False
+
+    def test_a_non_true_value_in_the_file_loads_as_false(self, tmp_path):
+        token, _ = _create(_store(), allow_personal_data=True)
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        data["tokens"][0]["allow_personal_data"] = "yes"
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).allow_personal_data is False
+
     def test_malformed_file_is_skipped_not_raised(self, tmp_path, caplog):
         _create(_store())
         _file(tmp_path).write_text("{not json", encoding="utf-8")

@@ -1484,8 +1484,8 @@ def _scoped_wiring(calls: list, *, ok: bool = True, reason: str = "", create_err
 
     secret = "pfst_" + "A" * 43
 
-    def _create(label, days, rule_ids, tools):
-        calls.append(("create", label, days, rule_ids, tools))
+    def _create(label, days, rule_ids, tools, allow_personal_data):
+        calls.append(("create", label, days, rule_ids, tools, allow_personal_data))
         if create_error:
             raise ScopedTokenError(create_error)
         return _scoped_token(label=label), secret
@@ -1546,9 +1546,32 @@ class TestScopedTokenRoutes:
         assert r.json() == {"created": {"id": "st-0123456789ab", "label": "sales-sync", "expires_at": 2.0}}
         assert self.SECRET not in r.text
         assert calls == [
-            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"]),
+            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"], False),
             ("send", self.SECRET),
         ]
+
+    def test_the_personal_data_flag_reaches_the_store(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "allow_personal_data": True}})
+        assert r.status_code == 200
+        assert calls[0][-1] is True
+
+    @pytest.mark.parametrize("value", ["true", 1, None, []])
+    def test_a_non_bool_personal_data_flag_is_a_400(self, controller, sessions, value):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "allow_personal_data": value}})
+        assert r.status_code == 400
+        assert calls == []
+
+    def test_the_fingerprint_covers_the_personal_data_flag(self):
+        base = {"label": "a", "days": 1, "rule_ids": ["r"], "tools": ["t"]}
+        off = rs._scoped_create_fingerprint_body(base)
+        on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data": True})
+        assert off["allow_personal_data"] is False and on["allow_personal_data"] is True
+        assert off != on
+        assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data": "yes"}) is None
 
     @pytest.mark.usefixtures("_data_dir")
     @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL])

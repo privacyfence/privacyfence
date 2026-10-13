@@ -1960,6 +1960,24 @@ class TestScopedTokenWiring:
         assert all(name.startswith("grist_") for name in data["auto_tools"])
         assert all(auto_accept.TOOL_TO_GATE[name] == "auto" for name in data["auto_tools"])
 
+    def test_the_wiring_passes_the_personal_data_flag_to_the_store_and_the_page(self, tmp_path, monkeypatch):
+        from privacyfence import scoped_tokens
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        monkeypatch.setattr(
+            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
+        )
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
+
+        flagged, _ = wiring.store_create("flagged", 30, [rule.id], ["gmail_list_messages"], True)
+        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], False)
+
+        assert (flagged.allow_personal_data, plain.allow_personal_data) == (True, False)
+        tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
+        assert (tokens["flagged"]["allow_personal_data"], tokens["plain"]["allow_personal_data"]) == (True, False)
+
     def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
         import time
 

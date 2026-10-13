@@ -174,7 +174,7 @@ from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
-from .scoped_tokens import ScopedToken, current_token_scope
+from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_token_scope
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -722,13 +722,17 @@ def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]
 def _personal_data_rule(
     tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
 ) -> policy_engine.PolicyRule | None:
-    """The stored rule with ``allow_personal_data`` that covers this call, for a tool in
-    ``PERSONAL_DATA_RULE_TOOLS`` only (ADR 0157); ``None`` for every other tool, when the result
-    carries the content itself (``content_reaches_result``), or when no such rule matches."""
+    """The token's own rule that covers this call, when the call is made with a scoped token
+    that has ``allow_personal_data`` (ADR 0173), for a tool in ``PERSONAL_DATA_RULE_TOOLS`` only
+    (ADR 0157); ``None`` for an unscoped call, a token without the flag, a revoked token, every
+    other tool, when the result carries the content itself (``content_reaches_result``), or when
+    no rule of the token matches."""
     if tool not in PERSONAL_DATA_RULE_TOOLS or content_reaches_result:
         return None
-    # Under a scoped token only the token's own rules count, flagged ones included (ADR 0164).
-    rules = [rule for rule in _rules_in_scope(current_token_scope()) if rule.allow_personal_data]
+    scope = current_token_scope()
+    if scope is None or scope is REVOKED_SCOPE or not scope.allow_personal_data:
+        return None
+    rules = _rules_in_scope(scope)
     if not rules:
         return None
     try:

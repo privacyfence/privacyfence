@@ -1396,6 +1396,30 @@ class TestScopedTokenRoutes:
         assert self._post(client, "create", {"confirmed": True, "label": 3}, csrf).status_code == 400
         assert store.tokens_for(ALICE) == []
 
+    def test_the_personal_data_flag_reaches_the_store(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.allow_personal_data is True
+
+    def test_a_token_without_the_flag_does_not_allow_personal_data(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        assert self._post(client, "create", {**self.BODY, "confirmed": True}, csrf).status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.allow_personal_data is False
+
+    def test_a_non_bool_personal_data_flag_is_a_400(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data": "yes", "confirmed": True}, csrf)
+
+        assert r.status_code == 400
+        assert store.tokens_for(ALICE) == []
+
     def test_create_returns_the_secret_once_with_no_store(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
 

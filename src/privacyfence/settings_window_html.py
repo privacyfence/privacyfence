@@ -335,7 +335,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
     aaGroup: null, aaValue: '', aaCheckedVerbs: {}, aaPersonalData: false,
-    stLabel: '', stDays: null, stRules: {}, stTools: {},
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false,
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -1224,6 +1224,9 @@ _JS = r"""
     } else if (t.expiring_soon) {
       chips = '<span class="pf-chip pf-st-chip pf-st-warn">Expires in ' + esc(t.days_left) + (t.days_left === 1 ? ' day' : ' days') + '</span>';
     }
+    if (t.allow_personal_data) {
+      chips += '<span class="pf-chip pf-st-chip">personal data allowed</span>';
+    }
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
@@ -1298,6 +1301,12 @@ _JS = r"""
         ', so ' + (uncovered.length === 1 ? 'its calls' : 'their calls') + ' will be denied. Select a rule that covers ' +
         (uncovered.length === 1 ? 'it' : 'them') + ', or untick ' + (uncovered.length === 1 ? 'it' : 'them') + '.</div>';
     }
+    var stPdOn = !!ui.stPersonalData;
+    var stPdLabel = 'Let exports, downloads and page uploads carry personal data';
+    html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
+      (stPdOn ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(stPdLabel) + '" data-st-personal-data="1">' + esc(stPdLabel) + '</div></div>';
+    html += '<div class="pf-hint">Only for calls made with this token, and only for Drive downloads delivered as a file, Grist, ' +
+      'Salesforce and Jira exports, and Peek page uploads. Other calls still stop for review when personal data is found.</div>';
     html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Add the tools these rules cover" data-st-add-covered="1">Add the tools these rules cover</div></div>';
     html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';
     html += '</div></div>';
@@ -1401,7 +1410,7 @@ _JS = r"""
   function submitScopedToken() {
     var ids = Object.keys(ui.stRules).filter(function (k) { return ui.stRules[k]; });
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
-    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools, allow_personal_data: !!ui.stPersonalData });
   }
 
   // -------------------------------------------------------------------- //
@@ -1801,6 +1810,7 @@ _JS = r"""
     if (stRuleEl) { var rid = stRuleEl.getAttribute('data-st-rule'); ui.stRules[rid] = !ui.stRules[rid]; render(pyState); return; }
     var stToolEl = e.target.closest('[data-st-tool]');
     if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
+    if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
     if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
     if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }
 

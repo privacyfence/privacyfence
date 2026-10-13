@@ -341,6 +341,7 @@ def scoped_token_page_data(
                 for rule_id in sorted(token.rule_ids)
             ],
             "tools": sorted(token.tools),
+            "allow_personal_data": token.allow_personal_data,
         })
     return {
         "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
@@ -362,10 +363,13 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
     """
     policy = scoped_tokens.policy_from_org_config({}, org_mode=False)
 
-    def _create(label: str, days: int, rule_ids: list[str], tools: list[str]) -> tuple[ScopedToken, str]:
+    def _create(
+        label: str, days: int, rule_ids: list[str], tools: list[str], allow_personal_data: bool,
+    ) -> tuple[ScopedToken, str]:
         with principal_scope(LOCAL_PRINCIPAL):
             return scoped_tokens.get_store().create(
                 LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=tools, policy=policy,
+                allow_personal_data=allow_personal_data,
             )
 
     def _revoke(token_id: str) -> ScopedToken | None:
