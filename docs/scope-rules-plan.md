@@ -43,11 +43,36 @@ Decisions taken with the maintainer while planning:
   (`policy/store.py:5-22`), and `describe.rule_verbs` (`policy/describe.py:79`) derives verbs from
   them. Collapsing verbs therefore changes no stored data on its own.
 - **Catalogue.** `policy/propose.py:279-392` (`PROPOSABLE_SCOPES`) declares which verbs each
-  predicate governs. `policy/catalogue.py:292-324` (`EXTRA_SCOPES`) holds Apps Script, Grist, Peek,
-  `gmail.configure` and `slack.share_anything`. `verb_labels` (:288-289, :302-312) produces the
+  predicate governs. `policy/catalogue.py:49-77` (`EXTRA_SCOPES`) holds Apps Script, Grist, Peek,
+  `gmail.configure` and `slack.share_anything`. `verb_labels` (:46, :59, :69) produces the
   bracketed Grist and Peek labels, and the JS shows them at `settings_window_html.py:928`.
-  `extra_operations_for(connector, verb)` (:362) derives an extra scope's operations from the
-  registry.
+  `extra_operations_for(connector, verb)` (:119) derives an extra scope's operations from the
+  registry. `PERSONAL_DATA_GROUPS` is at :110.
+- **Shared operation keys.** Four operation keys are reached by two verbs:
+  - `calendar.create_modify_event` (create, update);
+  - `slack.read_messages` (read through `approved_channel`, search through
+    `approved_channel_all_results`);
+  - `telegram.read_chat_messages` (the same split);
+  - `jira.read_issue` (read through `approved_project_keys`, search through
+    `approved_project_keys_all_results`).
+- **Seeded config.** `src/privacyfence/resources/settings.yaml.example:178-195` seeds a v2
+  `auto_accept:` section with one rule: `always_allow` on `contacts.edit` with the condition
+  `no_contact_info_change`. No catalogue entry carries that condition.
+  `daemon_main._bootstrap_config` (:336-345) copies the file on first run, and
+  `docs/configuration-reference.md:125-136` documents it. `tests/unit/test_docs_configuration_reference.py`
+  pins that doc against the example.
+- **Pinned v2 shape in tests.**
+  - `tests/unit/test_gate_real_evaluator.py:810-891` asserts predicates and `store.rule_id_for`
+    ids on disk after "Always allow".
+  - `tests/packaged_policy_probe.py:104-112` asserts `version == 2` and a `trusted_sender_domain`
+    predicate. Only the packaged smoke tests in `build.yml` run it: `test_macos_packaged_smoke.py`,
+    `test_deb_packaged_lifecycle.py` and `test_org_ubuntu_release_smoke.py`.
+- **Org-mode load order.** In org mode a principal's settings load lazily, on the first request
+  that needs their connectors (`daemon_main._connectors_for_principal`, :1126-1141). A scoped MCP
+  request resolves its token (`web/routes_mcp.py:432-436`) before that happens. The
+  `ScopedTokenStore` is built at `daemon_main.py:2201-2210` (and `web/server.py:1476`) over
+  `web/mcp_auth.scoped_token_principals()` (`mcp_auth.py:208`), which yields the local principal
+  and every `users/<id>/` directory.
 - **One scope, several stored rules.** `propose.rules_for_scope_group` (:617) and
   `_rules_from_pairs` (:576) create one `PolicyRule` per predicate. For example, `drive.folder`
   becomes `approved_folder` (read, download), `approved_sandbox_folder` (update, format,
@@ -85,9 +110,13 @@ Decisions taken with the maintainer while planning:
     tools aren't covered yet: …"), the add form at :908-946, `submitAddPolicyRule` at :1878-1891,
     and the token form starting at :1212 (`window.__pfScopedTokens`).
 - **Load path.** `daemon_main.load_config` (:382) runs `_drop_converted_v1_sections` (:359, the
-  precedent for a persisted startup rewrite) and `reject_v1_sections`. The rules are compiled at
-  `run_app` (:1936-1938) for local mode and at `_load_principal_settings` (:1027-1030) for each org
-  principal. Org mode has no admin-managed rules: each principal's rules live in their own
+  precedent for a persisted startup rewrite) and `reject_v1_sections`. It has two callers:
+  - `main` (:2374), for the local install;
+  - `_load_principal_settings` (:1027), for each org principal. Org Settings reaches it through
+    `web/routes_settings._ensure_principal_settings_loaded` (:1467-1475).
+
+  The rules are compiled at `run_app` (:1936-1938) for local mode and at
+  `_load_principal_settings` (:1029-1030) for each org principal. Org mode has no admin-managed rules: each principal's rules live in their own
   `settings.yaml` and go through the same store.
 - **Scoped token store.** `scoped_tokens.py`: `_to_json`/`_from_json` (:113-139),
   `ScopedTokenStore._path` (:156, `paths.authority_dir(principal) / "scoped_tokens.json"`),
@@ -312,28 +341,40 @@ Functions, all in `scope_rows.py`:
   - Lists are sorted.
   - Verbs are stored by their values, read back with `Verb(v)` and legacy aliases, and unknown
     verbs are dropped.
-  - Fails closed, returning `None`, for: a missing id; empty operations; no `scope` and no
-    `predicate`; a `scope` not in the catalogue; or empty verbs after parsing.
+  - Fails closed, returning `None`, for:
+    - a missing id;
+    - empty operations;
+    - no `scope` and no `predicate`;
+    - a `scope` not in the catalogue;
+    - a **scoped** row whose verbs are empty after parsing.
+  - A **custom** row may have `verbs: []`. Its verbs are display only and never decide what it
+    compiles to. The seeded `always_allow`/`contacts.edit` rule is such a row: no catalogue entry
+    credits `always_allow` with UPDATE.
+- **Custom row verbs.** A custom row's verbs are always
+  `frozenset(v for op in row.operations for v in registry.operation_verbs(op))`. This is not
+  `describe.rule_verbs`, which filters by the predicate's catalogue verbs and can come out empty.
 - `rows_from_section(section) -> list[ScopeRow]` and `rows_to_config(rows) -> dict`, with
   `{"version": 3, "rules": [...]}`.
-- `rows_from_config(cfg) -> list[ScopeRow]`: reads the `auto_accept:` section.
+- `rows_from_config(cfg) -> list[ScopeRow]`: reads the `auto_accept:` section, and is read-only.
   - Version 3: `rows_from_section`.
-  - Version 2, or no version with a `rules` list: `migrate_v2(section["rules"]).rows`.
+  - Version 2, or no version with a `rules` list: `migrate_v2(section["rules"]).rows`. This keeps
+    a v2 config readable for display and compile.
   - Anything else: `[]`.
 
-  Every writer uses this, so even a config the startup upgrade did not convert is written back as
-  version 3.
+  Writers never call it on a v2 section without first running the token-aware upgrade (3.4,
+  `policy_upgrade.ensure_scope_rows`).
 - `scope_of_rule(rule: PolicyRule) -> tuple[str, Any] | None`: the scope a v2 rule belongs to.
-  1. If the rule has exactly one condition, use the single `PROPOSABLE_SCOPES` entry whose
+  1. If the rule has exactly one condition, find the single `PROPOSABLE_SCOPES` entry whose
      predicate equals the rule's predicate and whose `condition` equals that condition. Its
-     `widening_group` is the scope.
+     `widening_group` is the candidate scope.
   2. If the rule has no conditions, collect the candidates whose predicate equals the rule's
      predicate and whose connector is in `{propose.connector_of_operation(op) for op in
      rule.operations}`. Candidates are the `PROPOSABLE_SCOPES` entries with `condition is None`
      (contributing their `widening_group`) and the `EXTRA_SCOPES` entries (contributing their id).
-     The rule maps only when the candidates name exactly one scope, and only if every one of its
-     operations is in `implied_operations(scope, scope_verbs(scope))`.
-  3. Anything else returns `None`, which means a custom row.
+     There must be exactly one candidate scope.
+  3. In both cases, the rule maps only if every one of its operations is in
+     `implied_operations(scope, scope_verbs(scope))`. Anything else returns `None`, which means a
+     custom row.
 
   The scope's value is `rule.value`.
 - `add_rules(rows, rules: list[PolicyRule]) -> tuple[list[ScopeRow], list[str]]`. This is the one
@@ -343,16 +384,23 @@ Functions, all in `scope_rows.py`:
     `rule.operations` into its operations. If there is no such row, append
     `ScopeRow(id=row_id_for(scope, value), ...)`.
   - **Unmapped**: a custom row with `id=store.rule_id_for(rule.predicate, rule.value,
-    rule.conditions)`. If a custom row with that id already exists, union its operations and verbs.
+    rule.conditions)`. If a custom row with that id already exists, union its operations, then
+    recompute its verbs as above.
 
   Returns the new row list and the ids of the rows touched, deduplicated and in order.
 - `remove_row(rows, row_id) -> list[ScopeRow]`.
 - `missing_operations(row) -> frozenset[str]`: what the row's verbs imply but its operations
-  lack. A scoped row returns `implied_operations(row.scope, row.verbs) - row.operations`; a custom
-  row returns `outdated.missing_operations(compile_row(row)[0])`.
+  lack.
+  - A scoped row returns `implied_operations(row.scope, row.verbs) - row.operations`.
+  - A custom row returns `outdated.missing_operations(compile_row(row)[0])`.
+- `missing_tools(row) -> tuple[str, ...]`: the tools of `missing_operations(row)` whose verb is in
+  `row.verbs`, sorted.
 - `fill_missing(rows, row_id) -> list[ScopeRow]`: adds `missing_operations` to one row (the
   "Update rule" button).
 - `set_verbs(rows, row_id, verbs: Iterable[Verb]) -> list[ScopeRow] | None`: the verb edit (3.5).
+- `pairs_of(rows, row_id) -> frozenset[tuple[str, str]]`: the `(predicate, operation)` pairs that
+  `compile_row` gives for that row today. Empty for an unknown id. Token creation and the upgrade
+  use it for `rule_limits` (3.4).
 - `migrate_v2(raw_rules: Any) -> V2Migration`, described in 3.4.
 
 `store.compile_rules_from_config(cfg)` dispatches on version. For a version-3 section it returns
@@ -363,9 +411,16 @@ unchanged.
 The engine (`policy/engine.py`) does not change. Several compiled rules share one row id, which
 ADR 0074 already allows: `find_matching_rule` returns the object, and attribution uses its `.id`.
 
-### 3.4 The upgrade (runs once, at load)
+**Downgrade.** An older daemon's `rule_from_dict` compiles the custom rows (they carry predicate,
+operations and conditions) and drops the scoped rows, because they have no predicate. Any rule
+write from an older daemon then rewrites the section as v2 and loses the scoped rows. The backup
+file (3.4) is the way back. ADR 0172 and the CHANGELOG say so.
 
-`scope_rows.migrate_v2(raw_rules) -> V2Migration`, a frozen dataclass with these fields:
+### 3.4 The upgrade
+
+#### Pure part: `scope_rows.migrate_v2(raw_rules) -> V2Migration`
+
+`V2Migration` is a frozen dataclass with these fields:
 
 - `rows: list[ScopeRow]`
 - `id_map: dict[str, str]`: old v2 id → new row id, for every v2 rule that went into a scoped row
@@ -376,9 +431,8 @@ ADR 0074 already allows: `find_matching_rule` returns the object, and attributio
 
 Algorithm:
 
-1. **Parse.** For each raw entry that is a dict, note `allow_personal_data is True` against its
-   `id`, then parse it with `store.rule_from_dict` (which now ignores that key). Drop entries that
-   fail to parse, as today.
+1. **Parse.** For each raw entry that is a dict, record its `id` when `allow_personal_data is True`,
+   then parse it with `store.rule_from_dict`. Drop entries that fail to parse, as today.
 2. **Group.** Map each rule with `scope_of_rule` and group mapped rules by
    `(scope, _sortable(value))`.
 3. **Build a candidate row per group.**
@@ -387,82 +441,167 @@ Algorithm:
    - `id` is `row_id_for(scope, value)`.
    - `former_ids` is the sorted old ids.
 4. **Check the candidate is lossless.** For each predicate, the operations and conditions of
-   `compile_row(candidate)` must equal the union of the group's rules for that predicate (a
-   predicate with no operations counts as absent). If the check fails, none of that group's rules
-   merge: each becomes its own custom row, keeping its old id unchanged, with `former_ids=()` and
-   `verbs=describe.rule_verbs(r)`. This guarantees the upgrade changes no unscoped decision except
-   dropping the personal-data flag.
+   `compile_row(candidate)` must equal the union of the group's rules for that predicate. A
+   predicate with no operations counts as absent.
+   - If the check fails, none of that group's rules merge. Each becomes its own custom row,
+     keeping its old id unchanged, with `former_ids=()`.
+   - The check guarantees the upgrade changes no unscoped decision except dropping the
+     personal-data flag.
 5. **Unmapped rules** become custom rows with their old id unchanged.
 6. **Order.** Rows come out in the order their first member appeared.
 
-`scoped_tokens.migrate_token_file(path: Path, migration: V2Migration) -> bool`. It writes only if
-something changed, and returns whether it did. It is idempotent. For each token:
+Tests must check this guarantee **after a round trip through the written form**:
+`migrate_v2` → `rows_to_config` → `rows_from_section` → `compile_rows`, compared with the v2
+compile.
 
-1. If `token.rule_ids ∩ migration.personal_data_ids` is not empty, set `allow_personal_data` to
-   true.
-2. For each row id `R` with `members[R] ∩ token.rule_ids` non-empty:
-   - add `R` to `rule_ids`, keeping the old ids too (harmless, and it keeps the step idempotent);
-   - if `members[R]` is not a subset of `token.rule_ids`, record a limit. A limit lists the
-     `(predicate, operation)` pairs that may still auto-accept under that row for this token:
-     `rule_limits[R] = ⋃ member_pairs[m] for m in members[R] ∩ token.rule_ids`.
-
-     This is because a token that listed only some of the merged rules must not gain the others.
-     It is a deny-only credential (ADR 0164).
-3. A token file that is missing or unreadable is left alone, and the function returns false.
-
-`ScopedToken` gains:
+#### Token part: `ScopedToken.rule_limits`
 
 ```python
 rule_limits: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict, hash=False)
 ```
 
-`_to_json` writes `"rule_limits": {row_id: [[predicate, operation], ...]}` (sorted) only when the
-dict is not empty, and `_from_json` reads it with `.get(..., {})`. In `gate._rules_in_scope`, a
-rule whose id is in `scope.rule_limits` is replaced by
-`dataclasses.replace(rule, operations=frozenset(op for op in rule.operations if (rule.predicate,
-op) in limits))`, and dropped if that leaves it empty. Tokens created after the upgrade never have
-limits.
+A limit lists, for one rule id the token carries, the `(predicate, operation)` pairs that may
+auto-accept under it for this token.
 
-`daemon_main._migrate_policy_to_scope_rows(config, resolved, tokens_path) -> None` is called from
-`load_config` right after `_drop_converted_v1_sections`, and before `reject_v1_sections`.
+- In `gate._rules_in_scope`, a rule whose id is in `scope.rule_limits` is replaced by
+  `dataclasses.replace(rule, operations=frozenset(op for op in rule.operations if (rule.predicate,
+  op) in limits))`, and dropped if that leaves it empty. A rule id with no limit is used as is:
+  that only happens for a token written before this change and never upgraded.
+- **Every token gets a limit for every rule it carries, so a token can only narrow.** A row keeps
+  its id when verbs are added (`add_rules`, `set_verbs`, `fill_missing`). Without a limit, a
+  recipe's token would silently gain whatever the person later adds to that row, which ADR 0164
+  rules out.
+- **At creation.** `ScopedTokenStore.create` sets
+  `rule_limits = {rid: scope_rows.pairs_of(rows, rid) for rid in rule_ids}`, with rows from
+  `auto_accept.get_policy_rows()`. This covers both modes, because both create through the store.
+- `_to_json` writes `"rule_limits": {row_id: [[predicate, operation], ...]}`, sorted, when the
+  dict is not empty. `_from_json` reads it with `.get("rule_limits", {})`, and a malformed value
+  makes the entry malformed (skipped, fail closed).
+- **Display.** The token page shows `(limited to: <tools>)` after a rule only when the limit is
+  narrower than `pairs_of` for that row today (3.6).
 
-- `load_config` gains a keyword `scoped_tokens_path: Path | None = None`. Callers:
-  - `run_app`, and the local `main` path that calls `load_config(args.config)`, pass
-    `paths.authority_dir(current_principal()) / scoped_tokens.STORE_FILE_NAME`;
-  - `_load_principal_settings` passes the same expression, under its principal scope.
-- It does nothing unless the `auto_accept:` section is a dict whose `version` is 2, or is missing
-  with a `rules` list.
-- Steps, in order:
-  1. Run `migration = scope_rows.migrate_v2(section["rules"])`.
-  2. Copy the file to `f"{resolved}.pre-scope-rules.bak"` with `shutil.copy2`, unless that file
-     already exists.
-  3. If `tokens_path` is not `None`, run `scoped_tokens.migrate_token_file(tokens_path,
-     migration)`. On `OSError`, append a deferred warning `f"{tokens_path}: could not update
-     scoped tokens for the new rule format: {exc}"`, leave `config` untouched (it stays on v2 and
-     keeps working), and return.
-  4. Set `config["auto_accept"] = scope_rows.rows_to_config(migration.rows)` and write it with
-     `atomic_write_text` (same `yaml.safe_dump` call as :373). On `OSError`, append a deferred
-     warning and keep the in-memory v3 config. The next start converts again from v2, and the
-     token step is idempotent.
-  5. On success, append the deferred warning:
-     `f"{resolved}: auto-accept rules converted to one rule per scope (version 3); the previous
-     file is kept at {resolved}.pre-scope-rules.bak"`.
+`scoped_tokens.migrate_token_file(path: Path, migration: V2Migration) -> list[str]` changes only
+what needs changing, and returns the labels of tokens whose `allow_personal_data` it newly set. It
+is idempotent. For each token:
+
+1. If `token.rule_ids ∩ migration.personal_data_ids` is not empty, set `allow_personal_data` to
+   true.
+2. For each row id `R` with `members[R] ∩ token.rule_ids` non-empty:
+   - **replace** those old ids in `rule_ids` with `R`, so they don't show as "a rule that no
+     longer exists";
+   - set `rule_limits[R] = ⋃ member_pairs[m] for m in members[R] ∩ token.rule_ids`.
+3. For each rule id left in `rule_ids` that is a custom row id kept unchanged and has no limit,
+   set its limit to its own `member_pairs`.
+4. A second run finds no old ids, so it changes nothing.
+5. A token file that is missing or unreadable is left alone, and the function returns `[]`.
+
+The write happens under the store's lock when a store is live:
+
+- `ScopedTokenStore.apply_migration(principal, migration) -> list[str]` holds `self._lock`,
+  refreshes, applies the same transformation in memory, and writes with `_write`.
+- `scoped_tokens.migrate_tokens(principal, migration) -> list[str]` calls
+  `apply_migration` on the store `get_store()` would return when one is set. Otherwise it calls
+  `migrate_token_file(paths.authority_dir(principal) / STORE_FILE_NAME, migration)`.
+- Add `scoped_tokens.current_store() -> ScopedTokenStore | None` (the set store, or `None`) for
+  this check, without changing `get_store()`.
+
+#### Non-pure part: `src/privacyfence/policy_upgrade.py`
+
+`ensure_scope_rows(cfg: dict, config_path: str, principal: Principal) -> bool` is the one
+token-aware upgrade. It returns `True` when `cfg`'s section is version 3 on return, and `False`
+when it had to stay v2.
+
+1. Do nothing (return `True`) unless the `auto_accept:` section is a dict whose `version` is 2, or
+   has no version and has a `rules` list.
+2. Run `migration = scope_rows.migrate_v2(section["rules"])`.
+3. Copy `config_path` to `f"{config_path}.pre-scope-rules.bak"` with `shutil.copy2`, unless that
+   file already exists or `config_path` does not exist.
+4. Run `labels = scoped_tokens.migrate_tokens(principal, migration)`. On `OSError`:
+   - log the warning `f"{principal.id}: could not update scoped tokens for the new rule format:
+     {exc}"`;
+   - leave `cfg` untouched, so it stays v2 and keeps working;
+   - return `False`.
+5. Set `cfg["auto_accept"] = scope_rows.rows_to_config(migration.rows)` and write it with
+   `secure_files.atomic_write_text(config_path, yaml.safe_dump(cfg, default_flow_style=False,
+   allow_unicode=True))`. On `OSError`, log a warning and still return `True`: the in-memory config
+   is v3, the next start converts again from v2, and the token step is idempotent.
+6. On success, log `f"{config_path}: auto-accept rules converted to one rule per scope (version
+   3); the previous file is kept at {config_path}.pre-scope-rules.bak"`.
+7. If `labels` is not empty, also log `f"Scoped tokens now allowed to carry personal data,
+   because they used a rule that allowed it: {', '.join(labels)}"`.
+
+**Logging.** `ensure_scope_rows` takes `log: Callable[[str], None]`, which defaults to
+`logger.warning`. `daemon_main` passes `_deferred_warnings.append` when it runs before logging is
+set up.
+
+**Callers:**
+
+- `daemon_main.load_config(config_path, *, principal: Principal | None = None)`. Right after
+  `_drop_converted_v1_sections`, when `principal` is not `None`, it calls
+  `policy_upgrade.ensure_scope_rows(config, resolved, principal,
+  log=_deferred_warnings.append)`. The two existing callers pass:
+  - `main` (:2374): `principal=LOCAL_PRINCIPAL`;
+  - `_load_principal_settings` (:1027): `principal=current_principal()`.
+- **Org-mode startup.** Before the line that constructs `ScopedTokenStore` at
+  `daemon_main.py:2210`, call the new `daemon_main._upgrade_all_principals()`. For each principal
+  in `web.mcp_auth.scoped_token_principals()`, under `principal_scope(p)`, it:
+  1. resolves `_resolve_authority_path("config/settings.yaml")`, and skips the principal if that
+     file does not exist;
+  2. loads it with `yaml.safe_load`;
+  3. calls `ensure_scope_rows`.
+
+  This way no scoped request is served with old token ids (`routes_mcp.py:432-436` resolves the
+  token before the lazy per-principal load). The local principal is covered too; for it this is a
+  no-op after `main`'s load.
+- **Every writer** (3.7) calls `ensure_scope_rows` on the config it re-read, before mutating.
+  If it returns `False`, the writer writes nothing and reports no change. `SettingsController`
+  methods then set `self.error = "Auto-accept rules could not be upgraded to the new format;
+  restart PrivacyFence and try again."`, so a write can never convert v2 without re-pointing
+  tokens.
+- **Import cycle.** `policy_upgrade` imports `scoped_tokens`, which imports `auto_accept`. So
+  `auto_accept` imports `policy_upgrade` inside the writer functions, as it already does for
+  `policy` imports (`auto_accept.py:540-544`).
+
+**The seeded config ships as version 3.** `src/privacyfence/resources/settings.yaml.example` gets
+`version: 3` and its one rule as a custom row. Generate the exact row with
+`scope_rows.row_to_dict` from the current v2 rule, so its id stays `r-d76028ec0b`; its verbs are
+`[update]`. The comment above it is rewritten to say:
+
+- rules are stored one per scope;
+- a scoped row's id comes from (scope, value);
+- a custom row keeps the id it was written with.
+
+`docs/configuration-reference.md:125-136` is updated in the same phase: the keys table for
+version 3 (`id`, `scope`, `predicate`, `value`, `verbs`, `operations`, `conditions`, `former_ids`).
+This keeps `tests/unit/test_docs_configuration_reference.py` passing.
 
 ### 3.5 Editing a rule's verbs
 
 `scope_rows.set_verbs(rows, row_id, verbs)` returns the new row list, or `None` to refuse. It
-refuses when: the row is unknown; the row is custom; `verbs` is empty; or any verb is outside
-`scope_verbs(row.scope)`. Otherwise:
+refuses when:
+
+- the row is unknown;
+- the row is custom;
+- `verbs` is empty;
+- any verb is outside `scope_verbs(row.scope)`.
+
+Otherwise:
 
 - `kept = row.verbs ∩ verbs` and `added = verbs - row.verbs`.
 - `operations = {op ∈ row.operations : op ∈ implied_operations(scope, kept)} ∪
   implied_operations(scope, added)`.
 
-So a verb that was already there keeps exactly the operations it had (no silent completion; that
-is still the "Update rule" button), a new verb gets all of its tools, and a removed verb's
-operations go unless a kept verb also implies them (`calendar.create_modify_event`). The id and
-`former_ids` are kept. An unchanged result is still returned, and the caller treats equal rows as
-a no-op.
+So:
+
+- a verb that was already there keeps exactly the operations it had (no silent completion; that
+  is still the "Update rule" button);
+- a new verb gets all of its tools;
+- a removed verb's operations go, unless a kept verb also implies them
+  (`calendar.create_modify_event` is implied by both add and update).
+
+The id and `former_ids` are kept. An unchanged result is still returned, and the caller treats
+equal rows as a no-op. A token that carries the row is unaffected by an added verb (its
+`rule_limits`), and loses what is removed.
 
 Callers:
 
@@ -475,7 +614,9 @@ Callers:
   - `_SENSITIVE_ACTIONS`;
   - `ACTION_SCOPES` in `web/org_settings_scope.py`, with LOCAL+ORG and the same scope as
     `add_policy_rule`;
-  - `_ORG_ALLOWED_ACTIONS`.
+  - `_ORG_ALLOWED_ACTIONS`;
+  - the parametrize list of `test_a_rule_write_is_per_principal_and_routed_in_both_modes`
+    (`tests/unit/web/test_org_settings_scope.py:139`).
 
 UI, in each scoped row card of `renderAutoAccept`:
 
@@ -484,9 +625,11 @@ UI, in each scoped row card of `renderAutoAccept`:
   with the row's verbs, then **`Save verbs`** (`data-aa-edit-save`) and **`Cancel`**
   (`data-aa-edit-cancel`).
 - Save posts `set_policy_rule_verbs {rule_id, verbs}` with `data-confirm` text **`Change this rule
-  to allow <verbs, comma-separated>? Added verbs cover all of their tools; tools of removed verbs
-  stop being auto-accepted.`**
+  to allow <verbs, comma-separated>? Added verbs cover all of their tools. Tools that only removed
+  verbs cover stop being auto-accepted.`**
 - Save is disabled while no verb is selected.
+- On a row whose `value_ids` has fewer than two ids, the `move` toggle is disabled, with the same
+  hint `aaPairHint` shows on the add form: a move needs both folders or lists.
 - Custom rows (`scope` null) show no Edit link.
 
 ### 3.6 Settings rows, bridge listing and token form read rows
@@ -499,8 +642,7 @@ UI, in each scoped row card of `renderAutoAccept`:
   Field changes:
   - `verbs` comes from `row.verbs` (sorted with `verb_sort_key`, each with its family).
   - `covered_tools` is `⋃ describe.covered_tools(r) for r in compile_row(row)`, sorted.
-  - `missing_tools` is the tools of `scope_rows.missing_operations(row)` whose verb is in
-    `row.verbs`. Add `scope_rows.missing_tools(row)` for that.
+  - `missing_tools` is `scope_rows.missing_tools(row)`.
   - `scope_type` is `describe.scope_type_of(compile_row(row)[0])`, or `""` when the row compiles
     to nothing.
   - Usage sums `count` over `row.id` and every `former_ids` entry, and takes the latest
@@ -512,10 +654,11 @@ UI, in each scoped row card of `renderAutoAccept`:
 - `describe.row_sentence(row: ScopeRow, value_display: str | None = None) -> str`:
   - A custom row returns `rule_sentence(compile_row(row)[0], value_display)`.
   - A scoped row returns `f"{connector_label} - {noun} {value}: allow {verbs}"`, or
-    `f"{connector_label} - {noun}: allow {verbs}"` when it has no value. Here `noun` is
-    `scope_type_label(scope_type)` for the scope type of the group's first entry (propose groups) or
-    of the extra's selector (`scopes.NEW_SCOPE_SELECTORS[extra.predicate].scope_type`), and the
-    verbs are comma-separated in `verb_sort_key` order.
+    `f"{connector_label} - {noun}: allow {verbs}"` when it has no value.
+    - `noun` is `scope_type_label(scope_type)`, where the scope type is that of the group's first
+      entry (propose groups) or of the extra's selector
+      (`scopes.NEW_SCOPE_SELECTORS[extra.predicate].scope_type`).
+    - The verbs are comma-separated in `verb_sort_key` order.
   - A condition scope appends `" - when " + condition name with underscores as spaces`, as
     `rule_sentence` does.
   - The personal-data suffix no longer exists.
@@ -532,13 +675,17 @@ UI, in each scoped row card of `renderAutoAccept`:
   `conditions` is the custom row's conditions, or `[]`. `privacyfence_list_policy` lists
   `auto_accept.get_policy_rows()`.
 - `web/server.py._scoped_rule_entry(row, value_display)` builds one entry per row, with the same
-  keys as today. In `scoped_token_page_data`, a token rule that has `rule_limits` gets
-  `"limited_to": [tools]`: the tools whose `(predicate, operation)` pair is in the limit. The JS
-  token list then renders `<sentence> (limited to: <tools>)`.
+  keys as today. In `scoped_token_page_data`, a token rule whose `rule_limits` entry is narrower
+  than `scope_rows.pairs_of(rows, rid)` gets `"limited_to": [tools]`: the tools whose operation and
+  predicate pair is in the limit. The JS token list then renders `<sentence> (limited to:
+  <tools>)`.
+- The org create-token audit text (`web/routes_settings.py:1723-1727`) appends `", personal data
+  allowed"` when the flag is set.
 
 ### 3.7 Writers
 
-All writers go through `scope_rows`, and always write a version-3 section.
+All writers go through `scope_rows`, and first call `policy_upgrade.ensure_scope_rows` (3.4) on the
+config they re-read.
 
 - **`auto_accept.py`.**
   - `get_policy_rows() -> list[ScopeRow]` reads disk via `rows_from_config`.
@@ -550,12 +697,18 @@ All writers go through `scope_rows`, and always write a version-3 section.
   - `remove_policy_v2_rule(rule_id)` applies `remove_row`, and `update_policy_v2_rule(rule_id)`
     applies `fill_missing`.
   - `set_policy_rule_verbs` (3.5).
-  - Each one re-reads under `write_lock`, writes `rows_to_config`, then calls
+  - Each one re-reads under `write_lock`, calls `ensure_scope_rows(cfg, path,
+    current_principal())`, writes `rows_to_config`, then calls
     `set_policy_v2_store_rules(compile_rows(rows))` and `notify_rules_changed`, as today.
+  - `scope_rows` and `policy_upgrade` are imported inside the functions (see the import cycle note
+    in 3.4).
 - **`settings_controller.py`.** `add_policy_rule`, `remove_policy_rule`, `update_policy_rule` and
-  the new `set_policy_rule_verbs` read `scope_rows.rows_from_config(cfg)`, apply the same
-  `scope_rows` function, set `cfg["auto_accept"] = rows_to_config(rows)`, then call
-  `_save_and_reload_policy_v2(cfg)`, which compiles through `store.compile_rules_from_config`.
+  the new `set_policy_rule_verbs`:
+  1. call `ensure_scope_rows` (with the controller's config path and `current_principal()`);
+  2. read `scope_rows.rows_from_config(cfg)` and apply the same `scope_rows` function;
+  3. set `cfg["auto_accept"] = rows_to_config(rows)`;
+  4. call `_save_and_reload_policy_v2(cfg)`, which compiles through
+     `store.compile_rules_from_config`.
 - **`gate.propose_policy_change`.** The confirmation text uses `describe.row_sentence` of the row
   being removed, or of the row the addition lands in after `add_rules`. `affected_ids` is
   `auto_accept.policy_row_ids_for(new_rules)`, computed before writing. Removal still looks the id
@@ -572,23 +725,32 @@ Written in the last phase. Each one is `Accepted`, `Implemented`, and dated the 
   a move rule now shows copy as a missing tool until updated. Rejected alternatives: keeping
   19 verbs with grouped chips; separate verbs for share/send and copy/move.
 - **ADR 0172: One stored auto-accept rule per scope (settings schema version 3).** It records 3.3
-  and 3.4 (row id, stored verbs, compile-to-predicates, lossless check, custom rows,
-  `former_ids`, token re-pointing and `rule_limits`, backup file), and amends ADR 0074: the id is
-  derived from (scope, value). Rejected alternatives:
+  and 3.4: row id, stored verbs, compile-to-predicates, the lossless check, custom rows,
+  `former_ids`, the backup file, the token-aware upgrade (`policy_upgrade.ensure_scope_rows`, run
+  at load, at org startup and before every write), token re-pointing, and `rule_limits` set at
+  token creation so a token never gains what is later added to its row. It amends ADR 0074: a
+  scoped row's id is derived from (scope, value). Rejected alternatives:
   - grouping v2 rules only in the UI, which leaves several ids per row and makes Remove, tokens
     and usage ambiguous;
   - storing verbs only, which would widen rules whenever a release adds a tool, contrary to
     ADR 0166;
+  - letting a token follow its row's growth, contrary to ADR 0164;
   - widening tokens to whole rows on upgrade.
 
-  Consequence: a downgrade cannot read version 3. An older daemon compiles no rules, which fails
-  closed; the backup file restores the old section by hand.
+  Consequence, on a downgrade:
+  - an older daemon compiles the custom rows and drops the scoped rows;
+  - any rule write from it rewrites the section as v2 and loses the scoped rows;
+  - `settings.yaml.pre-scope-rules.bak` restores the old section by hand.
 - **ADR 0173: Personal data is allowed per scoped token, not per rule.** It records 3.2 and the
-  upgrade's flag transfer, and amends ADRs 0157 and 0164. Rejected alternatives: per-rule flag
-  (it applied to any client, including interactive ones); per-rule flag inside a token (more UI,
-  for a distinction the maintainer did not want).
+  upgrade's flag transfer, and amends ADRs 0157 and 0164. Rejected alternatives:
+  - a per-rule flag, which applied to any client, including interactive ones;
+  - a per-rule flag inside a token, which means more UI for a distinction the maintainer did not
+    want.
 
-  Consequence: an unscoped session that used to auto-accept a flagged export now gets the card.
+  Consequences:
+  - An unscoped session that used to auto-accept a flagged export now gets the card.
+  - A token that carried one flagged rule now allows personal data on all of its rules' exports,
+    downloads and uploads. The upgrade logs the labels of the tokens this happened to.
 - **ADR 0174: A rule's verbs are edited in place.** It records 3.5 and amends ADR 0166: an explicit
   verb edit adds a new verb's full tool set, and editing never silently completes a verb that was
   already present. Rejected alternative: recomputing all operations on every edit, which would
@@ -617,6 +779,10 @@ Step-by-step page: https://claude.ai/artifact/Rgcogc68rCaw6QfyCowQWy (source:
   notice text must be updated to the new strings in this plan, never loosened.
 - **Coverage floor.** `scripts/check_coverage_floor.py` is ratcheted. Every new function needs
   direct tests.
+- **Packaged smoke tests run only in `build.yml`.** `tests/packaged_policy_probe.py` is exercised
+  by `test_macos_packaged_smoke.py`, `test_deb_packaged_lifecycle.py` and
+  `test_org_ubuntu_release_smoke.py`, which unit runs never execute. The feature PR must dispatch
+  `build.yml` (it is in `ci.dispatchable`) on its head and link a green run (`final_checks`).
 
 ## Implementation manifest
 
@@ -638,6 +804,7 @@ final_checks:
   - docs/scope-rules-plan.md and docs/scope-rules-plan-manual-steps.html are deleted and nothing links to them
   - ADRs 0171, 0172, 0173 and 0174 exist, are Accepted, and are listed in docs/adr/README.md; ADRs 0074, 0157, 0164, 0166 and 0170 carry a one-line Status pointer to the ADR that amends them
   - CHANGELOG.md has the four entries under "## [Unreleased]" and no new version heading
+  - build.yml was dispatched on the feature branch head (it runs tests/packaged_policy_probe.py through the packaged smoke tests) and the green run is linked in the PR
 phases:
   - id: p1-nine-verbs
     title: Collapse the 19 verbs to nine and drop bracketed verb labels
@@ -700,7 +867,7 @@ phases:
       9. Regenerate docs/always-allow-rules-reference.md by running
          `python3 scripts/generate_always_allow_reference.py` as its docstring says, and commit
          the result.
-      10. Tests: update every test the agent sweep listed (test_registry, test_describe,
+      10. Tests: update every test that pins verb names, labels or counts, at least (test_registry, test_describe,
           test_propose, test_catalogue, test_outdated, test_settings_controller,
           test_routes_settings, test_routes_org_settings, test_gate, test_auto_accept,
           test_mcp_tools, test_mcp_dispatch, test_server, test_settings_window_html,
@@ -838,12 +1005,14 @@ phases:
            and ::test_rule_id_for_has_no_personal_data_variant.
          - test_settings_window_html asserts the rule form has no data-aa-personal-data
            attribute.
-      Stop condition: if anything outside these files still reads rule.allow_personal_data
-      (`grep -rn "allow_personal_data" src` beyond scoped_tokens.py, gate.py and server.py),
-      fix it here, unless it is in a file another phase owns (daemon_main.py,
-      policy/scope_rows.py). In that case stop with status=blocked.
+      Stop condition: `grep -rn "allow_personal_data" src` may still match the token feature
+      from p2: scoped_tokens.py, gate.py (the token check), web/server.py, the
+      create-token fingerprint and wiring in web/routes_settings.py, and the token form in
+      settings_window_html.py. Leave those alone. Remove any other rule-flag use you find in
+      this phase's files. If one remains in a file outside this phase's touches, stop with
+      status=blocked.
     acceptance:
-      - grep -rn "allow_personal_data" src/privacyfence/policy src/privacyfence/settings_controller.py matches only the "ignores" comment in store.py
+      - grep -rn "allow_personal_data" src/privacyfence/policy src/privacyfence/settings_controller.py matches nothing
       - grep -rn "PERSONAL_DATA_GROUPS" src tests matches nothing
       - python3 -m pytest tests/unit/policy/test_store.py::test_rule_from_dict_ignores_allow_personal_data -q passes
       - ruff check . passes and python3 -m pytest tests/unit -q passes
@@ -856,122 +1025,186 @@ phases:
       - src/privacyfence/policy/scope_rows.py
       - tests/unit/policy/test_scope_rows.py
     brief: |
-      Read docs/scope-rules-plan.md sections 3.3, 3.4 (migrate_v2 only) and 3.5 (set_verbs
-      only). Create src/privacyfence/policy/scope_rows.py with exactly the names, signatures and
+      Read docs/scope-rules-plan.md sections 3.3, 3.4 ("Pure part" only) and 3.5 (set_verbs only).
+      Create src/privacyfence/policy/scope_rows.py with exactly the names, signatures and
       semantics listed there:
       SCHEMA_VERSION, ScopeRow, row_id_for, group_entries, extra_scope, scope_verbs,
       implied_operations, compile_row, compile_rows, row_to_dict, row_from_dict,
       rows_from_section, rows_to_config, rows_from_config, scope_of_rule, add_rules, remove_row,
-      missing_operations, missing_tools, fill_missing, set_verbs, V2Migration, migrate_v2.
-      - Give it a module docstring in the repo's style: what it is, that it is pure, and that it
+      missing_operations, missing_tools, fill_missing, set_verbs, pairs_of, V2Migration,
+      migrate_v2.
+      - Custom rows take their verbs from registry.operation_verbs and may have empty verbs (3.3).
+      - Give the module a docstring in the repo's style: what it is, that it is pure, and that it
         cites ADR 0172.
-      - It must not import daemon_main, auto_accept writers, settings_controller or web.
-      - Construct PolicyRule without allow_personal_data. This phase runs in parallel with p3, so
-        do not pass that argument at all.
-      - Read a raw v2 entry's "allow_personal_data" yourself in migrate_v2, before calling
-        store.rule_from_dict.
+      - It must not import daemon_main, auto_accept writers, scoped_tokens, settings_controller
+        or web.
+      - This phase runs in parallel with p2/p3, whose base still has the personal-data flag on
+        PolicyRule. So:
+        - construct PolicyRule without allow_personal_data;
+        - build flagged v2 entries in tests only as raw dicts;
+        - read a raw entry's "allow_personal_data" yourself in migrate_v2, before calling
+          store.rule_from_dict;
+        - do not test a non-bool flag;
+        - do not call rules_for_catalogue_entry with personal_data.
       Tests (tests/unit/policy/test_scope_rows.py), at least:
       - test_each_catalogue_group_round_trips_through_migration: parametrized over every
-        propose.SCOPES_BY_GROUP key and every catalogue.EXTRA_SCOPES key. Build v2 rules with
-        propose.rules_for_scope_group / catalogue.rules_for_catalogue_entry for all of the
-        group's verbs and a sample value, run migrate_v2 on their rule_to_dict forms, and assert
-        there is exactly one row and that compile_row reproduces the same (predicate, operations,
-        conditions) set.
-      - test_screenshot_case_merges_to_one_row: approved_folder [F] {drive.download_file}, plus
-        the same rule with allow_personal_data true and {drive.read_file, drive.download_file}.
-        Expect one row with verbs {read, download}, former_ids = both ids, and the flagged id in
-        personal_data_ids.
-      - test_slack_read_does_not_become_search: a v2 approved_channel rule with
-        slack.read_messages compiles back without approved_channel_all_results.
-      - test_partial_verb_is_not_widened: a v2 sandbox rule with only sheets.format_range
-        migrates with operations unchanged, and missing_operations reports the other update
-        operations.
-      - test_unmapped_rule_becomes_custom_row_with_its_old_id: unknown predicate, and a
-        drive.file rule.
-      - test_lossy_group_stays_as_custom_rows: construct a rule with an operation its predicate's
-        entry does not derive.
+        propose.SCOPES_BY_GROUP key and every catalogue.EXTRA_SCOPES key.
+        1. Build v2 rules with propose.rules_for_scope_group / catalogue.rules_for_catalogue_entry
+           for all of the group's verbs and a sample value.
+        2. Run migrate_v2 on their store.rule_to_dict forms, then rows_to_config, then
+           rows_from_section, then compile_rows.
+        3. Assert there is exactly one row and the compiled (predicate, operations, conditions)
+           set equals the v2 one.
+      - test_upgrade_round_trip_preserves_every_rule: a fixture with:
+        - the seeded rule from src/privacyfence/resources/settings.yaml.example (always_allow,
+          contacts.edit, no_contact_info_change);
+        - a hand-written rule with a non-canonical id;
+        - an unknown predicate;
+        - a drive.file rule;
+        - a rule with an operation its predicate's entry does not derive.
+
+        Through the same write-and-read round trip, every rule compiles back identically, and
+        custom rows keep their old ids.
+      - test_screenshot_case_merges_to_one_row: approved_folder [F] {drive.download_file}, plus a
+        raw dict of the same rule with allow_personal_data true and
+        {drive.read_file, drive.download_file}. Expect one row with verbs {read, download},
+        former_ids = both ids, and the flagged id in personal_data_ids.
+      - test_slack_read_does_not_become_search, test_telegram_read_does_not_become_search,
+        test_jira_read_does_not_become_search: the shared-key cases from section 2.
+      - test_partial_verb_is_not_widened: a v2 sandbox rule with only sheets.format_range migrates
+        with its operations unchanged, and missing_operations reports the other update operations.
+      - test_condition_rule_outside_its_entry_stays_custom: a scope_of_rule step-3 check for a
+        condition scope.
       - test_row_id_ignores_verbs and test_row_id_is_value_order_independent.
       - test_add_rules_extends_existing_row and test_add_rules_returns_touched_ids.
       - test_set_verbs_keeps_existing_operations_of_kept_verbs,
         test_set_verbs_adds_full_operations_for_new_verbs,
-        test_set_verbs_keeps_shared_operation_implied_by_kept_verb (calendar add/update),
+        test_set_verbs_keeps_shared_operation_implied_by_kept_verb (calendar add/update), and
         test_set_verbs_refuses_empty_unknown_custom_or_foreign_verbs.
-      - test_row_from_dict_fails_closed: one case per refusal listed in 3.3.
-      - test_rows_from_config_converts_v2_in_memory.
-      Coverage: `python3 -m pytest tests/unit/policy/test_scope_rows.py --cov=privacyfence.policy.scope_rows --cov-branch --cov-report=term-missing`
-      reports 100%.
+      - test_row_from_dict_fails_closed: one case per refusal in 3.3, plus
+        test_custom_row_with_empty_verbs_loads.
+      - test_rows_from_config_converts_v2_in_memory and test_pairs_of_matches_compile_row.
       Stop condition: if a catalogue group fails the round-trip test and the cause is in
       propose/catalogue rather than in scope_rows, stop with status=blocked (plan section 6).
     acceptance:
       - python3 -m pytest tests/unit/policy/test_scope_rows.py -q passes
+      - python3 -m pytest tests/unit/policy/test_scope_rows.py::test_upgrade_round_trip_preserves_every_rule -q passes
       - python3 -m pytest tests/unit/policy/test_scope_rows.py -q --cov=privacyfence.policy.scope_rows --cov-branch --cov-report=term-missing reports 100%
       - ruff check . passes and python3 -m mypy src/privacyfence/policy/scope_rows.py passes
 
-  - id: p5-load-migration
-    title: Read version 3, convert v2 at startup, re-point scoped tokens
+  - id: p5-token-limits-and-migration
+    title: Scoped tokens carry per-rule limits and can be re-pointed by the upgrade
     depends_on: [p3-rules-drop-personal-data, p4-scope-rows-module]
     complexity: M
     touches:
-      - src/privacyfence/policy/store.py
-      - src/privacyfence/daemon_main.py
       - src/privacyfence/scoped_tokens.py
       - src/privacyfence/gate.py
-      - tests/unit/policy/test_store.py
-      - tests/unit/test_daemon_main.py
       - tests/unit/test_scoped_tokens.py
       - tests/unit/test_gate.py
     brief: |
-      Read docs/scope-rules-plan.md section 3.4 in full, and 3.3's note on
-      store.compile_rules_from_config.
-      1. policy/store.py: compile_rules_from_config dispatches a version-3 section to
-         scope_rows (a local import, with the cycle comment from 3.3). Add SCHEMA_VERSION's
-         comment noting that v3 lives in scope_rows.
-      2. scoped_tokens.py:
-         - Add `rule_limits` to ScopedToken, with the JSON form from 3.4.
-         - Add migrate_token_file(path, migration) exactly as specified, writing with
-           secure_files.atomic_write_json in the same {"version": 1, "tokens": [...]} shape as
-           _write.
-      3. gate.py _rules_in_scope: apply rule_limits as 3.4 says. _personal_data_rule already
-         uses _rules_in_scope.
-      4. daemon_main.py:
-         - Add _migrate_policy_to_scope_rows and the load_config keyword, and wire the three
-           callers exactly as 3.4 lists, with the deferred warning texts verbatim.
-         - Import paths, scoped_tokens and current_principal as needed. Check
-           `paths.authority_dir(current_principal())` equals ScopedTokenStore._path's directory
-           for the local principal.
-      5. Tests:
-         - tests/unit/test_daemon_main.py, new class TestScopeRowsUpgrade:
-           - test_v2_section_is_converted_and_backed_up
-           - test_backup_is_not_overwritten_on_second_run
-           - test_v3_section_is_left_alone
-           - test_tokens_are_repointed_and_flag_transferred
-           - test_token_write_failure_leaves_v2_in_memory (monkeypatch migrate_token_file to
-             raise OSError)
-           - test_settings_write_failure_keeps_v3_in_memory
-           - test_unscoped_decisions_unchanged_by_upgrade: for a fixture of v2 rules covering
-             every catalogue group, every (operation, sample ctx) pair evaluates the same before
-             and after through policy.engine.evaluate, comparing the bool only.
+      Read docs/scope-rules-plan.md section 3.4, "Token part".
+      1. scoped_tokens.py:
+         - Add `rule_limits` to ScopedToken, with its JSON form and the fail-closed read.
+         - ScopedTokenStore.create sets `rule_limits[rid]` for every chosen rule id to
+           {(r.predicate, op) for r in auto_accept.get_policy_v2_store_rules() if r.id == rid
+           for op in r.operations}. These are the same pairs scope_rows.pairs_of gives, taken
+           from the compiled cache create() already validates against (:247).
+         - Add migrate_token_file(path, migration) -> list[str] exactly as 3.4 specifies (replace
+           old ids, limits, flag, idempotent), writing with secure_files.atomic_write_json in the
+           same {"version": 1, "tokens": [...]} shape as _write. Factor the per-token
+           transformation into one private function that apply_migration shares.
+         - Add ScopedTokenStore.apply_migration(principal, migration), current_store() and
+           migrate_tokens(principal, migration).
+      2. gate.py _rules_in_scope: apply rule_limits as 3.4 says.
+      3. Tests:
          - tests/unit/test_scoped_tokens.py:
-           - test_migrate_token_file_is_idempotent
-           - test_partial_reference_records_limits
-           - test_full_reference_records_no_limit
-           - test_missing_file_is_left_alone
+           - test_create_records_limits_for_every_rule
            - test_rule_limits_round_trip
+           - test_malformed_rule_limits_skips_the_token
+           - test_migrate_token_file_replaces_old_ids
+           - test_migrate_token_file_is_idempotent
+           - test_partial_reference_records_narrow_limits
+           - test_custom_row_reference_gets_its_own_limit
+           - test_flag_transfer_returns_labels
+           - test_missing_file_is_left_alone
+           - test_apply_migration_holds_the_lock_and_refreshes: two migrations and a create,
+             interleaved, lose nothing
          - tests/unit/test_gate.py:
            - test_rule_limits_narrow_a_token_to_its_former_rules
            - test_rule_limits_drop_a_rule_left_empty
-      Stop condition: if _load_principal_settings runs outside a principal_scope (so
-      current_principal() is not the principal being loaded), stop with status=blocked rather
-      than guessing a path.
+           - test_adding_a_verb_to_a_row_does_not_widen_an_existing_token: build the compiled
+             rules for a row before and after scope_rows.set_verbs adds a verb, and check the
+             token created before still auto-accepts only its original pairs
     acceptance:
-      - python3 -m pytest tests/unit/test_daemon_main.py -q -k TestScopeRowsUpgrade passes
-      - python3 -m pytest tests/unit/test_daemon_main.py::TestScopeRowsUpgrade::test_unscoped_decisions_unchanged_by_upgrade -q passes
-      - python3 -m pytest tests/unit/test_scoped_tokens.py tests/unit/test_gate.py tests/unit/policy/test_store.py -q passes
+      - python3 -m pytest tests/unit/test_scoped_tokens.py tests/unit/test_gate.py -q passes
+      - python3 -m pytest tests/unit/test_gate.py -q -k test_adding_a_verb_to_a_row_does_not_widen_an_existing_token passes
       - ruff check . passes and python3 -m pytest tests/unit -q passes
 
-  - id: p6-row-writers
-    title: Every writer stores scope rows
-    depends_on: [p5-load-migration]
+  - id: p6-settings-upgrade
+    title: Read version 3 and run the token-aware upgrade at load and at org startup
+    depends_on: [p5-token-limits-and-migration]
+    complexity: M
+    touches:
+      - src/privacyfence/policy/store.py
+      - src/privacyfence/policy_upgrade.py
+      - src/privacyfence/daemon_main.py
+      - src/privacyfence/resources/settings.yaml.example
+      - docs/configuration-reference.md
+      - tests/unit/policy/test_store.py
+      - tests/unit/test_policy_upgrade.py
+      - tests/unit/test_daemon_main.py
+      - tests/unit/test_docs_configuration_reference.py
+    brief: |
+      Read docs/scope-rules-plan.md section 3.4 ("Non-pure part" and the seeded-config
+      paragraph), and 3.3's note on store.compile_rules_from_config.
+      1. policy/store.py: compile_rules_from_config dispatches a version-3 section to scope_rows
+         (a local import, with the cycle comment from 3.3).
+      2. Create src/privacyfence/policy_upgrade.py with ensure_scope_rows exactly as 3.4 says,
+         log strings verbatim.
+      3. daemon_main.py:
+         - load_config gains `principal`, and the two callers pass it as 3.4 lists.
+         - Add _upgrade_all_principals and call it immediately before the
+           `scoped_tokens.ScopedTokenStore(scoped_token_principals)` line (:2210).
+      4. settings.yaml.example: version 3 with the seeded custom row generated by
+         scope_rows.row_to_dict (id r-d76028ec0b, verbs [update]), and the rewritten comment.
+         docs/configuration-reference.md :125-136: the version-3 keys table. Make
+         tests/unit/test_docs_configuration_reference.py pass, extending it only where it pins
+         v2 keys.
+      5. Tests:
+         - tests/unit/test_policy_upgrade.py (new):
+           - test_v2_is_converted_and_backed_up
+           - test_backup_is_not_overwritten
+           - test_v3_is_left_alone
+           - test_missing_config_file_makes_no_backup
+           - test_token_failure_leaves_v2_and_returns_false (monkeypatch migrate_tokens to
+             raise OSError)
+           - test_settings_write_failure_keeps_v3_in_memory
+           - test_logs_flagged_token_labels
+         - tests/unit/test_daemon_main.py, new class TestScopeRowsUpgrade:
+           - test_load_config_upgrades_with_principal
+           - test_load_config_without_principal_does_not_upgrade
+           - test_upgrade_all_principals_runs_before_the_token_store_loads
+           - test_fresh_install_seed_is_already_version_3: no backup, no warning
+           - test_unscoped_decisions_unchanged_by_upgrade: a v2 fixture covering every catalogue
+             group plus the custom cases from p4's round-trip test. Load it through load_config
+             (so through the written file), then compare policy.engine.evaluate's bool for every
+             (operation, sample ctx) pair before and after.
+         - tests/unit/policy/test_store.py: test_compile_rules_from_config_reads_version_3.
+      Stop condition: if _load_principal_settings runs outside a principal_scope (so
+      current_principal() is not the principal being loaded), or the ScopedTokenStore
+      construction at :2210 is not on the org startup path that precedes serving requests, stop
+      with status=blocked rather than guessing.
+    acceptance:
+      - python3 -m pytest tests/unit/test_policy_upgrade.py -q passes
+      - python3 -m pytest tests/unit/test_daemon_main.py -q -k TestScopeRowsUpgrade passes
+      - python3 -m pytest tests/unit/test_daemon_main.py -q -k test_unscoped_decisions_unchanged_by_upgrade passes
+      - python3 -m pytest tests/unit/test_docs_configuration_reference.py -q passes
+      - grep -n "version: 3" src/privacyfence/resources/settings.yaml.example matches
+      - ruff check . passes and python3 -m pytest tests/unit -q passes
+
+  - id: p7-row-writers
+    title: Every writer stores scope rows, after the token-aware upgrade
+    depends_on: [p6-settings-upgrade]
     complexity: M
     touches:
       - src/privacyfence/auto_accept.py
@@ -981,43 +1214,56 @@ phases:
       - tests/unit/test_auto_accept.py
       - tests/unit/test_settings_controller.py
       - tests/unit/test_gate.py
+      - tests/unit/test_gate_real_evaluator.py
+      - tests/packaged_policy_probe.py
       - tests/unit/web/**
     brief: |
-      Read docs/scope-rules-plan.md section 3.7. Do not add set_policy_rule_verbs yet (p8).
+      Read docs/scope-rules-plan.md section 3.7. Do not add set_policy_rule_verbs yet (p9).
       1. auto_accept.py:
          - Add get_policy_rows and policy_row_ids_for.
          - Re-implement get_policy_v2_rules, add_policy_v2_rules, remove_policy_v2_rule and
-           update_policy_v2_rule on scope_rows (rows_from_config, add_rules, remove_row,
-           fill_missing, rows_to_config, compile_rows), keeping their names, return types,
-           locking and notifications.
+           update_policy_v2_rule on scope_rows, each calling policy_upgrade.ensure_scope_rows
+           first. Keep their names, return types, locking and notifications.
+         - Import scope_rows and policy_upgrade inside the functions (cycle; see
+           auto_accept.py:540-544).
       2. settings_controller.py: add_policy_rule, remove_policy_rule and update_policy_rule work
-         on rows as 3.7 says, and their docstrings describe rows ("adds to the scope's row").
+         on rows as 3.7 says, setting the self.error text from 3.4 when ensure_scope_rows returns
+         False. Their docstrings describe rows ("adds to the scope's row").
       3. web/routes_settings.py _apply_org_action: the add, remove and update branches keep
-         calling the auto_accept writers. Make the audit text for add name the row id(s) from
+         calling the auto_accept writers. The add audit text names the row id(s) from
          policy_row_ids_for.
-      4. gate.py propose_policy_change: use describe.row_sentence for the description only if
-         p7 has already added it; otherwise keep rule_sentence (p7 switches it). affected_ids
-         comes from auto_accept.policy_row_ids_for(new_rules).
-      5. Tests:
+      4. gate.py propose_policy_change: keep rule_sentence for the description (p8 switches it).
+         affected_ids comes from auto_accept.policy_row_ids_for(new_rules).
+      5. tests/unit/test_gate_real_evaluator.py :810-891 (TestAcceptAllPersistsARealRule and
+         ...ForWrites): assert on disk `scope: gmail.sender_domain` / `scope: gmail.label`
+         instead of the predicate, and compare auto_accept_rule with
+         scope_rows.row_id_for(scope, value).
+      6. tests/packaged_policy_probe.py (probe_rule_on_disk / assert_probe_rule_on_disk, :104-112):
+         expect version 3, `scope == "gmail.sender_domain"`, the same value, `verbs == ["read"]`
+         and the same operations.
+      7. Tests:
          - test_auto_accept.py:
            - test_add_policy_v2_rules_writes_version_3
-           - test_adding_a_verb_to_a_scope_extends_its_row: the reported duplicate, from the
-             add side
+           - test_adding_a_verb_to_a_scope_extends_its_row: the reported duplicate, from the add
+             side
            - test_remove_by_row_id
            - test_update_fills_missing_on_row
-         - test_settings_controller.py: the same three for the controller, plus
-           test_two_adds_on_one_scope_leave_one_row.
-         - test_gate.py: the bridge add returns the row id; the popup "Always allow" lands in
-           an existing row.
+           - test_writer_refuses_when_upgrade_fails
+         - test_settings_controller.py: the same, plus test_two_adds_on_one_scope_leave_one_row,
+           which asserts on scope_rows.rows_from_config(cfg), not on the snapshot (p8 changes the
+           snapshot).
+         - test_gate.py: the bridge add returns the row id; the popup "Always allow" lands in an
+           existing row.
          Update the existing tests that read the section as version 2.
     acceptance:
-      - python3 -m pytest tests/unit/test_auto_accept.py::test_adding_a_verb_to_a_scope_extends_its_row tests/unit/test_settings_controller.py -q -k "one_row or version_3 or row" passes
+      - python3 -m pytest tests/unit/test_auto_accept.py tests/unit/test_settings_controller.py tests/unit/test_gate_real_evaluator.py -q passes
+      - python3 -m pytest tests/unit/test_auto_accept.py::test_adding_a_verb_to_a_scope_extends_its_row tests/unit/test_settings_controller.py -q -k "test_two_adds_on_one_scope_leave_one_row" passes
       - grep -n "rules_to_config" src/privacyfence/auto_accept.py src/privacyfence/settings_controller.py matches nothing
       - ruff check . passes and python3 -m pytest tests/unit -q passes
 
-  - id: p7-row-readers
+  - id: p8-row-readers
     title: Settings page, bridge listing and token form read scope rows
-    depends_on: [p6-row-writers]
+    depends_on: [p7-row-writers]
     complexity: M
     touches:
       - src/privacyfence/policy/describe.py
@@ -1042,9 +1288,11 @@ phases:
          - Usage is summed over id and former_ids.
          - SettingsController._auto_accept_state reads scope_rows.rows_from_config(cfg).
          - Keep the sort by sentence.
-      3. web/routes_settings.py org state builder (:1512-1542): use auto_accept.get_policy_rows()
-         and the renamed function. _await_rule_names / cached_rule_value apply to
-         compile_row(row)[0].
+      3. web/routes_settings.py:
+         - Org state builder (:1512-1542): use auto_accept.get_policy_rows() and the renamed
+           function. _await_rule_names and cached_rule_value apply to compile_row(row)[0].
+         - The org create-token audit text (:1723-1727) appends ", personal data allowed" when
+           the flag is set.
       4. web/mcp_dispatch.py: _policy_rule_row(row), with the output keys from 3.6.
          list_policy lists get_policy_rows().
       5. web/server.py: _scoped_rule_entry per row; scoped_token_page_data iterates rows and adds
@@ -1055,15 +1303,16 @@ phases:
          - The notice text (:889) becomes exactly the string in 3.6.
          - The token list renders "(limited to: …)" when `limited_to` is present.
       8. Tests:
-         - test_describe.py: test_row_sentence_for_a_folder_row (exact string:
-           "Drive - folder F: allow read, download"), and the custom-row and condition-row
+         - test_describe.py: test_row_sentence_for_a_folder_row (exact string
+           "Drive - folder F: allow read, download"), plus the custom-row and condition-row
            cases.
          - test_settings_controller.py:
-           - test_screenshot_case_renders_one_row: a v2 config with the two reported rules
-             gives one row with verbs [read, download]
+           - test_screenshot_case_renders_one_row: a v2 config with the two reported rules gives
+             one row with verbs [read, download]
            - test_usage_sums_former_ids
          - test_mcp_dispatch.py: the list_policy keys.
-         - test_server.py: limited_to.
+         - test_server.py: limited_to appears only for a narrowed limit.
+         - The org route test for the create-token audit text.
          - Update the browser test's expected notice text.
     acceptance:
       - python3 -m pytest tests/unit/test_settings_controller.py -q -k "screenshot_case_renders_one_row or usage_sums_former_ids" passes
@@ -1072,9 +1321,9 @@ phases:
       - ruff check . passes and python3 -m pytest tests/unit -q passes
       - python3 -m pytest tests/integration/test_settings_update_rule_browser.py -v passes and no test reports SKIPPED (use PRIVACYFENCE_TEST_CHROMIUM if the session hook exported it)
 
-  - id: p8-edit-verbs
+  - id: p9-edit-verbs
     title: Edit a rule's verbs on the Settings page
-    depends_on: [p7-row-readers]
+    depends_on: [p8-row-readers]
     complexity: M
     touches:
       - src/privacyfence/auto_accept.py
@@ -1090,38 +1339,40 @@ phases:
     brief: |
       Read docs/scope-rules-plan.md section 3.5. Copy the shape of the `update_policy_rule`
       action across every file it appears in. It is the closest precedent: list them with
-      `grep -rn "update_policy_rule" src`.
-      1. auto_accept.py: set_policy_rule_verbs(rule_id, verbs) -> bool on scope_rows.set_verbs.
-         It returns False on refusal or no change.
+      `grep -rn "update_policy_rule" src tests`.
+      1. auto_accept.py: set_policy_rule_verbs(rule_id, verbs) -> bool on scope_rows.set_verbs,
+         after ensure_scope_rows. It returns False on refusal or no change.
       2. settings_controller.py: set_policy_rule_verbs(self, rule_id: str, verbs: list) -> dict.
       3. web/routes_settings.py:
          - Add the action to _SENSITIVE_ACTIONS and _ORG_ALLOWED_ACTIONS.
          - Add an _apply_org_action branch, with the audit text from 3.5.
       4. web/org_settings_scope.py: add an ACTION_SCOPES entry, the same as update_policy_rule's.
-      5. settings_window_html.py: the Edit verbs UI exactly as in 3.5, with the data-aa-*
-         attributes, strings and disabled-Save rule from there. Wire it into the existing
-         handler block (:1707-1745) the way data-aa-expand and update_policy_rule are wired.
+      5. settings_window_html.py: the Edit verbs UI exactly as in 3.5, including the data-aa-*
+         attributes, strings, the disabled Save and the disabled move toggle for fewer than two
+         ids. Wire it into the existing handler block (:1707-1745) the way data-aa-expand and
+         update_policy_rule are wired.
       6. Tests:
-         - Unit tests for the controller and auto_accept (add a verb, remove a verb, refusal
-           is a no-op that writes nothing).
-         - Route tests in both modes:
-           - step-up is required when require_passkey is on
-           - the action is in the allowlists (TestSensitiveActionsCoverAllAllowedActions and
-             TestOrgOnlyActionsAreClassified pass)
-           - an org principal cannot edit another principal's rule
+         - Unit tests for the controller and auto_accept: add a verb; remove a verb; a refusal
+           is a no-op that writes nothing.
+         - tests/unit/web/test_org_settings_scope.py: add set_policy_rule_verbs to the parametrize
+           list of test_a_rule_write_is_per_principal_and_routed_in_both_modes (:139).
+           test_every_action_names_local_mode_or_is_a_classified_org_only_action and
+           test_org_allowed_actions_is_exactly_the_org_routed_projection must pass.
+         - tests/unit/web/test_routes_settings.py: TestSensitiveActionsCoverAllAllowedActions
+           (:452) passes, and step-up is required when require_passkey is on, in both modes.
          - test_settings_window_html: the Edit verbs hooks and confirm text are present.
          - A new tests/integration/test_settings_edit_verbs_browser.py, modelled on
            test_settings_update_rule_browser.py: open Edit verbs on a Drive folder row, add
            update, confirm, and see the row's chips change.
     acceptance:
       - python3 -m pytest tests/unit/test_settings_controller.py tests/unit/test_auto_accept.py -q -k set_policy_rule_verbs passes
-      - python3 -m pytest tests/unit/web -q passes
+      - python3 -m pytest tests/unit/web/test_org_settings_scope.py tests/unit/web/test_routes_settings.py -q passes
       - python3 -m pytest tests/integration/test_settings_edit_verbs_browser.py -v passes and no test reports SKIPPED
       - ruff check . passes and python3 -m pytest tests/unit -q passes
 
-  - id: p9-retire
+  - id: p10-retire
     title: ADRs, reference docs, changelog, delete the plan
-    depends_on: [p8-edit-verbs]
+    depends_on: [p9-edit-verbs]
     complexity: S
     touches:
       - docs/adr/**
@@ -1172,7 +1423,9 @@ phases:
            labels."
          - "Each scope now has one auto-accept rule. Adding verbs to a scope that already has a
            rule extends it, and existing rules are merged automatically on upgrade (the old
-           settings file is kept as settings.yaml.pre-scope-rules.bak)."
+           settings file is kept as settings.yaml.pre-scope-rules.bak). Scoped tokens keep
+           exactly the access they had. Downgrading is not supported: an older version ignores
+           the merged rules and drops them if it saves rules; restore the backup file instead."
          - "A rule's verbs can now be edited on the Auto-accept page."
          - "Personal data in exports, file downloads and Peek uploads is now allowed per scoped
            token instead of per rule. Tokens that used such a rule keep it; calls made without
