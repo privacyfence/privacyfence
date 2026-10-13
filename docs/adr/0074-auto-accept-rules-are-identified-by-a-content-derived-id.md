@@ -6,6 +6,7 @@ Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-18 in the
 redesign's rule-attribution phase, implemented in `ee93518a` and merged in
 [#541](https://github.com/privacyfence/privacyfence/pull/541); simplified in `081c1fe4` when the v1
 engine was retired, ADR 0004). Implemented.
+Amended by ADR 0172.
 
 ## Context
 

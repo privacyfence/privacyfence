@@ -297,22 +297,31 @@ resource the call touched. The exception is Gmail drafting, whose button writes 
 rule: every future draft is created without a card. Which tool offers which buttons is listed in
 the ["Always allow" per-tool reference](always-allow-rules-reference.md).
 
-**From Settings — Auto-accept.** **Settings → Auto-accept** lists every rule as a sentence, with
-colour-coded verb chips, an **Unblocks N tools** disclosure listing exactly which tools it covers,
-how often it has matched ("Matched 42x, last 3 days ago", or "Never matched"), and **✕ Remove**.
-You can filter by connector, verb family or text. **Add a rule** takes a scope, a value where the
-scope needs one (comma-separated for several), and the verbs to allow. To narrow a rule, remove it
-and add a narrower one; rules are not edited in place. When a passkey is required
-(`step_up.require_passkey`), adding or removing a rule asks for it (see
+**From Settings — Auto-accept.** **Settings → Auto-accept** lists one rule per scope — for example
+one row per Drive folder or Gmail sender domain — as a sentence, with colour-coded verb chips, an
+**Unblocks N tools** disclosure listing exactly which tools it covers, how often it has matched
+("Matched 42x, last 3 days ago", or "Never matched"), **Edit verbs** and **✕ Remove**. You can
+filter by connector, verb family or text. **Add a rule** takes a scope, a value where the scope
+needs one (comma-separated for several), and the verbs to allow; adding verbs to a scope that
+already has a rule extends that rule instead of creating a second one. **Edit verbs** switches
+verbs on or off for an existing rule: a verb you add covers all of its tools, a verb you remove
+stops covering its tools, and a verb the rule already had keeps exactly the tools it had. Rules
+that do not belong to a scope in the catalogue (for example one you wrote by hand in
+`settings.yaml`) show no **Edit verbs** link. When a passkey is required
+(`step_up.require_passkey`), adding, editing or removing a rule asks for it (see
 [Security and compliance](security-and-compliance.md)).
 
 A rule keeps the tools it covered when you saved it. When a release adds a tool that belongs to a
 verb the rule already has (for example `grist_import_csv` under a Grist document rule that allows
-*create*), the rule's row says "Newer tools aren't covered yet" and names them, and the call is
-denied until you click **Update rule** and confirm. That adds only those tools, keeps the rule and
-anything that refers to it (scoped tokens, the audit log) unchanged, and asks for the passkey like
-adding a rule. Nothing widens a rule on its own at startup, upgrade or load. See
-[ADR 0166](adr/0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md).
+*add*), the rule's row says "These verbs also cover tools this rule doesn't allow yet:" and names
+them, and the call is denied until you click **Update rule** and confirm. That adds only those
+tools, keeps the rule and anything that refers to it (scoped tokens, the audit log) unchanged, and
+asks for the passkey like adding a rule. Nothing widens a rule on its own at startup, upgrade or
+load; the first start after the one-rule-per-scope change merges your existing rules into one row
+per scope without adding any tool, and keeps the old file as `settings.yaml.pre-scope-rules.bak`.
+See [ADR 0166](adr/0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md),
+[ADR 0172](adr/0172-one-stored-auto-accept-rule-per-scope.md) and
+[ADR 0174](adr/0174-a-rules-verbs-are-edited-in-place.md).
 
 **From the AI system — `privacyfence_propose_policy_change`.** The AI system can propose adding,
 replacing or removing a rule. `privacyfence_list_policy` shows it the current rules and the scope
@@ -399,21 +408,21 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
-A Grist document rule, an approved-report rule and a Jira project search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) for the same document, report or project; the PII gate still applies to them unless the rule allows personal data (below).
+A Grist document rule, an approved-report rule and a Jira project search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) for the same document, report or project; the PII gate still applies to them unless the call is made with a scoped token that allows personal data (below).
 
-**Peek page.** A Peek page rule names page slugs and is set only in Settings; the card offers no "Always allow" button for Peek. *Read* covers `peek_get_comments` and `peek_get_stats` for those pages, and *update* covers `peek_upload_page` with one of those slugs, which publishes a new version. It never covers a new page, a visibility change, a rename or a delete.
+**Peek page.** A Peek page rule names page slugs and is set only in Settings; the card offers no "Always allow" button for Peek. *Read* covers `peek_get_comments` and `peek_get_stats` for those pages, and *add* covers `peek_upload_page` with one of those slugs, which publishes a new version. It never covers a new page, a visibility change, a rename or a delete.
 
 #### Letting personal data through
 
-The [PII check](#the-pii-check) keeps personal data out of the AI system's context. The tools below send their data to a file or to a page instead, and their result holds no row, so a rule can let them through. On the **Add a rule** form in **Settings → Auto-accept**, the scopes listed here show a checkbox:
+The [PII check](#the-pii-check) keeps personal data out of the AI system's context. The tools below send their data to a file or to a page instead, and their result holds no row, so a scoped token can let them through:
 
-| Scope | Checkbox | The rule then lets through |
-|---|---|---|
-| Grist document, Salesforce report, Jira project | Exports may include personal data | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` |
-| Peek page | New versions may include personal data | `peek_upload_page` with the page's slug |
-| Drive folder | Downloads may include personal data | `drive_download_file`, when the file is saved or handed over through a one-time link |
+| Scope | The token then lets through |
+|---|---|
+| Grist document, Salesforce report, Jira project | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` |
+| Peek page | `peek_upload_page` with the page's slug |
+| Drive folder | `drive_download_file`, when the file is saved or handed over through a one-time link |
 
-Under such a rule a matching call runs without a card or a second confirmation even when the scan finds personal data, in an unattended session too. Every other tool still scans, and a flagged rule matches nothing it did not match before. A Drive folder rule's box never applies to a download whose content comes back inside the tool result (an organization install returns a small file inline); that download keeps the check. The checkbox exists only in Settings, behind your passkey: `privacyfence_propose_policy_change` cannot set it. A rule with the box ticked is a separate rule from the same scope without it, and Settings shows it with "personal data allowed in exports, file downloads and page uploads". The audit log records the call as auto-accepted by that rule, with the categories found; on an organization install, adding the rule is audited as "personal data allowed". See [ADR 0157](adr/0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) and [ADR 0158](adr/0158-peek-rules-name-pages-and-cover-only-new-versions.md).
+**Personal data and scoped tokens.** The permission belongs to the [scoped token](connect-claude-code.md#scoped-tokens), not to a rule. On the **New token** form in **Settings → Scoped tokens**, tick **Let exports, downloads and page uploads carry personal data**. It applies only to calls made with that token, covers all of the token's rules, and is shown as "personal data allowed" in the token list. A matching call then runs without a card or a second confirmation even when the scan finds personal data, in an unattended session too, but only for the tools above and only when one of the token's rules matches. A call made without a token (an ordinary Claude session) always stops for review when personal data is found. A Drive download whose content comes back inside the tool result (an organization install returns a small file inline) keeps the check even with the box ticked. Every other tool still scans. The box exists only in Settings, behind your passkey: `privacyfence_propose_policy_change` cannot set it. The audit log records the call as auto-accepted by the rule, with the categories found; on an organization install, creating the token is audited as "personal data allowed". Rules saved before this change that allowed personal data were converted when you upgraded: the scoped tokens that used such a rule now carry the box. See [ADR 0173](adr/0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md), [ADR 0157](adr/0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) and [ADR 0158](adr/0158-peek-rules-name-pages-and-cover-only-new-versions.md).
 
 ### Conditions
 
@@ -440,15 +449,24 @@ condition needs the fetched item, so `privacyfence_check_policy` reports a rule 
 
 ### Verbs
 
-Settings and the confirmation dialog describe operations with 19 verbs in four families, colour-coded
-so a risky verb stands out:
+Settings and the confirmation dialog describe operations with nine verbs in four families,
+colour-coded so a risky verb stands out:
 
 | Family | Verbs |
 |---|---|
 | read | read, download, search |
-| write | create, update, format, restructure, comment, label, move, copy, archive, complete, transition, configure |
-| send | send, draft, share |
+| write | add, update, restructure, move |
+| send | send |
 | destructive | delete |
+
+*Add* creates something new (a file, an event, a task, a draft, a Grist row). *Update* changes
+something that exists, including formatting, comments, labels, completing a task, transitioning a
+Jira issue and changing a visibility. *Restructure* changes the shape of a container (Grist tables
+and columns, Gmail filters). *Move* relocates a Drive file, a task or a Gmail message (archiving),
+or copies a Drive file, and needs both the source and the destination folder or list in the rule
+where there is a destination. Older verb names (*create*, *draft*, *format*, *comment*, *label*,
+*complete*, *transition*, *copy*, *archive*, *configure*, *share*) are still accepted wherever a
+verb is typed and are mapped to these nine. See [ADR 0171](adr/0171-auto-accept-rules-use-nine-verbs.md).
 
 ### Same-file grace window
 
