@@ -303,6 +303,20 @@ every run.
 | Approved project | `approved_project_keys` | `[PFQA]` | `jira.read_issue` |
 | Own issues | `i_am_reporter` / `i_am_assignee` | — | `jira.read_issue` |
 
+### Seed: Jira Assets
+
+- [ ] Create an Assets schema with key exactly `PFQA`, holding the object types Account, Contract
+      and Asset. Contract references Account, and Asset references Contract.
+- [ ] Create two accounts, two contracts and three assets, every label tagged `[QATEST]`.
+- [ ] Name one contract `PrivacyFence QA seed contract [QATEST]` and link it to one `PFQA` Jira issue.
+- [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
+      `PrivacyFence QA seed contract [QATEST]`) and optionally `assets.seed_object_key` (blank to
+      resolve by label inside the schema).
+
+| Optional rule | Predicate | Value | Operations |
+|---|---|---|---|
+| Approved schema | `approved_schema_ids` | `[<PFQA schema id>]` | `assets.read_object` |
+
 ### Seed: Confluence
 
 - [ ] Create a space with key exactly `PFQA`.
