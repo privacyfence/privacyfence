@@ -101,6 +101,7 @@ and the other is not, the daemon logs a warning at start.
 | `gmail.append_signature_to_drafts` | bool | `false` | `false` | Append your Gmail signature (the one Gmail stores for the sending address) to drafts. Each draft tool's `include_signature` argument overrides it per call. The signature is shown on the card. **Settings > Privacy Filter**. |
 | `salesforce.report_max_pages` | int | `50` | `50` | Most report runs one paged `salesforce_run_report` read or one `salesforce_export_report` export may use (each page is one run and counts against the org's report-run limits). A read that needs more fails. |
 | `connectors.<name>.enabled` | bool | `true` | not set | `false` turns a connector off. `<name>` is one of `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`, `telegram`, `grist`, `peek`. Written by **Disable**/**Enable** on **Settings > Connectors**. A connector also needs its organization config and a sign-in before it runs. |
+| `connectors.assets.enabled` | bool | `false` | not set | `true` turns Jira Assets on and makes the Atlassian sign-in ask for the Assets scopes; an explicit value wins over the bundle's `atlassian.assets` flag, which is the default when this key is absent (see [Atlassian setup](atlassian-setup.md#jira-assets)). Sign in again after switching it on. |
 
 ### PII detection
 

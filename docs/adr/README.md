@@ -258,3 +258,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0168](0168-earlier-drive-file-versions-are-read-under-the-file-read-rule.md) | Earlier Drive file versions are read under the file-read rule | Accepted |
 | [0169](0169-a-stable-branch-follows-the-latest-stable-release-for-the-plugin-marketplace.md) | A `stable` branch follows the latest stable release for the plugin marketplace | Accepted |
 | [0170](0170-a-drive-copy-is-its-own-verb-governed-by-the-move-folder-scope.md) | A Drive copy is its own verb, governed by the move folder scope | Accepted |
+| [0171](0171-jira-assets-is-a-separate-read-only-connector-whose-atlassian-scopes-are-requested-only-when-switched-on.md) | Jira Assets is a separate read-only connector whose Atlassian scopes are requested only when it is switched on | Accepted |
+| [0172](0172-assets-schemas-types-and-attributes-are-auto-approved-and-object-reads-are-reviewed-per-schema.md) | Assets schemas, object types and attribute definitions are auto-approved; object reads are reviewed and can be auto-accepted per schema | Accepted |
+| [0173](0173-linked-objects-are-read-in-one-bounded-reviewed-traversal.md) | Linked objects are read in one bounded, reviewed traversal | Accepted |

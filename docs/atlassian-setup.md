@@ -99,6 +99,28 @@ desktop app's credentials and the organization server's bundle gets the server a
 server's bundle with the server flags and install it on the server — see
 [org-mode-setup-guide.md](org-mode-setup-guide.md) for signing and the server flags.
 
+## Jira Assets
+
+The optional **Jira Assets** connector (read-only) lets an agent browse Assets schemas, search
+objects with AQL, read linked objects and connected tickets, and export objects. It needs a Jira
+Service Management site with Assets enabled. It is off by default, and the extra permissions are
+requested only when it is switched on, so Jira and Confluence users who never use it are not asked
+for anything new.
+
+| Item | Value |
+|---|---|
+| Assets scopes (granular) | `read:cmdb-schema:jira`, `read:cmdb-type:jira`, `read:cmdb-attribute:jira`, `read:cmdb-object:jira`, `read:servicedesk-request` |
+| Bundle flag | `--atlassian-assets` (needs the client id and secret flags). Writes `atlassian.assets: true`, which switches Assets on by default for every user of the bundle. |
+
+1. In the [developer console](https://developer.atlassian.com/console/myapps/), open the app and
+   add the five scopes above (the `read:cmdb-*` scopes under the Jira API, `read:servicedesk-request`
+   under the Jira Service Management API).
+2. Switch Assets on: in **Settings > Connectors** enable **Jira Assets** (desktop), or build the
+   bundle with `--atlassian-assets`. An explicit `connectors.assets.enabled` setting wins over the
+   bundle flag.
+3. Authenticate again (**Authenticate…** on Jira Assets, or **Reconnect…**) so Atlassian shows the
+   extra consent. Tokens made before Assets was on do not have the permissions.
+
 ## Users connect
 
 Users install the bundle and click **Authenticate…** next to Jira or Confluence (desktop) or
@@ -140,3 +162,12 @@ has no Jira product, or the "Browse users and groups" global permission was remo
 or space. Check permissions in Jira or Confluence.
 
 **Wrong site connected** — on a desktop install, **Reconnect…** and pick the other site.
+
+**Jira Assets says "needs an extra Atlassian permission. Use Authenticate… on Jira Assets in
+PrivacyFence Settings."** — the saved sign-in was made before Assets was switched on, or without
+the five Assets scopes. Check that Assets is on, that the app has the scopes, then use
+**Authenticate…** on Jira Assets.
+
+**Jira Assets says "This Atlassian site has no Assets workspace (Jira Service Management Assets is
+not enabled)."** — the connected site has no Assets workspace. Enable Assets on a Jira Service
+Management site, or connect a site that has it.
