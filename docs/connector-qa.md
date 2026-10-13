@@ -308,9 +308,12 @@ every run.
 - [ ] Create an Assets schema with key exactly `PFQA`, holding the object types Account, Contract
       and Asset. Contract references Account, and Asset references Contract.
 - [ ] Create two accounts, two contracts and three assets, every label tagged `[QATEST]`.
-- [ ] Name one contract `PrivacyFence QA seed contract [QATEST]` and link it to one `PFQA` Jira issue
-      through an **Assets objects** custom field (object schema `PFQA`, filter `objectType = Contract`)
-      on that project's screens.
+- [ ] Name one contract `PrivacyFence QA seed contract [QATEST]`.
+- [ ] Optional: link the seed contract to a `[QATEST]` Jira issue through an **Assets objects**
+      custom field (object schema `PFQA`, filter `objectType = Contract`), so connected tickets has
+      something to return; without it the recording holds an empty list. The field is created in
+      the site-wide Fields admin and attaches only to a company-managed space; a team-managed
+      space's own field dialog has no Assets type.
 - [ ] Build the QA bundle with `--atlassian-assets --atlassian-assets-workspace-id <workspaceId>`,
       the id shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`.
 - [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
