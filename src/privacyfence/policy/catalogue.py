@@ -11,8 +11,8 @@ bridge writer call.
 
 ``EXTRA_SCOPES`` covers the operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
-tools, which had no predicate at all, Grist's seven operation keys (scoped by document), and Gmail's two filter tools and Slack's group-chat tool,
-which have no resource identity to scope to. The Settings page and the bridge tool configure them
+tools, which had no predicate at all, Grist's seven operation keys (scoped by document), Peek's page tools, and Gmail's two filter tools and
+Slack's group-chat tool, which have no resource identity to scope to. The Settings page and the bridge tool configure them
 the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing
 -- rather than reactively, off one gated call's own popup.
 """
@@ -42,8 +42,9 @@ class PolicyExtraScope:
     label: str
     needs_value: bool
     value_hint: str
-    # Display text for a verb chip whose bare name doesn't say what it unblocks.
-    verb_labels: dict[str, str] | None = None
+    # Operation keys the registry derivation over-reaches for this scope, removed by
+    # ``extra_operations_for``.
+    excludes: frozenset[str] = frozenset()
 
 
 EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
@@ -54,30 +55,32 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
     ),
     "grist.document": PolicyExtraScope(
         predicate="grist.document", connector="grist",
-        verbs=(Verb.READ, Verb.CREATE, Verb.UPDATE, Verb.RESTRUCTURE),
+        verbs=(Verb.READ, Verb.ADD, Verb.UPDATE, Verb.RESTRUCTURE),
         label="Grist — document", needs_value=True, value_hint="8CAN8gKdxY7z…document-id",
-        verb_labels={
-            "read": "read (records, export, SQL)",
-            "create": "create (add records, import CSV)",
-            "update": "update (records, CSV)",
-        },
     ),
     "peek.page": PolicyExtraScope(
         predicate="peek.page", connector="peek",
-        verbs=(Verb.READ, Verb.CREATE),
+        verbs=(Verb.READ, Verb.ADD),
         label="Peek — page", needs_value=True, value_hint="team-dashboard…page-slug",
-        verb_labels={"read": "read (comments, stats)", "create": "update (new versions)"},
     ),
-    "gmail.configure": PolicyExtraScope(
+    "gmail.filters": PolicyExtraScope(
         predicate="gmail.anything", connector="gmail",
-        verbs=(Verb.CONFIGURE,),
-        label="Gmail — anything (unconditional)", needs_value=False, value_hint="",
+        verbs=(Verb.RESTRUCTURE,),
+        label="Gmail — filters (unconditional)", needs_value=False, value_hint="",
     ),
-    "slack.share_anything": PolicyExtraScope(
+    "slack.group_chats": PolicyExtraScope(
         predicate="slack.anything", connector="slack",
-        verbs=(Verb.SHARE,),
-        label="Slack — anything (unconditional)", needs_value=False, value_hint="",
+        verbs=(Verb.SEND,),
+        label="Slack — group chats (unconditional)", needs_value=False, value_hint="",
+        excludes=frozenset({"slack.send_message"}),
     ),
+}
+
+# Ids retired when the nine verbs landed. `rules_for_catalogue_entry` resolves one before anything
+# else, so older bridge calls keep working.
+GROUP_ALIASES: dict[str, str] = {
+    "gmail.configure": "gmail.filters",
+    "slack.share_anything": "slack.group_chats",
 }
 
 # Example values for an "add a rule" form's value field, keyed by predicate, scoped down to the
@@ -116,17 +119,17 @@ PERSONAL_DATA_GROUPS: dict[str, str] = {
 }
 
 
-def extra_operations_for(connector: str, verb: Verb) -> frozenset[str]:
-    """Every operation key one of ``EXTRA_SCOPES``' verbs governs, for ``connector`` -- derived from
+def extra_operations_for(extra: PolicyExtraScope, verb: Verb) -> frozenset[str]:
+    """Every operation key one of ``EXTRA_SCOPES``' verbs governs, for ``extra`` -- derived from
     the tool registry the same way ``policy.propose.operations_for`` derives a
-    ``PROPOSABLE_SCOPES`` entry's own operations, since none of these three predicates is declared
-    there (see this module's own docstring)."""
+    ``PROPOSABLE_SCOPES`` entry's own operations, since none of these predicates is declared
+    there (see this module's own docstring), minus ``extra.excludes``."""
     return frozenset(
         entry.operation
         for entry in registry.TOOL_REGISTRY.values()
         if entry.operation is not None and entry.verb == verb
-        and entry.operation.split(".", 1)[0] == connector
-    )
+        and entry.operation.split(".", 1)[0] == extra.connector
+    ) - extra.excludes
 
 
 def scope_catalogue() -> list[dict[str, Any]]:
@@ -163,7 +166,6 @@ def scope_catalogue() -> list[dict[str, Any]]:
             "needs_value": extra.needs_value,
             "value_hint": extra.value_hint,
             "verbs": [v.value for v in extra.verbs],
-            **({"verb_labels": extra.verb_labels} if extra.verb_labels else {}),
         })
     for entry in entries:
         if entry["id"] in PERSONAL_DATA_GROUPS:
@@ -174,17 +176,21 @@ def scope_catalogue() -> list[dict[str, Any]]:
 
 def parse_verbs(verbs: Any) -> list[Verb]:
     """Turn a plain list of verb strings (a form's checked checkboxes, or a bridge call's own
-    ``verbs`` array) back into ``policy.registry.Verb`` members, dropping -- rather than erroring on
-    -- anything that isn't a real verb name, the same fail-closed-and-quiet posture
-    ``rules_for_catalogue_entry`` itself takes."""
+    ``verbs`` array) back into ``policy.registry.Verb`` members. A retired name
+    (``registry.LEGACY_VERB_ALIASES``) is mapped to its current verb, duplicates are dropped keeping
+    first-seen order, and anything that isn't a real verb name is dropped -- rather than erroring on
+    -- the same fail-closed-and-quiet posture ``rules_for_catalogue_entry`` itself takes."""
     if not isinstance(verbs, list):
         return []
     parsed: list[Verb] = []
     for raw in verbs:
+        resolved: Verb | None
         try:
-            parsed.append(Verb(raw))
+            resolved = Verb(raw)
         except ValueError:
-            continue
+            resolved = registry.LEGACY_VERB_ALIASES.get(raw) if isinstance(raw, str) else None
+        if resolved is not None and resolved not in parsed:
+            parsed.append(resolved)
     return parsed
 
 
@@ -206,7 +212,9 @@ def rules_for_catalogue_entry(
 
     ``personal_data`` sets ``allow_personal_data`` on every compiled rule (ADR 0157); it is only
     meaningful for the groups in ``PERSONAL_DATA_GROUPS`` and yields ``[]`` for any other.
+    ``group`` may be a retired id (``GROUP_ALIASES``), which is resolved first.
     """
+    group = GROUP_ALIASES.get(group, group)
     if personal_data and group not in PERSONAL_DATA_GROUPS:
         return []
     rules = _compile_catalogue_rules(group, value, verbs)
@@ -222,7 +230,7 @@ def _compile_catalogue_rules(group: str, value: list[str] | None, verbs: list[Ve
         if not allowed_verbs or (extra.needs_value and not value):
             return []
         operations: frozenset[str] = frozenset().union(
-            *(extra_operations_for(extra.connector, v) for v in allowed_verbs)
+            *(extra_operations_for(extra, v) for v in allowed_verbs)
         )
         if not operations:
             return []
@@ -236,6 +244,7 @@ def _compile_catalogue_rules(group: str, value: list[str] | None, verbs: list[Ve
 
 __all__ = [
     "EXTRA_SCOPES",
+    "GROUP_ALIASES",
     "PERSONAL_DATA_GROUPS",
     "VALUE_HINTS",
     "PolicyExtraScope",

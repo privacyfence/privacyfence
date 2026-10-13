@@ -143,6 +143,26 @@ def _sorted_dicts(rules) -> list[dict]:
     return sorted((store.rule_to_dict(rule) for rule in rules), key=lambda d: d["predicate"])
 
 
+# A grant capability finer than a verb: the nine verbs merged `complete`/`comment`/`transition` into
+# `update`, so expanding the verb a capability implies also reaches its siblings. The extras are
+# exactly those siblings, pinned here so a wider derivation still fails the test.
+_MERGED_VERB_EXTRAS: dict[tuple[str, str], frozenset[tuple[str, str]]] = {
+    ("tasks.task_lists", "edit"): frozenset({
+        ("tasks.complete_task", "approved_task_list"), ("tasks.uncomplete_task", "approved_task_list"),
+    }),
+    ("tasks.task_lists", "complete"): frozenset({("tasks.update_task", "approved_task_list")}),
+    ("jira.projects", "comment"): frozenset({
+        ("jira.update_issue", "approved_project_keys"), ("jira.transition_issue", "approved_project_keys"),
+    }),
+    ("jira.projects", "update"): frozenset({
+        ("jira.add_comment", "approved_project_keys"), ("jira.transition_issue", "approved_project_keys"),
+    }),
+    ("jira.projects", "transition"): frozenset({
+        ("jira.add_comment", "approved_project_keys"), ("jira.update_issue", "approved_project_keys"),
+    }),
+}
+
+
 class TestCatalogueIsDerived:
     """The catalogue declares verbs; operation keys come from the verb registry. These assertions
     are what stop it becoming a sixth table that drifts."""
@@ -183,7 +203,8 @@ class TestCatalogueIsDerived:
             for verb in verbs
             for operation in propose.operations_for(entry, verb)
         }
-        assert derived == targets
+        extras = _MERGED_VERB_EXTRAS.get((f"{resource_type.connector}.{resource_type.config_key}", capability), frozenset())
+        assert derived == targets | extras
 
     def test_every_catalogue_predicate_is_a_real_selector(self):
         for entry in propose.PROPOSABLE_SCOPES:
@@ -317,14 +338,15 @@ class TestProposalsAgainstTheV1Tables:
                     if p.scope.id == "move_within_approved_folders")
         assert copy.value == ["D9", "FOLDER1"]
         assert copy.operation == "drive.copy_file"
-        assert copy.verb == Verb.COPY
+        assert copy.verb == Verb.MOVE
         assert scopes.SCOPE_SELECTORS["move_within_approved_folders"].matches(copy.value, ctx) is True
 
-    def test_a_move_proposal_offers_a_copy_widening_over_the_same_folders(self):
+    def test_a_move_proposal_covers_copy_over_the_same_folders(self):
         ctx = _drive_ctx("drive_move_file", file_id="f1", destination_folder_id="D9")
         move = next(p for p in propose.proposals_for("drive_move_file", ctx)
                     if p.scope.id == "move_within_approved_folders")
-        (widening,) = [w for w in move.widenings if w.verb == Verb.COPY]
+        (widening,) = [w for w in move.widenings if w.verb == Verb.MOVE]
+        # The move's own operation is already in the proposal; the widening adds the copy.
         assert set(widening.pairs) == {("move_within_approved_folders", "drive.copy_file")}
 
     def test_a_move_with_no_destination_or_no_source_folder_is_not_proposed(self):
@@ -421,8 +443,7 @@ class TestOneWriter:
     """Popup and Settings, given the same intent, produce byte-identical rules."""
 
     SANDBOX_WRITE_VERBS = (
-        Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE, Verb.CREATE, Verb.MOVE,
-        Verb.COPY,
+        Verb.UPDATE, Verb.RESTRUCTURE, Verb.DELETE, Verb.ADD, Verb.MOVE,
     )
 
     def test_popup_and_settings_produce_identical_rules(self):
@@ -450,3 +471,33 @@ class TestOneWriter:
 
     def test_an_unknown_scope_group_yields_no_rules(self):
         assert propose.rules_for_scope_group("nope.nothing", ["x"], (Verb.READ,)) == []
+
+
+class TestNineVerbExcludes:
+    """The three scopes whose merged verb would otherwise reach a tool they can never match."""
+
+    def _scope(self, predicate, scope_type):
+        return next(e for e in propose.PROPOSABLE_SCOPES
+                    if e.predicate == predicate and e.scope_type == scope_type)
+
+    def test_gmail_drafting_scope_excludes_create_label(self):
+        scope = self._scope("always_allow", "gmail.anything")
+        assert scope.verbs == frozenset({Verb.ADD})
+        assert "gmail.create_label" in scope.excludes
+        assert "gmail.create_label" not in propose.operations_for(scope, Verb.ADD)
+        assert "gmail.create_draft" in propose.operations_for(scope, Verb.ADD)
+        assert scope.widenable is False
+
+    def test_contacts_label_scope_excludes_contacts_edit(self):
+        scope = self._scope("label_name_allowlist", "contacts.label")
+        assert "contacts.edit" in scope.excludes
+        operations = propose.operations_for(scope, Verb.UPDATE)
+        assert "contacts.edit" not in operations
+        assert operations == frozenset({"contacts.add_label", "contacts.remove_label"})
+
+    def test_slack_recipient_scope_excludes_group_chat(self):
+        scope = self._scope("approved_recipient", "slack.channel")
+        assert "slack.create_group_chat" in scope.excludes
+        operations = propose.operations_for(scope, Verb.SEND)
+        assert "slack.create_group_chat" not in operations
+        assert operations == frozenset({"slack.send_message"})

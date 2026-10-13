@@ -46,7 +46,7 @@ def missing_operations(rule: PolicyRule) -> frozenset[str]:
         if extra.predicate != rule.predicate or extra.connector not in connectors:
             continue
         for verb in verbs & frozenset(extra.verbs):
-            expected |= catalogue.extra_operations_for(extra.connector, verb)
+            expected |= catalogue.extra_operations_for(extra, verb)
     return frozenset(expected) - rule.operations
 
 

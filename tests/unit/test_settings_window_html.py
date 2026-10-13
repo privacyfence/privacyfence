@@ -270,10 +270,11 @@ class TestAutoAcceptTemplate:
         assert "data-aa-verb-toggle" in html
         assert "data-aa-add" in html
 
-    def test_move_copy_needs_two_ids_hint_and_block(self):
+    def test_move_needs_two_ids_hint_and_block(self):
         html = build_html(_make_state())
         assert "function aaPairHint(group)" in html
-        assert "['move', 'copy']" in html
+        assert "['move'].filter" in html
+        assert "['move', 'copy']" not in html
         assert "Enter at least two ids, separated by a comma." in html
         assert "pf-aa-pair-hint" in html
         # The invalid state disables the button and the submit path refuses too.
