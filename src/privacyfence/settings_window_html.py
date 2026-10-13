@@ -925,7 +925,7 @@ _JS = r"""
       group.verbs.forEach(function (verb) {
         var on = !!checkedVerbs[verb];
         html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
-          '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc((group.verb_labels || {})[verb] || verb) + '</div>';
+          '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc(verb) + '</div>';
       });
       html += '</div>';
     }
@@ -1854,15 +1854,15 @@ _JS = r"""
   // the selected group id is actually tracked there (see renderAutoAccept). Client-side no-ops
   // (rather than posting nothing useful) when no verb is checked -- add_policy_rule itself would
   // also just no-op, but skipping the round trip is cheap and avoids a pointless snapshot re-push.
-  // A move or a copy auto-accepts only when the source AND the destination are both in the one
+  // A move auto-accepts only when the source AND the destination are both in the one
   // rule's value list (policy/scopes.py `move_within_approved_folders`), so a rule that names a
-  // single folder for either verb can never match a move or copy out of it. Returns null when the
-  // form isn't about a valued scope with move/copy checked; otherwise {text, invalid}, where
+  // single folder for either verb can never match a move out of it. Returns null when the
+  // form isn't about a valued scope with move checked; otherwise {text, invalid}, where
   // invalid blocks "Add rule" until the field holds at least two distinct comma-separated ids.
   function aaPairHint(group) {
     if (!group || !group.needs_value) return null;
     var checked = ui.aaCheckedVerbs || {};
-    var verbs = ['move', 'copy'].filter(function (v) { return checked[v] && group.verbs.indexOf(v) >= 0; });
+    var verbs = ['move'].filter(function (v) { return checked[v] && group.verbs.indexOf(v) >= 0; });
     if (!verbs.length) return null;
     var seen = {};
     String(ui.aaValue || '').split(',').forEach(function (v) { v = v.trim(); if (v) seen[v] = true; });

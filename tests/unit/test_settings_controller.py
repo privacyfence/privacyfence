@@ -1878,17 +1878,17 @@ class TestPolicyScopeCatalogue:
 
     def test_gmail_and_slack_unconditional_extras_need_no_value(self):
         by_id = {e["id"]: e for e in sc._policy_scope_catalogue()}
-        assert by_id["gmail.configure"]["needs_value"] is False
-        assert by_id["gmail.configure"]["verbs"] == ["configure"]
-        assert by_id["slack.share_anything"]["needs_value"] is False
-        assert by_id["slack.share_anything"]["verbs"] == ["share"]
+        assert by_id["gmail.filters"]["needs_value"] is False
+        assert by_id["gmail.filters"]["verbs"] == ["restructure"]
+        assert by_id["slack.group_chats"]["needs_value"] is False
+        assert by_id["slack.group_chats"]["verbs"] == ["send"]
 
     def test_drive_folder_entry_unions_verbs_across_every_predicate_in_the_group(self):
         entry = next(e for e in sc._policy_scope_catalogue() if e["id"] == "drive.folder")
-        # approved_folder (read/download) + approved_sandbox_folder (update/format/restructure/
-        # comment/delete) + parent_folder_allowlist (create) + move_within_approved_folders (move, copy).
+        # approved_folder (read/download) + approved_sandbox_folder (update/restructure/delete)
+        # + parent_folder_allowlist (add) + move_within_approved_folders (move).
         assert set(entry["verbs"]) == {
-            "read", "download", "update", "format", "restructure", "comment", "delete", "create", "move", "copy",
+            "read", "download", "update", "restructure", "delete", "add", "move",
         }
 
 
@@ -1937,11 +1937,11 @@ class TestAddPolicyRule:
         tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
         assert {"apps_script_get_content", "apps_script_get_execution_log", "apps_script_write_content"} <= tools
 
-        state = controller.add_policy_rule("gmail.configure", "", ["configure"])
+        state = controller.add_policy_rule("gmail.filters", "", ["restructure"])
         tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
         assert "gmail_create_filter" in tools
 
-        state = controller.add_policy_rule("slack.share_anything", "", ["share"])
+        state = controller.add_policy_rule("slack.group_chats", "", ["send"])
         tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
         assert "slack_create_group_chat" in tools
 

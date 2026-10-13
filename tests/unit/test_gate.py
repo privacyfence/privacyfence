@@ -1083,7 +1083,7 @@ class TestPreflightAutoAccept:
 
     @pytest.mark.parametrize("verb, operation", [
         (Verb.READ, "grist.read_records"),  # also what grist_export_records and grist_export_sql resolve to
-        (Verb.CREATE, "grist.import_csv"),
+        (Verb.ADD, "grist.import_csv"),
         (Verb.UPDATE, "grist.update_csv"),
     ])
     def test_grist_document_rule_auto_accepts_the_csv_and_export_operations(self, verb, operation):

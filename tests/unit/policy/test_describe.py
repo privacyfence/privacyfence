@@ -18,7 +18,7 @@ from privacyfence.policy.registry import Verb
 from ...helpers import make_ctx
 
 _FILE = SimpleNamespace(id="f1", parent_ids=["FOLDER1"], owners=["me@corp.com"])
-_WRITE_VERBS = (Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE, Verb.CREATE, Verb.MOVE, Verb.COPY)
+_WRITE_VERBS = (Verb.UPDATE, Verb.RESTRUCTURE, Verb.DELETE, Verb.ADD, Verb.MOVE)
 
 
 def _drive_write_ctx():
@@ -49,8 +49,8 @@ class TestLabels:
     def test_widening_label_states_the_tool_count(self):
         proposal = propose.proposals_for("drive_sheets_write_range", _drive_write_ctx())[0]
         labels = {w.verb: describe.widening_label(w) for w in proposal.widenings}
-        assert labels[Verb.COMMENT] == "also allow comment (1 tool)"
-        assert labels[Verb.FORMAT] == "also allow format (2 tools)"
+        assert labels[Verb.DOWNLOAD] == "also allow download (1 tool)"
+        assert labels[Verb.UPDATE] == "also allow update (6 tools)"
 
 
 class TestRuleVerbsAndCoverage:
@@ -100,7 +100,7 @@ class TestSentences:
     def test_an_identity_rule_names_its_connector_scope_and_verbs(self):
         rule = PolicyRule(id="r", predicate="approved_sandbox_folder", value=["FOLDER1"],
                           operations=frozenset({"sheets.write_range", "sheets.format_range"}))
-        assert describe.rule_sentence(rule) == "Drive - folder FOLDER1: allow update, format"
+        assert describe.rule_sentence(rule) == "Drive - folder FOLDER1: allow update"
 
     def test_a_value_less_attribute_rule_names_no_value(self):
         rule = PolicyRule(id="r", predicate="i_am_owner", value=None,
@@ -129,8 +129,8 @@ class TestSentences:
                            operations=frozenset({"gmail.add_label"}))
         contacts = PolicyRule(id="r", predicate="label_name_allowlist", value=["Friends"],
                               operations=frozenset({"contacts.add_label"}))
-        assert describe.rule_sentence(gmail) == "Gmail - label Done: allow label"
-        assert describe.rule_sentence(contacts) == "Contacts - label Friends: allow label"
+        assert describe.rule_sentence(gmail) == "Gmail - label Done: allow update"
+        assert describe.rule_sentence(contacts) == "Contacts - label Friends: allow update"
 
     def test_a_dual_scope_predicate_with_no_matching_connector_falls_back_to_the_first(self):
         orphan = PolicyRule(id="r", predicate="label_name_allowlist", value=["X"],

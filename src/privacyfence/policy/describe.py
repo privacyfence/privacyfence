@@ -112,7 +112,7 @@ def _value_phrase(value: object) -> str:
 
 
 def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
-    """One rule as the sentence it is: ``Drive - folder 1CdeF: allow read, update, format``.
+    """One rule as the sentence it is: ``Drive - folder 1CdeF: allow read, update``.
 
     An unconditional scope says so rather than hiding behind a rule name, and a rule's
     conditions are appended as the narrowing they are.
@@ -151,7 +151,7 @@ def button_label(proposal: RuleProposal) -> str:
 
 
 def widening_label(widening: Widening) -> str:
-    """One widening chip: ``also allow format (2 tools)``. The tool count is the point -- it is the
+    """One widening chip: ``also allow update (2 tools)``. The tool count is the point -- it is the
     width the user is being asked to agree to, stated rather than implied."""
     tools = sum(
         1

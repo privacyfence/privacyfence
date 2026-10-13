@@ -11,11 +11,11 @@ asserts the join is exact). In particular:
   are the operation groups the old per-operation rule tables and the grant model had no way to
   configure at all. They get a verb and a scope subject here like every other governed tool, which
   is what makes them configurable: `policy/catalogue.py` offers `apps_script.project` (read),
-  `gmail.configure` (configure), `slack.share_anything` (share) and `grist.document` (read, create,
+  `gmail.filters` (restructure), `slack.group_chats` (send) and `grist.document` (read, add,
   update, restructure), and the catalogue's write-time
   validation keeps a rule naming a verb its scope cannot govern from being stored under any of them.
 - Three operation keys are shared by tools that perform two different verbs:
-  `calendar.create_modify_event` (create vs. update), `slack.read_messages` and
+  `calendar.create_modify_event` (add vs. update), `slack.read_messages` and
   `telegram.read_chat_messages` (read vs. search, depending on whether the call returns one
   conversation or a search's worth of results). `operation_verbs()` reports every verb any tool
   registers under a given operation key, so anything that expands a rule keyed on one of these
@@ -35,26 +35,16 @@ GATES: frozenset[str] = frozenset({"auto", "review", "popup"})
 
 
 class Verb(str, Enum):
-    """The nineteen verbs a rule can allow, grouped by family below."""
+    """The nine verbs a rule can allow, grouped by family below."""
 
     READ = "read"
     DOWNLOAD = "download"
     SEARCH = "search"
-    CREATE = "create"
+    ADD = "add"
     UPDATE = "update"
-    FORMAT = "format"
     RESTRUCTURE = "restructure"
-    COMMENT = "comment"
-    LABEL = "label"
     MOVE = "move"
-    COPY = "copy"
-    ARCHIVE = "archive"
-    COMPLETE = "complete"
-    TRANSITION = "transition"
-    CONFIGURE = "configure"
     SEND = "send"
-    DRAFT = "draft"
-    SHARE = "share"
     DELETE = "delete"
 
 
@@ -73,8 +63,8 @@ class ScopeSubject(str, Enum):
     """What object(s) a verb's scope is measured against, and with what quantifier.
 
     Most verbs measure a single item, but a handful quantify over more than one -- `search`
-    requires every result to be in scope, `move` and `copy` require both the source and the
-    destination, and `draft` requires every recipient. These are the cases that go wrong when a selector checks only
+    requires every result to be in scope, and `move` requires both the source and the
+    destination. These are the cases that go wrong when a selector checks only
     one of the objects -- a folder grant approving a move out of the folder because only the source
     was checked, or a channel rule needing a twin predicate to cover a search. This column records
     the quantifier; it is metadata, and each scope selector is what actually enforces it.
@@ -83,35 +73,19 @@ class ScopeSubject(str, Enum):
     ITEM = "item"
     CONTAINER = "container"
     EVERY_RESULT = "every_result"
-    LABEL_APPLIED = "label_applied"
     SOURCE_AND_DESTINATION = "source_and_destination"
-    LIST = "list"
-    PROJECT = "project"
-    ACCOUNT = "account"
     DESTINATION = "destination"
-    EVERY_RECIPIENT = "every_recipient"
-    AUDIENCE = "audience"
 
 
 VERB_FAMILY: dict[Verb, VerbFamily] = {
     Verb.READ: VerbFamily.READ,
     Verb.DOWNLOAD: VerbFamily.READ,
     Verb.SEARCH: VerbFamily.READ,
-    Verb.CREATE: VerbFamily.WRITE,
+    Verb.ADD: VerbFamily.WRITE,
     Verb.UPDATE: VerbFamily.WRITE,
-    Verb.FORMAT: VerbFamily.WRITE,
     Verb.RESTRUCTURE: VerbFamily.WRITE,
-    Verb.COMMENT: VerbFamily.WRITE,
-    Verb.LABEL: VerbFamily.WRITE,
     Verb.MOVE: VerbFamily.WRITE,
-    Verb.COPY: VerbFamily.WRITE,
-    Verb.ARCHIVE: VerbFamily.WRITE,
-    Verb.COMPLETE: VerbFamily.WRITE,
-    Verb.TRANSITION: VerbFamily.WRITE,
-    Verb.CONFIGURE: VerbFamily.WRITE,
     Verb.SEND: VerbFamily.SEND,
-    Verb.DRAFT: VerbFamily.SEND,
-    Verb.SHARE: VerbFamily.SEND,
     Verb.DELETE: VerbFamily.DESTRUCTIVE,
 }
 
@@ -119,22 +93,28 @@ VERB_SCOPE_SUBJECT: dict[Verb, ScopeSubject] = {
     Verb.READ: ScopeSubject.ITEM,
     Verb.DOWNLOAD: ScopeSubject.ITEM,
     Verb.SEARCH: ScopeSubject.EVERY_RESULT,
-    Verb.CREATE: ScopeSubject.CONTAINER,
+    Verb.ADD: ScopeSubject.CONTAINER,
     Verb.UPDATE: ScopeSubject.ITEM,
-    Verb.FORMAT: ScopeSubject.ITEM,
     Verb.RESTRUCTURE: ScopeSubject.ITEM,
-    Verb.COMMENT: ScopeSubject.ITEM,
-    Verb.LABEL: ScopeSubject.LABEL_APPLIED,
     Verb.MOVE: ScopeSubject.SOURCE_AND_DESTINATION,
-    Verb.COPY: ScopeSubject.SOURCE_AND_DESTINATION,
-    Verb.ARCHIVE: ScopeSubject.ITEM,
-    Verb.COMPLETE: ScopeSubject.LIST,
-    Verb.TRANSITION: ScopeSubject.PROJECT,
-    Verb.CONFIGURE: ScopeSubject.ACCOUNT,
     Verb.SEND: ScopeSubject.DESTINATION,
-    Verb.DRAFT: ScopeSubject.EVERY_RECIPIENT,
-    Verb.SHARE: ScopeSubject.AUDIENCE,
     Verb.DELETE: ScopeSubject.ITEM,
+}
+
+# Verb names retired when 19 verbs became nine. `catalogue.parse_verbs` maps them, so bridge calls
+# and sync recipes written with the old names keep working.
+LEGACY_VERB_ALIASES: dict[str, Verb] = {
+    "create": Verb.ADD,
+    "draft": Verb.ADD,
+    "format": Verb.UPDATE,
+    "comment": Verb.UPDATE,
+    "label": Verb.UPDATE,
+    "complete": Verb.UPDATE,
+    "transition": Verb.UPDATE,
+    "copy": Verb.MOVE,
+    "archive": Verb.MOVE,
+    "configure": Verb.RESTRUCTURE,
+    "share": Verb.SEND,
 }
 
 # Every tool with an operation key (TOOL_TO_OPERATION) gets exactly one verb here -- the verb is a
@@ -146,47 +126,47 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "gmail_get_message": Verb.READ,
     "gmail_get_thread": Verb.READ,
     "gmail_download_attachment": Verb.DOWNLOAD,
-    "gmail_create_draft": Verb.DRAFT,
-    "gmail_reply_draft": Verb.DRAFT,
-    "gmail_reply_all_draft": Verb.DRAFT,
-    "gmail_create_draft_with_attachments": Verb.DRAFT,
-    "gmail_reply_draft_with_attachments": Verb.DRAFT,
-    "gmail_reply_all_draft_with_attachments": Verb.DRAFT,
-    "gmail_add_label": Verb.LABEL,
-    "gmail_remove_label": Verb.LABEL,
-    "gmail_archive_message": Verb.ARCHIVE,
-    "gmail_create_filter": Verb.CONFIGURE,
-    "gmail_update_filter": Verb.CONFIGURE,
-    "gmail_create_label": Verb.CREATE,
+    "gmail_create_draft": Verb.ADD,
+    "gmail_reply_draft": Verb.ADD,
+    "gmail_reply_all_draft": Verb.ADD,
+    "gmail_create_draft_with_attachments": Verb.ADD,
+    "gmail_reply_draft_with_attachments": Verb.ADD,
+    "gmail_reply_all_draft_with_attachments": Verb.ADD,
+    "gmail_add_label": Verb.UPDATE,
+    "gmail_remove_label": Verb.UPDATE,
+    "gmail_archive_message": Verb.MOVE,
+    "gmail_create_filter": Verb.RESTRUCTURE,
+    "gmail_update_filter": Verb.RESTRUCTURE,
+    "gmail_create_label": Verb.ADD,
     "drive_get_file_content": Verb.READ,
     "drive_get_revision_content": Verb.READ,
     "drive_download_file": Verb.DOWNLOAD,
     "drive_write_file_content": Verb.UPDATE,
     "drive_write_doc_content": Verb.UPDATE,
-    "drive_upload_file": Verb.CREATE,
+    "drive_upload_file": Verb.ADD,
     "drive_move_file": Verb.MOVE,
-    "drive_copy_file": Verb.COPY,
-    "drive_add_comment": Verb.COMMENT,
+    "drive_copy_file": Verb.MOVE,
+    "drive_add_comment": Verb.UPDATE,
     "drive_sheets_get_values": Verb.READ,
     "drive_sheets_write_range": Verb.UPDATE,
     "drive_sheets_add_sheet": Verb.RESTRUCTURE,
     "drive_sheets_rename_sheet": Verb.RESTRUCTURE,
-    "drive_sheets_format_range": Verb.FORMAT,
+    "drive_sheets_format_range": Verb.UPDATE,
     "drive_sheets_insert_dimensions": Verb.RESTRUCTURE,
     "drive_sheets_delete_dimensions": Verb.DELETE,
     "drive_docs_edit_content": Verb.UPDATE,
-    "drive_docs_format_content": Verb.FORMAT,
+    "drive_docs_format_content": Verb.UPDATE,
     "slack_get_channel_history": Verb.READ,
     "slack_get_thread_replies": Verb.READ,
     "slack_search_messages": Verb.SEARCH,
-    "slack_create_group_chat": Verb.SHARE,
+    "slack_create_group_chat": Verb.SEND,
     "slack_send_message": Verb.SEND,
     "calendar_get_event_details": Verb.READ,
-    "calendar_create_event": Verb.CREATE,
+    "calendar_create_event": Verb.ADD,
     "calendar_update_event": Verb.UPDATE,
-    "calendar_create_out_of_office": Verb.CREATE,
+    "calendar_create_out_of_office": Verb.ADD,
     "calendar_set_working_location": Verb.UPDATE,
-    "calendar_set_event_visibility": Verb.SHARE,
+    "calendar_set_event_visibility": Verb.UPDATE,
     # calendar.set_color changes one attribute of an existing event, same shape as
     # calendar.working_location, so it gets the same verb.
     "calendar_set_event_color": Verb.UPDATE,
@@ -198,42 +178,42 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "grist_get_records": Verb.READ,
     "grist_export_records": Verb.READ,
     "grist_export_sql": Verb.READ,
-    "grist_add_records": Verb.CREATE,
+    "grist_add_records": Verb.ADD,
     "grist_update_records": Verb.UPDATE,
     "grist_create_table": Verb.RESTRUCTURE,
     "grist_add_columns": Verb.RESTRUCTURE,
-    "grist_import_csv": Verb.CREATE,
+    "grist_import_csv": Verb.ADD,
     "grist_update_csv": Verb.UPDATE,
     "contacts_update": Verb.UPDATE,
-    "contacts_create": Verb.CREATE,
-    "contacts_add_label": Verb.LABEL,
-    "contacts_remove_label": Verb.LABEL,
+    "contacts_create": Verb.ADD,
+    "contacts_add_label": Verb.UPDATE,
+    "contacts_remove_label": Verb.UPDATE,
     "jira_get_issue": Verb.READ,
     "jira_search_issues_with_fields": Verb.SEARCH,
     "jira_export_issues": Verb.SEARCH,
-    "jira_create_issue": Verb.CREATE,
-    "jira_add_comment": Verb.COMMENT,
+    "jira_create_issue": Verb.ADD,
+    "jira_add_comment": Verb.UPDATE,
     "jira_update_issue": Verb.UPDATE,
-    "jira_transition_issue": Verb.TRANSITION,
+    "jira_transition_issue": Verb.UPDATE,
     "confluence_get_page": Verb.READ,
     "confluence_get_page_by_title": Verb.READ,
     "confluence_download_attachment": Verb.DOWNLOAD,
-    "confluence_create_page": Verb.CREATE,
+    "confluence_create_page": Verb.ADD,
     "confluence_update_page": Verb.UPDATE,
     "telegram_get_messages": Verb.READ,
     "peek_get_comments": Verb.READ,
     "peek_get_stats": Verb.READ,
-    "peek_upload_page": Verb.CREATE,
-    "peek_set_visibility": Verb.SHARE,
-    "peek_add_comment": Verb.COMMENT,
+    "peek_upload_page": Verb.ADD,
+    "peek_set_visibility": Verb.UPDATE,
+    "peek_add_comment": Verb.UPDATE,
     "peek_rename_page": Verb.UPDATE,
     "peek_delete_page": Verb.DELETE,
     "telegram_search_messages": Verb.SEARCH,
     "telegram_send_message": Verb.SEND,
-    "tasks_create_task": Verb.CREATE,
+    "tasks_create_task": Verb.ADD,
     "tasks_update_task": Verb.UPDATE,
-    "tasks_complete_task": Verb.COMPLETE,
-    "tasks_uncomplete_task": Verb.COMPLETE,
+    "tasks_complete_task": Verb.UPDATE,
+    "tasks_uncomplete_task": Verb.UPDATE,
     "tasks_move_task": Verb.MOVE,
     "apps_script_get_content": Verb.READ,
     "apps_script_write_content": Verb.UPDATE,
