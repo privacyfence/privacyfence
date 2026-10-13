@@ -10,6 +10,7 @@ import pytest
 
 from privacyfence.policy import store
 from privacyfence.policy.engine import PolicyRule
+from privacyfence.policy.registry import Verb
 
 
 def _rule(id_="r1", predicate="approved_folder", value=None, operations=("op.a",), conditions=()):
@@ -231,6 +232,25 @@ class TestCompileRulesFromConfig:
             }
         }
         assert [r.id for r in store.compile_rules_from_config(cfg)] == ["r1", "r2"]
+
+    def test_compile_rules_from_config_reads_version_3(self):
+        from privacyfence.policy import scope_rows
+
+        scoped = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for("drive.folder", ["F1"]), scope="drive.folder", value=["F1"],
+            verbs=frozenset({Verb.READ}), operations=scope_rows.implied_operations("drive.folder", {Verb.READ}),
+        )
+        custom = scope_rows.ScopeRow(
+            id="r-custom", scope=None, value=None, verbs=frozenset(), operations=frozenset({"op.a"}),
+            predicate="always_allow",
+        )
+        cfg = {"auto_accept": scope_rows.rows_to_config([scoped, custom])}
+
+        rules = store.compile_rules_from_config(cfg)
+
+        assert rules == scope_rows.compile_rows([scoped, custom])
+        assert {rule.id for rule in rules} == {scoped.id, "r-custom"}
+        assert any(rule.predicate == "approved_folder" and rule.value == ["F1"] for rule in rules)
 
 
 class TestRulesToConfig:
