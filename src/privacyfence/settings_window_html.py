@@ -886,7 +886,7 @@ _JS = r"""
       // reach them. Widening is only ever this explicit, confirmed click (ADR 0166).
       if (r.missing_tools && r.missing_tools.length) {
         var missingNames = r.missing_tools.join(', ');
-        html += '<div class="pf-st-notice pf-aa-missing" role="status">Newer tools aren\'t covered yet: ' +
+        html += '<div class="pf-st-notice pf-aa-missing" role="status">These verbs also cover tools this rule doesn\'t allow yet: ' +
           esc(missingNames) + '. ' +
           '<span class="pf-link" role="button" tabindex="0" aria-label="Update rule" data-confirm="' +
           esc('Add ' + missingNames + ' to this rule? These tools will be auto-accepted wherever the rule matches.') +
@@ -1224,7 +1224,8 @@ _JS = r"""
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
     t.rules.forEach(function (r) {
-      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : esc(r.sentence)) + '</li>';
+      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : esc(r.sentence) +
+        (r.limited_to ? ' (limited to: ' + esc(r.limited_to.join(', ')) + ')' : '')) + '</li>';
     });
     detail += '</ul><div class="pf-hint">Tools</div><ul class="pf-st-list">';
     if (t.tools.length === 0) { detail += '<li>None</li>'; }

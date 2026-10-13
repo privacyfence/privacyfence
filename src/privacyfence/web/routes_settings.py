@@ -146,6 +146,7 @@ from starlette.routing import BaseRoute, Route
 from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepup, web_shell
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
+from ..policy import scope_rows
 from ..policy import store as policy_store
 from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
@@ -155,9 +156,9 @@ from ..scoped_tokens import (
 )
 from ..agent_identity import REGISTRY, entry_for_id, sanitize_client_string
 from ..settings_controller import (
-    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rules,
+    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
     _parse_value_list, _pii_general_fields, _privacy_state_from_config, _relative_time, _rule_usage_map,
-    audit_rows, cached_rule_value, rule_resource_ids,
+    audit_rows, cached_row_value, rule_resource_ids,
 )
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
@@ -1516,7 +1517,7 @@ def build_org_routes(
         privacy.pop("gmail_append_signature", None)
 
         resolver = get_resolver()
-        rules = auto_accept.get_policy_v2_rules()
+        rows = auto_accept.get_policy_rows()
         # The viewing principal's own recent decisions -- per-principal, exactly like
         # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
         # with the same agent column local mode's page gets.
@@ -1546,8 +1547,8 @@ def build_org_routes(
             "grist_signin": "unavailable",
             "grist_server_url_pinned": "",
             "grist_auth": {"error": ""},
-            "auto_accept": _auto_accept_state_from_rules(
-                rules, _rule_usage_map(), resolve_value=lambda rule: cached_rule_value(rule, resolver),
+            "auto_accept": _auto_accept_state_from_rows(
+                rows, _rule_usage_map(), resolve_value=lambda row: cached_row_value(row, resolver),
             ),
             "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
@@ -1618,8 +1619,9 @@ def build_org_routes(
         with principal_scope(principal):
             resolver = get_resolver()
             pending: list[tuple[Any, str]] = []
-            for rule in auto_accept.get_policy_v2_rules():
-                rt, resource_ids = rule_resource_ids(rule)
+            for row in auto_accept.get_policy_rows():
+                compiled = scope_rows.compile_row(row)
+                rt, resource_ids = rule_resource_ids(compiled[0]) if compiled else (None, [])
                 if rt is not None:
                     pending.extend(
                         (rt, rid) for rid in resource_ids if rid and resolver.cached_name(rt, rid) is None
@@ -1732,7 +1734,9 @@ def build_org_routes(
             _record_settings_audit(
                 principal,
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
-                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s) (principal={principal.id})",
+                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)"
+                + (", personal data allowed" if token.allow_personal_data else "")
+                + f" (principal={principal.id})",
             )
         # The only place the secret ever leaves the server: this one answer.
         return JSONResponse(

@@ -163,7 +163,7 @@ from .auto_accept import (
     ReviewContext,
     add_policy_v2_rules,
     add_rules_changed_listener,
-    get_policy_v2_rules,
+    get_policy_rows,
     get_policy_v2_store_rules,
     is_temp_accepted,
     policy_row_ids_for,
@@ -176,6 +176,7 @@ from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
+from .policy import scope_rows as policy_scope_rows
 from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_token_scope
 from .pii_detector import (
     PIIAuditMatch,
@@ -1482,13 +1483,14 @@ async def propose_policy_change(
     if operation not in ("add", "update", "remove"):
         raise ValueError(f"Unknown operation: {operation!r}")
 
-    existing_by_id = {rule.id: rule for rule in get_policy_v2_rules()}
+    existing_rows = get_policy_rows()
+    existing_by_id = {row.id: row for row in existing_rows}
 
     new_rules: list[policy_engine.PolicyRule] = []
     if operation == "remove":
         if rule_id not in existing_by_id:
             raise ValueError(f"Unknown rule id: {rule_id!r}. Call privacyfence_list_policy first.")
-        description = f"Remove auto-accept rule: {policy_describe.rule_sentence(existing_by_id[rule_id])}"
+        description = f"Remove auto-accept rule: {policy_describe.row_sentence(existing_by_id[rule_id])}"
     else:
         if operation == "update" and rule_id not in existing_by_id:
             raise ValueError(f"Unknown rule id: {rule_id!r}. Call privacyfence_list_policy first.")
@@ -1503,8 +1505,13 @@ async def propose_policy_change(
                 "which ones need a value."
             )
         verb = "Update" if operation == "update" else "Add"
+        base_rows = (
+            policy_scope_rows.remove_row(existing_rows, rule_id) if operation == "update" else existing_rows
+        )
+        landed_rows, landed_ids = policy_scope_rows.add_rules(base_rows, new_rules)
+        landed_by_id = {row.id: row for row in landed_rows}
         description = f"{verb} auto-accept rule: " + "; ".join(
-            policy_describe.rule_sentence(rule) for rule in new_rules
+            policy_describe.row_sentence(landed_by_id[row_id]) for row_id in landed_ids
         )
 
     created_at = time.time()
