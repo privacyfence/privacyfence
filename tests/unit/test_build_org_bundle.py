@@ -647,6 +647,33 @@ class TestInstructionsPrintedAfterWriting:
             build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--atlassian-assets"])
         assert str(excinfo.value) == "--atlassian-assets needs --atlassian-client-id and --atlassian-client-secret."
 
+    def test_atlassian_assets_workspace_id_is_written(self, tmp_path):
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
+            "--atlassian-assets", "--atlassian-assets-workspace-id", " 6d8c7ed1-92a5-4693-b107-226f466d78a3 ",
+        ])
+        atlassian = json.loads(out_path.read_text())["atlassian"]
+        assert atlassian["assets_workspace_id"] == "6d8c7ed1-92a5-4693-b107-226f466d78a3"
+
+    def test_atlassian_assets_workspace_id_must_be_a_uuid(self, tmp_path):
+        with pytest.raises(SystemExit) as excinfo:
+            build_org_bundle.main([
+                "-o", str(tmp_path / "org_config.json"), "--atlassian-client-id", "a",
+                "--atlassian-client-secret", "as", "--atlassian-assets-workspace-id", "../x",
+            ])
+        assert str(excinfo.value) == "--atlassian-assets-workspace-id is not a workspace id (expected a UUID)."
+
+    def test_atlassian_assets_workspace_id_without_credentials_exits(self, tmp_path):
+        with pytest.raises(SystemExit) as excinfo:
+            build_org_bundle.main([
+                "-o", str(tmp_path / "org_config.json"),
+                "--atlassian-assets-workspace-id", "6d8c7ed1-92a5-4693-b107-226f466d78a3",
+            ])
+        assert str(excinfo.value) == (
+            "--atlassian-assets-workspace-id needs --atlassian-client-id and --atlassian-client-secret."
+        )
+
     def test_merge_without_mode_flags_reads_the_issuer_from_the_existing_bundle(self, tmp_path, capsys):
         build_org_bundle.main(self._org_args(tmp_path))
         capsys.readouterr()

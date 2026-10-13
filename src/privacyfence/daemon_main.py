@@ -144,7 +144,7 @@ from .connectors.tasks import TasksConnector
 from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
-from .atlassian_oauth import AtlassianOAuthError, assets_enabled, scopes_for
+from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override, scopes_for
 from .atlassian_users import AtlassianUserDirectory
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
@@ -1568,7 +1568,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not atlassian_token:
                 raise AssetsClientError("Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings.")
             assets_client = AssetsClient(
-                config=atlassian_config,
+                config={**atlassian_config, **assets_workspace_override(config)},
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
             )
             assets_client.check_connection()

@@ -194,6 +194,20 @@ class TestAssetsScopes:
         assert scopes == atlassian_oauth_module.DEFAULT_SCOPES + atlassian_oauth_module.ASSETS_SCOPES
         assert "read:cmdb-object:jira" in scopes
 
+    def test_assets_scopes_leave_out_the_jsm_scope(self):
+        # The developer console does not offer every app the JSM API; asking for its scope
+        # would fail the whole Atlassian sign-in (ADR 0171).
+        assert "read:servicedesk-request" not in atlassian_oauth_module.ASSETS_SCOPES
+
+    @pytest.mark.parametrize("config, expected", [
+        ({}, {}),
+        ({"connectors": {"assets": {"enabled": True}}}, {}),
+        ({"connectors": {"assets": {"workspace_id": ""}}}, {}),
+        ({"connectors": {"assets": {"workspace_id": " ws-1 "}}}, {"assets_workspace_id": "ws-1"}),
+    ])
+    def test_assets_workspace_override(self, config, expected):
+        assert atlassian_oauth_module.assets_workspace_override(config) == expected
+
     def test_explicit_true_wins_over_a_bundle_without_the_flag(self):
         cfg = {"connectors": {"assets": {"enabled": True}}}
         assert atlassian_oauth_module.assets_enabled(cfg, {}) is True

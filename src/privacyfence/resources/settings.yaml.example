@@ -124,6 +124,7 @@ gmail:
 # connectors:
 #   telegram: { enabled: false }
 #   assets: { enabled: true }   # Jira Assets (read-only). Needs the Atlassian app's read:cmdb-* scopes; after switching it on, use Authenticate… once.
+#                               # Also needs the site's Assets workspace id, from the bundle or as connectors.assets.workspace_id (docs/configuration-reference.md).
 
 pii_detection:
   # Extra confirmation gate, on top of the normal Allow once/Deny popup:

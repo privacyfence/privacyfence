@@ -102,6 +102,7 @@ and the other is not, the daemon logs a warning at start.
 | `salesforce.report_max_pages` | int | `50` | `50` | Most report runs one paged `salesforce_run_report` read or one `salesforce_export_report` export may use (each page is one run and counts against the org's report-run limits). A read that needs more fails. |
 | `connectors.<name>.enabled` | bool | `true` | not set | `false` turns a connector off. `<name>` is one of `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`, `telegram`, `grist`, `peek`. Written by **Disable**/**Enable** on **Settings > Connectors**. A connector also needs its organization config and a sign-in before it runs. |
 | `connectors.assets.enabled` | bool | `false` | not set | `true` turns Jira Assets on and makes the Atlassian sign-in ask for the Assets scopes; an explicit value wins over the bundle's `atlassian.assets` flag, which is the default when this key is absent (see [Atlassian setup](atlassian-setup.md#jira-assets)). Sign in again after switching it on. |
+| `connectors.assets.workspace_id` | string | none | not set | The site's Assets workspace id (a UUID); wins over the bundle's `atlassian.assets_workspace_id`. Jira Assets needs one of the two, since PrivacyFence cannot look the id up itself (see [Atlassian setup](atlassian-setup.md#jira-assets)). |
 
 ### PII detection
 
@@ -247,6 +248,7 @@ How the daemon treats the file:
 | `--salesforce-login-url URL` | `https://login.salesforce.com` | `salesforce.login_url` | `https://test.salesforce.com` for a sandbox. |
 | `--atlassian-client-id`, `--atlassian-client-secret` | none | `atlassian.client_id`, `atlassian.client_secret` | Jira and Confluence. Give both or neither. |
 | `--atlassian-assets` | off | `atlassian.assets` | Request the Jira Assets scopes at Atlassian sign-in; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
+| `--atlassian-assets-workspace-id ID` | none | `atlassian.assets_workspace_id` | The site's Assets workspace id, the `workspaceId` at `https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace`; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--peek-base-url URL` | none | `peek.base_url` | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
 | `--grist-server-url URL` | none | `grist.server_url` | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |

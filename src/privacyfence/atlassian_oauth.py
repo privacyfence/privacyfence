@@ -70,9 +70,11 @@ DEFAULT_SCOPES: list[str] = [
 ASSETS_SCOPES: list[str] = [
     "read:cmdb-schema:jira", "read:cmdb-type:jira", "read:cmdb-attribute:jira",
     "read:cmdb-object:jira",
-    # The Assets workspace id comes from Jira Service Management's
-    # /rest/servicedeskapi/assets/workspace, which is behind a JSM scope.
-    "read:servicedesk-request",
+    # Not read:servicedesk-request, although /rest/servicedeskapi/assets/workspace
+    # (the workspace id lookup) accepts only that scope: the developer console no
+    # longer offers the Jira Service Management API to every OAuth app, and asking
+    # for a scope the app lacks fails the whole sign-in. The workspace id is
+    # configured instead (atlassian.assets_workspace_id); see ADR 0171.
 ]
 
 
@@ -87,6 +89,13 @@ def assets_enabled(config: dict[str, Any], org_config: dict[str, Any]) -> bool:
     if explicit is not None:
         return bool(explicit)
     return bool((org_config.get("atlassian") or {}).get("assets", False))
+
+
+def assets_workspace_override(config: dict[str, Any]) -> dict[str, str]:
+    """``{"assets_workspace_id": ...}`` from connectors.assets.workspace_id, which wins over the
+    bundle's atlassian.assets_workspace_id; empty when the setting is not given."""
+    value = ((config.get("connectors") or {}).get("assets") or {}).get("workspace_id")
+    return {"assets_workspace_id": str(value).strip()} if value else {}
 
 
 class AtlassianOAuthError(Exception):

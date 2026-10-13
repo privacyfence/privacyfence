@@ -10,10 +10,14 @@ Accepted — 2026-10-13. Implemented: `src/privacyfence/atlassian_oauth.py`,
 
 Jira Service Management Assets (the CMDB formerly called Insight) holds structured objects linked
 to each other and to Jira tickets. The Atlassian sign-in is shared by Jira and Confluence, and
-Assets needs five more permissions (`read:cmdb-schema:jira`, `read:cmdb-type:jira`,
-`read:cmdb-attribute:jira`, `read:cmdb-object:jira`, and `read:servicedesk-request` for the
-workspace id). Those permissions must exist on the Atlassian app, and asking for one the app
-lacks makes the whole consent screen fail.
+Assets needs four more permissions (`read:cmdb-schema:jira`, `read:cmdb-type:jira`,
+`read:cmdb-attribute:jira`, `read:cmdb-object:jira`). Those permissions must exist on the
+Atlassian app, and asking for one the app lacks makes the whole consent screen fail.
+
+Every Assets call is addressed to a workspace id. Atlassian's only lookup for it,
+`GET /rest/servicedeskapi/assets/workspace`, accepts nothing but the Jira Service Management
+classic scope `read:servicedesk-request`, and the developer console does not offer the Jira
+Service Management API to every OAuth app (the QA app has no such row on its Permissions page).
 
 ## Decision
 
@@ -24,6 +28,13 @@ lacks makes the whole consent screen fail.
   `connectors.assets.enabled` win, and otherwise takes the org bundle's `atlassian.assets` flag
   (`build_org_bundle.py --atlassian-assets`) as the default. Settings, the CLI and org-mode
   `/connect` all sign in through it.
+- **The workspace id is configured, not requested.** `ASSETS_SCOPES` leaves
+  `read:servicedesk-request` out. The id comes from `connectors.assets.workspace_id`
+  (`atlassian_oauth.assets_workspace_override`), else the bundle's `atlassian.assets_workspace_id`
+  (`build_org_bundle.py --atlassian-assets-workspace-id`), and must be a UUID, since it goes into
+  the URL path. With neither, `AssetsClient` still tries the lookup, for a token that happens to
+  hold the scope; a 401 or 403 there becomes an error naming the setting. `check_connection`
+  proves a configured id with one schema-list read.
 - **Granted scopes are recorded.** `resolve_resource_and_save` stores the union of the scopes of
   the accessible resources matching the chosen site in the token record, and both token refreshes
   keep the key.
@@ -38,6 +49,8 @@ lacks makes the whole consent screen fail.
   Atlassian sign-in fail at the consent screen.
 - **A separate API-token credential** — a second Atlassian secret on disk, with a different setup
   path from Jira and Confluence.
+- **Requesting `read:servicedesk-request` anyway** — an app without the Jira Service Management
+  API cannot hold it, so its whole Atlassian sign-in would fail, Jira and Confluence included.
 - **Inferring the scopes from a 401** — Atlassian's 401 for a missing scope looks the same as one
   for an expired token, and the existing clients treat 401 as "refresh".
 
@@ -46,13 +59,14 @@ lacks makes the whole consent screen fail.
 - Users who never switch Assets on see no change; switching it on costs one extra consent.
 - Tokens made before this change carry no recorded scopes, so they are treated as lacking Assets
   until the user re-authenticates.
-- An organisation must add the five scopes to its Atlassian app before setting
-  `--atlassian-assets`.
+- An organisation must add the four scopes to its Atlassian app before setting
+  `--atlassian-assets`, and set the site's workspace id (one value per site, read once from
+  `https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace` in a signed-in browser).
 
 ## Verification
 
 `tests/unit/test_assets_client.py` (`TestConstructor`, `TestWorkspace`, `TestRefresh`),
-`tests/unit/test_atlassian_oauth.py`, `tests/unit/test_daemon_main.py`,
+`tests/unit/test_atlassian_oauth.py`, `tests/unit/test_build_org_bundle.py`, `tests/unit/test_daemon_main.py`,
 `tests/unit/test_settings_controller.py`.
 
 ## Related

@@ -7,7 +7,9 @@ never writes to Assets.
 Required config keys are the merged ``atlassian_config`` the Jira client gets: ``access_token``,
 ``cloud_id`` and ``scopes`` (the scopes Atlassian granted, which must include
 ``ASSETS_REQUIRED_SCOPE``); ``client_id``/``client_secret``/``refresh_token`` are needed to
-refresh an expired access token.
+refresh an expired access token. ``assets_workspace_id`` (optional) is the site's Assets workspace
+id; without it the client looks the id up, which Atlassian allows only with the JSM scope
+``read:servicedesk-request`` that PrivacyFence does not request (see ADR 0171).
 """
 
 from __future__ import annotations
@@ -38,6 +40,11 @@ NEEDS_ASSETS_PERMISSION = (
     "Use Authenticate… on Jira Assets in PrivacyFence Settings."
 )
 NOT_AUTHENTICATED = "Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings."
+NEEDS_WORKSPACE_ID = (
+    "Jira Assets could not look up this site's Assets workspace id. Set it as "
+    "connectors.assets.workspace_id in PrivacyFence settings, or in the organization bundle "
+    "(build_org_bundle.py --atlassian-assets-workspace-id); see docs/atlassian-setup.md."
+)
 
 MAX_PAGES = 10
 AQL_PAGE_SIZE = 50
@@ -51,6 +58,7 @@ ID_BATCH = 50
 _SCHEMA_PAGE_SIZE = 100
 _HTTP_TIMEOUT_SECONDS = 30
 _ID_RE = re.compile(r"[0-9]{1,12}")
+WORKSPACE_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 _MAX_AQL_CHARS = 4000
 _DIRECTIONS = ("outbound", "inbound", "both")
 _ATTRIBUTE_KINDS = {
@@ -191,6 +199,16 @@ def _check_aql(aql: str) -> str:
     return aql
 
 
+def _scope_refused(exc: requests.HTTPError) -> bool:
+    """True for Atlassian's answer to a token without the endpoint's scope: a 403, or a 401
+    saying "scope does not match" (a bare 401 is an expired or revoked token)."""
+    response = exc.response
+    status = getattr(response, "status_code", None)
+    if status == 403:
+        return True
+    return status == 401 and "scope does not match" in (getattr(response, "text", "") or "")
+
+
 def _guarded(fn: Callable[..., _T]) -> Callable[..., _T]:
     """Re-raise anything but an ``AssetsClientError`` as ``AssetsClientError("<method> failed: …")``."""
     @functools.wraps(fn)
@@ -272,7 +290,10 @@ class AssetsClient:
         if ASSETS_REQUIRED_SCOPE not in (self._config.get("scopes") or []):
             raise AssetsClientError(NEEDS_ASSETS_PERMISSION)
         self._jira_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"
-        self._workspace_id: str | None = None
+        workspace_id = str(self._config.get("assets_workspace_id") or "").strip()
+        if workspace_id and not WORKSPACE_ID_RE.fullmatch(workspace_id):
+            raise AssetsClientError(f"The configured Assets workspace id is not a valid id: {workspace_id!r}")
+        self._workspace_id: str | None = workspace_id or None
         self._attribute_cache: dict[str, list[AssetsAttributeDef]] = {}
         self._session = requests.Session()
         self._session.headers["Authorization"] = f"Bearer {access_token}"
@@ -343,9 +364,16 @@ class AssetsClient:
         return self._request(self._send, method, url, params=params, json=json)
 
     def _api(self) -> str:
-        """The workspace-scoped Assets API base URL (the workspace id is looked up once)."""
+        """The workspace-scoped Assets API base URL. The workspace id is the configured one, or
+        else looked up once; the lookup needs a JSM scope the token normally lacks, so a refusal
+        asks for the id to be configured."""
         if self._workspace_id is None:
-            data = self._call("GET", f"{self._jira_url}/rest/servicedeskapi/assets/workspace")
+            try:
+                data = self._call("GET", f"{self._jira_url}/rest/servicedeskapi/assets/workspace")
+            except requests.HTTPError as exc:
+                if _scope_refused(exc):
+                    raise AssetsClientError(NEEDS_WORKSPACE_ID) from exc
+                raise
             values = data.get("values") or []
             workspace_id = (values[0].get("workspaceId") if values else "") or ""
             if not workspace_id:
@@ -353,6 +381,8 @@ class AssetsClient:
                     "This Atlassian site has no Assets workspace "
                     "(Jira Service Management Assets is not enabled)."
                 )
+            if not WORKSPACE_ID_RE.fullmatch(workspace_id):
+                raise AssetsClientError(f"Atlassian returned an unexpected Assets workspace id: {workspace_id!r}")
             self._workspace_id = workspace_id
         return f"{self._jira_url}/jsm/assets/workspace/{self._workspace_id}/v1"
 
@@ -365,8 +395,12 @@ class AssetsClient:
 
     @_guarded
     def check_connection(self) -> None:
-        """Resolve the Assets workspace id; nothing else."""
+        """Resolve the Assets workspace id and, when it was configured rather than looked up,
+        prove it with one cheap read."""
+        configured = self._workspace_id is not None
         self._api()
+        if configured:
+            self._get("objectschema/list", {"startAt": 0, "maxResults": 1})
 
     # ------------------------------------------------------------------ #
     # Schemas, types, attributes

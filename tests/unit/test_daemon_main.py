@@ -1148,6 +1148,21 @@ class TestBuildConnectorsAssets:
         assert assets.my_email == "me@x.com"
         assert fake.captured_kwargs["config"]["scopes"] == ["read:cmdb-object:jira"]
 
+    def test_bundle_workspace_id_reaches_the_client(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+
+        daemon_main.build_connectors({}, self._org(assets=True, assets_workspace_id="ws-bundle"))
+
+        assert fake.captured_kwargs["config"]["assets_workspace_id"] == "ws-bundle"
+
+    def test_settings_workspace_id_wins_over_the_bundle(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+        config = {"connectors": {"assets": {"enabled": True, "workspace_id": " ws-settings "}}}
+
+        daemon_main.build_connectors(config, self._org(assets_workspace_id="ws-bundle"))
+
+        assert fake.captured_kwargs["config"]["assets_workspace_id"] == "ws-settings"
+
     def test_built_when_the_bundle_flag_is_set(self, monkeypatch):
         self._setup(monkeypatch)
 

@@ -20,6 +20,7 @@ from privacyfence.assets_client import (
     EXPORT_MAX_OBJECTS,
     MAX_PAGES,
     NEEDS_ASSETS_PERMISSION,
+    NEEDS_WORKSPACE_ID,
     AssetsClient,
     AssetsClientError,
     AssetsEdge,
@@ -45,9 +46,10 @@ def fixture(name: str) -> Any:
 
 
 class FakeResponse:
-    def __init__(self, payload: Any = None, status: int = 200) -> None:
+    def __init__(self, payload: Any = None, status: int = 200, text: str = "") -> None:
         self.status_code = status
         self._payload = payload
+        self.text = text
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -157,6 +159,43 @@ class TestWorkspace:
         assert client.check_connection() is None
         assert session_of(client).paths() == [WORKSPACE_PATH]
 
+    @pytest.mark.parametrize("response", [
+        FakeResponse({}, status=403),
+        FakeResponse({}, status=401, text='{"code":401,"message":"Unauthorized; scope does not match"}'),
+    ])
+    def test_refused_lookup_asks_for_the_workspace_id(self, response, monkeypatch):
+        monkeypatch.setattr(assets_module, "atlassian_refresh", lambda *a: {"access_token": "new"})
+        client = make_client(lambda *a: response)
+        with pytest.raises(AssetsClientError) as exc:
+            client.check_connection()
+        assert str(exc.value) == NEEDS_WORKSPACE_ID
+        assert "connectors.assets.workspace_id" in str(exc.value)
+
+    def test_configured_id_skips_the_lookup(self):
+        client = make_client(routed({"GET objectschema/2": {"id": "2", "name": "S"}}), assets_workspace_id=WORKSPACE)
+        assert client.get_schema("2").name == "S"
+        assert session_of(client).paths(WORKSPACE_PATH) == []
+
+    def test_check_connection_proves_a_configured_id_with_one_read(self):
+        client = make_client(routed({"GET objectschema/list": {"values": []}}), assets_workspace_id=WORKSPACE)
+        assert client.check_connection() is None
+        assert session_of(client).calls == [("GET", "objectschema/list", {"startAt": 0, "maxResults": 1}, None)]
+
+    def test_check_connection_fails_for_a_wrong_configured_id(self):
+        client = make_client(lambda *a: FakeResponse({}, status=404), assets_workspace_id=WORKSPACE)
+        with pytest.raises(AssetsClientError, match=r"check_connection failed: 404 Error"):
+            client.check_connection()
+
+    @pytest.mark.parametrize("bad", ["../../rest/api/3/myself", "not-a-uuid", f"{WORKSPACE}/x"])
+    def test_configured_id_must_be_a_uuid(self, bad):
+        with pytest.raises(AssetsClientError, match="not a valid id"):
+            AssetsClient({**CONFIG, "assets_workspace_id": bad})
+
+    def test_looked_up_id_must_be_a_uuid(self):
+        client = make_client(lambda *a: {"values": [{"workspaceId": "../x"}]})
+        with pytest.raises(AssetsClientError, match="unexpected Assets workspace id"):
+            client.check_connection()
+
     def test_http_failure_is_wrapped(self):
         client = make_client(lambda *a: FakeResponse({}, status=500))
         with pytest.raises(AssetsClientError, match=r"check_connection failed: 500 Error"):
@@ -263,13 +302,13 @@ class TestRefresh:
     def test_401_with_failed_refresh_raises_the_original(self, monkeypatch):
         monkeypatch.setattr(assets_module, "atlassian_refresh", lambda *a: {})
         client = make_client(lambda *a: unauthorized())
-        with pytest.raises(AssetsClientError, match="401 Error"):
+        with pytest.raises(AssetsClientError, match=r"check_connection failed: 401 Error"):
             client.check_connection()
 
     def test_other_errors_do_not_refresh(self, monkeypatch):
         monkeypatch.setattr(assets_module, "atlassian_refresh", lambda *a: pytest.fail("refreshed"))
-        client = make_client(lambda *a: FakeResponse({}, status=403))
-        with pytest.raises(AssetsClientError, match="403 Error"):
+        client = make_client(lambda *a: FakeResponse({}, status=403), assets_workspace_id=WORKSPACE)
+        with pytest.raises(AssetsClientError, match=r"check_connection failed: 403 Error"):
             client.check_connection()
 
     def test_request_returns_the_decoded_json(self):
