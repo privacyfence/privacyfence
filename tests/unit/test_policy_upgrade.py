@@ -70,6 +70,11 @@ def _token_file(tmp_path):
     return tmp_path / "authority" / STORE_FILE_NAME
 
 
+def _read_text(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def _read(config_path):
     with open(config_path, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
@@ -77,7 +82,7 @@ def _read(config_path):
 
 def test_v2_is_converted_and_backed_up(config_path, tmp_path):
     original = _write_v2(config_path)
-    original_text = open(config_path, encoding="utf-8").read()
+    original_text = _read_text(config_path)
     _make_token()
     logged: list[str] = []
     cfg = yaml.safe_load(original_text)
@@ -91,7 +96,7 @@ def test_v2_is_converted_and_backed_up(config_path, tmp_path):
     (row,) = written["auto_accept"]["rules"]
     assert row["scope"] == "drive.folder"
     assert sorted(row["former_ids"]) == sorted([NARROW_ID, FLAGGED_ID])
-    assert open(f"{config_path}.pre-scope-rules.bak", encoding="utf-8").read() == original_text
+    assert _read_text(f"{config_path}.pre-scope-rules.bak") == original_text
     (tok,) = json.loads(_token_file(tmp_path).read_text(encoding="utf-8"))["tokens"]
     assert tok["rule_ids"] == [row["id"]]
     assert logged == [
@@ -108,19 +113,19 @@ def test_backup_is_not_overwritten(config_path):
 
     assert policy_upgrade.ensure_scope_rows(_read(config_path), config_path, LOCAL_PRINCIPAL, log=lambda m: None)
 
-    assert open(backup, encoding="utf-8").read() == "older backup"
+    assert _read_text(backup) == "older backup"
 
 
 def test_v3_is_left_alone(config_path):
     cfg = {"auto_accept": scope_rows.rows_to_config([])}
     with open(config_path, "w", encoding="utf-8") as fh:
         yaml.safe_dump(cfg, fh)
-    before = open(config_path, encoding="utf-8").read()
+    before = _read_text(config_path)
     logged: list[str] = []
 
     assert policy_upgrade.ensure_scope_rows(cfg, config_path, LOCAL_PRINCIPAL, log=logged.append) is True
 
-    assert open(config_path, encoding="utf-8").read() == before
+    assert _read_text(config_path) == before
     assert logged == []
     assert not os.path.exists(f"{config_path}.pre-scope-rules.bak")
 
@@ -136,7 +141,7 @@ def test_missing_config_file_makes_no_backup(config_path, tmp_path):
 
 def test_token_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
     _write_v2(config_path)
-    before = open(config_path, encoding="utf-8").read()
+    before = _read_text(config_path)
     cfg = _read(config_path)
     logged: list[str] = []
 
@@ -148,13 +153,13 @@ def test_token_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
     assert policy_upgrade.ensure_scope_rows(cfg, config_path, LOCAL_PRINCIPAL, log=logged.append) is False
 
     assert cfg["auto_accept"]["version"] == 2
-    assert open(config_path, encoding="utf-8").read() == before
+    assert _read_text(config_path) == before
     assert logged == [f"{LOCAL_PRINCIPAL.id}: could not update scoped tokens for the new rule format: disk full"]
 
 
 def test_backup_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
     _write_v2(config_path)
-    before = open(config_path, encoding="utf-8").read()
+    before = _read_text(config_path)
     cfg = _read(config_path)
     logged: list[str] = []
     migrated: list[object] = []
@@ -168,7 +173,7 @@ def test_backup_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
     assert policy_upgrade.ensure_scope_rows(cfg, config_path, LOCAL_PRINCIPAL, log=logged.append) is False
 
     assert cfg["auto_accept"]["version"] == 2
-    assert open(config_path, encoding="utf-8").read() == before
+    assert _read_text(config_path) == before
     assert _read(config_path)["auto_accept"]["version"] == 2
     assert migrated == []
     assert logged == [
@@ -179,7 +184,7 @@ def test_backup_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
 
 def test_settings_write_failure_keeps_v3_in_memory(config_path, monkeypatch):
     _write_v2(config_path)
-    before = open(config_path, encoding="utf-8").read()
+    before = _read_text(config_path)
     cfg = _read(config_path)
     logged: list[str] = []
 
@@ -191,7 +196,7 @@ def test_settings_write_failure_keeps_v3_in_memory(config_path, monkeypatch):
     assert policy_upgrade.ensure_scope_rows(cfg, config_path, LOCAL_PRINCIPAL, log=logged.append) is True
 
     assert cfg["auto_accept"]["version"] == 3
-    assert open(config_path, encoding="utf-8").read() == before
+    assert _read_text(config_path) == before
     assert len(logged) == 1 and "read-only" in logged[0]
 
 
