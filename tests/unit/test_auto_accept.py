@@ -320,7 +320,6 @@ class TestRulesChangedListener:
         read_and_create = frozenset({"grist.read_records", "grist.add_records", "grist.update_records"})
         add_policy_v2_rules([PolicyRule(
             id="x", predicate="grist.document", value=["DOC1"], operations=read_and_create,
-            allow_personal_data=True,
         )])
         (stored,) = auto_accept.get_policy_v2_rules()
         calls = []
@@ -331,7 +330,7 @@ class TestRulesChangedListener:
         assert "grist.import_csv" in added
         assert not added & read_and_create
         (updated,) = auto_accept.get_policy_v2_rules()
-        assert (updated.id, updated.value, updated.allow_personal_data) == (stored.id, ["DOC1"], True)
+        assert (updated.id, updated.value) == (stored.id, ["DOC1"])
         assert updated.operations == stored.operations | added
         assert auto_accept.get_policy_v2_store_rules() == [updated]
         assert calls == [1]

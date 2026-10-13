@@ -334,7 +334,7 @@ _JS = r"""
     privacyGroup: null,
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
-    aaGroup: null, aaValue: '', aaCheckedVerbs: {}, aaPersonalData: false,
+    aaGroup: null, aaValue: '', aaCheckedVerbs: {},
     stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false,
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
@@ -933,13 +933,6 @@ _JS = r"""
     if (pairHint) {
       html += '<div class="pf-hint pf-aa-pair-hint' + (pairHint.invalid ? ' pf-aa-pair-invalid' : '') +
         '" role="status">' + esc(pairHint.text) + '</div>';
-    }
-    if (group && group.personal_data_label) {
-      var pdOn = !!ui.aaPersonalData;
-      html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (pdOn ? ' on' : '') +
-        '" role="checkbox" aria-checked="' + (pdOn ? 'true' : 'false') + '" tabindex="0" aria-label="' +
-        esc(group.personal_data_label) + '" data-aa-personal-data="1">' + esc(group.personal_data_label) +
-        '</div></div>';
     }
     html += '<div><div class="button primary" role="button" aria-label="Add rule" data-aa-add="1"' +
       (pairHint && pairHint.invalid ? ' aria-disabled="true"' : ' tabindex="0"') + '>Add rule</div></div>';
@@ -1747,9 +1740,6 @@ _JS = r"""
       return;
     }
 
-    var aaPdEl = e.target.closest('[data-aa-personal-data]');
-    if (aaPdEl) { ui.aaPersonalData = !ui.aaPersonalData; render(pyState); return; }
-
     var aaAddEl = e.target.closest('[data-aa-add]');
     if (aaAddEl) { submitAddPolicyRule(); return; }
 
@@ -1893,11 +1883,9 @@ _JS = r"""
     var submitHint = aaPairHint(submitGroup);
     if (submitHint && submitHint.invalid) return;
     var valueInput = document.querySelector('[data-aa-value]');
-    post('add_policy_rule', { group: ui.aaGroup, value: valueInput ? valueInput.value : '', verbs: checked,
-      personal_data: !!ui.aaPersonalData });
+    post('add_policy_rule', { group: ui.aaGroup, value: valueInput ? valueInput.value : '', verbs: checked });
     ui.aaCheckedVerbs = {};
     ui.aaValue = '';
-    ui.aaPersonalData = false;
   }
 
   // No blur-commit fields are left (the Auto-accept page's own value field commits live via
@@ -1915,7 +1903,6 @@ _JS = r"""
       ui.aaGroup = el.value;
       ui.aaValue = '';
       ui.aaCheckedVerbs = {};
-      ui.aaPersonalData = false;
       render(pyState);
     }
   }

@@ -135,8 +135,6 @@ def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
     sentence = f"{connector} - {subject}: allow {verbs}" if connector else f"{subject}: allow {verbs}"
     if rule.conditions:
         sentence += " - when " + ", ".join(name.replace("_", " ") for name, _value in rule.conditions)
-    if rule.allow_personal_data:
-        sentence += " - personal data allowed in exports, file downloads and page uploads"
     return sentence
 
 

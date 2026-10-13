@@ -492,7 +492,7 @@ class TestAddRule:
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
 
-    def test_org_add_policy_rule_with_personal_data(self, tmp_path, monkeypatch):
+    def test_org_add_policy_rule_ignores_a_personal_data_field(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
         app, sessions = _app()
         client = _client(app)
@@ -508,24 +508,8 @@ class TestAddRule:
         with principal_scope(ALICE):
             rules = auto_accept.get_policy_v2_rules()
         assert len(rules) == 1
-        assert rules[0].allow_personal_data is True
-        assert "personal data allowed" in recorded[0][1]
-
-    def test_org_add_policy_rule_ignores_a_non_true_personal_data(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "alice")
-        app, sessions = _app()
-        client = _client(app)
-        csrf = _signed_in(client, sessions, ALICE)
-
-        r = _post_action(client, "add_policy_rule", {
-            "group": "grist.document", "value": "DOC1", "verbs": ["read"], "personal_data": "true",
-        }, csrf)
-        assert r.status_code == 200
-
-        with principal_scope(ALICE):
-            rules = auto_accept.get_policy_v2_rules()
-        assert len(rules) == 1
-        assert rules[0].allow_personal_data is False
+        assert rules == _catalogue_rules("grist.document", "read", ["DOC1"])
+        assert "personal data" not in recorded[0][1]
 
     def test_adds_a_rule_with_a_list_value_from_comma_separated_text(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
