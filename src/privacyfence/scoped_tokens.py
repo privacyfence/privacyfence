@@ -22,12 +22,15 @@ import re
 import secrets
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from . import auto_accept, paths, secure_files
 from .principal import Principal
+
+if TYPE_CHECKING:
+    from .policy.scope_rows import V2Migration
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,9 @@ class ScopedToken:
     rule_ids: frozenset[str]
     tools: frozenset[str]
     allow_personal_data: bool = False  # ADR 0173: exports, downloads and page uploads may carry personal data
+    # Per rule id the token carries: the (predicate, operation) pairs that may auto-accept under it
+    # for this token. A rule id with no entry is used whole (a token never upgraded).
+    rule_limits: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict, hash=False)
 
     def days_left(self, now: float) -> int:
         return max(0, math.ceil((self.expires_at - now) / _SECONDS_PER_DAY))
@@ -125,7 +131,26 @@ def _to_json(token: ScopedToken) -> dict[str, Any]:
     }
     if token.allow_personal_data:
         data["allow_personal_data"] = True
+    if token.rule_limits:
+        data["rule_limits"] = {rid: sorted([p, o] for p, o in pairs) for rid, pairs in sorted(token.rule_limits.items())}
     return data
+
+
+def _limits_from_json(raw: Any) -> dict[str, frozenset[tuple[str, str]]]:
+    """Strict read: anything but ``{row_id: [[predicate, operation], ...]}`` raises, so the entry is skipped."""
+    if not isinstance(raw, dict):
+        raise TypeError("rule_limits must be an object")
+    limits: dict[str, frozenset[tuple[str, str]]] = {}
+    for rid, pairs in raw.items():
+        if not isinstance(rid, str) or not isinstance(pairs, list):
+            raise TypeError("rule_limits entries must map a rule id to a list")
+        parsed = set()
+        for pair in pairs:
+            if not isinstance(pair, list) or len(pair) != 2 or not all(isinstance(x, str) for x in pair):
+                raise TypeError("a rule limit is a [predicate, operation] pair")
+            parsed.add((pair[0], pair[1]))
+        limits[rid] = frozenset(parsed)
+    return limits
 
 
 def _from_json(principal_id: str, raw: Any) -> ScopedToken:
@@ -141,7 +166,65 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         rule_ids=frozenset(str(r) for r in raw["rule_ids"]),
         tools=frozenset(str(t) for t in raw["tools"]),
         allow_personal_data=raw.get("allow_personal_data", False) is True,
+        rule_limits=_limits_from_json(raw.get("rule_limits", {})),
     )
+
+
+def _migrated(token: ScopedToken, migration: "V2Migration") -> tuple[ScopedToken, bool]:
+    """``token`` re-pointed at the migration's rows, and whether its personal-data flag was newly
+    set. Returns ``token`` itself when nothing needs changing, so a second run is a no-op."""
+    rule_ids = set(token.rule_ids)
+    limits = dict(token.rule_limits)
+    flag = token.allow_personal_data
+    newly_flagged = not flag and bool(token.rule_ids & migration.personal_data_ids)
+    if newly_flagged:
+        flag = True
+    for row_id, members in migration.members.items():
+        carried = members & token.rule_ids
+        if not carried:
+            continue
+        rule_ids -= carried
+        rule_ids.add(row_id)
+        for old in carried:
+            limits.pop(old, None)
+        limits[row_id] = frozenset().union(*(migration.member_pairs.get(m, frozenset()) for m in carried))
+    for rid in rule_ids:
+        # A custom row keeps its old id, and so is in member_pairs but not id_map.
+        if rid not in limits and rid not in migration.id_map and rid in migration.member_pairs:
+            limits[rid] = migration.member_pairs[rid]
+    result = replace(token, rule_ids=frozenset(rule_ids), rule_limits=limits, allow_personal_data=flag)
+    return (token, False) if result == token else (result, newly_flagged)
+
+
+def migrate_token_file(path: Path, migration: "V2Migration") -> list[str]:
+    """Re-point the tokens in ``path`` at the migration's rows; return the labels of tokens whose
+    ``allow_personal_data`` this set. Idempotent; a missing or unreadable file is left alone.
+    Entries that cannot be read are kept as they are. Raises ``OSError`` if the write fails."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entries = list(data["tokens"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    labels: list[str] = []
+    changed = False
+    out: list[Any] = []
+    for raw in entries:
+        try:
+            token = _from_json("", raw)
+        except (KeyError, TypeError, ValueError):
+            out.append(raw)
+            continue
+        new, newly_flagged = _migrated(token, migration)
+        if new is token:
+            out.append(raw)
+            continue
+        changed = True
+        out.append(_to_json(new))
+        if newly_flagged:
+            labels.append(new.label)
+    if changed:
+        secure_files.atomic_write_json(path, {"version": 1, "tokens": out})
+    return labels
 
 
 # (st_mtime_ns, st_ino) of a principal's file; the atomic replace gives a new inode, so a
@@ -250,11 +333,16 @@ class ScopedTokenStore:
             for name in sorted(tool_set):
                 if name not in auto_accept.TOOL_TO_GATE:
                     raise ScopedTokenError(f"{name} is not a PrivacyFence tool.")
-            known_rules = {rule.id for rule in auto_accept.get_policy_v2_store_rules()}
+            compiled = auto_accept.get_policy_v2_store_rules()
+            known_rules = {rule.id for rule in compiled}
             if not rules <= known_rules:
                 raise ScopedTokenError("One of the chosen rules no longer exists; reload the page.")
             if len(existing) >= MAX_TOKENS_PER_PRINCIPAL:
                 raise ScopedTokenError(f"You have {MAX_TOKENS_PER_PRINCIPAL} tokens already; revoke one first.")
+            limits = {
+                rid: frozenset((r.predicate, op) for r in compiled if r.id == rid for op in r.operations)
+                for rid in rules
+            }
             created = time.time() if now is None else now
             secret = mint_secret()
             token = ScopedToken(
@@ -269,6 +357,7 @@ class ScopedTokenStore:
                 rule_ids=rules,
                 tools=tool_set,
                 allow_personal_data=allow_personal_data,
+                rule_limits=limits,
             )
             self._tokens[principal.id] = [*existing, token]
             self._write(principal)
@@ -303,6 +392,24 @@ class ScopedTokenStore:
             self._tokens[principal_id] = []
             self._write(principal)
             return len(removed)
+
+    def apply_migration(self, principal: Principal, migration: "V2Migration") -> list[str]:
+        """``migrate_token_file`` for a live store: under the lock, on the freshly read tokens."""
+        with self._lock:
+            self._refresh(principal)
+            labels: list[str] = []
+            changed = False
+            tokens: list[ScopedToken] = []
+            for token in self._tokens[principal.id]:
+                new, newly_flagged = _migrated(token, migration)
+                changed = changed or new is not token
+                tokens.append(new)
+                if newly_flagged:
+                    labels.append(new.label)
+            if changed:
+                self._tokens[principal.id] = tokens
+                self._write(principal)
+            return labels
 
     def find(self, secret: str, now: float | None = None) -> ScopedToken | None:
         if not secret.startswith(TOKEN_PREFIX):
@@ -339,6 +446,20 @@ def get_store() -> ScopedTokenStore:
     if _STORE is None:
         _STORE = ScopedTokenStore(lambda: [])
     return _STORE
+
+
+def current_store() -> ScopedTokenStore | None:
+    """The store set by ``set_store``, or ``None``; unlike ``get_store`` it never creates one."""
+    return _STORE
+
+
+def migrate_tokens(principal: Principal, migration: "V2Migration") -> list[str]:
+    """Re-point ``principal``'s tokens through the live store when one is set (so its lock and
+    in-memory copy stay consistent), else straight in the file."""
+    store = current_store()
+    if store is not None:
+        return store.apply_migration(principal, migration)
+    return migrate_token_file(paths.authority_dir(principal) / STORE_FILE_NAME, migration)
 
 
 def set_store(store: ScopedTokenStore | None) -> None:

@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from privacyfence import auto_accept, paths, scoped_tokens
+from privacyfence.policy import scope_rows, store
+from privacyfence.policy.engine import PolicyRule
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.scoped_tokens import (
     MAX_TOKENS_PER_PRINCIPAL,
@@ -20,6 +22,11 @@ from privacyfence.scoped_tokens import (
     ScopedTokenStore,
 )
 
+RULES = [
+    SimpleNamespace(id="rule-a", predicate="pred-a", operations=frozenset({"op.read", "op.write"})),
+    SimpleNamespace(id="rule-b", predicate="pred-b", operations=frozenset({"op.read"})),
+    SimpleNamespace(id="rule-b", predicate="pred-b2", operations=frozenset({"op.search"})),
+]
 ENABLED = ScopedTokenPolicy(enabled=True, max_days=365)
 NOW = 1_000_000.0
 TOOL = "gmail_list_messages"
@@ -28,9 +35,7 @@ TOOL = "gmail_list_messages"
 @pytest.fixture(autouse=True)
 def _data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(
-        auto_accept, "get_policy_v2_store_rules", lambda: [SimpleNamespace(id="rule-a"), SimpleNamespace(id="rule-b")]
-    )
+    monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: list(RULES))
 
 
 def _store(*principals: Principal) -> ScopedTokenStore:
@@ -300,3 +305,193 @@ def test_token_scope_sets_and_resets_the_context():
         assert scoped_tokens.current_token_scope() is token
     assert scoped_tokens.current_token_scope() is None
     scoped_tokens.token_scope(token).__exit__(None, None, None)  # exit without enter is a no-op
+
+
+class TestRuleLimits:
+    def test_create_records_limits_for_every_rule(self):
+        token, _ = _create(_store(), rule_ids=["rule-a", "rule-b"])
+        assert token.rule_limits == {
+            "rule-a": {("pred-a", "op.read"), ("pred-a", "op.write")},
+            "rule-b": {("pred-b", "op.read"), ("pred-b2", "op.search")},
+        }
+
+    def test_rule_limits_round_trip(self, tmp_path):
+        token, _ = _create(_store(), rule_ids=["rule-a"])
+        raw = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"][0]
+        assert raw["rule_limits"] == {"rule-a": [["pred-a", "op.read"], ["pred-a", "op.write"]]}
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).rule_limits == token.rule_limits
+
+    @pytest.mark.parametrize("bad", ["x", {"rule-a": "x"}, {"rule-a": [["only-one"]]}, {"rule-a": [["p", 1]]}, {"rule-a": [{}]}])
+    def test_malformed_rule_limits_skips_the_token(self, tmp_path, bad):
+        token, secret = _create(_store())
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        data["tokens"][0]["rule_limits"] = bad
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id) is None
+        assert restarted.find(secret, now=NOW) is None
+
+
+def _raw(rule_id, predicate, operations, flagged=False):
+    data = store.rule_to_dict(PolicyRule(
+        id=rule_id, predicate=predicate, value=["F1"], operations=frozenset(operations),
+    ))
+    if flagged:
+        data["allow_personal_data"] = True
+    return data
+
+
+NARROW = _raw("r-narrow", "approved_folder", ["drive.download_file"])
+FLAGGED = _raw("r-flagged", "approved_folder", ["drive.read_file_contents", "drive.download_file"], flagged=True)
+
+
+def _known(monkeypatch, *ids):
+    monkeypatch.setattr(
+        auto_accept, "get_policy_v2_store_rules",
+        lambda: [SimpleNamespace(id=i, predicate="approved_folder", operations=frozenset({"x"})) for i in ids],
+    )
+
+
+def _tokens(tmp_path):
+    return {t["label"]: t for t in json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]}
+
+
+class TestMigrateTokenFile:
+    def test_migrate_token_file_replaces_old_ids(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-narrow", "r-flagged", "r-other")
+        store_ = _store()
+        _create(store_, label="narrow", rule_ids=["r-narrow", "r-other"])
+        migration = scope_rows.migrate_v2([NARROW, FLAGGED])
+        (row,) = migration.rows
+
+        labels = scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+
+        assert labels == []
+        entry = _tokens(tmp_path)["narrow"]
+        assert entry["rule_ids"] == sorted([row.id, "r-other"])
+        assert entry["rule_limits"][row.id] == [["approved_folder", "drive.download_file"]]
+        assert "allow_personal_data" not in entry
+
+    def test_migrate_token_file_is_idempotent(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-narrow", "r-flagged")
+        _create(_store(), label="a", rule_ids=["r-narrow"])
+        _create(_store(), label="b", rule_ids=["r-flagged"])
+        migration = scope_rows.migrate_v2([NARROW, FLAGGED])
+
+        first = scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+        written = _file(tmp_path).read_bytes()
+        second = scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+
+        assert first == ["b"]
+        assert second == []
+        assert _file(tmp_path).read_bytes() == written
+
+    def test_partial_reference_records_narrow_limits(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-narrow", "r-flagged")
+        _create(_store(), label="narrow", rule_ids=["r-narrow"])
+        _create(_store(), label="both", rule_ids=["r-narrow", "r-flagged"])
+        migration = scope_rows.migrate_v2([NARROW, FLAGGED])
+        (row,) = migration.rows
+
+        scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+
+        tokens = _tokens(tmp_path)
+        assert tokens["narrow"]["rule_limits"] == {row.id: [["approved_folder", "drive.download_file"]]}
+        assert tokens["both"]["rule_limits"] == {row.id: [
+            ["approved_folder", "drive.download_file"], ["approved_folder", "drive.read_file_contents"],
+        ]}
+        assert row.verbs and len(scope_rows.pairs_of(migration.rows, row.id)) >= 2
+
+    def test_custom_row_reference_gets_its_own_limit(self, tmp_path, monkeypatch):
+        odd = _raw("r-odd", "approved_folder", ["drive.write_file"])
+        fine = _raw("r-fine", "approved_folder", ["drive.read_file_contents"])
+        _known(monkeypatch, "r-odd")
+        _create(_store(), label="odd", rule_ids=["r-odd"])
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        del data["tokens"][0]["rule_limits"]  # a token written before limits existed
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        migration = scope_rows.migrate_v2([odd, fine])
+
+        scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+
+        entry = _tokens(tmp_path)["odd"]
+        assert entry["rule_ids"] == ["r-odd"]
+        assert entry["rule_limits"] == {"r-odd": [["approved_folder", "drive.write_file"]]}
+
+    def test_flag_transfer_returns_labels(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-narrow", "r-flagged")
+        _create(_store(), label="plain", rule_ids=["r-narrow"])
+        _create(_store(), label="pii", rule_ids=["r-flagged"])
+        _create(_store(), label="already", rule_ids=["r-flagged"], allow_personal_data=True)
+
+        labels = scoped_tokens.migrate_token_file(_file(tmp_path), scope_rows.migrate_v2([NARROW, FLAGGED]))
+
+        assert labels == ["pii"]
+        tokens = _tokens(tmp_path)
+        assert tokens["pii"]["allow_personal_data"] is True
+        assert "allow_personal_data" not in tokens["plain"]
+
+    def test_missing_file_is_left_alone(self, tmp_path):
+        path = tmp_path / "nowhere" / STORE_FILE_NAME
+        assert scoped_tokens.migrate_token_file(path, scope_rows.migrate_v2([NARROW])) == []
+        assert not path.exists()
+        path = tmp_path / STORE_FILE_NAME
+        path.write_text("{not json", encoding="utf-8")
+        assert scoped_tokens.migrate_token_file(path, scope_rows.migrate_v2([NARROW])) == []
+        assert path.read_text(encoding="utf-8") == "{not json"
+
+    def test_malformed_entry_is_kept_untouched(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-narrow")
+        _create(_store(), label="ok", rule_ids=["r-narrow"])
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        data["tokens"].append({"id": "broken"})
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+
+        scoped_tokens.migrate_token_file(_file(tmp_path), scope_rows.migrate_v2([NARROW]))
+
+        assert json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"][1] == {"id": "broken"}
+
+    def test_apply_migration_holds_the_lock_and_refreshes(self, tmp_path, monkeypatch):
+        a1 = _raw("r-a1", "approved_folder", ["drive.read_file_contents"])
+        a2 = _raw("r-a2", "approved_folder", ["drive.download_file"], flagged=True)
+        b = _raw("r-b", "approved_folder", ["drive.read_file_contents"])
+        b["value"] = ["F2"]
+        m1, m2 = scope_rows.migrate_v2([a1, a2]), scope_rows.migrate_v2([b])
+        _known(monkeypatch, "r-a1", "r-b", "r-c")
+        one, two = _store(), _store()  # two handles on one file, like two processes
+        _create(one, label="t1", rule_ids=["r-a1"])
+        _create(two, label="t2", rule_ids=["r-b"])  # reads t1 from disk, writes both
+
+        assert one.apply_migration(LOCAL_PRINCIPAL, m1) == []  # refreshes: sees t2 too
+        _create(one, label="t3", rule_ids=["r-c"])
+        assert two.apply_migration(LOCAL_PRINCIPAL, m2) == []
+        assert two.apply_migration(LOCAL_PRINCIPAL, m2) == []  # idempotent through the store
+
+        fresh = _store()
+        fresh.load()
+        by_label = {t.label: t for t in fresh.tokens_for(LOCAL_PRINCIPAL)}
+        assert set(by_label) == {"t1", "t2", "t3"}
+        assert by_label["t1"].rule_ids == {m1.rows[0].id}
+        assert by_label["t2"].rule_ids == {m2.rows[0].id}
+        assert by_label["t3"].rule_ids == {"r-c"}
+
+    def test_migrate_tokens_uses_the_live_store_when_set(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-narrow")
+        live = _store()
+        scoped_tokens.set_store(None)
+        assert scoped_tokens.current_store() is None
+        _create(live, label="a", rule_ids=["r-narrow"])
+        migration = scope_rows.migrate_v2([NARROW])
+        scoped_tokens.migrate_tokens(LOCAL_PRINCIPAL, migration)  # no store: edits the file
+        assert _tokens(tmp_path)["a"]["rule_ids"] == [migration.rows[0].id]
+
+        scoped_tokens.set_store(live)
+        try:
+            assert scoped_tokens.current_store() is live
+            monkeypatch.setattr(live, "apply_migration", lambda p, m: ["via-store"])
+            assert scoped_tokens.migrate_tokens(LOCAL_PRINCIPAL, migration) == ["via-store"]
+        finally:
+            scoped_tokens.set_store(None)
