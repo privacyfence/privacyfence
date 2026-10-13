@@ -756,6 +756,23 @@ class TestScopedTokensSection:
         assert "a rule that no longer exists" in html
         assert "r.missing ? 'a rule that no longer exists' : esc(r.sentence)" in html
 
+    def test_a_token_can_be_duplicated_and_the_form_cleared(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-duplicate="' in html
+        assert "aria-label=\"Duplicate ' + esc(t.label)" in html
+        assert "data-st-clear" in html
+        assert ">Clear form</div>" in html
+        assert "of this token\\'s rules no longer exist and were left out." in html
+        assert "The new token gets these rules as they are now. " in html
+        assert "The original only allowed part of them; check the tools below before creating it." in html
+        assert "/^(.*) (\\d+)$/" in html
+
+    def test_tools_follow_the_chosen_rules(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "data-st-other-tools" in html
+        assert "Tools that need no rule, from other connectors (" in html
+        assert "Select a rule to see the tools it covers." in html
+
 
 class TestOrgCapabilities:
     """window.__pfCapabilities is a separate embedded global from

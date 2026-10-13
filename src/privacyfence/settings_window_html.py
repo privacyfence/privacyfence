@@ -338,7 +338,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
-    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false,
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stDuplicateOf: null,
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -1288,9 +1288,63 @@ _JS = r"""
     if (t.tools.length === 0) { detail += '<li>None</li>'; }
     t.tools.forEach(function (name) { detail += '<li><code>' + esc(name) + '</code></li>'; });
     detail += '</ul></details>';
-    var control = chips + '<div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
+    var control = chips + '<div class="button" role="button" tabindex="0" aria-label="Duplicate ' + esc(t.label) + '" data-st-duplicate="' +
+      esc(t.id) + '">Duplicate</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
       dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div>';
     return rowHtml(t.label, esc(scopedExpiryText(t)) + detail, control, 'pf-st-row');
+  }
+
+  // "Daily sync" -> "Daily sync 2", "Daily sync 2" -> "Daily sync 3"; skips
+  // labels another token already has and keeps the name within 60 characters.
+  function scopedDuplicateLabel(label) {
+    var m = /^(.*) (\d+)$/.exec(label);
+    var base = m ? m[1] : label;
+    var n = m ? parseInt(m[2], 10) + 1 : 2;
+    var taken = {};
+    SCOPED.tokens.forEach(function (x) { taken[x.label] = true; });
+    for (;;) {
+      var suffix = ' ' + n;
+      var b = base;
+      if (b.length + suffix.length > 60) { b = b.slice(0, 60 - suffix.length).replace(/ +$/, ''); }
+      if (!taken[b + suffix]) { return b + suffix; }
+      n += 1;
+    }
+  }
+
+  function duplicateScopedToken(tokenId) {
+    var t = SCOPED.tokens.filter(function (x) { return x.id === tokenId; })[0];
+    if (!t) { return; }
+    ui.stDuplicateOf = t.id;
+    ui.stLabel = scopedDuplicateLabel(t.label);
+    ui.stDays = Math.min(SCOPED.max_days, Math.max(1, Math.round((t.expires_at - t.created_at) / 86400)));
+    ui.stRules = {};
+    t.rules.forEach(function (r) { if (!r.missing) { ui.stRules[r.id] = true; } });
+    ui.stTools = {};
+    t.tools.forEach(function (name) { ui.stTools[name] = true; });
+    ui.stPersonalData = !!t.allow_personal_data;
+    render(pyState);
+    var form = document.querySelector('.pf-st-form');
+    if (form && form.scrollIntoView) { form.scrollIntoView({block: 'start'}); }
+    var nameEl = document.querySelector('[data-st-label]');
+    if (nameEl) { nameEl.focus(); }
+  }
+
+  function clearScopedForm() {
+    ui.stDuplicateOf = null;
+    ui.stLabel = '';
+    ui.stDays = null;
+    ui.stRules = {};
+    ui.stTools = {};
+    ui.stPersonalData = false;
+    render(pyState);
+  }
+
+  function scopedToolChip(name, coverage) {
+    var on = !!ui.stTools[name];
+    var status = scopedToolStatus(name, coverage);
+    return '<div class="pf-chip' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
+      (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
+      esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
   }
 
   function renderScopedTokens() {
@@ -1313,6 +1367,21 @@ _JS = r"""
 
     if (ui.stDays === null) { ui.stDays = SCOPED.default_days; }
     html += '<h2 class="pf-group-title">New token</h2><div class="card pf-card pf-st-form">';
+    var dupOf = ui.stDuplicateOf
+      ? SCOPED.tokens.filter(function (x) { return x.id === ui.stDuplicateOf; })[0] : null;
+    if (dupOf) {
+      var dupMissing = dupOf.rules.filter(function (r) { return r.missing; }).length;
+      var dupLimited = dupOf.rules.some(function (r) { return !r.missing && r.limited_to; });
+      if (dupMissing) {
+        html += '<div class="pf-st-notice" role="status" data-st-dup-missing="1">' + esc(dupMissing) +
+          ' of this token\'s rules no longer exist and were left out.</div>';
+      }
+      if (dupLimited) {
+        html += '<div class="pf-st-notice" role="status" data-st-dup-limited="1">The new token gets these rules as they are now. ' +
+          'The original only allowed part of them; check the tools below before creating it.</div>';
+      }
+      html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Clear form" data-st-clear="1">Clear form</div></div>';
+    }
     html += '<label><span class="field-label">Name</span><input type="text" class="field" aria-label="Token name" data-st-label="1" value="' + esc(ui.stLabel) + '"/></label>';
     html += '<label><span class="field-label">Days valid</span><input type="number" class="field" aria-label="Days valid" data-st-days="1" min="1" max="' +
       esc(SCOPED.max_days) + '" value="' + esc(ui.stDays) + '"/></label>';
@@ -1333,17 +1402,32 @@ _JS = r"""
     html += '</div>';
     var coverage = scopedToolCoverage();
     html += '<div class="pf-row-title">Tools</div>';
+    var autoTools = SCOPED.auto_tools || [];
+    var anyRule = SCOPED.rules.some(function (r) { return ui.stRules[r.id]; });
+    if (!anyRule) { html += '<div class="pf-hint" data-st-no-rule-hint="1">Select a rule to see the tools it covers.</div>'; }
+    var shownTools = {};
     SCOPED.tools.forEach(function (g) {
-      html += '<div class="pf-hint">' + esc(g.connector) + '</div><div class="pf-chips">';
-      g.tools.forEach(function (name) {
-        var on = !!ui.stTools[name];
-        var status = scopedToolStatus(name, coverage);
-        html += '<div class="pf-chip' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
-          (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
-          esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
+      var hasCovered = g.tools.some(function (name) { return !!coverage[name]; });
+      var show = g.tools.filter(function (name) {
+        return !!coverage[name] || (hasCovered && autoTools.indexOf(name) !== -1) || !!ui.stTools[name];
       });
+      if (!show.length) { return; }
+      html += '<div class="pf-hint">' + esc(g.connector) + '</div><div class="pf-chips">';
+      show.forEach(function (name) { shownTools[name] = true; html += scopedToolChip(name, coverage); });
       html += '</div>';
     });
+    var otherTools = [];
+    SCOPED.tools.forEach(function (g) {
+      g.tools.forEach(function (name) {
+        if (autoTools.indexOf(name) !== -1 && !shownTools[name]) { otherTools.push(name); }
+      });
+    });
+    if (otherTools.length) {
+      html += '<details data-st-other-tools="1"><summary>Tools that need no rule, from other connectors (' + otherTools.length + ')</summary>' +
+        '<div class="pf-chips">';
+      otherTools.forEach(function (name) { html += scopedToolChip(name, coverage); });
+      html += '</div></details>';
+    }
     var uncovered = Object.keys(ui.stTools).filter(function (name) {
       return ui.stTools[name] && scopedToolStatus(name, coverage).uncovered;
     }).sort();
@@ -1887,6 +1971,9 @@ _JS = r"""
     var stToolEl = e.target.closest('[data-st-tool]');
     if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
     if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
+    var stDupEl = e.target.closest('[data-st-duplicate]');
+    if (stDupEl) { duplicateScopedToken(stDupEl.getAttribute('data-st-duplicate')); return; }
+    if (e.target.closest('[data-st-clear]')) { clearScopedForm(); return; }
     if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
     if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }
 
