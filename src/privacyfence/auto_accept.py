@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     # below -- a real (non-TYPE_CHECKING) import would be circular: `policy.engine` itself imports
     # `ReviewContext`/`temp_accept_key` from this module.
     from .policy.engine import PolicyRule
+    from .policy.registry import Verb
     from .policy.scope_rows import ScopeRow
 
 logger = logging.getLogger(__name__)
@@ -661,6 +662,29 @@ def update_policy_v2_rule(rule_id: str) -> frozenset[str]:
         _write_rows_locked(state, cfg, scope_rows.fill_missing(existing, rule_id))
     notify_rules_changed()
     return missing
+
+
+def set_policy_rule_verbs(rule_id: str, verbs: "list[Verb]") -> bool:
+    """Change which verbs the row with this stable id allows (``scope_rows.set_verbs``): a kept verb
+    keeps the operations it had, an added verb gets all of its tools, a removed verb's operations
+    go. Returns whether anything was written -- ``False`` when ``set_verbs`` refuses (unknown or
+    custom row, no verbs, a verb outside the scope) or the result equals the current rows."""
+    from .policy import scope_rows
+
+    state = _REGISTRY.get()
+    if state.config_path is None:
+        raise RuntimeError("auto_accept config path not initialized")
+    with state.write_lock:
+        loaded = _read_rows_locked(state)
+        if loaded is None:
+            return False
+        cfg, existing = loaded
+        updated = scope_rows.set_verbs(existing, rule_id, verbs)
+        if updated is None or updated == existing:
+            return False
+        _write_rows_locked(state, cfg, updated)
+    notify_rules_changed()
+    return True
 
 
 def set_rules_changed_listener(callback: Callable[[], None] | None) -> None:

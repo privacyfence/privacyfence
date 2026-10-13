@@ -27,6 +27,7 @@ from starlette.testclient import TestClient
 from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, update_checker
 from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
@@ -608,6 +609,27 @@ class TestSensitiveActionStepUp:
         assert r.status_code == 428
         (after,) = policy_store.compile_rules_from_config(controller._load_config())
         assert after.operations == stale.operations
+
+    def test_set_policy_rule_verbs_is_sensitive_and_needs_step_up(self, controller, sessions):
+        """Changing a rule's verbs changes what a future call auto-accepts, so it demands the same
+        fresh passkey assertion ``add_policy_rule`` does, and applies nothing without it."""
+        assert "set_policy_rule_verbs" in _SENSITIVE_ACTIONS
+        self._enroll()
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        (row,) = state["auto_accept"]["rules"]
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+
+        r = client.post(
+            "/api/settings/set_policy_rule_verbs",
+            json={"rule_id": row["id"], "verbs": ["read", "update"], "csrf": csrf},
+        )
+
+        assert r.status_code == 428
+        (after,) = scope_rows.rows_from_config(controller._load_config())
+        assert {v.value for v in after.verbs} == {"read"}
 
     def test_update_policy_rule_with_an_unknown_id_is_harmless(self, client, sessions):
         csrf = _authed(client, sessions)

@@ -1797,6 +1797,23 @@ class SettingsController:
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
+    def set_policy_rule_verbs(self, rule_id: str, verbs: list) -> dict[str, Any]:
+        """The Auto-accept page's "Edit verbs" action: changes which verbs the row with this id
+        allows (``scope_rows.set_verbs``). A kept verb keeps exactly the operations it had, an added
+        verb gets all of its tools, a removed verb's operations go. An unknown id, a custom row, no
+        verbs or a verb outside the row's scope is refused and writes nothing."""
+        verb_enums = _parse_verbs(verbs)
+        loaded = self._load_rows()
+        if loaded is None:
+            return self.snapshot()
+        cfg, existing = loaded
+        updated = policy_scope_rows.set_verbs(existing, rule_id, verb_enums)
+        if updated is None or updated == existing:
+            return self.snapshot()
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(updated)
+        self._save_and_reload_policy_v2(cfg)
+        return self.snapshot()
+
     def _load_rows(self) -> "tuple[dict[str, Any], list[policy_scope_rows.ScopeRow]] | None":
         """The config and its auto-accept rows after the token-aware upgrade
         (``policy_upgrade.ensure_scope_rows``). ``None`` when the upgrade had to leave the section

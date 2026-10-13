@@ -157,7 +157,7 @@ class TestAuthRequired:
         assert r.headers["location"] == "/login?next=/settings/privacy"
 
     @pytest.mark.parametrize("action", [
-        "add_policy_rule", "remove_policy_rule", "update_policy_rule",
+        "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
         "set_default_policy", "toggle_pii_detection",
     ])
     def test_writes_are_a_json_401_when_signed_out(self, action):
@@ -813,6 +813,69 @@ class TestUpdateRule:
         assert r.status_code == 403
         assert recorded == ["update_policy_rule"]
         assert "grist.import_csv" not in _on_disk_rules(tmp_path, "alice")[0]["operations"]
+
+
+class TestSetPolicyRuleVerbs:
+    """set_policy_rule_verbs in organization mode: the signed-in principal's own rows only, audited
+    with the rule and the verbs it now allows."""
+
+    def _seeded(self, tmp_path, monkeypatch, principal=ALICE):
+        _seed(tmp_path, monkeypatch, principal.id, rules=_catalogue_rules("drive.folder", "read", ["FOLDER1"]))
+        (row,) = scope_rows.add_rules([], _catalogue_rules("drive.folder", "read", ["FOLDER1"]))[0]
+        return row
+
+    @staticmethod
+    def _on_disk_rows(tmp_path, principal_id="alice"):
+        path = tmp_path / "users" / principal_id / "authority" / "config" / "settings.yaml"
+        return scope_rows.rows_from_config(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+    def test_adds_a_verb_and_audits_it(self, tmp_path, monkeypatch):
+        row = self._seeded(tmp_path, monkeypatch)
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        r = _post_action(client, "set_policy_rule_verbs", {"rule_id": row.id, "verbs": ["update", "read"]}, csrf)
+
+        assert r.status_code == 200
+        (after,) = self._on_disk_rows(tmp_path)
+        assert after.id == row.id
+        assert {v.value for v in after.verbs} == {"read", "update"}
+        assert recorded == [
+            f"Changed auto-accept rule {row.id!r} to allow 'read, update' (principal=alice)",
+        ]
+
+    def test_a_refusal_writes_and_audits_nothing(self, tmp_path, monkeypatch):
+        row = self._seeded(tmp_path, monkeypatch)
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        for payload in (
+            {"rule_id": row.id, "verbs": []},
+            {"rule_id": row.id, "verbs": ["send"]},
+            {"rule_id": "r-doesnotexist", "verbs": ["read", "update"]},
+        ):
+            assert _post_action(client, "set_policy_rule_verbs", payload, csrf).status_code == 200
+
+        assert recorded == []
+        assert self._on_disk_rows(tmp_path) == [row]
+
+    def test_a_second_principal_cannot_edit_the_first_principals_rule(self, tmp_path, monkeypatch):
+        row = self._seeded(tmp_path, monkeypatch)
+        _seed(tmp_path, monkeypatch, "bob", rules=[])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, BOB)
+
+        r = _post_action(client, "set_policy_rule_verbs", {"rule_id": row.id, "verbs": ["read", "update"]}, csrf)
+
+        assert r.status_code == 200
+        assert self._on_disk_rows(tmp_path) == [row]
 
 
 class TestRemoveRule:
