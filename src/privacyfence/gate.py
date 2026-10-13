@@ -166,6 +166,7 @@ from .auto_accept import (
     get_policy_v2_rules,
     get_policy_v2_store_rules,
     is_temp_accepted,
+    policy_row_ids_for,
     register_temp_accept,
     remove_policy_v2_rule,
     temp_accept_key,
@@ -1547,9 +1548,10 @@ async def propose_policy_change(
         affected_ids = [rule_id]
     else:
         removed = remove_policy_v2_rule(rule_id) if operation == "update" else False
+        row_ids = policy_row_ids_for(new_rules)
         added = add_policy_v2_rules(new_rules)
         changed = removed or added
-        affected_ids = sorted({rule.id for rule in new_rules})
+        affected_ids = row_ids
 
     applied_decision = (
         "policy_rule_removed_via_bridge_proposal" if operation == "remove"

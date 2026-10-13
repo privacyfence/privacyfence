@@ -1143,10 +1143,38 @@ class TestProposePolicyChange:
         assert result["confirmed"] is True
         assert result["changed"] is True
         cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8"))
-        assert cfg["auto_accept"]["rules"][0]["predicate"] == "approved_folder"
+        assert cfg["auto_accept"]["version"] == 3
+        assert cfg["auto_accept"]["rules"][0]["scope"] == "drive.folder"
         assert "migrated_to_policy_v2" not in cfg
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
+
+    async def test_the_bridge_add_returns_the_row_id(self, audit_dir):
+        result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        again = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["download"],
+        )
+
+        row_id = scope_rows.row_id_for("drive.folder", ["folder1"])
+        assert result["rule_ids"] == [row_id]
+        assert again["rule_ids"] == [row_id]
+        assert [row.id for row in auto_accept.get_policy_rows()] == [row_id]
+        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == row_id
+
+    async def test_the_popups_always_allow_lands_in_an_existing_row(self):
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        proposal = make_proposal("approved_folder", ["folder1"], "drive_download_file", connector="drive")
+
+        # What the popup's "Always allow" writes (gate.py's accept_all handling).
+        assert gate.add_policy_v2_rules(policy_propose.rules_for_proposal(proposal)) is True
+
+        (row,) = auto_accept.get_policy_rows()
+        assert row.id == scope_rows.row_id_for("drive.folder", ["folder1"])
+        assert {Verb.READ, Verb.DOWNLOAD} <= row.verbs
 
     async def test_the_dialog_it_raises_is_marked_sensitive(self, monkeypatch):
         """Nothing gated this dialog before it appeared -- an MCP client asked, no card was shown -- so
