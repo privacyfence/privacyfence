@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -149,6 +150,31 @@ def test_token_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
     assert cfg["auto_accept"]["version"] == 2
     assert open(config_path, encoding="utf-8").read() == before
     assert logged == [f"{LOCAL_PRINCIPAL.id}: could not update scoped tokens for the new rule format: disk full"]
+
+
+def test_backup_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
+    _write_v2(config_path)
+    before = open(config_path, encoding="utf-8").read()
+    cfg = _read(config_path)
+    logged: list[str] = []
+    migrated: list[object] = []
+
+    def boom(*args, **kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(shutil, "copy2", boom)
+    monkeypatch.setattr(scoped_tokens, "migrate_tokens", lambda *a, **k: migrated.append(a))
+
+    assert policy_upgrade.ensure_scope_rows(cfg, config_path, LOCAL_PRINCIPAL, log=logged.append) is False
+
+    assert cfg["auto_accept"]["version"] == 2
+    assert open(config_path, encoding="utf-8").read() == before
+    assert _read(config_path)["auto_accept"]["version"] == 2
+    assert migrated == []
+    assert logged == [
+        f"{config_path}: could not keep a backup of the previous file, so the auto-accept rules "
+        "stay in the previous format: read-only"
+    ]
 
 
 def test_settings_write_failure_keeps_v3_in_memory(config_path, monkeypatch):

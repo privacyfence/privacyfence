@@ -131,7 +131,7 @@ conditions a rule can use are in [Approvals and policy](approvals-and-policy.md)
 | `auto_accept.rules[].scope` | string | — | absent | The scope a scoped rule trusts. Absent on a custom rule. |
 | `auto_accept.rules[].predicate` | string | — | `always_allow` | The scope selector of a custom rule. Absent on a scoped rule. |
 | `auto_accept.rules[].value` | any | — | `null` | The resource ids or names the scope matches, or `null` for a scope without a value. |
-| `auto_accept.rules[].verbs` | list | — | `[update]` | The verbs the rule allows. |
+| `auto_accept.rules[].verbs` | list | — | `[update]` | The verbs the rule allows (derived from `operations` for a custom rule; display only). |
 | `auto_accept.rules[].operations` | list | — | `[contacts.edit]` | Internal operation keys the rule covers. |
 | `auto_accept.rules[].conditions` | list | `[]` | `[[no_contact_info_change, null]]` | Custom rules only: `[name, value]` pairs that must all hold. |
 | `auto_accept.rules[].former_ids` | list | `[]` | absent | The ids of the version-2 rules the upgrade merged into this rule. |

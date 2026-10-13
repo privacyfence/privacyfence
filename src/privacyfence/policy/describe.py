@@ -147,7 +147,7 @@ def row_sentence(row: "ScopeRow", value_display: str | None = None) -> str:
     A custom row renders as its compiled rule does. A scoped row names its connector, the scope's
     noun, its value (``value_display`` when the caller resolved it) and its stored verbs, with a
     condition scope's narrowing appended. There is no personal-data suffix: that allowance lives
-    on scoped tokens now (ADR 0164).
+    on scoped tokens now (ADR 0173).
     """
     from . import scope_rows  # scope_rows imports this module
 

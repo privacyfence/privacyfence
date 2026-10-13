@@ -48,7 +48,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Auto-accept rules now use nine verbs: read, download, search, add, update, restructure, move, send and delete.** Grist and Peek verbs no longer carry bracketed labels. The older verb names are still accepted wherever a verb is typed.
 - **Each scope now has one auto-accept rule.** Adding verbs to a scope that already has a rule extends it, and existing rules are merged automatically on upgrade (the old settings file is kept as `settings.yaml.pre-scope-rules.bak`). Scoped tokens keep exactly the access they had. Downgrading is not supported: an older version ignores the merged rules and drops them if it saves rules; restore the backup file instead.
 - **Personal data in exports, file downloads and Peek uploads is now allowed per scoped token instead of per rule.** Tokens that used such a rule keep it; calls made without a token always stop for review when personal data is found.
-- **The Settings "Add a rule" form now explains and checks move and copy rules.** A move or copy is auto-accepted only when both its source and destination folder are in the same rule, so a rule naming a single folder could never match. Ticking Move or Copy now shows a hint, and "Add rule" stays disabled until the Value field holds at least two comma-separated ids.
+- **The Settings "Add a rule" form now explains and checks move rules.** A move is auto-accepted only when both its source and destination are in the same rule, so a Drive folder or task list rule naming a single id could never match. Ticking Move now shows a hint, and "Add rule" stays disabled until the Value field holds at least two comma-separated ids.
 
 ### Added
 

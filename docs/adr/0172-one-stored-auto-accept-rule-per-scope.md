@@ -72,7 +72,8 @@ Adding verbs to a scope never extended the rule that was already there, and Remo
   button (ADR 0166).
 - **Downgrading is not supported.** An older daemon compiles the custom rows and drops the scoped
   rows, which have no predicate; any rule write from it then rewrites the section as version 2 and
-  loses them. The backup file is the way back: restore it by hand.
+  loses them. The backup file is the way back: restore it by hand. If the backup cannot be copied,
+  the upgrade does not convert: the section stays version 2 and the daemon keeps working on it.
 
 ## Alternatives considered
 

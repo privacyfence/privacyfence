@@ -46,7 +46,8 @@ def ensure_scope_rows(
     """Bring ``cfg``'s ``auto_accept:`` section to version 3, in memory and on disk.
 
     Returns ``True`` when the section is version 3 on return (or needed nothing), ``False`` when
-    it had to stay version 2 because the scoped tokens could not be updated.
+    it had to stay version 2 because the backup could not be kept or the scoped tokens could not
+    be updated.
     """
     raw_rules = _v2_rules(cfg.get("auto_accept"))
     if raw_rules is None:
@@ -59,7 +60,11 @@ def ensure_scope_rows(
         if not os.path.exists(backup) and os.path.exists(config_path):
             shutil.copy2(config_path, backup)
     except OSError as exc:
-        log(f"{config_path}: could not keep a backup of the previous file: {exc}")
+        log(
+            f"{config_path}: could not keep a backup of the previous file, so the auto-accept "
+            f"rules stay in the previous format: {exc}"
+        )
+        return False
 
     try:
         labels = scoped_tokens.migrate_tokens(principal, migration)
