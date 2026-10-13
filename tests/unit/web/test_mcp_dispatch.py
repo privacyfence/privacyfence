@@ -579,7 +579,7 @@ class TestProposePolicyChangeDispatch:
             "group": "drive.folder", "value": ["folder1"], "verbs": ["read"],
         })
         assert result["confirmed"] is True
-        assert "approved_folder" in self._config_path.read_text(encoding="utf-8")
+        assert "scope: drive.folder" in self._config_path.read_text(encoding="utf-8")
 
     async def test_denied_immediately_when_this_sessions_unattended_flag_is_set(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)

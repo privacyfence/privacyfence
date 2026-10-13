@@ -49,11 +49,9 @@ PROBE_TOOL = "privacyfence_propose_policy_change"
 PROBE_GROUP = "gmail.sender_domain"
 PROBE_VERBS = ["read"]
 
-#: What ``(PROBE_GROUP, PROBE_VERBS)`` compiles to through
-#: ``policy.catalogue.rules_for_catalogue_entry``: v2 keeps v1's predicate vocabulary, and ``read``
-#: on this group governs both Gmail read operations, not just the single ``gmail.read_message``
-#: key the v1 probe used to name by hand.
-PROBE_PREDICATE = "trusted_sender_domain"
+#: The operations ``(PROBE_GROUP, PROBE_VERBS)`` stores in its row: ``read`` on this group governs
+#: both Gmail read operations, not just the single ``gmail.read_message`` key the v1 probe used to
+#: name by hand.
 PROBE_OPERATIONS = ("gmail.read_message", "gmail.read_thread")
 
 #: ``gate.propose_policy_change``'s own audit vocabulary, for the log assertions on the far side of
@@ -87,10 +85,10 @@ def expected_description(value: str) -> str:
 
 
 def probe_rule_on_disk(settings_text: str, *, value: list[str]) -> dict[str, Any] | None:
-    """The probe's own row in ``settings_text``'s v2 ``auto_accept:`` section, or ``None``.
+    """The probe's own row in ``settings_text``'s v3 ``auto_accept:`` section, or ``None``.
 
-    Reads the section ``policy/store.py`` defines (``version: 2`` plus a ``rules:`` list of
-    ``rule_to_dict`` rows) rather than grepping, and never raises on a file it cannot make sense
+    Reads the section ``policy/scope_rows.py`` defines (``version: 3`` plus a ``rules:`` list of
+    ``row_to_dict`` rows, one per scope) rather than grepping, and never raises on a file it cannot make sense
     of: an unparseable, missing or wrong-shaped section is simply "no such rule", which is the
     failure the caller's own assertion should report.
     """
@@ -101,7 +99,7 @@ def probe_rule_on_disk(settings_text: str, *, value: list[str]) -> dict[str, Any
     if not isinstance(config, dict):
         return None
     section = config.get("auto_accept")
-    if not isinstance(section, dict) or section.get("version") != 2:
+    if not isinstance(section, dict) or section.get("version") != 3:
         return None
     rules = section.get("rules")
     if not isinstance(rules, list):
@@ -109,24 +107,25 @@ def probe_rule_on_disk(settings_text: str, *, value: list[str]) -> dict[str, Any
     for rule in rules:
         if not isinstance(rule, dict):
             continue
-        if rule.get("predicate") == PROBE_PREDICATE and rule.get("value") == list(value):
+        if rule.get("scope") == PROBE_GROUP and rule.get("value") == list(value):
             return rule
     return None
 
 
 def assert_probe_rule_on_disk(settings_text: str, *, value: list[str]) -> None:
-    """Assert a confirmed probe round trip over ``value`` actually persisted, as a v2 rule.
+    """Assert a confirmed probe round trip over ``value`` actually persisted, as a version-3 row.
 
-    The claim is the whole row, not the presence of a string: the predicate and value the probe's
-    group/value compile to, *and* every operation its verb derives. A writer that persisted a
+    The claim is the whole row, not the presence of a string: the scope, value and verbs the probe's
+    group/value store, *and* every operation its verb derives. A writer that persisted a
     narrower rule than the dialog described -- or wrote into v1's ``auto_accept_rules:`` section
-    instead, which shares the predicate vocabulary -- fails here rather than grepping green.
+    instead -- fails here rather than grepping green.
     """
     rule = probe_rule_on_disk(settings_text, value=value)
     assert rule is not None, (
-        f"no v2 auto_accept rule with predicate {PROBE_PREDICATE!r} over {value!r} in "
+        f"no version-3 auto_accept row with scope {PROBE_GROUP!r} over {value!r} in "
         f"settings.yaml -- got: {settings_text!r}"
     )
+    assert rule.get("verbs") == PROBE_VERBS, f"probe row has the wrong verbs: {rule!r}"
     operations = rule.get("operations")
     assert isinstance(operations, list) and set(PROBE_OPERATIONS) <= set(operations), (
         f"probe rule persisted without the operations {PROBE_VERBS!r} derives for "

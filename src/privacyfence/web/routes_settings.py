@@ -1863,10 +1863,16 @@ def build_org_routes(
                 return None
             value = _parse_value_list(str(body.get("value") or ""))
             new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
-            if not new_rules or not auto_accept.add_policy_v2_rules(new_rules):
+            if not new_rules:
+                return None
+            row_ids = auto_accept.policy_row_ids_for(new_rules)
+            if not auto_accept.add_policy_v2_rules(new_rules):
                 return None
             verb_names = ", ".join(verb.value for verb in verb_enums)
-            return f"Added auto-accept rule ({group!r}, allow {verb_names!r}) (principal={principal.id})"
+            return (
+                f"Added auto-accept rule ({group!r}, allow {verb_names!r}) to "
+                f"{', '.join(row_ids)} (principal={principal.id})"
+            )
         if action == "remove_policy_rule":
             rule_id = str(body.get("rule_id", ""))
             if not auto_accept.remove_policy_v2_rule(rule_id):

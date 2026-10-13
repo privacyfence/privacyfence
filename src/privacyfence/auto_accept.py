@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from email.utils import parseaddr
 from typing import TYPE_CHECKING, Any, Callable
 
-from .principal import PrincipalRegistry
+from .principal import PrincipalRegistry, current_principal
 from .policy.resource_registry import DRIVE_SANDBOX_WRITE_TARGETS
 from .secure_files import atomic_write_text
 
@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     # below -- a real (non-TYPE_CHECKING) import would be circular: `policy.engine` itself imports
     # `ReviewContext`/`temp_accept_key` from this module.
     from .policy.engine import PolicyRule
+    from .policy.scope_rows import ScopeRow
 
 logger = logging.getLogger(__name__)
 
@@ -530,18 +531,43 @@ def get_policy_v2_store_rules() -> "list[PolicyRule]":
     return _REGISTRY.get().policy_v2_store_rules
 
 
-def get_policy_v2_rules() -> "list[PolicyRule]":
-    """Read-only snapshot of the on-disk v2 ``auto_accept:`` section, straight from disk -- backs
-    ``privacyfence_list_policy``, which needs each rule's real, stable id
-    (``policy.store.rule_id_for``) to give a model something ``privacyfence_propose_policy_change``'s
-    ``update``/``remove`` can actually target -- unlike ``get_policy_v2_store_rules()`` above, which
-    is the in-memory hot-reloaded cache ``gate.py`` evaluates against, this always re-reads the file.
+def _read_rows_locked(state: Any) -> "tuple[dict[str, Any], list[ScopeRow]] | None":
+    """The config and its rows, read under ``state.write_lock`` (the caller holds it), after the
+    token-aware upgrade (``policy_upgrade.ensure_scope_rows``). ``None`` when the upgrade had to
+    leave the section at version 2, in which case a writer must write nothing.
 
-    Imports ``policy.store`` locally rather than at module level: ``policy.engine`` (imported by
-    ``policy.store``) itself imports ``ReviewContext``/``temp_accept_key`` from this module, so a
-    module-level import here would be circular.
-    """
+    Imports locally: ``scope_rows`` imports ``catalogue``, which imports ``store``, whose
+    ``engine`` imports this module, and ``policy_upgrade`` imports ``scoped_tokens``, which
+    imports this module."""
+    from . import policy_upgrade
+    from .policy import scope_rows
+
+    with open(state.config_path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    if not policy_upgrade.ensure_scope_rows(cfg, state.config_path, current_principal()):
+        return None
+    return cfg, scope_rows.rows_from_config(cfg)
+
+
+def _write_rows_locked(state: Any, cfg: dict[str, Any], rows: "list[ScopeRow]") -> None:
+    """Persist ``rows`` as the ``auto_accept:`` section and hot-reload the store (lock held)."""
+    from .policy import scope_rows
     from .policy import store as policy_store
+
+    cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = scope_rows.rows_to_config(rows)
+    atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
+    set_policy_v2_store_rules(scope_rows.compile_rows(rows))
+
+
+def get_policy_rows() -> "list[ScopeRow]":
+    """Read-only snapshot of the on-disk ``auto_accept:`` section as one row per scope, straight
+    from disk -- backs ``privacyfence_list_policy``, which needs each row's real, stable id to
+    give a model something ``privacyfence_propose_policy_change``'s ``update``/``remove`` can
+    target. Unlike ``get_policy_v2_store_rules()`` above, which is the in-memory hot-reloaded
+    cache ``gate.py`` evaluates against, this always re-reads the file, and it never writes: a
+    version-2 section is converted in memory only.
+    """
+    from .policy import scope_rows
 
     state = _REGISTRY.get()
     if state.config_path is None:
@@ -549,85 +575,90 @@ def get_policy_v2_rules() -> "list[PolicyRule]":
     with state.write_lock:
         with open(state.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
-    return policy_store.compile_rules_from_config(cfg)
+    return scope_rows.rows_from_config(cfg)
+
+
+def get_policy_v2_rules() -> "list[PolicyRule]":
+    """The on-disk rows compiled to engine rules (``get_policy_rows()``, compiled)."""
+    from .policy import scope_rows
+
+    return scope_rows.compile_rows(get_policy_rows())
+
+
+def policy_row_ids_for(rules: "list[PolicyRule]") -> list[str]:
+    """The ids of the rows ``add_policy_v2_rules(rules)`` would extend or create, computed against
+    the current rows without writing."""
+    from .policy import scope_rows
+
+    return scope_rows.add_rules(get_policy_rows(), list(rules))[1]
 
 
 def add_policy_v2_rules(rules: "list[PolicyRule]") -> bool:
-    """Merge ``rules`` into the on-disk v2 ``auto_accept:`` section and hot-reload the store,
+    """Merge ``rules`` into the on-disk ``auto_accept:`` section's rows and hot-reload the store,
     notifying every rules-changed listener -- the one writer every surface (Settings, the MCP
-    bridge, the popup's own "Always allow" flow) now shares. Returns whether the on-disk rule set
-    actually changed -- merging a rule that adds no new ``(predicate, value, conditions)`` row and
-    no new operation to an existing one is a no-op.
+    bridge, the popup's own "Always allow" flow) shares. Returns whether the on-disk rows
+    actually changed -- merging a rule that adds no new scope and no new operation to an existing
+    row is a no-op.
     """
-    from .policy import store as policy_store
+    from .policy import scope_rows
 
     state = _REGISTRY.get()
     if state.config_path is None:
         raise RuntimeError("auto_accept config path not initialized")
     with state.write_lock:
-        with open(state.config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        existing = policy_store.compile_rules_from_config(cfg)
-        merged = policy_store.merge_rules(existing + list(rules))
+        loaded = _read_rows_locked(state)
+        if loaded is None:
+            return False
+        cfg, existing = loaded
+        merged, _ = scope_rows.add_rules(existing, list(rules))
         if merged == existing:
             return False
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(merged)
-        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
-        set_policy_v2_store_rules(merged)
+        _write_rows_locked(state, cfg, merged)
     notify_rules_changed()
     return True
 
 
 def remove_policy_v2_rule(rule_id: str) -> bool:
-    """Remove the rule with this stable id from the on-disk v2 ``auto_accept:`` section entirely.
+    """Remove the row with this stable id from the on-disk ``auto_accept:`` section entirely.
     Returns whether anything was actually removed."""
-    from .policy import store as policy_store
+    from .policy import scope_rows
 
     state = _REGISTRY.get()
     if state.config_path is None:
         raise RuntimeError("auto_accept config path not initialized")
     with state.write_lock:
-        with open(state.config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        existing = policy_store.compile_rules_from_config(cfg)
-        remaining = [rule for rule in existing if rule.id != rule_id]
+        loaded = _read_rows_locked(state)
+        if loaded is None:
+            return False
+        cfg, existing = loaded
+        remaining = scope_rows.remove_row(existing, rule_id)
         if len(remaining) == len(existing):
             return False
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(remaining)
-        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
-        set_policy_v2_store_rules(remaining)
+        _write_rows_locked(state, cfg, remaining)
     notify_rules_changed()
     return True
 
 
 def update_policy_v2_rule(rule_id: str) -> frozenset[str]:
-    """Add to the rule with this stable id the operations its own verbs imply today and it lacks
-    (``policy.outdated``, ADR 0166), and return the keys added -- empty when the id is unknown or
-    nothing is missing, in which case nothing is written. The id, value and conditions
+    """Add to the row with this stable id the operations its own verbs imply today and it lacks
+    (``scope_rows.fill_missing``, ADR 0166), and return the keys added -- empty when the id is
+    unknown or nothing is missing, in which case nothing is written. The id, value and conditions
     are kept; what is added is computed here, never taken from a caller."""
-    import dataclasses
-
-    from .policy import outdated
-    from .policy import store as policy_store
+    from .policy import scope_rows
 
     state = _REGISTRY.get()
     if state.config_path is None:
         raise RuntimeError("auto_accept config path not initialized")
     with state.write_lock:
-        with open(state.config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        existing = policy_store.compile_rules_from_config(cfg)
-        target = next((rule for rule in existing if rule.id == rule_id), None)
-        missing = outdated.missing_operations(target) if target is not None else frozenset()
+        loaded = _read_rows_locked(state)
+        if loaded is None:
+            return frozenset()
+        cfg, existing = loaded
+        target = next((row for row in existing if row.id == rule_id), None)
+        missing = scope_rows.missing_operations(target) if target is not None else frozenset()
         if target is None or not missing:
             return frozenset()
-        updated = [
-            dataclasses.replace(rule, operations=rule.operations | missing) if rule is target else rule
-            for rule in existing
-        ]
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(updated)
-        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
-        set_policy_v2_store_rules(updated)
+        _write_rows_locked(state, cfg, scope_rows.fill_missing(existing, rule_id))
     notify_rules_changed()
     return missing
 

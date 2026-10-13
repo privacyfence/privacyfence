@@ -32,6 +32,7 @@ import pytest
 
 from privacyfence import auto_accept, gate
 from privacyfence.audit_log import current_week, init_audit_logger
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 
 from ..helpers import policy_rules
@@ -831,7 +832,7 @@ class TestAcceptAllPersistsARealRule:
 
         on_disk = config_path.read_text(encoding="utf-8")
         assert "auto_accept:" in on_disk
-        assert "trusted_sender_domain" in on_disk
+        assert "scope: gmail.sender_domain" in on_disk
         assert "example.com" in on_disk
 
         fail_if_popup_shown(monkeypatch)  # the newly created rule must cover this one silently
@@ -844,7 +845,7 @@ class TestAcceptAllPersistsARealRule:
         entries = read_audit_entries(audit_dir)
         assert len(entries) == 2
         assert entries[1]["decision"] == "auto_accepted"
-        assert entries[1]["auto_accept_rule"] == rule_id("trusted_sender_domain", ["example.com"])
+        assert entries[1]["auto_accept_rule"] == scope_rows.row_id_for("gmail.sender_domain", ["example.com"])
 
 
 class TestAcceptAllPersistsARealRuleForWrites:
@@ -874,7 +875,7 @@ class TestAcceptAllPersistsARealRuleForWrites:
         assert first_entry["auto_accept_rule"] == "label_name_allowlist"
 
         on_disk = config_path.read_text(encoding="utf-8")
-        assert "label_name_allowlist" in on_disk
+        assert "scope: gmail.label" in on_disk
         assert "Newsletters" in on_disk
 
         fail_if_popup_shown(monkeypatch)  # the newly created rule must cover this one silently
@@ -888,7 +889,7 @@ class TestAcceptAllPersistsARealRuleForWrites:
         entries = read_audit_entries(audit_dir)
         assert len(entries) == 2
         assert entries[1]["decision"] == "auto_accepted"
-        assert entries[1]["auto_accept_rule"] == rule_id("label_name_allowlist", ["Newsletters"])
+        assert entries[1]["auto_accept_rule"] == scope_rows.row_id_for("gmail.label", ["Newsletters"])
 
     # No test here for two concurrent gated_call()s for *different* args
     # (so not a coalescing case) racing to create the same rule via Always

@@ -19,7 +19,6 @@ flows, grant name resolution) runs on a background thread via
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 import re
@@ -55,9 +54,10 @@ from .policy import describe as policy_describe
 from .policy import outdated as policy_outdated
 from .policy import propose as policy_propose
 from .policy import registry as policy_registry
+from .policy import scope_rows as policy_scope_rows
 from .policy import store as policy_store
 from .policy.engine import PolicyRule
-from .principal import LOCAL_PRINCIPAL
+from .principal import LOCAL_PRINCIPAL, current_principal
 from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
 from .privacy_filter import init_privacy_filter
@@ -71,6 +71,7 @@ from .resource_names import ResourceNameResolver, get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
 from .step_up_config import LiveStepUpConfig, StepUpConfig, set_personal_scope, step_up_scope_fields
 from . import grist_auth, telegram_auth
+from . import policy_upgrade
 from .peek_client import (
     PeekClientError,
     bundle_base_url as peek_bundle_base_url,
@@ -1722,12 +1723,12 @@ class SettingsController:
         """The Auto-accept page's "Add rule" form. ``group`` is one of ``_policy_scope_catalogue()``'s
         own ids; ``verbs`` is whichever of that group's own verb checkboxes were checked, as their
         v2 verb strings. Additive only, like every other rule here: a submission that names a
-        ``(predicate, value)`` an existing rule already carries widens that rule's own operations
-        rather than creating a duplicate row (``policy.store.merge_rules``) -- which is also how
-        "add more verbs to an existing rule" works from this same form, no separate edit action
-        needed. Silently does nothing for an unrecognized group, a group none of the requested verbs
-        govern, or (for the one valued extra scope, ``apps_script.project``) a value-needing scope
-        submitted with none -- see ``_rules_for_catalogue_entry``'s own docstring.
+        ``(scope, value)`` an existing row already carries adds to that scope's row (its verbs and
+        operations) rather than creating a duplicate -- which is also how "add more verbs to an
+        existing rule" works from this same form, no separate edit action needed. Silently does
+        nothing for an unrecognized group, a group none of the requested verbs govern, or (for the
+        one valued extra scope, ``apps_script.project``) a value-needing scope submitted with none --
+        see ``_rules_for_catalogue_entry``'s own docstring.
         """
         verb_enums = _parse_verbs(verbs)
         if not verb_enums:
@@ -1735,45 +1736,62 @@ class SettingsController:
         new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value), verb_enums)
         if not new_rules:
             return self.snapshot()
-        cfg = self._load_config()
-        existing = policy_store.compile_rules_from_config(cfg)
-        merged = policy_store.merge_rules(existing + new_rules)
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(merged)
+        loaded = self._load_rows()
+        if loaded is None:
+            return self.snapshot()
+        cfg, existing = loaded
+        rows, _ = policy_scope_rows.add_rules(existing, new_rules)
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(rows)
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
     def remove_policy_rule(self, rule_id: str) -> dict[str, Any]:
-        """Removes the rule with this stable id from the on-disk v2 ``auto_accept:`` section
-        entirely -- narrowing (rather than adding a rule) is always a remove-and-re-add-narrower
-        here, the same "additive only" posture the whole policy model has, not a smaller-scoped
-        edit action of its own."""
-        cfg = self._load_config()
-        existing = policy_store.compile_rules_from_config(cfg)
-        remaining = [rule for rule in existing if rule.id != rule_id]
+        """Removes the row with this stable id from the on-disk ``auto_accept:`` section entirely
+        -- narrowing (rather than adding a rule) is always a remove-and-re-add-narrower here, the
+        same "additive only" posture the whole policy model has, not a smaller-scoped edit action
+        of its own."""
+        loaded = self._load_rows()
+        if loaded is None:
+            return self.snapshot()
+        cfg, existing = loaded
+        remaining = policy_scope_rows.remove_row(existing, rule_id)
         if len(remaining) == len(existing):
             return self.snapshot()
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(remaining)
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(remaining)
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
     def update_policy_rule(self, rule_id: str) -> dict[str, Any]:
-        """The Auto-accept page's "Update rule" button (ADR 0166): adds to this rule the operations
+        """The Auto-accept page's "Update rule" button (ADR 0166): adds to this row the operations
         its own verbs imply today and it lacks (tools added after it was saved). The id is kept, so
-        anything that references it keeps working. What is added is ``policy.outdated``'s answer
-        and nothing from the client; an unknown id or a rule with nothing missing writes nothing."""
-        cfg = self._load_config()
-        existing = policy_store.compile_rules_from_config(cfg)
-        target = next((rule for rule in existing if rule.id == rule_id), None)
-        missing = policy_outdated.missing_operations(target) if target is not None else frozenset()
-        if target is None or not missing:
+        anything that references it keeps working. What is added is ``scope_rows.missing_operations``'s
+        answer and nothing from the client; an unknown id or a row with nothing missing writes
+        nothing."""
+        loaded = self._load_rows()
+        if loaded is None:
             return self.snapshot()
-        updated = [
-            dataclasses.replace(rule, operations=rule.operations | missing) if rule is target else rule
-            for rule in existing
-        ]
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(updated)
+        cfg, existing = loaded
+        target = next((row for row in existing if row.id == rule_id), None)
+        if target is None or not policy_scope_rows.missing_operations(target):
+            return self.snapshot()
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(
+            policy_scope_rows.fill_missing(existing, rule_id)
+        )
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
+
+    def _load_rows(self) -> "tuple[dict[str, Any], list[policy_scope_rows.ScopeRow]] | None":
+        """The config and its auto-accept rows after the token-aware upgrade
+        (``policy_upgrade.ensure_scope_rows``). ``None`` when the upgrade had to leave the section
+        at version 2: ``self.error`` says so and the caller writes nothing."""
+        cfg = self._load_config()
+        if not policy_upgrade.ensure_scope_rows(cfg, self._config_path, current_principal()):
+            self.error = (
+                "Auto-accept rules could not be upgraded to the new format; "
+                "restart PrivacyFence and try again."
+            )
+            return None
+        return cfg, policy_scope_rows.rows_from_config(cfg)
 
     def _save_and_reload_policy_v2(self, cfg: dict[str, Any]) -> None:
         """Persist ``cfg`` and hot-reload the v2 rule cache (``set_policy_v2_store_rules``) plus

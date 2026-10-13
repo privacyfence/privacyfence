@@ -57,7 +57,7 @@ from privacyfence import auto_accept, paths, privacy_filter, scoped_tokens
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
-from privacyfence.policy import store as policy_store
+from privacyfence.policy import scope_rows
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
@@ -75,7 +75,14 @@ def _catalogue_rules(group: str, verb: str, value: list | None = None) -> list:
     """The ``PolicyRule``s one ``group``/``[verb]`` "add a rule" submission compiles to -- the same
     call the dispatcher itself makes, so a test can seed or predict exactly what a submission with
     this group/verbs produces."""
-    return policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs([verb]))
+    return _stored(policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs([verb])))
+
+
+def _stored(rules: list) -> list:
+    """``rules`` as the stored row compiles them back: one rule per scope entry, carrying the row's
+    id (``scope_rows.row_id_for``), which is the id a Remove or Update request names."""
+    rows, _ = scope_rows.add_rules([], list(rules))
+    return scope_rows.compile_rows(rows)
 
 
 def _on_disk_rules(tmp_path, principal_id: str) -> list:
@@ -89,14 +96,13 @@ def _on_disk_rules(tmp_path, principal_id: str) -> list:
 
 
 def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
-    # Scaffold until scope-rules p7 moves the writers to rows; p7 removes this line and updates these tests to version 3.
-    monkeypatch.setattr("privacyfence.policy_upgrade.ensure_scope_rows", lambda *a, **k: True)
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
     config_dir = tmp_path / "users" / principal_id / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     cfg: dict = {}
     if rules:
-        cfg["auto_accept"] = policy_store.rules_to_config(list(rules))
+        seeded, _ = scope_rows.add_rules([], list(rules))
+        cfg["auto_accept"] = scope_rows.rows_to_config(seeded)
     (config_dir / "settings.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
 
@@ -513,6 +519,25 @@ class TestAddRule:
         assert rules == _catalogue_rules("grist.document", "read", ["DOC1"])
         assert "personal data" not in recorded[0][1]
 
+    def test_the_audit_text_names_the_row_the_rule_landed_in(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda p, s: recorded.append(s))
+
+        _post_action(client, "add_policy_rule", {"group": "drive.folder", "value": "F1", "verbs": ["read"]}, csrf)
+        _post_action(client, "add_policy_rule", {"group": "drive.folder", "value": "F1", "verbs": ["update"]}, csrf)
+
+        row_id = scope_rows.row_id_for("drive.folder", ["F1"])
+        assert recorded == [
+            f"Added auto-accept rule ('drive.folder', allow 'read') to {row_id} (principal=alice)",
+            f"Added auto-accept rule ('drive.folder', allow 'update') to {row_id} (principal=alice)",
+        ]
+        with principal_scope(ALICE):
+            assert [row.id for row in auto_accept.get_policy_rows()] == [row_id]
+
     def test_adds_a_rule_with_a_list_value_from_comma_separated_text(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
         app, sessions = _app()
@@ -674,7 +699,7 @@ def _stale_grist_rule():
 
 
 def _catalogue_rules_for(group: str, verbs: list[str], value: list | None = None) -> list:
-    return policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs(verbs))
+    return _stored(policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs(verbs)))
 
 
 class TestUpdateRule:

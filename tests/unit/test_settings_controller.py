@@ -33,10 +33,13 @@ import pytest
 from privacyfence import auto_accept, daemon_main, org_mode, resource_names, scoped_tokens, settings_controller as sc, update_checker
 from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
-from privacyfence import peek_client
+from privacyfence import peek_client, policy_upgrade
+from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import engine as policy_engine
 from privacyfence.policy import propose as policy_propose
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
+from privacyfence.policy.registry import Verb
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -1893,10 +1896,10 @@ class TestPolicyScopeCatalogue:
 
 
 class TestAddPolicyRule:
-    """add_policy_rule is the Auto-accept page's one writer, straight to the on-disk v2
+    """add_policy_rule is the Auto-accept page's one writer, straight to the on-disk version-3
     ``auto_accept:`` section -- never through v1's auto_accept_rules/auto_accept_grants."""
 
-    def test_adds_a_scope_rule_to_the_v2_section(self, controller):
+    def test_adds_a_scope_row_to_the_version_3_section(self, controller):
         state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read", "download"])
 
         rules = state["auto_accept"]["rules"]
@@ -1906,7 +1909,8 @@ class TestAddPolicyRule:
         assert "FOLDER1" in rules[0]["value"]
 
         cfg = controller._load_config()
-        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["predicate"] == "approved_folder"
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["version"] == 3
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["scope"] == "drive.folder"
         # Writes only the current section: nothing a later load_config would refuse, and no marker.
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
@@ -1967,6 +1971,81 @@ class TestAddPolicyRule:
         assert rule_id == rules[0].id
 
 
+class TestPolicyRuleRows:
+    """The three rule writers work on rows, and upgrade a version-2 section first."""
+
+    def test_two_adds_on_one_scope_leave_one_row(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["update"])
+
+        # Asserts on the stored rows, not the snapshot: the snapshot's shape is not this
+        # writer's concern.
+        (row,) = scope_rows.rows_from_config(controller._load_config())
+        assert row.id == scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        assert row.verbs == {Verb.READ, Verb.UPDATE}
+
+    def test_add_upgrades_a_version_2_section_first(self, controller):
+        cfg = controller._load_config()
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(
+            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["FOLDER1"], [Verb.READ])
+        )
+        controller._save_and_reload_policy_v2(cfg)
+
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["update"])
+
+        section = controller._load_config()[policy_store.AUTO_ACCEPT_CONFIG_KEY]
+        assert section["version"] == 3
+        (row,) = scope_rows.rows_from_config(controller._load_config())
+        assert row.verbs == {Verb.READ, Verb.UPDATE}
+
+    def test_remove_by_row_id(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER2", ["read"])
+        keep = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        drop = scope_rows.row_id_for("drive.folder", ["FOLDER2"])
+
+        controller.remove_policy_rule(drop)
+
+        assert [r.id for r in scope_rows.rows_from_config(controller._load_config())] == [keep]
+
+    def test_update_fills_missing_on_row(self, controller):
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
+        cfg = controller._load_config()
+        (row,) = scope_rows.rows_from_config(cfg)
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = scope_rows.rows_to_config(
+            [dataclasses.replace(row, operations=row.operations - {"grist.import_csv"})]
+        )
+        controller._save_and_reload_policy_v2(cfg)
+
+        controller.update_policy_rule(row.id)
+
+        (updated,) = scope_rows.rows_from_config(controller._load_config())
+        assert updated.operations == row.operations
+
+    def test_writer_refuses_when_upgrade_fails(self, controller, monkeypatch):
+        cfg = controller._load_config()
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(
+            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["FOLDER1"], [Verb.READ])
+        )
+        controller._save_and_reload_policy_v2(cfg)
+        monkeypatch.setattr(policy_upgrade, "ensure_scope_rows", lambda *a, **k: False)
+        before = controller._load_config()
+        row_id = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+
+        for write in (
+            lambda: controller.add_policy_rule("drive.folder", "FOLDER2", ["read"]),
+            lambda: controller.remove_policy_rule(row_id),
+            lambda: controller.update_policy_rule(row_id),
+        ):
+            controller.error = ""
+            write()
+            assert controller.error == (
+                "Auto-accept rules could not be upgraded to the new format; "
+                "restart PrivacyFence and try again."
+            )
+            assert controller._load_config() == before
+
+
 class TestRemovePolicyRule:
     def test_removes_by_id(self, controller):
         state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
@@ -1995,10 +2074,11 @@ class TestUpdatePolicyRule:
         read/create/update, the operation list lacks ``grist.import_csv``."""
         controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
         cfg = controller._load_config()
-        (rule,) = policy_store.compile_rules_from_config(cfg)
-        stale = dataclasses.replace(rule, operations=rule.operations - {"grist.import_csv"})
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config([stale])
+        (row,) = scope_rows.rows_from_config(cfg)
+        stale_row = dataclasses.replace(row, operations=row.operations - {"grist.import_csv"})
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = scope_rows.rows_to_config([stale_row])
         controller._save_and_reload_policy_v2(cfg)
+        (stale,) = scope_rows.compile_row(stale_row)
         return stale
 
     def test_row_carries_the_missing_tools(self, controller):
