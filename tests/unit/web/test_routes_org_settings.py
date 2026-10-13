@@ -89,6 +89,8 @@ def _on_disk_rules(tmp_path, principal_id: str) -> list:
 
 
 def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
+    # Scaffold until scope-rules p7 moves the writers to rows; p7 removes this line and updates these tests to version 3.
+    monkeypatch.setattr("privacyfence.policy_upgrade.ensure_scope_rows", lambda *a, **k: True)
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
     config_dir = tmp_path / "users" / principal_id / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
