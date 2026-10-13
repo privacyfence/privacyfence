@@ -37,6 +37,7 @@ from privacyfence.auto_accept import (
     register_temp_accept,
     remove_policy_v2_rule,
     remove_rules_changed_listener,
+    set_policy_rule_verbs,
     set_rules_changed_listener,
     temp_accept_key,
     update_policy_v2_rule,
@@ -353,6 +354,65 @@ class TestRulesChangedListener:
 
         assert config_path.read_text(encoding="utf-8") == before
         assert calls == []
+
+    def _folder_row(self, tmp_path, verbs):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        add_policy_v2_rules(catalogue.rules_for_catalogue_entry("drive.folder", ["FOLDER1"], verbs))
+        (row,) = auto_accept.get_policy_rows()
+        return config_path, row
+
+    def test_set_policy_rule_verbs_adds_a_verb_keeping_the_id_and_firing_the_listener(self, tmp_path):
+        _, row = self._folder_row(tmp_path, [Verb.READ])
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        assert set_policy_rule_verbs(row.id, [Verb.READ, Verb.UPDATE]) is True
+
+        (after,) = auto_accept.get_policy_rows()
+        assert (after.id, after.value) == (row.id, row.value)
+        assert after.verbs == {Verb.READ, Verb.UPDATE}
+        assert after.operations > row.operations
+        assert auto_accept.get_policy_v2_store_rules() == scope_rows.compile_row(after)
+        assert calls == [1]
+
+    def test_set_policy_rule_verbs_removes_a_verb_and_its_operations(self, tmp_path):
+        _, row = self._folder_row(tmp_path, [Verb.READ, Verb.UPDATE])
+
+        assert set_policy_rule_verbs(row.id, [Verb.READ]) is True
+
+        (after,) = auto_accept.get_policy_rows()
+        assert after.verbs == {Verb.READ}
+        assert after.operations < row.operations
+
+    @pytest.mark.parametrize("rule_id, verbs", [
+        ("no-such-rule", [Verb.READ]),
+        ("ROW", []),
+        ("ROW", [Verb.SEND]),
+    ])
+    def test_set_policy_rule_verbs_refusal_writes_nothing(self, tmp_path, rule_id, verbs):
+        config_path, row = self._folder_row(tmp_path, [Verb.READ])
+        before = config_path.read_text(encoding="utf-8")
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        assert set_policy_rule_verbs(row.id if rule_id == "ROW" else rule_id, verbs) is False
+
+        assert config_path.read_text(encoding="utf-8") == before
+        assert calls == []
+
+    def test_set_policy_rule_verbs_with_the_same_verbs_is_a_no_op(self, tmp_path):
+        config_path, row = self._folder_row(tmp_path, [Verb.READ])
+        before = config_path.read_text(encoding="utf-8")
+
+        assert set_policy_rule_verbs(row.id, [Verb.READ]) is False
+
+        assert config_path.read_text(encoding="utf-8") == before
+
+    def test_set_policy_rule_verbs_requires_an_initialized_config_path(self):
+        with pytest.raises(RuntimeError):
+            set_policy_rule_verbs("some-id", [Verb.READ])
 
     def test_add_policy_v2_rules_writes_version_3(self, tmp_path):
         config_path = tmp_path / "settings.yaml"

@@ -210,6 +210,9 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-aa-sentence { flex: 1 1 260px; min-width: 0; font-size: var(--step-body); color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
 .pf-aa-verbs { display: flex; flex-wrap: wrap; gap: 4px; }
 .pf-aa-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-s); margin-top: 4px; }
+.pf-aa-edit { margin-top: var(--space-s); display: flex; flex-direction: column; gap: var(--space-s); }
+.pf-aa-edit-buttons { display: flex; gap: var(--space-s); }
+.pf-chip[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
 .pf-aa-tools { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.5; overflow-wrap: anywhere; }
 .pf-aa-usage { font-size: 13px; color: var(--muted); }
 .pf-aa-usage-stale { color: var(--warning); font-weight: 650; }
@@ -333,7 +336,7 @@ _JS = r"""
     section: (window.__pfInitialSection || (CAPS.sections.general ? 'general' : 'auto_accept')),
     privacyGroup: null,
     // Auto-accept page -- see renderAutoAccept below for how each is used.
-    aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
+    aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
     stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false,
     // Dismissible client-side only (never sent to Python, same reasoning
@@ -827,6 +830,54 @@ _JS = r"""
     }).join('');
   }
 
+  // A move auto-accepts only when its source AND its destination are both in the one rule's value
+  // list (policy/scopes.py `move_within_approved_folders`, `approved_task_list`). That holds for
+  // exactly these two scopes; Gmail's `move` has no destination, so it needs no pair.
+  var AA_MOVE_PAIR_SCOPES = ['drive.folder', 'tasks.list'];
+
+  function aaMoveNeedsPair(scopeId) {
+    return AA_MOVE_PAIR_SCOPES.indexOf(scopeId) !== -1;
+  }
+
+  function aaPairInvalidText(what) {
+    return 'A ' + what + ' is auto-accepted only when both its source folder and its destination ' +
+      'folder are in the same rule. Enter at least two ids, separated by a comma.';
+  }
+
+  // The "Edit verbs" panel of one rule row: the scope's verbs as toggles, pre-selected with the
+  // row's verbs (ui.aaEdit.verbs), then Save verbs / Cancel. Save carries its own confirm text and
+  // is inert while no verb is selected. `move` cannot be switched on for a pair scope row with
+  // fewer than two value ids.
+  function editVerbsHtml(r) {
+    var chosen = ui.aaEdit.verbs || {};
+    var needsPair = aaMoveNeedsPair(r.scope) && r.value_ids.length < 2;
+    var selected = r.scope_verbs.filter(function (v) { return chosen[v]; });
+    var html = '<div class="pf-aa-edit"><div class="pf-chips pf-caps-row">';
+    r.scope_verbs.forEach(function (verb) {
+      var on = !!chosen[verb];
+      var blocked = verb === 'move' && needsPair && !on;
+      html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
+        '" aria-label="' + esc(verb) + '" data-aa-edit-verb="' + esc(verb) + '"' +
+        (blocked ? ' aria-disabled="true"' : ' tabindex="0"') + '>' + esc(verb) + '</div>';
+    });
+    html += '</div>';
+    if (needsPair && r.scope_verbs.indexOf('move') !== -1) {
+      html += '<div class="pf-hint pf-aa-pair-hint pf-aa-pair-invalid" role="status">' + esc(aaPairInvalidText('move')) + '</div>';
+    }
+    html += '<div class="pf-aa-edit-buttons">';
+    if (selected.length) {
+      html += '<div class="button primary" role="button" tabindex="0" aria-label="Save verbs" data-aa-edit-save="1" data-confirm="' +
+        esc('Change this rule to allow ' + selected.join(', ') + '? Added verbs cover all of their tools. ' +
+          'Tools that only removed verbs cover stop being auto-accepted.') +
+        '" ' + dataAttr('set_policy_rule_verbs', { rule_id: r.id, verbs: selected }) + '>Save verbs</div>';
+    } else {
+      html += '<div class="button primary" role="button" aria-label="Save verbs" aria-disabled="true" data-aa-edit-save="1">Save verbs</div>';
+    }
+    html += '<div class="button" role="button" tabindex="0" aria-label="Cancel" data-aa-edit-cancel="1">Cancel</div>';
+    html += '</div></div>';
+    return html;
+  }
+
   function renderAutoAccept(state) {
     var aa = state.auto_accept;
     var search = (ui.aaSearch || '').trim().toLowerCase();
@@ -879,9 +930,15 @@ _JS = r"""
       html += '<div class="pf-link" role="button" tabindex="0" aria-expanded="' + (isExpanded ? 'true' : 'false') +
         '" aria-label="What this unblocks" data-aa-expand="' + esc(r.id) + '">' + (isExpanded ? '▾' : '▸') +
         ' Unblocks ' + r.covered_tools.length + ' tool' + (r.covered_tools.length === 1 ? '' : 's') + '</div>';
+      var editing = !!(ui.aaEdit && ui.aaEdit.id === r.id);
+      if (r.scope && r.scope_verbs && r.scope_verbs.length) {
+        html += '<div class="pf-link" role="button" tabindex="0" aria-label="Edit verbs" data-aa-edit="' +
+          esc(r.id) + '">Edit verbs</div>';
+      }
       html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
         dataAttr('remove_policy_rule', { rule_id: r.id }) + '>✕ Remove</div>';
       html += '</div>';
+      if (editing) html += editVerbsHtml(r);
       // Tools added after this rule was saved: its verbs name them, its stored operations do not
       // reach them. Widening is only ever this explicit, confirmed click (ADR 0166).
       if (r.missing_tools && r.missing_tools.length) {
@@ -1733,6 +1790,34 @@ _JS = r"""
       return;
     }
 
+    var aaEditEl = e.target.closest('[data-aa-edit]');
+    if (aaEditEl) {
+      var editId = aaEditEl.getAttribute('data-aa-edit');
+      if (ui.aaEdit && ui.aaEdit.id === editId) { ui.aaEdit = null; render(pyState); return; }
+      var editVerbs = {};
+      (pyState.auto_accept.rules || []).forEach(function (r) {
+        if (r.id === editId) r.verbs.forEach(function (v) { editVerbs[v.verb] = true; });
+      });
+      ui.aaEdit = { id: editId, verbs: editVerbs };
+      render(pyState);
+      return;
+    }
+
+    var aaEditVerbEl = e.target.closest('[data-aa-edit-verb]');
+    if (aaEditVerbEl) {
+      if (aaEditVerbEl.getAttribute('aria-disabled') === 'true' || !ui.aaEdit) return;
+      var editVerb = aaEditVerbEl.getAttribute('data-aa-edit-verb');
+      ui.aaEdit.verbs[editVerb] = !ui.aaEdit.verbs[editVerb];
+      render(pyState);
+      return;
+    }
+
+    var aaEditCancelEl = e.target.closest('[data-aa-edit-cancel]');
+    if (aaEditCancelEl) { ui.aaEdit = null; render(pyState); return; }
+
+    var aaEditSaveEl = e.target.closest('[data-aa-edit-save]');
+    if (aaEditSaveEl && aaEditSaveEl.getAttribute('aria-disabled') === 'true') return;
+
     var aaVerbEl = e.target.closest('[data-aa-verb-toggle]');
     if (aaVerbEl) {
       var verb = aaVerbEl.getAttribute('data-aa-verb-toggle');
@@ -1828,6 +1913,7 @@ _JS = r"""
       if (actionEl.tagName === 'INPUT' && actionEl.type === 'checkbox') e.preventDefault();
       var confirmText = actionEl.getAttribute('data-confirm');
       if (confirmText && !window.confirm(confirmText)) return;
+      if (actionEl.hasAttribute('data-aa-edit-save')) ui.aaEdit = null;
       var action = actionEl.getAttribute('data-action');
       var payload = {};
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }
@@ -1861,7 +1947,7 @@ _JS = r"""
   // form isn't about a valued scope with move checked; otherwise {text, invalid}, where
   // invalid blocks "Add rule" until the field holds at least two distinct comma-separated ids.
   function aaPairHint(group) {
-    if (!group || !group.needs_value) return null;
+    if (!group || !group.needs_value || !aaMoveNeedsPair(group.id)) return null;
     var checked = ui.aaCheckedVerbs || {};
     var verbs = ['move'].filter(function (v) { return checked[v] && group.verbs.indexOf(v) >= 0; });
     if (!verbs.length) return null;
@@ -1872,8 +1958,7 @@ _JS = r"""
     if (count >= 2) {
       return { invalid: false, text: 'A ' + what + ' is auto-accepted only when both its source and its destination are in this list.' };
     }
-    return { invalid: true, text: 'A ' + what + ' is auto-accepted only when both its source folder and its destination ' +
-      'folder are in the same rule. Enter at least two ids, separated by a comma.' };
+    return { invalid: true, text: aaPairInvalidText(what) };
   }
 
   function submitAddPolicyRule() {

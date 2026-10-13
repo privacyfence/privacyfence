@@ -56,7 +56,8 @@ def _make_state(**overrides):
         "auto_accept": {
             "rules": [
                 {"id": "r-abc123", "sentence": "Gmail - sender: allow read", "connector": "gmail",
-                 "connector_label": "Gmail", "scope_type": "gmail.sender", "value": "", "value_ids": [],
+                 "connector_label": "Gmail", "scope_type": "gmail.sender", "scope": "gmail.sender",
+                 "scope_verbs": ["read", "download", "move"], "value": "", "value_ids": [],
                  "verbs": [{"verb": "read", "family": "read"}], "covered_tools": ["gmail_get_message"],
                  "match_count": 0, "last_matched": "", "never_matched": True},
             ],
@@ -64,7 +65,7 @@ def _make_state(**overrides):
                 {"id": "drive.folder", "label": "Drive — folder", "connector": "drive", "needs_value": True,
                  "value_hint": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms", "verbs": ["read", "download"]},
                 {"id": "gmail.sender", "label": "Gmail — sender", "connector": "gmail", "needs_value": False,
-                 "value_hint": "", "verbs": ["read", "download", "archive"]},
+                 "value_hint": "", "verbs": ["read", "download", "move"]},
             ],
             "connectors": ["drive", "gmail"],
         },
@@ -280,6 +281,28 @@ class TestAutoAcceptTemplate:
         # The invalid state disables the button and the submit path refuses too.
         assert "pairHint && pairHint.invalid ? ' aria-disabled=\"true\"'" in html
         assert "if (submitHint && submitHint.invalid) return;" in html
+
+    def test_the_move_pair_rule_names_exactly_drive_folder_and_tasks_list(self):
+        """One constant lists the scopes whose move has a source and a destination; the add form's
+        hint and the Edit verbs toggle both go through the helper that reads it."""
+        html = build_html(_make_state())
+        assert "var AA_MOVE_PAIR_SCOPES = ['drive.folder', 'tasks.list'];" in html
+        assert "function aaMoveNeedsPair(scopeId)" in html
+        assert "!aaMoveNeedsPair(group.id)) return null;" in html
+        assert "aaMoveNeedsPair(r.scope) && r.value_ids.length < 2" in html
+
+    def test_edit_verbs_hooks_and_confirm_text_are_present(self):
+        html = build_html(_make_state())
+        assert 'data-aa-edit="' in html
+        assert "data-aa-edit-verb" in html
+        assert "data-aa-edit-save" in html
+        assert "data-aa-edit-cancel" in html
+        assert "dataAttr('set_policy_rule_verbs', { rule_id: r.id, verbs: selected })" in html
+        assert "Change this rule to allow ' + selected.join(', ') + '? Added verbs cover all of their tools. " in html
+        assert "Tools that only removed verbs cover stop being auto-accepted." in html
+        # Custom rows (scope null) get no link; Save is inert while no verb is selected.
+        assert "r.scope && r.scope_verbs && r.scope_verbs.length" in html
+        assert "aria-label=\"Save verbs\" aria-disabled=\"true\"" in html
 
     def test_rule_form_has_no_personal_data_checkbox(self):
         html = build_html(_make_state())

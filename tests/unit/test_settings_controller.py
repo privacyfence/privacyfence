@@ -2180,6 +2180,73 @@ class TestUpdatePolicyRule:
         assert "grist.import_csv" in in_scope.operations
 
 
+class TestSetPolicyRuleVerbs:
+    """set_policy_rule_verbs edits a scoped row's verbs in place (scope_rows.set_verbs)."""
+
+    def _row(self, controller, verbs):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", verbs)
+        (row,) = state["auto_accept"]["rules"]
+        return row
+
+    def test_adding_a_verb_keeps_the_id_and_adds_its_tools(self, controller):
+        row = self._row(controller, ["read"])
+
+        state = controller.set_policy_rule_verbs(row["id"], ["read", "update"])
+
+        (after,) = state["auto_accept"]["rules"]
+        assert after["id"] == row["id"]
+        assert {v["verb"] for v in after["verbs"]} == {"read", "update"}
+        assert set(row["covered_tools"]) < set(after["covered_tools"])
+        assert after["missing_tools"] == []
+
+    def test_removing_a_verb_drops_its_tools(self, controller):
+        row = self._row(controller, ["read", "update"])
+
+        state = controller.set_policy_rule_verbs(row["id"], ["read"])
+
+        (after,) = state["auto_accept"]["rules"]
+        assert {v["verb"] for v in after["verbs"]} == {"read"}
+        assert set(after["covered_tools"]) < set(row["covered_tools"])
+
+    @pytest.mark.parametrize("verbs", [[], ["send"], ["not-a-verb"]])
+    def test_a_refusal_is_a_no_op_that_writes_nothing(self, controller, monkeypatch, verbs):
+        row = self._row(controller, ["read"])
+        before = controller._load_config()
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.set_policy_rule_verbs(row["id"], verbs)
+
+        assert saved == []
+        assert controller._load_config() == before
+
+    def test_an_unknown_id_is_a_no_op_that_writes_nothing(self, controller, monkeypatch):
+        self._row(controller, ["read"])
+        before = controller._load_config()
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.set_policy_rule_verbs("r-does-not-exist", ["read", "update"])
+
+        assert saved == []
+        assert controller._load_config() == before
+
+    def test_unchanged_verbs_write_nothing(self, controller, monkeypatch):
+        row = self._row(controller, ["read"])
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.set_policy_rule_verbs(row["id"], ["read"])
+
+        assert saved == []
+
+    def test_the_row_carries_its_scope_and_scope_verbs(self, controller):
+        row = self._row(controller, ["read"])
+
+        assert row["scope"] == "drive.folder"
+        assert "update" in row["scope_verbs"]
+
+
 class TestAutoAcceptRuleUsage:
     """Rule attribution and staleness: each Auto-accept row's own match_count/last_matched/
     never_matched, from the audit log's rule_id field (see AuditEntry.rule_id's own docstring)."""
