@@ -242,18 +242,6 @@ class TestActionDispatch:
         rules = r.json()["auto_accept"]["rules"]
         assert any(row["connector"] == "gmail" for row in rules)
 
-    def test_add_policy_rule_passes_personal_data(self):
-        controller = sc.SettingsController.__new__(sc.SettingsController)
-        with patch.object(sc.SettingsController, "add_policy_rule", autospec=True) as add_rule:
-            rs._call_action(
-                controller, "add_policy_rule",
-                {"group": "grist.document", "value": "DOC1", "verbs": ["read"], "personal_data": True},
-            )
-
-        add_rule.assert_called_once_with(
-            controller, group="grist.document", value="DOC1", verbs=["read"], personal_data=True,
-        )
-
     def test_bad_argument_type_is_400_not_500(self, client, sessions):
         csrf = _authed(client, sessions)
         r = client.post(

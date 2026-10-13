@@ -106,12 +106,6 @@ class TestSentences:
         rule = PolicyRule(id="r", predicate="i_am_owner", value=None,
                           operations=frozenset({"drive.read_file_contents"}))
         assert describe.rule_sentence(rule) == "Drive - owned by me: allow read"
-    def test_sentence_says_personal_data_is_allowed(self):
-        rule = PolicyRule(id="r", predicate="grist.document", value=["d1"],
-                          operations=frozenset({"grist.read_records"}), allow_personal_data=True)
-        assert describe.rule_sentence(rule).endswith(
-            " - personal data allowed in exports, file downloads and page uploads"
-        )
 
 
     def test_a_condition_rule_says_it_is_unconditional_and_names_the_condition(self):

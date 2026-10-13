@@ -354,7 +354,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "peek_delete_page":                "popup",
 }
 
-# The tools a rule's allow_personal_data flag applies to (ADR 0157): each one's result carries no
+# The tools a scoped token's allow_personal_data flag applies to (ADR 0173): each one's result carries no
 # row (the data goes to a file or to a page the user's own rule names), so the PII scan, which
 # guards the model's context, is not what protects their data.
 PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
@@ -603,8 +603,8 @@ def remove_policy_v2_rule(rule_id: str) -> bool:
 def update_policy_v2_rule(rule_id: str) -> frozenset[str]:
     """Add to the rule with this stable id the operations its own verbs imply today and it lacks
     (``policy.outdated``, ADR 0166), and return the keys added -- empty when the id is unknown or
-    nothing is missing, in which case nothing is written. The id, value, conditions and
-    ``allow_personal_data`` are kept; what is added is computed here, never taken from a caller."""
+    nothing is missing, in which case nothing is written. The id, value and conditions
+    are kept; what is added is computed here, never taken from a caller."""
     import dataclasses
 
     from .policy import outdated

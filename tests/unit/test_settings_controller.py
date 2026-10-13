@@ -1911,18 +1911,9 @@ class TestAddPolicyRule:
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
 
-    def test_add_policy_rule_with_personal_data_stores_the_flag(self, controller):
-        controller.add_policy_rule("grist.document", "DOC1", ["read"], personal_data=True)
-
-        rules = controller._load_config()[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"]
-        assert len(rules) == 1
-        assert rules[0]["allow_personal_data"] is True
-
-    def test_add_policy_rule_personal_data_on_an_unsupported_group_adds_nothing(self, controller):
-        state = controller.add_policy_rule("gmail.label", "Label_1", ["read"], personal_data=True)
-
-        assert state["auto_accept"]["rules"] == []
-        assert policy_store.AUTO_ACCEPT_CONFIG_KEY not in controller._load_config()
+    def test_add_policy_rule_takes_no_personal_data_argument(self, controller):
+        with pytest.raises(TypeError):
+            controller.add_policy_rule("grist.document", "DOC1", ["read"], personal_data=True)
 
     def test_adding_more_verbs_for_the_same_value_widens_the_existing_row(self, controller):
         controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
@@ -2002,7 +1993,7 @@ class TestUpdatePolicyRule:
     def _stale_grist_rule(self, controller):
         """A Grist document rule as saved before the CSV tools existed: the verbs are still
         read/create/update, the operation list lacks ``grist.import_csv``."""
-        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"], personal_data=True)
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
         cfg = controller._load_config()
         (rule,) = policy_store.compile_rules_from_config(cfg)
         stale = dataclasses.replace(rule, operations=rule.operations - {"grist.import_csv"})
@@ -2037,7 +2028,7 @@ class TestUpdatePolicyRule:
         assert row["missing_tools"] == []
         assert "grist_import_csv" in row["covered_tools"]
 
-    def test_update_keeps_the_id_the_value_and_the_personal_data_flag(self, controller):
+    def test_update_keeps_the_id_the_value_and_the_conditions(self, controller):
         stale = self._stale_grist_rule(controller)
 
         controller.update_policy_rule(stale.id)
@@ -2046,7 +2037,6 @@ class TestUpdatePolicyRule:
         assert rule.id == stale.id
         assert rule.value == stale.value
         assert rule.conditions == stale.conditions
-        assert rule.allow_personal_data is True
         assert [r.id for r in policy_store.compile_rules_from_config(controller._load_config())] == [stale.id]
 
     def test_update_leaves_other_rules_untouched(self, controller):

@@ -281,20 +281,12 @@ class TestAutoAcceptTemplate:
         assert "pairHint && pairHint.invalid ? ' aria-disabled=\"true\"'" in html
         assert "if (submitHint && submitHint.invalid) return;" in html
 
-    def test_personal_data_chip_is_rendered_for_a_group_with_a_label(self):
+    def test_rule_form_has_no_personal_data_checkbox(self):
         html = build_html(_make_state())
-        assert "group.personal_data_label" in html
-        assert 'data-aa-personal-data="1"' in html
-        assert "closest('[data-aa-personal-data]')" in html
-        assert "ui.aaPersonalData = !ui.aaPersonalData" in html
-        # Switching group drops a choice that belonged to the previous one.
-        assert "ui.aaGroup = el.value;\n      ui.aaValue = '';\n      ui.aaCheckedVerbs = {};\n      ui.aaPersonalData = false;" in html
-
-    def test_add_rule_posts_personal_data(self):
-        html = build_html(_make_state())
-        assert "personal_data: !!ui.aaPersonalData" in html
-        # The flag is cleared once the rule is submitted.
-        assert "ui.aaValue = '';\n    ui.aaPersonalData = false;" in html
+        assert "data-aa-personal-data" not in html
+        assert "personal_data_label" not in html
+        assert "aaPersonalData" not in html
+        assert "verbs: checked });" in html
 
     def test_filter_bar_wired(self):
         html = build_html(_make_state())

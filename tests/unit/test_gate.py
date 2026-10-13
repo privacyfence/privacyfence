@@ -2090,10 +2090,9 @@ class TestPersonalDataRules:
 
     @staticmethod
     def _install(monkeypatch, *, predicate="grist.document", value=("doc1",), operation="grist.read_records",
-                 allow_personal_data=False) -> PolicyRule:
+                 ) -> PolicyRule:
         rule = policy_store.merge_rules([PolicyRule(
             id="", predicate=predicate, value=list(value), operations=frozenset({operation}),
-            allow_personal_data=allow_personal_data,
         )])[0]
         monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
@@ -2137,7 +2136,7 @@ class TestPersonalDataRules:
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
     async def test_unscoped_call_never_lets_personal_data_through(self, monkeypatch, audit_dir):
-        self._install(monkeypatch, allow_personal_data=True)
+        self._install(monkeypatch)
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
@@ -2147,7 +2146,7 @@ class TestPersonalDataRules:
         assert len(popups) == 1
 
     async def test_token_without_flag_keeps_the_scan(self, monkeypatch, audit_dir):
-        rule = self._install(monkeypatch, allow_personal_data=True)
+        rule = self._install(monkeypatch)
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
