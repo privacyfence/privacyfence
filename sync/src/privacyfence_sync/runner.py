@@ -122,7 +122,7 @@ async def _tool_step(
     if step.tool in EXPORT_TOOLS:
         args["destination_dir"] = str(work_dir)
         result = await _call(client, step, step.tool, args, attended, out)
-        await _receive_file(step, result, work_dir / str(step.args["file_name"]), client)
+        await _receive_file(step, result, work_dir / str(step.args["file_name"]), client, work_dir)
         return
     if step.tool in DOWNLOAD_TOOLS:
         holder = work_dir / f".download-{step.id}"
@@ -130,7 +130,7 @@ async def _tool_step(
         args["destination_dir"] = str(holder)
         try:
             result = await _call(client, step, step.tool, args, attended, out)
-            await _receive_file(step, result, work_dir / str(step.save_as), client)
+            await _receive_file(step, result, work_dir / str(step.save_as), client, work_dir)
         finally:
             shutil.rmtree(holder, ignore_errors=True)
         return
@@ -191,12 +191,14 @@ async def _call(
     return await client.call(tool, args)
 
 
-async def _receive_file(step: ToolStep, result: Any, dest: Path, client: SyncClient) -> None:
+async def _receive_file(step: ToolStep, result: Any, dest: Path, client: SyncClient, work_dir: Path) -> None:
     delivery = result.get("delivery") if isinstance(result, dict) else None
     if delivery == "local_disk" or (delivery is None and isinstance(result, dict) and result.get("path")):
         if result.get("truncated"):
             raise SyncError(f"step {step.id}: the download was truncated")
         written = Path(result["path"])
+        if written.is_symlink() or not written.resolve().is_relative_to(work_dir.resolve()):
+            raise SyncError(f"step {step.id}: the server named a file outside the work folder")
         if written != dest:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(written), dest)

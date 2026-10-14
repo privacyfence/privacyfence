@@ -369,10 +369,10 @@ python <run> <args...>
   small check after your plan step: it reads the plan's summary and exits non-zero on warnings, a
   row count that moved more than you expect, or an empty parse. Nothing after it runs, and a
   person looks at it.
-- **Environment.** The script runs in the work folder and gets your environment **without** any
-  variable whose name starts with `PRIVACYFENCE_`, so it never sees the token. It has no
-  PrivacyFence access: everything it needs comes in as files, and everything it produces goes out
-  as files. It may read and write your own files elsewhere (state, run history).
+- **Environment.** The script runs in the work folder and gets your environment without any
+  variable whose name starts with `PRIVACYFENCE_`, and without the variable `--token-env` names, so
+  it never sees the token. It runs as you, so it can read anything you can, including the stored
+  sign-in file.
 - The script's own folder is on its import path, so it can import modules that sit next to it.
   The work folder is not, so a file that lands there is never imported by accident.
 - `run` must be inside the recipe's folder. Keep the recipe, its scripts and templates in one
