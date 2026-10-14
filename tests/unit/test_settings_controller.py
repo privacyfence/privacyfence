@@ -2880,11 +2880,14 @@ def _run_pair(work, done) -> None:
 
 class TestPrivacyPolicyFailClosed:
     def test_set_category_policy_rejects_an_unknown_policy(self, controller):
-        before = controller._config_path and open(controller._config_path, encoding="utf-8").read()
+        with open(controller._config_path, encoding="utf-8") as fh:
+            before = fh.read()
 
         controller.set_category_policy("gmail", "body", "allow_everything")
 
-        assert open(controller._config_path, encoding="utf-8").read() == before
+        with open(controller._config_path, encoding="utf-8") as fh:
+            after = fh.read()
+        assert after == before
 
     def test_a_failed_privacy_filter_reload_is_logged(self, controller, monkeypatch, caplog):
         monkeypatch.setattr(
