@@ -1,0 +1,106 @@
+<title>Salesforce Write Checks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one narrow reading column; phases as bands, each check as a numbered list with tick boxes. */
+:root {
+  --bg: #f5f7fb; --surface: #ffffff; --fg: #18202e; --muted: #5a6577;
+  --line: #d9dfea; --accent: #0b6bcb; --accent-soft: #e3effb; --ok: #1d7a46;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11161f; --surface: #182030; --fg: #e6ebf3; --muted: #9aa6b8;
+  --line: #2a3446; --accent: #5aa7f0; --accent-soft: #1b2b42; --ok: #5cc98a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #11161f; --surface: #182030; --fg: #e6ebf3; --muted: #9aa6b8;
+  --line: #2a3446; --accent: #5aa7f0; --accent-soft: #1b2b42; --ok: #5cc98a; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 46rem; margin: 0 auto; padding-block: 32px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 28px; }
+h1 { font-size: 1.7rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-size: 1.05rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0; }
+h3 { font-size: 1.15rem; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 65ch; }
+.lede { color: var(--muted); }
+code { font-family: var(--font-mono); font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: .9rem; }
+.meta b { color: var(--fg); font-weight: 600; }
+ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 10px; }
+ol.steps li { counter-increment: s; display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: start; }
+ol.steps li::before { content: counter(s); font-variant-numeric: tabular-nums; color: var(--muted); min-width: 1.4em; text-align: right; padding-top: 1px; }
+ol.steps input { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--ok); }
+ol.steps li > div { min-width: 0; }
+ol.steps li.done > div { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { display: block; color: var(--muted); font-size: .92rem; margin-top: 2px; }
+.report { border-left: 3px solid var(--accent); padding: 10px 14px; background: var(--accent-soft); border-radius: 0 6px 6px 0; }
+.report pre { margin: 6px 0 0; font-family: var(--font-mono); font-size: .85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.empty { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h2>PrivacyFence · Salesforce write tools</h2>
+    <h1>Hands-on checks for the Salesforce write tools</h1>
+    <p class="lede">These are the steps that only you can do. CI tests the cards with a stand-in for the approval window, and the live lifecycle check runs on the QA runner. What is left is looking at the real cards against a real org.</p>
+  </header>
+
+  <section style="display:flex;flex-direction:column;gap:12px">
+    <h2>Before implementation</h2>
+    <p class="empty">Nothing. You can run <code>/implement</code> straight away.</p>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px">
+    <h2>After implementation, before the PR merges</h2>
+
+    <article class="item" id="ma1">
+      <h3>1. Check a single-record update card and a batch create card against a real Salesforce sandbox</h3>
+      <div class="meta"><span>Takes <b>about 20 minutes</b></span><span>Needs a <b>Salesforce sandbox or developer org</b>, not production</span></div>
+      <ol class="steps" data-group="ma1">
+        <li><input type="checkbox" id="ma1-s1" aria-label="Step 1 done"><div>Check out the PR's branch <code>feature/salesforce-write-tools</code> on your development machine and start the daemon with <code>./scripts/dev_start.sh</code>.
+          <span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/plan/salesforce-write-tools/docs/dev-vs-live-setup.md">dev-vs-live-setup.md</a>. A source run will not start on a machine that has the packaged app installed.</span></div></li>
+        <li><input type="checkbox" id="ma1-s2" aria-label="Step 2 done"><div>In PrivacyFence Settings, make sure Salesforce is signed in to the sandbox. If it is not, use <b>Authenticate…</b> on the Salesforce row.
+          <span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/plan/salesforce-write-tools/docs/salesforce-setup.md">salesforce-setup.md</a>. You do not need to sign in again: the existing <code>api</code> scope already allows writes.</span></div></li>
+        <li><input type="checkbox" id="ma1-s3" aria-label="Step 3 done"><div>In an AI client connected to this daemon (Claude Desktop or Claude Code), ask: <i>"Find a test Account with salesforce_search, then use salesforce_update_record to set its Description to 'PF write test' and its Industry to 'Retail'."</i> Approve the search card.
+          <span class="see">You should see an approval card titled <b>Update Salesforce Record</b>, with the record's name, <b>Fields changed: 2</b>, an <b>Effect</b> line that mentions your org's own automation, and a <b>Field | Current | New</b> table.</span></div></li>
+        <li><input type="checkbox" id="ma1-s4" aria-label="Step 4 done"><div>Look at the card's <b>Always allow</b> offer, but do not accept it. It should offer <b>this object type</b> for Account, and its verbs should include update.</div></li>
+        <li><input type="checkbox" id="ma1-s5" aria-label="Step 5 done"><div>Approve the card. Open the Account in Salesforce.
+          <span class="see">Description and Industry have their new values. No other field changed.</span></div></li>
+        <li><input type="checkbox" id="ma1-s6" aria-label="Step 6 done"><div>Ask for the same update again.
+          <span class="see">No card appears. The assistant gets an error saying every field already has the value given.</span></div></li>
+        <li><input type="checkbox" id="ma1-s7" aria-label="Step 7 done"><div>Ask: <i>"Use salesforce_create_records to create two Contacts on that Account: LastName 'PF test A' and LastName 'PF test B'."</i> <b>Deny</b> the card.
+          <span class="see">The card is titled <b>Create Salesforce Records</b>, shows <b>Records: 2</b>, and has a table with a <b>#</b> column. After you deny it, no Contact exists in Salesforce.</span></div></li>
+        <li><input type="checkbox" id="ma1-s8" aria-label="Step 8 done"><div>Ask again and approve this time. Check in Salesforce that both Contacts exist on the Account, then delete them by hand. PrivacyFence has no delete.</div></li>
+        <li><input type="checkbox" id="ma1-s9" aria-label="Step 9 done"><div>Open the audit log in Settings.
+          <span class="see">There are entries for the update, the denied create and the approved create. None of them shows field values.</span></div></li>
+      </ol>
+      <div class="report">
+        <b>Report back:</b> tick the PR's <code>ma1-real-cards</code> item, and paste one line into the PR:
+        <pre>ma1-real-cards: PASS (update card, no-op refusal, batch create deny+approve, audit) — org: sandbox</pre>
+        If any step failed, write <code>FAIL</code>, the step number and what you saw.
+      </div>
+    </article>
+  </section>
+</div>
+
+<script>
+(function () {
+  var KEY = "pf-sf-write-checks";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  document.querySelectorAll("ol.steps input[type=checkbox]").forEach(function (box) {
+    var li = box.closest("li");
+    box.checked = !!state[box.id];
+    li.classList.toggle("done", box.checked);
+    box.addEventListener("change", function () {
+      state[box.id] = box.checked;
+      li.classList.toggle("done", box.checked);
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    });
+  });
+})();
+</script>
