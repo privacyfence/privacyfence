@@ -795,20 +795,12 @@ class SettingsController:
             # (AuditEntry.security_config_hash) needs to move with it --
             # daemon_main.run_app() only stamps this AuditLogger with a
             # startup-time snapshot, and this is the one place (below every
-            # settings.yaml writer -- _save_and_reload, _save_and_reload_
+            # settings.yaml writer -- _save_and_reload_policy_v2, _save_and_reload_
             # privacy, toggle_pii_detection, ...) that a change actually
             # lands on disk.
             get_audit_logger().set_security_config_hash(compute_security_config_hash(cfg))
         except Exception as exc:
             logger.warning("Could not update audit log's security-config hash: %s", exc)
-
-    def _save_and_reload(self, cfg: dict) -> None:
-        self._save_config(cfg)
-        try:
-            # Triggers a snapshot push, so callers don't need a separate explicit push after this.
-            notify_rules_changed()
-        except Exception as exc:
-            logger.warning("Rule hot-reload failed: %s", exc)
 
     def _save_and_reload_privacy(self, cfg: dict) -> None:
         self._save_config(cfg)
@@ -1828,15 +1820,21 @@ class SettingsController:
         return cfg, policy_scope_rows.rows_from_config(cfg)
 
     def _save_and_reload_policy_v2(self, cfg: dict[str, Any]) -> None:
-        """Persist ``cfg`` and hot-reload the v2 rule cache (``set_policy_v2_store_rules``) plus
-        fire the rules-changed listener broadcast (``notify_rules_changed``, via
-        ``_save_and_reload``) that pushes a fresh snapshot to every open tab and re-checks any
-        pending approval."""
-        self._save_and_reload(cfg)
+        """Persist ``cfg``, hot-reload the v2 rule cache (``set_policy_v2_store_rules``), and only
+        then fire the rules-changed listener broadcast (``notify_rules_changed``) that pushes a
+        fresh snapshot to every open tab and re-checks any pending approval -- the cache is
+        reloaded first so a pending card is re-checked against the new rules. A failed compile
+        empties the cache (fail closed) rather than leaving the old, possibly wider, rules live."""
+        self._save_config(cfg)
         try:
             set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
         except Exception as exc:
             logger.warning("Policy v2 store hot-reload failed: %s", exc)
+            set_policy_v2_store_rules([])
+        try:
+            notify_rules_changed()
+        except Exception as exc:
+            logger.warning("Rule hot-reload failed: %s", exc)
 
     def _resolve_names_async(
         self, rt: GrantResourceType, resource_ids: list[str], client: Any | None
