@@ -135,7 +135,7 @@ from .mcp_auth import (
     single_token_verifier,
 )
 from .mcp_dispatch import McpDispatcher
-from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
+from .oauth_provider import CONSENT_PATH, IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
@@ -549,8 +549,14 @@ def _clear_web_base_url_file() -> None:
 # browsing-context group and nulls its ``window.opener`` -- and a client
 # whose redirect page hands the code back through ``window.opener``
 # (Gemini Enterprise's does) then never exchanges it. Neither path renders
-# a document, so COOP protected nothing on them. ADR 0108.
+# a document, so COOP protected nothing on them. ADR 0108. The consent pages
+# (``CONSENT_PATH``/<id>, ADR 0177) are the one exception to "neither renders a
+# document": they do, but they sit in the same chain and must keep the opener too.
 _OAUTH_POPUP_PATHS = frozenset({"/authorize", IDP_CALLBACK_PATH})
+
+
+def _keeps_popup_opener(path: str) -> bool:
+    return path in _OAUTH_POPUP_PATHS or path.startswith(CONSENT_PATH + "/")
 
 
 class _SecurityHeadersMiddleware:
@@ -629,7 +635,7 @@ class _SecurityHeadersMiddleware:
                 headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
                 headers["cross-origin-opener-policy"] = (
-                    "unsafe-none" if scope.get("path") in _OAUTH_POPUP_PATHS else "same-origin"
+                    "unsafe-none" if _keeps_popup_opener(scope.get("path") or "") else "same-origin"
                 )
                 if self._hsts:
                     headers["strict-transport-security"] = _HSTS
