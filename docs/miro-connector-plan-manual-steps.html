@@ -1,0 +1,259 @@
+<title>Miro Connector Manual Steps</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one reading column; two parts (before / after implementation), each a stack of numbered task cards with a checklist. */
+:root {
+  --bg: #f4f7f8;
+  --surface: #ffffff;
+  --ink: #14212b;
+  --ink-soft: #4a5a66;
+  --line: #d6e0e3;
+  --accent: #167a70;
+  --accent-soft: #e1f2ef;
+  --warn-bg: #fff4e0;
+  --warn-ink: #7a4b00;
+  --code-bg: #eef3f4;
+  --font-body: "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f171c; --surface: #172229; --ink: #e4ecef; --ink-soft: #a3b3bc; --line: #2a3a43;
+    --accent: #4cc2b4; --accent-soft: #163a36; --warn-bg: #3a2b10; --warn-ink: #f3c977; --code-bg: #1d2b33;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f171c; --surface: #172229; --ink: #e4ecef; --ink-soft: #a3b3bc; --line: #2a3a43;
+  --accent: #4cc2b4; --accent-soft: #163a36; --warn-bg: #3a2b10; --warn-ink: #f3c977; --code-bg: #1d2b33;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px; }
+.wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+h1 { font-size: 1.75rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-size: 1.2rem; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.05rem; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--ink-soft); max-width: 65ch; }
+.eyebrow { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 600; }
+.part { display: flex; flex-direction: column; gap: 16px; }
+.part-head { display: flex; flex-direction: column; gap: 4px; border-bottom: 2px solid var(--accent); padding-bottom: 8px; }
+.task { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.task-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: .8rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pill { background: var(--accent-soft); color: var(--ink); border-radius: 999px; padding: 2px 10px; }
+.why { color: var(--ink-soft); font-size: .92rem; }
+ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+ol.steps > li { counter-increment: step; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+ol.steps > li > label { display: contents; cursor: pointer; }
+ol.steps input[type="checkbox"] { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.step-body { min-width: 0; }
+.step-body::before { content: counter(step) ". "; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+li.done .step-body { color: var(--ink-soft); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { display: block; color: var(--ink-soft); font-size: .88rem; margin-top: 2px; }
+code { font-family: var(--font-mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--font-mono); font-size: .84rem; background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.done-when, .report { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); border-radius: 0 6px 6px 0; font-size: .92rem; }
+.secret { background: var(--warn-bg); color: var(--warn-ink); border-radius: 6px; padding: 10px 12px; font-size: .9rem; }
+.progress { font-size: .85rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.codehead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-family: var(--font-mono); font-size: .8rem; color: var(--ink-soft); }
+button.copy { font: inherit; font-size: .8rem; background: var(--accent); color: var(--surface); border: 0; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+button.reset { font: inherit; font-size: .85rem; background: none; border: 1px solid var(--line); color: var(--ink-soft); border-radius: 6px; padding: 4px 10px; cursor: pointer; align-self: flex-start; }
+</style>
+
+<div class="wrap">
+  <header class="part-head" style="border:0;padding:0;gap:8px">
+    <p class="eyebrow">PrivacyFence · plan/miro-connector</p>
+    <h1>Miro connector: the steps only you can do</h1>
+    <p class="lede">Do the two <strong>Before implementation</strong> tasks before you run <code>/implement</code>. The QA-recording phase needs them, and task 2 also confirms how Miro wants its token request. Do the <strong>After implementation</strong> checks once the feature PR is up, and tick them in the PR. Your ticks here are saved in this browser only.</p>
+    <p class="progress" id="progress"></p>
+    <button class="reset" type="button" id="reset">Clear all ticks</button>
+  </header>
+
+  <section class="part" aria-labelledby="before">
+    <div class="part-head">
+      <p class="eyebrow">Part 1</p>
+      <h2 id="before">Before implementation</h2>
+    </div>
+
+    <article class="task" data-task="mb1">
+      <div class="task-head">
+        <h3>1. Create a Miro QA account, Developer team, QA app and two boards</h3>
+        <div class="meta"><span class="pill">mb1-miro-qa-app</span><span>about 25 min</span></div>
+      </div>
+      <p class="why">Phase p10 records live fixtures from the seed board through this app, and the weekly live check adds and changes test sticky notes on the lifecycle board. Use an account that holds nothing real. A free Miro plan is enough: it allows three editable boards, and this needs two.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="mb1-1"><span class="step-body">Sign up for Miro with a dedicated QA e-mail address at <a href="https://miro.com/signup/" target="_blank" rel="noopener">miro.com/signup</a>.<span class="see">You land on the Miro dashboard with a default team.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-2"><span class="step-body">Create a Developer team: follow <a href="https://developers.miro.com/docs/create-a-developer-team" target="_blank" rel="noopener">Miro's "Create a Developer team" page</a> and click its <strong>Create a Developer team</strong> button. Name it <code>PrivacyFence QA</code>.<span class="see">The dashboard now has a second team, marked as a Developer team. Create everything below in this team.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-3"><span class="step-body">Open <a href="https://miro.com/app/settings/user-profile/apps" target="_blank" rel="noopener">Profile settings → Your apps</a> and click <strong>Create new app</strong>. Name it <code>PrivacyFence QA</code>, pick the <code>PrivacyFence QA</code> Developer team, and <strong>tick "Expire user authorization token"</strong> before you click <strong>Create app</strong>.<span class="see">This choice can't be changed later. Without it PrivacyFence refuses the sign-in. If you got it wrong, delete the app and create it again.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-4"><span class="step-body">On the app's page, under <strong>Redirect URI for OAuth2.0</strong>, click <strong>Add</strong>, enter exactly <code>http://localhost:53686/callback</code> and save.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-5"><span class="step-body">Under <strong>Permissions</strong>, tick only <code>boards:read</code> and <code>boards:write</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-6"><span class="step-body">Under <strong>App Credentials</strong>, copy the <strong>Client ID</strong> and the <strong>Client secret</strong> into your password manager as "Miro QA app".<span class="see">The client ID is not secret; the client secret is.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-7"><span class="step-body">In the <code>PrivacyFence QA</code> team, create a board named exactly <code>PrivacyFence QA [QATEST]</code>. On it:
+          <pre>a frame titled           QaFrame [QATEST]
+inside the frame:        sticky note "PrivacyFence QA seed [QATEST]"
+                         sticky note "PrivacyFence QA second [QATEST]"
+outside the frame:       sticky note "PrivacyFence QA outside [QATEST]"
+a connector line         from the "seed" sticky note to the "outside" one
+a tag                    QATEST, on the "seed" sticky note</pre>
+          <span class="see">Put nothing else on this board. The recorder refuses to record when a sticky note lacks <code>[QATEST]</code>.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-8"><span class="step-body">In the same team, create a second board named exactly <code>PrivacyFence QA lifecycle [QATEST]</code>, with one frame titled <code>QaLifecycleFrame [QATEST]</code> (any size).<span class="see">The live check adds test sticky notes here and changes them; it never deletes them, so clear them out by hand now and then.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-9"><span class="step-body">Note both board ids: open each board and take the part of the address after <code>/app/board/</code>, without the trailing <code>/</code>.<span class="see">It looks like <code>uXjVOD6LSME=</code>. Board ids are not secret.</span></span></label></li>
+      </ol>
+      <p class="secret">The client secret lets anyone holding it exchange sign-in codes for your QA account. Never paste it into a chat, the plan, a PR, an issue or a GitHub secret. Its only other copy is the runner's bundle in task 2 (<a href="https://github.com/privacyfence/privacyfence/blob/plan/miro-connector/docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md" target="_blank" rel="noopener">ADR 0019</a>).</p>
+      <p class="done-when"><strong>Done when:</strong> the QA app exists with expiring tokens, only <code>boards:read</code> and <code>boards:write</code>, and the redirect URI <code>http://localhost:53686/callback</code>; its client ID and secret are in your password manager; and both boards exist as described, with their ids noted.</p>
+    </article>
+
+    <article class="task" data-task="mb2">
+      <div class="task-head">
+        <h3>2. Put the app, a Miro token and the board ids on the QA runner</h3>
+        <div class="meta"><span class="pill">mb2-runner-qa-state</span><span>about 20 min</span></div>
+      </div>
+      <p class="why">Phase p10 dispatches <code>qa-record-fixture.yml</code>, which copies <code>~/privacyfence/</code> from the runner into its checkout (<a href="https://github.com/privacyfence/privacyfence/blob/plan/miro-connector/docs/connector-qa.md#persistent-qa-state" target="_blank" rel="noopener">connector-qa.md, Persistent QA state</a>). PrivacyFence's own <code>--miro-oauth</code> doesn't exist until the feature is built, so you get the first token by hand here. The runner then refreshes it on every run and copies the new one back. This request is also the plan's test of whether Miro accepts the token request as a form body.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="mb2-1"><span class="step-body">SSH into the runner host and switch to the runner user (the account whose home holds <code>~/privacyfence/</code>). Keep this shell open for the steps below.</span></label></li>
+        <li><label><input type="checkbox" id="mb2-2"><span class="step-body">Add the app to the runner's QA bundle. This prompts for both values, so the secret never lands in your shell history:
+          <div class="codehead"><span>runner shell</span><button class="copy" type="button" data-copy="code-bundle">Copy</button></div>
+          <pre id="code-bundle">python3 - &lt;&lt;'EOF'
+import getpass, json, os, pathlib
+p = pathlib.Path("~/privacyfence/org/org_config.json").expanduser()
+b = json.loads(p.read_text())
+b["miro"] = {"client_id": input("Miro client id: ").strip(),
+             "client_secret": getpass.getpass("Miro client secret: ").strip()}
+p.write_text(json.dumps(b, indent=2)); os.chmod(p, 0o600)
+print("SIGNED: re-sign it (next step)" if "signature" in b else "ok: unsigned bundle, skip the next step")
+EOF</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb2-3"><span class="step-body">Only if it printed <code>SIGNED</code>: the edit has voided the signature, and every connector on the runner stops until you re-sign. Copy the file to the machine that holds the signing key. From a checkout of <code>main</code> there, run <code>python3 scripts/build_org_bundle.py --merge -o org_config.json --sign-key &lt;key&gt;</code>; <code>--merge</code> keeps the <code>miro</code> section. Copy the file back with mode 600, and delete the copy on the signing machine.</span></label></li>
+        <li><label><input type="checkbox" id="mb2-4"><span class="step-body">Add the same <code>miro</code> section to your own copy of the QA bundle (<code>org_config.qa.json</code>), so that a later rebuild keeps it.</span></label></li>
+        <li><label><input type="checkbox" id="mb2-5"><span class="step-body">In the runner shell, load the two app values without echoing the secret:
+          <pre>read -r  -p "Miro client id: "     MIRO_CLIENT_ID
+read -rs -p "Miro client secret: " MIRO_CLIENT_SECRET; echo
+echo "https://miro.com/oauth/authorize?response_type=code&amp;client_id=$MIRO_CLIENT_ID&amp;redirect_uri=http%3A%2F%2Flocalhost%3A53686%2Fcallback&amp;state=qa"</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb2-6"><span class="step-body">Open the printed address in a browser on your own machine, signed in as the QA account. On Miro's install page, choose the <code>PrivacyFence QA</code> team and click <strong>Install &amp; authorize</strong>.<span class="see">The browser then fails to load <code>http://localhost:53686/callback?code=…</code>. That's expected: nothing listens there. Copy the value of <code>code</code> from the address bar (up to the next <code>&amp;</code>). It is single-use and expires in 10 minutes.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb2-7"><span class="step-body">Back in the runner shell, exchange the code with the credentials in a form body (the way PrivacyFence will):
+          <div class="codehead"><span>runner shell</span><button class="copy" type="button" data-copy="code-token">Copy</button></div>
+          <pre id="code-token">read -rs -p "Code: " MIRO_CODE; echo
+umask 077
+curl -sS -X POST https://api.miro.com/v1/oauth/token \
+  --data-urlencode grant_type=authorization_code \
+  --data-urlencode "client_id=$MIRO_CLIENT_ID" \
+  --data-urlencode "client_secret=$MIRO_CLIENT_SECRET" \
+  --data-urlencode "code=$MIRO_CODE" \
+  --data-urlencode "redirect_uri=http://localhost:53686/callback" \
+  -o ~/miro-token-response.json
+python3 - &lt;&lt;'EOF'
+import json, os, pathlib
+src = pathlib.Path("~/miro-token-response.json").expanduser()
+r = json.loads(src.read_text())
+if "access_token" not in r:
+    raise SystemExit("Miro refused: " + str(r.get("message") or r.get("error") or r))
+if "refresh_token" not in r or "expires_in" not in r:
+    raise SystemExit("No refresh token: the app was not created with 'Expire user authorization token'.")
+rec = {"access_token": r["access_token"], "refresh_token": r["refresh_token"], "expires_at": 0,
+       "team_id": str(r["team_id"]), "user_id": str(r.get("user_id", "")), "scope": r.get("scope", "")}
+dst = pathlib.Path("~/privacyfence/credentials/miro_token.json").expanduser()
+dst.write_text(json.dumps(rec)); os.chmod(dst, 0o600); src.unlink()
+print("ok: form body accepted; team", rec["team_id"], "scope", rec["scope"])
+EOF
+unset MIRO_CODE</pre>
+          <span class="see">It prints <code>ok: form body accepted; team … scope boards:read boards:write</code>. If it prints "Miro refused" instead, do the next step.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb2-8"><span class="step-body">Only if step 7 printed "Miro refused": repeat step 6 for a fresh code. Then run step 7 again with the curl call replaced by the query-string form Miro's SDKs use:
+          <pre>curl -sS -X POST "https://api.miro.com/v1/oauth/token?grant_type=authorization_code&amp;client_id=$MIRO_CLIENT_ID&amp;client_secret=$MIRO_CLIENT_SECRET&amp;code=$MIRO_CODE&amp;redirect_uri=http%3A%2F%2Flocalhost%3A53686%2Fcallback" -o ~/miro-token-response.json</pre>
+          <span class="see">If this one works, write down "query only". The plan then stops at its first phase so the token request can be redesigned.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb2-9"><span class="step-body">Clear the variables: <code>unset MIRO_CLIENT_ID MIRO_CLIENT_SECRET</code>. Check the file: <code>ls -l ~/privacyfence/credentials/miro_token.json</code> shows <code>-rw-------</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb2-10"><span class="step-body">Append the board ids from task 1 to <code>~/privacyfence/tests/fixtures/qa_environment.yaml</code>:
+          <pre>miro:
+  board_id: "&lt;id of PrivacyFence QA [QATEST]&gt;"
+  lifecycle_board_id: "&lt;id of PrivacyFence QA lifecycle [QATEST]&gt;"</pre></span></label></li>
+      </ol>
+      <p class="secret">The token file and the bundle hold live credentials for the QA account. They stay on the runner, mode 600, and nowhere else. The token's refresh window is 60 days. If more than 60 days pass before phase p10 runs, repeat steps 5 to 9.</p>
+      <p class="done-when"><strong>Done when:</strong> on the runner, <code>org/org_config.json</code> has a <code>miro</code> section and still loads (re-signed if it is signed); <code>credentials/miro_token.json</code> has mode 600 and holds <code>access_token</code>, <code>refresh_token</code>, <code>"expires_at": 0</code> and <code>team_id</code>; and <code>qa_environment.yaml</code> has a <code>miro</code> section with <code>board_id</code> and <code>lifecycle_board_id</code>. Then tell the <code>/implement</code> session that both before-steps are done, and whether the token request worked as a <strong>form body</strong> (expected) or <strong>query only</strong>.</p>
+    </article>
+  </section>
+
+  <section class="part" aria-labelledby="after">
+    <div class="part-head">
+      <p class="eyebrow">Part 2</p>
+      <h2 id="after">After implementation</h2>
+    </div>
+
+    <article class="task" data-task="ma1">
+      <div class="task-head">
+        <h3>3. Sign in to Miro from Settings and drive every Miro tool</h3>
+        <div class="meta"><span class="pill">ma1-local-mode-check</span><span>about 40 min</span></div>
+      </div>
+      <p class="why">This is the first real browser sign-in (the live check uses the hand-made token). It also shows what each approval card contains, and that real writes land on the board.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="ma1-1"><span class="step-body">On a machine without a packaged PrivacyFence install, check out <code>feature/miro-connector</code> and start it from source with <code>./scripts/dev_start.sh</code> (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/dev-vs-live-setup.md" target="_blank" rel="noopener">dev-vs-live-setup.md</a>).</span></label></li>
+        <li><label><input type="checkbox" id="ma1-2"><span class="step-body">Build a bundle with the QA app, typing the values only on this machine: <code>python3 scripts/build_org_bundle.py -o org_config.json --miro-client-id &lt;id&gt; --miro-client-secret &lt;secret&gt;</code>. Install it from <strong>Settings → General → Organization Configuration</strong>.<span class="see">The Miro row under <strong>Settings → Connectors</strong> now offers <strong>Authenticate…</strong>.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-3"><span class="step-body">Click <strong>Authenticate…</strong> on the Miro row, choose the <code>PrivacyFence QA</code> team on Miro's page and approve.<span class="see">The tab says you can close it, and Miro shows <strong>Connected</strong>.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-4"><span class="step-body">Connect an AI client to this daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/connect-claude-code.md" target="_blank" rel="noopener">Claude Code</a> is quickest). Ask it to list your Miro boards, show the QA board's details and list its tags.<span class="see">All three answer without an approval card.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-5"><span class="step-body">Ask it to read the items on the QA board, then only the items inside <code>QaFrame [QATEST]</code>, then two items by id, then the connector lines.<span class="see">Each shows a review card with Board, Team and a table of items or lines, with text and no HTML tags. Release each.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-6"><span class="step-body">On the lifecycle board, ask it to add in one request: a yellow sticky note inside <code>QaLifecycleFrame [QATEST]</code>, a card with a due date, a text, a circle shape and a new frame.<span class="see">One approval card lists all five in a table (Type, Text, Position, Size, Frame, Color) and says "New items are added to the board." Approve, and see them on the board.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-7"><span class="step-body">Ask it to connect the new sticky note to the card with a captioned line.<span class="see">The card names both ends by type and text. Approve, and see the line.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-8"><span class="step-body">Ask it to change the sticky note's text and color, move the card into the new frame, and take the sticky note out of its frame.<span class="see">One card with an Item / Field / Current / New table. Approve and check the board. If the plan's p10 found that items can't be taken out of a frame, the client instead gets "Miro's API cannot take an item out of a frame…" before any card.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-9"><span class="step-body">Ask it to rename the lifecycle board, then rename it back. Deny one more write request and see the client report the denial.</span></label></li>
+        <li><label><input type="checkbox" id="ma1-10"><span class="step-body">In <strong>Settings → Auto-accept</strong>, add a <strong>Miro — board</strong> rule for the QA board's id with the verb <strong>read</strong>. Read its items again.<span class="see">No card this time. Reading the lifecycle board still shows a card, and no Miro card ever offered "Always allow".</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-11"><span class="step-body">In Miro, remove the app from the team (<strong>team settings → Apps</strong>, or <a href="https://miro.com/app/settings/user-profile/apps" target="_blank" rel="noopener">Your apps</a>). Ask the client to read the QA board's items again.<span class="see">It fails with "Your Miro sign-in has expired or was revoked…" or "Miro refused the sign-in (HTTP 401)…". <strong>Authenticate…</strong> again restores it.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-12"><span class="step-body">Delete the items this check added on the lifecycle board by hand in Miro. The connector can't delete anything.</span></label></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste one line, for example <code>ma1 local mode: PASS (sign-in, 3 auto, 4 review cards, batch of 5, connector, updates incl. frame move, board rename, rule, revoke)</code>, or <code>FAIL at step N: what you saw</code>.</p>
+    </article>
+
+    <article class="task" data-task="ma2">
+      <div class="task-head">
+        <h3>4. Connect Miro on /connect in an org-mode test deployment</h3>
+        <div class="meta"><span class="pill">ma2-org-mode-check</span><span>about 20 min · only if you run one</span></div>
+      </div>
+      <p class="why">Checks the bundle's <code>miro</code> section, the org redirect URI and the server-side code exchange. No CI job runs an org deployment against Miro.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="ma2-1"><span class="step-body">On the QA app's page in Miro, add the redirect URI <code>https://&lt;server&gt;/oauth/callback/miro</code>, where <code>&lt;server&gt;</code> is your deployment's <code>--server-issuer-url</code>. Keep the localhost one.</span></label></li>
+        <li><label><input type="checkbox" id="ma2-2"><span class="step-body">Add Miro to the test bundle and sign it (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/configuration-reference.md" target="_blank" rel="noopener">configuration-reference.md</a>):
+          <pre>python3 scripts/build_org_bundle.py --merge -o org_config.json \
+  --miro-client-id &lt;id&gt; --miro-client-secret &lt;secret&gt; --sign-key &lt;your signing key&gt;</pre>
+          <span class="see">The output lists <code>https://&lt;server&gt;/oauth/callback/miro</code> among the redirect URIs to register.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-3"><span class="step-body">Install it on the test server and restart the daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md" target="_blank" rel="noopener">org-mode-setup-guide.md</a>). Sign in as a test person, open <code>/connect</code> and click <strong>Connect</strong> on the Miro row.<span class="see">Miro's install page appears; choose the QA team and approve. Back on <code>/connect</code>, Miro shows <strong>Connected</strong>.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-4"><span class="step-body">From an AI client connected as that person, read the QA board's items and release the card.</span></label></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste <code>ma2 org mode: PASS</code>, <code>FAIL at step N: what you saw</code>, or <code>ma2: skipped, no org-mode test deployment</code>.</p>
+    </article>
+  </section>
+</div>
+<script>
+(function () {
+  var KEY = 'pf-miro-manual-steps';
+  function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+  var state = load();
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  function paint() {
+    var done = 0;
+    boxes.forEach(function (b) {
+      b.closest('li').classList.toggle('done', b.checked);
+      if (b.checked) done++;
+    });
+    document.getElementById('progress').textContent = done + ' of ' + boxes.length + ' steps ticked';
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!state[b.id];
+    b.addEventListener('change', function () { state[b.id] = b.checked; save(state); paint(); });
+  });
+  document.getElementById('reset').addEventListener('click', function () {
+    state = {}; save(state); boxes.forEach(function (b) { b.checked = false; }); paint();
+  });
+  document.querySelectorAll('button.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var el = document.getElementById(btn.getAttribute('data-copy'));
+      var text = el.textContent;
+      function selectIt() { var r = document.createRange(); r.selectNodeContents(el); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+      try {
+        navigator.clipboard.writeText(text).then(function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); }, selectIt);
+      } catch (e) { selectIt(); }
+    });
+  });
+  paint();
+})();
+</script>
