@@ -176,9 +176,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0068](0068-step-up-is-turned-on-from-the-ui-and-off-only-by-a-config-edit.md) | Step-up is turned on from the UI and off only by a config edit | Accepted (retroactive) |
 | [0069](0069-require-passkey-with-nothing-enrolled-starts-and-releases-nothing.md) | With `require_passkey` on and nothing enrolled, the daemon starts and releases nothing step-up covers | Accepted (retroactive) |
 | [0070](0070-enabling-a-connector-is-sensitive-and-disabling-is-not.md) | Enabling a connector is a sensitive action, and disabling one is not | Accepted (retroactive) |
-| [0071](0071-audit-log-integrity-is-a-keyed-hash-chain-plus-off-host-forwarding.md) | Audit-log integrity is a keyed hash chain on the host, plus off-host forwarding | Accepted (retroactive) |
+| [0071](0071-audit-log-integrity-is-a-keyed-hash-chain-plus-off-host-forwarding.md) | Audit-log integrity is a keyed hash chain on the host, plus off-host forwarding | Accepted (retroactive); amended by 0176 |
 | [0072](0072-org-mode-persists-only-sealed-refresh-tokens.md) | Org mode persists only refresh tokens, each sealed to its bearer | Accepted (retroactive) |
-| [0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md) | An approved write is single-use; an approved read replays within the ledger TTL | Accepted (retroactive) |
+| [0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md) | An approved write is single-use; an approved read replays within the ledger TTL | Accepted (retroactive); amended by 0175 |
 | [0074](0074-auto-accept-rules-are-identified-by-a-content-derived-id.md) | Auto-accept rules are identified by a content-derived id, and decisions are attributed by it | Accepted (retroactive); amended by 0172 |
 | [0075](0075-apps-script-gets-no-run-tool.md) | The Apps Script connector has no tool that runs a script | Accepted (retroactive) |
 | [0076](0076-every-connector-tool-is-advertised-read-only.md) | Every connector tool is advertised to MCP clients as read-only | Superseded by 0086 |
@@ -262,3 +262,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074 |
 | [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164 |
 | [0174](0174-a-rules-verbs-are-edited-in-place.md) | A rule's verbs are edited in place | Accepted; amends 0166 |
+| [0175](0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md) | An approval is bound to the whole request and to what its card showed | Accepted; amends 0073 |
+| [0176](0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md) | A chain-less audit line is accepted only before the first chained line | Accepted; amends 0071 |

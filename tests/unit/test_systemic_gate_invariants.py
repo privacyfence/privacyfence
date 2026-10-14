@@ -41,18 +41,23 @@ guard before this module existed:
 """
 from __future__ import annotations
 
+import ast
 import dataclasses
 import importlib
 import inspect
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence.approvals import binding_key
 from privacyfence.auto_accept import TOOL_TO_GATE, ReviewContext
 from privacyfence.connector import ToolSpec
 from privacyfence.policy.conditions import CONDITION_SELECTORS
+
+from ..helpers import build_stub_args
 
 # Source-scanning assertions over real code, no I/O -- unit per
 # testing-policy.md's seven-layer taxonomy.
@@ -343,3 +348,93 @@ class TestNoOutcomeKeysOnAgentIdentity:
             f"{path.relative_to(SRC_ROOT)} references agent identity -- ADR 0006 Invariant 1: nothing that "
             "decides a gated call may key on a claimed agent_id."
         )
+
+
+def _gated_tool_params() -> list[tuple[str, str]]:
+    specs = _all_tool_specs()
+    return sorted(
+        (tool, p.name)
+        for tool, gate in TOOL_TO_GATE.items() if gate in ("review", "popup")
+        for p in specs[tool].params if p.name != "reason"
+    )
+
+
+def _vary(value):
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return value + 1
+    if isinstance(value, str):
+        return value + "-x"
+    if isinstance(value, list):
+        return [*value, "x"]
+    if isinstance(value, dict):
+        return {**value, "x": 1}
+    return "x"
+
+
+def _function_node(path: Path, name: str, owner: str | None = None) -> ast.AST:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    scope = tree
+    if owner is not None:
+        scope = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == owner)
+    return next(
+        n for n in ast.walk(scope)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+    )
+
+
+def _called_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Call):
+        func = node.func
+        return func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+    return None
+
+
+class TestApprovalBindingCoversTheWholeRequest:
+    """The decision ledger must never release one approval for a request that differs in any
+    argument (ADR 0175)."""
+
+    @pytest.mark.parametrize(("tool", "param"), _gated_tool_params())
+    def test_every_param_of_every_gated_tool_changes_the_key(self, tool, param):
+        stub = build_stub_args(_all_tool_specs()[tool])
+        varied = {**stub, param: _vary(stub.get(param))}
+
+        def key(a):
+            return binding_key(
+                "c", tool, request_args_json=json.dumps(a, sort_keys=True, default=str),
+                policy_args={}, card="",
+            )
+
+        assert key(stub) != key(varied), f"{tool}.{param} does not change the approval binding key"
+
+    def test_the_dispatcher_binds_the_request(self):
+        path = Path(__file__).parents[2] / "src" / "privacyfence" / "web" / "mcp_dispatch.py"
+        call = _function_node(path, "call", owner="McpDispatcher")
+        withs = [
+            w for w in ast.walk(call)
+            if isinstance(w, ast.With)
+            and any(
+                isinstance(n, ast.Await) and _called_name(n.value) == "call"
+                for n in ast.walk(w)
+            )
+        ]
+        assert withs, "McpDispatcher.call has no `with` around the connector.call await"
+        assert any(
+            _called_name(item.context_expr) == "request_args_scope" for w in withs for item in w.items
+        ), "the with around connector.call does not enter request_args_scope(...)"
+
+    def test_the_gate_keys_on_the_whole_request(self):
+        path = Path(__file__).parents[2] / "src" / "privacyfence" / "gate.py"
+        gated = _function_node(path, "gated_call")
+        assigns = [
+            n for n in ast.walk(gated)
+            if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "dedupe_key" for t in n.targets)
+        ]
+        assert len(assigns) == 1
+        value = assigns[0].value
+        assert _called_name(value) == "binding_key"
+        keywords = {k.arg: k.value for k in value.keywords}
+        assert _called_name(keywords.get("request_args_json")) == "current_request_args"
+        assert _called_name(keywords.get("card")) == "card_digest"

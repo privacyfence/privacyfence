@@ -30,6 +30,7 @@ from privacyfence.auto_accept import (
     TOOL_TO_GATE,
     TOOL_TO_OPERATION,
     _attendee_email,
+    _domain_of,
     add_policy_v2_rules,
     add_rules_changed_listener,
     init_config_path,
@@ -132,6 +133,20 @@ class TestDriveSheetsDocsSingleSourceOfTruth:
         for op_key, arg_name in TEMP_ACCEPT_ELIGIBLE_OPERATIONS.items():
             expected = "spreadsheet_id" if op_key.startswith("sheets.") else "file_id"
             assert arg_name == expected, (op_key, arg_name)
+
+
+class TestDomainOf:
+    @pytest.mark.parametrize(
+        "sender,domain",
+        [
+            ("Bob <bob@x.com>", "x.com"),
+            ('"CEO <ceo@trusted.com>" <attacker@evil.com>', "evil.com"),
+            ("no-at-sign", ""),
+            ("x@evil.com@trusted.com", ""),
+        ],
+    )
+    def test_domain_of_the_real_address(self, sender, domain):
+        assert _domain_of(sender) == domain
 
 
 class TestAttendeeEmail:

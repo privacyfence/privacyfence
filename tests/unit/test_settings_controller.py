@@ -314,24 +314,6 @@ class TestConfigHelpers:
 
         controller._save_config({"a": 1})  # must not raise
 
-    def test_save_and_reload_persists_and_triggers_rule_reload(self, controller, monkeypatch):
-        reload_calls = []
-        monkeypatch.setattr(sc, "notify_rules_changed", lambda: reload_calls.append(True))
-
-        section = {"version": 2, "rules": [
-            {"id": "r1", "predicate": "i_am_sender", "value": None, "operations": ["gmail.read_message"],
-             "conditions": []},
-        ]}
-        controller._save_and_reload({"auto_accept": section})
-
-        assert reload_calls == [True]
-        assert controller._load_config()["auto_accept"] == section
-
-    def test_save_and_reload_swallows_reload_failures(self, controller, monkeypatch):
-        monkeypatch.setattr(sc, "notify_rules_changed", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-
-        controller._save_and_reload({})  # must not raise
-
 
 class TestExtractDriveId:
     def test_bare_id_is_accepted_as_is(self):
@@ -1915,6 +1897,79 @@ class TestAddPolicyRule:
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
 
+    @pytest.mark.parametrize("method", ["add", "remove", "set_verbs", "update"])
+    def test_rules_changed_listeners_see_the_new_rule(self, controller, method):
+        """The rule cache is reloaded before the listeners fire, so a listener that re-checks a
+        pending card reads the rules the write just saved, not the previous set."""
+        if method != "add":
+            controller.add_policy_rule("drive.folder", "FOLDER1", ["read", "download"])
+        row_id = next(iter(controller.snapshot()["auto_accept"]["rules"]), {}).get("id")
+        if method == "update":
+            # Strip one operation so the row has something missing for "Update rule" to add.
+            cfg = controller._load_config()
+            cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["operations"].pop()
+            controller._save_and_reload_policy_v2(cfg)
+        seen: list = []
+        def listener() -> None:
+            seen.append(list(auto_accept.get_policy_v2_store_rules()))
+
+        auto_accept.add_rules_changed_listener(listener)
+        try:
+            if method == "add":
+                controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+            elif method == "remove":
+                controller.remove_policy_rule(row_id)
+            elif method == "set_verbs":
+                controller.set_policy_rule_verbs(row_id, ["read"])
+            else:
+                controller.update_policy_rule(row_id)
+        finally:
+            auto_accept.remove_rules_changed_listener(listener)
+        assert seen, "the listener never fired"
+        assert seen[-1] == list(auto_accept.get_policy_v2_store_rules())
+
+    async def test_a_pending_card_is_auto_accepted_when_settings_adds_a_covering_rule(
+        self, controller, tmp_path,
+    ):
+        from privacyfence import approval_ui
+        from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
+        from privacyfence.audit_log import init_audit_logger
+        from privacyfence.web_approval_ui import WebApprovalUI
+
+        init_audit_logger(str(tmp_path))
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+
+        with pytest.raises(ApprovalPending):
+            await gate_module.gated_call(
+                connector="drive", tool="drive_get_file_content", tool_name="Read Drive file",
+                summary="a file", sender="", raw_data=SimpleNamespace(parent_ids=["FOLDER1"]),
+                filtered_data="body", gate="review", preview={}, details_text="body",
+                my_email="me@example.com",
+            )
+        card = registry.list_pending()[0]
+
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+
+        assert card.final_decision == "auto_accepted"
+
+    def test_a_failed_policy_reload_after_a_remove_is_logged_and_leaves_no_wider_rule(
+        self, controller, monkeypatch, caplog,
+    ):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        row_id = controller.snapshot()["auto_accept"]["rules"][0]["id"]
+        assert auto_accept.get_policy_v2_store_rules()
+        monkeypatch.setattr(
+            policy_store, "compile_rules_from_config",
+            lambda cfg: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with caplog.at_level("WARNING"):
+            controller.remove_policy_rule(row_id)
+
+        assert "Policy v2 store hot-reload failed" in caplog.text
+        assert auto_accept.get_policy_v2_store_rules() == []
+
     def test_add_policy_rule_takes_no_personal_data_argument(self, controller):
         with pytest.raises(TypeError):
             controller.add_policy_rule("grist.document", "DOC1", ["read"], personal_data=True)
@@ -2821,3 +2876,25 @@ def _run_pair(work, done) -> None:
         done(False, exc)
     else:
         done(True, result)
+
+
+class TestPrivacyPolicyFailClosed:
+    def test_set_category_policy_rejects_an_unknown_policy(self, controller):
+        with open(controller._config_path, encoding="utf-8") as fh:
+            before = fh.read()
+
+        controller.set_category_policy("gmail", "body", "allow_everything")
+
+        with open(controller._config_path, encoding="utf-8") as fh:
+            after = fh.read()
+        assert after == before
+
+    def test_a_failed_privacy_filter_reload_is_logged(self, controller, monkeypatch, caplog):
+        monkeypatch.setattr(
+            sc, "init_privacy_filter", lambda cfg: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with caplog.at_level("WARNING"):
+            controller.set_default_policy("privacy", "redact")
+
+        assert "Privacy filter hot-reload failed" in caplog.text
