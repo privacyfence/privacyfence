@@ -6,7 +6,7 @@ web/routes_approvals.py (ADR 0033) left this behind as its own small module rath
 forcing it behind a mode adapter with nothing on the other side. Why org
 mode falls back to the IdP at all, and local mode does not, is ADR 0066.
 
-``GET /api/approvals/{id}/stepup/idp`` -> ``GET /oauth/stepup/callback``
+``POST /api/approvals/{id}/stepup/idp`` -> ``GET /oauth/stepup/callback``
 mirrors web/routes_org_identity.py's own ``/login`` flow almost exactly
 (same org_identity.py functions, same single-use ``state``-keyed pending-
 attempt store) with one addition: the callback must re-derive the *same*
@@ -14,6 +14,12 @@ principal the step-up was started for, not merely *a* signed-in principal --
 otherwise a second IdP account signing in through a leaked step-up link
 could authorize someone else's pending decision. See
 ``_StepUpAuthAttemptStore``/``stepup_callback`` below.
+
+The start is a CSRF-checked JSON ``POST`` the card's own button makes
+(``{"result", "choice", "csrf"}``, answered with ``{"redirect": <IdP url>}``),
+never a link: a ``GET`` an agent-supplied URL could trigger would let a page
+the user merely visited start a step-up that releases an approval. A pending
+attempt older than ``_STEP_UP_ATTEMPT_TTL_SECONDS`` is refused at the callback.
 
 ``step_up.require_passkey`` closes this fallback entirely for orgs
 that want hardware-bound WebAuthn as a hard requirement: with it set,
@@ -32,7 +38,7 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse, RedirectResponse, Response
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from .. import org_identity
@@ -72,7 +78,10 @@ class _StepUpAuthAttemptStore:
 
     def pop(self, state: str) -> _StepUpAuthAttempt | None:
         with self._lock:
-            return self._pending.pop(state, None)
+            attempt = self._pending.pop(state, None)
+        if attempt is None or (time.time() - attempt.created_at) > self._ttl:
+            return None
+        return attempt
 
     def _prune(self) -> None:
         now = time.time()
@@ -89,15 +98,26 @@ def build_routes(
     origin = issuer_url.rstrip("/")
 
     async def stepup_idp_start(request: Request) -> Response:
-        """A same-site navigation the user's own click on the failed card's
-        "Verify by signing in again" link makes -- the session cookie *is*
-        present here (unlike the eventual callback, see module docstring)."""
+        """The card's "Verify by signing in again" button posts here (JSON
+        ``{"result", "choice", "csrf"}``) and navigates to the ``redirect`` it
+        gets back -- the session cookie *is* present here (unlike the eventual
+        callback, see module docstring)."""
+        no_store = {"Cache-Control": "no-store"}
         principal = org_session.authenticated(request, sessions)
         if principal is None:
-            return RedirectResponse(
-                f"/login?next=/approvals/{quote(request.path_params['id'])}", status_code=302,
-                headers={"Cache-Control": "no-store"},
-            )
+            return JSONResponse({"error": "signed_out"}, status_code=401, headers=no_store)
+        if not step_up.enabled:
+            return PlainTextResponse("Not found.", status_code=404, headers=no_store)
+        if not org_session.check_origin(request):
+            return PlainTextResponse("Cross-origin request refused.", status_code=403, headers=no_store)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return PlainTextResponse("Invalid step-up request.", status_code=400, headers=no_store)
+        if not org_session.check_csrf(request, body.get("csrf")):
+            return PlainTextResponse("Invalid CSRF token.", status_code=403, headers=no_store)
         if step_up.require_passkey:
             # Not merely unadvertised (_org_step_up_response omits
             # idp_stepup_url) -- the endpoint itself refuses, so a client
@@ -105,14 +125,14 @@ def build_routes(
             # docstring's note on ``step_up.require_passkey``.
             return PlainTextResponse(
                 "This organization requires a passkey for step-up verification; "
-                "IdP re-authentication cannot be used instead.", status_code=403,
+                "IdP re-authentication cannot be used instead.", status_code=403, headers=no_store,
             )
         approval_id = request.path_params["id"]
-        result = request.query_params.get("result", "")
-        choice_raw = request.query_params.get("choice", "")
-        choice = int(choice_raw) if choice_raw.strip().lstrip("-").isdigit() else None
+        result = body.get("result", "")
         if result not in _STEP_UP_RESULTS:
-            return PlainTextResponse("Invalid step-up request.", status_code=400)
+            return PlainTextResponse("Invalid step-up request.", status_code=400, headers=no_store)
+        raw = body.get("choice")
+        choice = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
 
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(16)
@@ -129,7 +149,7 @@ def build_routes(
             idp, redirect_uri=redirect_uri, state=state, code_challenge=code_challenge, nonce=nonce,
             extra_params=extra_params,
         )
-        return RedirectResponse(url, status_code=302, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"redirect": url}, headers=no_store)
 
     async def stepup_callback(request: Request) -> Response:
         # Deliberately does not read the session cookie -- see module
@@ -191,7 +211,7 @@ def build_routes(
         )
 
     return [
-        Route("/api/approvals/{id}/stepup/idp", stepup_idp_start),
+        Route("/api/approvals/{id}/stepup/idp", stepup_idp_start, methods=["POST"]),
         Route("/oauth/stepup/callback", stepup_callback),
     ]
 
