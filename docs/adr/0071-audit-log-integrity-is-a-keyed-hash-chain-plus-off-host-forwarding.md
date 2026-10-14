@@ -6,6 +6,7 @@ Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-10 in
 `docs/security-remediation-plan.md` Phase 3 row 3.6, read it with
 `git show ba1ec76e^:docs/security-remediation-plan.md`, and implemented in `52e9c43a`, merged in
 [#270](https://github.com/privacyfence/privacyfence/pull/270)). Implemented.
+Amended by 0176.
 
 ## Context
 

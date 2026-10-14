@@ -158,7 +158,7 @@ waiting 30 seconds (`web.approvals.adaptive_hold`). When more than one is pendin
 points at a page where you can decide them together.
 
 After you approve, the AI system repeats the original call with the same arguments and gets the
-result. While the approval is pending, the call does nothing: no data is returned, no file is
+result; if an argument differs or the content the card showed has changed, the repeat gets a new card. While the approval is pending, the call does nothing: no data is returned, no file is
 handed out and no change is made. A pending approval nobody decides expires after 15 minutes
 (`web.approvals.pending_ttl_seconds`).
 
