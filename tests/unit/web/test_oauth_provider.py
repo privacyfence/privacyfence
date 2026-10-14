@@ -68,10 +68,19 @@ def _patch_idp_exchange(monkeypatch, *, claims: dict):
     )
 
 
+def _remember_consent(provider: op.OrgOAuthProvider, client, sub: str, redirect_uri: str | None = None) -> None:
+    """The person already allowed ``client`` once, so the IdP callback goes straight to the client."""
+    provider._consents.record(
+        Principal(id=sub), client.client_id,
+        redirect_uri or str(client.redirect_uris[0]),
+    )
+
+
 async def _drive_full_flow(provider: op.OrgOAuthProvider, monkeypatch, client, *, claims: dict, params=None):
     """register -> authorize -> IdP callback -> exchange code -> OAuthToken."""
     await provider.register_client(client)
     params = params or _params()
+    _remember_consent(provider, client, claims["sub"], str(params.redirect_uri))
     _patch_idp_exchange(monkeypatch, claims=claims)
     auth_url = await provider.authorize(client, params)
     import urllib.parse as up
@@ -157,6 +166,7 @@ class TestAuthorizeAndIdpCallback:
         provider = _provider(tmp_path, monkeypatch)
         client = _client_info(redirect_uri="https://claude.example.com/callback")
         await provider.register_client(client)
+        _remember_consent(provider, client, "alice")
         _patch_idp_exchange(monkeypatch, claims={"sub": "alice"})
         auth_url = await provider.authorize(client, _params(state="claudes-own-state"))
         state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
@@ -179,6 +189,7 @@ class TestAuthorizeAndIdpCallback:
         provider = _provider(tmp_path, monkeypatch)
         client = _client_info()
         await provider.register_client(client)
+        _remember_consent(provider, client, "alice")
         _patch_idp_exchange(monkeypatch, claims={"sub": "alice"})
         auth_url = await provider.authorize(client, _params())
         state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
@@ -219,11 +230,182 @@ class TestAuthorizeAndIdpCallback:
         provider = _provider(tmp_path, monkeypatch, policy=policy)
         client = _client_info()
         await provider.register_client(client)
+        _remember_consent(provider, client, "alice")
         _patch_idp_exchange(monkeypatch, claims={"sub": "alice", "email": "alice@acme.com"})
         auth_url = await provider.authorize(client, _params())
         state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
         redirect_url = await provider.handle_idp_callback(state=state, code="idp-code")
         assert "code=" in redirect_url
+
+
+async def _idp_callback_for(provider, monkeypatch, client, *, claims, params=None) -> str:
+    """register -> authorize -> IdP callback; returns where the browser is sent next."""
+    import urllib.parse as up
+    await provider.register_client(client)
+    _patch_idp_exchange(monkeypatch, claims=claims)
+    auth_url = await provider.authorize(client, params or _params())
+    state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
+    return await provider.handle_idp_callback(state=state, code="idp-code")
+
+
+class TestConsent:
+    """ADR 0177: no code until the person has allowed the client."""
+
+    async def test_authorize_shows_client_name_and_redirect_host_before_issuing_a_code(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        client.client_name = "Claude"
+        location = await _idp_callback_for(
+            provider, monkeypatch, client, claims={"sub": "alice", "email": "alice@acme.com"},
+        )
+        assert location.startswith(op.CONSENT_PATH + "/")
+        view = provider.consent_view(location.rsplit("/", 1)[1])
+        assert view is not None
+        assert view.client_name == "Claude"
+        assert view.redirect_host == "claude.example.com"
+        assert view.principal_label == "alice@acme.com"
+
+    async def test_idp_callback_does_not_issue_a_code_until_consent_is_posted(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        location = await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "alice"})
+        assert "code=" not in location
+        assert provider._codes == {}
+
+        consent_id = location.rsplit("/", 1)[1]
+        csrf = provider.consent_view(consent_id).csrf
+        redirect = provider.decide_consent(consent_id, csrf=csrf, allow=True)
+
+        assert redirect.startswith("https://claude.example.com/callback?")
+        assert "code=" in redirect
+        assert len(provider._codes) == 1
+
+    async def test_consent_post_requires_csrf(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        location = await _idp_callback_for(provider, monkeypatch, _client_info(), claims={"sub": "alice"})
+        consent_id = location.rsplit("/", 1)[1]
+
+        with pytest.raises(ValueError):
+            provider.decide_consent(consent_id, csrf="wrong", allow=True)
+
+        assert provider._codes == {}
+        assert provider.consent_view(consent_id) is None  # consumed, even though the csrf was wrong
+
+    async def test_a_remembered_consent_skips_the_page(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        first = await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "alice"})
+        consent_id = first.rsplit("/", 1)[1]
+        provider.decide_consent(consent_id, csrf=provider.consent_view(consent_id).csrf, allow=True)
+
+        second = await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "alice"})
+
+        assert second.startswith("https://claude.example.com/callback?")
+        assert "code=" in second
+
+    async def test_a_consent_for_one_redirect_uri_does_not_cover_another(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        client.redirect_uris = [AnyUrl("https://claude.example.com/callback"), AnyUrl("https://other.example.com/cb")]
+        _remember_consent(provider, client, "alice", "https://claude.example.com/callback")
+
+        location = await _idp_callback_for(
+            provider, monkeypatch, client, claims={"sub": "alice"},
+            params=_params(redirect_uri="https://other.example.com/cb"),
+        )
+
+        assert location.startswith(op.CONSENT_PATH + "/")
+
+    async def test_a_consent_does_not_carry_over_to_another_person(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _remember_consent(provider, client, "alice")
+
+        location = await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "bob"})
+
+        assert location.startswith(op.CONSENT_PATH + "/")
+
+    async def test_deny_returns_access_denied_to_the_client(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        location = await _idp_callback_for(
+            provider, monkeypatch, _client_info(), claims={"sub": "alice"}, params=_params(state="clients-state"),
+        )
+        consent_id = location.rsplit("/", 1)[1]
+
+        redirect = provider.decide_consent(consent_id, csrf=provider.consent_view(consent_id).csrf, allow=False)
+
+        assert redirect.startswith("https://claude.example.com/callback?")
+        assert "error=access_denied" in redirect
+        assert "state=clients-state" in redirect
+        assert "code=" not in redirect
+        assert provider._codes == {}
+        assert not provider._consents.has(Principal(id="alice"), "claude", "https://claude.example.com/callback")
+
+    async def test_an_expired_consent_is_gone(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        location = await _idp_callback_for(provider, monkeypatch, _client_info(), claims={"sub": "alice"})
+        consent_id = location.rsplit("/", 1)[1]
+        csrf = provider.consent_view(consent_id).csrf
+        real_now = time.time()
+        monkeypatch.setattr(op.time, "time", lambda: real_now + op._PENDING_CONSENT_TTL_SECONDS + 1)
+
+        assert provider.consent_view(consent_id) is None
+        with pytest.raises(ValueError):
+            provider.decide_consent(consent_id, csrf=csrf, allow=True)
+
+    async def test_a_nameless_client_is_shown_as_unnamed_and_a_hostile_name_is_cleaned(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        location = await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "alice"})
+        assert provider.consent_view(location.rsplit("/", 1)[1]).client_name == "An unnamed AI client"
+
+        named = _client_info(client_id="evil")
+        named.client_name = "\u202eEvil\x00 Corp"
+        location = await _idp_callback_for(provider, monkeypatch, named, claims={"sub": "alice"})
+        assert provider.consent_view(location.rsplit("/", 1)[1]).client_name == "Evil Corp"
+
+    async def test_custom_scheme_redirect_shows_its_authority(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info(redirect_uri="cursor://auth/callback")
+        location = await _idp_callback_for(
+            provider, monkeypatch, client, claims={"sub": "alice"},
+            params=_params(redirect_uri="cursor://auth/callback"),
+        )
+        assert provider.consent_view(location.rsplit("/", 1)[1]).redirect_host == "auth"
+
+    async def test_redirect_without_an_authority_shows_the_scheme(self, tmp_path, monkeypatch):
+        assert op.OrgOAuthProvider.redirect_host("myapp:/cb") == "myapp:"
+
+    async def test_too_many_pending_consents_is_refused(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        monkeypatch.setattr(op, "_MAX_PENDING_AUTHORIZATIONS", 1)
+        client = _client_info()
+        await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "alice"})
+        with pytest.raises(ValueError, match="too many pending consents"):
+            await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "alice"})
+
+    async def test_stale_pending_consents_are_pruned(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await _idp_callback_for(provider, monkeypatch, client, claims={"sub": "alice"})
+        real_now = time.time()
+        monkeypatch.setattr(op.time, "time", lambda: real_now + op._PENDING_CONSENT_TTL_SECONDS + 1)
+        await provider.authorize(client, _params())  # prunes
+        assert provider._pending_consents == {}
+
+    async def test_idp_callback_after_ttl_without_a_later_authorize_raises(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        _patch_idp_exchange(monkeypatch, claims={"sub": "alice"})
+        auth_url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
+        real_now = time.time()
+        monkeypatch.setattr(op.time, "time", lambda: real_now + op._PENDING_AUTHORIZATION_TTL_SECONDS + 1)
+
+        with pytest.raises(ValueError, match="invalid or expired"):
+            await provider.handle_idp_callback(state=state, code="idp-code")
 
 
 class TestAuthorizationCodeExchange:
@@ -238,6 +420,7 @@ class TestAuthorizationCodeExchange:
         client = _client_info()
         await provider.register_client(client)
         other_client = _client_info(client_id="someone-else")
+        _remember_consent(provider, client, "alice")
         _patch_idp_exchange(monkeypatch, claims={"sub": "alice"})
         auth_url = await provider.authorize(client, _params())
         import urllib.parse as up
@@ -281,6 +464,7 @@ class TestAuthorizationCodeExchange:
             token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
             admin_group_claim="groups", admin_group_values=("admins",),
         )
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
         monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
         provider = op.OrgOAuthProvider(idp, idp_callback_url=IDP_CALLBACK_URL)
