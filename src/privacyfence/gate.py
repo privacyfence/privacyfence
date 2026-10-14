@@ -18,9 +18,9 @@ postures, chosen per call by whether the active ApprovalUI exposes a
   ``{"status": "approval_pending", "approval_id", "url", ...}`` result
   instead of continuing to block. The human interaction keeps
   running in the background; when it concludes, the outcome lands in
-  approvals.py's decision ledger, keyed by ``(connector, tool,
-  canonical(args))``. Claude re-issuing the identical tool call finds that
-  ledger entry (``_resolve_decision``'s consume_ledger() check, below,
+  approvals.py's decision ledger, keyed by the whole request and what its
+  card showed (approvals.binding_key, ADR 0175). Claude re-issuing the identical tool call finds
+  that ledger entry (``_resolve_decision``'s consume_ledger() check, below,
   which every call -- deferred or not -- makes first) and releases the data
   without a second prompt. There is still no tool that takes an
   ``approval_id`` and returns content: the only path to data is the
@@ -155,7 +155,7 @@ from typing import Any, cast
 from .agent_identity import agent_scope
 from .approval_ui import get_approval_ui
 from .approval_window_html import NARROW, WIDE
-from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, canonical_key
+from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, binding_key, card_digest
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
     PERSONAL_DATA_RULE_TOOLS,
@@ -858,6 +858,36 @@ class reason_scope:  # noqa: N801 (context-manager-style name, like `freeze_time
             _reason_ctx.reset(self._token)
 
 
+_request_args_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "privacyfence_request_args", default=None
+)
+
+
+def current_request_args() -> str | None:
+    """The canonical JSON of the agent's whole tool-call arguments, minus "reason", for the
+    call in progress; None outside McpDispatcher.call (a direct gated_call in a test or a
+    script)."""
+    return _request_args_ctx.get()
+
+
+class request_args_scope:  # noqa: N801 (context-manager-style name, like reason_scope)
+    """Run the wrapped code with the agent's whole request available via
+    current_request_args(). Frozen to a JSON string on entry, so a connector that mutates
+    its own ``args`` dict cannot change what the approval is bound to (ADR 0175)."""
+
+    def __init__(self, args: dict[str, Any]) -> None:
+        self._json = json.dumps(args, sort_keys=True, default=str)
+        self._token: contextvars.Token | None = None
+
+    def __enter__(self) -> "request_args_scope":
+        self._token = _request_args_ctx.set(self._json)
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._token is not None:
+            _request_args_ctx.reset(self._token)
+
+
 async def gated_call(
     *,
     connector: str,
@@ -1069,12 +1099,23 @@ async def gated_call(
 
     # The deferred-protocol registry, if the active ApprovalUI has one (see
     # this module's own docstring) -- None for a registry-less ApprovalUI.
-    # dedupe_key mirrors mcp_dispatch.py's own retry-dedupe key shape (already
-    # retry-stable -- see approvals.canonical_key's docstring); computed
-    # unconditionally, cheaply, since both branches below need it whether or
-    # not a registry is active.
+    # ADR 0175: the connector's policy args leave out what is written (a Slack
+    # message's text, a draft's body) and what a read pages over, so the key also holds
+    # the agent's whole request and a digest of what the card showed. It hashes the
+    # details_text argument, never the derived `details`, whose fallback can differ
+    # between two identical calls. Computed unconditionally: both branches below need it.
     registry = _deferred_registry()
-    dedupe_key = canonical_key(connector, tool, args)
+    dedupe_key = binding_key(
+        connector, tool, request_args_json=current_request_args(), policy_args=args,
+        card=card_digest(
+            gate=gate, summary=summary, sender=sender, details_text=details_text,
+            scan_text="\x00".join(t or "" for t in (pii_scan_text, upload_pii_scan_text, write_content_scan_text)),
+            preview=preview, new_info=new_info, visibility=visibility,
+            preview_tables=preview_tables, preview_blocks=preview_blocks, table_only=table_only,
+            pdf_bytes=pdf_bytes, preview_bytes=preview_bytes, preview_mime_type=preview_mime_type,
+            delivery=delivery,
+        ),
+    )
     _pop_registry_expirations(registry)
 
     # Every exit from this function -- including one triggered by an

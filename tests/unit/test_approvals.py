@@ -17,7 +17,9 @@ from privacyfence.approvals import (
     TooManyPendingApprovalsError,
     _BATCHABLE_KINDS,
     _NON_BATCHABLE_KINDS,
+    binding_key,
     canonical_key,
+    card_digest,
 )
 from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, DenialFeedback
 from privacyfence.principal import Principal, principal_scope
@@ -44,6 +46,69 @@ class TestCanonicalKey:
         assert canonical_key("gmail", "gmail_get_message", None) == canonical_key(
             "gmail", "gmail_get_message", {}
         )
+
+
+def _card(**overrides):
+    kwargs = dict(
+        gate="review", summary="s", sender="a@example.com", details_text="body", scan_text="body",
+        preview={"from": "a", "to": "b"}, new_info={"k": "v"}, visibility={"Body": "shown"},
+        preview_tables=[{"headers": ["h"], "rows": [["c1", "c2"]]}], preview_blocks=None,
+        table_only=False, pdf_bytes=b"pdf", preview_bytes=b"png", preview_mime_type="image/png",
+        delivery="",
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+class TestBindingKey:
+    """The ledger / coalescing key holds the whole request and the card digest (ADR 0175)."""
+
+    @staticmethod
+    def _key(**overrides):
+        kwargs = dict(request_args_json='{"x": 1}', policy_args={"id": "1"}, card="c")
+        kwargs.update(overrides)
+        return binding_key("slack", "slack_send_message", **kwargs)
+
+    def test_identical_inputs_give_the_same_key(self):
+        assert self._key() == self._key()
+
+    def test_a_different_request_gives_a_different_key(self):
+        assert self._key() != self._key(request_args_json='{"x": 2}')
+
+    def test_a_different_policy_arg_gives_a_different_key(self):
+        assert self._key() != self._key(policy_args={"id": "2"})
+
+    def test_a_different_card_gives_a_different_key(self):
+        assert self._key() != self._key(card="d")
+
+    def test_no_request_args_is_allowed(self):
+        assert self._key(request_args_json=None) == self._key(request_args_json=None)
+        assert self._key(request_args_json=None) != self._key()
+
+
+class TestCardDigest:
+    def test_identical_inputs_give_the_same_digest(self):
+        assert card_digest(**_card()) == card_digest(**_card())
+
+    @pytest.mark.parametrize("overrides", [
+        {"details_text": "other"},
+        {"scan_text": "other"},
+        {"sender": "b@example.com"},
+        {"preview": {"from": "a", "to": "changed"}},
+        {"visibility": {"Body": "hidden"}},
+        {"preview_tables": [{"headers": ["h"], "rows": [["c1", "changed"]]}]},
+    ])
+    def test_a_change_to_any_shown_field_changes_the_digest(self, overrides):
+        assert card_digest(**_card(**overrides)) != card_digest(**_card())
+
+    def test_preview_bytes_count_for_a_write(self):
+        assert card_digest(**_card(gate="popup", preview_bytes=b"x")) != card_digest(**_card(gate="popup"))
+
+    def test_preview_bytes_do_not_count_for_a_read(self):
+        assert card_digest(**_card(gate="review", preview_bytes=b"x")) == card_digest(**_card(gate="review"))
+
+    def test_key_order_inside_preview_does_not_matter(self):
+        assert card_digest(**_card(preview={"to": "b", "from": "a"})) == card_digest(**_card())
 
 
 class TestRegisterOrCoalesce:

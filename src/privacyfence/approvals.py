@@ -20,9 +20,9 @@ every method they call: every approval, card, preview or decision read is
 authorized against ``current_principal()``.
 
 The coalescing/ledger key carries the principal too, for the same reason
-web/mcp_dispatch.py's retry-dedupe cache does: ``(connector, tool,
-canonical(args))`` alone collides across two principals who happen to call
-the same tool with the same arguments, and one would be handed the other's
+web/mcp_dispatch.py's retry-dedupe cache does: a key without the principal
+collides across two principals who happen to call the same tool with the
+same arguments, and one would be handed the other's
 decision. ``_by_key`` is keyed on ``(principal_id, dedupe_key)`` here for
 the same reason.
 
@@ -56,8 +56,8 @@ confirmation -- see gate.py's own module docstring):
   block until answered -- see that module).
 - ``finalize()`` resolves the *whole approval* -- the outcome gate.py's own
   interaction driver arrives at after however many UI steps it took. Only
-  finalize() writes the decision ledger (keyed by
-  ``(connector, tool, canonical(args))``, single-use for writes, so one
+  finalize() writes the decision ledger (keyed by the whole request, the
+  policy args and the card digest -- ``binding_key``, ADR 0175; single-use for writes, so one
   approval never releases a second identical write -- ADR 0073) and
   wakes ``wait_async()`` -- the thing gate.py's hold window actually awaits.
 
@@ -81,6 +81,7 @@ await.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -202,6 +203,44 @@ def canonical_key(connector: str, tool: str, args: dict[str, Any] | None) -> str
     the identical tool call always reproduces the identical key.
     """
     return f"{connector}:{tool}:{json.dumps(args or {}, sort_keys=True, default=str)}"
+
+
+def card_digest(
+    *, gate: str, summary: str, sender: str, details_text: str, scan_text: str,
+    preview: dict | None, new_info: dict | None, visibility: dict | None,
+    preview_tables: list | None, preview_blocks: list | None, table_only: bool,
+    pdf_bytes: bytes, preview_bytes: bytes, preview_mime_type: str, delivery: str,
+) -> str:
+    """SHA-256 over everything the approval card shows and everything the PII scan read.
+    Bytes are folded in by their own SHA-256, and only for a write (gate "popup"): a read's
+    thumbnail is fetched best-effort and can differ between two identical calls, while a
+    read's content is already bound through details_text and scan_text."""
+    def _h(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest() if data else ""
+    material = {
+        "gate": gate, "summary": summary, "sender": sender, "details_text": details_text,
+        "scan_text": hashlib.sha256(scan_text.encode("utf-8")).hexdigest(),
+        "preview": preview or {}, "new_info": new_info or {}, "visibility": visibility or {},
+        "preview_tables": preview_tables or [], "preview_blocks": preview_blocks or [],
+        "table_only": table_only, "preview_mime_type": preview_mime_type, "delivery": delivery,
+        "pdf_bytes": _h(pdf_bytes) if gate == "popup" else "",
+        "preview_bytes": _h(preview_bytes) if gate == "popup" else "",
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def binding_key(
+    connector: str, tool: str, *, request_args_json: str | None, policy_args: dict[str, Any] | None,
+    card: str,
+) -> str:
+    """The decision-ledger / coalescing key (ADR 0175): the agent's whole request, the
+    connector's policy args and the card digest, hashed. Re-issuing the identical call over
+    unchanged content reproduces it; any other request, or changed content, does not."""
+    material = json.dumps(
+        {"request": request_args_json, "policy": canonical_key(connector, tool, policy_args), "card": card},
+        sort_keys=True,
+    )
+    return f"{connector}:{tool}:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
 
 
 class ApprovalPending(Exception):
@@ -549,7 +588,8 @@ class PendingApprovalRegistry:
     ) -> tuple[PendingApproval, bool]:
         """Returns ``(approval, created)``. ``created=False`` means an
         identical, not-yet-finalized approval was already outstanding for
-        this exact ``(connector, tool, args)`` and the caller is coalescing
+        this exact request -- the same ``binding_key`` (whole request, policy
+        args and card digest, ADR 0175) -- and the caller is coalescing
         onto it -- the caller must not show a
         second card, only await the existing one.
 
@@ -774,7 +814,8 @@ class PendingApprovalRegistry:
     def consume_ledger(self, dedupe_key: str) -> LedgerHit | None:
         """A re-issued (or coalesced-and-since-finalized) identical call's
         first stop: is there already a decision on file for this exact
-        ``(connector, tool, args)``, *for the calling principal*? Returns a
+        ``binding_key`` (whole request, policy args and card digest, ADR
+        0175), *for the calling principal*? Returns a
         LedgerHit or None. Single-use entries
         (writes) are removed on the read that consumes them; read-gate
         entries stay reusable until ``ledger_ttl``: re-reading data a human
