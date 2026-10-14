@@ -213,7 +213,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md) | A Google API read is retried once when its connection drops; PrivacyFence never retries a write | Accepted |
 | [0106](0106-google-not-found-and-not-shared-errors-reach-the-agent.md) | A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic | Accepted |
 | [0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md) | Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise | Accepted |
-| [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted |
+| [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted; amended by 0177 |
 | [0109](0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md) | Gemini Enterprise is matched by the name its admin registers it with | Accepted |
 | [0110](0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md) | Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command | Accepted |
 | [0111](0111-a-duplicate-release-run-cancels-itself.md) | A duplicate release run cancels itself | Accepted |
@@ -242,7 +242,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0152](0152-which-peek-server-is-used-and-a-token-stays-with-it.md) | Which Peek server is used, and a Peek token stays with the server it was issued for | Accepted |
 | [0153](0153-peek-comments-are-posted-only-through-the-account-comment-endpoint.md) | Peek comments are posted only through the account comment endpoint | Accepted |
 | [0154](0154-peek-visit-stats-carry-names-and-times-never-ip-addresses.md) | Peek visit stats carry counts, visitor names and times, never IP addresses | Accepted |
-| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted; amended by 0157, 0160 |
+| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted; amended by 0157, 0160, 0180 |
 | [0156](0156-grist-export-sql-reads-through-the-sql-endpoint.md) | `grist_export_sql` reads through Grist's SQL endpoint | Accepted; amends 0146 |
 | [0157](0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) | A rule can let personal data through the tools whose result holds no row | Accepted; amends 0155; amended by 0173 |
 | [0158](0158-peek-rules-name-pages-and-cover-only-new-versions.md) | Peek rules name pages and cover only new versions | Accepted |
@@ -264,3 +264,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0174](0174-a-rules-verbs-are-edited-in-place.md) | A rule's verbs are edited in place | Accepted; amends 0166 |
 | [0175](0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md) | An approval is bound to the whole request and to what its card showed | Accepted; amends 0073 |
 | [0176](0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md) | A chain-less audit line is accepted only before the first chained line | Accepted; amends 0071 |
+| [0177](0177-an-org-mode-mcp-client-needs-the-persons-consent-once.md) | An org-mode MCP client needs the person's consent once | Accepted; amends 0108 |
+| [0178](0178-a-sign-in-or-connect-flow-is-finished-in-the-session-that-started-it.md) | A sign-in or connect flow is finished in the session that started it | Accepted |
+| [0179](0179-an-idp-step-up-starts-only-from-the-card-by-post.md) | An IdP step-up starts only from the card, by POST | Accepted |
+| [0180](0180-jira-and-salesforce-csv-exports-neutralise-formula-cells.md) | Jira and Salesforce CSV exports neutralise formula cells | Accepted; amends 0155 |
