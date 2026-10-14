@@ -607,6 +607,18 @@ class TestPreviewBody:
         assert "<script>alert(1)</script>" not in body
         assert "&lt;script&gt;" in body
 
+    def test_a_quote_in_an_image_source_is_escaped(self):
+        body = build_preview_body_html("", image_data_uri='data:image/png;base64,x"><b id=pf>')
+        assert '"><b id=pf>' not in body
+        assert "&quot;&gt;&lt;b id=pf&gt;" in body
+
+    def test_a_quote_in_a_pdf_page_source_is_escaped(self):
+        body = build_preview_body_html(
+            "", pdf_data_uri="data:application/pdf;base64,x", pdf_page_uris=['data:image/png;base64,x"><b id=pf>'],
+            pdf_page_count=1,
+        )
+        assert '"><b id=pf>' not in body
+
     def test_empty_details_text_falls_back_to_a_placeholder(self):
         assert "(no details)" in build_preview_body_html("")
 

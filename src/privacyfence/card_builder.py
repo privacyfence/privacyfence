@@ -8,6 +8,7 @@ WIDE preview pane.
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Callable
 
 from . import (
@@ -170,7 +171,9 @@ def build_card_html(
         else:
             pdf_fallback_text = text_extraction.extract_text(pdf_bytes, "application/pdf")
     image_data_uri = ""
-    if not pdf_data_uri and preview_bytes and preview_mime_type.startswith("image/"):
+    if not pdf_data_uri and preview_bytes and re.fullmatch(
+        r"image/[a-z0-9.+-]+", preview_mime_type.lower(),
+    ):
         image_data_uri = (
             f"data:{preview_mime_type};base64,{base64.b64encode(preview_bytes).decode('ascii')}"
         )

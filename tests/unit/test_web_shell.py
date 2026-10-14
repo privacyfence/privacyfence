@@ -209,6 +209,11 @@ class TestNotifications:
         html = web_shell.wrap("", title="t", active="approvals", notifications_detail="detailed")
         assert 'NOTIFICATIONS_DETAIL = "detailed"' in html
 
+    def test_a_hostile_notifications_detail_cannot_close_the_script(self):
+        html = web_shell.wrap("", title="t", active="approvals", notifications_detail="</script><b>x")
+        assert "</script><b>x" not in html
+        assert html.count("</script>") == html.count("<script")
+
     def test_notifications_enabled_exposed_globally_for_the_settings_card(self):
         # settings_window_html.py's renderNotificationsCard reads this off
         # `window` -- see that module's own comment on why (shared JS with
