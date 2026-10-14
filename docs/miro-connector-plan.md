@@ -19,7 +19,8 @@ The maintainer confirmed the scope while planning:
 - no Enterprise APIs (organizations, teams, projects, audit logs, board export or eDiscovery,
   legal holds, content logs, data classification).
 
-Board comments are left out: Miro's public REST API has no endpoint that reads them (§3.1).
+Board comments are left out: Miro's public REST API has no endpoint that reads them (§3.1). There is
+no tracking issue; this plan is the whole specification.
 
 ## 2. Current state
 
@@ -142,6 +143,13 @@ Line numbers are on `main` at `33757024`.
   in full.
 - **Logging and errors.** No log line, error message, preview dict or audit entry carries a token, the
   client secret, an authorization code or item content. Logs carry the board id and counts only.
+- **Test ids look real.** Item ids in tests are 19-digit strings such as `"3458764549483493025"`, never
+  short numbers: `test_code_no_history.py` reads `#42`-shaped text as an issue number, and the
+  connector formats items as `f"{type} #{id}"`.
+- **The live-check row of `/dod` is owed by the QA phases.** Every phase that touches
+  `src/privacyfence/*_client.py` or `src/privacyfence/connectors/**` before `p11-qa-live`: do not
+  dispatch `connector-live-check.yml`, and report that row as "deferred to p11-qa-live and
+  p12-docs-adrs-retire". Miro has no live check until `p10-qa-recorder` registers one.
 
 ### 3.1 Miro API facts this plan relies on
 
@@ -154,12 +162,13 @@ Sources:
 - Authorization URL `https://miro.com/oauth/authorize`, params `response_type=code`, `client_id`,
   `redirect_uri` and `state`. There is no `scope` parameter: the app's permissions are set in its
   settings in Miro.
-- No PKCE.
-- Token URL `POST https://api.miro.com/v1/oauth/token`, with `grant_type`, `client_id`,
-  `client_secret` and then `code` and `redirect_uri`, or `refresh_token`. The SDKs send these as
-  query parameters. This plan sends them as a form body (§3.2.1); manual step `mb2` confirms Miro
-  accepts that before any phase starts.
-- Token response: `access_token`, `token_type`, `scope` (space-separated), `team_id` and `user_id`.
+- No PKCE: neither the SDKs nor the docs mention one *(docs)*.
+- Token URL `POST https://api.miro.com/v1/oauth/token` *(docs; the spec has no token path)*, with
+  `grant_type`, `client_id`, `client_secret` and then `code` and `redirect_uri`, or
+  `refresh_token`. The SDKs send these as query parameters. This plan sends them as a form body
+  (§3.2.1); manual step `mb2` confirms Miro accepts that before any phase starts.
+- Token response *(SDK types and docs)*: `access_token`, `token_type`, `scope` (space-separated),
+  `team_id` and `user_id`.
   `refresh_token` and `expires_in` come only when the app was created with **"Expire user
   authorization token"** on. That choice is made when the app is created and cannot be changed
   afterwards *(docs)*.
@@ -187,15 +196,20 @@ Sources:
 | `update_board` | `PATCH /v2/boards/{board_id}` body `{name?, description?}` | name ≤ 60, description ≤ 300; never send `policy`, `teamId` or `projectId` |
 | `list_tags` | `GET /v2/boards/{board_id}/tags?limit&offset` | offset paging |
 | `list_items` | `GET /v2/boards/{board_id}/items?type&parent_item_id&limit&cursor` | cursor paging, `limit` 10–50 |
-| `get_item` | `GET /v2/boards/{board_id}/items/{item_id}` | `{id, type, data, style, position{x,y}, geometry{width,height}, parent{id}, modifiedAt}` |
+| `get_item` | `GET /v2/boards/{board_id}/items/{item_id}`, then for the five editable types `GET /v2/boards/{board_id}/{endpoint}/{item_id}` | the generic `GenericItem` has **no `style`** (`{id, type, data, position{x,y}, geometry{width,height}, parent{id}, modifiedAt}`); the per-type answer adds `style` |
 | `list_connectors` | `GET /v2/boards/{board_id}/connectors?limit&cursor` | `{id, startItem{id}, endItem{id}, shape, captions[{content}]}` |
-| `create_items` | `POST /v2/boards/{board_id}/items/bulk` body `[ItemCreate, …]` | 1–20 items, **transactional** (all or none); response `{data: [{id, type, …}]}` |
-| `create_connector` | `POST /v2/boards/{board_id}/connectors` | one per call; frames cannot be endpoints |
+| `create_items` | `POST /v2/boards/{board_id}/items/bulk` body `[ItemCreate, …]` | 1–20 items, **transactional** (all or none); response `{data: [{id, type, …}]}`. `ItemDataCreate` has no frame data, so **frames are not created here** |
+| `create_frame` | `POST /v2/boards/{board_id}/frames` body `{data{title, format, type}, style{fillColor}, position, geometry}` | one per call |
+| `create_connector` | `POST /v2/boards/{board_id}/connectors` | one per call; frames cannot be ends; `startItem.id` must differ from `endItem.id` |
 | `update_item` | `PATCH /v2/boards/{board_id}/{sticky_notes\|cards\|texts\|shapes\|frames}/{item_id}` | partial body `{data?, style?, position?, geometry?}` |
 | `set_parent` | `PATCH /v2/boards/{board_id}/items/{item_id}` body `{"parent": {"id": frame_id}}` | the generic item update accepts only `parent` and `position` |
 
 - **Taking an item out of a frame is undocumented.** This plan sends `{"parent": null}` and
-  `p10-qa-recorder` checks it live (§6).
+  `p11-qa-live` checks it live (§6).
+- **Fill colors of shapes and frames** are documented as one of 16 hex values (`FILL_COLORS` in
+  §3.3); the connector accepts only those. Card border (`cardTheme`) and text color take any
+  `#RRGGBB`.
+- **Search.** `GET /v2/boards?query=` matches a board's name or description.
 - **Never called:**
   - any `DELETE`;
   - `POST /v2/boards` (create board) and `PUT /v2/boards?copy_from` (copy board);
@@ -254,7 +268,7 @@ Sources:
   - Returns the record with the optional keys filled in.
 
 **Token requests** (`exchange_code` and `refresh` both use them)
-- A private `_token_request(form: dict[str, str]) -> dict[str, Any]`:
+- A private `_token_request(form: dict[str, str]) -> tuple[int, dict[str, Any]]`:
   - `requests.post(TOKEN_URL, data=form, timeout=30, allow_redirects=False)`. The credentials go
     in the form body, never in the URL, so no logger that prints a request line can see them.
   - `requests.RequestException` →
@@ -276,21 +290,37 @@ Sources:
   - When the answer carries `scope` and either required scope is missing from it →
     `MiroClientError(f"The Miro app is missing the permission(s) {', '.join(missing)}. Turn on boards:read and boards:write in the app's settings in Miro, then sign in again.")`.
     Extra scopes are not refused; the connector calls nothing beyond §3.1's table.
-  - Returns the record: `expires_at = time.time() + int(expires_in)`; `team_id` and `user_id` as
+  - A 2xx answer without `access_token` or `team_id`, or whose `expires_in` is not a positive
+    number, → `MiroClientError(f"Miro returned an incomplete sign-in answer (no {key}).")`, where
+    `key` is the first of `access_token`, `team_id`, `expires_in` that fails. These checks run
+    before the expiring-token and scope checks, in this order: access_token, team_id,
+    refresh_token/expires_in presence (the non-expiring message), expires_in value, scope.
+  - Returns the record: `expires_at = time.time() + float(expires_in)`; `team_id` and `user_id` as
     `str`; `scope` as given or `""`.
 - `refresh(config, record) -> dict[str, Any]`:
   - Form `grant_type=refresh_token`, `client_id`, `client_secret`, `refresh_token`.
   - 400 or 401 →
     `MiroClientError("Your Miro sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again.")`.
   - Other 4xx → `MiroClientError(f"Miro sign-in refresh failed: {message}")`.
+  - A 2xx answer without `access_token`, or whose `expires_in` is missing or not a positive number,
+    → the "incomplete sign-in answer" message with that key.
   - Returns `{**record, "access_token": …, "refresh_token": <new one, or the old one if absent>, "expires_at": …}`.
 
 **Token provider**
 - `class MiroTokenProvider(config: MiroOAuthConfig, token_file: str, record: dict[str, Any])`.
   - `team_id` property.
-  - `access_token(*, force_refresh: bool = False) -> str` takes a `threading.Lock`. It refreshes
-    when `force_refresh`, or when `record["expires_at"] - 60 <= time.time()`, saves with
-    `save_token_file`, and returns the token. It never re-reads the file.
+  - `access_token(*, force_refresh: bool = False) -> str` takes a `threading.Lock`. When it needs a
+    refresh (`force_refresh`, or `record["expires_at"] - 60 <= time.time()`), it first re-reads the
+    file with `load_token_file`. When that read succeeds and the file's `refresh_token` differs from
+    the one in memory, another instance has already refreshed, and Miro voided the old pair. The
+    provider then adopts the file's record. If that record is still valid
+    (`expires_at - 60 > time.time()`) and `force_refresh` is false, it returns that access token
+    without refreshing. Otherwise it refreshes from the newest record, saves with
+    `save_token_file` and returns the token. A failed re-read (`MiroClientError`) is ignored, and
+    it refreshes from memory.
+    This matters because a refresh voids the old refresh token. Two providers can be alive at once:
+    a Settings rebuild while the old connector still runs, an org registry rebuild, or the recorder
+    on the runner. Without the re-read the second one would sign the person out.
   - `__repr__` hides every token.
 
 **Interactive sign-in**
@@ -307,7 +337,8 @@ Sources:
 
 **Module docstring.** The Miro REST v2 client:
 - the token comes from `miro_auth`;
-- never follows a redirect and never retries a write (ADR 0105's rule);
+- never follows a redirect and never retries a write (ADR 0105's rule). The one repeat is after an
+  HTTP 401, with a refreshed token: Miro ran nothing on a 401, so it is not a retried write;
 - logs board ids and counts only, never a token or item content;
 - calls only the endpoints in §3.1's table.
 
@@ -324,7 +355,7 @@ Sources:
 - `BOARD_ID_RE = re.compile(r"[A-Za-z0-9_\-=+/]{4,64}")`.
 - `ITEM_ID_RE = re.compile(r"[0-9]{1,20}")`.
 - `BOARD_LINK_RE = re.compile(r"https://miro\.com/app/board/([^/?#]+)/?(?:[?#].*)?")`.
-- `normalize_board_id(value: str) -> str`:
+- `normalize_board_id(value: str) -> str` (policy/scopes.py repeats the link rule inline, §3.4):
   - Strips whitespace.
   - When `BOARD_LINK_RE.fullmatch` matches, takes its group and `urllib.parse.unquote`s it.
   - Requires `BOARD_ID_RE.fullmatch`, else `MiroClientError(f"Not a Miro board id or board link: {value!r}")`.
@@ -332,15 +363,16 @@ Sources:
 - Board ids go into paths through `urllib.parse.quote(board_id, safe="")`.
 
 **Dataclasses** (all fields typed)
-- `MiroBoard(id: str, name: str, description: str, team: str, owner: str, created_at: str,
-  modified_at: str, view_link: str)`.
+- `MiroBoard(id: str, name: str, description: str, team: str, created_at: str, modified_at: str,
+  view_link: str)`. No owner: the connector shows no person's name it does not need.
 - `MiroTag(id: str, title: str, color: str)`.
 - `MiroItem(id: str, type: str, content: str, title: str, description: str, due_date: str,
   shape: str, color: str, x: float | None, y: float | None, width: float | None,
   height: float | None, frame_id: str, modified_at: str)`.
   - `content`, `title`, `description` and `shape` come from `data`; `due_date` is `data.dueDate[:10]`.
   - `color` is `style.fillColor` for `sticky_note`, `shape`, `frame` and every other type,
-    `style.cardTheme` for `card`, and `style.color` for `text`.
+    `style.cardTheme` for `card`, and `style.color` for `text`. Only the per-type answer carries
+    `style`, so `color` is `""` for items from `list_items` and filled in by `get_item`.
   - `frame_id` is `parent.id`; missing keys give `""` or `None`.
 - `MiroConnectorLine(id: str, start_item_id: str, end_item_id: str, shape: str, captions: list[str])`.
 
@@ -381,9 +413,13 @@ Sources:
     - sends `type` only when non-empty, and `parent_item_id` only when `frame_id` is non-empty;
     - returns `(items, truncated)`, where `truncated` is `True` when a next cursor remained after
       `max_results` items were collected.
-  - `get_item(board_id, item_id) -> MiroItem`.
+  - `get_item(board_id, item_id) -> MiroItem`: the generic GET. When its `type` is a key of
+    `_TYPE_ENDPOINT`, it then does the per-type GET and parses that answer instead, which carries
+    `style`.
   - `list_connectors(board_id, *, max_results: int) -> tuple[list[MiroConnectorLine], bool]`.
-  - `create_items(board_id, bodies: list[dict[str, Any]]) -> list[MiroItem]`, one bulk POST.
+  - `create_items(board_id, bodies: list[dict[str, Any]]) -> list[MiroItem]`, one bulk POST. It
+    never contains a frame.
+  - `create_frame(board_id, body: dict[str, Any]) -> MiroItem`, one `POST /v2/boards/{id}/frames`.
   - `create_connector(board_id, body: dict[str, Any]) -> str` returns the new id.
   - `update_item(board_id, item_type: str, item_id: str, body: dict[str, Any]) -> None` uses
     `_TYPE_ENDPOINT = {"sticky_note": "sticky_notes", "card": "cards", "text": "texts",
@@ -420,7 +456,7 @@ Sources:
 | Tool | Gate | Params (besides `reason`) | Returns |
 |---|---|---|---|
 | `miro_list_boards` | auto | `query` (str, default `""`), `max_results` (int, default 50, 1–200) | bare list of `{"id","name","team","modified_at","view_link"}` |
-| `miro_get_board` | auto | `board_id` | `{"id","name","description","team","owner","created_at","modified_at","view_link"}` |
+| `miro_get_board` | auto | `board_id` | `{"id","name","team","created_at","modified_at","view_link"}`; no description (free text is content, read only behind a card) and no owner |
 | `miro_list_tags` | auto | `board_id` | bare list of `{"id","title","color"}` |
 | `miro_list_items` | review | `board_id`, `type` (str, default `""`), `frame_id` (str, default `""`), `max_results` (int, default 100, 1–500) | bare list of item dicts |
 | `miro_get_items` | review | `board_id`, `item_ids` (str, ids separated by commas, 1–50) | bare list of item dicts |
@@ -436,7 +472,7 @@ An **item dict** is `dataclasses.asdict(MiroItem)`.
 `Returns` sentence, each sibling by name, and `"Auto-approved."` or `"Requires user approval."`.
 First sentences:
 - `miro_list_boards`: "List the Miro boards this account can open in the connected Miro team, optionally only those matching a search text."
-- `miro_get_board`: "Get one Miro board's name, description, owner and dates."
+- `miro_get_board`: "Get one Miro board's name, team, dates and link."
 - `miro_list_tags`: "List the tags defined on one Miro board."
 - `miro_list_items`: "Read the items on one Miro board, optionally only one type of item or only the items inside one frame."
 - `miro_get_items`: "Read specific items of one Miro board by their ids."
@@ -456,10 +492,16 @@ Two descriptions carry extra sentences:
 - `frame_id`: "Only the items inside this frame (an item id of type frame from miro_list_items). Empty means the whole board."
 - `item_ids`: "Item ids from miro_list_items, separated by commas, 1 to 50."
 - `max_results`: "Most results to return. The result is cut to this many."
-- `query`: "Text to search board names for. Empty lists every board."
+- `query`: "Text to search for in board names and descriptions. Empty lists every board."
 - `name`: "New board name, at most 60 characters. Empty keeps the current name."
 - `description`: "New board description, at most 300 characters. Empty keeps the current description."
-- `items`, `connectors` and `changes`: the formats below, one sentence each, with one example.
+- `items`: "A JSON array of 1 to 20 items, each {\"type\": sticky_note|card|text|shape|frame, ...}. Keys by type: sticky_note content, shape (square or rectangle), width or height, frame_id; card title, description, due_date (YYYY-MM-DD), width, height, frame_id; text content (required), width, frame_id; shape content, shape (rectangle, round_rectangle, circle, triangle, rhombus, star, cloud, ...), width, height, frame_id; frame title, width, height. Every type takes x, y and color: a sticky_note color is a name such as yellow, light_blue or green; a shape or frame color is one of Miro's 16 fill colors such as #fff9b1; a card or text color is any #RRGGBB. Inside a frame x and y are measured from the frame's top-left corner. Content may use simple HTML such as <p> and <strong>. Example: [{\"type\": \"sticky_note\", \"content\": \"Idea\", \"color\": \"yellow\", \"x\": 0, \"y\": 0}]."
+- `connectors`: "A JSON array of 1 to 20 lines, each {\"start_item_id\": ..., \"end_item_id\": ...} with optional shape (straight, elbowed or curved), caption (at most 200 characters) and color (#RRGGBB). The two ends are different existing items that are not frames. Example: [{\"start_item_id\": \"3458764549483493025\", \"end_item_id\": \"3458764549483493026\", \"caption\": \"leads to\"}]."
+- `changes`: "A JSON array of 1 to 20 changes, each {\"id\": <item id>, <key>: <new value>, ...} using the keys miro_create_items allows for that item's type (not type). Set frame_id to a frame's id to move the item into it, or to an empty string to take it out; a change that sets frame_id sets no x or y. Example: [{\"id\": \"3458764549483493025\", \"content\": \"Done\", \"color\": \"green\"}]."
+
+  These three strings are written as Python string literals in the connector, with the quotes
+  escaped as shown; the shape list in `items` is abbreviated with "..." on purpose, and the full
+  list is in the validation message.
 
 **`items` format** (create): a JSON array of 1–20 objects, each with `type` and only the keys its
 type allows:
@@ -483,13 +525,21 @@ type allows:
   - for `sticky_note`, one of `STICKY_COLORS = ("gray", "light_yellow", "yellow", "orange",
     "light_green", "green", "dark_green", "cyan", "light_pink", "pink", "violet", "red",
     "light_blue", "blue", "dark_blue", "black")`;
-  - for every other type, `#RRGGBB` (`re.fullmatch(r"#[0-9A-Fa-f]{6}")`).
+  - for `shape` and `frame`, one of
+    `FILL_COLORS = ("#f5f6f8", "#d5f692", "#d0e17a", "#93d275", "#67c6c0", "#23bfe7", "#a6ccf5",
+    "#7b92ff", "#fff9b1", "#f5d128", "#ff9d48", "#f16c7f", "#ea94bb", "#ffcee0", "#b384bb",
+    "#000000")` (Miro's documented values; compared lower-cased);
+  - for `card` and `text`, `#RRGGBB` (`re.fullmatch(r"#[0-9A-Fa-f]{6}")`).
+- A `bool` is never accepted where a number is expected (`x`, `y`, `width`, `height`), even though
+  Python's `bool` is an `int`.
 - `MIRO_SHAPES` is the 21 values of Miro's `ShapeData.shape` enum: `rectangle`, `round_rectangle`,
   `circle`, `triangle`, `rhombus`, `parallelogram`, `trapezoid`, `pentagon`, `hexagon`, `octagon`,
   `wedge_round_rectangle_callout`, `star`, `flow_chart_predefined_process`, `cloud`, `cross`, `can`,
   `right_arrow`, `left_arrow`, `left_right_arrow`, `left_brace`, `right_brace`.
 
-**Body built per item** (`_item_body(spec) -> dict`, the bulk `ItemCreate`):
+**Body built per item** (`_item_body(spec) -> dict`). For every type but `frame` this is the bulk
+`ItemCreate`. A frame's body is the same dict without `"type"` and `"parent"`, sent to
+`create_frame`.
 - `{"type": t, "data": {...}, "style": {...}, "position": {"x": x, "y": y}, "geometry": {...},
   "parent": {"id": frame_id}}`, leaving out empty `data`, `style`, `geometry` and `parent`.
 - `data` per type:
@@ -505,16 +555,25 @@ type allows:
 - `color` goes to `style.fillColor` (sticky_note, shape, frame), `style.cardTheme` (card) or
   `style.color` (text).
 
+**Order of a create.** Frames in `items` are created first, one `create_frame` each, in the order
+given. Then every other item goes in one `create_items` bulk call, which Miro runs all or none. A
+`frame_id` in `items` must name a frame already on the board; a frame created in the same request
+cannot be a parent. When the request holds no other item, there is no bulk call.
+
 **`connectors` format**: a JSON array of 1–20
-`{"start_item_id", "end_item_id", "shape"?: straight|elbowed|curved, "caption"?: str ≤ 200, "color"?: "#RRGGBB"}`.
+`{"start_item_id", "end_item_id", "shape"?: straight|elbowed|curved, "caption"?: str ≤ 200, "color"?: "#RRGGBB"}`,
+and no other keys.
 - The body is `{"startItem": {"id"}, "endItem": {"id"}, "shape"?, "captions"?: [{"content": caption}], "style"?: {"strokeColor": color}}`.
 - Both ends must be existing items. A missing one is a `MiroNotFound` from `get_item`.
-- A frame cannot be an end.
+- A frame cannot be an end, and the two ends differ.
 
 **`changes` format**: a JSON array of 1–20 `{"id": "<item id>", <field>: <new value>, …}` with at
 least one field.
 - The fields are the create keys of the item's current type, minus `type`.
 - `frame_id` may be `""`, meaning take it out of its frame. Frames take no `frame_id`.
+- A change that carries `frame_id` carries no `x` or `y`: after a move, Miro measures the position
+  from the new parent, so the two are separate changes.
+- A frame's change sends only `title` in `data`, never `format` or `type` again.
 - Ids are distinct.
 - Each change becomes, in order:
   1. one `update_item` with the changed `data`, `style`, `position` and `geometry` groups, when any
@@ -531,24 +590,36 @@ least one field.
 - A text with no content: `ValueError("A text needs non-empty content.")`
 - A bad color for a sticky note:
   `ValueError(f"A sticky_note color must be one of {', '.join(STICKY_COLORS)}.")`
-- A bad color for any other type:
-  `ValueError(f"A {t} color must be a hex color such as #FFD02F.")`
+- A bad color for a shape or frame:
+  `ValueError(f"A {t} color must be one of {', '.join(FILL_COLORS)}.")`
+- A bad color for a card or text:
+  `ValueError(f"A {t} color must be a hex color such as #2D9BF0.")`
 - A bad shape:
   `ValueError(f"Unsupported shape {s!r}. Use one of {', '.join(MIRO_SHAPES)}.")` (sticky notes:
   `"A sticky_note shape must be square or rectangle."`)
-- A number out of range: `ValueError(f"{key} must be a number from 1 to 100000.")`; for x and y,
-  `ValueError("x and y must be numbers.")`
+- A number out of range, or a `bool`: `ValueError(f"{key} must be a number from 1 to 100000.")`;
+  for x and y, `ValueError("x and y must be numbers.")`
 - A bad `due_date`: `ValueError("due_date must be a date written YYYY-MM-DD.")`
 - Text too long: `ValueError(f"{key} is longer than {limit} characters.")`
 - A bad `frame_id`: `ValueError(f"Not a Miro item id: {value!r}")`
+- A `frame_id` that is not a frame on this board (checked with `get_item` before the gate; a
+  `MiroNotFound` counts too): `ValueError(f"Item {frame_id} is not a frame on this board.")`
 - `connectors`:
   `ValueError('connectors must be a JSON array of 1 to 20 {"start_item_id": ..., "end_item_id": ...} objects.')`
 - An unknown end:
   `ValueError(f"Item(s) not found on this board: {', '.join(sorted(missing))}.")`
 - A frame as an end: `ValueError("A connector cannot start or end at a frame.")`
+- The same item at both ends: `ValueError("A connector must join two different items.")`
+- An unknown key in a connector:
+  `ValueError("A connector takes only these keys: caption, color, end_item_id, shape, start_item_id.")`
+- A bad shape: `ValueError("A connector shape must be straight, elbowed or curved.")`
+- A bad color: `ValueError("A connector color must be a hex color such as #2D9BF0.")`
+- A caption over 200 characters: the "longer than" message with key `caption`.
 - `changes`:
   `ValueError('changes must be a JSON array of 1 to 20 {"id": ..., <field>: <new value>} objects with distinct ids and at least one field each.')`
 - An item id not on the board: the same "not found" message.
+- `frame_id` together with `x` or `y`:
+  `ValueError(f"Item {id}: move it into or out of a frame in one change and set its x and y in another.")`
 - A type that cannot be changed:
   `ValueError(f"Item {id} is a {type}; only sticky notes, cards, texts, shapes and frames can be changed.")`
 - `item_ids`: `ValueError("item_ids must be 1 to 50 Miro item ids separated by commas.")`
@@ -588,14 +659,20 @@ least one field.
   - `tool_name="Read Miro Connectors"`, `summary=f"Read {n} connector(s) from {board.name}"`.
   - `new_info={"Connectors": str(n), "Captions": "the caption text of every listed connector"}`.
   - `details_text` is one line per connector,
-    `f"#{c.id}: {c.start_item_id} → {c.end_item_id} {' / '.join(_plain(x) for x in c.captions)}"`.
+    `f"#{c.id}: {c.start_item_id} → {c.end_item_id} {' / '.join(_plain(x) for x in c.captions)}"`,
+    or `"(no connectors)"`. When truncated it is prefixed with
+    `f"Showing the first {max_results} connectors; the board has more.\n\n"`.
   - Table headers `["id", "from", "to", "captions"]`, `table_only=True`.
-- `miro_create_items`: validate, then `_board_info`, then gate, then `create_items`.
+- `miro_create_items`: validate, then `_board_info`, then `get_item` for each distinct `frame_id`
+  (the "not a frame" check), then gate, then the frames and the bulk call in the order above. On a
+  `MiroClientError` after k frames were created, it raises
+  `RuntimeError(f"{exc} Frames created before the error: {', '.join(ids) or 'none'}.")`.
   - `tool_name="Add Miro Items"`, `summary=f"Add {n} item(s) to {board.name}"`,
     `raw_data={"board_id": board_id, "items": bodies}`, `filtered_data=None`, `gate="popup"`.
   - `preview={…, "Items": str(n)}`.
   - `preview_tables=[{"headers": ["Type", "Text", "Position", "Size", "Frame", "Color"], "rows": [...]}]`,
     where Position is `f"{x:g}, {y:g}"`, Size is `f"{w:g} × {h:g}"` with `-` for an unset side,
+    Frame is the parent frame's title (`_cell(_plain(frame.title))`, from the `get_item` check),
     and empty cells are `""`.
   - `details_text=json.dumps(bodies, indent=2, ensure_ascii=False)`.
   - Returns `{"board_id": board_id, "created": [{"id": i.id, "type": i.type} for i in created]}`.
@@ -616,7 +693,10 @@ least one field.
     `f"{item.type} #{item.id}"`. Current comes from the `MiroItem` field of the same name (`x`,
     `y`, `width`, `height`, `color`, `content`, `title`, `description`, `due_date`, `shape`,
     `frame_id`). An empty frame value reads `"(none)"`.
-  - `details_text` is one line per cell, `f"{item.type} #{item.id} {field}: {_cell(old)} → {_cell(new)}"`.
+  - The table is the summary (its cells strip tags and stop at 200 characters).
+    `details_text` is exactly what will be sent:
+    `json.dumps([{"id": …, "type": …, "update": <update_item body or None>, "frame_id": <given value, or omitted>} …], indent=2, ensure_ascii=False)`,
+    so a link target or text past 200 characters is still visible to the approver.
   - On a `MiroClientError` after k items, raises
     `RuntimeError(f"{exc} Items changed before the error: {', '.join(ids) or 'none'}.")`.
 - `miro_update_board`: `tool_name="Update Miro Board"`, `summary=f"Update board {board.name}"`,
@@ -668,8 +748,12 @@ Each description names its siblings.
 - **No `PROPOSABLE_SCOPES` entry.** The approval card never offers "Always allow" for a Miro
   operation. Rules are made on **Settings > Auto-accept** or through
   `privacyfence_propose_policy_change` (ADR 0077, ADR 0144 precedent).
-- **The rule value is the board id**, never its link. The connector normalizes a link before
-  matching.
+- **The rule value is the board id.** The connector normalizes a link before the call reaches the
+  gate. `_miro_board_matches` also normalizes each rule value, so a rule typed as a board link still
+  matches: a value matching `https://miro\.com/app/board/([^/?#]+)/?(?:[?#].*)?` becomes its
+  `urllib.parse.unquote`d group (the same rule as `miro_client.normalize_board_id`, repeated inline
+  so that `policy/` imports no connector client). The value hint and the setup guide still ask for
+  the id.
 
 ### 3.5 Local mode: daemon, Settings and CLI
 
@@ -689,8 +773,9 @@ Each description names its siblings.
           logger.warning("Miro connector disabled: %s", exc)
           failures["miro"] = _classify_connector_failure(exc)
   ```
-  `miro_bundle_settings` and `load_miro_token` are `miro_auth.bundle_settings` and
-  `load_token_file`, imported under those names.
+  `miro_bundle_settings`, `load_miro_token` and `miro_authorize_interactive` are
+  `miro_auth.bundle_settings`, `load_token_file` and `authorize_interactive`, imported under those
+  names (Grist's are imported the same way).
 - `run_miro_oauth(org_config) -> int` and a `--miro-oauth` flag, in the shape of `run_grist_oauth`
   and its flag, `oauth_flag` entry and dispatch:
 
@@ -706,8 +791,10 @@ Each description names its siblings.
 - `authenticate_connector` gains `elif connector == "miro": self._authenticate_miro(org_config)`.
 - `_authenticate_miro` is `_authenticate_salesforce` (`:1302-1328`) with
   `miro_auth.bundle_settings` and `miro_auth.authorize_interactive`:
-  - a missing section sets `self.error = "Miro organization config isn't installed yet."`;
-  - an incomplete one sets `self.error = f"Miro organization config is not usable: {exc}"`;
+  - when `org_config.get("miro")` is empty or missing, it sets
+    `self.error = "Miro organization config isn't installed yet."` and returns;
+  - otherwise it calls `bundle_settings`, and a `MiroClientError` sets
+    `self.error = f"Miro organization config is not usable: {exc}"`;
   - a sign-in failure sets `f"Miro authentication failed: {result}"`.
 - `scripts/qa_authenticate_connectors.py`: add
   `OAuthStep("miro", "miro", "--miro-oauth", "Miro")` to `STEPS` after Salesforce, and name
@@ -727,14 +814,12 @@ Each description names its siblings.
 - `_is_configured("miro")` is the default `client_id` check.
 - `_build_authorize_url` gets a `miro` branch: `cfg = miro_auth.bundle_settings(section)` (a
   `MiroClientError` raises `_NotConfigured`), and
-  `url = miro_auth.build_authorize_url(cfg.client_id, redirect_uri, state)`. It returns the PKCE
-  verifier the other branches return, unused.
+  `url = miro_auth.build_authorize_url(cfg.client_id, redirect_uri, state)`. It returns
+  `(url, "")`, as the Slack branch does (no PKCE).
 - `_exchange_and_save` gets a `miro` branch:
   `record = miro_auth.exchange_code(cfg, code, redirect_uri)`, then
   `miro_auth.save_token_file(token_file, record)`. A `MiroClientError` follows the existing
   sign-in-failed path (the way the Grist branch's errors do).
-- The `/oauth/start` handler also catches `miro_auth.MiroClientError` next to
-  `grist_auth.GristClientError`.
 - The org redirect URI is `https://<server>/oauth/callback/miro`. One Miro app can carry it and the
   local `http://localhost:53686/callback`.
 - `_is_connected("miro")` keeps the default (the token file exists).
@@ -751,13 +836,18 @@ Each description names its siblings.
 - **No other sign-in.** No non-expiring tokens, no personal tokens from Miro's "Install app and get
   OAuth token" button, and no PKCE-less public client.
 - **One Miro team per person.** Connecting a second team replaces the first.
+- **No board-name resolver on Settings > Auto-accept.** A `miro.board` rule shows the board id, as
+  Peek's rules show page ids. Grist's resolver (`settings_controller.py:217-219`,
+  `policy/resource_registry.py:269-276`) is not copied.
 - **No connector icon.** Only real brand assets go in `resources/connector_icons/`, and the website
   shows no logos (ADR 0101).
 - Adding any of these later is a new decision.
 
 ### 3.8 Setup guide `miro-setup.md` (in `docs/`)
 
-Modelled on the Grist and Salesforce guides. Sections:
+Modelled on the Grist and Salesforce guides. `p3-connector-listing` writes a skeleton: every
+heading below with one sentence under it. `p12-docs-adrs-retire` writes the full content and checks
+it against the code. Sections:
 - `# Miro setup`: what the assistant can do, and that nothing is deleted.
 - `## Register the PrivacyFence app` (for administrators):
   1. Create a Developer team in Miro if there is none (Miro's "Create a Developer team" page).
@@ -791,7 +881,7 @@ Modelled on the Grist and Salesforce guides. Sections:
 
 - **0177**: Miro connects only by OAuth.
   - The connection uses an organization-registered app whose tokens expire: authorization code,
-    confidential client, `state`, and no PKCE (Miro offers none).
+    confidential client, `state`, and no PKCE (Miro documents none).
   - The app's permissions are `boards:read` and `boards:write`, set on the app because Miro takes no
     `scope` parameter. Sign-in refuses a token without either one, and refuses a token that never
     expires.
@@ -805,6 +895,8 @@ Modelled on the Grist and Salesforce guides. Sections:
     - query-string credentials as Miro's SDKs send them (request-line logging could capture them);
     - Miro's own MCP server instead of a connector (it has no PrivacyFence approval or audit, and is
       enabled per Enterprise organization).
+  - A refresh re-reads the token file first, so two live instances cannot void each other's
+    refresh token.
 - **0178**: The Miro connector reads, adds and changes, and never deletes.
   - It leaves out every Enterprise API, sharing and member changes, board create and copy, and tag
     writes.
@@ -816,11 +908,13 @@ Modelled on the Grist and Salesforce guides. Sections:
     - Enterprise export and audit APIs (organization-wide compliance access, not one person's
       boards).
 - **0179**: Miro auto-accept rules are per board (`miro.board`), made on Settings or through the
-  bridge tool, never from the approval card.
+  bridge tool, never from the approval card. A rule value given as a board link is read as the
+  board's id.
   - Rejected: adding the scope to `SCOPE_SELECTORS`, the frozen v1 set; ADR 0077 and ADR 0144 are
     the precedent.
 - **0180**: A Miro write covers a batch of up to 20 items or connectors under one approval card.
-  - Creating items is Miro's transactional bulk call: all or none.
+  - Creating sticky notes, cards, texts and shapes is Miro's transactional bulk call: all or none.
+    Frames are not part of Miro's bulk call, so they are created first, one request each.
   - Updates and connectors go one request at a time after the approval. They stop at the first
     error, report what was already done, and never retry.
   - Rejected:
@@ -840,7 +934,7 @@ The step-by-step page is `manual_steps_artifact` in the manifest.
   - a token file obtained by hand with the form-body exchange of §3.2.1;
   - the board ids in `qa_environment.yaml`.
 
-  `p10-qa-recorder` dispatches `qa-record-fixture.yml`, which fails without them. `mb2` also
+  `p11-qa-live` dispatches `qa-record-fixture.yml`, which fails without them. `mb2` also
   confirms that Miro accepts the form-body token request (§6).
 
 **After implementation**
@@ -852,14 +946,14 @@ The step-by-step page is `manual_steps_artifact` in the manifest.
 
 - **Form-body token requests.**
   - Risk: Miro's SDKs send the token request as query parameters; this plan sends a form body.
-  - Check: `mb2` performs exactly that request before any phase starts, and its done-when records
-    which variant worked.
-  - If the user's `manual_before` confirmation says Miro accepted only query parameters,
-    `p1-auth` stops with `status=blocked`, and the plan is revised before anything else.
+  - Check: `mb2` performs exactly that request before any phase starts.
+  - Its done-when tells the user not to confirm `mb2` if only the query-parameter request worked.
+    The plan is then revised (§3.2.1 and ADR 0177) before `/implement` starts. No phase checks this
+    itself.
 - **Taking an item out of a frame.**
   - Risk: the API does not document how; this plan sends `{"parent": null}`.
-  - Check: `lifecycle_miro` checks it live in `p10-qa-recorder`.
-  - If Miro refuses it, or the item keeps its frame, `p10-qa-recorder` applies this fallback:
+  - Check: `lifecycle_miro` (written in `p10-qa-recorder`) checks it live in `p11-qa-live`.
+  - If Miro refuses it, or the item keeps its frame, `p11-qa-live` applies this fallback:
     - in `connectors/miro.py`, a change with `frame_id == ""` raises
       `ValueError("Miro's API cannot take an item out of a frame. Move it out in Miro.")` before the
       gate;
@@ -876,8 +970,15 @@ The step-by-step page is `manual_steps_artifact` in the manifest.
   - If `/v2/boards` is refused too, stop with `status=blocked`.
 - **Response shapes.**
   - The parsers tolerate missing optional keys (`""` or `None`).
-  - `p10-qa-recorder` records real responses. A parser a fixture contradicts is fixed in that phase.
+  - `p11-qa-live` records real responses. A parser a fixture contradicts is fixed in that phase.
   - If a recorded shape makes a §3.3 behaviour impossible, stop with `status=blocked`.
+- **Frames and colors on the live board.**
+  - Risk: `create_frame` and the 16 `FILL_COLORS` come from the spec and have not been run live.
+  - Check: `lifecycle_miro` creates one frame and one shape with fill color `#fff9b1`, and
+    `p11-qa-live` reads the result.
+  - If Miro refuses either, stop with `status=blocked`.
+- **The seed board stays small.** `RawCapture` keeps the last page of a paged call. The seed board
+  holds fewer than 50 items, so `list_items.json` is one whole page.
 - **`miro.board` and the popup.** If, after `p7-policy-scope`, an approval card offers "Always
   allow" for a Miro tool, stop with `status=blocked`.
 - **Tests that enumerate connectors.**
@@ -920,12 +1021,12 @@ manual_steps_source: docs/miro-connector-plan-manual-steps.html
 manual_before:
   - id: mb1-miro-qa-app
     title: Create a Miro QA account, Developer team, QA app (expiring tokens, boards:read and boards:write), a seed board and a lifecycle board
-    why: p10-qa-recorder records live fixtures from the seed board and runs the add-and-update lifecycle on the lifecycle board through this app; without them the recording has nothing to read.
+    why: p11-qa-live records live fixtures from the seed board and runs the add-and-update lifecycle on the lifecycle board through this app; without them the recording has nothing to read.
     done_when: The QA app exists with "Expire user authorization token" on, permissions boards:read and boards:write only, and redirect URI http://localhost:53686/callback; its client id and secret are in your password manager; the board "PrivacyFence QA [QATEST]" holds a frame "QaFrame [QATEST]" with two [QATEST] sticky notes inside it, one [QATEST] sticky note outside it, one connector line between two of the sticky notes and a tag QATEST; and the board "PrivacyFence QA lifecycle [QATEST]" exists with a frame "QaLifecycleFrame [QATEST]".
   - id: mb2-runner-qa-state
     title: Put the Miro app in the runner's QA bundle, a hand-obtained Miro token file on the runner, and the board ids in qa_environment.yaml
-    why: p10-qa-recorder dispatches qa-record-fixture.yml, which reads ~/privacyfence/org/org_config.json (miro section), ~/privacyfence/credentials/miro_token.json and the miro section of ~/privacyfence/tests/fixtures/qa_environment.yaml on the runner; without them the run fails. The token request also proves that Miro accepts a form-body token request (plan §6).
-    done_when: On the runner, org/org_config.json has "miro" {"client_id", "client_secret"} and still loads (re-signed if it is signed); credentials/miro_token.json has mode 600 and holds access_token, refresh_token, "expires_at" 0 and team_id; qa_environment.yaml has a miro section with board_id and lifecycle_board_id. Tell the /implement session whether the form-body token request worked (expected) or only the query-parameter one did.
+    why: p11-qa-live dispatches qa-record-fixture.yml, which reads ~/privacyfence/org/org_config.json (miro section), ~/privacyfence/credentials/miro_token.json and the miro section of ~/privacyfence/tests/fixtures/qa_environment.yaml on the runner; without them the run fails. The token request also proves that Miro accepts a form-body token request (plan §6).
+    done_when: On the runner, org/org_config.json has "miro" {"client_id", "client_secret"} and still loads (re-signed if it is signed); credentials/miro_token.json has mode 600 and holds access_token, refresh_token, "expires_at" 0 and team_id; qa_environment.yaml has a miro section with board_id and lifecycle_board_id. The form-body token request worked. If only the query-parameter one did, do not confirm this step; tell the planner session instead, because the plan must be revised before /implement starts (plan §6).
 manual_after:
   - id: ma1-local-mode-check
     title: Sign in to Miro from Settings and drive every Miro tool from an AI client in local mode
@@ -944,7 +1045,7 @@ final_checks:
   - ADRs 0177, 0178, 0179 and 0180 exist in docs/adr/, are Accepted, and are in the docs/adr/README.md index (renumbered if main took those numbers first)
   - CHANGELOG.md has the Miro entry under "## [Unreleased]" and no new version heading
   - After python3 scripts/generate_tools_reference.py and python3 scripts/generate_always_allow_reference.py, git diff --exit-code docs/tools-reference.md docs/always-allow-rules-reference.md exits 0
-  - The PR description links the qa-record-fixture.yml run (p10-qa-recorder), says whether taking an item out of a frame works, and links the connector-live-check.yml run (p11-docs-adrs-retire), which is the definition-of-done QA row
+  - The PR description links the qa-record-fixture.yml run (p11-qa-live), says whether taking an item out of a frame works, and links the connector-live-check.yml run (p12-docs-adrs-retire), which is the definition-of-done QA row
 phases:
   - id: p1-auth
     title: Miro auth module (bundle section, token file, sign-in, refresh) and its tests
@@ -958,8 +1059,6 @@ phases:
       Read first: the must-read docs (CLAUDE.md, CONTRIBUTING.md, docs/releasing.md, docs/coding-and-testing-guidelines.md,
       docs/testing-policy.md, docs/adr/README.md), plan §3.0, §3.1 and §3.2.1 (the spec), and the Grist functions this copies in
       shape: src/privacyfence/grist_auth.py:122-188 and 397-490, and oauth_loopback.run_browser_oauth (oauth_loopback.py:148-156).
-      0. Check the user's manual_before confirmation that the orchestrator passed you: if it says Miro accepted only the
-         query-parameter token request, stop with status=blocked (plan §6).
       1. Create src/privacyfence/miro_auth.py exactly as plan §3.2.1: module docstring, MiroClientError, the constants,
          MiroOAuthConfig (repr hides the secret) and bundle_settings, save_token_file, load_token_file, _token_request,
          build_authorize_url, exchange_code, refresh, MiroTokenProvider and authorize_interactive. All HTTP through requests
@@ -972,12 +1071,16 @@ phases:
          not-authenticated message; invalid JSON and non-object → the "could not be read" message; user_id and scope default
          to ""), TestBuildAuthorizeUrl (exactly response_type, client_id, redirect_uri, state; no scope, no code_challenge),
          TestTokenRequest (credentials in data=, never in the URL or params; allow_redirects False; network error, 302, 500,
-         non-JSON body → their messages), TestExchangeCode (record shape and expires_at; 400 with message → "Miro sign-in
-         failed: …"; no refresh_token → the non-expiring message; scope "boards:read" only → the missing-permission message
-         naming boards:write; extra scopes accepted; no scope key accepted), TestRefresh (new refresh_token replaces the old;
-         absent keeps the old; 400 and 401 → the expired message; 403 with JSON → "Miro sign-in refresh failed: …"),
-         TestMiroTokenProvider (no refresh while valid; refresh 60 s before expiry, at expires_at 0 and on force_refresh; the
-         refreshed record is saved; never reads the file), TestAuthorizeInteractive (run_browser_oauth monkeypatched: port
+         non-JSON body → their messages; returns (status, body)), TestExchangeCode (record shape and expires_at; 400 with
+         message → "Miro sign-in failed: …"; no access_token, no team_id, expires_in "soon" or 0 → the "incomplete sign-in
+         answer" message naming that key; no refresh_token → the non-expiring message; scope "boards:read" only → the
+         missing-permission message naming boards:write; extra scopes accepted; no scope key accepted), TestRefresh (new
+         refresh_token replaces the old; absent keeps the old; no access_token → the incomplete message; 400 and 401 → the
+         expired message; 403 with JSON → "Miro sign-in refresh failed: …"), TestMiroTokenProvider (no refresh and no file
+         read while valid; refresh 60 s before expiry, at expires_at 0 and on force_refresh; the refreshed record is saved;
+         when the file on disk holds a different refresh_token with a valid expires_at, it is adopted with no HTTP request;
+         when it holds a different but expired one, the refresh uses the file's refresh_token; an unreadable file is ignored
+         and the refresh uses memory), TestAuthorizeInteractive (run_browser_oauth monkeypatched: port
          53686, path /callback, redirect_host localhost; the build callback ignores the challenge; OAuthLoopbackError →
          "Miro sign-in failed: …"; the record is saved). Assert no token, code or secret appears in any raised message or repr.
       3. tests/unit/test_systemic_gate_invariants.py: add ("miro_auth", None, "save_token_file") to TOKEN_WRITE_SITES and rename
@@ -1014,14 +1117,18 @@ phases:
          401 then success after one forced refresh; 401 twice; allow_redirects=False and the Authorization header asserted;
          no token in any message), TestCheckConnection (team name from /v1/oauth-token; 403 falls back to GET /v2/boards
          limit=1 and team_name ""), and one class per method asserting method, path, params/body and parsing:
-         TestListBoards (offset paging stops at max_results and at MAX_PAGES), TestGetBoard (missing keys give ""),
+         TestListBoards (offset paging stops at max_results and at MAX_PAGES), TestGetBoard (missing keys give ""; no owner field),
          TestUpdateBoard (only given keys sent; never policy/teamId/projectId), TestListTags, TestListItems (cursor paging;
-         type and parent_item_id sent only when non-empty; truncated flag; MiroItem field mapping for each type incl. color
-         source per type and due_date cut to 10 chars), TestGetItem (404 raises MiroNotFound), TestListConnectors,
-         TestCreateItems (one POST to /items/bulk with the list), TestCreateConnector, TestUpdateItem (endpoint per type;
+         type and parent_item_id sent only when non-empty; truncated flag; MiroItem field mapping for each type, color ""
+         from the generic answer, due_date cut to 10 chars), TestGetItem (generic GET then the per-type GET for each of the
+         five editable types, color taken from the per-type style per type; an image makes only the generic GET; 404 raises
+         MiroNotFound), TestListConnectors, TestCreateItems (one POST to /items/bulk with the list), TestCreateFrame (one POST
+         to /frames), TestCreateConnector, TestUpdateItem (endpoint per type;
          an image type raises the "cannot be changed here" message before any request), TestSetParent (body with id; body
          {"parent": None} for ""). Each id-taking method rejects a bad id before any request.
       3. ruff check . and python3 -m pytest tests/unit -q.
+      Definition of done: the /dod live-check row is deferred to p11-qa-live and p12-docs-adrs-retire; do not dispatch
+      connector-live-check.yml in this phase (plan §3.0).
     acceptance:
       - python3 -m pytest tests/unit/test_miro_client.py -q passes
       - python3 -m pytest tests/unit/test_miro_client.py -q --cov=privacyfence.miro_client --cov-branch --cov-report=term-missing reports 100% for src/privacyfence/miro_client.py
@@ -1053,6 +1160,7 @@ phases:
       - tests/unit/connectors/test_readme_manifest_alignment.py
       - tests/unit/test_website_connector_pages.py
       - tests/unit/test_website_connectors_page.py
+      - tests/unit/test_website_pages.py
     brief: |
       Read first: the must-read docs, plan §3.3 (connector spec), §3.7, §3.8 (setup guide), and src/privacyfence/connectors/grist.py
       (template for _fetch, _auto_audit, tool_specs style) with tests/unit/connectors/test_grist_connector.py (gated_call_spy at
@@ -1068,8 +1176,8 @@ phases:
          CONNECTOR_CLASSES (and its import) in tests/unit/connectors/test_readme_manifest_alignment.py.
       4. python3 scripts/generate_tools_reference.py regenerates docs/tools-reference.md (Miro row 3 · 3 · 0 · 0; plan §6 counts).
       5. Website and docs, required by tests/unit/test_website_connector_pages.py and test_website_connectors_page.py:
-         a. The setup guide miro-setup.md in docs/, with every section in plan §3.8 (describe all ten tools now; the feature
-            ships as a whole).
+         a. The setup guide miro-setup.md in docs/ as a skeleton: every heading in plan §3.8, each with one plain sentence
+            saying what the section covers (p12-docs-adrs-retire writes the full content).
          b. README.md "## Connectors" table: row "| Miro | List boards and tags; read items and connector lines after review; add and change sticky notes, cards, texts, shapes, frames and connector lines with approval (nothing is deleted) |" after Peek.
          c. website/connectors/miro/index.html, modelled on website/connectors/grist/index.html (same head, meta
             pf-content-group connector, canonical/og URLs for /connectors/miro/, the other-connectors include with
@@ -1091,6 +1199,8 @@ phases:
          j. website/_partials/other-connectors.html: add <li data-connector="miro"><a href="/connectors/miro/">Miro</a></li>
             after the Peek line, and change the header comment's "the other six" to "the other seven".
          k. docs/README.md: add "- [`miro-setup.md`](miro-setup.md)" after the peek-setup.md line under "### Connector setup".
+         l. tests/unit/test_website_pages.py: rename test_there_are_fourteen_second_level_pages to
+            test_there_are_fifteen_second_level_pages and assert len(SECOND_LEVEL) == 15 (/connectors/miro/ is the new one).
       6. Create tests/unit/connectors/test_miro_connector.py (module docstring; pytestmark unit) with a gated_call_spy fixture
          as Grist's: TestDispatch (unknown tool → ValueError); TestListBoards, TestGetBoard, TestListTags (never call
          gated_call — spy stays empty; each writes an auto_accepted audit entry with the tool name; a MiroClientError becomes
@@ -1101,9 +1211,11 @@ phases:
          python3 scripts/build_site.py --out /tmp/pf-site-check --no-docs --offline.
       Stop condition: if a unit test outside touches fails because of the new connector module (another hand-maintained
       connector list this plan does not name), stop with status=blocked and name the test.
+      Definition of done: the /dod live-check row is deferred to p11-qa-live and p12-docs-adrs-retire; do not dispatch
+      connector-live-check.yml in this phase (plan §3.0).
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_miro_connector.py -q passes
-      - python3 -m pytest tests/unit/test_website_docs_allowlist.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/web/test_tool_schema_portability.py tests/unit/test_connector_tool_annotations.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_references_exist.py -q passes
+      - python3 -m pytest tests/unit/test_website_pages.py tests/unit/test_website_docs_allowlist.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/web/test_tool_schema_portability.py tests/unit/test_connector_tool_annotations.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_references_exist.py -q passes
       - grep -n "| \[Miro\](#miro) | 3 | 3 | 0 | 0 |" docs/tools-reference.md matches
       - python3 scripts/build_site.py --out /tmp/pf-site-check --no-docs --offline exits 0
       - python3 -m pytest tests/unit -q passes
@@ -1141,7 +1253,17 @@ phases:
          message, a MiroNotFound for one id → the "not found" ValueError naming it and no gate. TestListConnectors — table and
          details lines. TestFieldCompleteness — a real MiroClient with a faked _request returning a fully populated board and
          items response, run through miro_list_items, checked with assert_no_placeholder_fields(gated_call_spy[0]["preview"]).
+         TestListConnectors also covers its truncated prefix and "(no connectors)". TestEveryToolIsAudited: give the MagicMock
+         client team_name "QA team", get_board → MiroBoard("uXjVOD6LSME=", "QA board", "", "QA team", "", "", ""),
+         list_items → ([STICKY], False), get_item → STICKY, list_connectors → ([MiroConnectorLine("3458764549483493027",
+         "3458764549483493025", "3458764549483493026", "curved", ["[QATEST]"])], False), where STICKY is
+         MiroItem("3458764549483493025", "sticky_note", "<p>[QATEST]</p>", "", "", "", "square", "yellow", 0.0, 0.0, 199.0,
+         228.0, "", ""); and arg_overrides {"miro_list_items": {"board_id": "uXjVOD6LSME="}, "miro_get_items":
+         {"board_id": "uXjVOD6LSME=", "item_ids": "3458764549483493025"}, "miro_list_connectors": {"board_id":
+         "uXjVOD6LSME="}} plus board_id for the three auto tools.
       5. ruff check . and python3 -m pytest tests/unit -q.
+      Definition of done: the /dod live-check row is deferred to p11-qa-live and p12-docs-adrs-retire; do not dispatch
+      connector-live-check.yml in this phase (plan §3.0).
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_miro_connector.py -q passes
       - python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/policy/test_registry.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_generate_always_allow_reference.py -q passes
@@ -1167,27 +1289,37 @@ phases:
     brief: |
       Read first: plan §3.3 (items and connectors formats, value rules, _item_body, validation messages, the two tools'
       gated_call arguments) and §3.4; src/privacyfence/connectors/grist.py _add_records (l.1018-1059) as the pattern.
-      1. connectors/miro.py: STICKY_COLORS, MIRO_SHAPES, the items and connectors parsers, _item_body, and the two tools
-         (specs, call(), handlers). Order inside each: parse and validate (ValueError) → _board_info (and get_item for every
-         distinct connector end) → gated_call(gate="popup", …) → the client write(s) through _fetch → return the §3.3 dict.
-         Nothing is written if gated_call raises. For connectors, a MiroClientError after k creations raises the §3.3
-         RuntimeError naming the ids already created.
+      1. connectors/miro.py: STICKY_COLORS, FILL_COLORS, MIRO_SHAPES, the items and connectors parsers, _item_body, and the
+         two tools (specs, call(), handlers). Order inside each: parse and validate (ValueError) → _board_info, then
+         get_item for every distinct frame_id in items (the "not a frame" check) or every distinct connector end →
+         gated_call(gate="popup", …) → the client write(s) through _fetch → return the §3.3 dict. Nothing is written if
+         gated_call raises. miro_create_items creates the frames first (create_frame, one each, in order), then every other
+         item in one create_items call, skipped when there is none (§3.3 "Order of a create"). A MiroClientError after k
+         frames, or after k connectors, raises the §3.3 RuntimeError naming the ids already created.
       2. Tables (§3.4): TOOL_TO_GATE popup ×2, TOOL_TO_OPERATION, TOOL_TO_VERB Verb.ADD ×2 (and _VERB_MATRIX),
          write_effects.EFFECT_BY_TOOL with the two exact strings under a "# ── Miro ──" header, gate._TOOL_LAYOUT WIDE ×2.
       3. Regenerate docs/tools-reference.md and docs/always-allow-rules-reference.md; website card → 8 tools: 3 auto, 3 review,
          2 popup ("8 tools: 3 without a card · 3 reviewed · 2 need approval"), heading 152; how-it-works 152.
-      4. Tests: TestCreateItems — one parametrized case per type building the exact bulk body (color to the right style key,
-         dueDate with T12:00:00.000Z, frame format/type, parent only with frame_id, empty groups left out); the card table
-         rows (Position, Size with "-", Frame, Color); preview keys exactly Board, Team, Items; gate == "popup";
+      4. Tests: TestCreateItems — one parametrized case per type building the exact body (color to the right style key,
+         dueDate with T12:00:00.000Z, frame format/type and no type/parent keys in a frame's body, parent only with frame_id,
+         empty groups left out); a mixed request calls create_frame for each frame first and then one create_items without
+         the frames; a frames-only request makes no create_items call; a failure on the second frame raises naming the
+         first and makes no bulk call; the card table rows (Position, Size with "-", Frame showing the frame's title,
+         Color); a frame_id that is a sticky note or not found gives the "not a frame" message with no gate; a bool width,
+         a shape color outside FILL_COLORS and a card color "#12345" give their messages; preview keys exactly Board, Team, Items; gate == "popup";
          filtered_data is None; every §3.3 validation message for items (spy stays empty for each); the client write runs only
          after the spy returns and not at all when gated_call raises (monkeypatch it to raise RuntimeError); the return
-         dict. TestCreateConnectors — the body; From/To cells from the fetched items; a missing end and a frame end give their
-         messages with no gate; a failure on the second of three raises the RuntimeError naming the first id; the third is
+         dict. TestCreateConnectors — the body; From/To cells from the fetched items; a missing end, a frame end, the same item at
+         both ends, an unknown key, a bad shape, a bad color and a 201-character caption give their messages with no gate; a failure on the second of three raises the RuntimeError naming the first id; the third is
          never attempted. Extend MIRO_SIBLINGS. TestEveryToolIsAudited: give the MagicMock client get_board →
-         MiroBoard("uXjVOD6LSME=", "QA board", "", "QA team", "QA owner", "", "", ""), get_item → a sticky_note MiroItem,
-         create_items → [that item], create_connector → "3458764549483493025", and arg_overrides for both tools with a valid
-         board_id and one-element JSON arrays.
+         MiroBoard("uXjVOD6LSME=", "QA board", "", "QA team", "", "", ""), get_item → a sticky_note MiroItem with id
+         "3458764549483493025", create_items → [that item], create_connector → "3458764549483493027", and arg_overrides
+         {"miro_create_items": {"board_id": "uXjVOD6LSME=", "items": '[{"type": "sticky_note", "content": "a"}]'},
+         "miro_create_connectors": {"board_id": "uXjVOD6LSME=", "connectors": '[{"start_item_id": "3458764549483493025",
+         "end_item_id": "3458764549483493026"}]'}}; for the connector case get_item returns a sticky note with the id asked for.
       5. ruff check . and python3 -m pytest tests/unit -q.
+      Definition of done: the /dod live-check row is deferred to p11-qa-live and p12-docs-adrs-retire; do not dispatch
+      connector-live-check.yml in this phase (plan §3.0).
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_miro_connector.py -q passes
       - python3 -m pytest tests/unit/test_write_effects.py tests/unit/policy/test_registry.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py tests/unit/test_generate_always_allow_reference.py -q passes
@@ -1218,22 +1350,28 @@ phases:
          found and non-changeable type messages) → build the Current/New rows → gated_call(gate="popup") → per change, in
          order, update_item with only the changed groups (data/style/position/geometry; a position change sends both x and y,
          taking the unchanged one from the current item; a geometry change for a sticky note sends only the one side given)
-         then set_parent when frame_id is given → return. A MiroClientError after k items raises the §3.3 RuntimeError.
+         then set_parent when frame_id is given → return. A MiroClientError after k items raises the §3.3 RuntimeError. A
+         frame's change sends only title in data. details_text is the §3.3 JSON of what will be sent; the table is the
+         summary.
          miro_update_board: validate (both empty, lengths) → _board_info → gate → update_board → return the new name and
          description.
       2. Tables (§3.4): TOOL_TO_GATE popup ×2, TOOL_TO_OPERATION, TOOL_TO_VERB Verb.UPDATE ×2 (and _VERB_MATRIX), EFFECT_BY_TOOL
          with the two exact strings, gate._TOOL_LAYOUT WIDE for miro_update_items only.
       3. Regenerate docs/tools-reference.md and docs/always-allow-rules-reference.md; website card → 10 tools: 3 auto, 3 review,
          4 popup ("10 tools: 3 without a card · 3 reviewed · 4 need approval"), heading 154; how-it-works 154.
-      4. Tests: TestUpdateItems — Current/New rows for each field (frame "" shows "(none)"), details lines with "→", preview
+      4. Tests: TestUpdateItems — Current/New rows for each field (frame "" shows "(none)"); details_text is the JSON of the
+         exact bodies (a 300-character content with an <a href> appears in it whole); preview
          keys exactly Board, Team, Items, Fields changed; the request sequence per change (update_item body groups; set_parent
          with an id and with ""; a change of only frame_id makes no update_item call); validation messages (unknown key for
-         the item's type, frame_id on a frame, duplicate ids, empty change, an image item) with the spy empty; no write when
+         the item's type, frame_id on a frame, frame_id with x, duplicate ids, empty change, an image item) with the spy
+         empty; a frame's title change sends {"data": {"title": ...}} only; no write when
          gated_call raises; a failure on the second item raises naming the first. TestUpdateBoard — only given fields in the
          table and the client call; both empty and over-long messages. Extend MIRO_SIBLINGS and TestEveryToolIsAudited
          (update_board returns the MiroBoard; arg_overrides for both tools).
       5. Confirm no Miro tool is destructive (tests/unit/test_connector_tool_annotations.py unchanged and passing).
       6. ruff check . and python3 -m pytest tests/unit -q.
+      Definition of done: the /dod live-check row is deferred to p11-qa-live and p12-docs-adrs-retire; do not dispatch
+      connector-live-check.yml in this phase (plan §3.0).
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_miro_connector.py -q passes
       - python3 -m pytest tests/unit/test_write_effects.py tests/unit/policy/test_registry.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py tests/unit/test_generate_always_allow_reference.py -q passes
@@ -1263,15 +1401,16 @@ phases:
       (l.31, 80-88, 155-162), tests/unit/policy/test_scope_rows.py:219-252, tests/unit/policy/test_scopes.py:461,
       tests/unit/policy/test_propose.py:299-318, tests/unit/policy/test_registry.py:28-46, and the grist.document case in
       tests/unit/test_gate.py.
-      1. scopes.py: _miro_board_matches and the "miro.board" NEW_SCOPE_SELECTORS entry exactly as §3.4; name miro.board in
+      1. scopes.py: _miro_board_matches (normalizing each rule value from a board link, §3.4) and the "miro.board"
+         NEW_SCOPE_SELECTORS entry exactly as §3.4; name miro.board in
          the module docstring's list.
       2. catalogue.py: the "miro.board" PolicyExtraScope exactly as §3.4; name it in the docstring's list of extra scopes.
       3. propose.py docstring: a bullet that miro.list_items, get_items, list_connectors, create_items, create_connectors,
          update_items and update_board are governed by miro.board, a scope with no entry here. registry.py docstring, where it
          lists what policy/catalogue.py offers: add miro.board. No PROPOSABLE_SCOPES entry.
       4. python3 scripts/generate_always_allow_reference.py.
-      5. Tests: test_scopes.py — miro.board matches the board_id from args, not another one, and an empty value never
-         matches. test_catalogue.py — the entry exists with verbs read, add, update; compiling ["uXjVOD6LSME="] with
+      5. Tests: test_scopes.py — miro.board matches the board_id from args, not another one, a rule value written as
+         https://miro.com/app/board/uXjVOD6LSME=/ matches board_id "uXjVOD6LSME=", and an empty value never matches. test_catalogue.py — the entry exists with verbs read, add, update; compiling ["uXjVOD6LSME="] with
          [Verb.READ, Verb.ADD] gives the three miro read operations and the two add operations with predicate miro.board;
          an empty value is rejected like grist.document's. test_scope_rows.py — a miro.board row next to the grist.document
          cases (same shape). test_gate.py — next to the grist.document case: a stored miro.board rule auto-accepts
@@ -1319,8 +1458,8 @@ phases:
          test_settings_controller.py — authenticate_connector("miro") without a section sets "Miro organization config isn't
          installed yet."; with one it runs miro_auth.authorize_interactive (monkeypatched; drive _run_async synchronously the
          way the Grist tests do) against data_dir()/credentials/miro_token.json and refreshes connectors; a failure sets
-         "Miro authentication failed: …"; the miro row's has_org follows the bundle; update the ALL_CONNECTORS assertion
-         (l.2567). test_qa_authenticate_connectors.py — the miro step runs --miro-oauth and --only miro selects it; update any
+         "Miro authentication failed: …"; the miro row's has_org follows the bundle; an incomplete section sets "Miro
+         organization config is not usable: …". test_qa_authenticate_connectors.py — the miro step runs --miro-oauth and --only miro selects it; update any
          pinned step list or count.
       5. ruff check . and python3 -m pytest tests/unit -q.
       Stop condition: plan §6 "Tests that enumerate connectors".
@@ -1365,88 +1504,129 @@ phases:
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
   - id: p10-qa-recorder
-    title: Live check, lifecycle and recorded fixtures for Miro (and the frame move-out outcome)
+    title: The Miro live check and lifecycle in the QA recorder, tested against a fake client, and the QA docs
     depends_on: [p6-update, p8-local-daemon-oauth]
     complexity: M
     touches:
       - scripts/qa_fixture_recorder.py
       - tests/unit/test_qa_fixture_recorder.py
       - tests/fixtures/qa_environment.yaml.example
-      - tests/fixtures/live/miro/**
-      - tests/unit/test_miro_client.py
-      - src/privacyfence/miro_client.py
-      - src/privacyfence/connectors/miro.py
-      - tests/unit/connectors/test_miro_connector.py
-      - docs/miro-setup*.md
       - docs/connector-qa.md
+      - docs/testing-policy.md
     brief: |
       Read first: docs/connector-qa.md (whole), docs/testing-policy.md "Layer 5", scripts/qa_fixture_recorder.py
       _build_grist_client (l.1064-1070), check_grist (l.1087-1152), lifecycle_grist (l.2462-2510), RawCapture (l.599-632),
-      CONNECTOR_CHECKS/EXPECTED_FIXTURES/LIFECYCLE_CHECKS, the .claude/skills/steward/SKILL.md notes on qa-record-fixture.yml,
-      and plan §6 "Taking an item out of a frame".
+      CONNECTOR_CHECKS/EXPECTED_FIXTURES/LIFECYCLE_CHECKS, and plan §6 "Taking an item out of a frame" and "Frames and
+      colors on the live board". This phase dispatches nothing; p11-qa-live runs it on the runner.
       1. scripts/qa_fixture_recorder.py:
          - _build_miro_client(): config = miro_auth.bundle_settings(daemon_main.load_org_config().get("miro") or {}); path =
            daemon_main._resolve_path(daemon_main.TOKEN_FILES["miro"]); provider = MiroTokenProvider(config, path,
            miro_auth.load_token_file(path)); client = MiroClient(provider); client.check_connection(); return client.
          - check_miro(record, manifest): cfg = manifest.get("miro") or {}; board_id required (missing → a failed CheckResult
-           "miro.board_id missing from qa_environment.yaml"). CheckResults recorded through RawCapture:
+           "miro.board_id missing from qa_environment.yaml"). Four CheckResults recorded through RawCapture:
            get_board ("get_board.json": ok when the name contains [QATEST]); list_items ("list_items.json": ok only when
-           every sticky_note's content contains [QATEST], refusing to record otherwise; at least one frame present);
+           every sticky_note's content contains [QATEST] and at least one frame is listed; it refuses to record otherwise);
            list_connectors ("list_connectors.json": ok when at least one is listed); list_tags ("list_tags.json": ok when a
-           tag titled QATEST exists). Before writing each fixture, pass it through the recorder's existing redaction
-           (redact + deidentify_structural_fields) and replace every createdBy/modifiedBy/owner name and id with the
+           tag titled QATEST exists). Before writing each fixture, pass it through the recorder's existing redact and
+           deidentify_structural_fields, and replace every createdBy/modifiedBy/owner object's name and id with the
            recorder's placeholders.
-         - lifecycle_miro(manifest): on cfg["lifecycle_board_id"] only — never board_id — find the frame titled
-           "QaLifecycleFrame [QATEST]" via list_items(type="frame"); create one sticky note with content
-           f"{LIFECYCLE_TAG} miro sticky {suffix}" inside that frame (create_items); read it back; update_item its content to
-           f"{LIFECYCLE_TAG} miro sticky {suffix} updated"; read back; set_parent(board, id, "") to take it out of the frame;
-           read back and record whether frame_id is now "" (frame_move_out_ok). No delete — the client has none (plan §3.7);
-           the docstring says stickies accumulate and are cleaned by hand. LifecycleResult("miro", ok, note, cleanup_ok=None),
-           where note includes "frame move-out: works" or "frame move-out: not supported (<error or 'parent kept'>)"; the
-           move-out result does not make ok False.
+         - lifecycle_miro(manifest): on cfg["lifecycle_board_id"] only, never board_id. Find the frame titled
+           "QaLifecycleFrame [QATEST]" via list_items(item_type="frame"). Then create_items one sticky note with content
+           f"{LIFECYCLE_TAG} miro sticky {suffix}" and parent that frame, plus one shape with content
+           f"{LIFECYCLE_TAG} miro shape {suffix}" and style fillColor "#fff9b1"; create_frame one frame titled
+           f"{LIFECYCLE_TAG} miro frame {suffix}"; get_item the sticky note; update_item its content to
+           f"{LIFECYCLE_TAG} miro sticky {suffix} updated"; get_item again and check the content; set_parent(board, id, "")
+           to take it out of the frame; get_item again and set frame_move_out_ok to whether frame_id is now "" (a
+           MiroClientError from set_parent counts as not ok, with its message). No delete: the client has none (plan §3.7).
+           The docstring says the items accumulate and are cleaned by hand. Return LifecycleResult("miro", ok, note,
+           cleanup_ok=None). ok covers the creates, the content update and both reads. note contains "frame move-out: works"
+           or "frame move-out: not supported (<error, or 'parent kept'>)". The move-out result does not make ok False.
          - Register "miro" in CONNECTOR_CHECKS, EXPECTED_FIXTURES ("get_board.json", "list_items.json",
-           "list_connectors.json", "list_tags.json") and LIFECYCLE_CHECKS; name Miro in the comment above LIFECYCLE_CHECKS.
+           "list_connectors.json", "list_tags.json") and LIFECYCLE_CHECKS, and name Miro in the comment above
+           LIFECYCLE_CHECKS.
       2. tests/fixtures/qa_environment.yaml.example: a miro section (board_id: "", lifecycle_board_id: "") with comments in
          the file's style.
-      3. docs/connector-qa.md: a Miro row in the QA accounts table (a free Miro account holding nothing real, with a Developer
-         team and the QA app; the runner's token file is obtained by hand once with the form-body exchange and refreshed by
-         the runner, and rotated by re-authenticating with qa_authenticate_connectors.py --only miro); the "--only" options
-         list gains miro; "### Seed: Miro" (the two boards from manual step mb1 and the optional miro.board rule row);
-         the Manifest reference row; the --lifecycle sentence gains Miro; "### Miro checks" in the exploratory section
-         (sign-in from Settings, the review cards for the three reads, the popup cards for the four writes with their
-         tables, a batch of 20, a rule from Settings auto-accepts a read, a board in another team answers 403).
-      4. Commit and push this phase branch, then dispatch .github/workflows/qa-record-fixture.yml against it with input
-         connector=miro (GitHub MCP actions_run_trigger, ref = this phase branch). A queued run waits on the
-         connector-live-check concurrency group: wait, never re-dispatch. When it succeeds, git pull. Review every file under
-         tests/fixtures/live/miro/ before continuing: no real name, e-mail, team name other than the QA ones, token, or
-         non-[QATEST] content. If something leaks, extend the redaction in check_miro, push and dispatch again. Then, because
-         qa-record-fixture.yml does not run --lifecycle, dispatch .github/workflows/connector-live-check.yml (no inputs)
-         against this phase branch, wait for it (same concurrency group), and read the Miro lifecycle row and its
-         "frame move-out" note from the run's "Run qa_fixture_recorder.py --lifecycle" step log (get_job_logs) or its
-         connector-live-check-report artifact. If it opens or updates the chore/connector-live-fixture-drift PR for another
-         connector, leave that PR alone (steward skill) and mention it.
-      5. Frame move-out: if the lifecycle note says "not supported", apply the plan §6 fallback in src/privacyfence/miro_client.py,
-         src/privacyfence/connectors/miro.py, their tests and the setup guide (miro-setup.md in docs/), exactly as written
-         there. If it says "works", change nothing. Say which in your final report.
-      6. tests/unit/test_miro_client.py: TestLiveFixtureParsing replaying the four fixtures through the real parsers via a
-         faked _request, skipping with the record hint when a file is missing, exactly like the Grist one. If a fixture shows a
-         shape a parser mishandles, fix miro_client.py and its unit test (plan §6).
-      7. tests/unit/test_qa_fixture_recorder.py: check_miro (including the missing board_id and the non-[QATEST] refusal) and
-         lifecycle_miro (both move-out outcomes) against a fake client; TestFixturePresence passes.
-      8. ruff check . and python3 -m pytest tests/unit -q.
+      3. docs/connector-qa.md:
+         - a Miro row in the QA accounts table: a free Miro account holding nothing real, with a Developer team and the QA
+           app; the runner's token file was obtained by hand once with the form-body exchange, is refreshed by the runner,
+           and is rotated with qa_authenticate_connectors.py --only miro;
+         - miro in the "--only" options list;
+         - "### Seed: Miro": the two boards from manual step mb1, kept under 50 items, and the optional miro.board rule row;
+         - the Manifest reference row;
+         - Miro in the --lifecycle sentence;
+         - "### Miro checks" in the exploratory section: sign-in from Settings, the review cards for the three reads, the
+           popup cards for the four writes with their tables, a batch of 20, a rule from Settings auto-accepting a read, and
+           a board in another team answering 403.
+         docs/testing-policy.md: add Miro where it lists the connectors --lifecycle covers.
+      4. tests/unit/test_qa_fixture_recorder.py, against a fake client following the existing per-connector tests there:
+         check_miro (the four results; the missing board_id; the non-[QATEST] refusal; the owner and createdBy scrub), and
+         lifecycle_miro (both move-out outcomes, the set_parent error case, and that it never touches board_id).
+         TestFixturePresence.test_every_expected_fixture_file_exists_and_is_nonempty_valid_json (l.2107-2113) fails for
+         miro until the files are recorded. Change its parametrize list to
+         [pytest.param(c, marks=pytest.mark.xfail(strict=True, reason="Miro fixtures are recorded on the QA runner"))
+         if c == "miro" else c for c in sorted(recorder.EXPECTED_FIXTURES)]; p11-qa-live puts the plain list back. No
+         phase id goes in the reason (tests/unit/test_code_no_history.py).
+      5. ruff check . and python3 -m pytest tests/unit -q.
+      Stop condition: if adding "miro" to EXPECTED_FIXTURES makes a test other than TestFixturePresence fail for want of
+      files, stop with status=blocked and name it.
+    acceptance:
+      - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q passes
+      - python3 -c "import sys; sys.path.insert(0,'scripts'); import qa_fixture_recorder as q; assert 'miro' in q.CONNECTOR_CHECKS and 'miro' in q.LIFECYCLE_CHECKS and 'miro' in q.EXPECTED_FIXTURES" exits 0
+      - grep -n "### Seed: Miro" docs/connector-qa.md matches
+      - python3 -m pytest tests/unit -q passes
+      - ruff check . passes
+  - id: p11-qa-live
+    title: Record the Miro fixtures and run the lifecycle on the QA runner, then apply what they show
+    depends_on: [p10-qa-recorder]
+    complexity: M
+    touches:
+      - tests/fixtures/live/miro/**
+      - scripts/qa_fixture_recorder.py
+      - tests/unit/test_qa_fixture_recorder.py
+      - tests/unit/test_miro_client.py
+      - src/privacyfence/miro_client.py
+      - src/privacyfence/connectors/miro.py
+      - tests/unit/connectors/test_miro_connector.py
+      - docs/miro-setup*.md
+    brief: |
+      Read first: the .claude/skills/steward/SKILL.md notes on qa-record-fixture.yml and connector-live-check.yml,
+      docs/connector-qa.md "Reviewing recorded fixtures", plan §6 ("Taking an item out of a frame", "Frames and colors on
+      the live board", "Response shapes", "The runner credential"), and tests/unit/test_grist_client.py's
+      TestLiveFixtureParsing.
+      1. Push this phase branch. Dispatch .github/workflows/qa-record-fixture.yml against it with input connector=miro
+         (GitHub MCP actions_run_trigger, ref = this phase branch). A queued run is waiting on the connector-live-check
+         concurrency group: wait, and never re-dispatch. When it succeeds, git pull.
+      2. Review every file under tests/fixtures/live/miro/. None may hold a real name or e-mail, a team name other than the
+         QA one, a token, or content without [QATEST]. If one does, extend the scrub in check_miro (and its unit test),
+         push, and dispatch again.
+      3. qa-record-fixture.yml does not run --lifecycle. Dispatch .github/workflows/connector-live-check.yml (no inputs)
+         against this branch and wait for it (same concurrency group). Read the Miro lifecycle row and its
+         "frame move-out" note from the "Run qa_fixture_recorder.py --lifecycle" step log (get_job_logs) or the
+         connector-live-check-report artifact. If the run opens or updates the chore/connector-live-fixture-drift PR for
+         another connector, leave that PR alone (steward skill) and mention it.
+      4. If the Miro lifecycle row failed on the frame create or the shape color, stop with status=blocked (plan §6). If
+         the note says "frame move-out: not supported", apply the plan §6 fallback exactly as written there, in
+         src/privacyfence/miro_client.py, src/privacyfence/connectors/miro.py, their tests and the setup guide
+         (miro-setup.md in docs/). If it says "works", change none of them. Say which in your final report.
+      5. tests/unit/test_miro_client.py: TestLiveFixtureParsing, replaying the four fixtures through the real parsers via a
+         faked _request and skipping with the record hint when a file is missing, exactly like the Grist one. If a fixture
+         shows a shape a parser mishandles, fix miro_client.py and its unit test (plan §6). Remove any xfail marker
+         p10-qa-recorder put on TestFixturePresence (restore the plain sorted(recorder.EXPECTED_FIXTURES) parametrize).
+      6. ruff check . and python3 -m pytest tests/unit -q.
       Stop condition: plan §6 "The runner credential" and "Response shapes".
     acceptance:
       - ls tests/fixtures/live/miro/ lists get_board.json, list_items.json, list_connectors.json and list_tags.json
       - python3 -m pytest tests/unit/test_qa_fixture_recorder.py tests/unit/test_miro_client.py tests/unit/connectors/test_miro_connector.py -q passes, with TestLiveFixtureParsing not skipped
-      - python3 -c "import sys; sys.path.insert(0,'scripts'); import qa_fixture_recorder as q; assert 'miro' in q.CONNECTOR_CHECKS and 'miro' in q.LIFECYCLE_CHECKS" exits 0
+      - grep -n "Miro fixtures are recorded on the QA runner" tests/unit/test_qa_fixture_recorder.py finds nothing
       - The qa-record-fixture.yml run for connector=miro on this phase branch concluded success (URL in the final report)
       - The connector-live-check.yml run on this phase branch shows the Miro lifecycle row passing (URL and the frame move-out outcome in the final report)
+      - python3 -m pytest tests/unit/connectors/test_miro_connector.py tests/unit/test_miro_client.py -q --cov=privacyfence.connectors.miro --cov=privacyfence.miro_client --cov-branch --cov-report=term-missing reports 100% for both files
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
-  - id: p11-docs-adrs-retire
-    title: Reference docs, changelog, the four ADRs, the live check, and retiring the plan
-    depends_on: [p7-policy-scope, p9-org-oauth, p10-qa-recorder]
-    complexity: S
+  - id: p12-docs-adrs-retire
+    title: The full setup guide, reference docs, changelog, the four ADRs, the live check, and retiring the plan
+    depends_on: [p7-policy-scope, p9-org-oauth, p11-qa-live]
+    complexity: M
     touches:
       - docs/miro-setup*.md
       - docs/configuration-reference.md
@@ -1467,9 +1647,11 @@ phases:
       311-328), docs/connecting-a-service.md (l.1-10, 72-78, 135-140, 177-190), docs/org-mode-setup-guide.md (l.35-50,
       183-196, 270-282), docs/approvals-and-policy.md (l.395-411), CHANGELOG.md's "## [Unreleased]" section.
       0. If main already holds ADRs numbered 0177-0180, take the next free numbers and use them everywhere below.
-      1. The setup guide miro-setup.md in docs/: check every statement against the code as it now is (error texts from
-         miro_auth.py and miro_client.py, the option names in build_org_bundle.py, the port and callback paths, the frame
-         move-out outcome from p10) and correct it.
+      1. The setup guide miro-setup.md in docs/: replace the skeleton with the full content of every plan §3.8 section,
+         taking each statement from the code as it now is: the error texts from miro_auth.py and miro_client.py, the option
+         names in build_org_bundle.py, the port and callback paths, the ten tools and their gates from
+         docs/tools-reference.md, and the frame move-out outcome p11-qa-live reported (its run's lifecycle note, or the
+         current miro_update_items description).
       2. docs/configuration-reference.md: miro in the connectors.<name>.enabled list (l.103); "[Miro setup](miro-setup.md)" in
          the guide sentence (l.218-226); --miro-oauth in the command-line options table next to --grist-oauth; the redirect-URI
          sentence (l.311) gains Miro. docs/approvals-and-policy.md: after the "Grist document" row of the scope table add
