@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import threading
 import time
@@ -42,6 +43,7 @@ import pytest
 import yaml
 
 from privacyfence import approval_ui, auto_accept, gate, scoped_tokens
+from privacyfence.auto_accept import ReviewContext
 from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
@@ -49,6 +51,7 @@ from privacyfence.pii_detector import init_pii_detection
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import TOOL_REGISTRY, Verb
@@ -1083,7 +1086,7 @@ class TestPreflightAutoAccept:
 
     @pytest.mark.parametrize("verb, operation", [
         (Verb.READ, "grist.read_records"),  # also what grist_export_records and grist_export_sql resolve to
-        (Verb.CREATE, "grist.import_csv"),
+        (Verb.ADD, "grist.import_csv"),
         (Verb.UPDATE, "grist.update_csv"),
     ])
     def test_grist_document_rule_auto_accepts_the_csv_and_export_operations(self, verb, operation):
@@ -1140,10 +1143,38 @@ class TestProposePolicyChange:
         assert result["confirmed"] is True
         assert result["changed"] is True
         cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8"))
-        assert cfg["auto_accept"]["rules"][0]["predicate"] == "approved_folder"
+        assert cfg["auto_accept"]["version"] == 3
+        assert cfg["auto_accept"]["rules"][0]["scope"] == "drive.folder"
         assert "migrated_to_policy_v2" not in cfg
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
+
+    async def test_the_bridge_add_returns_the_row_id(self, audit_dir):
+        result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        again = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["download"],
+        )
+
+        row_id = scope_rows.row_id_for("drive.folder", ["folder1"])
+        assert result["rule_ids"] == [row_id]
+        assert again["rule_ids"] == [row_id]
+        assert [row.id for row in auto_accept.get_policy_rows()] == [row_id]
+        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == row_id
+
+    async def test_the_popups_always_allow_lands_in_an_existing_row(self):
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        proposal = make_proposal("approved_folder", ["folder1"], "drive_download_file", connector="drive")
+
+        # What the popup's "Always allow" writes (gate.py's accept_all handling).
+        assert gate.add_policy_v2_rules(policy_propose.rules_for_proposal(proposal)) is True
+
+        (row,) = auto_accept.get_policy_rows()
+        assert row.id == scope_rows.row_id_for("drive.folder", ["folder1"])
+        assert {Verb.READ, Verb.DOWNLOAD} <= row.verbs
 
     async def test_the_dialog_it_raises_is_marked_sensitive(self, monkeypatch):
         """Nothing gated this dialog before it appeared -- an MCP client asked, no card was shown -- so
@@ -2080,20 +2111,27 @@ class TestPIIGate:
 
 
 class TestPersonalDataRules:
-    """A rule with ``allow_personal_data`` lets the tools in ``PERSONAL_DATA_RULE_TOOLS``
-    auto-accept despite a PII finding (ADR 0157) and nothing else."""
+    """A scoped token with ``allow_personal_data`` lets the tools in ``PERSONAL_DATA_RULE_TOOLS``
+    auto-accept despite a PII finding, through one of its own rules (ADR 0173), and nothing else.
+    An unscoped call, a token without the flag and a revoked token keep the scan."""
 
     PII_TEXT = "Please wire the deposit to DE89370400440532013000, thanks."
 
     @staticmethod
-    def _install(monkeypatch, *, allow_personal_data: bool) -> PolicyRule:
+    def _install(monkeypatch, *, predicate="grist.document", value=("doc1",), operation="grist.read_records",
+                 ) -> PolicyRule:
         rule = policy_store.merge_rules([PolicyRule(
-            id="", predicate="grist.document", value=["doc1"],
-            operations=frozenset({"grist.read_records"}), allow_personal_data=allow_personal_data,
+            id="", predicate=predicate, value=list(value), operations=frozenset({operation}),
         )])[0]
         monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
         return rule
+
+    @staticmethod
+    def _token(rule: PolicyRule, tool: str, *, allow_personal_data: bool = True) -> ScopedToken:
+        return dataclasses.replace(
+            _scoped_token(rule_ids=(rule.id,), tools=(tool,)), allow_personal_data=allow_personal_data,
+        )
 
     @staticmethod
     def _call(tool: str = "grist_export_records", **overrides):
@@ -2101,12 +2139,13 @@ class TestPersonalDataRules:
             connector="grist", tool=tool, gate="review", args={"doc_id": "doc1"}, **overrides,
         ))
 
-    async def test_flagged_rule_auto_accepts_an_export_despite_pii(self, monkeypatch, audit_dir):
-        rule = self._install(monkeypatch, allow_personal_data=True)
+    async def test_flagged_token_lets_personal_data_through_export(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
-        result = await self._call(pii_scan_text=self.PII_TEXT)
+        with scoped_tokens.token_scope(self._token(rule, "grist_export_records")):
+            result = await self._call(pii_scan_text=self.PII_TEXT)
 
         assert result is FILTERED
         assert popups == []
@@ -2116,40 +2155,17 @@ class TestPersonalDataRules:
         assert entry["pii_detected"] is True
         assert entry["pii_categories"] == ["IBAN (bank account number)"]
 
-    async def test_flagged_rule_auto_accepts_in_an_unattended_session(self, monkeypatch, audit_dir):
-        self._install(monkeypatch, allow_personal_data=True)
+    async def test_flagged_token_lets_personal_data_through_in_an_unattended_session(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
 
-        with gate.unattended_scope(True):
+        with gate.unattended_scope(True), scoped_tokens.token_scope(self._token(rule, "grist_export_records")):
             result = await self._call(pii_scan_text=self.PII_TEXT)
 
         assert result is FILTERED
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
-    async def test_a_flagged_rule_outside_a_tokens_scope_does_not_let_personal_data_through(
-        self, monkeypatch, audit_dir,
-    ):
-        self._install(monkeypatch, allow_personal_data=True)
-
-        with scoped_tokens.token_scope(_scoped_token(rule_ids=("r-other",), tools=("grist_export_records",))):
-            with pytest.raises(gate.GateDeniedError, match="scoped token"):
-                await self._call(pii_scan_text=self.PII_TEXT)
-
-        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
-
-    async def test_a_flagged_rule_inside_a_tokens_scope_still_lets_personal_data_through(
-        self, monkeypatch, audit_dir,
-    ):
-        rule = self._install(monkeypatch, allow_personal_data=True)
-
-        with scoped_tokens.token_scope(_scoped_token(rule_ids=(rule.id,), tools=("grist_export_records",))):
-            result = await self._call(pii_scan_text=self.PII_TEXT)
-
-        assert result is FILTERED
-        [entry] = read_audit_entries(audit_dir)
-        assert (entry["decision"], entry["rule_id"], entry["pii_detected"]) == ("auto_accepted", rule.id, True)
-
-    async def test_unflagged_rule_still_shows_the_card_on_pii(self, monkeypatch, audit_dir):
-        self._install(monkeypatch, allow_personal_data=False)
+    async def test_unscoped_call_never_lets_personal_data_through(self, monkeypatch, audit_dir):
+        self._install(monkeypatch)
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
@@ -2158,35 +2174,64 @@ class TestPersonalDataRules:
 
         assert len(popups) == 1
 
-    async def test_flag_does_not_apply_to_grist_get_records(self, monkeypatch, audit_dir):
-        self._install(monkeypatch, allow_personal_data=True)
+    async def test_token_without_flag_keeps_the_scan(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
-        with pytest.raises(RuntimeError):
-            await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
-        assert len(popups) == 1
+        with scoped_tokens.token_scope(self._token(rule, "grist_export_records", allow_personal_data=False)):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._call(pii_scan_text=self.PII_TEXT)
 
-        with gate.unattended_scope(True):
-            with pytest.raises(RuntimeError, match="unattended session"):
+        assert popups == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_revoked_scope_keeps_the_scan(self, monkeypatch, audit_dir):
+        self._install(monkeypatch)
+        revoked = dataclasses.replace(scoped_tokens.REVOKED_SCOPE, allow_personal_data=True)
+        ctx = ReviewContext(connector="grist", tool="grist_export_records", args={"doc_id": "doc1"}, raw_data=None)
+
+        with scoped_tokens.token_scope(scoped_tokens.REVOKED_SCOPE):
+            assert gate._personal_data_rule("grist_export_records", "grist.read_records", ctx) is None
+        # Even a revoked scope that somehow carried the flag has no rules to match.
+        with scoped_tokens.token_scope(revoked):
+            assert gate._personal_data_rule("grist_export_records", "grist.read_records", ctx) is None
+
+    async def test_flag_does_not_widen_a_token_to_rules_it_does_not_carry(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        other = dataclasses.replace(self._token(rule, "grist_export_records"), rule_ids=frozenset({"r-other"}))
+
+        with scoped_tokens.token_scope(other):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_flag_does_not_apply_to_grist_get_records(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with scoped_tokens.token_scope(self._token(rule, "grist_get_records")):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
                 await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
-        assert read_audit_entries(audit_dir)[-1]["decision"] == "denied_unattended"
+
+        assert popups == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
 
     async def test_flag_applies_to_jira_export_issues(self, monkeypatch, audit_dir):
-        rule = policy_store.merge_rules([PolicyRule(
-            id="", predicate="approved_project_keys_all_results", value=["ENG"],
-            operations=frozenset({"jira.read_issue"}), allow_personal_data=True,
-        )])[0]
-        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
-        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        rule = self._install(
+            monkeypatch, predicate="approved_project_keys_all_results", value=("ENG",), operation="jira.read_issue",
+        )
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
-        result = await gate.gated_call(**base_kwargs(
-            connector="jira", tool="jira_export_issues", gate="review",
-            raw_data=[SimpleNamespace(key="ENG-1")], args={"jql": "project = ENG"},
-            pii_scan_text=self.PII_TEXT,
-        ))
+        with scoped_tokens.token_scope(self._token(rule, "jira_export_issues")):
+            result = await gate.gated_call(**base_kwargs(
+                connector="jira", tool="jira_export_issues", gate="review",
+                raw_data=[SimpleNamespace(key="ENG-1")], args={"jql": "project = ENG"},
+                pii_scan_text=self.PII_TEXT,
+            ))
 
         assert result is FILTERED
         assert popups == []
@@ -2195,15 +2240,11 @@ class TestPersonalDataRules:
         assert entry["rule_id"] == rule.id
         assert entry["pii_detected"] is True
 
-    @staticmethod
-    def _install_drive_folder(monkeypatch) -> PolicyRule:
-        rule = policy_store.merge_rules([PolicyRule(
-            id="", predicate="approved_folder", value=["fold1"],
-            operations=frozenset({"drive.download_file"}), allow_personal_data=True,
-        )])[0]
-        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
-        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
-        return rule
+    @classmethod
+    def _install_drive_folder(cls, monkeypatch) -> PolicyRule:
+        return cls._install(
+            monkeypatch, predicate="approved_folder", value=("fold1",), operation="drive.download_file",
+        )
 
     @staticmethod
     def _drive_download(**overrides):
@@ -2218,7 +2259,8 @@ class TestPersonalDataRules:
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
-        result = await self._drive_download()
+        with scoped_tokens.token_scope(self._token(rule, "drive_download_file")):
+            result = await self._drive_download()
 
         assert result is FILTERED
         assert popups == []
@@ -2227,39 +2269,28 @@ class TestPersonalDataRules:
         assert entry["rule_id"] == rule.id
         assert entry["pii_detected"] is True
 
-    async def test_flag_does_not_apply_when_content_reaches_the_result(self, monkeypatch, audit_dir):
-        self._install_drive_folder(monkeypatch)
+    async def test_inline_download_keeps_the_scan_even_with_flag(self, monkeypatch, audit_dir):
+        rule = self._install_drive_folder(monkeypatch)
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
-        with pytest.raises(RuntimeError):
-            await self._drive_download(content_reaches_result=True)
+        with scoped_tokens.token_scope(self._token(rule, "drive_download_file")):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._drive_download(content_reaches_result=True)
 
-        assert len(popups) == 1
+        assert popups == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
 
-    @staticmethod
-    def _install_peek(monkeypatch, *, allow_personal_data: bool) -> PolicyRule:
-        rule = policy_store.merge_rules([PolicyRule(
-            id="", predicate="peek.page", value=["dash"],
-            operations=frozenset({"peek.upload_page"}), allow_personal_data=allow_personal_data,
-        )])[0]
-        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
-        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
-        return rule
-
-    @staticmethod
-    def _peek_call():
-        return gate.gated_call(**base_kwargs(
-            connector="peek", tool="peek_upload_page", gate="popup",
-            args={"slug": "dash", "title": "Dash"}, upload_pii_scan_text=TestPersonalDataRules.PII_TEXT,
-        ))
-
-    async def test_flagged_peek_page_rule_lets_an_upload_with_pii_through(self, monkeypatch, audit_dir):
-        rule = self._install_peek(monkeypatch, allow_personal_data=True)
+    async def test_flagged_token_lets_a_peek_page_upload_with_pii_through(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch, predicate="peek.page", value=("dash",), operation="peek.upload_page")
         popups = []
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
-        await self._peek_call()
+        with scoped_tokens.token_scope(self._token(rule, "peek_upload_page")):
+            await gate.gated_call(**base_kwargs(
+                connector="peek", tool="peek_upload_page", gate="popup",
+                args={"slug": "dash", "title": "Dash"}, upload_pii_scan_text=self.PII_TEXT,
+            ))
 
         assert popups == []
         [entry] = read_audit_entries(audit_dir)
@@ -2267,20 +2298,11 @@ class TestPersonalDataRules:
         assert entry["rule_id"] == rule.id
         assert entry["pii_detected"] is True
 
-    async def test_unflagged_peek_page_rule_shows_the_card_on_pii(self, monkeypatch, audit_dir):
-        self._install_peek(monkeypatch, allow_personal_data=False)
-        popups = []
-        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popups.append(a) or "deny", None))
-
-        with pytest.raises(RuntimeError):
-            await self._peek_call()
-
-        assert len(popups) == 1
-
     async def test_no_pii_takes_the_ordinary_path(self, monkeypatch, audit_dir):
-        self._install(monkeypatch, allow_personal_data=True)
+        rule = self._install(monkeypatch)
 
-        result = await self._call(pii_scan_text="nothing sensitive here")
+        with scoped_tokens.token_scope(self._token(rule, "grist_export_records")):
+            result = await self._call(pii_scan_text="nothing sensitive here")
 
         assert result is FILTERED
         [entry] = read_audit_entries(audit_dir)
@@ -4339,3 +4361,63 @@ class TestDenyFeedback:
         assert str(excinfo.value) == self.DEFAULT
         assert approval.deny_feedback == DenialFeedback()
         assert read_audit_entries(audit_dir)[-1]["deny_note_chars"] == 0
+
+
+class TestRuleLimits:
+    """A token's ``rule_limits`` (3.4) narrow a rule it carries to the (predicate, operation) pairs
+    it had when it was made or upgraded; they never widen it."""
+
+    @staticmethod
+    def _install(*rules):
+        auto_accept.set_policy_v2_store_rules(list(rules))
+
+    @staticmethod
+    def _limited(rule_ids, limits):
+        return dataclasses.replace(_scoped_token(rule_ids=rule_ids), rule_limits=limits)
+
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    def test_rule_limits_narrow_a_token_to_its_former_rules(self):
+        rule = PolicyRule(
+            id="r-in", predicate="gmail.anything", value=None,
+            operations=frozenset({"gmail.read_message", "gmail.read_thread"}),
+        )
+        self._install(rule)
+        token = self._limited(["r-in"], {"r-in": frozenset({("gmail.anything", "gmail.read_message")})})
+
+        (narrowed,) = gate._rules_in_scope(token)
+
+        assert narrowed.operations == {"gmail.read_message"}
+        assert (narrowed.id, narrowed.predicate) == ("r-in", "gmail.anything")
+        assert gate._rules_in_scope(None) == [rule]
+        assert gate._rules_in_scope(_scoped_token(rule_ids=["r-in"])) == [rule]  # no limit: used whole
+
+    def test_rule_limits_drop_a_rule_left_empty(self):
+        rule = _gmail_read_rule("r-in")
+        self._install(rule)
+
+        assert gate._rules_in_scope(self._limited(["r-in"], {"r-in": frozenset()})) == []
+        other_pairs = {"r-in": frozenset({("gmail.other", "gmail.read_message")})}
+        assert gate._rules_in_scope(self._limited(["r-in"], other_pairs)) == []
+
+    def test_adding_a_verb_to_a_row_does_not_widen_an_existing_token(self):
+        scope, value = "drive.folder", ["FOLDER1"]
+        row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, value), scope=scope, value=value, verbs=frozenset({Verb.READ}),
+            operations=scope_rows.implied_operations(scope, [Verb.READ]),
+        )
+        before = scope_rows.compile_rows([row])
+        token = self._limited([row.id], {row.id: scope_rows.pairs_of([row], row.id)})
+
+        (widened,) = scope_rows.set_verbs([row], row.id, [Verb.READ, Verb.DOWNLOAD]) or [None]
+        after = scope_rows.compile_rows([widened])
+        assert {(r.predicate, op) for r in after for op in r.operations} > token.rule_limits[row.id]
+        self._install(*after)
+
+        scoped = gate._rules_in_scope(token)
+
+        assert {(r.predicate, op) for r in scoped for op in r.operations} == token.rule_limits[row.id]
+        assert {(r.predicate, op) for r in before for op in r.operations} == token.rule_limits[row.id]

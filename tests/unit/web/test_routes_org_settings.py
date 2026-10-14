@@ -57,7 +57,7 @@ from privacyfence import auto_accept, paths, privacy_filter, scoped_tokens
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
-from privacyfence.policy import store as policy_store
+from privacyfence.policy import scope_rows
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
@@ -75,7 +75,14 @@ def _catalogue_rules(group: str, verb: str, value: list | None = None) -> list:
     """The ``PolicyRule``s one ``group``/``[verb]`` "add a rule" submission compiles to -- the same
     call the dispatcher itself makes, so a test can seed or predict exactly what a submission with
     this group/verbs produces."""
-    return policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs([verb]))
+    return _stored(policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs([verb])))
+
+
+def _stored(rules: list) -> list:
+    """``rules`` as the stored row compiles them back: one rule per scope entry, carrying the row's
+    id (``scope_rows.row_id_for``), which is the id a Remove or Update request names."""
+    rows, _ = scope_rows.add_rules([], list(rules))
+    return scope_rows.compile_rows(rows)
 
 
 def _on_disk_rules(tmp_path, principal_id: str) -> list:
@@ -94,7 +101,8 @@ def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
     config_dir.mkdir(parents=True, exist_ok=True)
     cfg: dict = {}
     if rules:
-        cfg["auto_accept"] = policy_store.rules_to_config(list(rules))
+        seeded, _ = scope_rows.add_rules([], list(rules))
+        cfg["auto_accept"] = scope_rows.rows_to_config(seeded)
     (config_dir / "settings.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
 
@@ -149,7 +157,7 @@ class TestAuthRequired:
         assert r.headers["location"] == "/login?next=/settings/privacy"
 
     @pytest.mark.parametrize("action", [
-        "add_policy_rule", "remove_policy_rule", "update_policy_rule",
+        "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
         "set_default_policy", "toggle_pii_detection",
     ])
     def test_writes_are_a_json_401_when_signed_out(self, action):
@@ -492,7 +500,7 @@ class TestAddRule:
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
 
-    def test_org_add_policy_rule_with_personal_data(self, tmp_path, monkeypatch):
+    def test_org_add_policy_rule_ignores_a_personal_data_field(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
         app, sessions = _app()
         client = _client(app)
@@ -508,24 +516,27 @@ class TestAddRule:
         with principal_scope(ALICE):
             rules = auto_accept.get_policy_v2_rules()
         assert len(rules) == 1
-        assert rules[0].allow_personal_data is True
-        assert "personal data allowed" in recorded[0][1]
+        assert rules == _catalogue_rules("grist.document", "read", ["DOC1"])
+        assert "personal data" not in recorded[0][1]
 
-    def test_org_add_policy_rule_ignores_a_non_true_personal_data(self, tmp_path, monkeypatch):
+    def test_the_audit_text_names_the_row_the_rule_landed_in(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
         app, sessions = _app()
         client = _client(app)
         csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda p, s: recorded.append(s))
 
-        r = _post_action(client, "add_policy_rule", {
-            "group": "grist.document", "value": "DOC1", "verbs": ["read"], "personal_data": "true",
-        }, csrf)
-        assert r.status_code == 200
+        _post_action(client, "add_policy_rule", {"group": "drive.folder", "value": "F1", "verbs": ["read"]}, csrf)
+        _post_action(client, "add_policy_rule", {"group": "drive.folder", "value": "F1", "verbs": ["update"]}, csrf)
 
+        row_id = scope_rows.row_id_for("drive.folder", ["F1"])
+        assert recorded == [
+            f"Added auto-accept rule ('drive.folder', allow 'read') to {row_id} (principal=alice)",
+            f"Added auto-accept rule ('drive.folder', allow 'update') to {row_id} (principal=alice)",
+        ]
         with principal_scope(ALICE):
-            rules = auto_accept.get_policy_v2_rules()
-        assert len(rules) == 1
-        assert rules[0].allow_personal_data is False
+            assert [row.id for row in auto_accept.get_policy_rows()] == [row_id]
 
     def test_adds_a_rule_with_a_list_value_from_comma_separated_text(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
@@ -688,7 +699,7 @@ def _stale_grist_rule():
 
 
 def _catalogue_rules_for(group: str, verbs: list[str], value: list | None = None) -> list:
-    return policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs(verbs))
+    return _stored(policy_catalogue.rules_for_catalogue_entry(group, value, policy_catalogue.parse_verbs(verbs)))
 
 
 class TestUpdateRule:
@@ -802,6 +813,69 @@ class TestUpdateRule:
         assert r.status_code == 403
         assert recorded == ["update_policy_rule"]
         assert "grist.import_csv" not in _on_disk_rules(tmp_path, "alice")[0]["operations"]
+
+
+class TestSetPolicyRuleVerbs:
+    """set_policy_rule_verbs in organization mode: the signed-in principal's own rows only, audited
+    with the rule and the verbs it now allows."""
+
+    def _seeded(self, tmp_path, monkeypatch, principal=ALICE):
+        _seed(tmp_path, monkeypatch, principal.id, rules=_catalogue_rules("drive.folder", "read", ["FOLDER1"]))
+        (row,) = scope_rows.add_rules([], _catalogue_rules("drive.folder", "read", ["FOLDER1"]))[0]
+        return row
+
+    @staticmethod
+    def _on_disk_rows(tmp_path, principal_id="alice"):
+        path = tmp_path / "users" / principal_id / "authority" / "config" / "settings.yaml"
+        return scope_rows.rows_from_config(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+    def test_adds_a_verb_and_audits_it(self, tmp_path, monkeypatch):
+        row = self._seeded(tmp_path, monkeypatch)
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        r = _post_action(client, "set_policy_rule_verbs", {"rule_id": row.id, "verbs": ["update", "read"]}, csrf)
+
+        assert r.status_code == 200
+        (after,) = self._on_disk_rows(tmp_path)
+        assert after.id == row.id
+        assert {v.value for v in after.verbs} == {"read", "update"}
+        assert recorded == [
+            f"Changed auto-accept rule {row.id!r} to allow 'read, update' (principal=alice)",
+        ]
+
+    def test_a_refusal_writes_and_audits_nothing(self, tmp_path, monkeypatch):
+        row = self._seeded(tmp_path, monkeypatch)
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        for payload in (
+            {"rule_id": row.id, "verbs": []},
+            {"rule_id": row.id, "verbs": ["send"]},
+            {"rule_id": "r-doesnotexist", "verbs": ["read", "update"]},
+        ):
+            assert _post_action(client, "set_policy_rule_verbs", payload, csrf).status_code == 200
+
+        assert recorded == []
+        assert self._on_disk_rows(tmp_path) == [row]
+
+    def test_a_second_principal_cannot_edit_the_first_principals_rule(self, tmp_path, monkeypatch):
+        row = self._seeded(tmp_path, monkeypatch)
+        _seed(tmp_path, monkeypatch, "bob", rules=[])
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, BOB)
+
+        r = _post_action(client, "set_policy_rule_verbs", {"rule_id": row.id, "verbs": ["read", "update"]}, csrf)
+
+        assert r.status_code == 200
+        assert self._on_disk_rows(tmp_path) == [row]
 
 
 class TestRemoveRule:
@@ -1394,6 +1468,39 @@ class TestScopedTokenRoutes:
         assert self._post(client, "create", {**self.BODY, "confirmed": True}, "wrong").status_code == 401
         assert self._post(client, "create", self.BODY, csrf).json() == {"error": "confirmation required"}
         assert self._post(client, "create", {"confirmed": True, "label": 3}, csrf).status_code == 400
+        assert store.tokens_for(ALICE) == []
+
+    def test_the_personal_data_flag_reaches_the_store(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.allow_personal_data is True
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        assert any(f"({token.id})" in text and ", personal data allowed (principal=alice)" in text for text in summaries)
+
+    def test_a_token_without_the_flag_does_not_allow_personal_data(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        assert self._post(client, "create", {**self.BODY, "confirmed": True}, csrf).status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.allow_personal_data is False
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            assert not any("personal data allowed" in e.summary for e in get_audit_logger().recent_entries(20))
+
+    def test_a_non_bool_personal_data_flag_is_a_400(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data": "yes", "confirmed": True}, csrf)
+
+        assert r.status_code == 400
         assert store.tokens_for(ALICE) == []
 
     def test_create_returns_the_secret_once_with_no_store(self, tmp_path, monkeypatch):

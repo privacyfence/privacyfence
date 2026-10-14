@@ -31,15 +31,18 @@ class TestScopeCatalogue:
     def test_grist_document_entry_needs_a_value_and_offers_four_verbs(self):
         entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "grist.document")
         assert entry["needs_value"] is True
-        assert set(entry["verbs"]) == {"read", "create", "update", "restructure"}
+        assert set(entry["verbs"]) == {"read", "add", "update", "restructure"}
         assert entry["connector"] == "grist"
 
     def test_gmail_and_slack_unconditional_extras_need_no_value(self):
         by_id = {e["id"]: e for e in catalogue.scope_catalogue()}
-        assert by_id["gmail.configure"]["needs_value"] is False
-        assert by_id["gmail.configure"]["verbs"] == ["configure"]
-        assert by_id["slack.share_anything"]["needs_value"] is False
-        assert by_id["slack.share_anything"]["verbs"] == ["share"]
+        assert by_id["gmail.filters"]["needs_value"] is False
+        assert by_id["gmail.filters"]["verbs"] == ["restructure"]
+        assert by_id["gmail.filters"]["label"] == "Gmail — filters (unconditional)"
+        assert by_id["slack.group_chats"]["needs_value"] is False
+        assert by_id["slack.group_chats"]["verbs"] == ["send"]
+        assert by_id["slack.group_chats"]["label"] == "Slack — group chats (unconditional)"
+        assert "gmail.configure" not in by_id and "slack.share_anything" not in by_id
 
 
 class TestParseVerbs:
@@ -75,7 +78,7 @@ class TestRulesForCatalogueEntry:
         })
 
     def test_grist_document_compiles_read_and_create_to_their_operations(self):
-        rules = catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [Verb.READ, Verb.CREATE])
+        rules = catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [Verb.READ, Verb.ADD])
         assert len(rules) == 1
         assert rules[0].predicate == "grist.document"
         assert rules[0].value == ["DOC1"]
@@ -85,7 +88,7 @@ class TestRulesForCatalogueEntry:
         assert catalogue.rules_for_catalogue_entry("grist.document", None, [Verb.READ]) == []
 
     def test_unconditional_extra_ignores_a_submitted_value(self):
-        rules = catalogue.rules_for_catalogue_entry("gmail.configure", None, [Verb.CONFIGURE])
+        rules = catalogue.rules_for_catalogue_entry("gmail.filters", None, [Verb.RESTRUCTURE])
         assert len(rules) == 1
         assert rules[0].predicate == "gmail.anything"
         assert rules[0].operations == frozenset({"gmail.create_filter", "gmail.update_filter"})
@@ -96,16 +99,13 @@ class TestRulesForCatalogueEntry:
         assert via_catalogue == via_propose
 
     def test_result_is_a_real_merged_policy_rule_store_can_persist(self):
-        rules = catalogue.rules_for_catalogue_entry("slack.share_anything", None, [Verb.SHARE])
+        rules = catalogue.rules_for_catalogue_entry("slack.group_chats", None, [Verb.SEND])
         # merge_rules mints the same content-derived id store.compile_rules_from_config would read
         # back -- proving this is a real, persistable PolicyRule, not just a plain construction.
         assert rules == store.merge_rules(rules)
 
-    def test_personal_data_label_only_on_the_listed_groups(self):
-        labelled = {e["id"] for e in catalogue.scope_catalogue() if "personal_data_label" in e}
-        assert labelled == set(catalogue.PERSONAL_DATA_GROUPS) == {
-            "grist.document", "salesforce.report", "jira.project", "peek.page", "drive.folder",
-        }
+    def test_no_catalogue_entry_carries_a_personal_data_label(self):
+        assert not [e["id"] for e in catalogue.scope_catalogue() if "personal_data_label" in e]
 
     def test_peek_page_read_compiles_comments_and_stats(self):
         rules = catalogue.rules_for_catalogue_entry("peek.page", ["dash"], [Verb.READ])
@@ -114,50 +114,47 @@ class TestRulesForCatalogueEntry:
         assert rules[0].operations == frozenset({"peek.read_comments", "peek.read_stats"})
 
     def test_peek_page_update_compiles_upload_only(self):
-        rules = catalogue.rules_for_catalogue_entry("peek.page", ["dash"], [Verb.CREATE])
+        rules = catalogue.rules_for_catalogue_entry("peek.page", ["dash"], [Verb.ADD])
         assert len(rules) == 1
         assert rules[0].operations == frozenset({"peek.upload_page"})
 
-    def test_peek_page_offers_the_personal_data_label(self):
-        entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "peek.page")
-        assert entry["personal_data_label"] == "New versions may include personal data"
 
-    @pytest.mark.parametrize("group", ["grist.document", "jira.project"])
-    def test_personal_data_sets_the_flag_on_every_compiled_rule(self, group):
-        verbs = [Verb.READ, Verb.SEARCH] if group == "jira.project" else [Verb.READ]
-        rules = catalogue.rules_for_catalogue_entry(group, ["x1"], verbs, personal_data=True)
-        assert rules
-        assert all(rule.allow_personal_data for rule in rules)
-        if group == "jira.project":
-            assert {rule.predicate for rule in rules} == {
-                "approved_project_keys", "approved_project_keys_all_results",
-            }
-
-    def test_personal_data_on_another_group_compiles_nothing(self):
-        assert catalogue.rules_for_catalogue_entry(
-            "apps_script.project", ["script1"], [Verb.READ], personal_data=True,
-        ) == []
-
-    def test_flagged_rule_ids_differ_from_plain_ones(self):
-        plain = catalogue.rules_for_catalogue_entry("grist.document", ["d1"], [Verb.READ])
-        flagged = catalogue.rules_for_catalogue_entry("grist.document", ["d1"], [Verb.READ], personal_data=True)
-        assert plain[0].id != flagged[0].id
-        assert flagged[0].id == store.rule_id_for_rule(flagged[0])
+def test_scope_catalogue_has_no_verb_labels():
+    assert all("verb_labels" not in entry for entry in catalogue.scope_catalogue())
 
 
-def test_grist_chips_name_the_csv_and_export_tools_they_cover():
-    entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "grist.document")
-    assert entry["verb_labels"] == {
-        "read": "read (records, export, SQL)",
-        "create": "create (add records, import CSV)",
-        "update": "update (records, CSV)",
+def test_parse_verbs_maps_legacy_names():
+    assert catalogue.parse_verbs(["create", "draft", "format", "comment", "label", "complete",
+                                  "transition", "copy", "archive", "configure", "share"]) == [
+        Verb.ADD, Verb.UPDATE, Verb.MOVE, Verb.RESTRUCTURE, Verb.SEND,
+    ]
+    # Current names win their own spelling, duplicates collapse keeping first-seen order, and an
+    # unknown name or a non-string is still dropped.
+    assert catalogue.parse_verbs(["update", "read", "label", "read", "bogus", 3]) == [Verb.UPDATE, Verb.READ]
+    assert catalogue.parse_verbs("read") == []
+
+
+def test_group_aliases_resolve():
+    assert catalogue.GROUP_ALIASES == {
+        "gmail.configure": "gmail.filters", "slack.share_anything": "slack.group_chats",
     }
-    assert {e["id"] for e in catalogue.scope_catalogue() if "verb_labels" in e} == {"grist.document", "peek.page"}
+    assert "gmail.configure" not in catalogue.EXTRA_SCOPES
+    assert catalogue.rules_for_catalogue_entry("gmail.configure", None, [Verb.RESTRUCTURE]) == \
+        catalogue.rules_for_catalogue_entry("gmail.filters", None, [Verb.RESTRUCTURE])
+    assert catalogue.rules_for_catalogue_entry("slack.share_anything", None, [Verb.SEND]) == \
+        catalogue.rules_for_catalogue_entry("slack.group_chats", None, [Verb.SEND])
+
+
+def test_slack_group_chats_never_reaches_send_message():
+    (rule,) = catalogue.rules_for_catalogue_entry("slack.group_chats", None, [Verb.SEND])
+    assert rule.operations == frozenset({"slack.create_group_chat"})
+    extra = catalogue.EXTRA_SCOPES["slack.group_chats"]
+    assert catalogue.extra_operations_for(extra, Verb.SEND) == frozenset({"slack.create_group_chat"})
 
 
 @pytest.mark.parametrize("verb, tools", [
     (Verb.READ, {"grist.read_records"}),
-    (Verb.CREATE, {"grist.add_records", "grist.import_csv"}),
+    (Verb.ADD, {"grist.add_records", "grist.import_csv"}),
     (Verb.UPDATE, {"grist.update_records", "grist.update_csv"}),
     (Verb.RESTRUCTURE, {"grist.create_table", "grist.add_columns"}),
 ])

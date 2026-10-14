@@ -10,6 +10,7 @@ import pytest
 
 from privacyfence.policy import store
 from privacyfence.policy.engine import PolicyRule
+from privacyfence.policy.registry import Verb
 
 
 def _rule(id_="r1", predicate="approved_folder", value=None, operations=("op.a",), conditions=()):
@@ -48,16 +49,16 @@ class TestRuleIdFor:
         assert rule_id.startswith("r-")
         assert len(rule_id) == len("r-") + 10
 
-    def test_flag_off_keeps_the_existing_id(self):
+    def test_id_is_the_hash_of_the_content_key(self):
         import hashlib
         digest = hashlib.sha256(repr(("approved_folder", ("'f1'",), ())).encode()).hexdigest()[:10]
         assert store.rule_id_for("approved_folder", ["f1"], ()) == f"r-{digest}"
-        assert store.rule_id_for("approved_folder", ["f1"], (), allow_personal_data=False) == f"r-{digest}"
 
-    def test_flag_on_gives_a_different_id(self):
-        plain = store.rule_id_for("approved_folder", ["f1"], ())
-        flagged = store.rule_id_for("approved_folder", ["f1"], (), allow_personal_data=True)
-        assert flagged != plain
+    def test_rule_id_for_has_no_personal_data_variant(self):
+        import inspect
+        assert list(inspect.signature(store.rule_id_for).parameters) == ["predicate", "value", "conditions"]
+        with pytest.raises(TypeError):
+            store.rule_id_for("approved_folder", ["f1"], (), allow_personal_data=True)
 
 
 class TestRuleIdForRule:
@@ -138,14 +139,6 @@ class TestMergeRules:
     def test_empty_list(self):
         assert store.merge_rules([]) == []
 
-    def test_flagged_and_plain_rules_on_one_scope_stay_two_rows(self):
-        plain = _rule(id_="a", predicate="grist.document", value=["d1"], operations=("grist.read_records",))
-        flagged = PolicyRule(id="b", predicate="grist.document", value=["d1"],
-                             operations=frozenset({"grist.read_records"}), allow_personal_data=True)
-        merged = store.merge_rules([plain, flagged])
-        assert [rule.allow_personal_data for rule in merged] == [False, True]
-        assert merged[0].id != merged[1].id
-
 
 class TestRuleDictRoundTrip:
     def test_rule_to_dict_then_from_dict_is_lossless(self):
@@ -159,14 +152,7 @@ class TestRuleDictRoundTrip:
         data = store.rule_to_dict(rule)
         assert data["operations"] == ["a.op", "z.op"]
 
-    def test_flag_round_trips(self):
-        rule = PolicyRule(id="r-abc123", predicate="grist.document", value=["d1"],
-                          operations=frozenset({"grist.read_records"}), allow_personal_data=True)
-        data = store.rule_to_dict(rule)
-        assert data["allow_personal_data"] is True
-        assert store.rule_from_dict(data) == rule
-
-    def test_plain_rule_has_no_flag_key(self):
+    def test_rule_to_dict_has_no_flag_key(self):
         assert "allow_personal_data" not in store.rule_to_dict(_rule())
 
 
@@ -201,10 +187,12 @@ class TestRuleFromDictFailsClosed:
         rule = store.rule_from_dict({"id": "r1", "predicate": "always_allow", "operations": ["op.a"]})
         assert rule.conditions == ()
 
-    @pytest.mark.parametrize("flag", ["yes", 1, None])
-    def test_non_bool_flag_drops_the_rule(self, flag):
-        data = {"id": "r1", "predicate": "always_allow", "operations": ["op.a"], "allow_personal_data": flag}
-        assert store.rule_from_dict(data) is None
+    @pytest.mark.parametrize("flag", [True, False, "yes", 1, None])
+    def test_rule_from_dict_ignores_allow_personal_data(self, flag):
+        base = {"id": "r1", "predicate": "always_allow", "operations": ["op.a"]}
+        rule = store.rule_from_dict({**base, "allow_personal_data": flag})
+        assert rule == store.rule_from_dict(base)
+        assert rule is not None
 
 
 class TestCompileRulesFromConfig:
@@ -244,6 +232,25 @@ class TestCompileRulesFromConfig:
             }
         }
         assert [r.id for r in store.compile_rules_from_config(cfg)] == ["r1", "r2"]
+
+    def test_compile_rules_from_config_reads_version_3(self):
+        from privacyfence.policy import scope_rows
+
+        scoped = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for("drive.folder", ["F1"]), scope="drive.folder", value=["F1"],
+            verbs=frozenset({Verb.READ}), operations=scope_rows.implied_operations("drive.folder", {Verb.READ}),
+        )
+        custom = scope_rows.ScopeRow(
+            id="r-custom", scope=None, value=None, verbs=frozenset(), operations=frozenset({"op.a"}),
+            predicate="always_allow",
+        )
+        cfg = {"auto_accept": scope_rows.rows_to_config([scoped, custom])}
+
+        rules = store.compile_rules_from_config(cfg)
+
+        assert rules == scope_rows.compile_rows([scoped, custom])
+        assert {rule.id for rule in rules} == {scoped.id, "r-custom"}
+        assert any(rule.predicate == "approved_folder" and rule.value == ["F1"] for rule in rules)
 
 
 class TestRulesToConfig:

@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-11. Implemented.
 Amends ADR 0148. Its consequence "stored rules hold operation keys, so existing rules are not widened" still holds for every automatic path; this ADR adds the one explicit way to widen a rule.
+Amended by ADR 0174.
 
 ## Context
 

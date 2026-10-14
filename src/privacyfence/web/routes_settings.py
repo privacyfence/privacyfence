@@ -146,6 +146,7 @@ from starlette.routing import BaseRoute, Route
 from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepup, web_shell
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
+from ..policy import scope_rows
 from ..policy import store as policy_store
 from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
@@ -155,9 +156,9 @@ from ..scoped_tokens import (
 )
 from ..agent_identity import REGISTRY, entry_for_id, sanitize_client_string
 from ..settings_controller import (
-    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rules,
+    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
     _parse_value_list, _pii_general_fields, _privacy_state_from_config, _relative_time, _rule_usage_map,
-    audit_rows, cached_rule_value, rule_resource_ids,
+    audit_rows, cached_row_value, rule_resource_ids,
 )
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
@@ -224,7 +225,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------- #
 
 _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
-    "add_policy_rule", "remove_policy_rule", "update_policy_rule",
+    "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
     "toggle_pii_detection", "toggle_pii_category",
     # Changes *what gets gated* the same way every other entry here
@@ -356,7 +357,7 @@ class ScopedTokenWiring:
     clipboard, so no response from this module ever carries it;
     ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
 
-    store_create: Callable[[str, int, list[str], list[str]], tuple[ScopedToken, str]]
+    store_create: Callable[[str, int, list[str], list[str], bool], tuple[ScopedToken, str]]
     store_revoke: Callable[[str], ScopedToken | None]
     store_revoke_all: Callable[[], int]
     send_secret: Callable[[str], tuple[bool, str]]
@@ -374,7 +375,13 @@ def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
         return None
     if not all(isinstance(name, str) for name in (*rule_ids, *tools)):
         return None
-    return {"label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools)}
+    allow_personal_data = payload.get("allow_personal_data", False)
+    if not isinstance(allow_personal_data, bool):
+        return None
+    return {
+        "label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools),
+        "allow_personal_data": allow_personal_data,
+    }
 
 
 def _scoped_revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1195,6 +1202,7 @@ def build_routes(
         try:
             token, secret = await run_in_threadpool(
                 scoped_tokens.store_create, bound["label"], bound["days"], bound["rule_ids"], bound["tools"],
+                bound["allow_personal_data"],
             )
         except ScopedTokenError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1333,7 +1341,7 @@ _SCOPED_TOKENS_DISABLED = (
 )
 
 _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
-    "add_policy_rule", "remove_policy_rule", "update_policy_rule",
+    "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
     "toggle_pii_detection", "toggle_pii_category",
     "set_default_policy", "set_category_policy",
     "pin_agent_client", "unpin_agent_client",
@@ -1509,7 +1517,7 @@ def build_org_routes(
         privacy.pop("gmail_append_signature", None)
 
         resolver = get_resolver()
-        rules = auto_accept.get_policy_v2_rules()
+        rows = auto_accept.get_policy_rows()
         # The viewing principal's own recent decisions -- per-principal, exactly like
         # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
         # with the same agent column local mode's page gets.
@@ -1539,8 +1547,8 @@ def build_org_routes(
             "grist_signin": "unavailable",
             "grist_server_url_pinned": "",
             "grist_auth": {"error": ""},
-            "auto_accept": _auto_accept_state_from_rules(
-                rules, _rule_usage_map(), resolve_value=lambda rule: cached_rule_value(rule, resolver),
+            "auto_accept": _auto_accept_state_from_rows(
+                rows, _rule_usage_map(), resolve_value=lambda row: cached_row_value(row, resolver),
             ),
             "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
@@ -1611,8 +1619,9 @@ def build_org_routes(
         with principal_scope(principal):
             resolver = get_resolver()
             pending: list[tuple[Any, str]] = []
-            for rule in auto_accept.get_policy_v2_rules():
-                rt, resource_ids = rule_resource_ids(rule)
+            for row in auto_accept.get_policy_rows():
+                compiled = scope_rows.compile_row(row)
+                rt, resource_ids = rule_resource_ids(compiled[0]) if compiled else (None, [])
                 if rt is not None:
                     pending.extend(
                         (rt, rid) for rid in resource_ids if rid and resolver.cached_name(rt, rid) is None
@@ -1716,6 +1725,7 @@ def build_org_routes(
                     lambda: store.create(
                         principal, label=bound["label"], days=bound["days"], rule_ids=bound["rule_ids"],
                         tools=bound["tools"], policy=token_policy,
+                        allow_personal_data=bound["allow_personal_data"],
                     ),
                 )
             except ScopedTokenError as exc:
@@ -1724,7 +1734,9 @@ def build_org_routes(
             _record_settings_audit(
                 principal,
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
-                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s) (principal={principal.id})",
+                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)"
+                + (", personal data allowed" if token.allow_personal_data else "")
+                + f" (principal={principal.id})",
             )
         # The only place the secret ever leaves the server: this one answer.
         return JSONResponse(
@@ -1854,19 +1866,17 @@ def build_org_routes(
             if not verb_enums:
                 return None
             value = _parse_value_list(str(body.get("value") or ""))
-            personal_data = body.get("personal_data") is True
-            new_rules = policy_catalogue.rules_for_catalogue_entry(
-                group, value, verb_enums, personal_data=personal_data,
-            )
-            if not new_rules or not auto_accept.add_policy_v2_rules(new_rules):
+            new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            if not new_rules:
+                return None
+            row_ids = auto_accept.policy_row_ids_for(new_rules)
+            if not auto_accept.add_policy_v2_rules(new_rules):
                 return None
             verb_names = ", ".join(verb.value for verb in verb_enums)
-            if personal_data:
-                return (
-                    f"Added auto-accept rule ({group!r}, allow {verb_names!r}, personal data allowed) "
-                    f"(principal={principal.id})"
-                )
-            return f"Added auto-accept rule ({group!r}, allow {verb_names!r}) (principal={principal.id})"
+            return (
+                f"Added auto-accept rule ({group!r}, allow {verb_names!r}) to "
+                f"{', '.join(row_ids)} (principal={principal.id})"
+            )
         if action == "remove_policy_rule":
             rule_id = str(body.get("rule_id", ""))
             if not auto_accept.remove_policy_v2_rule(rule_id):
@@ -1879,6 +1889,16 @@ def build_org_routes(
                 return None
             return (
                 f"Updated auto-accept rule {rule_id!r}, added {', '.join(sorted(added))} "
+                f"(principal={principal.id})"
+            )
+        if action == "set_policy_rule_verbs":
+            rule_id = str(body.get("rule_id", ""))
+            verb_enums = policy_catalogue.parse_verbs(body.get("verbs") or [])
+            if not auto_accept.set_policy_rule_verbs(rule_id, list(verb_enums)):
+                return None
+            verb_names = ", ".join(sorted(verb.value for verb in verb_enums))
+            return (
+                f"Changed auto-accept rule {rule_id!r} to allow {verb_names!r} "
                 f"(principal={principal.id})"
             )
         if action == "set_step_up_scope":

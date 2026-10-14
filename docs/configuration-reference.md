@@ -125,13 +125,16 @@ conditions a rule can use are in [Approvals and policy](approvals-and-policy.md)
 
 | Key | Type | Code default | Seeded | What it is |
 |---|---|---|---|---|
-| `auto_accept.version` | int | — | `2` | Schema version. Always `2`. |
-| `auto_accept.rules` | list | empty (no rules) | one rule, below | The rules. A call auto-accepts if any rule matches. |
-| `auto_accept.rules[].id` | string | — | `r-d76028ec0b` | Stable id computed from the rule's predicate, value and conditions. |
-| `auto_accept.rules[].predicate` | string | — | `always_allow` | The scope selector. |
+| `auto_accept.version` | int | — | `3` | Schema version. Always `3`; a version-2 file is converted on the next start and the previous file is kept as `settings.yaml.pre-scope-rules.bak`. |
+| `auto_accept.rules` | list | empty (no rules) | one rule, below | The rules, one per scope. A call auto-accepts if any rule matches. |
+| `auto_accept.rules[].id` | string | — | `r-d76028ec0b` | Stable id. A scoped rule's id is computed from its scope and value; a custom rule keeps the id it was written with. |
+| `auto_accept.rules[].scope` | string | — | absent | The scope a scoped rule trusts. Absent on a custom rule. |
+| `auto_accept.rules[].predicate` | string | — | `always_allow` | The scope selector of a custom rule. Absent on a scoped rule. |
 | `auto_accept.rules[].value` | any | — | `null` | The resource ids or names the scope matches, or `null` for a scope without a value. |
+| `auto_accept.rules[].verbs` | list | — | `[update]` | The verbs the rule allows (derived from `operations` for a custom rule; display only). |
 | `auto_accept.rules[].operations` | list | — | `[contacts.edit]` | Internal operation keys the rule covers. |
-| `auto_accept.rules[].conditions` | list | `[]` | `[[no_contact_info_change, null]]` | `[name, value]` pairs that must all hold. |
+| `auto_accept.rules[].conditions` | list | `[]` | `[[no_contact_info_change, null]]` | Custom rules only: `[name, value]` pairs that must all hold. |
+| `auto_accept.rules[].former_ids` | list | `[]` | absent | The ids of the version-2 rules the upgrade merged into this rule. |
 
 The seeded rule auto-accepts contact edits that change no email address or phone number. A missing
 or empty `auto_accept` section means nothing auto-accepts.

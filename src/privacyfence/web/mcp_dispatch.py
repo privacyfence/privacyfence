@@ -20,7 +20,7 @@ from typing import Any, Callable, Hashable
 
 from ..approvals import ApprovalPending, PendingApprovalRegistry
 from ..audit_log import AuditEntry, current_week, get_audit_logger, released_request_scope
-from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
+from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_rows
 from .. import local_files
 from ..connector import Connector
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
@@ -28,6 +28,7 @@ from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, u
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe as policy_describe
 from ..policy import propose as policy_propose
+from ..policy import scope_rows
 from ..policy import registry as policy_registry
 from ..principal import current_principal
 from ..scoped_tokens import current_token_scope
@@ -40,27 +41,29 @@ logger = logging.getLogger(__name__)
 _CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm"})
 
 
-def _policy_rule_row(rule) -> dict:
+def _policy_rule_row(row) -> dict:
     """One ``privacyfence_list_policy`` rule row -- the same fields
     ``settings_controller.SettingsController._auto_accept_state`` renders for the Auto-accept
     Settings page, minus that method's own name-resolution machinery (a friendly display name
     for an opaque id like a Drive folder), which is a web-page-only affordance an MCP client has no
     use for: a model reading ``covered_tools``/``sentence`` already gets the width of the rule, and raw
     ids are exactly what it would pass back into ``privacyfence_propose_policy_change`` anyway."""
-    connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    compiled = scope_rows.compile_row(row)
+    connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in row.operations})
     return {
-        "id": rule.id,
-        "sentence": policy_describe.rule_sentence(rule),
+        "id": row.id,
+        "sentence": policy_describe.row_sentence(row),
         "connector": connectors_of_rule[0] if connectors_of_rule else "",
-        "scope_type": policy_describe.scope_type_of(rule),
-        "value": rule.value,
-        "operations": sorted(rule.operations),
+        "scope": row.scope,
+        "scope_type": policy_describe.scope_type_of(compiled[0]) if compiled else "",
+        "value": row.value,
+        "operations": sorted(row.operations),
         "verbs": [
             {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
-            for verb in policy_describe.rule_verbs(rule)
+            for verb in sorted(row.verbs, key=policy_propose.verb_sort_key)
         ],
-        "conditions": [[name, value] for name, value in rule.conditions],
-        "covered_tools": sorted(policy_describe.covered_tools(rule)),
+        "conditions": [[name, value] for name, value in row.conditions],
+        "covered_tools": sorted({tool for rule in compiled for tool in policy_describe.covered_tools(rule)}),
     }
 
 
@@ -374,15 +377,15 @@ class McpDispatcher:
             logger.warning("Audit log write failed for policy check: %s", exc)
 
     def list_policy(self, claude_reason: str = "") -> dict:
-        """privacyfence_list_policy's handler: the on-disk v2
-        ``auto_accept:`` section, sentence-rendered the same way ``settings_controller.
+        """privacyfence_list_policy's handler: the on-disk
+        ``auto_accept:`` scope rows, sentence-rendered the same way ``settings_controller.
         SettingsController._auto_accept_state`` renders it for the Auto-accept Settings page, plus
         the scope catalogue ``privacyfence_propose_policy_change``'s ``group``/``verbs`` validate
         against -- so a model can discover a real rule id and a real (group, verbs) pair before
         proposing anything, the same "list before you propose" contract ``propose_policy_change``
         below expects."""
         _ = self.connectors
-        rule_rows = sorted((_policy_rule_row(rule) for rule in get_policy_v2_rules()), key=lambda row: row["sentence"])
+        rule_rows = sorted((_policy_rule_row(row) for row in get_policy_rows()), key=lambda row: row["sentence"])
         result = {"rules": rule_rows, "scope_groups": policy_catalogue.scope_catalogue()}
         try:
             get_audit_logger().record(AuditEntry(

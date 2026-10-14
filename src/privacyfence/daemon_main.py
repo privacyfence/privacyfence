@@ -95,6 +95,7 @@ from . import (
     audit_forwarding,
     org_bundle_signing,
     org_mode,
+    policy_upgrade,
     privilege_separation,
     step_up_config,
 )
@@ -104,7 +105,7 @@ if TYPE_CHECKING:
     from .approvals import PendingApprovalRegistry
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, safe_principal_id, user_dir
 from .std_streams import ensure_std_streams
-from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, current_principal
+from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
 from .webauthn_stepup import StepUpRequirementChange, has_credentials as has_webauthn_credentials
 from .webauthn_stepup import observe_step_up_requirement, step_up_disabled_notice
 from .app_credentials import telegram_app_credentials
@@ -379,7 +380,7 @@ def _drop_converted_v1_sections(config: dict[str, Any], resolved: str) -> None:
     )
 
 
-def load_config(config_path: str) -> dict[str, Any]:
+def load_config(config_path: str, *, principal: Principal | None = None) -> dict[str, Any]:
     resolved = _resolve_path(config_path)
     if not os.path.exists(resolved):
         _bootstrap_config(resolved)
@@ -388,8 +389,29 @@ def load_config(config_path: str) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError(f"Config file {resolved} did not parse to a mapping")
     _drop_converted_v1_sections(config, resolved)
+    if principal is not None:
+        policy_upgrade.ensure_scope_rows(config, resolved, principal, log=_deferred_warnings.append)
     policy_store.reject_v1_sections(config, resolved)
     return config
+
+
+def _upgrade_all_principals() -> None:
+    """Convert every principal's ``auto_accept:`` section to version 3 before the scoped token
+    store is built, so no scoped request is served with a token that still names a v2 rule id.
+    A principal without a settings file is skipped; the local principal is a no-op here after
+    ``main``'s own ``load_config``."""
+    from .web.mcp_auth import scoped_token_principals
+
+    for principal in scoped_token_principals():
+        with principal_scope(principal):
+            resolved = _resolve_authority_path("config/settings.yaml")
+            if not os.path.exists(resolved):
+                continue
+            with open(resolved, encoding="utf-8") as fh:
+                config = yaml.safe_load(fh) or {}
+            if not isinstance(config, dict):
+                continue
+            policy_upgrade.ensure_scope_rows(config, resolved, principal, log=_deferred_warnings.append)
 
 
 def load_org_config() -> dict[str, Any]:
@@ -792,7 +814,6 @@ def _maybe_start_web_server(
     mcp_dispatcher = None
     if mcp_enabled:
         from .connector_registry import ConnectorRegistry
-        from .principal import Principal
 
         # ADR 0008: local mode's own /mcp dispatch is now per-principal,
         # exactly like org mode's (_start_org_web_server's own
@@ -1024,7 +1045,7 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     settings.yaml carried a rule *and* went through the real factory.
     """
     resolved_path = _resolve_authority_path("config/settings.yaml")
-    cfg = load_config(resolved_path)
+    cfg = load_config(resolved_path, principal=current_principal())
     _flush_deferred_warnings()
     init_config_path(resolved_path)
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
@@ -1083,7 +1104,6 @@ def _start_org_web_server(
     from .connector_registry import ConnectorRegistry
     from .gate import configure_popup_executor
     from .org_identity import IdpConfig
-    from .principal import Principal, current_principal
     from .web.mcp_dispatch import McpDispatcher
     from .web.oauth_provider import OrgOAuthProvider
     from .web.org_session import OrgSessionStore
@@ -1161,6 +1181,10 @@ def _start_org_web_server(
     )
 
     push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)
+
+    # Before WebServer builds the scoped token store: tokens must name row ids when it loads them.
+    _upgrade_all_principals()
+    _flush_deferred_warnings()
 
     server = WebServer(
         web_ui,
@@ -2371,7 +2395,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        config = load_config(args.config)
+        config = load_config(args.config, principal=LOCAL_PRINCIPAL)
     except (FileNotFoundError, ValueError) as exc:
         return _refuse_to_start(f"Configuration error: {exc}")
 

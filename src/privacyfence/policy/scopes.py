@@ -571,8 +571,8 @@ def _peek_page_matches(value: Any, ctx: ReviewContext) -> bool:
 # are honestly-unconditional scopes in the same sense `always_allow` is -- but deliberately their
 # own predicates, distinct from
 # `always_allow`, rather than reusing it: `always_allow` already carries three `PROPOSABLE_SCOPES`
-# entries (Gmail drafting, two calendar conditions) whose declared verbs (`draft`, `read`) would
-# make `describe.rule_verbs` wrongly filter a `configure`/`share` rule down to nothing (it credits a
+# entries (Gmail drafting, two calendar conditions) whose declared verbs (`add`, `read`) would
+# make `describe.rule_verbs` wrongly filter a `restructure`/`send` rule down to nothing (it credits a
 # rule only with the verbs its predicate's own catalogue entries declare, once that predicate has
 # any). A predicate with no catalogue entry at all is credited with every verb its operations
 # actually carry instead, which is what these two need. `policy_engine.evaluate`'s own matching

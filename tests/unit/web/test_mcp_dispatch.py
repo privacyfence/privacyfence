@@ -555,6 +555,23 @@ class TestListPolicy:
         assert "folder1" in row["sentence"]
         assert "drive_get_file_content" in row["covered_tools"]
 
+    async def test_a_listed_row_carries_the_scope_row_keys(self, monkeypatch):
+        from privacyfence import gate
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read", "download"],
+        )
+
+        (row,) = _dispatcher({}).list_policy()["rules"]
+        assert set(row) == {
+            "id", "sentence", "connector", "scope", "scope_type", "value", "operations", "verbs",
+            "conditions", "covered_tools",
+        }
+        assert row["scope"] == "drive.folder"
+        assert row["scope_type"] == "drive.folder"
+        assert [v["verb"] for v in row["verbs"]] == ["read", "download"]
+        assert row["conditions"] == []
+
     def test_records_a_policy_listed_audit_entry(self):
         _dispatcher({}).list_policy("checking before a scheduled run")
         entries = self._read_entries()
@@ -579,7 +596,7 @@ class TestProposePolicyChangeDispatch:
             "group": "drive.folder", "value": ["folder1"], "verbs": ["read"],
         })
         assert result["confirmed"] is True
-        assert "approved_folder" in self._config_path.read_text(encoding="utf-8")
+        assert "scope: drive.folder" in self._config_path.read_text(encoding="utf-8")
 
     async def test_denied_immediately_when_this_sessions_unattended_flag_is_set(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)

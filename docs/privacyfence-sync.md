@@ -48,8 +48,9 @@ step.
 Every step needs an auto-accept rule, because a scheduled run gets no cards. Create them in
 **Settings → Auto-accept → Add a rule** (each asks for your passkey): the report, Jira project,
 Drive folder, Grist document and Peek page the recipe touches, with the verbs its steps use. The
-export tools and a Peek page upload also need the **personal data** checkbox on their rule if the
-data holds personal data ([Letting personal data through](approvals-and-policy.md#letting-personal-data-through)).
+export tools and a Peek page upload also need **Let exports, downloads and page uploads carry
+personal data** ticked on the recipe's scoped token if the data holds personal data
+([Letting personal data through](approvals-and-policy.md#letting-personal-data-through)).
 
 To find a missing rule, run the recipe once with `privacyfence-sync run recipe.yaml --attended`:
 each uncovered step shows a card, and the card's **Always allow** button or Settings adds the rule.

@@ -285,35 +285,36 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     _scope("approved_folder", "drive.folder", "drive", (Verb.READ, Verb.DOWNLOAD), _folder_ids, "this folder"),
     _scope(
         "approved_sandbox_folder", "drive.folder", "drive",
-        (Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE),
+        (Verb.UPDATE, Verb.RESTRUCTURE, Verb.DELETE),
         _folder_ids, "this folder",
     ),
-    _scope("parent_folder_allowlist", "drive.folder", "drive", (Verb.CREATE,), _args_values("parent_folder_id"), "this folder"),
-    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE, Verb.COPY), _move_folder_ids, "these folders"),
+    _scope("parent_folder_allowlist", "drive.folder", "drive", (Verb.ADD,), _args_values("parent_folder_id"), "this folder"),
+    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE,), _move_folder_ids, "these folders"),
     _scope("i_am_owner", "drive.owned_by_me", "drive", (Verb.READ, Verb.DOWNLOAD), _no_value_needed, "if I own it"),
     # ── Gmail ─────────────────────────────────────────────────────────────────────────────────
-    _scope("i_am_sender", "gmail.sender", "gmail", (Verb.READ, Verb.DOWNLOAD, Verb.ARCHIVE), _no_value_needed, "if I'm sender"),
+    _scope("i_am_sender", "gmail.sender", "gmail", (Verb.READ, Verb.DOWNLOAD, Verb.MOVE), _no_value_needed, "if I'm sender"),
     _scope(
         "trusted_sender_domain", "gmail.sender_domain", "gmail",
-        (Verb.READ, Verb.DOWNLOAD, Verb.ARCHIVE), _sender_domain, "this sender domain",
+        (Verb.READ, Verb.DOWNLOAD, Verb.MOVE), _sender_domain, "this sender domain",
     ),
-    _scope("label_name_allowlist", "gmail.label", "gmail", (Verb.LABEL,), _args_values("label_name"), "this label"),
+    _scope("label_name_allowlist", "gmail.label", "gmail", (Verb.UPDATE,), _args_values("label_name"), "this label"),
     # Gmail drafting is unconditional (``always_allow`` under ``gmail.create_draft``), and
     # modelling it as an explicit "anything in Gmail" scope is the point -- an unconditional grant
     # that reads as unconditional. It is never widenable: a scope with no resource identity must not
-    # be offered a one-click width increase, and ``draft`` is a send-family verb.
+    # be offered a one-click width increase, and ``add`` is a write-family verb, and this scope
+    # is still never widenable.
     _scope(
-        "always_allow", "gmail.anything", "gmail", (Verb.DRAFT,), _no_value_needed, "",
-        group="gmail.anything", widenable=False,
+        "always_allow", "gmail.anything", "gmail", (Verb.ADD,), _no_value_needed, "",
+        group="gmail.anything", widenable=False, excludes=("gmail.create_label",),
     ),
     # ── Calendar ──────────────────────────────────────────────────────────────────────────────
     #
     # ``calendar.out_of_office`` and ``calendar.working_location`` always act on your own primary
     # calendar and carry no ``calendar_id`` argument at all, so ``personal_calendar`` has nothing to
-    # check for them -- derivation over their ``create``/``update`` verbs has to be told so.
+    # check for them -- derivation over their ``add``/``update`` verbs has to be told so.
     _scope(
         "personal_calendar", "calendar.calendar", "calendar",
-        (Verb.READ, Verb.CREATE, Verb.UPDATE, Verb.SHARE, Verb.DELETE), _args_values("calendar_id"),
+        (Verb.READ, Verb.ADD, Verb.UPDATE, Verb.DELETE), _args_values("calendar_id"),
         "this calendar", excludes=("calendar.out_of_office", "calendar.working_location"),
     ),
     _scope("i_am_organizer", "calendar.organized_by_me", "calendar", (Verb.READ,), _no_value_needed, "if I organize it"),
@@ -324,7 +325,10 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     # can actually be measured from -- args for a single channel, every result for a search.
     _scope("approved_channel", "slack.channel", "slack", (Verb.READ,), _slack_channel, "this channel"),
     _scope("approved_channel_all_results", "slack.channel", "slack", (Verb.SEARCH,), _slack_result_channels, "this channel"),
-    _scope("approved_recipient", "slack.channel", "slack", (Verb.SEND,), _slack_channel, "this channel"),
+    _scope(
+        "approved_recipient", "slack.channel", "slack", (Verb.SEND,), _slack_channel, "this channel",
+        excludes=("slack.create_group_chat",),
+    ),
     # The channel-kind attributes are mutually exclusive descriptions of one channel, not degrees of
     # the same scope, so each gets its own widening group: "my own DM" must never offer "…and every
     # group DM" as a widening of itself.
@@ -336,7 +340,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     # ── Jira ──────────────────────────────────────────────────────────────────────────────────
     _scope(
         "approved_project_keys", "jira.project", "jira",
-        (Verb.READ, Verb.CREATE, Verb.COMMENT, Verb.UPDATE, Verb.TRANSITION), _jira_project_keys, "this project",
+        (Verb.READ, Verb.ADD, Verb.UPDATE), _jira_project_keys, "this project",
     ),
     _scope("approved_project_keys_all_results", "jira.project", "jira", (Verb.SEARCH,), _jira_result_project_keys, "this project"),
     _scope("i_am_reporter", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm reporter", group="jira.my_issues/reporter"),
@@ -344,7 +348,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     # ── Confluence ────────────────────────────────────────────────────────────────────────────
     _scope(
         "approved_space_keys", "confluence.space", "confluence",
-        (Verb.READ, Verb.DOWNLOAD, Verb.CREATE, Verb.UPDATE), _confluence_space_keys, "this space",
+        (Verb.READ, Verb.DOWNLOAD, Verb.ADD, Verb.UPDATE), _confluence_space_keys, "this space",
     ),
     _scope(
         "i_am_author", "confluence.authored_by_me", "confluence",
@@ -370,15 +374,15 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     # ── Tasks ─────────────────────────────────────────────────────────────────────────────────
     _scope(
         "approved_task_list", "tasks.list", "tasks",
-        (Verb.CREATE, Verb.UPDATE, Verb.COMPLETE, Verb.MOVE), _task_list_ids, "this list",
+        (Verb.ADD, Verb.UPDATE, Verb.MOVE), _task_list_ids, "this list",
     ),
     # ── Contacts ──────────────────────────────────────────────────────────────────────────────
     # ``label_name_allowlist`` is the one predicate that genuinely serves two scope types (see
     # ``scopes.SCOPE_SELECTORS``' own tuple for it), so this entry cannot be identified by its
     # predicate alone the way every other one is.
     _scope(
-        "label_name_allowlist", "contacts.label", "contacts", (Verb.LABEL,), _args_values("label_name"),
-        "this label", entry_id="contacts.label",
+        "label_name_allowlist", "contacts.label", "contacts", (Verb.UPDATE,), _args_values("label_name"),
+        "this label", entry_id="contacts.label", excludes=("contacts.edit",),
     ),
     # ── Condition scopes (no resource identity -- see ProposableScope.condition) ───────────────
     _scope(

@@ -16,6 +16,7 @@ same-file temp-accept grace window, and the rules-changed listener broadcast.
 """
 from __future__ import annotations
 
+import dataclasses
 import threading
 from types import SimpleNamespace
 
@@ -36,11 +37,13 @@ from privacyfence.auto_accept import (
     register_temp_accept,
     remove_policy_v2_rule,
     remove_rules_changed_listener,
+    set_policy_rule_verbs,
     set_rules_changed_listener,
     temp_accept_key,
     update_policy_v2_rule,
 )
 from privacyfence.policy import catalogue
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.registry import Verb
 from privacyfence.policy.engine import PolicyRule, evaluate
@@ -296,11 +299,12 @@ class TestRulesChangedListener:
         config_path = tmp_path / "settings.yaml"
         config_path.write_text(yaml.dump({}), encoding="utf-8")
         init_config_path(str(config_path))
-        add_policy_v2_rules([PolicyRule(
+        rule = PolicyRule(
             id="i_am_sender", predicate="i_am_sender", value=None,
             operations=frozenset({"gmail.read_message"}),
-        )])
-        rule_id = policy_store.rule_id_for("i_am_sender", None, ())
+        )
+        (rule_id,) = auto_accept.policy_row_ids_for([rule])
+        add_policy_v2_rules([rule])
         calls = []
         set_rules_changed_listener(lambda: calls.append(1))
 
@@ -320,7 +324,6 @@ class TestRulesChangedListener:
         read_and_create = frozenset({"grist.read_records", "grist.add_records", "grist.update_records"})
         add_policy_v2_rules([PolicyRule(
             id="x", predicate="grist.document", value=["DOC1"], operations=read_and_create,
-            allow_personal_data=True,
         )])
         (stored,) = auto_accept.get_policy_v2_rules()
         calls = []
@@ -331,7 +334,7 @@ class TestRulesChangedListener:
         assert "grist.import_csv" in added
         assert not added & read_and_create
         (updated,) = auto_accept.get_policy_v2_rules()
-        assert (updated.id, updated.value, updated.allow_personal_data) == (stored.id, ["DOC1"], True)
+        assert (updated.id, updated.value) == (stored.id, ["DOC1"])
         assert updated.operations == stored.operations | added
         assert auto_accept.get_policy_v2_store_rules() == [updated]
         assert calls == [1]
@@ -348,6 +351,169 @@ class TestRulesChangedListener:
 
         assert update_policy_v2_rule("no-such-rule") == frozenset()
         assert update_policy_v2_rule(stored.id) == frozenset()
+
+        assert config_path.read_text(encoding="utf-8") == before
+        assert calls == []
+
+    def _folder_row(self, tmp_path, verbs):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        add_policy_v2_rules(catalogue.rules_for_catalogue_entry("drive.folder", ["FOLDER1"], verbs))
+        (row,) = auto_accept.get_policy_rows()
+        return config_path, row
+
+    def test_set_policy_rule_verbs_adds_a_verb_keeping_the_id_and_firing_the_listener(self, tmp_path):
+        _, row = self._folder_row(tmp_path, [Verb.READ])
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        assert set_policy_rule_verbs(row.id, [Verb.READ, Verb.UPDATE]) is True
+
+        (after,) = auto_accept.get_policy_rows()
+        assert (after.id, after.value) == (row.id, row.value)
+        assert after.verbs == {Verb.READ, Verb.UPDATE}
+        assert after.operations > row.operations
+        assert auto_accept.get_policy_v2_store_rules() == scope_rows.compile_row(after)
+        assert calls == [1]
+
+    def test_set_policy_rule_verbs_removes_a_verb_and_its_operations(self, tmp_path):
+        _, row = self._folder_row(tmp_path, [Verb.READ, Verb.UPDATE])
+
+        assert set_policy_rule_verbs(row.id, [Verb.READ]) is True
+
+        (after,) = auto_accept.get_policy_rows()
+        assert after.verbs == {Verb.READ}
+        assert after.operations < row.operations
+
+    @pytest.mark.parametrize("rule_id, verbs", [
+        ("no-such-rule", [Verb.READ]),
+        ("ROW", []),
+        ("ROW", [Verb.SEND]),
+    ])
+    def test_set_policy_rule_verbs_refusal_writes_nothing(self, tmp_path, rule_id, verbs):
+        config_path, row = self._folder_row(tmp_path, [Verb.READ])
+        before = config_path.read_text(encoding="utf-8")
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        assert set_policy_rule_verbs(row.id if rule_id == "ROW" else rule_id, verbs) is False
+
+        assert config_path.read_text(encoding="utf-8") == before
+        assert calls == []
+
+    def test_set_policy_rule_verbs_with_the_same_verbs_is_a_no_op(self, tmp_path):
+        config_path, row = self._folder_row(tmp_path, [Verb.READ])
+        before = config_path.read_text(encoding="utf-8")
+
+        assert set_policy_rule_verbs(row.id, [Verb.READ]) is False
+
+        assert config_path.read_text(encoding="utf-8") == before
+
+    def test_set_policy_rule_verbs_requires_an_initialized_config_path(self):
+        with pytest.raises(RuntimeError):
+            set_policy_rule_verbs("some-id", [Verb.READ])
+
+    def test_add_policy_v2_rules_writes_version_3(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+
+        assert add_policy_v2_rules(
+            catalogue.rules_for_catalogue_entry("gmail.sender_domain", ["example.com"], [Verb.READ])
+        ) is True
+
+        section = yaml.safe_load(config_path.read_text(encoding="utf-8"))["auto_accept"]
+        assert section["version"] == 3
+        (row,) = section["rules"]
+        assert row["scope"] == "gmail.sender_domain"
+        assert row["value"] == ["example.com"]
+        assert row["verbs"] == ["read"]
+        assert row["id"] == scope_rows.row_id_for("gmail.sender_domain", ["example.com"])
+        assert auto_accept.get_policy_v2_store_rules() == auto_accept.get_policy_v2_rules()
+
+    def test_adding_a_verb_to_a_scope_extends_its_row(self, tmp_path):
+        # The reported duplicate, from the add side: a second verb on the same (scope, value) must
+        # land in the first one's row, not beside it.
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        add_policy_v2_rules(catalogue.rules_for_catalogue_entry("drive.folder", ["F1"], [Verb.READ]))
+        (first,) = auto_accept.get_policy_rows()
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        added = add_policy_v2_rules(catalogue.rules_for_catalogue_entry("drive.folder", ["F1"], [Verb.UPDATE]))
+
+        assert added is True
+        (row,) = auto_accept.get_policy_rows()
+        assert row.id == first.id
+        assert row.verbs == first.verbs | {Verb.UPDATE}
+        assert first.operations < row.operations
+        assert calls == [1]
+
+    def test_policy_row_ids_for_reports_the_row_without_writing(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        rules = catalogue.rules_for_catalogue_entry("gmail.sender_domain", ["example.com"], [Verb.READ])
+        before = config_path.read_text(encoding="utf-8")
+
+        assert auto_accept.policy_row_ids_for(rules) == [
+            scope_rows.row_id_for("gmail.sender_domain", ["example.com"])
+        ]
+        assert config_path.read_text(encoding="utf-8") == before
+
+    def test_remove_by_row_id(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        add_policy_v2_rules(catalogue.rules_for_catalogue_entry("drive.folder", ["F1"], [Verb.READ]))
+        add_policy_v2_rules(catalogue.rules_for_catalogue_entry("drive.folder", ["F2"], [Verb.READ]))
+        keep, drop = auto_accept.get_policy_rows()
+
+        assert remove_policy_v2_rule(drop.id) is True
+
+        assert [row.id for row in auto_accept.get_policy_rows()] == [keep.id]
+        assert {rule.id for rule in auto_accept.get_policy_v2_store_rules()} == {keep.id}
+
+    def test_update_fills_missing_on_row(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        add_policy_v2_rules(catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [Verb.READ]))
+        (row,) = auto_accept.get_policy_rows()
+        stale = dataclasses.replace(row, operations=frozenset(sorted(row.operations)[:1]))
+        config_path.write_text(
+            yaml.safe_dump({"auto_accept": scope_rows.rows_to_config([stale])}), encoding="utf-8",
+        )
+
+        added = update_policy_v2_rule(row.id)
+
+        assert added == row.operations - stale.operations
+        (updated,) = auto_accept.get_policy_rows()
+        assert (updated.id, updated.operations) == (row.id, row.operations)
+
+    def test_writer_refuses_when_upgrade_fails(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "settings.yaml"
+        v2 = {"auto_accept": policy_store.rules_to_config(
+            catalogue.rules_for_catalogue_entry("drive.folder", ["F1"], [Verb.READ])
+        )}
+        config_path.write_text(yaml.safe_dump(v2), encoding="utf-8")
+        init_config_path(str(config_path))
+        monkeypatch.setattr("privacyfence.policy_upgrade.ensure_scope_rows", lambda *a, **k: False)
+        before = config_path.read_text(encoding="utf-8")
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+        (rule_id,) = auto_accept.policy_row_ids_for(
+            catalogue.rules_for_catalogue_entry("drive.folder", ["F1"], [Verb.READ])
+        )
+
+        assert add_policy_v2_rules(
+            catalogue.rules_for_catalogue_entry("drive.folder", ["F2"], [Verb.READ])
+        ) is False
+        assert remove_policy_v2_rule(rule_id) is False
+        assert update_policy_v2_rule(rule_id) == frozenset()
 
         assert config_path.read_text(encoding="utf-8") == before
         assert calls == []

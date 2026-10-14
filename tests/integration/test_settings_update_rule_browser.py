@@ -65,7 +65,7 @@ def test_no_notice_or_button_for_a_rule_with_nothing_missing(page):
 def test_the_notice_names_the_tools_and_the_button_carries_the_rule_id(page):
     _render(page, _state(["grist_import_csv", "grist_update_csv"]))
     text = page.inner_text(NOTICE)
-    assert "Newer tools aren't covered yet: grist_import_csv, grist_update_csv." in text
+    assert "These verbs also cover tools this rule doesn't allow yet: grist_import_csv, grist_update_csv." in text
     assert page.get_attribute(BUTTON, "data-payload") == '{"rule_id":"r-abc123"}'
 
 
