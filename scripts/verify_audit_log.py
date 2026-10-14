@@ -35,17 +35,45 @@ and 2 for a usage error (a missing/inaccessible directory).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from privacyfence.audit_log import AuditLogger  # noqa: E402
+from privacyfence.audit_log import GENESIS_HASH, AuditLogger  # noqa: E402
 
 
 def _weeks_in(log_dir: Path) -> list[str]:
     return sorted(p.stem for p in log_dir.glob("*.jsonl"))
+
+
+def _chain_ends(path: Path) -> tuple[str, str] | None:
+    """``(first prev_hash, last entry_hash)`` of the chained lines in one week
+    file, or None when it has no chained line (or cannot be read)."""
+    first_prev: str | None = None
+    last_hash = ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(data, dict) or not data.get("entry_hash"):
+                    continue
+                if first_prev is None:
+                    first_prev = data.get("prev_hash") or ""
+                last_hash = data["entry_hash"]
+    except OSError:
+        return None
+    if first_prev is None:
+        return None
+    return first_prev, last_hash
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,6 +133,27 @@ def main(argv: list[str] | None = None) -> int:
         if not result.ok:
             print(f"  first broken entry: line {result.first_break_line}")
             all_ok = False
+
+    if not args.weeks:
+        ends = [(w, e) for w in weeks if (e := _chain_ends(log_dir / f"{w}.jsonl")) is not None]
+        for (earlier, earlier_ends), (later, later_ends) in zip(ends, ends[1:], strict=False):
+            if later_ends[0] == GENESIS_HASH:
+                print(f"{later}: note -- starts a new chain segment")
+            elif later_ends[0] != earlier_ends[1]:
+                print(f"{later}: FAILED -- its first entry does not continue {earlier}'s last entry "
+                      "(a week may have been removed or replaced)")
+                all_ok = False
+        state_path = log_dir / ".audit_chain_state.json"
+        if ends and state_path.exists():
+            newest, newest_ends = ends[-1]
+            try:
+                state_hash = json.loads(state_path.read_text(encoding="utf-8")).get("last_hash")
+            except (OSError, ValueError, AttributeError):
+                state_hash = None
+            if state_hash != newest_ends[1]:
+                print(f"{newest}: FAILED -- the last entry does not match .audit_chain_state.json "
+                      "(entries may have been removed from the end)")
+                all_ok = False
 
     return 0 if all_ok else 1
 
