@@ -284,7 +284,7 @@ class TestActionDispatch:
             calls += 1
             return calls > 1
 
-        events = server.state_stream.subscribe(disconnected)
+        events = server.state_stream.subscribe(disconnected, receives_settings=True)
         first = await events.__anext__()
         controller._push_snapshot()
         await events.__anext__()  # the initial approvals event

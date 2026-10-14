@@ -902,7 +902,10 @@ class _BootstrapMiddleware:
         if not code:
             await self._app(scope, receive, send)
             return
-        response = RedirectResponse(request.url.path, status_code=303)
+        response = RedirectResponse(
+            # A leading "//" or "/\\" would be read as a scheme-relative URL to another host.
+            "/" + request.url.path.lstrip("/\\"), status_code=303,
+        )
         # The code carries its own provenance (web/session_auth.py's
         # ``PROVENANCE_*``) and, since ADR 0008, the principal that minted it
         # (which OS user's control-channel connection asked), and the session
@@ -937,8 +940,13 @@ def _state_stream_route(stream: StateStream, *, sessions: LocalSessionStore) -> 
         session_id = request.cookies.get(_SESSION_COOKIE, "")
         if not session_id or not sessions.touch(session_id):
             return _unauthorized_response(request)
+        # The settings snapshot is the owner's: another OS user's stream carries approvals only.
+        receives_settings = current_principal().id == LOCAL_PRINCIPAL.id
         return StreamingResponse(
-            stream.subscribe(request.is_disconnected, touch=lambda: sessions.touch(session_id)),
+            stream.subscribe(
+                request.is_disconnected, touch=lambda: sessions.touch(session_id),
+                receives_settings=receives_settings,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store"},
         )

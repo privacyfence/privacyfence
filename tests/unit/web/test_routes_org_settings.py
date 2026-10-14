@@ -460,7 +460,10 @@ class TestRuleValueNames:
             if drive.calls:
                 break
             time.sleep(0.01)
-        time.sleep(0.05)
+        for _ in range(200):
+            if '"value": "Q3 Reports"' in client.get("/settings").text:
+                break
+            time.sleep(0.01)
         assert '"value": "Q3 Reports"' in client.get("/settings").text
         assert drive.calls == [self.FOLDER_ID]
 
