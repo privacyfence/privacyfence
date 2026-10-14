@@ -1,0 +1,87 @@
+<title>Organization Flow Checks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one reading column, a sticky progress strip, numbered items with checkable steps. */
+:root {
+  --bg: #f6f7f4; --surface: #ffffff; --fg: #1d2421; --muted: #5d6862; --line: #d9ded8;
+  --accent: #2f6b4f; --accent-soft: #e3efe8; --warn: #8a5a00; --warn-soft: #fbf0d9;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Source Serif 4", Georgia, serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --surface: #1a201d; --fg: #e4e9e5; --muted: #9aa69f; --line: #2c3530;
+  --accent: #7cc39f; --accent-soft: #1f3329; --warn: #e2b85c; --warn-soft: #33290f; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121614; --surface: #1a201d; --fg: #e4e9e5; --muted: #9aa69f; --line: #2c3530;
+  --accent: #7cc39f; --accent-soft: #1f3329; --warn: #e2b85c; --warn-soft: #33290f; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 760px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font-family: var(--serif); font-size: 1.9rem; line-height: 1.2; margin: 0 0 6px; text-wrap: balance; }
+.lede { color: var(--muted); margin: 0 0 18px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: .85rem; color: var(--muted); margin-bottom: 22px; }
+.meta code { font-family: var(--mono); font-size: .82rem; }
+.progress { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--bg);
+  padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; font-size: .85rem; }
+.bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+@media (prefers-reduced-motion: reduce) { .bar > span { transition: none; } }
+h2 { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 34px 0 10px; }
+.none { color: var(--muted); font-style: italic; }
+section.item { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 18px 20px; margin: 0 0 18px; }
+.item h3 { font-family: var(--serif); font-size: 1.2rem; margin: 0 0 4px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.item h3 .id { font-family: var(--mono); font-size: .78rem; color: var(--accent); font-weight: 500; }
+.time { font-size: .8rem; color: var(--muted); }
+.why { color: var(--muted); margin: 4px 0 12px; }
+ol.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; display: grid; gap: 10px; }
+ol.steps li { counter-increment: s; display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; }
+ol.steps li > div { min-width: 0; }
+ol.steps li > div::before { content: counter(s) ". "; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+input[type=checkbox] { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+li.done > div { color: var(--muted); }
+.see { display: block; font-size: .88rem; color: var(--muted); margin-top: 2px; }
+.see::before { content: "You should see: "; font-weight: 600; }
+code, pre { font-family: var(--mono); font-size: .85em; }
+code { background: var(--accent-soft); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+pre { background: var(--accent-soft); padding: 10px 12px; border-radius: 4px; overflow-x: auto; margin: 6px 0 0; white-space: pre; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.end { margin-top: 14px; padding: 10px 12px; border-radius: 4px; background: var(--accent-soft); font-size: .92rem; }
+.end.report { background: var(--warn-soft); }
+.end strong { display: block; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.secret { border-left: 3px solid var(--warn); padding-left: 10px; color: var(--fg); }
+</style>
+<div class="wrap">
+<h1>Organization mode: the real-IdP check</h1>
+<p class="lede">One check on a test organization deployment with a real identity provider, after every phase has merged into <code>fix/web-and-org-hardening</code> and before its pull request merges. CI fakes the identity provider; only a real one shows silent single sign-on stopping at the new consent page, and the new cookies working in a real browser.</p>
+<div class="meta"><span>Plan <a href="https://github.com/privacyfence/privacyfence/blob/plan/web-and-org-hardening/docs/web-and-org-hardening-plan.md"><code>docs/web-and-org-hardening-plan.md</code></a></span><span>Branch <code>fix/web-and-org-hardening</code></span></div>
+<div class="progress" role="status"><span id="count">0 of 0 steps done</span><div class="bar"><span id="fill"></span></div></div>
+<h2>Before implementation</h2>
+<p class="none">Nothing. No phase needs anything from you before it starts.</p>
+<h2>After implementation</h2>
+<section class="item" id="ma1-real-idp-org-flows"><h3><span class="id">ma1-real-idp-org-flows</span>Consent page, provider connect, sign-in and IdP step-up on a real deployment<span class="time">about 45 min</span></h3><p class="why">The consent page is the fix for a client getting a token without the person seeing it; it only matters if a real IdP signs people in silently.</p><ol class="steps"><li><input type="checkbox" id="ma1-real-idp-org-flows-s1" aria-label="Step 1 done"><div>On your test organization server (never production), install the branch: <code>pip install --upgrade "git+https://github.com/privacyfence/privacyfence@fix/web-and-org-hardening"</code> into the service's virtual environment, then restart the service, as <a href="https://github.com/privacyfence/privacyfence/blob/plan/web-and-org-hardening/docs/org-mode-setup-guide.md#upgrade">the organization guide, Upgrade</a> describes.<span class="see">the service is active and <code>/login</code> loads over HTTPS.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s2" aria-label="Step 2 done"><div>In <code>org_config.json</code>, set <code>"step_up": {"enabled": true}</code> for this test (see <a href="https://github.com/privacyfence/privacyfence/blob/plan/web-and-org-hardening/docs/org-mode-setup-guide.md#12-approvals-and-step-up">Approvals and step-up</a>) and restart. Do not enrol a passkey for the test user.<span class="see">Settings shows step-up on.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s3" aria-label="Step 3 done"><div>Sign in at <code>https://&lt;your host&gt;/login</code> as test user A.<span class="see">you land on <code>/approvals</code>, signed in as A.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s4" aria-label="Step 4 done"><div>On your computer: <code>claude mcp add --transport http privacyfence-test https://&lt;your host&gt;/mcp</code>, then run <code>/mcp</code> in Claude Code and authenticate.<span class="see">after the IdP sign-in, a PrivacyFence page “Allow Claude Code to use PrivacyFence as &lt;A's email&gt;?” naming the host Claude Code returns to (localhost). Nothing is connected yet.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s5" aria-label="Step 5 done"><div>Click <strong>Allow</strong>.<span class="see">a short “Returning to …” page, then Claude Code reports PrivacyFence connected.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s6" aria-label="Step 6 done"><div>Remove and re-add the server (<code>claude mcp remove privacyfence-test</code>, then step 4 again) as the same user.<span class="see">no consent page this time: the choice was remembered for A and this client.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s7" aria-label="Step 7 done"><div>In Claude Code, ask for a write that needs approval (for example a Gmail draft). Open its card in the browser and click <strong>Allow once</strong>.<span class="see">“This approval needs extra verification” with a button <strong>Verify by signing in again</strong>. Clicking it sends you through a fresh IdP sign-in and back to <code>/approvals?stepup=ok</code>, and the write goes through.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s8" aria-label="Step 8 done"><div>Take the id of any pending approval and open <code>https://&lt;your host&gt;/api/approvals/&lt;id&gt;/stepup/idp?result=accept</code> directly in the browser.<span class="see"><code>405 Method Not Allowed</code>, and the approval is still pending.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s9" aria-label="Step 9 done"><div>Open <code>/connect</code> and connect Google (or Slack) for user A.<span class="see">the provider's consent screen, then “Connected” on <code>/connect</code>.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s10" aria-label="Step 10 done"><div>Optional, if you have a second test user B: start <code>/connect</code> → Google as A, copy the provider's consent URL before finishing it, and open it in a private window signed in as B. Finish the consent there.<span class="see"><code>/connect</code> shows the connection failed, and neither A nor B has a new Google connection.</span></div></li><li><input type="checkbox" id="ma1-real-idp-org-flows-s11" aria-label="Step 11 done"><div>Turn <code>step_up.enabled</code> back to what it was and restart.<span class="see">the server is back to its normal configuration.</span></div></li></ol><div class="end report"><strong>Report back</strong>Paste into the pull request: <code>ma1: consent page shown once then remembered — pass/fail; IdP step-up from the card released the write — pass/fail; step-up GET link refused (405) — pass/fail; provider connect — pass/fail; cross-browser connect refused — pass/fail/skipped</code>.</div></section>
+</div>
+<script>
+(function () {
+  var KEY = "pf-manual-steps-web-and-org-hardening";
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { saved = {}; }
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("input[type=checkbox]"));
+  function update() {
+    var done = 0;
+    boxes.forEach(function (b) { if (b.checked) done++; b.closest("li").classList.toggle("done", b.checked); });
+    document.getElementById("count").textContent = done + " of " + boxes.length + " steps done";
+    document.getElementById("fill").style.width = (boxes.length ? (100 * done / boxes.length) : 0) + "%";
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!saved[b.id];
+    b.addEventListener("change", function () {
+      saved[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+      update();
+    });
+  });
+  update();
+})();
+</script>
