@@ -19,6 +19,8 @@ that means and doesn't mean.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import secrets
 import threading
@@ -39,6 +41,10 @@ from .csp import nonce_for
 logger = logging.getLogger(__name__)
 
 LOGIN_CALLBACK_PATH = "/oauth/idp/login-callback"
+# Set by /login on its redirect to the IdP, checked by the callback: the sign-in finishes only in
+# the browser that started it (ADR 0178). One slot, so of two /login tabs open at once only the
+# later one completes.
+LOGIN_BINDING_COOKIE = "pf_org_login"
 # Where a sign-out lands, and where a form post with no session left ends (web/routes_connect.py).
 # A page on this origin, not /login: /login redirects on to the IdP, and a browser checks the
 # page's form-action on every redirect a form submission follows, so that bounce would need the
@@ -91,9 +97,12 @@ class _LoginAttemptStore:
     def pop(self, state: str) -> _LoginAttempt | None:
         """Single-use: a state value is consumed the moment it's looked up,
         successfully or not, so the same IdP redirect can never be replayed
-        to mint a second session."""
+        to mint a second session. An attempt past its TTL reads as absent."""
         with self._lock:
-            return self._attempts.pop(state, None)
+            attempt = self._attempts.pop(state, None)
+        if attempt is None or (time.time() - attempt.created_at) > _LOGIN_ATTEMPT_TTL_SECONDS:
+            return None
+        return attempt
 
     def _prune(self) -> None:
         now = time.time()
@@ -101,6 +110,10 @@ class _LoginAttemptStore:
             stale = [s for s, a in self._attempts.items() if (now - a.created_at) > _LOGIN_ATTEMPT_TTL_SECONDS]
             for s in stale:
                 del self._attempts[s]
+
+
+def _binding_value(state: str) -> str:
+    return hashlib.sha256(state.encode()).hexdigest()
 
 
 def _safe_next_path(raw: str | None, *, default: str = DEFAULT_NEXT_PATH) -> str:
@@ -177,7 +190,12 @@ def build_routes(
         url = org_identity.build_authorization_url(
             idp, redirect_uri=redirect_uri, state=state, code_challenge=code_challenge, nonce=attempt.nonce,
         )
-        return RedirectResponse(url, status_code=302, headers={"Cache-Control": "no-store"})
+        response = RedirectResponse(url, status_code=302, headers={"Cache-Control": "no-store"})
+        response.set_cookie(
+            LOGIN_BINDING_COOKIE, _binding_value(state), httponly=True, secure=True, samesite="lax",
+            path=LOGIN_CALLBACK_PATH, max_age=_LOGIN_ATTEMPT_TTL_SECONDS,
+        )
+        return response
 
     async def login_callback(request: Request) -> Response:
         idp_error = request.query_params.get("error")
@@ -187,7 +205,10 @@ def build_routes(
         state = request.query_params.get("state", "")
         code = request.query_params.get("code", "")
         attempt = attempts.pop(state) if state else None
-        if attempt is None or not code:
+        # The state is burnt above either way; a callback without this browser's binding cookie
+        # (a link handed to someone else) gets the same answer as an unknown state.
+        bound = hmac.compare_digest(request.cookies.get(LOGIN_BINDING_COOKIE, ""), _binding_value(state))
+        if attempt is None or not code or not bound:
             return PlainTextResponse("Sign-in failed: invalid or expired login attempt.", status_code=400)
         try:
             tokens = await asyncio.to_thread(
@@ -212,7 +233,8 @@ def build_routes(
             new_session_id=session_id, principal_id=principal.id,
         )
         response = RedirectResponse(attempt.next_path, status_code=302, headers={"Cache-Control": "no-store"})
-        org_session.set_session_cookie(response, session_id)
+        org_session.set_session_cookie(response, session_id)  # first Set-Cookie header: the smoke test reads it
+        response.delete_cookie(LOGIN_BINDING_COOKIE, path=LOGIN_CALLBACK_PATH)
         return response
 
     async def logout(request: Request) -> Response:

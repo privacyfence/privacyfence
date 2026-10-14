@@ -2,6 +2,8 @@
 /logout -- the org-mode browser sign-in flow."""
 from __future__ import annotations
 
+import urllib.parse as _up
+
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
@@ -51,6 +53,19 @@ class TestLogin:
         app, _sessions = _app()
         r = _client(app).get("/login")
         assert r.headers.get("cache-control") == "no-store"
+
+    def test_login_sets_the_binding_cookie(self):
+        import hashlib
+
+        app, _sessions = _app()
+        r = _client(app).get("/login")
+        state = dict(_up.parse_qsl(_up.urlparse(r.headers["location"]).query))["state"]
+        set_cookie = r.headers["set-cookie"]
+        assert set_cookie.startswith(f"{roi.LOGIN_BINDING_COOKIE}={hashlib.sha256(state.encode()).hexdigest()}")
+        lowered = set_cookie.lower()
+        assert "httponly" in lowered and "secure" in lowered and "samesite=lax" in lowered
+        assert f"path={roi.LOGIN_CALLBACK_PATH}".lower() in lowered
+        assert f"max-age={roi._LOGIN_ATTEMPT_TTL_SECONDS}" in lowered
 
     def test_open_redirect_via_next_is_rejected(self, monkeypatch):
         app, sessions = _app()
@@ -146,6 +161,82 @@ class TestLoginCallback:
         # cosmetic.
         assert cb.headers["location"] == roi.DEFAULT_NEXT_PATH
         assert sessions.get(cb.cookies[org_session.SESSION_COOKIE]) is not None
+
+    def _login(self, client, monkeypatch, *, sub: str = "alice"):
+        monkeypatch.setattr(roi.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "opaque"})
+        monkeypatch.setattr(
+            roi.org_identity, "verify_id_token", lambda idp, token, *, nonce: {"sub": sub, "nonce": nonce},
+        )
+        r = client.get("/login")
+        return dict(_up.parse_qsl(_up.urlparse(r.headers["location"]).query))["state"], r
+
+    def test_login_callback_without_the_starting_browser_cookie_is_rejected(self, monkeypatch):
+        app, sessions = _app()
+        state, _login = self._login(_client(app), monkeypatch)
+        # Another person's browser: it has the callback URL but never visited /login.
+        cb = _client(app).get(f"{roi.LOGIN_CALLBACK_PATH}?code=abc&state={state}")
+        assert cb.status_code == 400
+        assert org_session.SESSION_COOKIE not in cb.cookies
+        assert "set-cookie" not in cb.headers
+        assert sessions.session_count == 0
+
+    def test_login_callback_with_another_attempts_cookie_is_rejected(self, monkeypatch):
+        app, sessions = _app()
+        victim_state, _ = self._login(_client(app), monkeypatch)
+        attacker = _client(app)
+        _attacker_state, attacker_login = self._login(attacker, monkeypatch)
+        attacker_cookie = attacker_login.cookies[roi.LOGIN_BINDING_COOKIE]
+
+        cb = _client(app).get(
+            f"{roi.LOGIN_CALLBACK_PATH}?code=abc&state={victim_state}",
+            headers={"Cookie": f"{roi.LOGIN_BINDING_COOKIE}={attacker_cookie}"},
+        )
+
+        assert cb.status_code == 400
+        assert org_session.SESSION_COOKIE not in cb.cookies
+        assert sessions.session_count == 0
+
+    def test_a_rejected_callback_still_burns_the_state(self, monkeypatch):
+        app, sessions = _app()
+        client = _client(app)
+        state, login = self._login(client, monkeypatch)
+        cookie = login.cookies[roi.LOGIN_BINDING_COOKIE]
+
+        wrong = _client(app).get(f"{roi.LOGIN_CALLBACK_PATH}?code=abc&state={state}")
+        right = _client(app).get(
+            f"{roi.LOGIN_CALLBACK_PATH}?code=abc&state={state}",
+            headers={"Cookie": f"{roi.LOGIN_BINDING_COOKIE}={cookie}"},
+        )
+
+        assert wrong.status_code == 400
+        assert right.status_code == 400
+        assert sessions.session_count == 0
+
+    def test_the_session_cookie_is_first_and_the_binding_cookie_is_cleared(self, monkeypatch):
+        app, _sessions = _app()
+        client = _client(app)
+        state, _login = self._login(client, monkeypatch)
+        cb = client.get(f"{roi.LOGIN_CALLBACK_PATH}?code=abc&state={state}")
+        headers = cb.headers.get_list("set-cookie")
+        assert headers[0].startswith(f"{org_session.SESSION_COOKIE}=")
+        assert any(h.startswith(f"{roi.LOGIN_BINDING_COOKIE}=") and "max-age=0" in h.lower() for h in headers[1:])
+
+    def test_login_callback_after_ttl_is_rejected(self, monkeypatch):
+        import time
+
+        app, sessions = _app()
+        state, login = self._login(_client(app), monkeypatch)
+        cookie = login.cookies[roi.LOGIN_BINDING_COOKIE]
+        now = time.time()
+        monkeypatch.setattr(roi.time, "time", lambda: now + roi._LOGIN_ATTEMPT_TTL_SECONDS + 1)
+
+        cb = _client(app).get(
+            f"{roi.LOGIN_CALLBACK_PATH}?code=abc&state={state}",
+            headers={"Cookie": f"{roi.LOGIN_BINDING_COOKIE}={cookie}"},
+        )
+
+        assert cb.status_code == 400
+        assert sessions.session_count == 0
 
     def test_idp_error_param_fails_cleanly(self):
         app, _sessions = _app()
