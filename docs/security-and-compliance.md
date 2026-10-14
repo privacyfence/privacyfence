@@ -326,6 +326,8 @@ python3 scripts/verify_audit_log.py <dir> --week 2026-W38     # one ISO week
 
 Exit status: `0` intact, `1` a week failed (or no files found), `2` directory missing.
 
+The script also checks that each week's first entry continues the previous week's last one, and that the newest entry matches `.audit_chain_state.json`, so a removed week or a cut-off tail is reported, unless the `.audit_chain_state.json` file was edited too (it is not keyed). Lines written before chaining existed are accepted only at the top of a file ([ADR 0176](adr/0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md)).
+
 The chain detects edits, insertions and deletions made without the key. Anyone who can read the
 key can rebuild a consistent chain. On a separated install that means root or the service account.
 On a non-packaged install it includes any process running as you. For evidence that survives that,

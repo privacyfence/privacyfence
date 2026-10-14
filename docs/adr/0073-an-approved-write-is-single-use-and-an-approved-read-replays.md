@@ -8,6 +8,7 @@ Accepted (recorded retroactively on 2026-09-25; decided around 2026-08-28 in
 in `36c5b7ce`, merged in [#188](https://github.com/privacyfence/privacyfence/pull/188)).
 The hold-window path, write-only coalescing and the collected-outcome expiry audit below were
 decided in https://github.com/privacyfence/privacyfence/issues/739 and are implemented.
+Amended by 0175.
 
 ## Context
 
