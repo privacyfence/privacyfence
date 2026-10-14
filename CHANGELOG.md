@@ -48,6 +48,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **An approval now covers exactly the request and content the card showed.** A repeated call with any different argument, or whose content changed, gets a new card, so an approved message can no longer be swapped for another one.
 - **`trusted_sender_domain`, `approved_recipient_domain` and `to_is_myself` rules read the real email address**, so a display name such as `"CEO <ceo@trusted.com>" <attacker@evil.com>` no longer matches.
 - **`verify_audit_log.py` now reports a forged line placed after chained entries, a removed week, and entries cut from the end of the log** (unless the chain-state file was edited too).
+- **Organization mode: the first time an MCP client signs in for you, PrivacyFence shows which client is asking and where it returns, and issues nothing until you allow it.**
+- **Organization mode: connecting Google, Slack, Atlassian or Grist, and signing in, must be finished in the browser that started them.**
+- **Organization mode: the identity-provider check for an approval starts only from the approval card.**
+- **Hostile client names and connector values can no longer break the Settings page or the approval card's markup.**
+- **On a computer shared by several people, the live Settings updates go only to the owner, and the sign-in link no longer redirects to other sites.**
+- **Large or malformed Excel attachments are refused before they are read.**
+- **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
+- **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
 
 ### Fixed
 
