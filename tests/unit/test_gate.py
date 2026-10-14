@@ -54,6 +54,7 @@ from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_m
 from privacyfence.gmail_client import GmailMessage, SendAsAlias
 from privacyfence.grist_client import GristColumn
 from privacyfence.pii_detector import init_pii_detection
+from privacyfence.principal import Principal, current_principal, principal_scope
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
@@ -3372,6 +3373,97 @@ class TestDeferredApprovalProtocol:
         decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
         assert decisions == ["approval_pending", "approved"]
         assert registry.get(first["approval_id"]) is None  # consumed on collection
+
+
+class TestPrincipalScopedLedger:
+    """A released read stays on the ledger for a re-issue, but only for the principal it was
+    decided for."""
+
+    async def test_another_principals_identical_read_gets_its_own_card(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+
+        with principal_scope(Principal(id="alice")):
+            first = await gated_call_or_pending(**base_kwargs(gate="review"))
+            assert first["status"] == "approval_pending"
+            approval = registry.get(first["approval_id"])
+            registry.answer(approval.id, "accept")
+            assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+            assert await gated_call_or_pending(**base_kwargs(gate="review")) is FILTERED
+
+        with principal_scope(Principal(id="bob")):
+            bobs = await gated_call_or_pending(**base_kwargs(gate="review"))
+        assert bobs["status"] == "approval_pending"
+        assert bobs["approval_id"] != first["approval_id"]
+
+        registry.answer(registry.get(bobs["approval_id"]).id, "deny")
+        await asyncio.sleep(0.02)
+
+
+class TestRulesChangedReevaluation:
+    """A rule change resolves the pending cards the new rules cover (gate._on_rules_changed ->
+    PendingApprovalRegistry.reevaluate_all), through gate._should_auto_accept."""
+
+    def _registry(self, monkeypatch, evaluator):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", evaluator)
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return registry
+
+    async def _resolves_on_rule_change(self, monkeypatch, audit_dir, gate_kind, **overrides):
+        registry = self._registry(monkeypatch, FakeEvaluator())
+        kwargs = base_kwargs(gate=gate_kind, **overrides)
+
+        first = await gated_call_or_pending(**kwargs)
+        assert first["status"] == "approval_pending"
+        approval = registry.get(first["approval_id"])
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((False, "")))
+        auto_accept.notify_rules_changed()
+        assert not approval.is_finalized()
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "new_rule")))
+        auto_accept.notify_rules_changed()
+        assert approval.final_decision == "auto_accepted"
+
+        assert await gated_call_or_pending(**kwargs) is FILTERED
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions[-1] == "auto_accepted"
+        return registry
+
+    async def test_rules_change_resolves_only_cards_the_new_rules_cover(self, monkeypatch, audit_dir):
+        await self._resolves_on_rule_change(monkeypatch, audit_dir, "review")
+
+    async def test_rules_change_resolves_a_pending_popup_card(self, monkeypatch, audit_dir):
+        await self._resolves_on_rule_change(monkeypatch, audit_dir, "popup", tool="gmail_create_draft")
+
+    async def test_a_rule_change_by_one_principal_leaves_another_principals_card_pending(
+        self, monkeypatch, audit_dir,
+    ):
+        def only_alice(operation_key, ctx):
+            ok = current_principal().id == "alice"
+            return (ok, "alice_rule" if ok else "", "alice_rule" if ok else "")
+
+        registry = self._registry(monkeypatch, FakeEvaluator())
+        cards = {}
+        for name in ("alice", "bob"):
+            with principal_scope(Principal(id=name)):
+                result = await gated_call_or_pending(**base_kwargs(gate="review"))
+            assert result["status"] == "approval_pending"
+            cards[name] = registry.get(result["approval_id"])
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", only_alice)
+        with principal_scope(Principal(id="alice")):
+            auto_accept.notify_rules_changed()
+
+        assert cards["alice"].final_decision == "auto_accepted"
+        assert not cards["bob"].is_finalized()
+
+        registry.answer(cards["bob"].id, "deny")
+        await asyncio.sleep(0.02)
 
 
 class TestAdaptiveHoldWindow:

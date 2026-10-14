@@ -525,6 +525,16 @@ class TestLedgerTTLExpiry:
         assert registry.consume_ledger("k1") is None
         assert registry.get(approval.id) is None
 
+    def test_consume_ledger_refuses_an_entry_past_its_ledger_ttl_without_a_sweep(self):
+        """consume_ledger refuses an expired entry with no external sweep (no pop_* call first)."""
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        registry.finalize(approval.id, "accept")
+        approval.ledger_expires_at = time.time() - 1
+        assert registry.consume_ledger("k1") is None
+
     def test_a_replayed_review_entry_is_not_reported_once_the_ledger_ttl_lapses(self):
         # The read's data was released through the ledger, so its lapse is
         # not "expired" (ADR 0073) -- but the entry is still cleaned up.
@@ -866,19 +876,23 @@ class TestPrincipalDimension:
         assert alice_approval.id != bob_approval.id
 
     def test_ledger_entry_is_not_shared_across_principals(self):
+        # A review gate on purpose: its ledger entry is reusable, so it is still on file when Bob
+        # asks. A single-use write entry would be gone after Alice's own consume, and a missing
+        # principal check would then go unnoticed.
         registry = make_registry()
         with principal_scope(Principal(id="alice")):
             approval, _ = registry.register_or_coalesce(
-                dedupe_key="same-key", connector="c", tool="t", gate_kind="popup", request_id="r1",
+                dedupe_key="same-key", connector="c", tool="t", gate_kind="review", request_id="r1",
             )
             registry.finalize(approval.id, "accept")
+        with principal_scope(Principal(id="bob")):
+            # Bob issuing the identical call must not see Alice's decision, while it is on file.
+            assert registry.consume_ledger("same-key") is None
+        with principal_scope(Principal(id="alice")):
             assert registry.consume_ledger("same-key") == LedgerHit(
                 decision="accept", rule_name="", decided_at=approval.decided_at, expires_at=approval.ledger_expires_at,
                 request_id="r1",
             )
-        with principal_scope(Principal(id="bob")):
-            # Bob issuing the identical call must not see Alice's decision.
-            assert registry.consume_ledger("same-key") is None
 
     def test_list_pending_filters_by_principal(self):
         registry = make_registry()
