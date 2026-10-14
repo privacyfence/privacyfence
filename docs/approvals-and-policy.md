@@ -49,6 +49,8 @@ the AI system repeats **the identical call** — same tool, same arguments. Ther
 fetches content by approval id: approved content only ever reaches the AI system through the
 original call.
 
+Your decision applies to exactly what you saw: if any argument of the repeated call differs, or the content the card would show has changed, the repeat gets a new card ([ADR 0175](adr/0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md)).
+
 If you already have an approval waiting, a second one returns `approval_pending` immediately
 instead of waiting another 30 seconds (`web.approvals.adaptive_hold`, on by default), and the
 result points at the approvals list so you can decide them together.

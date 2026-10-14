@@ -1,6 +1,7 @@
 """Unit tests for privacyfence.audit_log — the append-only decision trail."""
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -732,12 +733,71 @@ class TestHashChain:
             summary="s", sender="a@example.com", decision="approved",
             auto_accept_rule="", latency_seconds=1.0,
         )
-        week_file.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+        week_file.write_text((json.dumps(legacy) + "\n") * 2, encoding="utf-8")
 
         logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry())
+        logger.record(make_entry())
         result = logger.verify_chain("2026-W28")
         assert result.ok is True
-        assert result.entries_checked == 1
+        assert result.entries_checked == 4
+
+    def _three_entries(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        for _ in range(3):
+            logger.record(make_entry())
+        week_file = tmp_path / "2026-W28.jsonl"
+        return logger, week_file, week_file.read_text(encoding="utf-8").splitlines()
+
+    def test_verify_chain_rejects_chainless_line_after_chained_entries(self, tmp_path):
+        logger, week_file, lines = self._three_entries(tmp_path)
+        forged = json.loads(lines[1])
+        del forged["entry_hash"], forged["prev_hash"]
+        forged["decision"] = "approved"
+        lines[1] = json.dumps(forged)
+        week_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = logger.verify_chain("2026-W28")
+        assert result.ok is False
+        assert result.first_break_line == 2
+
+    def test_verify_chain_rejects_a_junk_line_replacing_a_chained_one(self, tmp_path):
+        logger, week_file, lines = self._three_entries(tmp_path)
+        lines[0] = json.dumps({"summary": "junk"})
+        week_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = logger.verify_chain("2026-W28")
+        assert result.ok is False
+        assert result.first_break_line == 2
+
+    @pytest.mark.parametrize(
+        "field",
+        [f.name for f in dataclasses.fields(AuditEntry) if f.name not in ("entry_hash", "prev_hash")],
+    )
+    def test_editing_any_recorded_field_breaks_the_chain(self, tmp_path, field):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry())
+        logger.record(make_entry())
+        week_file = tmp_path / "2026-W28.jsonl"
+        lines = week_file.read_text(encoding="utf-8").splitlines()
+        data = json.loads(lines[0])
+        value = data[field]
+        if isinstance(value, bool):
+            data[field] = not value
+        elif isinstance(value, (int, float)):
+            data[field] = value + 1
+        elif isinstance(value, str):
+            data[field] = value + "x"
+        elif isinstance(value, list):
+            data[field] = value + ["x"]
+        elif isinstance(value, dict):
+            data[field] = {"x": 1}
+        else:
+            data[field] = "x"
+        lines[0] = json.dumps(data)
+        week_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        assert logger.verify_chain("2026-W28").ok is False
 
     def test_chain_key_and_state_persist_across_logger_instances(self, tmp_path):
         # A daemon restart constructs a brand-new AuditLogger over the same

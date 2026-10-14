@@ -24,7 +24,7 @@ from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_rows
 from .. import local_files
 from ..connector import Connector
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
-from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, unattended_scope
+from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe as policy_describe
 from ..policy import propose as policy_propose
@@ -249,7 +249,7 @@ class McpDispatcher:
         try:
             with (
                 unattended_scope(session_key in self._unattended_sessions), reason_scope(reason),
-                released_request_scope(),
+                request_args_scope(args), released_request_scope(),
             ):
                 result = await connector.call(tool, args)
         except ApprovalPending as pending:

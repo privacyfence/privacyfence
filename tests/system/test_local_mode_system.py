@@ -428,6 +428,13 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
             assert "approved" in decisions
             assert "rejected" in decisions
 
+            from privacyfence.audit_log import AuditLogger
+
+            audit_logger = AuditLogger(str(audit_dir))
+            results = [audit_logger.verify_chain(p.stem) for p in sorted(audit_dir.glob("*.jsonl"))]
+            assert all(r.ok for r in results), results
+            assert sum(r.entries_checked for r in results) >= 4
+
             # Cross-platform assertion this scenario adds on top of
             # tests/platform/'s own OS-level coverage (see module
             # docstring): the audit directory this exact scenario just

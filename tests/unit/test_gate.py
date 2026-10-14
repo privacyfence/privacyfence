@@ -38,6 +38,7 @@ import json
 import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -46,8 +47,14 @@ from privacyfence import approval_ui, auto_accept, gate, scoped_tokens
 from privacyfence.auto_accept import ReviewContext
 from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
+from privacyfence.connectors.gmail import GmailConnector
+from privacyfence.connectors.grist import GristConnector
+from privacyfence.connectors.slack import SlackConnector
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
+from privacyfence.gmail_client import GmailMessage, SendAsAlias
+from privacyfence.grist_client import GristColumn
 from privacyfence.pii_detector import init_pii_detection
+from privacyfence.principal import Principal, current_principal, principal_scope
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
@@ -56,6 +63,7 @@ from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import TOOL_REGISTRY, Verb
 from privacyfence.scoped_tokens import ScopedToken
+from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web_approval_ui import WebApprovalUI
 
 from ..helpers import policy_rules
@@ -2676,6 +2684,211 @@ class TestCoalescing:
         assert sorted(e["decision"] for e in entries) == ["approved", "approved"]
 
 
+class TestApprovalBinding:
+    """One approval never releases a request the human did not see (ADR 0175): the ledger and the
+    coalescing key hold the agent's whole request and a digest of the card, so a request that
+    differs in any argument, or whose shown content changed, gets a card of its own."""
+
+    @staticmethod
+    def _registry(monkeypatch, *, hold_window=0.05):
+        registry = PendingApprovalRegistry(hold_window=hold_window, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return registry
+
+    async def _decide_first_pending(self, registry, decision, *, exclude=()):
+        """Answer the first pending card whose id is not in ``exclude``, once
+        one appears, and return its id."""
+        assert await wait_until_async(
+            lambda: any(a.id not in exclude for a in registry.list_pending()), timeout=2.0,
+        )
+        [card] = [a for a in registry.list_pending() if a.id not in exclude]
+        registry.answer(card.id, decision)
+        return card.id
+
+    @staticmethod
+    async def _accept(registry, result):
+        """Accept the card a pending result points at and wait for its decision to land."""
+        approval = registry.get(result["approval_id"])
+        registry.answer(approval.id, "accept")
+        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+
+    @staticmethod
+    def _slack():
+        client = MagicMock()
+        client.resolve_channel_name.return_value = ""
+        client.resolve_is_group_dm.return_value = False
+        client.resolve_is_self_dm.return_value = False
+        client.resolve_user_name.return_value = ""
+        client.send_message.return_value = {"ok": True, "ts": "1", "channel_id": "C1"}
+        connector = SlackConnector(client)
+        connector.my_email = "me@example.com"
+        return connector, client
+
+    @staticmethod
+    def _send(dispatcher, text):
+        return dispatcher.call("s1", "slack", "slack_send_message", {"channel_id": "C1", "text": text, "reason": "r"})
+
+    async def test_approved_write_is_not_redeemable_with_different_content(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch)
+        connector, client = self._slack()
+        dispatcher = McpDispatcher(lambda: {"slack": connector})
+
+        first = await self._send(dispatcher, "a")
+        assert first["status"] == "approval_pending"
+        await self._accept(registry, first)
+
+        second = await self._send(dispatcher, "b")
+
+        assert second["status"] == "approval_pending"
+        assert second["approval_id"] != first["approval_id"]
+        assert all(call.args[1] != "b" for call in client.send_message.call_args_list)
+        registry.answer(second["approval_id"], "deny")
+
+    async def test_identical_reissue_collects_the_decision(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch)
+        connector, client = self._slack()
+        dispatcher = McpDispatcher(lambda: {"slack": connector})
+
+        first = await self._send(dispatcher, "a")
+        await self._accept(registry, first)
+        await self._send(dispatcher, "a")
+
+        client.send_message.assert_called_once_with("C1", "a", "")
+        entries = read_audit_entries(audit_dir)
+        assert [e["decision"] for e in entries] == ["approval_pending", "approved"]
+        assert entries[0]["request_id"] == entries[1]["request_id"]
+
+    async def test_a_changed_request_arg_not_on_the_card_still_needs_its_own_card(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch)
+        kwargs = base_kwargs(gate="popup", tool="gmail_create_draft", args={"id": "1"})
+
+        with gate.request_args_scope({"id": "1", "extra": "a"}):
+            first = await gated_call_or_pending(**kwargs)
+        assert first["status"] == "approval_pending"
+        await self._accept(registry, first)
+
+        with gate.request_args_scope({"id": "1", "extra": "b"}):
+            second = await gated_call_or_pending(**kwargs)
+
+        assert second["status"] == "approval_pending"
+        assert second["approval_id"] != first["approval_id"]
+        registry.answer(second["approval_id"], "deny")
+
+    async def test_identical_gmail_draft_reissue_collects_the_decision(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch)
+        client = MagicMock()
+        connector = GmailConnector(client)
+        connector.my_email = "me@example.com"
+        client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="x", sender="alice@example.com")
+        client.create_draft.return_value = {"draft_id": "d1"}
+        client.resolve_send_as.return_value = SendAsAlias(
+            "me@example.com", "Me", "<div>Ada Lovelace</div>", is_default=True, is_primary=True,
+        )
+        dispatcher = McpDispatcher(lambda: {"gmail": connector})
+        args = {
+            "to": "alice@example.com", "subject": "Hi", "body": "See you then.",
+            "include_signature": True, "reason": "r",
+        }
+
+        first = await dispatcher.call("s1", "gmail", "gmail_create_draft", dict(args))
+        assert first["status"] == "approval_pending"
+        await self._accept(registry, first)
+        await dispatcher.call("s1", "gmail", "gmail_create_draft", dict(args))
+
+        client.create_draft.assert_called_once()
+        assert registry.list_pending() == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["approval_pending", "approved"]
+
+    async def test_identical_grist_import_reissue_collects_the_decision(self, monkeypatch, audit_dir, tmp_path):
+        registry = self._registry(monkeypatch)
+        client = MagicMock()
+        client.host = "docs.getgrist.com"
+        client.list_columns.return_value = [GristColumn("Name", "Name", "Text", False)]
+        client.add_records.return_value = [1]
+        connector = GristConnector(client)
+        doc_id = "8CAN8gKdxY7zAbCdEfGh12"
+        client.get_document.return_value = SimpleNamespace(
+            id=doc_id, name="Budget", workspace="Home", team="Acme",
+        )
+        path = tmp_path / "people.csv"
+        path.write_bytes(b"Name\nAda\n")
+        dispatcher = McpDispatcher(lambda: {"grist": connector})
+        args = {"doc_id": doc_id, "table_id": "Contacts", "local_path": str(path), "reason": "r"}
+
+        first = await dispatcher.call("s1", "grist", "grist_import_csv", dict(args))
+        assert first["status"] == "approval_pending"
+        await self._accept(registry, first)
+        await dispatcher.call("s1", "grist", "grist_import_csv", dict(args))
+
+        client.add_records.assert_called_once()
+        assert registry.list_pending() == []
+
+    async def test_a_differing_write_does_not_coalesce_onto_a_pending_card(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch, hold_window=5.0)
+        connector, _client = self._slack()
+        dispatcher = McpDispatcher(lambda: {"slack": connector})
+
+        task_a = asyncio.create_task(self._send(dispatcher, "a"))
+        assert await wait_until_async(lambda: len(registry.list_pending()) == 1, timeout=2.0)
+        registry.hold_window = 0
+        result_b = await self._send(dispatcher, "b")
+
+        assert result_b["status"] == "approval_pending"
+        assert len(registry.list_pending()) == 2
+        for card in registry.list_pending():
+            registry.answer(card.id, "deny")
+        await asyncio.gather(task_a, return_exceptions=True)
+
+    async def test_read_replay_requires_identical_released_content(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch)
+        kwargs = base_kwargs(gate="review", tool="slack_read_channel", connector="slack", details_text="one")
+        scope = {"channel_id": "C1", "limit": 1}
+
+        with gate.request_args_scope(scope):
+            first = await gated_call_or_pending(**kwargs)
+        assert first["status"] == "approval_pending"
+        await self._accept(registry, first)
+
+        with gate.request_args_scope(scope):
+            assert await gated_call_or_pending(**kwargs) is FILTERED
+        assert registry.list_pending() == []
+
+        with gate.request_args_scope({"channel_id": "C1", "limit": 500}):
+            wider = await gated_call_or_pending(**kwargs)
+        assert wider["status"] == "approval_pending"
+
+        iban = dict(kwargs, details_text="one\ntwo IBAN HU42117730161111101800000000")
+        with gate.request_args_scope(scope):
+            changed = await gated_call_or_pending(**iban)
+        assert changed["status"] == "approval_pending"
+        assert registry.get(changed["approval_id"]).pii_forces_confirmation
+        for result in (wider, changed):
+            registry.answer(result["approval_id"], "deny")
+
+    async def test_coalescing_with_real_args(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch, hold_window=5.0)
+        kwargs = base_kwargs(gate="review", tool="gmail_get_message", args={"id": "1"})
+
+        async def _call():
+            with gate.request_args_scope({"id": "1"}):
+                return await gate.gated_call(**kwargs)
+
+        async def _decide_once_pending():
+            assert await wait_until_async(lambda: len(registry.list_pending()) >= 1, timeout=2.0)
+            await asyncio.sleep(0.05)
+            pending = registry.list_pending()
+            assert len(pending) == 1  # one card for two identical requests
+            registry.answer(pending[0].id, "accept")
+
+        (a, b), _ = await asyncio.gather(
+            asyncio.gather(_call(), _call()), _decide_once_pending(),
+        )
+
+        assert a is FILTERED and b is FILTERED
+
+
 class TestPendingApprovalCarriesPreview:
     """The ``preview`` dict gated_call()
     hands to show_popup()/show_read_popup() is now also stamped onto the
@@ -3160,6 +3373,97 @@ class TestDeferredApprovalProtocol:
         decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
         assert decisions == ["approval_pending", "approved"]
         assert registry.get(first["approval_id"]) is None  # consumed on collection
+
+
+class TestPrincipalScopedLedger:
+    """A released read stays on the ledger for a re-issue, but only for the principal it was
+    decided for."""
+
+    async def test_another_principals_identical_read_gets_its_own_card(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+
+        with principal_scope(Principal(id="alice")):
+            first = await gated_call_or_pending(**base_kwargs(gate="review"))
+            assert first["status"] == "approval_pending"
+            approval = registry.get(first["approval_id"])
+            registry.answer(approval.id, "accept")
+            assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+            assert await gated_call_or_pending(**base_kwargs(gate="review")) is FILTERED
+
+        with principal_scope(Principal(id="bob")):
+            bobs = await gated_call_or_pending(**base_kwargs(gate="review"))
+        assert bobs["status"] == "approval_pending"
+        assert bobs["approval_id"] != first["approval_id"]
+
+        registry.answer(registry.get(bobs["approval_id"]).id, "deny")
+        await asyncio.sleep(0.02)
+
+
+class TestRulesChangedReevaluation:
+    """A rule change resolves the pending cards the new rules cover (gate._on_rules_changed ->
+    PendingApprovalRegistry.reevaluate_all), through gate._should_auto_accept."""
+
+    def _registry(self, monkeypatch, evaluator):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", evaluator)
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return registry
+
+    async def _resolves_on_rule_change(self, monkeypatch, audit_dir, gate_kind, **overrides):
+        registry = self._registry(monkeypatch, FakeEvaluator())
+        kwargs = base_kwargs(gate=gate_kind, **overrides)
+
+        first = await gated_call_or_pending(**kwargs)
+        assert first["status"] == "approval_pending"
+        approval = registry.get(first["approval_id"])
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((False, "")))
+        auto_accept.notify_rules_changed()
+        assert not approval.is_finalized()
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "new_rule")))
+        auto_accept.notify_rules_changed()
+        assert approval.final_decision == "auto_accepted"
+
+        assert await gated_call_or_pending(**kwargs) is FILTERED
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions[-1] == "auto_accepted"
+        return registry
+
+    async def test_rules_change_resolves_only_cards_the_new_rules_cover(self, monkeypatch, audit_dir):
+        await self._resolves_on_rule_change(monkeypatch, audit_dir, "review")
+
+    async def test_rules_change_resolves_a_pending_popup_card(self, monkeypatch, audit_dir):
+        await self._resolves_on_rule_change(monkeypatch, audit_dir, "popup", tool="gmail_create_draft")
+
+    async def test_a_rule_change_by_one_principal_leaves_another_principals_card_pending(
+        self, monkeypatch, audit_dir,
+    ):
+        def only_alice(operation_key, ctx):
+            ok = current_principal().id == "alice"
+            return (ok, "alice_rule" if ok else "", "alice_rule" if ok else "")
+
+        registry = self._registry(monkeypatch, FakeEvaluator())
+        cards = {}
+        for name in ("alice", "bob"):
+            with principal_scope(Principal(id=name)):
+                result = await gated_call_or_pending(**base_kwargs(gate="review"))
+            assert result["status"] == "approval_pending"
+            cards[name] = registry.get(result["approval_id"])
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", only_alice)
+        with principal_scope(Principal(id="alice")):
+            auto_accept.notify_rules_changed()
+
+        assert cards["alice"].final_decision == "auto_accepted"
+        assert not cards["bob"].is_finalized()
+
+        registry.answer(cards["bob"].id, "deny")
+        await asyncio.sleep(0.02)
 
 
 class TestAdaptiveHoldWindow:

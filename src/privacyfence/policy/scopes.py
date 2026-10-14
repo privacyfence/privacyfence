@@ -223,11 +223,9 @@ def _i_am_sender_matches(_value: Any, ctx: ReviewContext) -> bool:
 def _trusted_sender_domain_matches(value: Any, ctx: ReviewContext) -> bool:
     if not value:
         return False
-    raw_sender = getattr(ctx.raw_data, "sender", "") or ""
-    email_part = raw_sender
-    if "<" in raw_sender and ">" in raw_sender:
-        email_part = raw_sender[raw_sender.index("<") + 1 : raw_sender.index(">")]
-    domain = email_part.split("@", 1)[-1].lower().strip()
+    domain = _domain_of(getattr(ctx.raw_data, "sender", "") or "")
+    if not domain:
+        return False
     allowed = {d.lower().strip() for d in _values_of(value)}
     return any(domain == d or domain.endswith("." + d) for d in allowed)
 
@@ -258,7 +256,7 @@ def _i_am_sole_recipient_matches(_value: Any, ctx: ReviewContext) -> bool:
 def _to_is_myself_matches(_value: Any, ctx: ReviewContext) -> bool:
     to = ctx.args.get("to", "") or ""
     recipients = [r for r in _values_of(to) if r]
-    return bool(ctx.my_email) and bool(recipients) and all(ctx.my_email.lower() in r.lower() for r in recipients)
+    return bool(ctx.my_email) and bool(recipients) and all(_address_of(r) == ctx.my_email.lower() for r in recipients)
 
 
 def _approved_recipient_domain_matches(value: Any, ctx: ReviewContext) -> bool:
@@ -267,7 +265,7 @@ def _approved_recipient_domain_matches(value: Any, ctx: ReviewContext) -> bool:
     to = ctx.args.get("to", "") or ""
     recipients = [r for r in _values_of(to) if r]
     allowed = {d.lower().strip() for d in _values_of(value)}
-    return bool(recipients) and all(_domain_of(r) in allowed for r in recipients)
+    return bool(recipients) and all(_domain_of(r) for r in recipients) and all(_domain_of(r) in allowed for r in recipients)
 
 
 # ── Jira ──────────────────────────────────────────────────────────────────────────────────────

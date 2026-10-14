@@ -25,6 +25,7 @@ from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedback
+from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.scoped_tokens import ScopedToken
@@ -157,6 +158,19 @@ class TestCall:
         dispatcher = _dispatcher({"gmail": connector})
         await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "reason": "because"})
         assert connector.calls == [("gmail_tool", {"x": 1})]
+
+    async def test_the_connector_sees_the_whole_request_minus_reason(self):
+        seen: list[str | None] = []
+
+        class Recorder(FakeConnector):
+            async def call(self, tool, args):
+                seen.append(gate.current_request_args())
+                return "ok"
+
+        dispatcher = _dispatcher({"gmail": Recorder("gmail")})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "reason": "r"})
+        assert seen == ['{"x": 1}']
+        assert gate.current_request_args() is None
 
     async def test_unknown_connector_raises(self):
         dispatcher = _dispatcher({})
