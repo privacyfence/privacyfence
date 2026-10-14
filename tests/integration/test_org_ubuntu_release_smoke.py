@@ -486,7 +486,6 @@ def _allow_consent(client: LoopbackClient, back_at_daemon: requests.Response) ->
     header is sent -- this client talks plain http to 127.0.0.1, so an https one would be refused,
     and ``check_origin`` accepts a missing one."""
     import html as html_lib
-    import re
 
     page_path = _loopback_target(back_at_daemon.headers["location"])
     assert page_path.startswith("/oauth/consent/"), back_at_daemon.headers["location"]

@@ -301,8 +301,8 @@ class TestCall:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         first.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await first
+        await asyncio.gather(first, return_exceptions=True)
+        assert first.cancelled()
         release.set()
         assert await asyncio.wait_for(dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}), 1) == "r"
         assert len(connector.calls) == 2
