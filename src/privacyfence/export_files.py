@@ -8,6 +8,8 @@ import io
 import json
 from typing import Any
 
+from .audit_log import _FORMULA_TRIGGER_CHARS as FORMULA_TRIGGER_CHARS
+
 EXPORT_MAX_ROWS = 50_000
 SAMPLE_ROWS = 20
 SCAN_CHARS = 1_000_000
@@ -78,8 +80,25 @@ def csv_cell(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def render(columns: list[str], rows: list[list[Any]], fmt: str) -> bytes:
+def _neutralise(value: Any) -> Any:
+    """Prefix a string cell a spreadsheet would read as a formula with ``'`` so it shows as text."""
+    if isinstance(value, str) and value.startswith(FORMULA_TRIGGER_CHARS):
+        return "'" + value
+    return value
+
+
+def render(
+    columns: list[str], rows: list[list[Any]], fmt: str, *, spreadsheet_safe: bool = False,
+) -> bytes:
+    """Serialise ``rows`` as CSV or JSON.
+
+    ``spreadsheet_safe`` applies to CSV only: a string cell starting with a formula trigger
+    character is written with a leading ``'``. Exports that must round-trip unchanged
+    (Grist) leave it off.
+    """
     if fmt == "csv":
+        if spreadsheet_safe:
+            rows = [[_neutralise(v) for v in row] for row in rows]
         buf = io.StringIO()
         writer = csv.writer(buf, lineterminator="\n")
         writer.writerow(columns)

@@ -1176,10 +1176,10 @@ class TestReportPagingCheck:
         sf.restful.side_effect = restful
         return sf
 
-    def _check(self, sf, *, summary="sum", record=False, label="PF QA Number"):
+    def _check(self, sf, *, summary="00O5e000004SumARY1", record=False, label="PF QA Number"):
         client = SalesforceClient(config={"access_token": "t", "instance_url": "https://my.salesforce.com"})
         client._get_sf = lambda: sf
-        return recorder._check_salesforce_report_paging(client, "rep", summary, label, "QA Report", record)
+        return recorder._check_salesforce_report_paging(client, "00O5e000004RepORT1", summary, label, "QA Report", record)
 
     def test_report_paging_check_passes(self):
         res = self._check(self._sf())
@@ -1225,7 +1225,7 @@ class TestReportPagingCheck:
             return page
 
         client.run_report_page = run_report_page
-        res = recorder._check_salesforce_report_paging(client, "rep", "sum", "PF QA Number", "QA Report", False)
+        res = recorder._check_salesforce_report_paging(client, "00O5e000004RepORT1", "00O5e000004SumARY1", "PF QA Number", "QA Report", False)
         assert not res.ok and res.note == "greaterThan on page_by not honoured"
 
     def test_report_paging_check_summary_report_without_rows(self):
