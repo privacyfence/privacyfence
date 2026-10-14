@@ -55,8 +55,9 @@ There is no tracking issue.
   - `auto_accept.TOOL_TO_GATE` (`auto_accept.py:290-294`)
   - `policy/registry.TOOL_TO_VERB` (`registry.py:174-177`), plus the test-side
     `_VERB_MATRIX`, whose length is asserted as 93 at `tests/unit/policy/test_registry.py:287`
-  - `write_effects.EFFECT_BY_TOOL` (`write_effects.py:42-170`; `tests/unit/test_write_effects.py`
-    scans connector sources for `gated_call(... tool="X" ... gate="popup")`)
+  - `write_effects.EFFECT_BY_TOOL` (`write_effects.py:42-180`, no Salesforce group yet;
+    `tests/unit/test_write_effects.py:31` scans connector sources for `gated_call(` blocks, cut at
+    the first `\n\s*\)`, and looks for `tool="X"` and `gate="popup"` inside each block)
   - `gate._TOOL_LAYOUT` (`gate.py:263-264`)
   - `policy/propose.py:366-368`: the `approved_object_types` scope covers `(Verb.READ,
     Verb.SEARCH)` and excludes `salesforce.run_report`
@@ -90,6 +91,10 @@ There is no tracking issue.
 
   ADR 0145 is the "the connector only adds" precedent. ADR 0148 sets the rule that errors never
   carry provider cell text before approval.
+- **Error visibility.** `safe_errors.public_message` (`safe_errors.py:103-127`) shows the AI client
+  the text of a *named* `RuntimeError` subclass, such as `GristCsvWriteError` at
+  `grist.py:136`. A bare `RuntimeError`, which is what `_fetch` raises, becomes "Tool call failed.
+  See the PrivacyFence log for details." A `ValueError` is shown as it is.
 - **QA.**
   - `scripts/qa_fixture_recorder.py` `check_salesforce` (`:1374-1460`) runs reads only.
   - `--lifecycle` (`LIFECYCLE_CHECKS`, `:2683`) has a create/read/update/read check for calendar,
@@ -138,8 +143,8 @@ Tool descriptions. Use this exact text; each is under 1024 characters:
 
 Param descriptions. Each is at least 20 characters:
 
-- `object_type`: "API name of the Salesforce object, such as 'Account', 'Contact' or a custom
-  object like 'Invoice__c'." Reuse the wording `salesforce_get_record` already has.
+- `object_type`: use `salesforce_get_record`'s `object_type` description word for word
+  (`salesforce.py:349-350`).
 - `record_id`: "The record's 15- or 18-character Salesforce id, from salesforce_search or
   salesforce_get_record (its id field)."
 - `fields`: "A JSON object mapping field API names to values: text, numbers, true/false, dates as
@@ -172,7 +177,7 @@ MAX_CELL_PREVIEW_CHARS = 200
 WRITABLE_TYPES: dict[str, str] = {
     "string": "text", "textarea": "text", "picklist": "text", "multipicklist": "text",
     "combobox": "text", "email": "text", "phone": "text", "url": "text", "reference": "text",
-    "encryptedstring": "text", "time": "text",
+    "time": "text",
     "boolean": "bool", "int": "int", "double": "number", "currency": "number",
     "percent": "number", "date": "date", "datetime": "datetime",
 }
@@ -242,6 +247,9 @@ Functions, with these exact signatures:
     `+00:00` and a trailing `±HHMM` with `±HH:MM`. Compare the instants. If either fails to parse,
     compare the strings.
   - `multipicklist`: compare `set(s.split(";"))`.
+  - `reference`: when both values are strings matching `^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$`,
+    compare `[:15]`, because a lookup set with a 15-character id is read back with 18 characters.
+    Otherwise compare `str()`.
   - Anything else: compare `str()`.
 - `cell_text(value: Any, limit: int | None = MAX_CELL_PREVIEW_CHARS) -> str`
   - `None` or `""` becomes `"(empty)"`, and bool becomes `"true"` or `"false"`. Anything else is
@@ -272,8 +280,12 @@ class WriteFailure:
     message: str          # Salesforce's message, cut to 200 characters
 
 class SalesforceWriteError(SalesforceClientError):
-    """Salesforce refused a write; nothing was saved (every batch is sent with allOrNone)."""
+    """Salesforce refused a write with a 4xx answer or a composite result that is not success;
+    nothing was saved, because every batch is sent with allOrNone."""
     def __init__(self, failures: list[WriteFailure], total: int) -> None: ...
+
+class SalesforceObjectNotFoundError(SalesforceClientError):
+    """describe_fields got 404: no object type of that name is visible to the user."""
 ```
 
 `str(SalesforceWriteError)` takes one of two forms:
@@ -306,21 +318,31 @@ New `SalesforceClient` methods. Each runs through `self._call(_run)`, so an expi
 refreshed and retried once. That is safe, because Salesforce refused the request before running
 it. Nothing else is retried (ADR 0105).
 
-Inside each write's `_run`, catch `simple_salesforce.exceptions.SalesforceMalformedRequest`,
-`SalesforceRefusedRequest`, `SalesforceResourceNotFound` and `SalesforceGeneralError`, and raise
-`SalesforceWriteError(_write_failures(exc.content), total)`. Import those exception classes inside
-`_run`, as `_build_sf` imports `Salesforce`. Do not catch `SalesforceExpiredSession`.
+Inside each write's `_run`, catch three `simple_salesforce.exceptions` classes:
+`SalesforceMalformedRequest`, `SalesforceRefusedRequest` and `SalesforceResourceNotFound`. Raise
+`SalesforceWriteError(_write_failures(exc.content), total)` for each.
+
+Catch `SalesforceGeneralError` separately. A 5xx after a POST or PATCH does not prove that nothing
+was saved, so raise `SalesforceClientError(f"Salesforce returned HTTP {exc.status}; the write may
+or may not have been saved. Check the records before trying again")`.
+
+Import those exception classes inside `_run`, as `_build_sf` imports `Salesforce`. Do not catch
+`SalesforceExpiredSession`.
+
+`.content` is `result.json()`, or `result.text` (a str) when the body is not JSON.
 
 - `describe_fields(object_type: str) -> list[SalesforceField]`
-  - Validates `object_type`, then calls `getattr(sf, object_type).describe()` and maps each entry
-    of `["fields"]`: `name`, `label`, `type`, `createable`, `updateable`, `nillable`, and
-    `externalId` → `external_id`.
-  - Missing keys default to `""` or `False`.
+  - Validates `object_type`, then calls `sf.restful(f"sobjects/{object_type}/describe")`. It does
+    not use `getattr(sf, object_type)`, which misbehaves for names such as `bulk` or `query`.
+  - Maps each entry of `["fields"]`: `name`, `label`, `type`, `createable`, `updateable`,
+    `nillable`, and `externalId` → `external_id`. Missing keys default to `""` or `False`.
+  - A `SalesforceResourceNotFound` raises
+    `SalesforceObjectNotFoundError(f"{object_type} is not an object type your Salesforce user can see")`.
 - `create_record(object_type: str, fields: dict[str, Any]) -> str`
   - Calls `sf.restful(f"sobjects/{object_type}/", method="POST", json=fields)` and returns
     `result["id"]`.
   - When the result is not a dict with `success` true, raise `SalesforceWriteError` from
-    `_write_failures(result.get("errors"))` with `total=1`.
+    `_write_failures(result.get("errors") if isinstance(result, dict) else None)` with `total=1`.
 - `update_record(object_type: str, record_id: str, fields: dict[str, Any]) -> None`
   - Validates both arguments, then calls
     `sf.restful(f"sobjects/{object_type}/{record_id}", method="PATCH", json=fields)`.
@@ -341,7 +363,10 @@ Inside each write's `_run`, catch `simple_salesforce.exceptions.SalesforceMalfor
     `'<id>'`. Every other key goes through `_soql_quote`.
   - Builds `SELECT <Id, key_field, *fields, de-duplicated case-insensitively in that order> FROM
     <object_type> WHERE <key_field> IN (<quoted, comma-joined>)`.
-  - Runs `sf.query_all(soql)` and returns `records` with `attributes` removed.
+  - `query_all` sends the SOQL in the URL, so split `keys` into chunks whose quoted, comma-joined
+    IN list is at most 4,000 characters. Run one `sf.query_all(soql)` per chunk and concatenate
+    the `records`, with `attributes` removed. Grist's lookups use the same bound
+    (`_CSV_LOOKUP_JSON_CHARS`, `grist.py:127`).
   - The f-string query gets `# nosec B608  # identifiers match _SOQL_IDENTIFIER_RE and values are quoted by _soql_quote`.
 - Every method logs object type and counts only, never a value, for example
   `logger.info("create_records %s: %d record(s)", object_type, len(records))`.
@@ -355,26 +380,53 @@ Common to all four tools:
    helper `_check_object_type(object_type: str) -> str`.
 2. Parse the JSON with D2. All of this happens before any client call, so a malformed call costs
    no approval and no API call.
-3. Run `index = field_index(await self._fetch(self._sf.describe_fields, object_type))` and resolve
-   the fields with D2.
-4. Call `gated_call(connector=self.name, tool="<tool>", ..., gate="popup", ...)`. Keep the keyword
-   order `tool=` before `gate=` on purpose: the alignment and write-effects tests find the tool by
-   the regex `tool="X",.*?gate="popup"`. Pass `filtered_data=None`, `my_email=self.my_email` and
-   `table_only=True`.
+3. Get the field index through a new connector helper
+   `async def _field_index(self, object_type: str) -> dict[str, SalesforceField]`. It runs
+   `asyncio.to_thread(self._sf.describe_fields, object_type)`, and:
+   - re-raises `SalesforceObjectNotFoundError` as `ValueError(str(exc))`, so the AI client sees it
+     and can correct the name;
+   - turns any other `SalesforceClientError` into `RuntimeError`, as `_fetch` does;
+   - returns `field_index(...)`.
+
+   Then resolve the fields with D2.
+4. Build `preview`, `preview_tables`, `details_text`, `raw_data` and `args` into local variables
+   first. Then call `gated_call(` with `connector=self.name,` and `tool="<tool>",`, followed on the
+   next line by `gate="popup",`, and pass the locals after that.
+   - No multi-line expression may come before `gate=` inside the call:
+     `tests/unit/test_write_effects.py` cuts the block at the first line that starts with `)`.
+   - The alignment test finds the tool by `tool="X",.*?gate="popup"`.
+   - Also pass `tool_name`, `summary`, `sender=object_type`, `filtered_data=None`,
+     `my_email=self.my_email` and `table_only=True`.
 5. Pass `raw_data` holding names and counts only, never values:
    `{"object_type", "fields": sorted names}` for a single write, and
    `{"object_type", "records": n, "fields": sorted union of names}` for a batch.
 6. Pass `args` with `"object_type"`, which the `approved_object_types` matcher reads, and
    `"sha256": payload_sha256(<the exact write payload>)`, which binds the approval to the payload
    (ADR 0073). Also pass `"record_id"` on update_record and `"key_field"` on update_records.
-7. After approval, run the client write through `self._fetch`. A `SalesforceWriteError` arrives as
-   `RuntimeError` with D3's message.
+7. After approval, run the client write through a new connector helper
+   `async def _write(self, func, *args) -> Any`. It runs `asyncio.to_thread(func, *args)`, and:
+   - re-raises `SalesforceWriteError` as `SalesforceWriteRefusedError(str(exc))`;
+   - turns any other `SalesforceClientError` into `RuntimeError`, as `_fetch` does.
+
+   Define `SalesforceWriteRefusedError` in `connectors/salesforce.py`, modelled on
+   `GristCsvWriteError` (`grist.py:136`):
+
+   ```python
+   class SalesforceWriteRefusedError(RuntimeError):
+       """Salesforce refused an approved write and saved nothing. Shown to the model verbatim: it
+       carries Salesforce's status codes, field API names and messages cut to 200 characters,
+       which the caller needs to fix a validation-rule failure."""
+   ```
+
+   It is a named subclass, so `safe_errors.public_message` passes its text through (after
+   `redact_secrets`). A bare `RuntimeError` would be replaced by the generic message.
 
 Per tool:
 
 - **`salesforce_create_record`**
   - `tool_name="Create Salesforce Record"` and `summary=f"Create {object_type} record"`.
-  - `preview={"Object type": object_type, "Fields": str(len(resolved))}`.
+  - `sender=object_type` and
+    `preview={"Object type": object_type, "Fields": str(len(resolved))}`.
   - `preview_tables=[{"headers": ["Field", "Label", "Value"], "rows": [[name, index[name.lower()].label, cell_text(v)] ...]}]`.
   - `details_text`: one `f"{name}: {cell_text(v, None)}"` line per field, in input order.
   - Payload hashed: `{"object_type": object_type, "fields": resolved}`.
@@ -390,7 +442,9 @@ Per tool:
      - `tool_name="Update Salesforce Record"`
      - `summary=f"Update {object_type}: {name}"`, where `name` is
        `current.fields.get("Name") or record_id`
-     - `preview={"Object type", "Record ID", "Name": str(name), "Fields changed": str(len(changes))}`
+     - `preview={"Object type": object_type, "Record ID": record_id, "Fields changed": str(len(changes))}`.
+       The record's name is read from Salesforce, so it goes only into `summary`, as on
+       `salesforce_get_record`.
      - `preview_tables=[{"headers": ["Field", "Current", "New"], "rows": [[name, cell_text(old), cell_text(new)] ...]}]`
      - `details_text`: one line per change,
        `f"{name}: {cell_text(old, None)} → {cell_text(new, None)}"`
@@ -400,7 +454,7 @@ Per tool:
   - Run `resolve_fields` for each record with `where=f"records[{i}]"`.
   - `tool_name="Create Salesforce Records"` and
     `summary=f"Create {n} {object_type} record(s)"`.
-  - `preview={"Object type", "Records": str(n)}`.
+  - `preview={"Object type": object_type, "Records": str(n)}`.
   - The table's headers are `["#"]` plus the union of field names in first-seen order. Each row is
     `[str(i + 1)]` plus `cell_text` of each value, with `""` where a record lacks that field.
   - `details_text`: a `f"Record {i + 1}"` line per record, followed by that record's
@@ -431,7 +485,8 @@ Per tool:
   5. Gate the call:
      - `tool_name="Update Salesforce Records"`
      - `summary=f"Update {u} {object_type} record(s)"`
-     - `preview={"Object type", "Matched by": key.name, "Records to update": str(u), "Unchanged records": str(m), "Fields changed": str(total changed cells)}`
+     - `preview={"Object type": object_type, "Matched by": key.name, "Records to update": str(u), "Unchanged records": str(m), "Fields changed": str(c)}`,
+       where `c` is the total number of changed cells
      - `preview_tables=[{"headers": ["Record", "Field", "Current", "New"], "rows": ...}]`, with the
        key value as "Record"
      - `details_text`: one line per change,
@@ -452,7 +507,8 @@ Per tool:
   entry, without changing any key.
 - **`auto_accept.TOOL_TO_GATE`:** all four are `"popup"`.
 - **`registry.TOOL_TO_VERB`:** the creates are `Verb.ADD` and the updates are `Verb.UPDATE`.
-- **`write_effects.EFFECT_BY_TOOL`** gets these exact sentences:
+- **`write_effects.EFFECT_BY_TOOL`** gets a new `# ── Salesforce ──` group placed before the
+  `# ── Peek ──` group, with these exact sentences:
   - create_record: "A new record of that object type is created in Salesforce with the fields
     shown. PrivacyFence changes no other record; your org's own automation, such as flows and
     triggers, may still react."
@@ -472,7 +528,12 @@ Per tool:
   `_salesforce_object_types` already reads `object_type` from args, so no change is needed there.
 
   Update the comment above the Salesforce block to say that the object-type scope also covers
-  creating and updating records of that type, including the batch tools.
+  adding and updating records of that type, including the batch tools.
+
+  The card offers this rule for a write, as Jira's project scope and Confluence's space scope
+  already do. `approved_object_types` is a `SCOPE_SELECTORS` scope, unlike Grist's extra scope
+  (ADR 0144). An existing rule gains `add` or `update` only when its owner adds them with
+  **Edit verbs** on Settings → Auto-accept (ADR 0174).
 - **`docs/approvals-and-policy.md`:** the Salesforce object type row's condition column becomes
   "every requested or written object type is one of these".
 
@@ -513,6 +574,13 @@ These go into the ADRs as rejected alternatives:
   `salesforce_update_records`.** Upsert cannot tell beforehand which records it would create. A
   rule allowing only *update* on an object type would then auto-accept creates. Unmatched keys are
   refused instead, and the caller uses `salesforce_create_records` for them.
+- **Settings-only write rules, as for Grist (ADR 0144).** Grist needed a new scope outside the
+  frozen `SCOPE_SELECTORS`. `approved_object_types` is already in that set, and it is proposable
+  for reads. Jira and Confluence write rules are offered from the card the same way.
+- **Error text that leaves Salesforce's messages out**, as Grist's CSV errors do (ADR 0148). A
+  validation rule's message is written by the org's administrator. It is the only way the caller
+  can learn what to fix, it is cut to 200 characters, and it reaches the client only after the
+  write was approved.
 - **Delete.** A delete can only be previewed as ids. A mistaken create or update can be fixed in
   Salesforce, and Salesforce keeps field history where the org turns it on.
 - **Atomic multi-object batches.** One object type per call keeps the describe check and the rule
@@ -536,13 +604,19 @@ numbers in `docs/adr/` when that phase runs, in this order (see Risks).
   - Batch updates match by `Id` or an External ID field, and a key that matches no record or
     several records refuses the call.
   - Pre-approval messages never carry a value read from Salesforce.
-  - After approval, Salesforce's own error messages are returned, cut to 200 characters, because
-    the caller needs them to fix a validation-rule failure.
+  - After approval, a refused write raises `SalesforceWriteRefusedError`, a named `RuntimeError`
+    that `safe_errors.public_message` passes through. It carries Salesforce's status codes, field
+    names and messages, cut to 200 characters. This is a deliberate exception to ADR 0148's "never
+    the provider's own text", with the reason from D7.
+  - A 5xx after a write says the write may or may not have been saved, and nothing is retried
+    (ADR 0105).
 - **ADR 0177: The Salesforce object-type rule also covers creating and updating records of that
   type.**
   - Covers D5: `approved_object_types` gains `add` and `update`, offered from the card.
   - Each tool has its own operation key, so the batch tools can be left out later.
-  - Existing rules are not widened (ADR 0166).
+  - Existing rules are not widened (ADR 0166). They gain the verbs only through **Edit verbs**
+    (ADR 0174).
+  - Rejected: Settings-only rules as for Grist (ADR 0144), with the reason from D7.
 
 ## Manual steps
 
@@ -564,10 +638,9 @@ sandbox, and confirm what the cards show. The steps are in the
   2** to whatever total the files hold, and do not set an absolute number. If
   `tests/unit/test_website_connectors_page.py` still fails after that, stop with `status=blocked`:
   another connector's count moved under you.
-- **`simple-salesforce` error shapes.** D3 assumes `.content` is the parsed JSON list. If the
-  installed version gives bytes or text for a 400 in the client tests' mocks of `restful`,
-  `_write_failures` must still return `[WriteFailure(0, "UNKNOWN", [], "")]` and never raise.
-  Assert this in a test.
+- **`simple-salesforce` error shapes.** The locked version is 1.12.10. It gives `.content` as
+  `result.json()`, or as `result.text` when the body is not JSON. `_write_failures` must return
+  `[WriteFailure(0, "UNKNOWN", [], "")]` for a str and must never raise. A test asserts this.
 - **The composite API needs API version 42.0 or later.** `simple-salesforce`'s default version is
   far newer. If a lifecycle check reports `NOT_FOUND` on `composite/sobjects`, stop and report it,
   rather than lowering anything.
@@ -594,7 +667,7 @@ manual_after:
 verify_after_merge:
   - python3 -m pytest tests/unit/test_salesforce_client.py tests/unit/test_salesforce_writes.py tests/unit/connectors/test_salesforce_connector.py tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_systemic_gate_invariants.py -q
 final_checks:
-  - docs/salesforce-write-tools-plan.md and docs/salesforce-write-tools-plan-manual-steps.html are deleted and nothing links to them (grep -rn "salesforce-write-tools-plan" . --include=*.md --include=*.html --include=*.py finds nothing)
+  - docs/salesforce-write-tools-plan.md and docs/salesforce-write-tools-plan-manual-steps.html are deleted and nothing links to them (git grep -n "salesforce-write-tools-plan" finds nothing)
   - The three ADRs from the plan's ADRs section exist in docs/adr/, have Status Accepted, and are rows in docs/adr/README.md
   - CHANGELOG.md has the Salesforce write-tools entry under "## [Unreleased]" and no new version heading
   - grep -rn -i "read-only" website/connectors/salesforce/index.html README.md website/compare/claude-connectors/index.html | grep -i salesforce finds nothing
@@ -608,32 +681,46 @@ phases:
       - tests/unit/test_salesforce_client.py
     brief: |
       Read docs/salesforce-write-tools-plan.md, "Design" D3, before starting; it is the spec.
-      Must-read docs: CLAUDE.md, CONTRIBUTING.md, docs/coding-and-testing-guidelines.md (§1.4, §1.8, §2.7).
+      Must-read docs: CLAUDE.md, CONTRIBUTING.md, docs/coding-and-testing-guidelines.md (sections
+      1.4, 1.8 and 2.7).
+      Code, comments, docstrings and tests must not mention plan item ids (D1-D7), phase ids or
+      this plan, and must not cite the new ADRs; cite existing ADRs or docs by path
+      (tests/unit/test_code_no_history.py enforces this).
       1. In src/privacyfence/salesforce_client.py, add the dataclasses SalesforceField and
-         WriteFailure and the exception SalesforceWriteError(SalesforceClientError) exactly as in
-         D3, next to the existing dataclasses (after ReportPage). Implement __init__ to store
+         WriteFailure and the exceptions SalesforceWriteError and SalesforceObjectNotFoundError
+         (both subclasses of SalesforceClientError) exactly as in D3, next to the existing dataclasses (after ReportPage). Implement __init__ to store
          `failures` and `total` and build the message D3 specifies.
       2. Add the module helpers _SOQL_IDENTIFIER_RE, _soql_quote, _write_failures and
          _composite_failures under a new "# ---- #" banner "Record writes" placed before
          build_authorize_url.
       3. Add SalesforceClient methods describe_fields, create_record, update_record,
          create_records, update_records and find_records, after search(). Each uses self._call.
-         Writes catch only the four simple_salesforce exceptions D3 names (imported inside _run)
-         and raise SalesforceWriteError; SalesforceExpiredSession must stay uncaught so _call
-         refreshes. Log object type and counts only.
+         Writes map SalesforceMalformedRequest, SalesforceRefusedRequest and
+         SalesforceResourceNotFound to SalesforceWriteError, and SalesforceGeneralError to the
+         "may or may not have been saved" SalesforceClientError, all imported inside _run.
+         SalesforceExpiredSession must stay uncaught so _call refreshes. find_records chunks the
+         IN list at 4,000 characters. Log object type and counts only.
       4. Tests in tests/unit/test_salesforce_client.py, using the existing with_fake_sf(client, sf)
          helper and a MagicMock sf. Add classes:
-         - TestDescribeFields: maps a describe payload (name, label, type, createable, updateable,
-           nillable, externalId) to SalesforceField; a missing key defaults to "" / False;
-           rejects "Account/../x" as an object type.
+         - TestDescribeFields: calls sf.restful("sobjects/Account/describe"); maps a describe
+           payload (name, label, type, createable, updateable, nillable, externalId) to
+           SalesforceField; a missing key defaults to "" / False; rejects "Account/../x" as an
+           object type before any sf call; a SalesforceResourceNotFound from restful raises
+           SalesforceObjectNotFoundError with message
+           "Acount is not an object type your Salesforce user can see" for object type "Acount".
          - TestCreateRecord: POSTs to "sobjects/Account/" with json=fields and returns the id;
            a SalesforceMalformedRequest whose .content is
            [{"errorCode": "REQUIRED_FIELD_MISSING", "message": "Required fields are missing: [Name]", "fields": ["Name"]}]
            raises SalesforceWriteError whose str() is exactly
            "Salesforce did not save the record: records[0]: REQUIRED_FIELD_MISSING (Name): Required fields are missing: [Name]";
-           .content of b"not json" gives one UNKNOWN failure and does not raise anything else;
-           an expired session (SalesforceExpiredSession, as the existing refresh tests raise it)
-           is refreshed and retried once.
+           .content of the str "not json" gives one UNKNOWN failure and does not raise anything
+           else; a SalesforceGeneralError("u", 503, "n", "busy") raises SalesforceClientError (not
+           SalesforceWriteError) whose message contains "may or may not have been saved";
+           expired session: sf.restful.side_effect = [SalesforceExpiredSession("u", 401, "n",
+           [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired or invalid"}]),
+           {"id": "001000000000001AAA", "success": True, "errors": []}], monkeypatch
+           client._try_refresh to lambda: True (as TestCall in this file does), assert two
+           restful calls and the returned id.
          - TestUpdateRecord: PATCHes "sobjects/Account/001000000000001AAA" with only the given
            fields; an invalid record id raises SalesforceClientError before any sf call.
          - TestCompositeWrites: create_records sends allOrNone True and attributes.type on every
@@ -643,8 +730,10 @@ phases:
            12 failures list 10 then "; and 2 more"; 0 and 201 records raise SalesforceClientError;
            update_records rejects a record without a valid "Id".
          - TestFindRecords: by Id builds `SELECT Id, Name FROM Account WHERE Id IN ('001000000000001AAA')`
-           (assert the exact string passed to sf.query_all); by an external id the value
-           "O'Brien\\x" is quoted as 'O\'Brien\\\\x' in the SOQL; a key with "\n" raises
+           (assert the exact string passed to sf.query_all); by an external id the Python value
+           "O'Brien\\x" appears in the SOQL as the Python string "'O\\'Brien\\\\x'"; 300 keys of 30
+           characters each issue more than one query_all call and the rows of all calls are
+           returned; a key with "\n" raises
            SalesforceClientError; a field name "Name; DROP" raises; the key field is not repeated
            when also listed in fields (case-insensitive); attributes are stripped from results.
       5. Run `ruff check .`, `python3 -m pytest tests/unit/test_salesforce_client.py -q`,
@@ -668,6 +757,9 @@ phases:
     brief: |
       Read docs/salesforce-write-tools-plan.md, "Design" D2, before starting; it is the spec
       (constants, function signatures and every error string).
+      Code, comments, docstrings and tests must not mention plan item ids (D1-D7), phase ids or
+      this plan, and must not cite the new ADRs; cite existing ADRs or docs by path
+      (tests/unit/test_code_no_history.py enforces this).
       1. Create src/privacyfence/salesforce_writes.py with a module docstring saying it holds the
          pure checks the Salesforce write tools run before their approval card, and that no error
          message carries a value read from Salesforce. `from __future__ import annotations` next.
@@ -695,7 +787,9 @@ phases:
          - TestValuesDiffer: None vs "" equal; 3 vs 3.0 equal for double; True vs "true" handled
            as bool; "2026-10-14T10:00:00.000+0000" vs "2026-10-14T10:00:00Z" equal;
            "2026-10-14T10:00:00Z" vs "2026-10-14T11:00:00Z" differ; "a;b" vs "b;a" equal for
-           multipicklist; an unparseable datetime falls back to string comparison.
+           multipicklist; "001000000000001" vs "001000000000001AAA" equal for reference;
+           "Acme" vs "acme" differ for string; an unparseable datetime falls back to string
+           comparison.
          - TestCellText: (empty), true/false, the 200-character cut with "…", limit=None.
          - TestNoValueInMessages: build a describe index and call resolve_fields with a value
            "SECRET-VALUE-123" in each failing shape; assert "SECRET-VALUE-123" is in no message.
@@ -704,7 +798,7 @@ phases:
          `python3 -m mypy src/privacyfence`.
     acceptance:
       - python3 -m pytest tests/unit/test_salesforce_writes.py -q passes
-      - python3 -m pytest tests/unit/test_salesforce_writes.py -q --cov=privacyfence.salesforce_writes --cov-branch --cov-report=term-missing reports 100%
+      - python3 -m pytest tests/unit/test_salesforce_writes.py -q --cov=privacyfence.salesforce_writes --cov-branch --cov-fail-under=100 passes
       - python3 -m mypy src/privacyfence passes
       - ruff check . passes
 
@@ -729,21 +823,29 @@ phases:
       - website/connectors/index.html
       - website/how-it-works/index.html
     brief: |
-      Read docs/salesforce-write-tools-plan.md "Design" D1, D4 and D5 first; they are the spec
-      (descriptions, param texts, card fields, error strings, table entries, effect sentences).
+      Read docs/salesforce-write-tools-plan.md "Current state" and "Design" D1, D4 and D5 first;
+      they are the spec (descriptions, param texts, card fields, error strings, table entries,
+      effect sentences). Must-read docs: CLAUDE.md, CONTRIBUTING.md,
+      docs/coding-and-testing-guidelines.md (sections 1.5, 2.4, 2.6 and 2.7).
       Copy the shape of grist_add_records / grist_update_records in src/privacyfence/connectors/grist.py:1018-1121.
+      Code, comments, docstrings and tests must not mention plan item ids (D1-D7), phase ids or
+      this plan, and must not cite the new ADRs; cite existing ADRs or docs by path
+      (tests/unit/test_code_no_history.py enforces this).
       1. connectors/salesforce.py: import from ..salesforce_writes the D2 functions you use and
          _validate_object_type_name/_validate_salesforce_id from ..salesforce_client. Add the
          ToolSpecs salesforce_create_record and salesforce_update_record after
          salesforce_search's spec, with read_only=False and the D1 texts. Add both to call().
-         Add a "# ---- #" banner "Popup gate (writes)" and the methods _create_record and
-         _update_record per D4, plus the helper _check_object_type. Keep `tool="..."` before
-         `gate="popup"` in each gated_call.
+         Add the class SalesforceWriteRefusedError (D4 step 7) after _FILTERS_SHAPE_ERROR. Add
+         a "# ---- #" banner "Popup gate (writes)" and the methods _create_record and
+         _update_record per D4, plus the helpers _check_object_type, _field_index and _write.
+         Build every gated_call argument into a local first, and write `tool="..."` then
+         `gate="popup"` as the first lines after `connector=` (D4 step 4).
       2. auto_accept.py: add the two tools to TOOL_TO_OPERATION (salesforce.create_record,
          salesforce.update_record) and TOOL_TO_GATE ("popup"), next to the Salesforce rows.
       3. policy/registry.py: TOOL_TO_VERB gets salesforce_create_record: Verb.ADD and
          salesforce_update_record: Verb.UPDATE.
-      4. write_effects.py: the two D5 sentences for these tools.
+      4. write_effects.py: a new "# ── Salesforce ──" group before "# ── Peek ──" with the two
+         D5 sentences for these tools.
       5. gate.py: add both to _TOOL_LAYOUT as WIDE.
       6. policy/propose.py: approved_object_types verbs become (Verb.READ, Verb.SEARCH,
          Verb.ADD, Verb.UPDATE); update the Salesforce comment as D5 says.
@@ -753,24 +855,32 @@ phases:
            "salesforce_update_record": ("salesforce_get_record",) — the batch siblings are added
            in p4). Add TestCreateRecord and TestUpdateRecord using gated_call_spy and a client
            MagicMock whose describe_fields returns a list of SalesforceField and get_record returns
-           a SalesforceRecord. Cover: gate "popup"; preview has only the D4 keys and no field
-           value; preview_tables headers; args carry object_type and sha256 (and record_id);
+           a SalesforceRecord. Cover: gate "popup" and sender == object_type; preview has exactly
+           the D4 keys and none of the values from fields or from the current record (use
+           "SECRET-CURRENT" as the current Name and assert it is not in any preview value);
+           preview_tables headers; args carry object_type and sha256 (and record_id);
            raw_data holds no value; a malformed fields JSON and an unknown field raise ValueError
            with no describe/gate call for the JSON case and no gate call for the field case;
            update with no change raises the D4 "nothing to change" error and never gates; update
            sends only the changed fields to client.update_record; SalesforceWriteError from the
-           client surfaces as RuntimeError with the same text; results match D1.
+           client raises SalesforceWriteRefusedError with the same text and
+           safe_errors.public_message(err) == str(err); any other SalesforceClientError from the
+           write raises a plain RuntimeError; describe_fields raising
+           SalesforceObjectNotFoundError raises ValueError with its text and no gate call;
+           results match D1.
            Extend the existing assert_all_tools_leave_an_audit_trail call with arg_overrides for
            the two tools (valid fields JSON, a valid record_id) and make its client return a
            describe list and a record so both reach the gate.
          - tests/unit/policy/test_registry.py: add the two rows to _VERB_MATRIX and change the
            asserted length from 93 to 95.
-         - tests/unit/policy/test_propose.py: add both tools to the per-tool context list at
-           lines 79-82 with args {"object_type": "Account", ...}; add a test that
+         - tests/unit/policy/test_propose.py: add both tools to CORPUS right after the
+           confluence_update_page entry, with make_ctx(connector="salesforce",
+           args={"object_type": "Account", ...}, raw_data={}); add a test that
            propose.operations_for(<approved_object_types entry>, Verb.ADD) contains
            "salesforce.create_record" and, for Verb.UPDATE, "salesforce.update_record".
-         - tests/unit/test_auto_accept.py: add both tools to any table spot-check that lists
-           Salesforce tools.
+         - tests/unit/test_auto_accept.py: add test_salesforce_write_tools_have_their_own_operation_keys
+           next to test_salesforce_search_maps_to_clean_operation_key, asserting
+           TOOL_TO_OPERATION and TOOL_TO_GATE ("popup") for the two tools.
       8. Regenerate: `python3 scripts/generate_tools_reference.py` and
          `python3 scripts/generate_always_allow_reference.py`; commit both outputs.
       9. website/connectors/index.html: on the Salesforce card set data-tools and the printed
@@ -790,6 +900,7 @@ phases:
       - python3 -m pytest tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_systemic_gate_invariants.py -q passes
       - python3 -m pytest tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_generate_always_allow_reference.py tests/unit/web/test_tool_schema_portability.py -q passes
       - grep -n 'salesforce_create_record.*popup' src/privacyfence/auto_accept.py matches
+      - python3 -m pytest tests/unit/connectors/test_salesforce_connector.py -q --cov=privacyfence.connectors.salesforce --cov-branch --cov-report=term-missing lists no missing line or branch inside _create_record, _update_record, _check_object_type, _field_index or _write
       - python3 -m mypy src/privacyfence passes
 
   - id: p4-batch-tools
@@ -813,14 +924,18 @@ phases:
     brief: |
       Read docs/salesforce-write-tools-plan.md "Design" D1, D4 (the two batch tools) and D5
       first. Follow the pattern p3 added for the single-record tools (git log --grep "Plan-Phase: p3"
-      on this branch shows the commit).
+      on this branch shows the commit): locals before gated_call, tool= then gate="popup" first,
+      sender=object_type, writes through _write so a refusal is SalesforceWriteRefusedError.
+      Code, comments, docstrings and tests must not mention plan item ids (D1-D7), phase ids or
+      this plan, and must not cite the new ADRs; cite existing ADRs or docs by path
+      (tests/unit/test_code_no_history.py enforces this).
       1. connectors/salesforce.py: ToolSpecs salesforce_create_records and
          salesforce_update_records (D1 texts; key_field is ToolParam("key_field", "str",
          required=False, default="Id", ...)), dispatch in call(), and methods _create_records and
          _update_records exactly per D4, in the "Popup gate (writes)" group.
       2. auto_accept.py: TOOL_TO_OPERATION (salesforce.create_records, salesforce.update_records)
          and TOOL_TO_GATE ("popup"). registry.py: Verb.ADD / Verb.UPDATE. write_effects.py: the two
-         D5 batch sentences. gate.py: both WIDE. propose.py needs no change (verbs already there).
+         D5 batch sentences, in the Salesforce group p3 added. gate.py: both WIDE. propose.py needs no change (verbs already there).
       3. Tests in tests/unit/connectors/test_salesforce_connector.py:
          - SALESFORCE_SIBLINGS: "salesforce_create_records": ("salesforce_create_record",),
            "salesforce_update_records": ("salesforce_update_record", "salesforce_search"), and add
@@ -838,11 +953,19 @@ phases:
            object_type, key_field and sha256; the error text never contains a current value read
            from find_records (use "SECRET-CURRENT" as a current value and assert it is absent from
            every raised message).
-         - Extend the audit-trail call's arg_overrides for both tools.
+         - Extend the audit-trail call's arg_overrides for both tools:
+           salesforce_create_records records='[{"Name": "A"}]'; salesforce_update_records
+           records='[{"Id": "001000000000001AAA", "Name": "New"}]' and key_field="Id". The
+           audit-trail client's describe_fields must return an "Id" field of type "id" and a
+           createable, updateable "Name" field of type "string", and find_records must return
+           [{"Id": "001000000000001AAA", "Name": "Old"}], so both tools reach the gate.
+         - A refusal from client.create_records / update_records raises
+           SalesforceWriteRefusedError and safe_errors.public_message(err) == str(err).
          - tests/unit/policy/test_registry.py: two rows, length 95 → 97.
            tests/unit/policy/test_propose.py: both tools in the context list; operations_for for
            Verb.ADD/UPDATE also contain "salesforce.create_records"/"salesforce.update_records".
-           tests/unit/test_auto_accept.py: add to any Salesforce spot-check.
+           tests/unit/test_auto_accept.py: extend test_salesforce_write_tools_have_their_own_operation_keys
+           to the two batch tools.
       4. Regenerate docs/tools-reference.md and docs/always-allow-rules-reference.md with the two
          generator scripts.
       5. website/connectors/index.html: Salesforce card tools +2 and popup +2 (7→9, 2→4 if p3
@@ -857,6 +980,7 @@ phases:
       - python3 -m pytest tests/unit/connectors/test_salesforce_connector.py -q passes
       - python3 -m pytest tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_systemic_gate_invariants.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_generate_always_allow_reference.py tests/unit/web/test_tool_schema_portability.py -q passes
       - grep -c 'salesforce_create_record\|salesforce_update_record' src/privacyfence/policy/registry.py prints 4
+      - python3 -m pytest tests/unit/connectors/test_salesforce_connector.py -q --cov=privacyfence.connectors.salesforce --cov-branch --cov-report=term-missing lists no missing line or branch inside _create_records or _update_records
       - python3 -m mypy src/privacyfence passes
 
   - id: p5-qa-lifecycle
@@ -868,15 +992,22 @@ phases:
       - tests/unit/test_qa_fixture_recorder.py
       - tests/fixtures/qa_environment.yaml.example
       - docs/connector-qa.md
+      - docs/testing-policy.md
     brief: |
       Read docs/salesforce-write-tools-plan.md "Design" D6 first.
+      Code, comments, docstrings and tests must not mention plan item ids (D1-D7), phase ids or
+      this plan, and must not cite the new ADRs; cite existing ADRs or docs by path
+      (tests/unit/test_code_no_history.py enforces this).
       1. scripts/qa_fixture_recorder.py: add lifecycle_salesforce(manifest) after lifecycle_peek
          (alphabetical order of the existing lifecycle_* functions), modelled on lifecycle_grist
          (scripts/qa_fixture_recorder.py:2462-2510): build the client the way check_salesforce
          does, run the D6 steps, return LifecycleResult("salesforce", ok, note,
          cleanup_ok=None) with note "create, get, update, batch create, find, batch update all
          verified" on success. Docstring states it never deletes and why. Register it in
-         LIFECYCLE_CHECKS in alphabetical position.
+         LIFECYCLE_CHECKS in alphabetical position. Also fix the places that say Salesforce has
+         no lifecycle check: the module docstring list (scripts/qa_fixture_recorder.py:31-34),
+         the lifecycle scope list (around :2059-2062), and the "salesforce, telegram ... nothing
+         to create" note (around :2086-2088), which becomes telegram only.
       2. tests/fixtures/qa_environment.yaml.example: under salesforce:, add commented
          lifecycle_object_type: Task, lifecycle_name_field: Subject, lifecycle_note_field:
          Description, with a comment that they are the --lifecycle check's defaults.
@@ -884,14 +1015,18 @@ phases:
          MagicMock client (patch the builder the function uses) through success, and one where
          update_record raises, asserting ok False and the note carries the error; and that
          "salesforce" is in LIFECYCLE_CHECKS.
-      4. docs/connector-qa.md: add Salesforce to the --lifecycle list (around line 385) and the
+      4. docs/testing-policy.md: add salesforce to the lifecycle connector list (around line 210).
+         docs/connector-qa.md: add Salesforce to the "--lifecycle runs for" list (around line 393) and the
          manifest-keys table row (around line 342), and a short paragraph in "Salesforce checks"
          (around 641-650) saying the lifecycle check creates and updates Tasks tagged with the
          lifecycle tag and never deletes them, so they are deleted by hand now and then.
       5. Run `ruff check .` and `python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q`.
       6. Push the phase branch, then dispatch connector-live-check.yml (no inputs) against it with
-         the GitHub MCP actions_run_trigger tool; record the run URL and the lifecycle report's
-         Salesforce row in your phase report. A red Salesforce lifecycle row from
+         the GitHub MCP actions_run_trigger tool. If the run has not started within 30 minutes
+         (self-hosted runner offline), stop with status=blocked. Read the Salesforce row from the
+         job log of the step "Run qa_fixture_recorder.py --lifecycle" (get_job_logs), and record
+         the run URL and that row in your phase report. If the run's --record step opens a
+         fixture-drift PR, do not merge or follow it. A red Salesforce lifecycle row from
          INSUFFICIENT_ACCESS is a finding for the maintainer, not a code change: report it and
          finish. Any other red Salesforce row: stop with status=blocked and paste the row.
     acceptance:
@@ -911,7 +1046,11 @@ phases:
       - CHANGELOG.md
     brief: |
       Read docs/salesforce-write-tools-plan.md "Goal" and "Current state" (the read-only claims
-      list) first. Match the website pages' existing voice: short plain sentences.
+      list) first. Match the website pages' existing voice: short plain sentences, present tense,
+      no "now", "new" or "earlier" (docs and pages describe today's behaviour;
+      tests/unit/test_docs_no_history.py checks the published docs). The verbs a rule holds are
+      add and update (docs/adr/0171-auto-accept-rules-use-nine-verbs.md); an existing rule gets
+      them through Edit verbs on Settings → Auto-accept.
       1. website/connectors/salesforce/index.html:
          - <title>: "Salesforce for AI assistants (MCP), reviewed — PrivacyFence".
          - meta description: "Let AI assistants look up, search and report on Salesforce records,
@@ -927,28 +1066,31 @@ phases:
          - "Needs your approval" card (line 50): "Creating a record or updating one, or up to 200
            of one object type at once, all or none. The card shows each field's current and new
            value. The assistant can only change what your own Salesforce user can change."
+         - The "Routine requests" section (around lines 72-83) and its Object types card: say
+           that an object-type rule lets matching reads run, and, when it has the add and update
+           verbs, also creating and updating records of that type.
       2. website/compare/claude-connectors/index.html:78: "Salesforce (read-only)" becomes
          "Salesforce".
       3. README.md:75: "| Salesforce | Read records, search, run reports; create and update records |".
-      4. docs/salesforce-setup.md: add a section "## Creating and updating records" after the
-         section that lists the OAuth scopes: the existing api scope already covers writes, so no
-         one signs in again; what the user may change is decided by their own Salesforce profile
-         and permission sets; every write shows an approval card and nothing deletes; an
-         "Always allow" rule for an object type can now include create and update, and a rule
-         saved earlier keeps only the verbs it had (Settings → Auto-accept offers "Update rule"
-         only for verbs it already has).
+      4. docs/salesforce-setup.md: insert a section "## Creating and updating records"
+         immediately before "## Reading large reports", saying: the api scope covers writes, so
+         connecting needs nothing more; what a user can change is decided by their own Salesforce
+         profile and permission sets; every write shows an approval card, a batch is all or
+         none, and nothing deletes; "An object-type rule covers creating and updating records
+         only when it has the add and update verbs; add them with Edit verbs on Settings →
+         Auto-accept."
       5. CHANGELOG.md under "## [Unreleased]" (Added): "Salesforce: create and update records,
          one at a time or up to 200 of one object type in one approval, all or none. Updates show
          each field's current and new value; nothing deletes. An object-type "Always allow" rule
-         can include create and update."
-      6. Run `python3 -m pytest tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q`
-         and `ruff check .`. If the repo has a website link/build test (grep tests/unit for
-         build_site), run it too.
+         can hold the add and update verbs."
+      6. Run `python3 -m pytest tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_docs_no_history.py -q`
+         (test_website_pages.py checks that a meta description is 50-250 characters) and
+         `ruff check .`.
     acceptance:
       - grep -n -i "read-only" website/connectors/salesforce/index.html finds nothing
       - grep -n "Salesforce (read-only)" website/compare/claude-connectors/index.html finds nothing
       - grep -n "## Creating and updating records" docs/salesforce-setup.md matches
-      - python3 -m pytest tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_docs_no_history.py -q passes
 
   - id: p7-retire-plan
     title: ADRs, reference-doc check, delete the plan
@@ -967,18 +1109,19 @@ phases:
          Status "Accepted — <today>. Implemented.". Context/Decision/Alternatives/Consequences
          come from the plan's Goal, D1-D7 and Risks; Verification names the test classes added in
          p1-p5; Related links src/privacyfence/salesforce_client.py, salesforce_writes.py,
-         connectors/salesforce.py and ADRs 0073, 0105, 0145, 0148, 0166, 0171. No link to the plan.
+         connectors/salesforce.py and ADRs 0073, 0077, 0105, 0144, 0145, 0148, 0166, 0171, 0174.
+         No link to the plan.
       2. Add the three rows to docs/adr/README.md's index table in number order.
       3. Delete docs/salesforce-write-tools-plan.md and
          docs/salesforce-write-tools-plan-manual-steps.html.
-      4. `grep -rn "salesforce-write-tools-plan" .` must find nothing; fix any link it finds.
+      4. `git grep -n "salesforce-write-tools-plan"` must find nothing; fix any link it finds.
       5. Re-run `python3 scripts/generate_tools_reference.py`; if it changes docs/tools-reference.md,
          commit that.
       6. Run `ruff check .` and `python3 -m pytest tests/unit -q` (includes
          tests/unit/test_code_no_history.py and any ADR index test).
     acceptance:
       - test ! -e docs/salesforce-write-tools-plan.md && test ! -e docs/salesforce-write-tools-plan-manual-steps.html
-      - grep -rn "salesforce-write-tools-plan" . --include=*.md --include=*.html --include=*.py finds nothing
+      - git grep -n "salesforce-write-tools-plan" finds nothing
       - grep -c "Salesforce" docs/adr/README.md is at least 4 (0133 plus the three new rows)
       - python3 -m pytest tests/unit -q passes
 ```
