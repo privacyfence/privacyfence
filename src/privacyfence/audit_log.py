@@ -650,9 +650,12 @@ class AuditLogger:
         AuditLogger wrote it), and each entry's ``prev_hash`` must match
         the previous entry's ``entry_hash`` (proves no entry was inserted,
         removed, or reordered). A line with no chain fields at all (one
-        written before the chain existed) can't be verified -- it's skipped, and it resets
-        the "previous entry" expectation for the line after it, since the
-        chain never covered it in the first place.
+        written before the chain existed) can't be verified, and is accepted
+        only before the first chained line of the file: a chain-less line
+        after a chained one fails the check (a forged or replaced line).
+        When chain-less lines precede the first chained line, that line's
+        ``prev_hash`` must be the genesis hash, so replacing a chained line
+        with a junk one is caught too.
 
         Cross-*file* continuity (this week's first prev_hash matching last
         week's last entry_hash) is intentionally not checked here --
@@ -669,6 +672,8 @@ class AuditLogger:
             return ChainVerificationResult(week=week, ok=True, entries_checked=0, detail="no such log file")
 
         expected_prev: str | None = None
+        seen_chained = False
+        seen_chainless = False
         checked = 0
         with open(week_file, encoding="utf-8") as fh:
             for lineno, raw_line in enumerate(fh, start=1):
@@ -685,12 +690,25 @@ class AuditLogger:
                 stored_hash = data.get("entry_hash") or ""
                 if not stored_hash:
                     # A line with no chain fields (schema_version 1, or no
-                    # schema_version at all) -- nothing to verify, and nothing
-                    # for the *next* entry to chain against either.
-                    expected_prev = None
+                    # schema_version at all) -- nothing to verify. Legitimate
+                    # only above the first chained line.
+                    if seen_chained:
+                        return ChainVerificationResult(
+                            week=week, ok=False, entries_checked=checked, first_break_line=lineno,
+                            detail="an entry with no chain fields follows a chained entry -- a "
+                                   "line may have been forged or replaced",
+                        )
+                    seen_chainless = True
                     checked += 1
                     continue
                 stored_prev = data.get("prev_hash") or ""
+                if not seen_chained and seen_chainless and stored_prev != GENESIS_HASH:
+                    return ChainVerificationResult(
+                        week=week, ok=False, entries_checked=checked, first_break_line=lineno,
+                        detail="the first chained entry after unchained lines does not start a new "
+                               "chain -- earlier entries may have been replaced",
+                    )
+                seen_chained = True
                 if expected_prev is not None and stored_prev != expected_prev:
                     return ChainVerificationResult(
                         week=week, ok=False, entries_checked=checked, first_break_line=lineno,
