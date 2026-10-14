@@ -40,11 +40,11 @@ position across that re-render.
 """
 from __future__ import annotations
 
-import json
 import secrets
 from typing import Any
 
 from .design_css import DOCUMENT_CSS
+from .html_embed import json_for_script
 from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 
 # The settings page is built from the shared design system (resources/design/, ADR 0078/0079),
@@ -2311,22 +2311,22 @@ def build_html(
     tokens" section the same way.
     """
     nonce = nonce or secrets.token_urlsafe(18)
-    state_json = json.dumps(state)
+    state_json = json_for_script(state)
     capabilities = _capabilities_for(mode, is_admin=is_admin)
     capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
     capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
-    caps_json = json.dumps(capabilities)
+    caps_json = json_for_script(capabilities)
     ai_client_script = ""
     if capabilities["sections"]["ai_client"]:
-        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json.dumps(ai_client)};</script>'
+        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json_for_script(ai_client)};</script>'
     scoped_tokens_script = ""
     if capabilities["sections"]["scoped_tokens"]:
         # Rule sentences carry user-chosen values: no "</script>" may end the tag early.
-        scoped_json = json.dumps(scoped_tokens).replace("<", "\\u003c")
+        scoped_json = json_for_script(scoped_tokens)
         scoped_tokens_script = f'<script nonce="{nonce}">window.__pfScopedTokens = {scoped_json};</script>'
     section_script = ""
     if initial_section is not None:
-        section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
+        section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json_for_script(initial_section)};</script>'
     return (
         "<title>PrivacyFence Settings</title>"
         f'<style nonce="{nonce}">{DOCUMENT_CSS}{_CSS}</style>'
