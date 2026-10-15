@@ -18,7 +18,7 @@ unless `commit` is on a `releases/*` branch, since those get the same packaging-
 `main`; see CONTRIBUTING.md's branch-protection section), then for each workflow reads the single most
 recent *completed* run on that branch and checks two things: that its commit is actually an
 ancestor of the commit being released (a run for a commit the branch hasn't reached yet says
-nothing about this tag), and that it succeeded. Anything else -- no run at all, the latest run not
+nothing about this tag), and that it succeeded, and that nothing the workflow's `on.push.paths` watches changed after it. Anything else -- no run at all, the latest run not
 yet reachable from this tag, or a reachable run that failed -- is a coverage gap.
 
 What happens with a gap depends on `--channel` (the same value `scripts/r2_release.py channel`
@@ -52,6 +52,7 @@ one being released.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import subprocess
@@ -59,9 +60,11 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 API_ROOT = "https://api.github.com"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # The three graphical-session/autostart workflows -- see module docstring.
 WORKFLOWS = ("linux-graphical-session.yml", "windows-graphical-session.yml", "macos-graphical-session.yml")
@@ -123,7 +126,43 @@ def is_ancestor(candidate_sha: str, commit: str) -> bool:
     return result.returncode == 0
 
 
-def evaluate(workflow: str, run: dict[str, Any] | None, run_is_ancestor: bool) -> str | None:
+def watched_paths(workflow_file: Path) -> list[str]:
+    """The `paths:` patterns under `on.push` in `workflow_file`, read line by line (stdlib only).
+    Takes the `      - ` items after the first `    paths:` line, quotes stripped; comment and
+    blank lines are skipped and the list ends at the first other line."""
+    patterns: list[str] = []
+    in_paths = False
+    for raw in workflow_file.read_text(encoding="utf-8").splitlines():
+        if not in_paths:
+            in_paths = raw.rstrip() == "    paths:"
+            continue
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not raw.startswith("      - "):
+            break
+        item = raw[len("      - "):].split(" #", 1)[0].strip()
+        patterns.append(item.strip("'\""))
+    return patterns
+
+
+def changed_since(run_sha: str, commit: str) -> list[str]:
+    """Files that differ between `run_sha` and `commit` (`git diff --name-only`)."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", run_sha, commit],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def evaluate(
+    workflow: str,
+    run: dict[str, Any] | None,
+    run_is_ancestor: bool,
+    stale_files: list[str] | None = None,
+) -> str | None:
     """Pure function of one workflow's already-fetched latest run (or None) and whether that run's
     commit is an ancestor of the commit being released (already resolved by the caller via
     `is_ancestor`, which needs a real checkout). Returns a warning message, or None if that
@@ -145,6 +184,11 @@ def evaluate(workflow: str, run: dict[str, Any] | None, run_is_ancestor: bool) -
             f"{workflow}'s most recent run reachable from this release did not succeed "
             f"(conclusion={conclusion}): {run.get('html_url')} (see docs/testing-policy.md's layer 6)."
         )
+    if stale_files:
+        return (
+            f"{workflow}: {len(stale_files)} file(s) it covers changed after its last run "
+            f"({stale_files[0]}, ...) (see docs/testing-policy.md's layer 6)."
+        )
     return None
 
 
@@ -158,7 +202,14 @@ def check_all(repo: str, commit: str, token: str, workflows: tuple[str, ...] = W
             warnings.append(f"could not check {workflow}'s latest run: {exc}")
             continue
         run_is_ancestor = run is not None and is_ancestor(run["head_sha"], commit)
-        message = evaluate(workflow, run, run_is_ancestor)
+        stale_files: list[str] = []
+        if run is not None and run_is_ancestor:
+            patterns = watched_paths(REPO_ROOT / ".github/workflows" / workflow)
+            stale_files = [
+                f for f in changed_since(run["head_sha"], commit)
+                if any(fnmatch.fnmatch(f, pattern) for pattern in patterns)
+            ]
+        message = evaluate(workflow, run, run_is_ancestor, stale_files)
         if message:
             warnings.append(message)
     return warnings

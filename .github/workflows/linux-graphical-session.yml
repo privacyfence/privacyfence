@@ -34,6 +34,10 @@ on:
       # in this repo that builds that .deb.
       - 'scripts/linux_privilege_separation.sh'
       - 'installer/linux/**'
+      - 'src/privacyfence/privilege_separation.py'
+      - 'src/privacyfence/companion.py'
+      - 'src/privacyfence/oauth_loopback.py'
+      - 'src/privacyfence/service_control.py'
       - 'scripts/pyinstaller_common.py'
       - 'PrivacyFenceApp.linux.spec'
       - 'tests/integration/test_linux_graphical_session_autostart.py'
