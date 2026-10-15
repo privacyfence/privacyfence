@@ -43,7 +43,7 @@ from privacyfence import (
     upload_staging,
     web_approval_ui,
 )
-from privacyfence.web import state_stream
+from privacyfence.web import control_channel, state_stream
 from tests.diagnostics import capture_failure_diagnostics, suite_name_for
 
 
@@ -107,6 +107,7 @@ def _reset() -> None:
     local_files.force_bridge_for_tests(False)
     settings_controller._main_dispatch = None
     state_stream._loop = None
+    control_channel._mint_nonces.clear()
     # privilege_separation caches the parsed marker file for
     # the life of the process (it can't change under a running daemon), so a
     # test that provisions a fake separated layout would otherwise leave that
