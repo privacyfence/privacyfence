@@ -54,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Hostile client names and connector values can no longer break the Settings page or the approval card's markup.**
 - **On a computer shared by several people, the live Settings updates go only to the owner, and the sign-in link no longer redirects to other sites.**
 - **Large or malformed Excel attachments are refused before they are read.**
+- **Linux: a separated install refuses a daemon executable (or its script interpreter) that a non-root account could rewrite, and the layout step no longer walks into `handoff/`'s subdirectories.** `--daemon-exec` must now be root-owned along its whole path, e.g. `/opt/privacyfence/venv/bin/privacyfence-app`; macOS also checks a staged script's interpreter.
 - **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
 - **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
 

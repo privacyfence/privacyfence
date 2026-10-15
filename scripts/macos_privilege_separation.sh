@@ -313,6 +313,24 @@ stage_trusted_image() {
     cp -p "$COMPANION_EXECUTABLE" "$staged_companion"
     DAEMON_EXECUTABLE="$staged_daemon"
     COMPANION_EXECUTABLE="$staged_companion"
+    # A script runs under its interpreter, which must be as trusted as the file.
+    if [ "$(head -c 2 -- "$DAEMON_EXECUTABLE")" = '#!' ]; then
+      local line interpreter word
+      local -a words=()
+      line="$(head -n 1 -- "$DAEMON_EXECUTABLE")"
+      read -r -a words <<<"${line#\#!}"
+      interpreter="${words[0]:-}"
+      if [ "$interpreter" = "/usr/bin/env" ]; then
+        interpreter=""
+        for word in "${words[@]:1}"; do
+          case "$word" in -*) continue ;; esac
+          interpreter="$(command -v -- "$word")" || interpreter=""
+          break
+        done
+      fi
+      [ -n "$interpreter" ] || die "cannot tell which interpreter ${DAEMON_EXECUTABLE} names on its #! line"
+      require_trusted_image "$interpreter"
+    fi
   fi
   # The parent (/Library/PrivacyFence), not just $TRUSTED_IMAGE_DIR itself --
   # require_trusted_image() walks every ancestor, and while `mkdir -p` as
@@ -447,28 +465,35 @@ marker_owner_user() {
 apply_layout() {
   note "re-owning ${SYSTEM_ROOT} to ${SERVICE_ACCOUNT}:${SERVICE_GROUP}"
   mkdir -p "${SYSTEM_ROOT}/authority" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" "${SYSTEM_ROOT}/logs"
+  # handoff/ (3770) is the one place a group member can write, so the passes
+  # below never descend into it: a directory or link planted there could
+  # otherwise steer a root `find ... -exec` at a file elsewhere.
+  local handoff="${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
+  note "removing unexpected directories under ${HANDOFF_DIR_NAME}/"
+  find "$handoff" -mindepth 1 -maxdepth 1 -type d -exec rm -rf -- {} +
   # Everything except sockets (ADR 0029). A socket belongs to the process that
   # bound it, at the mode it chose: re-owning a live companion's
   # handoff/companion.sock on a re-run -- every .pkg upgrade is one -- leaves
   # that companion unable to unlink it under handoff/'s sticky bit, and every
   # companion after it refusing to take it over (ADR 0027). `chown -h` and
-  # the chmod's `! -type l` keep `find -exec` from following a symlink, which
-  # `chown -R`/`chmod -R` never did.
-  find "$SYSTEM_ROOT" ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
+  # `chmod -h` act on a link itself, and neither is ever given `-R`.
+  find "$SYSTEM_ROOT" -path "$handoff" -prune -o ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
+  chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" "$handoff"
+  find "$handoff" -mindepth 1 -maxdepth 1 ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
   # Tighten everything first, then re-open exactly the two places that have to
   # be reachable from the user's own session. Order matters: the blanket
   # go-rwx below would otherwise undo the handoff directory's group bits.
-  find "$SYSTEM_ROOT" ! -type s ! -type l -exec chmod go-rwx {} +
-  chmod "$SYSTEM_ROOT_MODE" "$SYSTEM_ROOT"
-  chmod "$AUTHORITY_DIR_MODE" "${SYSTEM_ROOT}/authority"
-  chmod "$HANDOFF_DIR_MODE" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
+  find "$SYSTEM_ROOT" -path "$handoff" -prune -o ! -type s ! -type l -exec chmod -h go-rwx {} +
+  chmod -h "$SYSTEM_ROOT_MODE" "$SYSTEM_ROOT"
+  chmod -h "$AUTHORITY_DIR_MODE" "${SYSTEM_ROOT}/authority"
+  chmod -h "$HANDOFF_DIR_MODE" "$handoff"
   # The daemon rewrites the discovery files (mcp_url, web_base_url) on every
   # start, but until then one left at 0600 (by a hand-edited tree, or a
   # daemon started before this re-run) keeps the companion and the .mcpb shim
   # from finding a daemon that is running.
   # (privilege_separation.ensure_handoff_file_mode() re-asserts this too; doing
   # it here as well means a correct install doesn't depend on that fix-up.)
-  find "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" -type f -exec chmod "$HANDOFF_FILE_MODE" {} +
+  find "$handoff" -mindepth 1 -maxdepth 1 -type f -exec chmod -h "$HANDOFF_FILE_MODE" {} +
 }
 
 write_marker() {
