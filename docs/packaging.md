@@ -102,10 +102,11 @@ attempts); any other signing failure returns on the first attempt.
 ### Install (`installer/macos/pkg/postinstall`)
 
 The `.pkg` postinstall runs as root with no login session. It resolves the human from the console
-owner (`stat -f '%Su' /dev/console`; `root`/`loginwindow`/empty count as nobody), runs
-`/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh enable
---auto [--user <console user>] --app /Applications/PrivacyFenceApp.app`, then `daemon
-ensure-running`. It always exits 0: a failed `enable` is logged (`/var/log/install.log`), and the
+owner (`stat -f '%Su' /dev/console`; `root`/`loginwindow`/empty count as nobody). It skips set-up
+unless every file in the installed bundle is owned by root, then runs the pkg's own copy of
+`macos_privilege_separation.sh` (carried in the pkg's Scripts directory with the two plist
+templates, not the copy inside the app bundle) as `enable --auto [--user <console user>] --app
+/Applications/PrivacyFenceApp.app`, then `daemon ensure-running` ([ADR 0184](adr/0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md)). It always exits 0: a failed `enable` is logged (`/var/log/install.log`), and the
 daemon's own admin-password prompt (`privilege_separation.maybe_auto_enable_macos()`) re-offers it
 on every start that finds a packaged install unseparated. Re-running the `.pkg` over a running
 install is the upgrade path: `enable` re-stages the image and bootouts/bootstraps the LaunchDaemon
@@ -243,8 +244,9 @@ Installed files: `/opt/privacyfence/` (the bundle), `/usr/bin/privacyfence-app` 
 Applications-menu entry, `/usr/sbin/privacyfence-privilege-separation` (renamed
 `scripts/linux_privilege_separation.sh`), its templates under
 `/usr/share/privacyfence/installer/linux/`, the polkit action
-`eu.privacyfence.daemon-control.policy` (lets the companion run `daemon start`/`stop`/`restart`
-through `pkexec`), icons, and lintian overrides. No autostart entry ships in the package.
+`eu.privacyfence.daemon-control.policy` (two actions, `eu.privacyfence.daemon-control` for `daemon …`
+and `eu.privacyfence.enable-for-user` for `enable …`, selected by the first argument; under `pkexec`
+the script accepts only an argument allow-list, [ADR 0183](adr/0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md)), icons, and lintian overrides. No autostart entry ships in the package.
 
 ### Maintainer scripts
 

@@ -381,8 +381,9 @@ checklist for the PR description.
 - [ ] `src/privacyfence/*_client.py` or `src/privacyfence/connectors/**`: run
       `scripts/qa_fixture_recorder.py --check <connector>` against a dedicated QA account per
       [`connector-qa.md`](connector-qa.md), and paste its report into the PR description. Without
-      local QA credentials, dispatch `connector-live-check.yml` against the branch and link the run
-      instead — see [`testing-policy.md`, layer 5](testing-policy.md#layer-5-live-connector).
+      local QA credentials, dispatch `qa-record-fixture.yml` on `main` with inputs `connector` and
+      `branch` and link the run instead (a dispatch on any other ref never gets the runner, and
+      `connector-live-check.yml` on `main` checks `main`'s code) — see [`testing-policy.md`, layer 5](testing-policy.md#layer-5-live-connector).
 - [ ] `web/mcp_dispatch.py`, `web/routes_mcp.py`, `connector.py`'s `ToolSpec`/`ToolParam` shapes, or
       `web/server.py`'s socket-binding/lifecycle: run `pytest tests/integration -v` locally and
       confirm `test_mcp_daemon_contract.py` still passes — it drives a real, socket-bound daemon
@@ -430,7 +431,7 @@ Parser/client unit tests replay committed, redacted live fixtures from
 Real provider checks run through `scripts/qa_fixture_recorder.py` (`--check`, `--record`,
 `--lifecycle`) against dedicated QA accounts, on a developer machine or on the self-hosted runner
 through `connector-live-check.yml` (weekly, or dispatched) and `qa-record-fixture.yml` (records one
-connector's fixture and commits it to the branch it was dispatched against). See
+connector's fixture, dispatched on `main`, and commits it to the branch named in its `branch` input). See
 [`connector-qa.md`](connector-qa.md) for the accounts, the runner and both workflows, and
 [`testing-policy.md`, layer 5](testing-policy.md#layer-5-live-connector) for where
 this sits in the test policy.
@@ -526,7 +527,7 @@ runtime or in review, so work through them deliberately.
 | Live check and recorded fixture | `scripts/qa_fixture_recorder.py`: `CONNECTOR_CHECKS` and `EXPECTED_FIXTURES` | **enforced**: import-time assertion that both have the same keys, plus `tests/unit/test_qa_fixture_recorder.py`'s `TestFixturePresence` (each listed fixture file exists and is valid JSON) |
 | QA seed objects for the connector | `tests/fixtures/qa_environment.yaml.example` (the real, git-ignored `qa_environment.yaml` lives on the QA machine and runner) | review |
 | QA account authentication step (OAuth connectors) | `scripts/qa_authenticate_connectors.py`'s `STEPS` | review |
-| Record the fixture | dispatch `qa-record-fixture.yml` with `connector=<name>` against the feature branch; it commits `tests/fixtures/live/<name>/…` back to that branch — see [`connector-qa.md`](connector-qa.md#recording-one-connector) | the fixture-presence test above |
+| Record the fixture | dispatch `qa-record-fixture.yml` on `main` with inputs `connector=<name>` and `branch=<feature branch>`; the hosted `commit-fixture` job commits `tests/fixtures/live/<name>/…` to that branch — see [`connector-qa.md`](connector-qa.md#recording-one-connector) | the fixture-presence test above |
 | Privacy-matrix rows (tool, direction, gate) | the doc `test_readme_manifest_alignment.py` parses (its `README_PATH`) | **enforced**: every tool documented, direction matches `read_only` |
 | User-facing setup guide and a `CHANGELOG.md` line | `docs/<service>-setup.md` (or the shared Google guide), `## [Unreleased]` | review |
 

@@ -167,3 +167,31 @@ def test_unmarked_skip_stays_a_skip_with_both_switches(project, monkeypatch):
     monkeypatch.setenv("PRIVACYFENCE_REQUIRE_PACKAGED", "1")
     monkeypatch.setenv("PRIVACYFENCE_REQUIRE_BROWSER", "1")
     _run(project).assert_outcomes(skipped=1)
+
+
+def test_packaged_elevated_shell_skip_fails_when_required(project, monkeypatch):
+    project.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.packaged
+        def test_it():
+            pytest.skip("a machine-wide install needs an elevated shell")
+        """
+    )
+    monkeypatch.setenv("PRIVACYFENCE_REQUIRE_PACKAGED", "1")
+    _run(project).assert_outcomes(failed=1)
+
+
+def test_packaged_xfail_stays_an_xfail_when_required(project, monkeypatch):
+    project.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.packaged
+        def test_it():
+            pytest.xfail("no dist/x built yet")
+        """
+    )
+    monkeypatch.setenv("PRIVACYFENCE_REQUIRE_PACKAGED", "1")
+    _run(project).assert_outcomes(xfailed=1)

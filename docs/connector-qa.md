@@ -417,8 +417,8 @@ classes (see [`tests/fixtures/live/README.md`](../tests/fixtures/live/README.md)
 
 A dedicated Linux host or VM, not shared with other repositories or workloads:
 
-- a GitHub Actions runner registered to this repository with the label `privacyfence-test`, in the
-  organization runner group `privacyfence-test`. The group allows public repositories but is set to
+- a GitHub Actions runner registered in the organization runner group `privacyfence-test` (not to
+  this repository) with the label `privacyfence-test`. The group allows public repositories but is set to
   **Selected workflows**: only `connector-live-check.yml` and `qa-record-fixture.yml` as they stand
   on `main`, so a pull request, a fork or any other branch's copy of a workflow can never be
   scheduled on it. Fork pull requests from outside collaborators also require approval before any
@@ -467,13 +467,13 @@ already-spent token.
 `.github/workflows/connector-live-check.yml` runs weekly (Monday 06:00 UTC) and on
 `workflow_dispatch`, with a 20-minute timeout. It:
 
-1. checks out the repository (full history) and builds a fresh `.venv` with
-   `pip install -e ".[test]"`;
+1. checks out the repository (full history) and builds a fresh `.venv` from the hash-pinned lock
+   (`pip install --require-hashes -r requirements/dev.lock.txt`, then `pip install --no-deps -e .`);
 2. copies the persistent QA state into the checkout;
 3. runs `--check` with `continue-on-error`, since drift is a finding, not a crash;
 4. if the check failed, runs `--record`;
 5. runs `--lifecycle`, which fails the job on any failure;
-6. if the check failed, opens or updates a PR from `chore/connector-live-fixture-drift` that
+6. if the check failed, the separate `open-drift-pr` job (on a GitHub-hosted runner) opens or updates a PR from `chore/connector-live-fixture-drift` that
    contains only `tests/fixtures/live/**`, with the record report as its body;
 7. copies refreshed credentials back (always);
 8. uploads `/tmp/qa-*-report.md` as the `connector-live-check-report` artifact, kept for 90 days

@@ -140,8 +140,10 @@ usage: sudo $0 {enable|uninstall|status} [options]
   --daemon-exec <p>   run this instead of the .app's daemon executable
   --companion-exec <p> run this instead of the .app's companion executable
                       (both together let a source/venv install be separated:
-                       --daemon-exec .venv/bin/privacyfence-app
-                       --companion-exec .venv/bin/privacyfence-companion)
+                       --daemon-exec /opt/privacyfence/venv/bin/privacyfence-app
+                       --companion-exec /opt/privacyfence/venv/bin/privacyfence-companion
+                       a source or venv install can be separated only if root
+                       owns it and everything above it)
   --purge             uninstall only: also delete the data under
                       ${SYSTEM_ROOT}, the marker, and the ${SERVICE_ACCOUNT}
                       account and group. Without it, uninstall keeps all
