@@ -355,7 +355,7 @@ apply_layout() {
   mkdir -p "${SYSTEM_ROOT}/authority" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" "${SYSTEM_ROOT}/logs"
   # handoff/ (3770) is the one place a group member can write, so the passes
   # below never descend into it: a directory or link planted there could
-  # otherwise steer a root `find ... -exec` at a file elsewhere (SEC-D4).
+  # otherwise steer a root `find ... -exec` at a file elsewhere.
   local handoff="${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
   note "removing unexpected directories under ${HANDOFF_DIR_NAME}/"
   find "$handoff" -mindepth 1 -maxdepth 1 -type d -exec rm -rf -- {} +

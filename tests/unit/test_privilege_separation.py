@@ -1314,7 +1314,7 @@ class TestApplyLayoutLeavesSocketsAlone:
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_handoff_subdirectories_are_removed_and_never_walked(self, platform, tmp_path):
-        # SEC-D4: handoff/ is group-writable, so a directory planted in it must
+        # handoff/ is group-writable, so a directory planted in it must
         # not be descended into by a root find that then chowns/chmods.
         root = tmp_path / "root"
         handoff = root / "handoff"
@@ -1389,7 +1389,7 @@ def _executable(path: Path, content: str = "#!/bin/sh\n") -> Path:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="runs the Linux installer's own bash")
 class TestLinuxDaemonImageMustBeRootOwned:
-    """SEC-D2: the service account runs ``--daemon-exec``, so a file or any
+    """The service account runs ``--daemon-exec``, so a file or any
     directory above it that a non-root account can write is a way to run code
     as that account. Real bash functions, with ``stat`` stubbed (the
     ownership of a temp tree cannot be chosen without root)."""
