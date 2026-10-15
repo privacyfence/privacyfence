@@ -1443,7 +1443,7 @@ class DriveConnector(Connector):
                         file_id, drive_file.size, _FULL_FETCH_PII_SCAN_MAX_BYTES,
                     )
                 else:
-                    pii_scan_text = extract_text(content.content_bytes, drive_file.mime_type)
+                    pii_scan_text = await asyncio.to_thread(extract_text, content.content_bytes, drive_file.mime_type)
                     full_bytes = content.content_bytes
         except RuntimeError:
             pass
@@ -1732,7 +1732,7 @@ class DriveConnector(Connector):
                     # which also becomes a rich "markdown" preview_blocks entry
                     # (see this function's own preview construction further
                     # down) instead of a visual thumbnail.
-                    upload_pii_scan_text = extract_text(read_bytes, guessed_mime)
+                    upload_pii_scan_text = await asyncio.to_thread(extract_text, read_bytes, guessed_mime)
         elif is_org_local_path:
             display_name = name.strip() or os.path.basename(local_path)
             expanded = os.path.expanduser(local_path)
@@ -1756,7 +1756,7 @@ class DriveConnector(Connector):
                     if guessed_mime.startswith("image/"):
                         preview_bytes = read_bytes
                         preview_mime_type = guessed_mime
-                    upload_pii_scan_text = extract_text(read_bytes, guessed_mime)
+                    upload_pii_scan_text = await asyncio.to_thread(extract_text, read_bytes, guessed_mime)
         else:
             display_name = name.strip() or "(unnamed file)"
             try:
@@ -1777,7 +1777,7 @@ class DriveConnector(Connector):
                 if guessed_mime.startswith("image/"):
                     preview_bytes = decoded
                     preview_mime_type = guessed_mime
-                upload_pii_scan_text = extract_text(decoded, guessed_mime)
+                upload_pii_scan_text = await asyncio.to_thread(extract_text, decoded, guessed_mime)
 
         preview = {
             "File": display_name,

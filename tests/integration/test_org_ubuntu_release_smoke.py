@@ -446,6 +446,21 @@ def _extract_cookie(response: requests.Response, name: str) -> str:
     return raw.split(";", 1)[0].split("=", 1)[1]
 
 
+def _extract_named_cookie(response: requests.Response, name: str) -> str:
+    """The value of the ``name`` cookie among every ``Set-Cookie`` header (``/login`` sets the
+    ``pf_org_login`` binding cookie, ADR 0178)."""
+    for raw in response.raw.headers.getlist("Set-Cookie"):
+        if raw.startswith(f"{name}="):
+            return raw.split(";", 1)[0].split("=", 1)[1]
+    raise AssertionError(f"no {name!r} cookie in Set-Cookie: {response.raw.headers.getlist('Set-Cookie')!r}")
+
+
+def _login_binding_header(to_idp: requests.Response) -> dict[str, str]:
+    """The Cookie header a browser would send on the callback: this client is plain http, so
+    the Secure binding cookie is carried by hand."""
+    return {"Cookie": f"pf_org_login={_extract_named_cookie(to_idp, 'pf_org_login')}"}
+
+
 def _complete_browser_login(
     client: LoopbackClient, idp: MockIdp, *, sub: str, next_path: str = "", email: str | None = None,
 ) -> str:
@@ -460,9 +475,27 @@ def _complete_browser_login(
     assert to_idp.status_code == 302, to_idp.text
     at_idp = requests.get(to_idp.headers["location"], allow_redirects=False, timeout=10)
     assert at_idp.status_code == 302, at_idp.text
-    back_at_daemon = client.get(_loopback_target(at_idp.headers["location"]))
+    back_at_daemon = client.get(_loopback_target(at_idp.headers["location"]), headers=_login_binding_header(to_idp))
     assert back_at_daemon.status_code == 302, back_at_daemon.text
     return _extract_cookie(back_at_daemon, "pf_org_session")
+
+
+def _allow_consent(client: LoopbackClient, back_at_daemon: requests.Response) -> dict[str, str]:
+    """The IdP callback of a client this person has not allowed yet ends on the consent page (ADR
+    0177): GET it, POST "allow" and read the code from the continue page's link. No ``Origin``
+    header is sent -- this client talks plain http to 127.0.0.1, so an https one would be refused,
+    and ``check_origin`` accepts a missing one."""
+    import html as html_lib
+
+    page_path = _loopback_target(back_at_daemon.headers["location"])
+    assert page_path.startswith("/oauth/consent/"), back_at_daemon.headers["location"]
+    page = client.get(page_path)
+    assert page.status_code == 200, page.text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+    decided = client.post(page_path, data={"csrf": csrf, "decision": "allow"})
+    assert decided.status_code == 200, decided.text
+    link = html_lib.unescape(re.search(r'<a href="([^"]+)">Continue</a>', decided.text).group(1))
+    return dict(parse_qsl(urlparse(link).query))
 
 
 def _mcp_bearer_token_for(client: LoopbackClient, idp: MockIdp, *, sub: str) -> str:
@@ -492,7 +525,7 @@ def _mcp_bearer_token_for(client: LoopbackClient, idp: MockIdp, *, sub: str) -> 
     assert at_idp.status_code == 302, at_idp.text
     back_at_daemon = client.get(_loopback_target(at_idp.headers["location"]))
     assert back_at_daemon.status_code == 302, back_at_daemon.text
-    callback_qs = dict(parse_qsl(urlparse(back_at_daemon.headers["location"]).query))
+    callback_qs = _allow_consent(client, back_at_daemon)
 
     token_resp = client.post("/token", data={
         "grant_type": "authorization_code", "code": callback_qs["code"], "redirect_uri": CLAUDE_REDIRECT_URI,
@@ -686,7 +719,7 @@ class TestRunningOrgModeService:
         assert at_idp.status_code == 302, at_idp.text
         back_at_daemon = self.client.get(_loopback_target(at_idp.headers["location"]))
         assert back_at_daemon.status_code == 302, back_at_daemon.text
-        callback_qs = dict(parse_qsl(urlparse(back_at_daemon.headers["location"]).query))
+        callback_qs = _allow_consent(self.client, back_at_daemon)
         assert callback_qs["state"] == "claude-state"
 
         token_resp = self.client.post("/token", data={
@@ -696,11 +729,13 @@ class TestRunningOrgModeService:
         assert token_resp.status_code == 200, token_resp.text
         access_token = token_resp.json()["access_token"]
 
-        # No principal directory exists yet -- ConnectorRegistry.get()
-        # (and the per-principal settings.yaml it bootstraps) only runs
-        # once something actually asks for that principal's tools.
+        # Nothing but the remembered consent exists in the principal's directory yet --
+        # ConnectorRegistry.get() (and the per-principal settings.yaml it bootstraps) only
+        # runs once something actually asks for that principal's tools.
         users_dir = self.home / ".privacyfence" / "users"
-        assert not users_dir.exists() or not any(users_dir.iterdir())
+        carol_files = {p.name for p in (users_dir / safe_principal_id("carol")).iterdir()}
+        assert carol_files == {"oauth_consents.json"}
+        assert [p.name for p in users_dir.iterdir()] == [safe_principal_id("carol")]
 
         async with httpx2.AsyncClient(headers={"Host": ISSUER_HOST, "Authorization": f"Bearer {access_token}"}) as hc:
             async with streamable_http_client(f"http://127.0.0.1:{self.port}/mcp", http_client=hc) as (r, w):
@@ -890,7 +925,9 @@ class TestAppLevelAuthzPolicy:
         assert to_idp.status_code == 302, to_idp.text
         at_idp = requests.get(to_idp.headers["location"], allow_redirects=False, timeout=10)
         assert at_idp.status_code == 302, at_idp.text
-        back_at_daemon = self.client.get(_loopback_target(at_idp.headers["location"]))
+        back_at_daemon = self.client.get(
+            _loopback_target(at_idp.headers["location"]), headers=_login_binding_header(to_idp),
+        )
         assert back_at_daemon.status_code == 400, back_at_daemon.text
         assert "set-cookie" not in back_at_daemon.headers
 

@@ -23,6 +23,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger, released_req
 from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_rows
 from .. import local_files
 from ..connector import Connector
+from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
 from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
@@ -227,7 +228,7 @@ class McpDispatcher:
         scope_id = scope.id if scope is not None else ""
         now = time.time()
         self._prune_stale(now)
-        key = self._dedupe_key(principal_id, scope_id, connector_name, tool, args)
+        key = self._dedupe_key(principal_id, scope_id, session_key, current_agent().id, connector_name, tool, args)
         entry = self._inflight.get(key)
         if entry is not None:
             existing, recorded_at = entry
@@ -304,8 +305,16 @@ class McpDispatcher:
             del self._inflight[key]
 
     @staticmethod
-    def _dedupe_key(principal_id: str, scope_id: str, connector_name: str, tool: str, args: dict) -> str:
-        return f"{principal_id}:{scope_id}:{connector_name}:{tool}:{json.dumps(args, sort_keys=True, default=str)}"
+    def _dedupe_key(
+        principal_id: str, scope_id: str, session_key: Hashable, agent_id: str,
+        connector_name: str, tool: str, args: dict,
+    ) -> str:
+        # The retry dedupe is for one client retrying its own call; it never crosses MCP sessions
+        # (a second session's identical call must run itself, e.g. under its own unattended flag).
+        return (
+            f"{principal_id}:{scope_id}:{session_key}:{agent_id}:{connector_name}:{tool}:"
+            f"{json.dumps(args, sort_keys=True, default=str)}"
+        )
 
     @staticmethod
     def _is_read_only(connector: Connector, tool: str) -> bool:

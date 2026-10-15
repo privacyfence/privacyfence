@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from mcp.shared.exceptions import MCPError
 
 from privacyfence_sync import cli
 from privacyfence_sync.auth import FileTokenStorage, storage_path
+from privacyfence_sync.transform import script_env
 from privacyfence_sync.client import SignInError, SyncError, ToolDenied, ToolFailed
 
 
@@ -150,19 +152,34 @@ def test_token_env_names_another_variable(
     assert cli.main(["run", simple(write_recipe), "--token-env", "MY_TOKEN"]) == 0
 
 
+def test_custom_token_env_is_hidden_from_scripts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MY_TOKEN", "t")
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "connect_token", lambda server, token: seen.append(token) or FakeSession())
+    cli._connect("http://x/mcp", "MY_TOKEN")
+    assert seen == ["t"]
+    assert "MY_TOKEN" not in os.environ
+    assert "MY_TOKEN" not in script_env()
+
+
 def test_server_resolution_order(write_recipe: RecipeWriter, daemon: Daemon, monkeypatch: pytest.MonkeyPatch) -> None:
     servers = daemon.servers
+
+    def main(*argv: str) -> int:
+        monkeypatch.setenv("PRIVACYFENCE_TOKEN", "secret-token")  # a run takes the token out of the environment
+        return cli.main(list(argv))
+
     plain = simple(write_recipe)
 
-    assert cli.main(["run", plain]) == 0
+    assert main("run", plain) == 0
     assert servers[-1] == "http://127.0.0.1:8765/mcp"
     monkeypatch.setenv("PRIVACYFENCE_MCP_URL", "http://env/mcp")
-    assert cli.main(["run", plain]) == 0
+    assert main("run", plain) == 0
     assert servers[-1] == "http://env/mcp"
     with_server = simple(write_recipe, server="http://recipe/mcp")
-    assert cli.main(["run", with_server]) == 0
+    assert main("run", with_server) == 0
     assert servers[-1] == "http://recipe/mcp"
-    assert cli.main(["run", with_server, "--server", "http://flag/mcp"]) == 0
+    assert main("run", with_server, "--server", "http://flag/mcp") == 0
     assert servers[-1] == "http://flag/mcp"
 
 

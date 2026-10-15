@@ -148,6 +148,8 @@ How the settings combine:
   a fresh sign-in at the identity provider instead of a passkey for a single decision, and refuses
   a batch that needs step-up (`400`, nothing applied): approve each item from its card, or add a
   passkey ([ADR 0066](adr/0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md)).
+  That sign-in starts only from the card's own button, by a request the page checks, never from a
+  link ([ADR 0179](adr/0179-an-idp-step-up-starts-only-from-the-card-by-post.md)).
 - **Batch approval:** one assertion covers a selected set of approvals and is bound to that exact
   set and each item's result. It cannot be replayed for a larger, smaller or altered set.
   `batch: per_item` sends every item that needs step-up back to its own card. PII confirmations

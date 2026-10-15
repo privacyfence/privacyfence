@@ -1069,28 +1069,28 @@ class TestRunReportPage:
         client = with_fake_sf(make_client(), sf)
         client.report_max_pages = 3
         with pytest.raises(ReportPagingError, match="stopped after 3 pages") as exc:
-            client.run_report_page("r1", "Num__c", pages_done=3)
+            client.run_report_page(REPORT_ID, "Num__c", pages_done=3)
         assert exc.value.reason == "page_limit"
         sf.restful.assert_not_called()
 
     def test_last_allowed_page_runs(self):
         client, sf = self._client(_page_result(["a"]))
         client.report_max_pages = 3
-        assert client.run_report_page("r1", "Num__c", pages_done=2).keys == ["a"]
+        assert client.run_report_page(REPORT_ID, "Num__c", pages_done=2).keys == ["a"]
 
     def test_describe_then_keyset_post(self):
         result = _page_result(["a", "b"], count=7, all_data=False)
         client, sf = self._client(result)
         flt = ReportFilter("Name", "equals", ["x"])
 
-        page = client.run_report_page("r1", "Num__c", ["Name", "Num__c"], [flt], after="0", pages_done=1, remaining=7)
+        page = client.run_report_page(REPORT_ID, "Num__c", ["Name", "Num__c"], [flt], after="0", pages_done=1, remaining=7)
 
         assert page == ReportPage(result, ["a", "b"], False, 7)
         built = build_keyset_metadata(self.SAVED, ["Name", "Num__c"], [flt], "Num__c", "0")
         assert sf.restful.call_args_list == [
-            (("analytics/reports/r1/describe",), {}),
+            ((f"analytics/reports/{REPORT_ID}/describe",), {}),
             (
-                ("analytics/reports/r1",),
+                (f"analytics/reports/{REPORT_ID}",),
                 {"params": {"includeDetails": "true"}, "method": "POST", "json": {"reportMetadata": built}},
             ),
         ]
@@ -1099,25 +1099,25 @@ class TestRunReportPage:
         result = _page_result(["a"])
         del result["allData"]
         client, _ = self._client(result)
-        assert client.run_report_page("r1", "Num__c").all_data is True
+        assert client.run_report_page(REPORT_ID, "Num__c").all_data is True
 
     def test_non_dict_describe_is_treated_as_empty(self):
         sf = MagicMock()
         sf.restful.side_effect = [None, _page_result(["a"])]
         client = with_fake_sf(make_client(), sf)
         with pytest.raises(ReportPagingError, match="not a column of this run: $") as exc:
-            client.run_report_page("r1", "Num__c")
+            client.run_report_page(REPORT_ID, "Num__c")
         assert exc.value.reason == "bad_page_by"
 
     def test_paging_error_from_keys_propagates_unchanged(self):
         client, _ = self._client(_page_result(["a", "a"]))
         with pytest.raises(ReportPagingError) as exc:
-            client.run_report_page("r1", "Num__c")
+            client.run_report_page(REPORT_ID, "Num__c")
         assert exc.value.reason == "not_unique"
 
     def test_page_info_for_the_page(self):
         client, _ = self._client(_page_result(["a", "b"], count=4, all_data=False))
-        page = client.run_report_page("r1", "Num__c", remaining=None)
+        page = client.run_report_page(REPORT_ID, "Num__c", remaining=None)
         assert report_page_info(2, 3, len(page.keys), not page.all_data) == {
             "number": 2, "first_row": 4, "last_row": 5, "more": True,
         }

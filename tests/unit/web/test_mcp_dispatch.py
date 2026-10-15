@@ -269,6 +269,46 @@ class TestCall:
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert len(connector.calls) == 1
 
+    async def test_an_identical_call_from_another_session_is_not_deduped(self):
+        connector = FakeConnector("gmail", result="r", delay=0.05)
+        dispatcher = _dispatcher({"gmail": connector})
+        await asyncio.gather(
+            dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}),
+            dispatcher.call("s2", "gmail", "gmail_tool", {"x": 1}),
+        )
+        assert len(connector.calls) == 2
+
+    async def test_an_unattended_session_never_gets_another_sessions_result(self):
+        connector = UnattendedAwareConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector}, unattended_sessions_enabled=True)
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        dispatcher.begin_unattended_session("s2", "why")
+        await dispatcher.call("s2", "gmail", "gmail_tool", {"x": 1})
+        assert connector.observed_unattended == [False, True]
+
+    async def test_cancelled_leader_does_not_poison_the_dedupe_key(self):
+        release = asyncio.Event()
+
+        class Waiting(FakeConnector):
+            async def call(self, tool, args):
+                self.calls.append((tool, args))
+                await release.wait()
+                return "r"
+
+        connector = Waiting("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        first = asyncio.create_task(dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert first.cancelled()
+        release.set()
+        assert await asyncio.wait_for(dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}), 1) == "r"
+        assert len(connector.calls) == 2
+        assert dispatcher._inflight  # the completed second call is cached, the cancelled one left no stale key
+        assert all(fut.done() and not fut.cancelled() for fut, _ in dispatcher._inflight.values())
+
     async def test_a_pending_approval_result_is_never_cached_for_reuse(self):
         # A gated call that went pending (gate.gated_call raises
         # ApprovalPending, ADR 0093) comes back as its

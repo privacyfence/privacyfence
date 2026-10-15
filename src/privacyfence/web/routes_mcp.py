@@ -44,7 +44,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from pydantic import AnyHttpUrl
 from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -59,7 +59,10 @@ from ..safe_errors import public_message
 from . import mcp_tools
 from .mcp_auth import principal_from_access_token, scope_from_access_token, single_token_verifier
 from .mcp_dispatch import McpDispatcher
-from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
+from . import org_session
+from .csp import nonce_for
+from .oauth_consent import render_consent_page, render_continue_page
+from .oauth_provider import CONSENT_PATH, IDP_CALLBACK_PATH, OrgOAuthProvider
 
 logger = logging.getLogger(__name__)
 
@@ -1041,7 +1044,9 @@ def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Rout
     document pointing at this same issuer. The one route the SDK has no
     opinion on -- ``provider``'s own IdP-facing callback -- is added
     alongside them; see ``OrgOAuthProvider.handle_idp_callback``'s own
-    docstring for what it does.
+    docstring for what it does. So are the consent page's two routes
+    (``GET``/``POST`` ``/oauth/consent/<id>``, ADR 0177): the page an
+    org member sees before a client they have not allowed yet gets a code.
     """
     issuer = AnyHttpUrl(issuer_url)
     resource_url = AnyHttpUrl(f"{issuer_url.rstrip('/')}{MCP_PATH}")
@@ -1075,6 +1080,41 @@ def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Rout
         return RedirectResponse(redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
 
     routes.append(Route(IDP_CALLBACK_PATH, idp_callback))
+
+    expired = "This sign-in has expired. Start again from your AI client."
+    no_store = {"Cache-Control": "no-store"}
+
+    async def consent_page(request: Request) -> Response:
+        consent_id = request.path_params["consent_id"]
+        view = provider.consent_view(consent_id)
+        if view is None:
+            return PlainTextResponse(expired, status_code=400, headers=no_store)
+        return HTMLResponse(
+            render_consent_page(view, consent_id=consent_id, nonce=nonce_for(request)), headers=no_store,
+        )
+
+    async def consent_post(request: Request) -> Response:
+        if not org_session.check_origin(request):
+            return PlainTextResponse("Cross-origin request rejected.", status_code=403)
+        form = await request.form()
+        csrf, decision = form.get("csrf"), form.get("decision")
+        if not isinstance(csrf, str) or decision not in ("allow", "deny"):
+            return PlainTextResponse("Bad request.", status_code=400)
+        try:
+            redirect_url = provider.decide_consent(
+                request.path_params["consent_id"], csrf=csrf, allow=decision == "allow",
+            )
+        except ValueError:
+            return PlainTextResponse(expired, status_code=400, headers=no_store)
+        return HTMLResponse(
+            render_continue_page(
+                redirect_url, redirect_host=provider.redirect_host(redirect_url), nonce=nonce_for(request),
+            ),
+            headers=no_store,
+        )
+
+    routes.append(Route(f"{CONSENT_PATH}/{{consent_id}}", consent_page, methods=["GET"]))
+    routes.append(Route(f"{CONSENT_PATH}/{{consent_id}}", consent_post, methods=["POST"]))
     return routes
 
 

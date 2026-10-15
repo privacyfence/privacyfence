@@ -21,29 +21,21 @@ own ``GOOGLE_CONNECTORS``/``_GOOGLE_CLIENTS``, which already draws this
 same distinction for local mode's own Connectors-page flow: each is a
 distinct OAuth grant with its own scopes and its own token file.
 
-**The one load-bearing subtlety this module exists to get right**: the
-browser's GET that lands back on ``/oauth/callback/{service}`` after a
-redirect from Google/Slack/Salesforce/Atlassian is a cross-site-initiated
-top-level navigation from the provider's own domain, and this route
-resolves the principal without depending on a session cookie arriving on
-it at all -- entirely from the single-use ``state`` value
-``_PendingAuthStore`` recorded at ``/oauth/start/{service}`` time, where
-the cookie is unambiguously present (that request is a same-site
-navigation the user's own click on ``/connect`` made).
+**The one load-bearing rule this module exists to get right**: the callback
+must be finished in the same signed-in session that started it (ADR 0178).
+The browser's GET that lands back on ``/oauth/callback/{service}`` after a
+redirect from Google/Slack/Salesforce/Atlassian carries the Lax
+``pf_org_session`` cookie (a top-level GET navigation), and the route
+requires that session's principal to be the one ``_PendingAuthStore``
+recorded at ``/oauth/start/{service}`` time. A consent link started by one
+person and opened by a colleague therefore saves nothing: it would otherwise
+connect the starter's account to the colleague's provider grant, or the
+reverse. The single-use ``state`` still identifies the flow (and its PKCE
+verifier); the session binds it to a browser.
 
-This was originally forced: ``pf_org_session`` was ``SameSite=Strict``,
-which omits the cookie on exactly that kind of landing. The cookie is
-``SameSite=Lax`` now -- Strict made the *sign-in* landing
-(routes_org_identity.py's ``/oauth/idp/login-callback`` -> post-login
-page) an infinite redirect loop, which no amount of ``state`` can fix
-for a callback whose job is to establish the session in the first place;
-see ``org_session.set_session_cookie``'s own comment. Under Lax the
-cookie would in fact now reach this callback, but resolving the principal
-from ``state`` is kept, and is the better design independent of cookie
-policy: it binds the callback to the specific authorization flow that
-started it rather than to whoever merely happens to be signed in in that
-browser, and it leaves this module correct whatever the cookie policy
-does next.
+The cookie is ``SameSite=Lax`` so that the *sign-in* landing
+(routes_org_identity.py's ``/oauth/idp/login-callback`` -> post-login page)
+does not loop; see ``org_session.set_session_cookie``'s own comment.
 
 **Atlassian's multi-site accounts** are handled with one deliberate
 simplification versus local mode: if the signed-in account can reach more
@@ -216,9 +208,9 @@ class _PendingAuth:
 
 
 class _PendingAuthStore:
-    """State -> principal/service/PKCE-verifier, single-use. See module
-    docstring's own note on why the callback route trusts *this*, not the
-    session cookie, to know who is signing in."""
+    """State -> principal/service/PKCE-verifier, single-use, and good for
+    ``ttl`` seconds. The callback checks the principal recorded here against
+    the signed-in session (module docstring, ADR 0178)."""
 
     def __init__(self, ttl: float = _PENDING_TTL_SECONDS) -> None:
         self._ttl = ttl
@@ -232,7 +224,10 @@ class _PendingAuthStore:
 
     def pop(self, state: str) -> _PendingAuth | None:
         with self._lock:
-            return self._pending.pop(state, None)
+            pending = self._pending.pop(state, None)
+        if pending is None or (time.time() - pending.created_at) > self._ttl:
+            return None
+        return pending
 
     def _prune(self) -> None:
         now = time.time()
@@ -481,10 +476,9 @@ def build_routes(
         return RedirectResponse(authorize_url, status_code=302, headers={"Cache-Control": "no-store"})
 
     async def callback(request: Request) -> Response:
-        # Deliberately does not read org_session.authenticated()/the
-        # session cookie -- see module docstring's own note on why it
-        # can't be relied on here. Trust is rooted entirely in the
-        # single-use `state` value, popped exactly once.
+        # The callback must be finished in the same signed-in session that started it, so a
+        # consent link cannot be handed to a colleague (ADR 0178). Trust is rooted in the
+        # single-use `state` (popped exactly once, within its TTL) *and* in that session.
         #
         # The path segment here is a *grant key* (see _GRANT_KEY), not
         # necessarily the real service the user asked to connect -- for
@@ -499,6 +493,10 @@ def build_routes(
         if pending is None or _GRANT_KEY.get(pending.service) != grant_key:
             return PlainTextResponse("Invalid or expired sign-in attempt. Return to /connect and try again.", status_code=400)
         service = pending.service
+        signed_in = org_session.authenticated(request, sessions)
+        if signed_in is None or signed_in.id != pending.principal_id:
+            logger.info("OAuth callback for %s ignored: not finished by the principal that started it", service)
+            return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
         if provider_error or not code:
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
 

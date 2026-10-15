@@ -257,8 +257,8 @@ class TestSecurityHeadersOrgMode:
 
 
 class TestCrossOriginOpenerPolicyOrgMode:
-    """The two OAuth paths a client's sign-in popup passes through send
-    ``unsafe-none``, so the popup keeps its ``window.opener`` (ADR 0108);
+    """The OAuth paths a client's sign-in popup passes through (including the consent page,
+    ADR 0177) send ``unsafe-none``, so the popup keeps its ``window.opener`` (ADR 0108);
     every other response keeps ``same-origin``."""
 
     def _client(self, tmp_path, monkeypatch) -> TestClient:
@@ -274,6 +274,15 @@ class TestCrossOriginOpenerPolicyOrgMode:
         r = self._client(tmp_path, monkeypatch).get("/oauth/idp/callback", params={"state": "x", "code": "y"})
         assert r.status_code == 400
         assert r.headers.get("cross-origin-opener-policy") == "unsafe-none"
+
+    def test_consent_pages_keep_the_popup_opener(self, tmp_path, monkeypatch):
+        """The consent page renders a document, but it sits in the sign-in chain (ADR 0177)."""
+        client = self._client(tmp_path, monkeypatch)
+        got = client.get("/oauth/consent/x")
+        posted = client.post("/oauth/consent/x", data={"csrf": "c", "decision": "allow"})
+        assert got.status_code == 400
+        assert got.headers.get("cross-origin-opener-policy") == "unsafe-none"
+        assert posted.headers.get("cross-origin-opener-policy") == "unsafe-none"
 
     def test_every_other_response_is_still_same_origin(self, tmp_path, monkeypatch):
         client = self._client(tmp_path, monkeypatch)

@@ -83,6 +83,28 @@ class TestRender:
         assert data == '[{"a":1,"b":"é"},{"a":null,"b":true}]\n'.encode()
         assert json.loads(data) == [{"a": 1, "b": "é"}, {"a": None, "b": True}]
 
+    @pytest.mark.parametrize("value", ["=1+1", "+1", "-1+1", "@SUM(A1)", "\t=1", "\r=1"])
+    def test_formula_leading_cells_are_neutralised(self, value):
+        data = export_files.render(["a"], [[value]], "csv", spreadsheet_safe=True).decode()
+        assert data.startswith("a\n")
+        assert data[2:].startswith(("'", '"\''))
+
+    def test_neutralised_cell_is_written_exactly(self):
+        assert export_files.render(["a"], [["=1+1"]], "csv", spreadsheet_safe=True) == b"a\n'=1+1\n"
+
+    def test_numbers_and_plain_text_are_unchanged_when_spreadsheet_safe(self):
+        data = export_files.render(["a", "b"], [[-5, "hello"]], "csv", spreadsheet_safe=True)
+        assert data == b"a,b\n-5,hello\n"
+
+    def test_cells_are_left_alone_by_default(self):
+        assert export_files.render(["a"], [["=1+1"]], "csv") == b"a\n=1+1\n"
+
+    def test_json_is_unchanged_by_spreadsheet_safe(self):
+        rows = [["=1+1"]]
+        assert export_files.render(["a"], rows, "json", spreadsheet_safe=True) == export_files.render(
+            ["a"], rows, "json",
+        )
+
 
 class TestSampleTable:
     def test_shows_twenty_rows_and_truncates_long_cells(self):
