@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.2.0] — 2026-10-15
+
 ### Security
 
 - **macOS: the installer runs its own copy of the setup script and skips setup when the app bundle is not owned by root.**
@@ -3333,7 +3335,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...HEAD
+[6.2.0]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...v6.2.0
 [6.1.1]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...v6.1.1
 [6.1.0]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...v6.0.0
