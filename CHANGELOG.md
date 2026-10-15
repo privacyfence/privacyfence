@@ -64,6 +64,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **A rule added in Settings now resolves the pending approvals it covers right away.**
+- **The docs and privacyfence.eu now list all three tools marked destructive, name Grist and Peek wherever they list the services PrivacyFence connects to, and say which installers are signed.** downloads.privacyfence.eu no longer keeps request logs ([ADR 0186](docs/adr/0186-the-download-worker-keeps-no-request-logs.md)).
 
 ### Changed
 

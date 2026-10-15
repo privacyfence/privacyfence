@@ -277,4 +277,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0183](0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md) | Under pkexec the privilege-separation script accepts only the companion's own requests | Accepted |
 | [0184](0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md) | The macOS pkg runs its own copy of the privilege-separation script, and only over a root-owned app bundle | Accepted |
 | [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Accepted; amends 0021 |
+| [0186](0186-the-download-worker-keeps-no-request-logs.md) | The download Worker keeps no request logs | Accepted |
 | [0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md) | The `.mcpb` shim trusts only handoff entries the service account owns; the daemon replaces a foreign control socket | Accepted; amends 0027 |
