@@ -217,6 +217,11 @@ class TestCatalogueIsDerived:
                     assert propose.connector_of_operation(operation) == entry.connector
                     assert verb in registry.operation_verbs(operation)
 
+    def test_no_scope_derives_the_assets_tickets_operation(self):
+        for entry in propose.PROPOSABLE_SCOPES:
+            for verb in entry.verbs:
+                assert "assets.read_tickets" not in propose.operations_for(entry, verb)
+
     def test_operations_for_a_verb_the_scope_does_not_govern_is_empty(self):
         folder = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_folder")
         assert propose.operations_for(folder, Verb.DELETE) == frozenset()

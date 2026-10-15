@@ -18,8 +18,9 @@ connector needs a gate that matches how Jira handles its own structure and issue
   `assets_list_attributes` write a connector `_auto_audit`, on the precedent of
   `jira_list_fields` (ADR 0135).
 - **Every object read is reviewed under one operation, `assets.read_object`:**
-  `assets_search_objects`, `assets_get_object`, `assets_get_related_objects`,
-  `assets_get_connected_tickets` and `assets_export_objects`.
+  `assets_search_objects`, `assets_get_object`, `assets_get_related_objects` and
+  `assets_export_objects`. `assets_get_connected_tickets` is reviewed under its own operation,
+  `assets.read_tickets`.
 - **Two scope predicates on the new `assets.schema` scope type**, matching on the schema id of
   the objects the call returned: `approved_schema_ids` for READ, and
   `approved_schema_ids_all_results` for SEARCH, which matches only when every returned object is in
@@ -42,6 +43,9 @@ connector needs a gate that matches how Jira handles its own structure and issue
 
 - A rule naming a schema auto-accepts reads and AQL searches only inside it; a search that returns
   an object from any other schema still asks.
+- Connected tickets have their own operation, `assets.read_tickets`, that no schema rule governs,
+  because a ticket's key and summary belong to a Jira project the schema rule says nothing about;
+  each call shows a card. A later change may let a Jira project rule cover it.
 
 ## Verification
 
