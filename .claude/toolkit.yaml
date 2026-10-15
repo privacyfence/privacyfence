@@ -48,8 +48,8 @@ verify:
     - when: ["src/privacyfence/*_client.py", "src/privacyfence/connectors/**"]
       do: >-
         A `scripts/qa_fixture_recorder.py --check <connector>` report against a dedicated QA account per
-        docs/connector-qa.md is owed. No live credentials in a session: dispatch connector-live-check.yml
-        (see ci.dispatchable) instead of marking the row done.
+        docs/connector-qa.md is owed. No live credentials in a session: dispatch qa-record-fixture.yml on `main`
+        with `branch=` (see ci.dispatchable) instead of marking the row done.
     - when: ["src/privacyfence/web/mcp_dispatch.py", "src/privacyfence/web/routes_mcp.py", "src/privacyfence/connector.py", "src/privacyfence/web/server.py"]
       do: >-
         If the change is to ToolSpec/ToolParam in connector.py, or to web/server.py's socket-binding or
@@ -99,8 +99,8 @@ ci:
         branch to record for). It records on the self-hosted runner, then commits the fixture to that branch:
         pull before continuing.
     - workflow: connector-live-check.yml
-      use_when: "`qa_fixture_recorder.py --check` for the definition-of-done QA row"
-      notes: No inputs. The report lands as the `connector-live-check-report` artifact; link the run in the PR.
+      use_when: The weekly drift check of `main` itself; not for a branch's definition-of-done QA row
+      notes: No inputs. It checks `main`'s code, not a branch's, so it cannot stand in for the QA row; use qa-record-fixture.yml with `branch=` or run `--check` locally with QA credentials.
     - workflow: windows-graphical-session.yml
       use_when: Windows autostart / Task Scheduler behaviour
       notes: No inputs.

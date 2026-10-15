@@ -65,7 +65,7 @@ and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout
 
 `pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
 also runs `playwright install --with-deps chromium`. A skipped test is not a pass where CI
-expects it to run, so three switches turn a skip into a failure (`tests/conftest.py`):
+expects it to run, so three switches turn a skip into a failure (two in `tests/conftest.py`, the third in `tests/system/test_local_mode_system.py`):
 `PRIVACYFENCE_REQUIRE_BROWSER=1` (the `test` job's pytest step and `website-build.yml`'s test step) fails
 a `browser` test that skips because Chromium or Playwright is missing, and a module whose Playwright
 import skips it — a browser test that skips for another reason, such as a docs site that was not
@@ -244,7 +244,7 @@ setup: [`connector-qa.md`](connector-qa.md).
 
 A PR touching `src/privacyfence/*_client.py` or `src/privacyfence/connectors/**` owes a `--check`
 report, scoped to that connector, under a `## Local QA check` heading. Run it on a machine with QA
-credentials, or dispatch `connector-live-check.yml`:
+credentials, or dispatch `qa-record-fixture.yml` on `main` with `branch=` (a dispatch on a branch never gets the runner, and `connector-live-check.yml` checks `main`):
 
 ```bash
 .venv/bin/python scripts/qa_fixture_recorder.py --check confluence    # never writes

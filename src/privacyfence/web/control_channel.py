@@ -1443,10 +1443,9 @@ def _existing_socket_owner_problem(sock_path: Path) -> str | None:
     user's approval authority. Refusing to steal a socket another account
     created closes it with nothing more than an ``lstat``.
 
-    Applies equally to ``control.sock`` (the daemon's own channel), where it
-    is a smaller change in practice -- the daemon is always the same service
-    account across restarts -- but costs nothing to check uniformly rather
-    than carve out an exception only the companion's socket needs.
+    Applies to ``control.sock`` (the daemon's own channel) too, except that
+    the control channel is built with ``replace_foreign_socket=True`` and
+    removes a foreign socket (logging a warning) instead of refusing it.
     """
     try:
         st = sock_path.lstat()

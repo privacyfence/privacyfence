@@ -9,7 +9,8 @@ of the checks in `release-testing.md`'s "What stays manual".
     .venv/bin/python scripts/pre_release_check.py
 
 Run from the repo root (with `mcpb/shim/` node_modules already installed via
-`npm install`), the same as CI. Exits non-zero if any check fails.
+`npm install`, and `privacyfence-sync` installed via `pip install -e "./sync[test]"`), the same
+as CI. Exits non-zero if any check fails.
 
 `ruff check .`, `bandit`, `mypy src/privacyfence` and `scripts/mypy_strict_modules.py` are all
 included below because all four block in CI (`.github/workflows/tests.yml`'s `static-analysis` job --

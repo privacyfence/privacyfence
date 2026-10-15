@@ -153,7 +153,13 @@ jobs:
       - name: Check the connector has a recorder implementation
         run: |
           set -euo pipefail
-          if ! grep -q "^    \"${CONNECTOR}\": check_" scripts/qa_fixture_recorder.py; then
+          # Validated before the grep, and the grep is fixed-string: the value also flows into the
+          # artifact `path:` below on the runner that holds the QA credentials.
+          if ! printf '%s' "${CONNECTOR}" | grep -Eq '^[a-z_]+$'; then
+            echo "##[error] '${CONNECTOR}' is not a valid connector name (^[a-z_]+$)."
+            exit 1
+          fi
+          if ! grep -Fq "    \"${CONNECTOR}\": check_" scripts/qa_fixture_recorder.py; then
             echo "##[error] '${CONNECTOR}' is not registered in CONNECTOR_CHECKS" \
                  "in scripts/qa_fixture_recorder.py."
             exit 1

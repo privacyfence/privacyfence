@@ -54,7 +54,7 @@ _REQUIRE_BROWSER = "PRIVACYFENCE_REQUIRE_BROWSER"
 # is a CI misconfiguration.
 _PACKAGED_SKIP_REASON = re.compile(
     r"(?i)no dist/|built yet|not installed|not on PATH|missing after build|could not build"
-    r"|needs root|only meaningful|systemd|not present|chromium|playwright"
+    r"|needs root|elevated|only meaningful|systemd|not present|chromium|playwright"
 )
 # Skips a dispatched (unsigned, un-notarized) build legitimately takes -- "is unsigned for this
 # build", "is signed but not notarized" -- match none of the above and stay skips.
@@ -171,7 +171,8 @@ def _reset_singletons():
 def pytest_runtest_makereport(item, call):
     rep = yield
     setattr(item, f"rep_{rep.when}", rep)
-    if rep.skipped:
+    # An xfail also reports as skipped (with ``wasxfail``) and is not a missing prerequisite.
+    if rep.skipped and not hasattr(rep, "wasxfail"):
         reason = _skip_reason(rep.longrepr)
         markers = {m.name for m in item.iter_markers()}
         name = _required_run_switch(markers, reason)
@@ -201,7 +202,9 @@ def pytest_runtest_makereport(item, call):
 # ``importorskip`` skips the whole module at collection, before any item (and
 # so any marker) exists -- the switches therefore apply to the collection
 # report itself: each packaged CI step runs one module, so any collection skip
-# there means the artifact or its env was not provided.
+# there means the artifact or its env was not provided. This is stricter than the
+# per-test rule (which matches the reason), and is correct only while every
+# packaged step runs a single module; revisit it before a step runs several.
 @pytest.hookimpl(wrapper=True)
 def pytest_collectreport(report):
     # Mutated before the yield so the session's own collectreport handling
