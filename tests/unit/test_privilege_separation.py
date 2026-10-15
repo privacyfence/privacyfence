@@ -1361,7 +1361,7 @@ class TestApplyLayoutLeavesSocketsAlone:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="runs the Linux installer's own bash")
 class TestPkexecAllowList:
-    """SEC-D3: under pkexec (``PKEXEC_UID`` set) the Linux script accepts only the argument lists the
+    """Under pkexec (``PKEXEC_UID`` set) the Linux script accepts only the argument lists the
     companion passes. ``--daemon-exec`` names a file the service account then runs, so it is never
     one of them. Real bash, with ``id`` stubbed so no account needs to exist."""
 
