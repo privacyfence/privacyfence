@@ -290,6 +290,11 @@ The recorded owner in the marker keeps the install's original data. Adding anoth
 ([ADR 0043](adr/0043-the-recorded-owner-is-never-rewritten.md)). One group member cannot take over
 another's companion socket ([ADR 0027](adr/0027-a-group-member-cannot-take-over-another-members-companion-socket.md)).
 
+On Linux the script refuses to separate an install whose daemon program, or any directory above it,
+a non-root account can write. Run through `pkexec`, it accepts only the companion's own requests:
+starting, stopping or restarting the service, and setting it up for the account that ran `pkexec`
+([ADR 0183](adr/0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md)).
+
 What this takes away from a process running as you:
 
 - editing `config/settings.yaml`: the always-allow rules, policy and PII settings;
@@ -424,7 +429,8 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
   (default 300 seconds) ([ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)).
 - **Client secrets** belong to the deployment, not a person. Rotate a leaked one with the provider.
 - **Supply chain:** each release build produces CycloneDX SBOMs, and installers are signed as
-  described in [Platform support](platform-support.md).
+  described in [Platform support](platform-support.md). Release and QA-runner jobs install every build tool from hash-pinned locks
+  ([ADR 0182](adr/0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md)).
 - **Operations:** one daemon per data directory (a file lock enforces it); organization mode is not
   clustered. Back up and restore the data directory with its owners and permissions intact.
 
