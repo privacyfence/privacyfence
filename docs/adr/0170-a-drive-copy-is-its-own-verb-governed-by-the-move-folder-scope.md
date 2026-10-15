@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-10-12. Implemented.
+Amended by ADR 0171.
 
 ## Context
 

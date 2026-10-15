@@ -13,6 +13,8 @@ import {
   pipeNameFor,
   posixControlSocketPath,
   privilegeSeparationRoot,
+  checkHandoffEntry,
+  type OwnershipFs,
   readMcpUrl,
   socketPathUnder,
   SYSTEM_ROOTS,
@@ -88,6 +90,85 @@ describe("readMcpUrl", () => {
 
   it("throws when the file doesn't exist", () => {
     assert.throws(() => readMcpUrl("/definitely/does/not/exist/mcp_url"));
+  });
+
+  function writeUrl(text: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-proto-"));
+    const file = path.join(dir, "mcp_url");
+    fs.writeFileSync(file, text);
+    return file;
+  }
+
+  it("rejects a URL that names another computer", () => {
+    for (const url of ["http://10.0.0.5:8765/mcp", "https://evil.example/mcp"]) {
+      assert.throws(() => readMcpUrl(writeUrl(url)), /not this computer/);
+    }
+  });
+
+  it("accepts the loopback hostnames", () => {
+    for (const url of ["http://localhost:8765/mcp", "http://127.0.0.1:8765/mcp", "http://[::1]:8765/mcp"]) {
+      assert.equal(readMcpUrl(writeUrl(url)), url);
+    }
+  });
+
+  it("rejects an mcp_url owned by someone other than the service account", () => {
+    const file = writeUrl("http://localhost:8765/mcp");
+    const fsx = fakeFs({ isFile: true, uid: 501 }, 999);
+    assert.throws(() => readMcpUrl(file, { root: "/root", fsx }), /not owned by the service account/);
+  });
+
+  it("accepts an mcp_url the service account owns", () => {
+    const file = writeUrl("http://localhost:8765/mcp");
+    const fsx = fakeFs({ isFile: true, uid: 999 }, 999);
+    assert.equal(readMcpUrl(file, { root: "/root", fsx }), "http://localhost:8765/mcp");
+  });
+});
+
+/** An fs stand-in whose lstat reports the given entry and whose stat of the
+ * root reports ``rootUid``: a unit test cannot chown a real file. */
+function fakeFs(entry: { isSocket?: boolean; isFile?: boolean; uid: number }, rootUid: number) {
+  return {
+    lstatSync: () => ({
+      isSocket: () => entry.isSocket === true,
+      isFile: () => entry.isFile === true,
+      uid: entry.uid,
+    }),
+    statSync: () => ({ uid: rootUid }),
+  } as unknown as OwnershipFs;
+}
+
+describe("checkHandoffEntry", () => {
+  it("rejects a socket owned by another uid", () => {
+    assert.throws(
+      () => checkHandoffEntry("/r/handoff/control.sock", "socket", "/r", fakeFs({ isSocket: true, uid: 501 }, 999)),
+      /not owned by the service account/,
+    );
+  });
+
+  it("rejects a regular file where a socket is expected", () => {
+    assert.throws(
+      () => checkHandoffEntry("/r/handoff/control.sock", "socket", "/r", fakeFs({ isFile: true, uid: 999 }, 999)),
+      /not owned by the service account/,
+    );
+  });
+
+  it("rejects a socket where a file is expected", () => {
+    assert.throws(
+      () => checkHandoffEntry("/r/handoff/mcp_url", "file", "/r", fakeFs({ isSocket: true, uid: 999 }, 999)),
+      /not owned by the service account/,
+    );
+  });
+
+  it("passes when the kind is right and the uids match", () => {
+    checkHandoffEntry("/r/handoff/control.sock", "socket", "/r", fakeFs({ isSocket: true, uid: 999 }, 999));
+    checkHandoffEntry("/r/handoff/mcp_url", "file", "/r", fakeFs({ isFile: true, uid: 999 }, 999));
+  });
+
+  it("uses the real filesystem by default", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-proto-"));
+    const file = path.join(dir, "mcp_url");
+    fs.writeFileSync(file, "x");
+    checkHandoffEntry(file, "file", dir);
   });
 });
 

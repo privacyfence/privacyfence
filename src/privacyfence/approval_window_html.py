@@ -447,7 +447,7 @@ def build_preview_body_html(
             pdf_data_uri, pdf_page_uris, pdf_page_count, pdf_fallback_text, highlight,
         )
     if image_data_uri:
-        return f'<img src="{image_data_uri}" style="max-width:100%;display:block">'
+        return f'<img src="{_html_escape(image_data_uri, quote=True)}" style="max-width:100%;display:block">'
     if blocks:
         return "".join(_render_block(b, highlight) for b in blocks)
     tables_html = "".join(_table_html(t, highlight) for t in (tables or []))
@@ -464,7 +464,7 @@ def _pdf_preview_html(
     pdf_data_uri: str, page_uris: Sequence[str], page_count: int, fallback_text: str,
     highlight: Callable[[str], list[tuple[int, int]]] | None,
 ) -> str:
-    embed = f'<embed class="pf-pdf-embed" src="{pdf_data_uri}" type="application/pdf">'
+    embed = f'<embed class="pf-pdf-embed" src="{_html_escape(pdf_data_uri, quote=True)}" type="application/pdf">'
     if page_uris:
         shown = len(page_uris)
         total = max(page_count, shown)
@@ -472,7 +472,7 @@ def _pdf_preview_html(
         narrow = (
             f'<p class="pf-pdf-note"><span class="badge">Showing {pages}</span></p>'
             + "".join(
-                f'<img class="pf-pdf-page" src="{uri}" alt="Page {i} of {total}">'
+                f'<img class="pf-pdf-page" src="{_html_escape(uri, quote=True)}" alt="Page {i} of {total}">'
                 for i, uri in enumerate(page_uris, start=1)
             )
         )
@@ -1126,7 +1126,7 @@ def _agent_html(label: AgentLabel, icon_data_uri: str) -> str:
         )
     attested = tier == TIER_ATTESTED
     if attested and icon_data_uri:
-        mark = f'<img class="pf-agent-icon" src="{icon_data_uri}" alt="">'
+        mark = f'<img class="pf-agent-icon" src="{_html_escape(icon_data_uri, quote=True)}" alt="">'
     elif attested:
         mark = ""
     else:
@@ -1157,14 +1157,14 @@ def _header_html(
     *, agent_html: str = "",
 ) -> str:
     connector_img = (
-        f'<img class="pf-connector-icon" src="{connector_icon_data_uri}" alt="">'
+        f'<img class="pf-connector-icon" src="{_html_escape(connector_icon_data_uri, quote=True)}" alt="">'
         if connector_icon_data_uri else ""
     )
     # Classes, not inline styles: an inline style cannot carry a container
     # query, and the shield's size and the title row's wrapping change when
     # the card is compact (styles.css).
     shield_img = (
-        f'<img class="pf-head-shield" src="{shield_icon_data_uri}">'
+        f'<img class="pf-head-shield" src="{_html_escape(shield_icon_data_uri, quote=True)}">'
         if shield_icon_data_uri else ""
     )
     seen_html = f'<div class="pf-seen">{_html_escape(seen_count_text)}</div>' if seen_count_text else ""

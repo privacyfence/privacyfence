@@ -57,7 +57,7 @@
           <h3>Local mode</h3>
           <ol class="steps">
             <li>Install PrivacyFence from the <a href="/download/">download page</a>.</li>
-            <li>In PrivacyFence, open <strong>Settings → AI clients</strong>. Note the <strong>MCP URL</strong>, normally <code>http://127.0.0.1:8765/mcp</code>, and click <strong>Copy token</strong>.</li>
+            <li>In PrivacyFence, open <strong>Settings → AI clients</strong>. Note the <strong>MCP URL</strong>, normally <code>http://localhost:8765/mcp</code>, and click <strong>Copy token</strong>.</li>
             <li>In ChatGPT desktop, open <strong>Settings → MCP servers → Add server</strong>. Name it <code>PrivacyFence</code>, choose <strong>Streamable HTTP</strong>, enter the MCP URL, and add the header <code>Authorization</code> with <code>Bearer </code> followed by your token.</li>
             <li>Save, then turn the server on in a chat.</li>
           </ol>
@@ -88,7 +88,7 @@
         <h2 id="confirmations-heading">ChatGPT may ask first. PrivacyFence's card decides.</h2>
       </div>
       <div class="page-copy stack">
-        <p>PrivacyFence tells ChatGPT truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. ChatGPT sorts the tools into <strong>Read</strong> and <strong>Write</strong>, and whether it asks you first is decided by ChatGPT's own permission setting.</p>
+        <p>PrivacyFence tells ChatGPT truthfully what each tool does: reads are read-only, writes are writes, and the tools that delete something (<code>calendar_delete_event</code>, <code>drive_sheets_delete_dimensions</code> and <code>peek_delete_page</code>) are marked destructive. ChatGPT sorts the tools into <strong>Read</strong> and <strong>Write</strong>, and whether it asks you first is decided by ChatGPT's own permission setting.</p>
         <p>What we observed on the web, with a personal plan and the setting <strong>Allow low-risk tools</strong>: ChatGPT did not ask before creating a calendar event. It asked once before an upload and offered to always allow the tool; after that it did not ask again. ChatGPT desktop asked before tools that are not read-only, with an option to always allow them. In every case PrivacyFence's approval card was still shown.</p>
         <p>Allowing a tool in ChatGPT only stops ChatGPT's question: a gated call still waits for PrivacyFence's approval card, and that card decides. There is no mode that advertises writes as read-only.</p>
       </div>

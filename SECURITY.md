@@ -23,7 +23,7 @@ Please include:
 shim, organization mode) and its packaging and release pipeline. **Out of scope** (as `NOTICE`
 sets out): content AI models generate while using PrivacyFence, data returned by connected
 services, and vulnerabilities in those services themselves (Google, Slack, Salesforce, Atlassian,
-Telegram); report those to the vendor.
+Telegram, Grist, Peek); report those to the vendor.
 
 ## What happens next
 

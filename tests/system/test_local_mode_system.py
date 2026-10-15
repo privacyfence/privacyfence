@@ -70,6 +70,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -85,10 +87,8 @@ import yaml
 import privacyfence
 from tests.control_channel_client import mint_bootstrap_code, resolve_posix_socket_path
 
-mcp_client = pytest.importorskip(
-    "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
-)
 from mcp import ClientSession  # noqa: E402
+from mcp.client.stdio import StdioServerParameters, stdio_client  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
 # A real daemon subprocess plus several real HTTP round trips (tool calls,
@@ -175,7 +175,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _prepare_sandbox(tmp_path: Path, *, port: int) -> Path:
+def _prepare_sandbox(tmp_path: Path, *, port: int, name: str = "sandbox") -> Path:
     """A fresh sandbox directory (what ``paths.data_dir()`` resolves to in
     the spawned process -- see ``_BOOTSTRAP`` above), pre-seeded with a
     real ``settings.yaml`` -- a real free port, update checks disabled (this
@@ -184,7 +184,7 @@ def _prepare_sandbox(tmp_path: Path, *, port: int) -> Path:
     first call reliably goes ``approval_pending`` within this test's own
     patience, with no artificial sleep needed to force it (same reasoning
     as test_deferred_approval_round_trip.py's own ``hold_window=0.05``)."""
-    sandbox = tmp_path / "sandbox"
+    sandbox = tmp_path / name
     example = Path(privacyfence.__file__).parent / "resources" / "settings.yaml.example"
     config = yaml.safe_load(example.read_text(encoding="utf-8"))
     config["web"]["port"] = port
@@ -428,6 +428,13 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
             assert "approved" in decisions
             assert "rejected" in decisions
 
+            from privacyfence.audit_log import AuditLogger
+
+            audit_logger = AuditLogger(str(audit_dir))
+            results = [audit_logger.verify_chain(p.stem) for p in sorted(audit_dir.glob("*.jsonl"))]
+            assert all(r.ok for r in results), results
+            assert sum(r.entries_checked for r in results) >= 4
+
             # Cross-platform assertion this scenario adds on top of
             # tests/platform/'s own OS-level coverage (see module
             # docstring): the audit directory this exact scenario just
@@ -519,3 +526,57 @@ async def test_local_mode_status_bootstrap_lands_on_connectors_page(tmp_path):
         assert exit_code == 0, (
             f"daemon did not exit cleanly (code {exit_code}) -- log:\n{log_path.read_text(errors='replace')}"
         )
+
+
+SHIM_ENTRY = Path(__file__).resolve().parents[2] / "mcpb" / "shim" / "dist" / "shim.js"
+
+
+async def test_shim_against_real_daemon_process(tmp_path):
+    """The built ``.mcpb`` shim, a real Node process, against a real daemon
+    process: it finds the daemon's ``mcp_url`` and control socket under its
+    own data directory, asks for a token with ``MINT MCP``, and relays a
+    gated tool call, so ``approval_pending`` comes back through it. The two
+    sides are otherwise only ever tested against stand-ins for each other.
+
+    ``PRIVACYFENCE_REQUIRE_NODE=1`` (set by ``tests.yml``) turns the two
+    skips below into failures."""
+    require = os.environ.get("PRIVACYFENCE_REQUIRE_NODE") == "1"
+    node = shutil.which("node")
+    if node is None or not SHIM_ENTRY.exists():
+        reason = "node is not on PATH" if node is None else f"{SHIM_ENTRY} is not built (cd mcpb/shim && npm ci && npm run build)"
+        if require:
+            pytest.fail(f"PRIVACYFENCE_REQUIRE_NODE=1 but {reason}")
+        pytest.skip(reason)
+
+    # The shim derives its data directory from HOME / LOCALAPPDATA exactly as
+    # production does (protocol.ts's dataDir()), so the daemon's sandbox is
+    # that directory under a fake home. Both are created by this process, so
+    # the shim's ownership checks on them pass.
+    home = tmp_path / "shim-home"
+    home.mkdir()
+    sandbox = _prepare_sandbox(
+        home, port=_free_port(), name="PrivacyFence" if sys.platform == "win32" else ".privacyfence",
+    )
+
+    with _daemon(sandbox) as (proc, log_path):
+        mcp_url = _wait_for_mcp_url(proc, sandbox, log_path)
+        parsed = urlparse(mcp_url)
+        _wait_until_connectable(parsed.hostname, parsed.port)
+
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith("PRIVACYFENCE_")
+        }
+        env.update({"HOME": str(home), "USERPROFILE": str(home), "LOCALAPPDATA": str(home)})
+        params = StdioServerParameters(command=node, args=[str(SHIM_ENTRY)], env=env)
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                names = {t.name for t in (await session.list_tools()).tools}
+                assert "system_test_send" in names
+                result = await session.call_tool(
+                    "system_test_send",
+                    {"message": "hello through the shim", "reason": "system test through the shim"},
+                )
+        assert result.is_error is not True, result
+        assert result.structured_content["status"] == "approval_pending"

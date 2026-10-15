@@ -67,10 +67,13 @@ jobs:
 
   deploy:
     needs: verify
-    # Never on a `pull_request` run: deploying (and the Cloudflare credentials that requires)
-    # must not happen for an unmerged change, fork-authored or not -- only a push to `main` (via
-    # the trigger's own `branches: [main]` filter) or a manual dispatch reach this job.
-    if: github.event_name != 'pull_request'
+    # Never on a `pull_request` run, and never from a ref other than `main`: deploying (and the
+    # Cloudflare credentials that requires) must not happen for an unmerged change, fork-authored
+    # or not, nor for a manual dispatch on some other branch. The `if:` enforces the ref; the
+    # `downloads-worker` environment is where the Cloudflare secrets belong and where deployment
+    # branches are restricted to `main` as well.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    environment: downloads-worker
     runs-on: ubuntu-latest
     defaults:
       run:

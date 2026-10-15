@@ -60,7 +60,8 @@ def _resolve_server(flag: str | None, recipe_server: str | None) -> str:
 
 
 def _connect(server: str, token_env: str) -> SyncClient:
-    token = os.environ.get(token_env)
+    # The scripts this process runs must never see the bearer token, whatever variable carried it.
+    token = os.environ.pop(token_env, None)
     if token:
         return connect_token(server, token)
     storage = FileTokenStorage(storage_path(server))

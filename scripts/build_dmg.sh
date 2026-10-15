@@ -24,7 +24,7 @@
 #   pip install pyinstaller
 #   brew install create-dmg
 #   brew install librsvg   # optional, only if you add SVG assets
-#   node + npx on PATH (used by scripts/build_mcpb.sh)
+#   node + npm on PATH (used by scripts/build_mcpb.sh)
 #
 # Usage:
 #   ./scripts/build_dmg.sh [--sign "Developer ID Application: Your Name (TEAMID)"]

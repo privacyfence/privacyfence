@@ -18,7 +18,7 @@ from privacyfence.policy.registry import Verb
 from ...helpers import make_ctx
 
 _FILE = SimpleNamespace(id="f1", parent_ids=["FOLDER1"], owners=["me@corp.com"])
-_WRITE_VERBS = (Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE, Verb.CREATE, Verb.MOVE, Verb.COPY)
+_WRITE_VERBS = (Verb.UPDATE, Verb.RESTRUCTURE, Verb.DELETE, Verb.ADD, Verb.MOVE)
 
 
 def _drive_write_ctx():
@@ -49,8 +49,8 @@ class TestLabels:
     def test_widening_label_states_the_tool_count(self):
         proposal = propose.proposals_for("drive_sheets_write_range", _drive_write_ctx())[0]
         labels = {w.verb: describe.widening_label(w) for w in proposal.widenings}
-        assert labels[Verb.COMMENT] == "also allow comment (1 tool)"
-        assert labels[Verb.FORMAT] == "also allow format (2 tools)"
+        assert labels[Verb.DOWNLOAD] == "also allow download (1 tool)"
+        assert labels[Verb.UPDATE] == "also allow update (6 tools)"
 
 
 class TestRuleVerbsAndCoverage:
@@ -100,18 +100,12 @@ class TestSentences:
     def test_an_identity_rule_names_its_connector_scope_and_verbs(self):
         rule = PolicyRule(id="r", predicate="approved_sandbox_folder", value=["FOLDER1"],
                           operations=frozenset({"sheets.write_range", "sheets.format_range"}))
-        assert describe.rule_sentence(rule) == "Drive - folder FOLDER1: allow update, format"
+        assert describe.rule_sentence(rule) == "Drive - folder FOLDER1: allow update"
 
     def test_a_value_less_attribute_rule_names_no_value(self):
         rule = PolicyRule(id="r", predicate="i_am_owner", value=None,
                           operations=frozenset({"drive.read_file_contents"}))
         assert describe.rule_sentence(rule) == "Drive - owned by me: allow read"
-    def test_sentence_says_personal_data_is_allowed(self):
-        rule = PolicyRule(id="r", predicate="grist.document", value=["d1"],
-                          operations=frozenset({"grist.read_records"}), allow_personal_data=True)
-        assert describe.rule_sentence(rule).endswith(
-            " - personal data allowed in exports, file downloads and page uploads"
-        )
 
 
     def test_a_condition_rule_says_it_is_unconditional_and_names_the_condition(self):
@@ -122,6 +116,38 @@ class TestSentences:
                           conditions=(("not_private", None),))
         assert describe.rule_sentence(rule) == "Calendar - anything: allow read - when not private"
 
+    def test_row_sentence_for_a_folder_row(self):
+        from privacyfence.policy import scope_rows
+        row = scope_rows.ScopeRow(
+            id="r-1", scope="drive.folder", value=["F"], verbs=frozenset({Verb.READ, Verb.DOWNLOAD}),
+            operations=frozenset({"drive.read_file_contents", "drive.download_file"}),
+        )
+        assert describe.row_sentence(row) == "Drive - folder F: allow read, download"
+        assert describe.row_sentence(row, "Budget") == "Drive - folder Budget: allow read, download"
+
+    def test_row_sentence_for_a_custom_row_matches_its_compiled_rule(self):
+        from privacyfence.policy import scope_rows
+        row = scope_rows.ScopeRow(
+            id="r-2", scope=None, value=None, verbs=frozenset(), predicate="i_am_owner",
+            operations=frozenset({"drive.read_file_contents"}),
+        )
+        assert describe.row_sentence(row) == "Drive - owned by me: allow read"
+
+    def test_row_sentence_for_a_condition_row_names_the_condition(self):
+        from privacyfence.policy import scope_rows
+        scope = next(
+            g for g, entries in propose.SCOPES_BY_GROUP.items()
+            if entries[0].condition and entries[0].connector == "calendar"
+        )
+        entry = propose.SCOPES_BY_GROUP[scope][0]
+        row = scope_rows.ScopeRow(
+            id="r-3", scope=scope, value=None, verbs=frozenset({Verb.READ}),
+            operations=scope_rows.implied_operations(scope, [Verb.READ]),
+        )
+        sentence = describe.row_sentence(row)
+        assert sentence.startswith("Calendar - ")
+        assert sentence.endswith(" - when " + entry.condition[0].replace("_", " "))
+
     def test_a_dual_scope_predicate_resolves_against_the_rules_own_connector(self):
         """`label_name_allowlist` serves `gmail.label` and `contacts.label`; which one it is
         depends on the operations the rule actually carries."""
@@ -129,8 +155,8 @@ class TestSentences:
                            operations=frozenset({"gmail.add_label"}))
         contacts = PolicyRule(id="r", predicate="label_name_allowlist", value=["Friends"],
                               operations=frozenset({"contacts.add_label"}))
-        assert describe.rule_sentence(gmail) == "Gmail - label Done: allow label"
-        assert describe.rule_sentence(contacts) == "Contacts - label Friends: allow label"
+        assert describe.rule_sentence(gmail) == "Gmail - label Done: allow update"
+        assert describe.rule_sentence(contacts) == "Contacts - label Friends: allow update"
 
     def test_a_dual_scope_predicate_with_no_matching_connector_falls_back_to_the_first(self):
         orphan = PolicyRule(id="r", predicate="label_name_allowlist", value=["X"],

@@ -184,8 +184,8 @@ jobs:
 
       - name: Build sdist and wheel
         run: |
-          pip install --upgrade pip build
-          python -m build
+          pip install --require-hashes -r requirements/release.lock.txt
+          python -m build --no-isolation
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -195,7 +195,7 @@ jobs:
       # privacyfence-sync (sync/) is released with the same version, from the same tag. Its own
       # artifact, so the Telegram check-dist step and the R2 upload below keep reading dist/ only.
       - name: Build privacyfence-sync
-        run: python -m build --sdist --wheel sync --outdir sync-dist
+        run: python -m build --no-isolation --sdist --wheel sync --outdir sync-dist
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -210,10 +210,10 @@ jobs:
       - name: Determine version and release channel
         id: release
         run: |
-          # This job doesn't `pip install -e .` the package (the `build` step above builds the
-          # sdist/wheel in an isolated venv that doesn't expose setuptools_scm out here) -- same
-          # situation as build.yml's own version-detection steps, which install it explicitly too.
-          pip install --quiet setuptools_scm
+          # This job doesn't install the package (the `build` step above builds the sdist/wheel
+          # from the release lock, without isolation) -- the same lock supplies setuptools_scm
+          # here, as in build.yml's own version-detection steps.
+          pip install --quiet --require-hashes -r requirements/release.lock.txt
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -362,5 +362,5 @@ jobs:
           CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
-          python3 -m pip install --quiet boto3
+          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
           python3 scripts/r2_release.py upload --version "${{ needs.build.outputs.version }}" dist/*

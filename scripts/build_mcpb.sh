@@ -20,8 +20,8 @@
 # server entry.
 #
 # Prerequisites:
-#   node + npm on PATH (npm installs mcpb/shim/'s build-time deps; npx runs
-#   the @anthropic-ai/mcpb CLI).
+#   node + npm on PATH (npm installs mcpb/shim/'s build-time deps, including the
+#   exact-pinned @anthropic-ai/mcpb CLI, run from mcpb/shim/node_modules/.bin).
 #   pip install -e .   # PrivacyFence itself -- not built by this script, only
 #                       # needed so VERSION below can read its installed
 #                       # metadata (git-tag-derived, see this repo's
@@ -64,11 +64,11 @@ cp src/privacyfence/resources/icon_512.png "${STAGE}/icon.png"
 # ID signature and notarization.
 
 echo "→ Validating manifest…"
-npx --yes @anthropic-ai/mcpb validate "${STAGE}/manifest.json"
+"${REPO_ROOT}/mcpb/shim/node_modules/.bin/mcpb" validate "${STAGE}/manifest.json"
 
 echo "→ Packing…"
 rm -f "$OUT"
-npx --yes @anthropic-ai/mcpb pack "$STAGE" "$OUT"
+"${REPO_ROOT}/mcpb/shim/node_modules/.bin/mcpb" pack "$STAGE" "$OUT"
 
 echo ""
 echo "✓ Done: ${OUT}   ($(du -sh "$OUT" | cut -f1))"

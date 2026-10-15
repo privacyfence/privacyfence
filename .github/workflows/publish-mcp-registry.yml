@@ -144,7 +144,7 @@ jobs:
       - name: Determine version and release channel
         id: release
         run: |
-          pip install --quiet setuptools_scm
+          pip install --quiet --require-hashes -r requirements/release.lock.txt
           VERSION="$(python3 -m setuptools_scm)"
           python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
           CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"

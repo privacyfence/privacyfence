@@ -115,9 +115,10 @@ disable or re-enable a service in Settings, connected clients are told to refres
 
 The tool list holds one tool per enabled, signed-in connector tool, plus the eight `privacyfence_*`
 tools below. Each connector tool carries MCP annotations that say what it does: a read is
-read-only and idempotent; a write is neither. Only the two tools that delete something,
-`calendar_delete_event` (an event) and `drive_sheets_delete_dimensions` (rows or columns of a
-spreadsheet), are marked destructive; an overwrite is a write, not a deletion.
+read-only and idempotent; a write is neither. Only the three tools that delete something,
+`calendar_delete_event` (an event), `drive_sheets_delete_dimensions` (rows or columns of a
+spreadsheet) and `peek_delete_page` (a Peek page with its comments and visit history), are marked
+destructive; an overwrite is a write, not a deletion.
 
 These annotations are always true. PrivacyFence is a privacy tool and does not tell an AI system
 anything false, so there is no setting, header or extension that advertises a write as read-only.
@@ -158,7 +159,7 @@ waiting 30 seconds (`web.approvals.adaptive_hold`). When more than one is pendin
 points at a page where you can decide them together.
 
 After you approve, the AI system repeats the original call with the same arguments and gets the
-result. While the approval is pending, the call does nothing: no data is returned, no file is
+result; if an argument differs or the content the card showed has changed, the repeat gets a new card. While the approval is pending, the call does nothing: no data is returned, no file is
 handed out and no change is made. A pending approval nobody decides expires after 15 minutes
 (`web.approvals.pending_ttl_seconds`).
 

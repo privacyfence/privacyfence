@@ -18,7 +18,7 @@ an organization deployment, because local mode listens only on localhost.
 
 There is no PrivacyFence-operated infrastructure in either mode. No hosted service sits in the
 data path: every tool call goes from the machine or server running PrivacyFence straight to the
-provider (Google, Slack, Salesforce, Atlassian, Telegram).
+provider (Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server).
 
 A **packaged install** is the macOS `.pkg` (on the DMG), the Windows installer, or the `.deb`. A
 source checkout or a `pip`/`pipx install privacyfence` is not packaged. It is never
@@ -148,6 +148,8 @@ How the settings combine:
   a fresh sign-in at the identity provider instead of a passkey for a single decision, and refuses
   a batch that needs step-up (`400`, nothing applied): approve each item from its card, or add a
   passkey ([ADR 0066](adr/0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md)).
+  That sign-in starts only from the card's own button, by a request the page checks, never from a
+  link ([ADR 0179](adr/0179-an-idp-step-up-starts-only-from-the-card-by-post.md)).
 - **Batch approval:** one assertion covers a selected set of approvals and is bound to that exact
   set and each item's result. It cannot be replayed for a larger, smaller or altered set.
   `batch: per_item` sends every item that needs step-up back to its own card. PII confirmations
@@ -288,6 +290,11 @@ The recorded owner in the marker keeps the install's original data. Adding anoth
 ([ADR 0043](adr/0043-the-recorded-owner-is-never-rewritten.md)). One group member cannot take over
 another's companion socket ([ADR 0027](adr/0027-a-group-member-cannot-take-over-another-members-companion-socket.md)).
 
+On Linux the script refuses to separate an install whose daemon program, or any directory above it,
+a non-root account can write. Run through `pkexec`, it accepts only the companion's own requests:
+starting, stopping or restarting the service, and setting it up for the account that ran `pkexec`
+([ADR 0183](adr/0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md)).
+
 What this takes away from a process running as you:
 
 - editing `config/settings.yaml`: the always-allow rules, policy and PII settings;
@@ -325,6 +332,8 @@ python3 scripts/verify_audit_log.py <dir> --week 2026-W38     # one ISO week
 ```
 
 Exit status: `0` intact, `1` a week failed (or no files found), `2` directory missing.
+
+The script also checks that each week's first entry continues the previous week's last one, and that the newest entry matches `.audit_chain_state.json`, so a removed week or a cut-off tail is reported, unless the `.audit_chain_state.json` file was edited too (it is not keyed). Lines written before chaining existed are accepted only at the top of a file ([ADR 0176](adr/0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md)).
 
 The chain detects edits, insertions and deletions made without the key. Anyone who can read the
 key can rebuild a consistent chain. On a separated install that means root or the service account.
@@ -420,7 +429,8 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
   (default 300 seconds) ([ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)).
 - **Client secrets** belong to the deployment, not a person. Rotate a leaked one with the provider.
 - **Supply chain:** each release build produces CycloneDX SBOMs, and installers are signed as
-  described in [Platform support](platform-support.md).
+  described in [Platform support](platform-support.md#signing). Release and QA-runner jobs install every build tool from hash-pinned locks
+  ([ADR 0182](adr/0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md)).
 - **Operations:** one daemon per data directory (a file lock enforces it); organization mode is not
   clustered. Back up and restore the data directory with its owners and permissions intact.
 

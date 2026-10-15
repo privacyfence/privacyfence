@@ -40,11 +40,11 @@ position across that re-render.
 """
 from __future__ import annotations
 
-import json
 import secrets
 from typing import Any
 
 from .design_css import DOCUMENT_CSS
+from .html_embed import json_for_script
 from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 
 # The settings page is built from the shared design system (resources/design/, ADR 0078/0079),
@@ -210,6 +210,9 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-aa-sentence { flex: 1 1 260px; min-width: 0; font-size: var(--step-body); color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
 .pf-aa-verbs { display: flex; flex-wrap: wrap; gap: 4px; }
 .pf-aa-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-s); margin-top: 4px; }
+.pf-aa-edit { margin-top: var(--space-s); display: flex; flex-direction: column; gap: var(--space-s); }
+.pf-aa-edit-buttons { display: flex; gap: var(--space-s); }
+.pf-chip[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
 .pf-aa-tools { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.5; overflow-wrap: anywhere; }
 .pf-aa-usage { font-size: 13px; color: var(--muted); }
 .pf-aa-usage-stale { color: var(--warning); font-weight: 650; }
@@ -333,9 +336,9 @@ _JS = r"""
     section: (window.__pfInitialSection || (CAPS.sections.general ? 'general' : 'auto_accept')),
     privacyGroup: null,
     // Auto-accept page -- see renderAutoAccept below for how each is used.
-    aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
-    aaGroup: null, aaValue: '', aaCheckedVerbs: {}, aaPersonalData: false,
-    stLabel: '', stDays: null, stRules: {}, stTools: {},
+    aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
+    aaGroup: null, aaValue: '', aaCheckedVerbs: {},
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stDuplicateOf: null,
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -827,6 +830,54 @@ _JS = r"""
     }).join('');
   }
 
+  // A move auto-accepts only when its source AND its destination are both in the one rule's value
+  // list (policy/scopes.py `move_within_approved_folders`, `approved_task_list`). That holds for
+  // exactly these two scopes; Gmail's `move` has no destination, so it needs no pair.
+  var AA_MOVE_PAIR_SCOPES = ['drive.folder', 'tasks.list'];
+
+  function aaMoveNeedsPair(scopeId) {
+    return AA_MOVE_PAIR_SCOPES.indexOf(scopeId) !== -1;
+  }
+
+  function aaPairInvalidText(what) {
+    return 'A ' + what + ' is auto-accepted only when both its source folder and its destination ' +
+      'folder are in the same rule. Enter at least two ids, separated by a comma.';
+  }
+
+  // The "Edit verbs" panel of one rule row: the scope's verbs as toggles, pre-selected with the
+  // row's verbs (ui.aaEdit.verbs), then Save verbs / Cancel. Save carries its own confirm text and
+  // is inert while no verb is selected. `move` cannot be switched on for a pair scope row with
+  // fewer than two value ids.
+  function editVerbsHtml(r) {
+    var chosen = ui.aaEdit.verbs || {};
+    var needsPair = aaMoveNeedsPair(r.scope) && r.value_ids.length < 2;
+    var selected = r.scope_verbs.filter(function (v) { return chosen[v]; });
+    var html = '<div class="pf-aa-edit"><div class="pf-chips pf-caps-row">';
+    r.scope_verbs.forEach(function (verb) {
+      var on = !!chosen[verb];
+      var blocked = verb === 'move' && needsPair && !on;
+      html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
+        '" aria-label="' + esc(verb) + '" data-aa-edit-verb="' + esc(verb) + '"' +
+        (blocked ? ' aria-disabled="true"' : ' tabindex="0"') + '>' + esc(verb) + '</div>';
+    });
+    html += '</div>';
+    if (needsPair && r.scope_verbs.indexOf('move') !== -1) {
+      html += '<div class="pf-hint pf-aa-pair-hint pf-aa-pair-invalid" role="status">' + esc(aaPairInvalidText('move')) + '</div>';
+    }
+    html += '<div class="pf-aa-edit-buttons">';
+    if (selected.length) {
+      html += '<div class="button primary" role="button" tabindex="0" aria-label="Save verbs" data-aa-edit-save="1" data-confirm="' +
+        esc('Change this rule to allow ' + selected.join(', ') + '? Added verbs cover all of their tools. ' +
+          'Tools that only removed verbs cover stop being auto-accepted.') +
+        '" ' + dataAttr('set_policy_rule_verbs', { rule_id: r.id, verbs: selected }) + '>Save verbs</div>';
+    } else {
+      html += '<div class="button primary" role="button" aria-label="Save verbs" aria-disabled="true" data-aa-edit-save="1">Save verbs</div>';
+    }
+    html += '<div class="button" role="button" tabindex="0" aria-label="Cancel" data-aa-edit-cancel="1">Cancel</div>';
+    html += '</div></div>';
+    return html;
+  }
+
   function renderAutoAccept(state) {
     var aa = state.auto_accept;
     var search = (ui.aaSearch || '').trim().toLowerCase();
@@ -879,14 +930,20 @@ _JS = r"""
       html += '<div class="pf-link" role="button" tabindex="0" aria-expanded="' + (isExpanded ? 'true' : 'false') +
         '" aria-label="What this unblocks" data-aa-expand="' + esc(r.id) + '">' + (isExpanded ? '▾' : '▸') +
         ' Unblocks ' + r.covered_tools.length + ' tool' + (r.covered_tools.length === 1 ? '' : 's') + '</div>';
+      var editing = !!(ui.aaEdit && ui.aaEdit.id === r.id);
+      if (r.scope && r.scope_verbs && r.scope_verbs.length) {
+        html += '<div class="pf-link" role="button" tabindex="0" aria-label="Edit verbs" data-aa-edit="' +
+          esc(r.id) + '">Edit verbs</div>';
+      }
       html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
         dataAttr('remove_policy_rule', { rule_id: r.id }) + '>✕ Remove</div>';
       html += '</div>';
+      if (editing) html += editVerbsHtml(r);
       // Tools added after this rule was saved: its verbs name them, its stored operations do not
       // reach them. Widening is only ever this explicit, confirmed click (ADR 0166).
       if (r.missing_tools && r.missing_tools.length) {
         var missingNames = r.missing_tools.join(', ');
-        html += '<div class="pf-st-notice pf-aa-missing" role="status">Newer tools aren\'t covered yet: ' +
+        html += '<div class="pf-st-notice pf-aa-missing" role="status">These verbs also cover tools this rule doesn\'t allow yet: ' +
           esc(missingNames) + '. ' +
           '<span class="pf-link" role="button" tabindex="0" aria-label="Update rule" data-confirm="' +
           esc('Add ' + missingNames + ' to this rule? These tools will be auto-accepted wherever the rule matches.') +
@@ -925,7 +982,7 @@ _JS = r"""
       group.verbs.forEach(function (verb) {
         var on = !!checkedVerbs[verb];
         html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
-          '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc((group.verb_labels || {})[verb] || verb) + '</div>';
+          '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc(verb) + '</div>';
       });
       html += '</div>';
     }
@@ -933,13 +990,6 @@ _JS = r"""
     if (pairHint) {
       html += '<div class="pf-hint pf-aa-pair-hint' + (pairHint.invalid ? ' pf-aa-pair-invalid' : '') +
         '" role="status">' + esc(pairHint.text) + '</div>';
-    }
-    if (group && group.personal_data_label) {
-      var pdOn = !!ui.aaPersonalData;
-      html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (pdOn ? ' on' : '') +
-        '" role="checkbox" aria-checked="' + (pdOn ? 'true' : 'false') + '" tabindex="0" aria-label="' +
-        esc(group.personal_data_label) + '" data-aa-personal-data="1">' + esc(group.personal_data_label) +
-        '</div></div>';
     }
     html += '<div><div class="button primary" role="button" aria-label="Add rule" data-aa-add="1"' +
       (pairHint && pairHint.invalid ? ' aria-disabled="true"' : ' tabindex="0"') + '>Add rule</div></div>';
@@ -1224,19 +1274,77 @@ _JS = r"""
     } else if (t.expiring_soon) {
       chips = '<span class="pf-chip pf-st-chip pf-st-warn">Expires in ' + esc(t.days_left) + (t.days_left === 1 ? ' day' : ' days') + '</span>';
     }
+    if (t.allow_personal_data) {
+      chips += '<span class="pf-chip pf-st-chip">personal data allowed</span>';
+    }
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
     t.rules.forEach(function (r) {
-      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : esc(r.sentence)) + '</li>';
+      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : esc(r.sentence) +
+        (r.limited_to ? ' (limited to: ' + esc(r.limited_to.join(', ')) + ')' : '')) + '</li>';
     });
     detail += '</ul><div class="pf-hint">Tools</div><ul class="pf-st-list">';
     if (t.tools.length === 0) { detail += '<li>None</li>'; }
     t.tools.forEach(function (name) { detail += '<li><code>' + esc(name) + '</code></li>'; });
     detail += '</ul></details>';
-    var control = chips + '<div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
+    var control = chips + '<div class="button" role="button" tabindex="0" aria-label="Duplicate ' + esc(t.label) + '" data-st-duplicate="' +
+      esc(t.id) + '">Duplicate</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
       dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div>';
     return rowHtml(t.label, esc(scopedExpiryText(t)) + detail, control, 'pf-st-row');
+  }
+
+  // "Daily sync" -> "Daily sync 2", "Daily sync 2" -> "Daily sync 3"; skips
+  // labels another token already has and keeps the name within 60 characters.
+  function scopedDuplicateLabel(label) {
+    var m = /^(.*) (\d+)$/.exec(label);
+    var base = m ? m[1] : label;
+    var n = m ? parseInt(m[2], 10) + 1 : 2;
+    var taken = {};
+    SCOPED.tokens.forEach(function (x) { taken[x.label] = true; });
+    for (;;) {
+      var suffix = ' ' + n;
+      var b = base;
+      if (b.length + suffix.length > 60) { b = b.slice(0, 60 - suffix.length).replace(/ +$/, ''); }
+      if (!taken[b + suffix]) { return b + suffix; }
+      n += 1;
+    }
+  }
+
+  function duplicateScopedToken(tokenId) {
+    var t = SCOPED.tokens.filter(function (x) { return x.id === tokenId; })[0];
+    if (!t) { return; }
+    ui.stDuplicateOf = t.id;
+    ui.stLabel = scopedDuplicateLabel(t.label);
+    ui.stDays = Math.min(SCOPED.max_days, Math.max(1, Math.round((t.expires_at - t.created_at) / 86400)));
+    ui.stRules = {};
+    t.rules.forEach(function (r) { if (!r.missing) { ui.stRules[r.id] = true; } });
+    ui.stTools = {};
+    t.tools.forEach(function (name) { ui.stTools[name] = true; });
+    ui.stPersonalData = !!t.allow_personal_data;
+    render(pyState);
+    var form = document.querySelector('.pf-st-form');
+    if (form && form.scrollIntoView) { form.scrollIntoView({block: 'start'}); }
+    var nameEl = document.querySelector('[data-st-label]');
+    if (nameEl) { nameEl.focus(); }
+  }
+
+  function clearScopedForm() {
+    ui.stDuplicateOf = null;
+    ui.stLabel = '';
+    ui.stDays = null;
+    ui.stRules = {};
+    ui.stTools = {};
+    ui.stPersonalData = false;
+    render(pyState);
+  }
+
+  function scopedToolChip(name, coverage) {
+    var on = !!ui.stTools[name];
+    var status = scopedToolStatus(name, coverage);
+    return '<div class="pf-chip' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
+      (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
+      esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
   }
 
   function renderScopedTokens() {
@@ -1259,6 +1367,21 @@ _JS = r"""
 
     if (ui.stDays === null) { ui.stDays = SCOPED.default_days; }
     html += '<h2 class="pf-group-title">New token</h2><div class="card pf-card pf-st-form">';
+    var dupOf = ui.stDuplicateOf
+      ? SCOPED.tokens.filter(function (x) { return x.id === ui.stDuplicateOf; })[0] : null;
+    if (dupOf) {
+      var dupMissing = dupOf.rules.filter(function (r) { return r.missing; }).length;
+      var dupLimited = dupOf.rules.some(function (r) { return !r.missing && r.limited_to; });
+      if (dupMissing) {
+        html += '<div class="pf-st-notice" role="status" data-st-dup-missing="1">' + esc(dupMissing) +
+          ' of this token\'s rules no longer exist and were left out.</div>';
+      }
+      if (dupLimited) {
+        html += '<div class="pf-st-notice" role="status" data-st-dup-limited="1">The new token gets these rules as they are now. ' +
+          'The original only allowed part of them; check the tools below before creating it.</div>';
+      }
+      html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Clear form" data-st-clear="1">Clear form</div></div>';
+    }
     html += '<label><span class="field-label">Name</span><input type="text" class="field" aria-label="Token name" data-st-label="1" value="' + esc(ui.stLabel) + '"/></label>';
     html += '<label><span class="field-label">Days valid</span><input type="number" class="field" aria-label="Days valid" data-st-days="1" min="1" max="' +
       esc(SCOPED.max_days) + '" value="' + esc(ui.stDays) + '"/></label>';
@@ -1279,17 +1402,32 @@ _JS = r"""
     html += '</div>';
     var coverage = scopedToolCoverage();
     html += '<div class="pf-row-title">Tools</div>';
+    var autoTools = SCOPED.auto_tools || [];
+    var anyRule = SCOPED.rules.some(function (r) { return ui.stRules[r.id]; });
+    if (!anyRule) { html += '<div class="pf-hint" data-st-no-rule-hint="1">Select a rule to see the tools it covers.</div>'; }
+    var shownTools = {};
     SCOPED.tools.forEach(function (g) {
-      html += '<div class="pf-hint">' + esc(g.connector) + '</div><div class="pf-chips">';
-      g.tools.forEach(function (name) {
-        var on = !!ui.stTools[name];
-        var status = scopedToolStatus(name, coverage);
-        html += '<div class="pf-chip' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
-          (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
-          esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
+      var hasCovered = g.tools.some(function (name) { return !!coverage[name]; });
+      var show = g.tools.filter(function (name) {
+        return !!coverage[name] || (hasCovered && autoTools.indexOf(name) !== -1) || !!ui.stTools[name];
       });
+      if (!show.length) { return; }
+      html += '<div class="pf-hint">' + esc(g.connector) + '</div><div class="pf-chips">';
+      show.forEach(function (name) { shownTools[name] = true; html += scopedToolChip(name, coverage); });
       html += '</div>';
     });
+    var otherTools = [];
+    SCOPED.tools.forEach(function (g) {
+      g.tools.forEach(function (name) {
+        if (autoTools.indexOf(name) !== -1 && !shownTools[name]) { otherTools.push(name); }
+      });
+    });
+    if (otherTools.length) {
+      html += '<details data-st-other-tools="1"><summary>Tools that need no rule, from other connectors (' + otherTools.length + ')</summary>' +
+        '<div class="pf-chips">';
+      otherTools.forEach(function (name) { html += scopedToolChip(name, coverage); });
+      html += '</div></details>';
+    }
     var uncovered = Object.keys(ui.stTools).filter(function (name) {
       return ui.stTools[name] && scopedToolStatus(name, coverage).uncovered;
     }).sort();
@@ -1298,6 +1436,12 @@ _JS = r"""
         ', so ' + (uncovered.length === 1 ? 'its calls' : 'their calls') + ' will be denied. Select a rule that covers ' +
         (uncovered.length === 1 ? 'it' : 'them') + ', or untick ' + (uncovered.length === 1 ? 'it' : 'them') + '.</div>';
     }
+    var stPdOn = !!ui.stPersonalData;
+    var stPdLabel = 'Let exports, downloads and page uploads carry personal data';
+    html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
+      (stPdOn ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(stPdLabel) + '" data-st-personal-data="1">' + esc(stPdLabel) + '</div></div>';
+    html += '<div class="pf-hint">Only for calls made with this token, and only for Drive downloads delivered as a file, Grist, ' +
+      'Salesforce and Jira exports, and Peek page uploads. Other calls still stop for review when personal data is found.</div>';
     html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Add the tools these rules cover" data-st-add-covered="1">Add the tools these rules cover</div></div>';
     html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';
     html += '</div></div>';
@@ -1401,7 +1545,7 @@ _JS = r"""
   function submitScopedToken() {
     var ids = Object.keys(ui.stRules).filter(function (k) { return ui.stRules[k]; });
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
-    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools, allow_personal_data: !!ui.stPersonalData });
   }
 
   // -------------------------------------------------------------------- //
@@ -1730,6 +1874,34 @@ _JS = r"""
       return;
     }
 
+    var aaEditEl = e.target.closest('[data-aa-edit]');
+    if (aaEditEl) {
+      var editId = aaEditEl.getAttribute('data-aa-edit');
+      if (ui.aaEdit && ui.aaEdit.id === editId) { ui.aaEdit = null; render(pyState); return; }
+      var editVerbs = {};
+      (pyState.auto_accept.rules || []).forEach(function (r) {
+        if (r.id === editId) r.verbs.forEach(function (v) { editVerbs[v.verb] = true; });
+      });
+      ui.aaEdit = { id: editId, verbs: editVerbs };
+      render(pyState);
+      return;
+    }
+
+    var aaEditVerbEl = e.target.closest('[data-aa-edit-verb]');
+    if (aaEditVerbEl) {
+      if (aaEditVerbEl.getAttribute('aria-disabled') === 'true' || !ui.aaEdit) return;
+      var editVerb = aaEditVerbEl.getAttribute('data-aa-edit-verb');
+      ui.aaEdit.verbs[editVerb] = !ui.aaEdit.verbs[editVerb];
+      render(pyState);
+      return;
+    }
+
+    var aaEditCancelEl = e.target.closest('[data-aa-edit-cancel]');
+    if (aaEditCancelEl) { ui.aaEdit = null; render(pyState); return; }
+
+    var aaEditSaveEl = e.target.closest('[data-aa-edit-save]');
+    if (aaEditSaveEl && aaEditSaveEl.getAttribute('aria-disabled') === 'true') return;
+
     var aaVerbEl = e.target.closest('[data-aa-verb-toggle]');
     if (aaVerbEl) {
       var verb = aaVerbEl.getAttribute('data-aa-verb-toggle');
@@ -1737,9 +1909,6 @@ _JS = r"""
       render(pyState);
       return;
     }
-
-    var aaPdEl = e.target.closest('[data-aa-personal-data]');
-    if (aaPdEl) { ui.aaPersonalData = !ui.aaPersonalData; render(pyState); return; }
 
     var aaAddEl = e.target.closest('[data-aa-add]');
     if (aaAddEl) { submitAddPolicyRule(); return; }
@@ -1801,6 +1970,10 @@ _JS = r"""
     if (stRuleEl) { var rid = stRuleEl.getAttribute('data-st-rule'); ui.stRules[rid] = !ui.stRules[rid]; render(pyState); return; }
     var stToolEl = e.target.closest('[data-st-tool]');
     if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
+    if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
+    var stDupEl = e.target.closest('[data-st-duplicate]');
+    if (stDupEl) { duplicateScopedToken(stDupEl.getAttribute('data-st-duplicate')); return; }
+    if (e.target.closest('[data-st-clear]')) { clearScopedForm(); return; }
     if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
     if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }
 
@@ -1827,6 +2000,7 @@ _JS = r"""
       if (actionEl.tagName === 'INPUT' && actionEl.type === 'checkbox') e.preventDefault();
       var confirmText = actionEl.getAttribute('data-confirm');
       if (confirmText && !window.confirm(confirmText)) return;
+      if (actionEl.hasAttribute('data-aa-edit-save')) ui.aaEdit = null;
       var action = actionEl.getAttribute('data-action');
       var payload = {};
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }
@@ -1854,15 +2028,15 @@ _JS = r"""
   // the selected group id is actually tracked there (see renderAutoAccept). Client-side no-ops
   // (rather than posting nothing useful) when no verb is checked -- add_policy_rule itself would
   // also just no-op, but skipping the round trip is cheap and avoids a pointless snapshot re-push.
-  // A move or a copy auto-accepts only when the source AND the destination are both in the one
+  // A move auto-accepts only when the source AND the destination are both in the one
   // rule's value list (policy/scopes.py `move_within_approved_folders`), so a rule that names a
-  // single folder for either verb can never match a move or copy out of it. Returns null when the
-  // form isn't about a valued scope with move/copy checked; otherwise {text, invalid}, where
+  // single folder for either verb can never match a move out of it. Returns null when the
+  // form isn't about a valued scope with move checked; otherwise {text, invalid}, where
   // invalid blocks "Add rule" until the field holds at least two distinct comma-separated ids.
   function aaPairHint(group) {
-    if (!group || !group.needs_value) return null;
+    if (!group || !group.needs_value || !aaMoveNeedsPair(group.id)) return null;
     var checked = ui.aaCheckedVerbs || {};
-    var verbs = ['move', 'copy'].filter(function (v) { return checked[v] && group.verbs.indexOf(v) >= 0; });
+    var verbs = ['move'].filter(function (v) { return checked[v] && group.verbs.indexOf(v) >= 0; });
     if (!verbs.length) return null;
     var seen = {};
     String(ui.aaValue || '').split(',').forEach(function (v) { v = v.trim(); if (v) seen[v] = true; });
@@ -1871,8 +2045,7 @@ _JS = r"""
     if (count >= 2) {
       return { invalid: false, text: 'A ' + what + ' is auto-accepted only when both its source and its destination are in this list.' };
     }
-    return { invalid: true, text: 'A ' + what + ' is auto-accepted only when both its source folder and its destination ' +
-      'folder are in the same rule. Enter at least two ids, separated by a comma.' };
+    return { invalid: true, text: aaPairInvalidText(what) };
   }
 
   function submitAddPolicyRule() {
@@ -1883,11 +2056,9 @@ _JS = r"""
     var submitHint = aaPairHint(submitGroup);
     if (submitHint && submitHint.invalid) return;
     var valueInput = document.querySelector('[data-aa-value]');
-    post('add_policy_rule', { group: ui.aaGroup, value: valueInput ? valueInput.value : '', verbs: checked,
-      personal_data: !!ui.aaPersonalData });
+    post('add_policy_rule', { group: ui.aaGroup, value: valueInput ? valueInput.value : '', verbs: checked });
     ui.aaCheckedVerbs = {};
     ui.aaValue = '';
-    ui.aaPersonalData = false;
   }
 
   // No blur-commit fields are left (the Auto-accept page's own value field commits live via
@@ -1905,7 +2076,6 @@ _JS = r"""
       ui.aaGroup = el.value;
       ui.aaValue = '';
       ui.aaCheckedVerbs = {};
-      ui.aaPersonalData = false;
       render(pyState);
     }
   }
@@ -2141,22 +2311,22 @@ def build_html(
     tokens" section the same way.
     """
     nonce = nonce or secrets.token_urlsafe(18)
-    state_json = json.dumps(state)
+    state_json = json_for_script(state)
     capabilities = _capabilities_for(mode, is_admin=is_admin)
     capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
     capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
-    caps_json = json.dumps(capabilities)
+    caps_json = json_for_script(capabilities)
     ai_client_script = ""
     if capabilities["sections"]["ai_client"]:
-        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json.dumps(ai_client)};</script>'
+        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json_for_script(ai_client)};</script>'
     scoped_tokens_script = ""
     if capabilities["sections"]["scoped_tokens"]:
         # Rule sentences carry user-chosen values: no "</script>" may end the tag early.
-        scoped_json = json.dumps(scoped_tokens).replace("<", "\\u003c")
+        scoped_json = json_for_script(scoped_tokens)
         scoped_tokens_script = f'<script nonce="{nonce}">window.__pfScopedTokens = {scoped_json};</script>'
     section_script = ""
     if initial_section is not None:
-        section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
+        section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json_for_script(initial_section)};</script>'
     return (
         "<title>PrivacyFence Settings</title>"
         f'<style nonce="{nonce}">{DOCUMENT_CSS}{_CSS}</style>'

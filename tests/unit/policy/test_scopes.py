@@ -319,6 +319,46 @@ class TestIdentitySpoofResistance:
         assert selector.matches(None, ctx) is False, f"{predicate} matched spoofed identity {payload!r}"
 
 
+_SPOOF_DOMAIN_PAYLOADS = [
+    pytest.param('"CEO <ceo@trusted.com>" <attacker@evil.com>', id="quoted-display-name-address"),
+    pytest.param("attacker@evil.com (<x@trusted.com>)", id="comment-address"),
+    pytest.param("x@evil.com@trusted.com", id="double-at"),
+    pytest.param("alice@trusted.com)<bob@evil.com>", id="paren-then-angle"),
+]
+
+class TestDomainAndSelfSpoofResistance:
+    """The domain and self selectors judge the real address (`parseaddr`), not any address text in
+    the header. The frozen v1 reference oracle keeps the old hand parse on purpose; no agreement
+    fixture holds a spoof payload, so this is a documented divergence (plan section 3.4)."""
+
+    @pytest.mark.parametrize("payload", _SPOOF_DOMAIN_PAYLOADS)
+    def test_trusted_sender_domain_ignores_display_name_address(self, payload):
+        ctx = make_ctx(raw_data=SimpleNamespace(sender=payload))
+        assert SCOPE_SELECTORS["trusted_sender_domain"].matches(["trusted.com"], ctx) is False
+
+    @pytest.mark.parametrize("payload", _SPOOF_DOMAIN_PAYLOADS)
+    def test_approved_recipient_domain_ignores_display_name_address(self, payload):
+        ctx = make_ctx(args={"to": payload})
+        assert SCOPE_SELECTORS["approved_recipient_domain"].matches(["trusted.com"], ctx) is False
+
+    @pytest.mark.parametrize(
+        "payload", [*_SPOOF_DOMAIN_PAYLOADS, pytest.param("me@example.com <attacker@evil.com>", id="self-display-name")]
+    )
+    def test_to_is_myself_ignores_display_name_address(self, payload):
+        ctx = make_ctx(args={"to": payload}, my_email="me@example.com")
+        assert SCOPE_SELECTORS["to_is_myself"].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("sender", ["Alice <alice@trusted.com>", "alice@sub.trusted.com"])
+    def test_trusted_sender_domain_still_matches_real_address(self, sender):
+        ctx = make_ctx(raw_data=SimpleNamespace(sender=sender))
+        assert SCOPE_SELECTORS["trusted_sender_domain"].matches(["trusted.com"], ctx) is True
+
+    @pytest.mark.parametrize("to", ["me@example.com", "Me <me@example.com>"])
+    def test_to_is_myself_still_matches_real_address(self, to):
+        ctx = make_ctx(args={"to": to}, my_email="me@example.com")
+        assert SCOPE_SELECTORS["to_is_myself"].matches(None, ctx) is True
+
+
 class TestVocabularyCompleteness:
     def test_every_scope_predicate_is_classified_upstream(self):
         for predicate in SCOPE_SELECTORS:

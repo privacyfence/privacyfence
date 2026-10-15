@@ -45,10 +45,6 @@ class PolicyRule:
     content-derived id ``policy.store.rule_id_for`` minted, and that stored id is what decisions
     are attributed to (ADR 0074). ``policy.store.rule_id_for_rule`` recomputes the same id from a
     rule's content.
-
-    ``allow_personal_data`` lets the tools in ``auto_accept.PERSONAL_DATA_RULE_TOOLS`` auto-accept
-    under this rule even when the PII scan finds something (ADR 0157); it changes nothing for any
-    other tool, and nothing about whether a call matches.
     """
 
     id: str
@@ -56,7 +52,6 @@ class PolicyRule:
     value: Any
     operations: frozenset[str]
     conditions: tuple[tuple[str, Any], ...] = ()
-    allow_personal_data: bool = False
 
 
 def _selector_for(predicate: str) -> "scopes.ScopeSelector | None":

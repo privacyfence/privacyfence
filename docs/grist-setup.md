@@ -172,12 +172,12 @@ The rule's verbs cover these tools:
 | Verb | Tools |
 |---|---|
 | read | `grist_get_records`, `grist_export_records`, `grist_export_sql` |
-| create | `grist_add_records`, `grist_import_csv` |
+| add | `grist_add_records`, `grist_import_csv` |
 | update | `grist_update_records`, `grist_update_csv` |
 | restructure | `grist_create_table`, `grist_add_columns` |
 
 A CSV import or update rule lets the assistant load a file into that document without a card, so
-grant `create` and `update` only for a document you are happy to have bulk-written.
+grant `add` and `update` only for a document you are happy to have bulk-written.
 
 ## Troubleshooting
 

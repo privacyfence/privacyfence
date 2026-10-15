@@ -83,6 +83,17 @@ refuses to serve.
   a source run, as described above.
 - It does not change any path, port or discovery file.
 
+## `PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP`
+
+This variable is for organization-mode development against an identity provider that is served
+over plain HTTP only (a devcontainer Keycloak, a loopback OIDC test server). It is never for a real
+deployment. It counts as set when its value is anything other than empty, `0`, `false` or `False`.
+
+**What it allows:** it skips the HTTPS check on the issuer and on every endpoint the identity
+provider's discovery document names (`org_identity.py`). Those URLs are what organization mode's
+trust model relies on being unspoofable in transit, so with the variable set, sign-in has no
+protection against a network attacker.
+
 ## State locations
 
 `src/privacyfence/paths.py` is authoritative.

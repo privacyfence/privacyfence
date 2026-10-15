@@ -17,12 +17,15 @@ popup's confirmation dialog and the MCP bridge's policy tools all render rules t
 """
 from __future__ import annotations
 
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from . import propose, registry, scopes
 from .engine import PolicyRule
 from .propose import RuleProposal, Widening
 from .registry import TOOL_REGISTRY, Verb
+
+if TYPE_CHECKING:
+    from .scope_rows import ScopeRow
 
 
 def connector_label(connector: str) -> str:
@@ -112,7 +115,7 @@ def _value_phrase(value: object) -> str:
 
 
 def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
-    """One rule as the sentence it is: ``Drive - folder 1CdeF: allow read, update, format``.
+    """One rule as the sentence it is: ``Drive - folder 1CdeF: allow read, update``.
 
     An unconditional scope says so rather than hiding behind a rule name, and a rule's
     conditions are appended as the narrowing they are.
@@ -135,8 +138,43 @@ def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
     sentence = f"{connector} - {subject}: allow {verbs}" if connector else f"{subject}: allow {verbs}"
     if rule.conditions:
         sentence += " - when " + ", ".join(name.replace("_", " ") for name, _value in rule.conditions)
-    if rule.allow_personal_data:
-        sentence += " - personal data allowed in exports, file downloads and page uploads"
+    return sentence
+
+
+def row_sentence(row: "ScopeRow", value_display: str | None = None) -> str:
+    """One stored scope row as the sentence it is: ``Drive - folder F: allow read, download``.
+
+    A custom row renders as its compiled rule does. A scoped row names its connector, the scope's
+    noun, its value (``value_display`` when the caller resolved it) and its stored verbs, with a
+    condition scope's narrowing appended. There is no personal-data suffix: that allowance lives
+    on scoped tokens now (ADR 0173).
+    """
+    from . import scope_rows  # scope_rows imports this module
+
+    if row.scope is None:
+        return rule_sentence(scope_rows.compile_row(row)[0], value_display)
+    entries = scope_rows.group_entries(row.scope)
+    extra = scope_rows.extra_scope(row.scope)
+    condition: tuple[str, object] | None = None
+    if entries:
+        connector, scope_type, condition = entries[0].connector, entries[0].scope_type, entries[0].condition
+    elif extra is not None:
+        connector = extra.connector
+        selector = scopes.NEW_SCOPE_SELECTORS.get(extra.predicate)
+        raw_type = selector.scope_type if selector is not None else ""
+        scope_type = (
+            next((t for t in raw_type if t.partition(".")[0] == connector), raw_type[0])
+            if isinstance(raw_type, tuple) else raw_type
+        )
+    else:
+        connector, scope_type = "", ""
+    noun = scope_type_label(scope_type) if scope_type else row.scope
+    phrase = value_display if value_display else _value_phrase(row.value)
+    subject = f"{noun} {phrase}" if row.value else noun
+    verbs = ", ".join(v.value for v in sorted(row.verbs, key=propose.verb_sort_key)) or "nothing"
+    sentence = f"{connector_label(connector)} - {subject}: allow {verbs}" if connector else f"{subject}: allow {verbs}"
+    if condition:
+        sentence += " - when " + condition[0].replace("_", " ")
     return sentence
 
 
@@ -151,7 +189,7 @@ def button_label(proposal: RuleProposal) -> str:
 
 
 def widening_label(widening: Widening) -> str:
-    """One widening chip: ``also allow format (2 tools)``. The tool count is the point -- it is the
+    """One widening chip: ``also allow update (2 tools)``. The tool count is the point -- it is the
     width the user is being asked to agree to, stated rather than implied."""
     tools = sum(
         1
@@ -181,6 +219,7 @@ __all__ = [
     "confirmation_text",
     "connector_label",
     "covered_tools",
+    "row_sentence",
     "rule_sentence",
     "rule_verbs",
     "scope_type_label",

@@ -9,7 +9,7 @@ Required config keys are the merged ``atlassian_config`` the Jira client gets: `
 ``ASSETS_REQUIRED_SCOPE``); ``client_id``/``client_secret``/``refresh_token`` are needed to
 refresh an expired access token. ``assets_workspace_id`` (optional) is the site's Assets workspace
 id; without it the client looks the id up, which Atlassian allows only with the JSM scope
-``read:servicedesk-request`` that PrivacyFence does not request (see ADR 0171).
+``read:servicedesk-request`` that PrivacyFence does not request (see ADR 0188).
 """
 
 from __future__ import annotations

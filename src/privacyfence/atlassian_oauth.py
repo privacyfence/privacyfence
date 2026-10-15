@@ -74,7 +74,7 @@ ASSETS_SCOPES: list[str] = [
     # (the workspace id lookup) accepts only that scope: the developer console no
     # longer offers the Jira Service Management API to every OAuth app, and asking
     # for a scope the app lacks fails the whole sign-in. The workspace id is
-    # configured instead (atlassian.assets_workspace_id); see ADR 0171.
+    # configured instead (atlassian.assets_workspace_id); see ADR 0188.
 ]
 
 

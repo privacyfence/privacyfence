@@ -1,4 +1,4 @@
-# ADR 0173: Linked objects are read in one bounded, reviewed traversal
+# ADR 0190: Linked objects are read in one bounded, reviewed traversal
 
 ## Status
 
@@ -19,7 +19,7 @@ hop, each needing its own approval.
   the walk stops.
 - **One review card shows the whole graph**: every object and every edge. The call is a SEARCH
   read, so a schema rule applies only when every returned object (the root included) is in an
-  approved schema (ADR 0172).
+  approved schema (ADR 0189).
 
 ## Alternatives considered
 
@@ -40,5 +40,5 @@ hop, each needing its own approval.
 
 ## Related
 
-[ADR 0172](0172-assets-schemas-types-and-attributes-are-auto-approved-and-object-reads-are-reviewed-per-schema.md),
-[ADR 0171](0171-jira-assets-is-a-separate-read-only-connector-whose-atlassian-scopes-are-requested-only-when-switched-on.md).
+[ADR 0189](0189-assets-schemas-types-and-attributes-are-auto-approved-and-object-reads-are-reviewed-per-schema.md),
+[ADR 0188](0188-jira-assets-is-a-separate-read-only-connector-whose-atlassian-scopes-are-requested-only-when-switched-on.md).

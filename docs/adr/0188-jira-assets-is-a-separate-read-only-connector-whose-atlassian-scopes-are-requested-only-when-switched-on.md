@@ -1,4 +1,4 @@
-# ADR 0171: Jira Assets is a separate read-only connector whose Atlassian scopes are requested only when it is switched on
+# ADR 0188: Jira Assets is a separate read-only connector whose Atlassian scopes are requested only when it is switched on
 
 ## Status
 

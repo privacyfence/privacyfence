@@ -196,7 +196,7 @@ class TestAssetsScopes:
 
     def test_assets_scopes_leave_out_the_jsm_scope(self):
         # The developer console does not offer every app the JSM API; asking for its scope
-        # would fail the whole Atlassian sign-in (ADR 0171).
+        # would fail the whole Atlassian sign-in (ADR 0188).
         assert "read:servicedesk-request" not in atlassian_oauth_module.ASSETS_SCOPES
 
     @pytest.mark.parametrize("config, expected", [

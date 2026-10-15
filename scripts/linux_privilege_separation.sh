@@ -166,8 +166,10 @@ usage: sudo $0 {enable|uninstall|status} [options]
   --daemon-exec <p>   run this instead of ${DEFAULT_DAEMON_EXECUTABLE}
   --companion-exec <p> run this instead of ${DEFAULT_COMPANION_EXECUTABLE}
                       (both together let a source/venv install be separated:
-                       --daemon-exec .venv/bin/privacyfence-app
-                       --companion-exec .venv/bin/privacyfence-companion)
+                       --daemon-exec /opt/privacyfence/venv/bin/privacyfence-app
+                       --companion-exec /opt/privacyfence/venv/bin/privacyfence-companion
+                       a source or venv install can be separated only if root
+                       owns it and everything above it)
   --auto              enable only: never die(), never prompt -- log and exit 0
                       instead of failing when this can't safely tell who owns
                       the install or find the daemon. For unattended callers
@@ -230,10 +232,58 @@ resolve_owner() {
   [ -n "$OWNER_HOME" ] || die "could not resolve ${OWNER_USER}'s home directory"
 }
 
+# The service account runs this file; nothing a non-root account can write may reach it (ADR 0003).
+# A symlink's own mode is always 777 on Linux, so a link is checked for its owner only; the file it
+# resolves to, and every directory above that, get the full owner-and-mode check.
+_check_image_entry() {
+  local entry="$1" what="$2" path="$3" link_ok="$4" owner mode
+  read -r owner mode < <(stat -c '%u %a' -- "$entry")
+  [ "$owner" = "0" ] || die "refusing ${what} ${path}: ${entry} is owned by uid ${owner}, not root -- a separated daemon must run from a root-owned install"
+  if [ "$link_ok" = 1 ] && [ -L "$entry" ]; then return 0; fi
+  [ $(( 8#$mode & 8#022 )) -eq 0 ] || die "refusing ${what} ${path}: ${entry} is writable by group or others"
+}
+_walk_image_path() {
+  local start="$1" what="$2" path="$3" link_ok="$4" candidate="$1"
+  while :; do
+    _check_image_entry "$candidate" "$what" "$path" "$link_ok"
+    [ "$candidate" = "/" ] && break
+    candidate="$(dirname -- "$candidate")"
+  done
+}
+# Prints the resolved path, which the caller uses from then on, so the unit names what was checked.
+require_root_owned_image() {
+  local path="$1" what="$2" literal resolved
+  literal="$(realpath -s -- "$path")" || die "refusing ${what} ${path}: cannot resolve it"
+  resolved="$(readlink -f -- "$path")" || die "refusing ${what} ${path}: cannot resolve it"
+  _walk_image_path "$literal" "$what" "$path" 1
+  _walk_image_path "$resolved" "$what" "$path" 0
+  printf '%s\n' "$resolved"
+}
+
 resolve_executables() {
   : "${DAEMON_EXECUTABLE:=$DEFAULT_DAEMON_EXECUTABLE}"
   : "${COMPANION_EXECUTABLE:=$DEFAULT_COMPANION_EXECUTABLE}"
   [ -x "$DAEMON_EXECUTABLE" ] || die "not executable: ${DAEMON_EXECUTABLE} -- pass --daemon-exec for a source or venv install"
+  # die() inside $(...) ends only the subshell, which has already printed why.
+  DAEMON_EXECUTABLE="$(require_root_owned_image "$DAEMON_EXECUTABLE" "--daemon-exec")" || exit 1
+  # A script runs under its interpreter, so that is part of the image too.
+  local line interpreter word
+  local -a words=()
+  if [ "$(head -c 2 -- "$DAEMON_EXECUTABLE")" = '#!' ]; then
+    line="$(head -n 1 -- "$DAEMON_EXECUTABLE")"
+    read -r -a words <<<"${line#\#!}"
+    interpreter="${words[0]:-}"
+    if [ "$interpreter" = "/usr/bin/env" ]; then
+      interpreter=""
+      for word in "${words[@]:1}"; do
+        case "$word" in -*) continue ;; esac
+        interpreter="$(command -v -- "$word")" || interpreter=""
+        break
+      done
+    fi
+    [ -n "$interpreter" ] || die "refusing --daemon-exec ${DAEMON_EXECUTABLE}: cannot tell which interpreter its #! line names"
+    require_root_owned_image "$interpreter" "--daemon-exec interpreter" >/dev/null
+  fi
   # The companion is what a human uses once the daemon has no desktop session
   # of its own, so a separated install without one is a locked door. Refuse
   # rather than install half of ADR 0002's inversion.
@@ -303,6 +353,12 @@ unseparated_data_dir() { printf '%s/.privacyfence' "$OWNER_HOME"; }
 apply_layout() {
   note "re-owning ${SYSTEM_ROOT} to ${SERVICE_ACCOUNT}:${SERVICE_GROUP}"
   mkdir -p "${SYSTEM_ROOT}/authority" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" "${SYSTEM_ROOT}/logs"
+  # handoff/ (3770) is the one place a group member can write, so the passes
+  # below never descend into it: a directory or link planted there could
+  # otherwise steer a root `find ... -exec` at a file elsewhere.
+  local handoff="${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
+  note "removing unexpected directories under ${HANDOFF_DIR_NAME}/"
+  find "$handoff" -mindepth 1 -maxdepth 1 -type d -exec rm -rf -- {} +
   # Everything except sockets (ADR 0029). A socket belongs to the process that
   # bound it, at the mode it chose: re-owning a live companion's
   # handoff/companion.sock on a re-run -- every .deb upgrade is one -- leaves
@@ -310,11 +366,19 @@ apply_layout() {
   # companion after it refusing to take it over (ADR 0027). `chown -h` and
   # the chmod's `! -type l` keep `find -exec` from following a symlink, which
   # `chown -R`/`chmod -R` never did.
-  find "$SYSTEM_ROOT" ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
+  find "$SYSTEM_ROOT" -path "$handoff" -prune -o ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
+  chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" "$handoff"
+  find "$handoff" -mindepth 1 -maxdepth 1 ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
   # Tighten everything first, then re-open exactly the two places that have to
   # be reachable from the user's own session. Order matters: the blanket
   # go-rwx below would otherwise undo the handoff directory's group bits.
-  find "$SYSTEM_ROOT" ! -type s ! -type l -exec chmod go-rwx {} +
+  # Run as the service account, which owns every file by now: a link swapped
+  # in mid-run can then only reach files it already owns. From /, because
+  # pkexec starts in root's mode-700 home, where `find` as another user
+  # cannot return.
+  ( cd / && setpriv --reuid="$SERVICE_ACCOUNT" --regid="$SERVICE_GROUP" --clear-groups \
+      find "$SYSTEM_ROOT" -path "$handoff" -prune -o ! -type s ! -type l -exec chmod go-rwx {} + ) \
+    || warn "could not tighten every mode under ${SYSTEM_ROOT} (a file changed while it ran)"
   chmod "$SYSTEM_ROOT_MODE" "$SYSTEM_ROOT"
   chmod "$AUTHORITY_DIR_MODE" "${SYSTEM_ROOT}/authority"
   chmod "$HANDOFF_DIR_MODE" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
@@ -322,7 +386,9 @@ apply_layout() {
   # (privilege_separation.ensure_handoff_file_mode()); re-asserting it here
   # means a correct install doesn't depend on that fix-up, and repairs one a
   # human has chmod-ed by hand.
-  find "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" -type f -exec chmod "$HANDOFF_FILE_MODE" {} +
+  ( cd / && setpriv --reuid="$SERVICE_ACCOUNT" --regid="$SERVICE_GROUP" --clear-groups \
+      find "$handoff" -mindepth 1 -maxdepth 1 -type f -exec chmod "$HANDOFF_FILE_MODE" {} + ) \
+    || warn "could not tighten every mode under ${SYSTEM_ROOT} (a file changed while it ran)"
 }
 
 write_marker() {
@@ -363,15 +429,22 @@ MARKER
 
 # ── systemd / XDG wiring ──────────────────────────────────────────────────────
 
+# Escape the characters that are special in the replacement half of an
+# `s|...|...|` expression (the delimiter, `&` and the backslash), so a path
+# containing any of them renders literally.
+sed_escape() {
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
 render_template() {
   local template="$1" destination="$2"
   [ -f "$template" ] || die "missing template: ${template}"
   sed \
-    -e "s|__DAEMON_EXECUTABLE__|${DAEMON_EXECUTABLE}|g" \
-    -e "s|__COMPANION_EXECUTABLE__|${COMPANION_EXECUTABLE}|g" \
-    -e "s|__SERVICE_ACCOUNT__|${SERVICE_ACCOUNT}|g" \
-    -e "s|__SERVICE_GROUP__|${SERVICE_GROUP}|g" \
-    -e "s|__SYSTEM_ROOT__|${SYSTEM_ROOT}|g" \
+    -e "s|__DAEMON_EXECUTABLE__|$(sed_escape "$DAEMON_EXECUTABLE")|g" \
+    -e "s|__COMPANION_EXECUTABLE__|$(sed_escape "$COMPANION_EXECUTABLE")|g" \
+    -e "s|__SERVICE_ACCOUNT__|$(sed_escape "$SERVICE_ACCOUNT")|g" \
+    -e "s|__SERVICE_GROUP__|$(sed_escape "$SERVICE_GROUP")|g" \
+    -e "s|__SYSTEM_ROOT__|$(sed_escape "$SYSTEM_ROOT")|g" \
     "$template" > "$destination"
   chown root:root "$destination"
   chmod 644 "$destination"
@@ -840,6 +913,45 @@ cmd_status() {
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
+# Saved before any `shift`: check_pkexec_arguments() judges the argument list
+# exactly as the caller wrote it.
+ORIGINAL_ARGS=("$@")
+
+# The companion runs this script through pkexec, so whoever can run pkexec
+# gets to choose the arguments. polkit's own action only names the path (and
+# the first argument, ADR 0183); this is the guard. Under pkexec (PKEXEC_UID
+# set) it accepts exactly the lists the companion passes and nothing else --
+# in particular never --daemon-exec, which names a file the service account
+# then runs. The .deb's postinst runs the script as root without pkexec, so it
+# is not restricted.
+check_pkexec_arguments() {
+  [ -n "${PKEXEC_UID:-}" ] || return 0
+  local count="${#ORIGINAL_ARGS[@]}"
+  case "${ORIGINAL_ARGS[0]:-}" in
+    daemon)
+      if [ "$count" -eq 2 ]; then
+        case "${ORIGINAL_ARGS[1]}" in
+          start|stop|restart|ensure-running|status) return 0 ;;
+        esac
+      fi
+      ;;
+    enable)
+      if [ "$count" -eq 2 ] && [ "${ORIGINAL_ARGS[1]}" = "--auto" ]; then
+        return 0
+      fi
+      if [ "$count" -eq 3 ] && [ "${ORIGINAL_ARGS[1]}" = "--for-user" ]; then
+        local caller
+        caller="$(id -nu "$PKEXEC_UID" 2>/dev/null)" || caller=""
+        if [ -n "$caller" ] && [ "${ORIGINAL_ARGS[2]}" = "$caller" ]; then
+          return 0
+        fi
+        die "not allowed via pkexec: --for-user must name the account that ran pkexec"
+      fi
+      ;;
+  esac
+  die "not allowed via pkexec: ${ORIGINAL_ARGS[*]-}"
+}
+
 [ $# -ge 1 ] || usage
 COMMAND="$1"; shift
 # `daemon`'s sub-verb is a positional, consumed here, before the generic
@@ -865,6 +977,8 @@ while [ $# -gt 0 ]; do
     *) die "unknown option: $1" ;;
   esac
 done
+
+check_pkexec_arguments
 
 # The two halves of ADR 0003 decision 3 are complements, not modifiers of one
 # another: naming a user and then asking for the half that deliberately has no

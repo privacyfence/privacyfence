@@ -15,8 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write        # needed to push the drift branch
-  pull-requests: write   # needed for create-pull-request to open the PR itself
+  contents: read   # the PR-opening job below widens this for itself; the runner job never holds write
 
 concurrency:
   group: connector-live-check
@@ -51,6 +50,10 @@ jobs:
     runs-on: [self-hosted, privacyfence-test]
     timeout-minutes: 20   # generous but bounded -- a few minutes of read
                            # calls plus one venv build, not an open-ended job
+    permissions:
+      contents: read      # this job holds live credentials and never gets a write token
+    outputs:
+      drift: ${{ steps.check.outcome == 'failure' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,8 +80,8 @@ jobs:
       - name: Build this run's venv
         run: |
           python3 -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -e ".[test]"
+          .venv/bin/pip install --require-hashes -r requirements/dev.lock.txt
+          .venv/bin/pip install --no-deps --no-build-isolation -e .
 
       # The only step that touches this runner's permanent state.
       # QA_SECRETS_DIR (org_config.json, credentials/,
@@ -136,19 +139,24 @@ jobs:
           .venv/bin/python scripts/qa_fixture_recorder.py --lifecycle \
             --report-file /tmp/qa-lifecycle-report.md
 
-      # Opens a PR only when --record actually changed a fixture file --
-      # a maintainer reviews the redacted diff exactly as the manual
-      # process in testing-policy.md Sec 2.1 already describes, this just
-      # removes the "someone has to remember to run it" step.
-      - name: Open drift PR
+      # The runner job only hands the re-recorded fixtures over as artifacts;
+      # the `open-drift-pr` job below, on a GitHub-hosted runner, is the only
+      # one that holds a write token.
+      - name: Upload drift fixtures
         if: steps.check.outcome == 'failure'
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          branch: chore/connector-live-fixture-drift
-          title: "chore: connector live fixture drift detected"
-          commit-message: "Update recorded fixtures after provider API drift"
-          body-path: /tmp/qa-record-report.md
-          add-paths: tests/fixtures/live/**
+          name: drift-fixtures
+          path: tests/fixtures/live
+          retention-days: 7
+
+      - name: Upload drift report
+        if: steps.check.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: drift-report
+          path: /tmp/qa-record-report.md
+          retention-days: 7
 
       # Mirrors the copy-in step above, reversed. Each *_client.py that
       # refreshes an expired OAuth access token already persists the
@@ -183,3 +191,37 @@ jobs:
           name: connector-live-check-report
           path: /tmp/qa-*-report.md
           retention-days: 90
+
+  # Opens a PR only when --record actually changed a fixture file -- a
+  # maintainer reviews the redacted diff exactly as the manual process in
+  # testing-policy.md Sec 2.1 already describes, this just removes the
+  # "someone has to remember to run it" step. Runs on a GitHub-hosted runner
+  # so the write token never reaches the credential-holding runner.
+  open-drift-pr:
+    needs: live-check
+    if: needs.live-check.outputs.drift == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # needed to push the drift branch
+      pull-requests: write   # needed for create-pull-request to open the PR itself
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: drift-fixtures
+          path: tests/fixtures/live
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: drift-report
+          path: /tmp
+
+      - name: Open drift PR
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: chore/connector-live-fixture-drift
+          title: "chore: connector live fixture drift detected"
+          commit-message: "Update recorded fixtures after provider API drift"
+          body-path: /tmp/qa-record-report.md
+          add-paths: tests/fixtures/live/**

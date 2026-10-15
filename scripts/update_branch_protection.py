@@ -76,8 +76,8 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # whole-tree mypy run, the promoted-module mypy run, bandit) block, so requiring the job requires
 # all four (a required check sees only the job's conclusion, never an individual step's).
 #
-# test-python-compat's matrix (.github/workflows/tests.yml's `python-version: ['3.11', '3.12']`)
-# reports one check per leg, named from that job's own `name:` template -- both legs are listed
+# test-python-compat's matrix (.github/workflows/tests.yml's `python-version: ['3.11', '3.12', '3.14']`)
+# reports one check per leg, named from that job's own `name:` template -- every leg is listed
 # individually below; add/remove an entry here if that matrix ever changes.
 #
 # The `sync` job (privacyfence-sync, sync/) is a matrix too: its two legs report as `Sync client

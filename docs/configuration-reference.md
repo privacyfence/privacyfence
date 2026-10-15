@@ -127,13 +127,16 @@ conditions a rule can use are in [Approvals and policy](approvals-and-policy.md)
 
 | Key | Type | Code default | Seeded | What it is |
 |---|---|---|---|---|
-| `auto_accept.version` | int | — | `2` | Schema version. Always `2`. |
-| `auto_accept.rules` | list | empty (no rules) | one rule, below | The rules. A call auto-accepts if any rule matches. |
-| `auto_accept.rules[].id` | string | — | `r-d76028ec0b` | Stable id computed from the rule's predicate, value and conditions. |
-| `auto_accept.rules[].predicate` | string | — | `always_allow` | The scope selector. |
+| `auto_accept.version` | int | — | `3` | Schema version. Always `3`; a version-2 file is converted on the next start and the previous file is kept as `settings.yaml.pre-scope-rules.bak`. |
+| `auto_accept.rules` | list | empty (no rules) | one rule, below | The rules, one per scope. A call auto-accepts if any rule matches. |
+| `auto_accept.rules[].id` | string | — | `r-d76028ec0b` | Stable id. A scoped rule's id is computed from its scope and value; a custom rule keeps the id it was written with. |
+| `auto_accept.rules[].scope` | string | — | absent | The scope a scoped rule trusts. Absent on a custom rule. |
+| `auto_accept.rules[].predicate` | string | — | `always_allow` | The scope selector of a custom rule. Absent on a scoped rule. |
 | `auto_accept.rules[].value` | any | — | `null` | The resource ids or names the scope matches, or `null` for a scope without a value. |
+| `auto_accept.rules[].verbs` | list | — | `[update]` | The verbs the rule allows (derived from `operations` for a custom rule; display only). |
 | `auto_accept.rules[].operations` | list | — | `[contacts.edit]` | Internal operation keys the rule covers. |
-| `auto_accept.rules[].conditions` | list | `[]` | `[[no_contact_info_change, null]]` | `[name, value]` pairs that must all hold. |
+| `auto_accept.rules[].conditions` | list | `[]` | `[[no_contact_info_change, null]]` | Custom rules only: `[name, value]` pairs that must all hold. |
+| `auto_accept.rules[].former_ids` | list | `[]` | absent | The ids of the version-2 rules the upgrade merged into this rule. |
 
 The seeded rule auto-accepts contact edits that change no email address or phone number. A missing
 or empty `auto_accept` section means nothing auto-accepts.
@@ -168,7 +171,7 @@ or empty `auto_accept` section means nothing auto-accepts.
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download tool delivers in local mode; it also caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`) write. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
+| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download tool delivers in local mode; it also caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
 
 ### Passkey step-up (local mode)
 
@@ -327,9 +330,26 @@ options below are for running it by hand.
 | `--grist-oauth` | The same for Grist, when the organization config carries a Grist OAuth app. With an API key, use **Settings > Connectors** instead. |
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
 | `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
+| `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (`local` in local mode, or the principal id the audit log and the org Settings page show) and exit. Run it as the account the daemon runs as. |
 
 The sign-in options are for an install that is not privilege-separated (a source checkout or a
 `pip`/`pipx` install). On a packaged install the daemon refuses to run as your account, so they
 fail; connect services from **Settings > Connectors** instead (see
 [Connecting a service](connecting-a-service.md)). They need the organization config bundle
 installed first, except `--telegram-setup` and `--peek-login` (the latter asks for the Peek server address when the bundle names none).
+
+### privacyfence-companion
+
+The companion app's own command. The packaged installs start it for you. `--action`, `--serve` and
+`--launch` are mutually exclusive.
+
+| Option | What it does |
+|---|---|
+| (no option) | Run the tray (Windows) or menu-bar (macOS) companion. Linux has no tray, so there `--action` or `--serve` is required. |
+| `--launch` | Open Approvals, starting the tray or menu-bar companion first if none is running. This is what clicking the app icon or the Start Menu entry runs ([ADR 0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md)). |
+| `--serve` | Run only the companion's control channel, with no tray or menu, and stay up, so a separated daemon can hand this session a sign-in link to open. A separated Linux install's autostart entry runs this. |
+| `--action open-approvals` / `open-settings` | Open Approvals / Settings and exit. |
+| `--action copy-mcp-token` | Copy this account's AI client token to the clipboard ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md)). |
+| `--action recovery-code` | Ask the daemon for a new one-time passkey recovery code and show it in a dialog. |
+| `--action service-status`, `service-start`, `service-restart`, `service-stop` | Report on, start, restart or stop the background service; the last three ask for an administrator's password. |
+| `--action quit` | Ask the daemon to shut down, as Settings' Quit button does (only when the install allows quitting). |

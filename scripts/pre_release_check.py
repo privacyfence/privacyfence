@@ -9,7 +9,8 @@ of the checks in `release-testing.md`'s "What stays manual".
     .venv/bin/python scripts/pre_release_check.py
 
 Run from the repo root (with `mcpb/shim/` node_modules already installed via
-`npm install`), the same as CI. Exits non-zero if any check fails.
+`npm install`, and `privacyfence-sync` installed via `pip install -e "./sync[test]"`), the same
+as CI. Exits non-zero if any check fails.
 
 `ruff check .`, `bandit`, `mypy src/privacyfence` and `scripts/mypy_strict_modules.py` are all
 included below because all four block in CI (`.github/workflows/tests.yml`'s `static-analysis` job --
@@ -79,6 +80,18 @@ def main() -> int:
     results["bandit"] = run(
         "bandit", ["bandit", "-c", "pyproject.toml", "-r", "src"], cwd=REPO_ROOT
     )
+
+    # CI's `sync` job (tests.yml) installs privacyfence-sync alone and runs these three.
+    results["sync tests"] = run(
+        "sync tests",
+        [
+            "python3", "-m", "pytest", "sync/tests", "-q", "--cov=privacyfence_sync",
+            "--cov-branch", "--cov-report=term-missing", "--cov-fail-under=100",
+        ],
+        cwd=REPO_ROOT,
+    )
+    results["sync mypy"] = run("sync mypy", ["python3", "-m", "mypy", "sync/src"], cwd=REPO_ROOT)
+    results["sync bandit"] = run("sync bandit", ["bandit", "-r", "sync/src"], cwd=REPO_ROOT)
 
     print("=== Pre-release check summary ===")
     for name, ok in results.items():

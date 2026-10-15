@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-11. Implemented.
 Amends [ADR 0037](0037-a-local-override-is-a-relabel-and-never-attests.md), [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md), [ADR 0008](0008-one-principal-per-os-user.md) and [ADR 0015](0015-unattended-session-flag-is-advisory-only.md).
+Amended by ADR 0173.
 
 ## Context
 

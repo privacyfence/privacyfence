@@ -27,14 +27,14 @@ def _without(rule: PolicyRule, *operations: str) -> PolicyRule:
 class TestMissingOperations:
 
     def test_grist_rule_saved_before_the_csv_tools_reports_the_import(self):
-        full = _rule("grist.document", ["DOC1"], [Verb.READ, Verb.CREATE, Verb.UPDATE])
+        full = _rule("grist.document", ["DOC1"], [Verb.READ, Verb.ADD, Verb.UPDATE])
         stale = _without(full, "grist.import_csv")
         assert outdated.missing_operations(stale) == {"grist.import_csv"}
         assert "grist_import_csv" in outdated.missing_tools(stale)
         assert outdated.missing_tools(stale) == ("grist_import_csv",)
 
     def test_a_complete_rule_reports_nothing(self):
-        full = _rule("grist.document", ["DOC1"], [Verb.READ, Verb.CREATE, Verb.UPDATE])
+        full = _rule("grist.document", ["DOC1"], [Verb.READ, Verb.ADD, Verb.UPDATE])
         assert outdated.missing_operations(full) == frozenset()
         assert outdated.missing_tools(full) == ()
 
@@ -54,12 +54,13 @@ class TestMissingOperations:
         assert outdated.missing_operations(rule) == frozenset()
         assert outdated.missing_tools(rule) == ()
 
-    def test_a_move_rule_is_not_widened_by_the_copy_verb(self):
+    def test_a_move_rule_without_drive_copy_file_reports_it_missing(self):
         rule = PolicyRule(
             id="r", predicate="move_within_approved_folders", value=["F1", "F2"],
             operations=frozenset({"drive.move_file"}),
         )
-        assert outdated.missing_operations(rule) == frozenset()
+        assert outdated.missing_operations(rule) == frozenset({"drive.copy_file"})
+        assert outdated.missing_tools(rule) == ("drive_copy_file",)
 
     def test_a_verb_the_rule_does_not_have_contributes_nothing(self):
         read_only = _rule("grist.document", ["DOC1"], [Verb.READ])
@@ -75,7 +76,7 @@ class TestMissingOperations:
         assert all(op.split(".")[1].startswith(("read", "download")) for op in missing)
 
     def test_a_shared_predicate_is_limited_to_the_rules_own_connector(self):
-        gmail = _rule("gmail.label", ["Newsletters"], [Verb.LABEL])
+        gmail = _rule("gmail.label", ["Newsletters"], [Verb.UPDATE])
         assert outdated.missing_operations(gmail) == frozenset()
         stale = _without(gmail, "gmail.remove_label")
         assert outdated.missing_operations(stale) == {"gmail.remove_label"}

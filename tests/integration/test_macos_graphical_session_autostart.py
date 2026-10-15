@@ -127,7 +127,7 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
     see ``scripts/build_dmg.sh``.
 
     Deliberately not imported from ``test_macos_packaged_smoke.py``: that
-    module's own top level runs ``pytest.importorskip("mcp"/"playwright...")``,
+    module's own top level imports ``mcp`` and skips without playwright,
     which this module has no reason to depend on just to reuse ~20 lines --
     same "stay independently runnable" posture that module's own
     ``built_shim_entry`` fixture already states for itself.

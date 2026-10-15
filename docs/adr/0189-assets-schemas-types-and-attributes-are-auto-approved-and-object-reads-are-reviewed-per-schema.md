@@ -1,4 +1,4 @@
-# ADR 0172: Assets schemas, object types and attribute definitions are auto-approved; reading objects is reviewed under `assets.read_object` and can be auto-accepted per object schema
+# ADR 0189: Assets schemas, object types and attribute definitions are auto-approved; reading objects is reviewed under `assets.read_object` and can be auto-accepted per object schema
 
 ## Status
 
@@ -24,8 +24,10 @@ connector needs a gate that matches how Jira handles its own structure and issue
   the objects the call returned: `approved_schema_ids` for READ, and
   `approved_schema_ids_all_results` for SEARCH, which matches only when every returned object is in
   an approved schema. The export reaches its rule through the search verb and holds no attribute
-  value in `raw_data` (ADR 0159), and `assets_export_objects` is a personal-data-rule tool
-  (ADR 0157).
+  value in `raw_data` (ADR 0159), and `assets_export_objects` is in
+  `auto_accept.PERSONAL_DATA_RULE_TOOLS`, so a scoped token with `allow_personal_data`
+  ([0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) on `main`) lets an export
+  through when personal data is found, and no other call does.
 - **A grant type `assets`** with config key `schemas` lets a user name schemas by id; the
   resolver shows the schema name.
 

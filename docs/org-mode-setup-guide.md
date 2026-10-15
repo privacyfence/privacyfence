@@ -669,8 +669,11 @@ People reconnect or check a connection the same way; see
 
 Every client connects to `https://pf.acme.example.com/mcp`. The client discovers the authorization
 server from `/.well-known/oauth-protected-resource/mcp`, registers itself at `/register`, and opens
-the organization's sign-in page. After sign-in it holds its own tokens; there is nothing to copy or
-paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
+the organization's sign-in page. The first time a person connects a given client, PrivacyFence then
+shows a consent page that names the client and the host it returns to, and issues nothing until the
+person allows it; the choice is remembered per person, client and redirect address
+([ADR 0177](adr/0177-an-org-mode-mcp-client-needs-the-persons-consent-once.md)). After that the client
+holds its own tokens; there is nothing to copy or paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
 which the person signs in again.
 
 claude.ai also needs this host on its **Settings → Capabilities → Domain allowlist** to move

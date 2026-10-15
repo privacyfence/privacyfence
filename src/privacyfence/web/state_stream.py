@@ -121,7 +121,8 @@ class StateStream:
     ) -> None:
         self._settings_snapshot = settings_snapshot
         self._list_pending = list_pending
-        self._subscribers: set[asyncio.Queue] = set()
+        # queue -> receives_settings: the settings snapshot is the owner's, never another OS user's.
+        self._subscribers: dict[asyncio.Queue, bool] = {}
         self._closed = False
 
     # ------------------------------------------------------------------ #
@@ -144,7 +145,9 @@ class StateStream:
         self._broadcast(_CLOSED_EVENT, None)
 
     def _broadcast(self, event: str, data: Any) -> None:
-        for queue in list(self._subscribers):
+        for queue, receives_settings in list(self._subscribers.items()):
+            if event == "settings" and not receives_settings:
+                continue
             # maxsize=1, replace-not-append: each subscriber only ever
             # holds the *latest* pending message per stream, which is what
             # "pushes are debounced" means here -- a burst of rapid
@@ -165,6 +168,8 @@ class StateStream:
         self,
         is_disconnected: Callable[[], Awaitable[bool]],
         touch: Callable[[], bool] | None = None,
+        *,
+        receives_settings: bool,
     ):
         """Async generator of SSE-formatted strings for one connection.
 
@@ -175,11 +180,14 @@ class StateStream:
         opened. It returns whether the session is still live -- once it
         returns False (idle- or absolute-expired), the loop breaks and the
         connection closes, the same way a client disconnect does, rather
-        than streaming to a tab whose session no longer exists."""
+        than streaming to a tab whose session no longer exists.
+
+        ``receives_settings`` is True only for the owner's connections: the settings snapshot is
+        not principal-filtered, so a second OS user's stream gets approvals events only."""
         queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-        self._subscribers.add(queue)
+        self._subscribers[queue] = receives_settings
         try:
-            settings_state = self._settings_snapshot()
+            settings_state = self._settings_snapshot() if receives_settings else None
             if settings_state is not None:
                 yield _sse("settings", settings_state)
             last_ids = self._approvals_ids()
@@ -204,7 +212,7 @@ class StateStream:
                     last_ids = ids
                     yield _sse("approvals", self._approvals_payload())
         finally:
-            self._subscribers.discard(queue)
+            self._subscribers.pop(queue, None)
 
     def _approvals_ids(self) -> tuple[str, ...]:
         return tuple(a.id for a in self._list_pending())

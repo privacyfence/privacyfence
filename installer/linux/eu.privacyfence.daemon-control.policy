@@ -10,12 +10,19 @@
 
   service_control.py's run_elevated() runs
   `pkexec /usr/sbin/privacyfence-privilege-separation daemon <action>`
-  (`<action>` is always `start`, `stop` or `restart`; see that module's own
-  docstring). pkexec looks up the *executable path* it was asked to run
-  against every action this policy file defines (there is deliberately only
-  one below, covering all three daemon actions together, since they are the
-  same trust decision made three times: "let this signed-in user manage
-  PrivacyFence's system service").
+  and the companion's set-up path runs the same script with
+  the for-user or auto form of its `enable` command. pkexec looks up the
+  *executable path* it was asked to run against every action this policy file
+  defines, and the org.freedesktop.policykit.exec.argv1 annotation (polkit
+  0.113 and later) narrows that to the first argument. The two actions below
+  differ only in that: `daemon` and `enable` get a prompt that says what is
+  being authorised. They are the same trust decision, so both use
+  auth_admin_keep.
+
+  The prompt text is not the guard. The argument allow-list in
+  scripts/linux_privilege_separation.sh (check_pkexec_arguments) is: under
+  pkexec it accepts only the argument lists the companion passes, and never
+  the daemon-exec option (ADR 0183).
 
   auth_admin_keep, on every one of allow_any/allow_inactive/allow_active,
   mirrors what the plan calls for: an administrator password (or the
@@ -40,5 +47,18 @@
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/sbin/privacyfence-privilege-separation</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">daemon</annotate>
+  </action>
+
+  <action id="eu.privacyfence.enable-for-user">
+    <description>Set up the PrivacyFence background service for your account</description>
+    <message>Authentication is required to set up PrivacyFence's background service for your account</message>
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/sbin/privacyfence-privilege-separation</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">enable</annotate>
   </action>
 </policyconfig>

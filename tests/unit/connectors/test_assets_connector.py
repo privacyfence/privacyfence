@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from privacyfence import auto_accept
+from privacyfence import auto_accept, scoped_tokens
 from privacyfence.assets_client import (
     AssetsAttributeDef,
     AssetsClient,
@@ -880,16 +881,27 @@ class TestExportObjects:
 
 
 class TestExportAutoAccept:
-    """The schema all-results rule covers the export; PII needs allow_personal_data (ADR 0157)."""
+    """The schema all-results rule covers the export; PII needs a token that allows it (ADR 0173 on main)."""
 
     PII = "DE89370400440532013000"
 
     @staticmethod
-    def _rule(*, allow_personal_data=False):
-        auto_accept.set_policy_v2_store_rules(policy_store.merge_rules([PolicyRule(
+    def _rule() -> PolicyRule:
+        rules = policy_store.merge_rules([PolicyRule(
             id="", predicate="approved_schema_ids_all_results", value=["2"],
-            operations=frozenset({"assets.read_object"}), allow_personal_data=allow_personal_data,
-        )]))
+            operations=frozenset({"assets.read_object"}),
+        )])
+        auto_accept.set_policy_v2_store_rules(rules)
+        return rules[0]
+
+    @staticmethod
+    def _scoped_token(rule: PolicyRule, *, allow_personal_data: bool) -> scoped_tokens.ScopedToken:
+        return scoped_tokens.ScopedToken(
+            id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
+            principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
+            rule_ids=frozenset({rule.id}), tools=frozenset({"assets_export_objects"}),
+            allow_personal_data=allow_personal_data,
+        )
 
     @pytest.fixture(autouse=True)
     def _clear_rules(self):
@@ -924,7 +936,7 @@ class TestExportAutoAccept:
         assert len(popups) == 1
         assert delivered == []
 
-    async def test_personal_data_needs_a_rule_with_allow_personal_data(
+    async def test_personal_data_needs_a_token_that_allows_it(
         self, tmp_path, delivered, monkeypatch,
     ):
         from privacyfence import gate
@@ -936,14 +948,25 @@ class TestExportAutoAccept:
         connector, client = make_connector()
         client.export_objects.return_value = [make_object(
             schema_id="2", attributes={"Name": ["ACME"], "IBAN": [self.PII]})]
+        rule = self._rule()
 
-        self._rule(allow_personal_data=False)
+        # Unscoped: the personal data sends the export to the review card.
         with pytest.raises(GateDeniedError):
             await connector.call("assets_export_objects", EXPORT_ARGS)
+        assert len(popups) == 1
         assert delivered == []
 
-        self._rule(allow_personal_data=True)
-        result = await connector.call("assets_export_objects", EXPORT_ARGS)
+        # A scoped token that does not allow personal data is denied outright, with no card.
+        with scoped_tokens.token_scope(self._scoped_token(rule, allow_personal_data=False)):
+            with pytest.raises(GateDeniedError, match="scoped token"):
+                await connector.call("assets_export_objects", EXPORT_ARGS)
+        assert len(popups) == 1
+        assert delivered == []
+        assert audit_lines(tmp_path)[-1]["decision"] == "denied_scoped_token"
+
+        # The same token with allow_personal_data auto-accepts.
+        with scoped_tokens.token_scope(self._scoped_token(rule, allow_personal_data=True)):
+            result = await connector.call("assets_export_objects", EXPORT_ARGS)
 
         assert result["rows"] == 1
         assert len(delivered) == 1

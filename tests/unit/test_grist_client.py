@@ -675,6 +675,19 @@ class TestLiveFixtureParsing:
         client._request = lambda *args, **kwargs: raw  # type: ignore[method-assign]
         return client
 
+    def test_list_documents_fixture_still_parses(self):
+        raw = self._load("list_documents.json")
+
+        client = GristClient(SERVER, GristApiKey("key"))
+        # The recorded file is the workspaces response; /api/orgs is served separately.
+        client._request = lambda method, path, **kw: (  # type: ignore[method-assign]
+            [{"id": 1, "name": "Home"}] if path == "/api/orgs" else raw
+        )
+
+        docs = client.list_documents()
+
+        assert docs and all(d.id and d.name for d in docs)
+
     def test_list_columns_fixture_still_parses(self):
         raw = self._load("list_columns.json")
 

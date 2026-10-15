@@ -54,7 +54,7 @@ claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mc
   --header "Authorization: Bearer $(privacyfence-app --print-mcp-token)"
 ```
 
-- `mcp_url` holds `http://127.0.0.1:8765/mcp` unless you changed `web.port`
+- `mcp_url` holds `http://localhost:8765/mcp` unless you changed `web.port`
   ([Configuration reference](configuration-reference.md)).
 - `--print-mcp-token` mints your account's token the first time and prints the same one afterwards,
   the same token **Copy AI Client Token** copies. **Rotate token** in **Settings → AI clients**
@@ -79,7 +79,10 @@ A client holding it sees only the tools you chose, and a call goes through only 
 auto-accepts it. Anything else is denied at once; a scoped token never raises an approval card.
 Settings flags a token with 14 days or fewer left, and `privacyfence_status` tells the client its
 expiry. **Revoke** stops one token at once; **Revoke all** stops every one. Your own token and your
-other clients are not affected. See [Scoped tokens](security-and-compliance.md#scoped-tokens).
+other clients are not affected. A token cannot be edited: **Duplicate** fills the New token form
+from an existing token, with a numbered name, so you can create a replacement and revoke the old
+one. The form lists only the tools the selected rules cover, plus the tools that need no rule. See
+[Scoped tokens](security-and-compliance.md#scoped-tokens).
 
 ## Organization mode
 
@@ -101,7 +104,10 @@ named, expiring bearer token limited to chosen rules and tools, for a scheduled 
 in. The token is shown once, in a dialog with a Copy button; it is not stored and cannot be shown
 again. Pass it as the bearer token (`Authorization: Bearer pfst_…`) to `/mcp`. Its lifetime is 90
 days by default and at most the administrator's limit. Revoke it in the same page. It is
-[deny-only](security-and-compliance.md#scoped-tokens).
+[deny-only](security-and-compliance.md#scoped-tokens). A token cannot be edited: **Duplicate** fills
+the New token form from an existing token, with a numbered name, so you can create a replacement
+and revoke the old one. The form lists only the tools the selected rules cover, plus the tools that
+need no rule.
 
 Connect your services at `https://pf.example.com/connect`. Setting up the deployment itself is
 [Organization deployment](org-mode-setup-guide.md).
@@ -134,7 +140,8 @@ Two things can ask you before a tool runs:
    [Approvals and policy](approvals-and-policy.md).
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). There is no switch that
 advertises writes as read-only. If you would rather confirm only once, on PrivacyFence's card,
 always-allow PrivacyFence's tools in Claude Code: choose the option not to ask again the first

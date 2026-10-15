@@ -18,9 +18,9 @@ postures, chosen per call by whether the active ApprovalUI exposes a
   ``{"status": "approval_pending", "approval_id", "url", ...}`` result
   instead of continuing to block. The human interaction keeps
   running in the background; when it concludes, the outcome lands in
-  approvals.py's decision ledger, keyed by ``(connector, tool,
-  canonical(args))``. Claude re-issuing the identical tool call finds that
-  ledger entry (``_resolve_decision``'s consume_ledger() check, below,
+  approvals.py's decision ledger, keyed by the whole request and what its
+  card showed (approvals.binding_key, ADR 0175). Claude re-issuing the identical tool call finds
+  that ledger entry (``_resolve_decision``'s consume_ledger() check, below,
   which every call -- deferred or not -- makes first) and releases the data
   without a second prompt. There is still no tool that takes an
   ``approval_id`` and returns content: the only path to data is the
@@ -142,6 +142,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import dataclasses
 import functools
 import json
 import logging
@@ -154,7 +155,7 @@ from typing import Any, cast
 from .agent_identity import agent_scope
 from .approval_ui import get_approval_ui
 from .approval_window_html import NARROW, WIDE
-from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, canonical_key
+from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, binding_key, card_digest
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
     PERSONAL_DATA_RULE_TOOLS,
@@ -162,9 +163,10 @@ from .auto_accept import (
     ReviewContext,
     add_policy_v2_rules,
     add_rules_changed_listener,
-    get_policy_v2_rules,
+    get_policy_rows,
     get_policy_v2_store_rules,
     is_temp_accepted,
+    policy_row_ids_for,
     register_temp_accept,
     remove_policy_v2_rule,
     temp_accept_key,
@@ -174,7 +176,8 @@ from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
-from .scoped_tokens import ScopedToken, current_token_scope
+from .policy import scope_rows as policy_scope_rows
+from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_token_scope
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -715,23 +718,39 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
 def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]:
     """Every cached rule for an unscoped call; only the token's own rules under a scoped token
     (ADR 0164). A rule id the token keeps but the person has since removed or changed simply
-    matches nothing."""
+    matches nothing. A rule with a ``rule_limits`` entry keeps only the operations that entry lists
+    (so verbs added to a row later never widen the token), and is dropped when none are left."""
     rules = get_policy_v2_store_rules()
     if scope is None:
         return rules
-    return [rule for rule in rules if rule.id in scope.rule_ids]
+    scoped: list[policy_engine.PolicyRule] = []
+    for rule in rules:
+        if rule.id not in scope.rule_ids:
+            continue
+        limit = scope.rule_limits.get(rule.id)
+        if limit is not None:
+            operations = frozenset(op for op in rule.operations if (rule.predicate, op) in limit)
+            if not operations:
+                continue
+            rule = dataclasses.replace(rule, operations=operations)
+        scoped.append(rule)
+    return scoped
 
 
 def _personal_data_rule(
     tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
 ) -> policy_engine.PolicyRule | None:
-    """The stored rule with ``allow_personal_data`` that covers this call, for a tool in
-    ``PERSONAL_DATA_RULE_TOOLS`` only (ADR 0157); ``None`` for every other tool, when the result
-    carries the content itself (``content_reaches_result``), or when no such rule matches."""
+    """The token's own rule that covers this call, when the call is made with a scoped token
+    that has ``allow_personal_data`` (ADR 0173), for a tool in ``PERSONAL_DATA_RULE_TOOLS`` only
+    (ADR 0157); ``None`` for an unscoped call, a token without the flag, a revoked token, every
+    other tool, when the result carries the content itself (``content_reaches_result``), or when
+    no rule of the token matches."""
     if tool not in PERSONAL_DATA_RULE_TOOLS or content_reaches_result:
         return None
-    # Under a scoped token only the token's own rules count, flagged ones included (ADR 0164).
-    rules = [rule for rule in _rules_in_scope(current_token_scope()) if rule.allow_personal_data]
+    scope = current_token_scope()
+    if scope is None or scope is REVOKED_SCOPE or not scope.allow_personal_data:
+        return None
+    rules = _rules_in_scope(scope)
     if not rules:
         return None
     try:
@@ -840,6 +859,36 @@ class reason_scope:  # noqa: N801 (context-manager-style name, like `freeze_time
     def __exit__(self, *exc_info: object) -> None:
         if self._token is not None:
             _reason_ctx.reset(self._token)
+
+
+_request_args_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "privacyfence_request_args", default=None
+)
+
+
+def current_request_args() -> str | None:
+    """The canonical JSON of the agent's whole tool-call arguments, minus "reason", for the
+    call in progress; None outside McpDispatcher.call (a direct gated_call in a test or a
+    script)."""
+    return _request_args_ctx.get()
+
+
+class request_args_scope:  # noqa: N801 (context-manager-style name, like reason_scope)
+    """Run the wrapped code with the agent's whole request available via
+    current_request_args(). Frozen to a JSON string on entry, so a connector that mutates
+    its own ``args`` dict cannot change what the approval is bound to (ADR 0175)."""
+
+    def __init__(self, args: dict[str, Any]) -> None:
+        self._json = json.dumps(args, sort_keys=True, default=str)
+        self._token: contextvars.Token | None = None
+
+    def __enter__(self) -> "request_args_scope":
+        self._token = _request_args_ctx.set(self._json)
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._token is not None:
+            _request_args_ctx.reset(self._token)
 
 
 async def gated_call(
@@ -1053,12 +1102,23 @@ async def gated_call(
 
     # The deferred-protocol registry, if the active ApprovalUI has one (see
     # this module's own docstring) -- None for a registry-less ApprovalUI.
-    # dedupe_key mirrors mcp_dispatch.py's own retry-dedupe key shape (already
-    # retry-stable -- see approvals.canonical_key's docstring); computed
-    # unconditionally, cheaply, since both branches below need it whether or
-    # not a registry is active.
+    # ADR 0175: the connector's policy args leave out what is written (a Slack
+    # message's text, a draft's body) and what a read pages over, so the key also holds
+    # the agent's whole request and a digest of what the card showed. It hashes the
+    # details_text argument, never the derived `details`, whose fallback can differ
+    # between two identical calls. Computed unconditionally: both branches below need it.
     registry = _deferred_registry()
-    dedupe_key = canonical_key(connector, tool, args)
+    dedupe_key = binding_key(
+        connector, tool, request_args_json=current_request_args(), policy_args=args,
+        card=card_digest(
+            gate=gate, summary=summary, sender=sender, details_text=details_text,
+            scan_text="\x00".join(t or "" for t in (pii_scan_text, upload_pii_scan_text, write_content_scan_text)),
+            preview=preview, new_info=new_info, visibility=visibility,
+            preview_tables=preview_tables, preview_blocks=preview_blocks, table_only=table_only,
+            pdf_bytes=pdf_bytes, preview_bytes=preview_bytes, preview_mime_type=preview_mime_type,
+            delivery=delivery,
+        ),
+    )
     _pop_registry_expirations(registry)
 
     # Every exit from this function -- including one triggered by an
@@ -1467,13 +1527,14 @@ async def propose_policy_change(
     if operation not in ("add", "update", "remove"):
         raise ValueError(f"Unknown operation: {operation!r}")
 
-    existing_by_id = {rule.id: rule for rule in get_policy_v2_rules()}
+    existing_rows = get_policy_rows()
+    existing_by_id = {row.id: row for row in existing_rows}
 
     new_rules: list[policy_engine.PolicyRule] = []
     if operation == "remove":
         if rule_id not in existing_by_id:
             raise ValueError(f"Unknown rule id: {rule_id!r}. Call privacyfence_list_policy first.")
-        description = f"Remove auto-accept rule: {policy_describe.rule_sentence(existing_by_id[rule_id])}"
+        description = f"Remove auto-accept rule: {policy_describe.row_sentence(existing_by_id[rule_id])}"
     else:
         if operation == "update" and rule_id not in existing_by_id:
             raise ValueError(f"Unknown rule id: {rule_id!r}. Call privacyfence_list_policy first.")
@@ -1488,8 +1549,13 @@ async def propose_policy_change(
                 "which ones need a value."
             )
         verb = "Update" if operation == "update" else "Add"
+        base_rows = (
+            policy_scope_rows.remove_row(existing_rows, rule_id) if operation == "update" else existing_rows
+        )
+        landed_rows, landed_ids = policy_scope_rows.add_rules(base_rows, new_rules)
+        landed_by_id = {row.id: row for row in landed_rows}
         description = f"{verb} auto-accept rule: " + "; ".join(
-            policy_describe.rule_sentence(rule) for rule in new_rules
+            policy_describe.row_sentence(landed_by_id[row_id]) for row_id in landed_ids
         )
 
     created_at = time.time()
@@ -1533,9 +1599,10 @@ async def propose_policy_change(
         affected_ids = [rule_id]
     else:
         removed = remove_policy_v2_rule(rule_id) if operation == "update" else False
+        row_ids = policy_row_ids_for(new_rules)
         added = add_policy_v2_rules(new_rules)
         changed = removed or added
-        affected_ids = sorted({rule.id for rule in new_rules})
+        affected_ids = row_ids
 
     applied_decision = (
         "policy_rule_removed_via_bridge_proposal" if operation == "remove"
