@@ -1218,6 +1218,18 @@ class TestInstallerContract:
         assert deconfigure_case.group(1).strip() == ""
 
 
+def _write_setpriv_stub(bin_dir: Path) -> None:
+    """A ``setpriv`` that logs ``setpriv $*`` and runs what follows
+    ``--clear-groups`` as the current user."""
+    stub = bin_dir / "setpriv"
+    stub.write_text(
+        '#!/bin/sh\necho "setpriv $*" >> "$CALL_LOG"\n'
+        'while [ "$1" != "--clear-groups" ]; do shift; done\nshift\nexec "$@"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="runs the POSIX installers' own bash against a real unix socket")
 class TestApplyLayoutLeavesSocketsAlone:
     """ADR 0029: ``apply_layout()`` runs on every ``enable``, including the
@@ -1266,10 +1278,12 @@ class TestApplyLayoutLeavesSocketsAlone:
                 stub = bin_dir / tool
                 stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$CALL_LOG"\n', encoding="utf-8")
                 stub.chmod(0o755)
+            _write_setpriv_stub(bin_dir)
 
             script = "\n".join([
                 "set -euo pipefail",
                 "note() { :; }",
+                "warn() { :; }",
                 "move_handoff_files_in() { :; }",
                 f"SYSTEM_ROOT={shlex.quote(str(root))}",
                 "SERVICE_ACCOUNT=svc SERVICE_GROUP=grp HANDOFF_DIR_NAME=handoff",
@@ -1298,6 +1312,250 @@ class TestApplyLayoutLeavesSocketsAlone:
             listener.close()
             shutil.rmtree(root, ignore_errors=True)
 
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_handoff_subdirectories_are_removed_and_never_walked(self, platform, tmp_path):
+        # handoff/ is group-writable, so a directory planted in it must
+        # not be descended into by a root find that then chowns/chmods.
+        root = tmp_path / "root"
+        handoff = root / "handoff"
+        (handoff / "d").mkdir(parents=True)
+        planted = handoff / "d" / "f"
+        planted.write_text("x", encoding="utf-8")
+        token = handoff / "mcp_token"
+        token.write_text("token", encoding="utf-8")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        log = tmp_path / "calls.log"
+        for tool in ("chown", "chmod"):
+            stub = bin_dir / tool
+            stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$CALL_LOG"\n', encoding="utf-8")
+            stub.chmod(0o755)
+        _write_setpriv_stub(bin_dir)
+
+        script = "\n".join([
+            "set -euo pipefail",
+            "note() { :; }",
+            "warn() { :; }",
+            f"SYSTEM_ROOT={shlex.quote(str(root))}",
+            "SERVICE_ACCOUNT=svc SERVICE_GROUP=grp HANDOFF_DIR_NAME=handoff",
+            "SYSTEM_ROOT_MODE=711 AUTHORITY_DIR_MODE=700 HANDOFF_DIR_MODE=3770 HANDOFF_FILE_MODE=640",
+            self._function(platform, "apply_layout"),
+            "apply_layout",
+        ])
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "CALL_LOG": str(log)}
+        subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, timeout=30)
+
+        assert not (handoff / "d").exists()
+        lines = log.read_text(encoding="utf-8").splitlines()
+        assert not any(str(planted) in line or str(handoff / "d") in line for line in lines), lines
+        assert any(str(token) in line for line in lines if line.startswith("chmod")), lines
+        if platform == "linux":
+            setprivs = [line for line in lines if line.startswith("setpriv")]
+            assert len(setprivs) == 2, lines
+            assert all(line.startswith("setpriv --reuid=svc --regid=grp --clear-groups find ") for line in setprivs), setprivs
+        else:
+            chmods = [line for line in lines if line.startswith("chmod")]
+            assert chmods and all(line.startswith("chmod -h ") for line in chmods), chmods
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the Linux installer's own bash")
+class TestPkexecAllowList:
+    """Under pkexec (``PKEXEC_UID`` set) the Linux script accepts only the argument lists the
+    companion passes. ``--daemon-exec`` names a file the service account then runs, so it is never
+    one of them. Real bash, with ``id`` stubbed so no account needs to exist."""
+
+    POLICY = LINUX_TEMPLATE_DIR / "eu.privacyfence.daemon-control.policy"
+
+    def _check(self, args: list[str], *, pkexec_uid: str | None = "1000"):
+        array = " ".join(shlex.quote(arg) for arg in args)
+        script = "\n".join([
+            "set -uo pipefail",
+            "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }",
+            'id() { if [ "$1 $2" = "-nu 1000" ]; then echo alice; else return 1; fi; }',
+            TestApplyLayoutLeavesSocketsAlone._function("linux", "check_pkexec_arguments"),
+            f"ORIGINAL_ARGS=({array})",
+            "check_pkexec_arguments",
+        ])
+        env = {k: v for k, v in os.environ.items() if k != "PKEXEC_UID"}
+        if pkexec_uid is not None:
+            env["PKEXEC_UID"] = pkexec_uid
+        return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["enable", "--daemon-exec", "/tmp/x"],
+            ["enable", "--auto", "--daemon-exec", "/tmp/x"],
+            ["uninstall", "--purge"],
+            ["uninstall"],
+            ["enable", "--user", "bob"],
+            ["enable", "--machine-only"],
+            ["enable", "--for-user", "bob"],
+        ],
+    )
+    def test_refuses_lists_the_companion_never_passes(self, args):
+        result = self._check(args)
+        assert result.returncode == 1, result
+        assert "not allowed via pkexec" in result.stderr
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["daemon", "status"],
+            ["daemon", "restart"],
+            ["daemon", "ensure-running"],
+            ["enable", "--auto"],
+            ["enable", "--for-user", "alice"],
+        ],
+    )
+    def test_accepts_the_companions_lists(self, args):
+        result = self._check(args)
+        assert result.returncode == 0, result
+
+    def test_without_pkexec_nothing_is_restricted(self):
+        result = self._check(["enable", "--daemon-exec", "/tmp/x"], pkexec_uid=None)
+        assert result.returncode == 0, result
+
+    def test_the_whole_script_refuses_before_doing_anything(self):
+        env = {**os.environ, "PKEXEC_UID": "1000"}
+        result = subprocess.run(
+            ["bash", str(INSTALLERS["linux"]), "enable", "--daemon-exec", "/tmp/x"],
+            env=env, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 1, result
+        assert "not allowed via pkexec" in result.stderr
+
+    def test_the_policy_has_one_action_per_first_argument(self):
+        import xml.etree.ElementTree as ET
+
+        actions = ET.parse(self.POLICY).getroot().findall("action")
+        assert len(actions) == 2
+        by_argv1 = {}
+        for action in actions:
+            annotations = {a.get("key"): a.text for a in action.findall("annotate")}
+            assert annotations["org.freedesktop.policykit.exec.path"] == "/usr/sbin/privacyfence-privilege-separation"
+            by_argv1[annotations["org.freedesktop.policykit.exec.argv1"]] = action.findtext("message")
+        assert by_argv1 == {
+            "daemon": "Authentication is required to start, stop or restart PrivacyFence's background service",
+            "enable": "Authentication is required to set up PrivacyFence's background service for your account",
+        }
+
+
+class _StubbedStat:
+    """A ``stat`` on ``PATH`` that prints a table-chosen answer, branching on
+    its last argument (the path): ``table`` maps a path to the output, and
+    anything else gets ``default``."""
+
+    def __init__(self, tmp_path: Path, table: dict[str, str], default: str):
+        self.bin_dir = tmp_path / "statbin"
+        self.bin_dir.mkdir()
+        lines = "\n".join(f'    "{path}") printf "%s\\n" "{out}" ;;' for path, out in table.items())
+        stub = self.bin_dir / "stat"
+        stub.write_text(
+            '#!/bin/bash\nfor last; do :; done\nfmt=""; [ "$1" = "-f" ] && fmt="$2"\n'
+            f'case "$last" in\n{lines}\n    *) printf "%s\\n" "{default}" ;;\nesac\n',
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+
+    def env(self) -> dict[str, str]:
+        return {**os.environ, "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def _executable(path: Path, content: str = "#!/bin/sh\n") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="runs the Linux installer's own bash, which needs GNU realpath -s and stat -c",
+)
+class TestLinuxDaemonImageMustBeRootOwned:
+    """The service account runs ``--daemon-exec``, so a file or any
+    directory above it that a non-root account can write is a way to run code
+    as that account. Real bash functions, with ``stat`` stubbed (the
+    ownership of a temp tree cannot be chosen without root)."""
+
+    FUNCTIONS = (
+        "_check_image_entry", "_walk_image_path", "require_root_owned_image", "resolve_executables",
+    )
+
+    def _script(self, *body: str) -> str:
+        fns = [TestApplyLayoutLeavesSocketsAlone._function("linux", name) for name in self.FUNCTIONS]
+        return "\n".join(["set -uo pipefail", "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }", *fns, *body])
+
+    def _enable(self, tmp_path, daemon: Path, table: dict[str, str]):
+        companion = _executable(tmp_path / "companion")
+        stat_stub = _StubbedStat(tmp_path, table, default="0 755")
+        script = self._script(
+            f"DAEMON_EXECUTABLE={shlex.quote(str(daemon))}",
+            f"COMPANION_EXECUTABLE={shlex.quote(str(companion))}",
+            "DEFAULT_DAEMON_EXECUTABLE=/nonexistent DEFAULT_COMPANION_EXECUTABLE=/nonexistent",
+            "resolve_executables",
+            'echo "resolved=$DAEMON_EXECUTABLE"',
+        )
+        return subprocess.run(["bash", "-c", script], env=stat_stub.env(), capture_output=True, text=True, timeout=30)
+
+    def test_linux_enable_refuses_user_owned_daemon_exec(self, tmp_path):
+        daemon = _executable(tmp_path / "app")
+        result = self._enable(tmp_path, daemon, {str(daemon): "1000 755"})
+        assert result.returncode == 1, result
+        assert "owned by uid 1000" in result.stderr
+
+    def test_group_writable_daemon_exec_is_refused(self, tmp_path):
+        daemon = _executable(tmp_path / "app")
+        result = self._enable(tmp_path, daemon, {str(daemon): "0 775"})
+        assert result.returncode == 1, result
+        assert "writable by group or others" in result.stderr
+
+    def test_a_root_owned_link_to_a_user_owned_file_is_refused(self, tmp_path):
+        target = _executable(tmp_path / "real")
+        link = tmp_path / "link"
+        link.symlink_to(target)
+        result = self._enable(tmp_path, link, {str(link): "0 777", str(target): "1000 755"})
+        assert result.returncode == 1, result
+        assert "owned by uid 1000" in result.stderr
+        assert str(target) in result.stderr
+
+    def test_a_root_owned_link_to_a_root_owned_file_passes(self, tmp_path):
+        target = _executable(tmp_path / "real")
+        link = tmp_path / "link"
+        link.symlink_to(target)
+        result = self._enable(tmp_path, link, {str(link): "0 777"})
+        assert result.returncode == 0, result
+        assert f"resolved={target}" in result.stdout
+
+    def test_a_script_daemon_exec_checks_its_interpreter(self, tmp_path):
+        interpreter = _executable(tmp_path / "venv" / "bin" / "python", "")
+        daemon = _executable(tmp_path / "app", f"#!{interpreter}\nprint(1)\n")
+        result = self._enable(tmp_path, daemon, {str(interpreter): "1000 755"})
+        assert result.returncode == 1, result
+        assert "owned by uid 1000" in result.stderr
+        assert "--daemon-exec interpreter" in result.stderr
+
+    @pytest.mark.skipif(
+        getattr(os, "geteuid", lambda: -1)() != 0,
+        reason="real system paths are root-owned only when the test runs as root's view of them; CI runners differ",
+    )
+    @pytest.mark.parametrize("path", ["/bin/sh", "/usr/bin/python3"])
+    def test_real_system_paths_pass(self, path):
+        if not Path(path).exists():
+            pytest.skip(f"{path} is not installed here")
+        script = self._script(f"require_root_owned_image {path} x")
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result
+        assert result.stdout.strip() == os.path.realpath(path)
+
+    def test_a_relative_path_terminates(self, tmp_path):
+        _executable(tmp_path / "x")
+        script = self._script("require_root_owned_image ./x x")
+        result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=5)
+        assert result.returncode in (0, 1), result
+
 
 @pytest.mark.skipif(sys.platform == "win32", reason="runs the macOS installer's own bash against a real unix socket")
 class TestMacosScriptHelpers:
@@ -1308,6 +1566,43 @@ class TestMacosScriptHelpers:
     ``uninstall [--purge]`` (ADR 0042) keeping or deleting the data."""
 
     _function = staticmethod(TestApplyLayoutLeavesSocketsAlone._function)
+
+    def test_macos_staging_checks_a_script_images_interpreter(self, tmp_path):
+        # Staging copies a --daemon-exec script into the root-owned image dir,
+        # but the interpreter it names stays where it was: it must be trusted too.
+        interpreter = _executable(tmp_path / "venv" / "bin" / "python", "")
+        daemon = _executable(tmp_path / "src" / "app", f"#!{interpreter}\nprint(1)\n")
+        companion = _executable(tmp_path / "src" / "companion")
+        image_dir = tmp_path / "Library" / "PrivacyFence" / "image"
+        stat_stub = _StubbedStat(tmp_path, {str(interpreter): "alice|wheel|755"}, default="root|wheel|755")
+        # macOS `stat -f '%Su' / '%Sg' / '%OLp'`: answer by format.
+        stub = stat_stub.bin_dir / "stat"
+        stub.write_text(
+            '#!/bin/bash\nfor last; do :; done\nIFS="|" read -r u g m <<<"root|wheel|755"\n'
+            f'[ "$last" = {shlex.quote(str(interpreter))} ] && u=alice\n'
+            'case "$2" in %Su) echo "$u" ;; %Sg) echo "$g" ;; %OLp) echo "$m" ;; esac\n',
+            encoding="utf-8",
+        )
+        for tool in ("chown", "chmod"):
+            noop = stat_stub.bin_dir / tool
+            noop.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            noop.chmod(0o755)
+        script = "\n".join([
+            "set -uo pipefail",
+            "note() { :; }",
+            "warn() { echo \"warning: $*\" >&2; }",
+            "die() { echo \"error: $*\" >&2; exit 1; }",
+            "TRUSTED_IMAGE_GROUP=wheel SERVICE_ACCOUNT=_privacyfence APP_PATH=",
+            f"TRUSTED_IMAGE_DIR={shlex.quote(str(image_dir))}",
+            f"DAEMON_EXECUTABLE={shlex.quote(str(daemon))}",
+            f"COMPANION_EXECUTABLE={shlex.quote(str(companion))}",
+            self._function("darwin", "require_trusted_image"),
+            self._function("darwin", "stage_trusted_image"),
+            "stage_trusted_image",
+        ])
+        result = subprocess.run(["bash", "-c", script], env=stat_stub.env(), capture_output=True, text=True, timeout=30)
+        assert result.returncode == 1, result
+        assert f"{interpreter} is owned by 'alice', not root" in result.stderr
 
     def _run_uninstall(self, tmp_path, *, purge: bool, receipt: bool):
         """Runs the real ``cmd_uninstall``/``uninstall_services``/
@@ -3080,6 +3375,40 @@ class TestEnableSplitContract:
 
         assert 'CONSOLE_USER=""' in postinstall
         assert '"$SEPARATION_SCRIPT" enable --auto --app "$APP_PATH"' in postinstall
+
+    @staticmethod
+    def _postinstall_text() -> str:
+        return (REPO_ROOT / "installer" / "macos" / "pkg" / "postinstall").read_text(
+            encoding="utf-8"
+        )
+
+    def test_postinstall_runs_the_copy_beside_it_with_a_fixed_find(self):
+        postinstall = self._postinstall_text()
+
+        assert re.search(
+            r'^SEPARATION_SCRIPT="\$\(cd "\$\(dirname "\$0"\)" && pwd\)/scripts/macos_privilege_separation\.sh"$',
+            postinstall,
+            re.MULTILINE,
+        )
+        assert re.search(r"^FIND=/usr/bin/find$", postinstall, re.MULTILINE)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash function")
+    @pytest.mark.parametrize(("stub_output", "expected_ok"), [("/Applications/x", False), ("", True)])
+    def test_postinstall_skips_a_bundle_not_owned_by_root(self, tmp_path, stub_output, expected_ok):
+        match = re.search(
+            r"^bundle_is_root_owned\(\) \{.*\}$", self._postinstall_text(), re.MULTILINE
+        )
+        assert match is not None
+        find = tmp_path / "find"
+        find.write_text(f"#!/bin/sh\nprintf '%s' '{stub_output}'\n", encoding="utf-8")
+        find.chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", "-c", f'FIND={shlex.quote(str(find))}\nAPP_PATH=/x\n{match.group(0)}\nbundle_is_root_owned'],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+
+        assert (result.returncode == 0) is expected_ok
 
 
 class TestForUserKeepsTheRecordedOwner:

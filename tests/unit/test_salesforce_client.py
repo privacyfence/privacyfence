@@ -1358,3 +1358,13 @@ class TestLiveFixtureParsing:
 
         assert reports, "recorded list_reports.json has no records"
         assert all(r.id and r.name for r in reports)
+
+    def test_run_report_page_fixture_still_parses(self):
+        raw = self._load("run_report_page.json")
+        sf = MagicMock()
+        sf.restful.side_effect = [{"reportMetadata": raw["reportMetadata"]}, raw]
+        client = with_fake_sf(make_client(), sf)
+
+        page = client.run_report_page(REPORT_ID, raw["reportMetadata"]["detailColumns"][0])
+
+        assert page.keys and page.all_data is True

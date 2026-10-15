@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("cryptography")
 
 from privacyfence import org_bundle_signing
 from privacyfence.step_up_config import STEP_UP_SCOPES, StepUpConfig

@@ -132,6 +132,12 @@ def test_pkg_contains_postinstall_and_app_payload(expanded_pkg):
             f"{postinstall} doesn't call macos_privilege_separation.sh -- wrong script bundled?"
         )
         assert "enable --auto" in contents, f"{postinstall} doesn't auto-enable privilege separation: {contents}"
+        assert 'dirname "$0"' in contents, f"{postinstall} doesn't run the script shipped beside it"
+        scripts_dir = postinstall.parent
+        shipped = scripts_dir / "scripts" / "macos_privilege_separation.sh"
+        assert shipped.is_file() and shipped.stat().st_mode & 0o111, f"{shipped} missing or not executable"
+        template = scripts_dir / "installer" / "macos" / "com.privacyfence.daemon.plist.tmpl"
+        assert template.is_file(), f"{template} missing from the package scripts"
 
     app_bundles = list(expanded_pkg.glob("**/Payload/PrivacyFenceApp.app"))
     assert app_bundles, f"no PrivacyFenceApp.app found in any component's Payload under expanded {pkg_path.name}"

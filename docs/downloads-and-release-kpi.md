@@ -11,7 +11,7 @@ What a tag triggers, the channel scheme and the release checklist are in
 ## How a release reaches a user
 
 ```
-git tag vX.Y.Z  ──►  build.yml / publish-pypi.yml
+release.yml (tag vX.Y.Z)  ──►  build.yml / publish-pypi.yml
                           │
                           ├──► private Cloudflare R2: releases/<channel>/<version>/...
                           │         │

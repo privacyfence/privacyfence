@@ -45,6 +45,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **macOS: the installer runs its own copy of the setup script and skips setup when the app bundle is not owned by root.**
+- **Linux: separating an install refuses a daemon program that a non-root account can modify, and the password prompt now names what it is for and only ever starts, stops or restarts the service or sets it up for your account.** `--daemon-exec` must be root-owned along its whole path, e.g. `/opt/privacyfence/venv/bin/privacyfence-app`; paths containing `&`, `|` or `\` also render correctly in the installed service file.
 - **An approval now covers exactly the request and content the card showed.** A repeated call with any different argument, or whose content changed, gets a new card, so an approved message can no longer be swapped for another one.
 - **`trusted_sender_domain`, `approved_recipient_domain` and `to_is_myself` rules read the real email address**, so a display name such as `"CEO <ceo@trusted.com>" <attacker@evil.com>` no longer matches.
 - **`verify_audit_log.py` now reports a forged line placed after chained entries, a removed week, and entries cut from the end of the log** (unless the chain-state file was edited too).
@@ -54,8 +56,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Hostile client names and connector values can no longer break the Settings page or the approval card's markup.**
 - **On a computer shared by several people, the live Settings updates go only to the owner, and the sign-in link no longer redirects to other sites.**
 - **Large or malformed Excel attachments are refused before they are read.**
+- **Raised minimum versions of `pypdf`, `PyJWT` and `urllib3` for `pip install privacyfence`, to releases without known advisories.** `cryptography` and `certifi` minimums are raised too.
 - **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
 - **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
+- **Claude Desktop extension: it now connects only to a PrivacyFence on this computer whose files belong to PrivacyFence's own service account.** On a separated install the daemon removes a control socket another account left in the shared folder instead of running without one.
 
 ### Fixed
 

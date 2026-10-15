@@ -65,7 +65,7 @@
     "issuetype": {
       "avatarId": 10318,
       "description": "A small, distinct piece of work.",
-      "entityId": "4633c0de-4f6f-472d-98f8-2eb4361d642f",
+      "entityId": "qa-placeholder-entity-id",
       "hierarchyLevel": 0,
       "iconUrl": "https://example.com/qa-placeholder",
       "id": "qa-placeholder-id-3",

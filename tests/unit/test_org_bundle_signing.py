@@ -11,8 +11,6 @@ import sys
 
 import pytest
 
-pytest.importorskip("cryptography")
-
 from privacyfence import org_bundle_signing as obs
 
 

@@ -5,6 +5,7 @@ import dataclasses
 import json
 from pathlib import Path
 
+import openpyxl
 import pytest
 from freezegun import freeze_time
 
@@ -232,7 +233,6 @@ class TestExportWeekToExcel:
         assert logger.export_week_to_excel("2026-W28") is None
 
     def test_export_produces_workbook_with_expected_content(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(
@@ -281,7 +281,6 @@ class TestExportWeekToExcel:
         assert summary_rows["IBAN (bank account number)"] == 1
 
     def test_a_scoped_token_denial_gets_the_unattended_fill_and_its_own_summary_row(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="denied_unattended"))
@@ -304,8 +303,6 @@ class TestExportWeekToExcel:
         )
 
     def test_export_omits_category_breakdown_when_no_entry_has_categories(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="approved"))
@@ -317,7 +314,6 @@ class TestExportWeekToExcel:
         assert "By PII category (refinement trial)" not in labels
 
     def test_export_skips_malformed_lines(self, tmp_path):
-        pytest.importorskip("openpyxl")
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry())
         week_file = tmp_path / "2026-W28.jsonl"
@@ -329,7 +325,6 @@ class TestExportWeekToExcel:
         assert output is not None
 
     def test_export_empty_file_returns_none(self, tmp_path):
-        pytest.importorskip("openpyxl")
         logger = AuditLogger(str(tmp_path))
         week_file = tmp_path / "2026-W28.jsonl"
         week_file.write_text("", encoding="utf-8")
@@ -498,7 +493,6 @@ class TestRuleUsage:
 
 class TestExportAllPending:
     def test_exports_only_weeks_missing_xlsx(self, tmp_path):
-        pytest.importorskip("openpyxl")
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(week="2026-W01"))
         logger.record(make_entry(week="2026-W02"))
@@ -975,8 +969,6 @@ class TestForwarding:
 
 class TestExportIncludesIntegrityColumns:
     def test_new_columns_present_with_expected_values(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path), deployment_id="dep-1", security_config_hash="cfg-1")
         entry = make_entry()
@@ -995,8 +987,6 @@ class TestExportIncludesIntegrityColumns:
 
 class TestExportIncludesBinderColumns:
     def test_decided_via_and_batch_id_present_with_expected_values(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path))
         entry = make_entry(decided_via="binder", batch_id="batch-123")
@@ -1013,8 +1003,6 @@ class TestExportIncludesBinderColumns:
         assert row == ["binder", "batch-123"]
 
     def test_batch_id_formula_injection_is_neutralised(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path))
         entry = make_entry(decided_via="binder", batch_id="=WEBSERVICE(\"evil\")")
@@ -1116,7 +1104,6 @@ class TestAgentFields:
         assert logger.verify_chain("2026-W28").ok is False
 
     def test_excel_export_appends_agent_columns(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
         from privacyfence.agent_identity import AgentSource, agent_scope, identify
 
         logger = AuditLogger(str(tmp_path))
@@ -1195,7 +1182,6 @@ class TestDenyFeedbackFields:
         assert logger.verify_chain("2026-W28").ok is False
 
     def test_excel_export_appends_deny_columns(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="rejected", deny_intent="rewrite", deny_note_chars=42))
@@ -1237,7 +1223,6 @@ class TestApprovalLinkageFields:
         assert entry.expired_decision == ""
 
     def test_excel_export_appends_request_id_and_expired_decision(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(request_id="req-1", decision="expired", expired_decision="approved"))

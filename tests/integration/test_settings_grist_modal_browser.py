@@ -17,6 +17,8 @@ from privacyfence.settings_window_html import build_html  # noqa: E402
 from tests.unit.test_settings_window_html import _make_state  # noqa: E402
 from tests.website_site import chromium_launch_kwargs  # noqa: E402
 
+pytestmark = pytest.mark.browser
+
 KEY = '[data-grist-field="api_key"]'
 URL = '[data-grist-field="server_url"]'
 

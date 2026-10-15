@@ -124,15 +124,15 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0016](0016-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive) |
 | [0017](0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive); amended by 0092 |
 | [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive); amended by 0039, 0044 |
-| [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive) |
+| [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive); amended by 0181 |
 | [0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md) | PyPI/TestPyPI publishing uses OIDC Trusted Publisher only | Accepted (retroactive) |
-| [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive) |
+| [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive); amended by 0185 |
 | [0022](0022-one-release-tag-per-commit.md) | One release tag per commit; a stuck release is fixed forward | Accepted (retroactive) |
 | [0023](0023-changelog-is-the-only-source-of-release-notes.md) | `CHANGELOG.md` is the only source of stable release notes, and rendering fails loudly | Accepted (retroactive) |
 | [0024](0024-pre-releases-are-publicly-downloadable.md) | Pre-releases are publicly downloadable through the download Worker | Accepted (retroactive) |
 | [0025](0025-no-certified-security-framework.md) | No certified security framework (ISO 27001/BCP/SLA): a risk-acceptance posture | Accepted (retroactive) |
 | [0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md) | The companion manages the daemon through the platform's service manager, one elevation prompt per action | Accepted |
-| [0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) | A service-group member cannot take over another member's companion socket | Accepted; amended by 0029 |
+| [0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) | A service-group member cannot take over another member's companion socket | Accepted; amended by 0029, 0187 |
 | [0028](0028-clients-without-the-shim-get-capability-urls.md) | Clients without the shim move files through single-use capability URLs | Accepted |
 | [0029](0029-the-layout-step-never-re-owns-a-socket.md) | The installers' layout step never re-owns a socket | Accepted |
 | [0030](0030-preflight-dispatches-build-yml-before-tagging.md) | Cutting a release first dispatches `build.yml` on the untagged commit | Accepted |
@@ -268,3 +268,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0178](0178-a-sign-in-or-connect-flow-is-finished-in-the-session-that-started-it.md) | A sign-in or connect flow is finished in the session that started it | Accepted |
 | [0179](0179-an-idp-step-up-starts-only-from-the-card-by-post.md) | An IdP step-up starts only from the card, by POST | Accepted |
 | [0180](0180-jira-and-salesforce-csv-exports-neutralise-formula-cells.md) | Jira and Salesforce CSV exports neutralise formula cells | Accepted; amends 0155 |
+| [0181](0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md) | The QA runner is reachable only from `main`'s two QA workflows, and its jobs hold read-only tokens | Accepted; amends 0019 |
+| [0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md) | Every tool a release or QA-runner job installs comes from a hash-pinned lock or an exact npm pin | Accepted; extends 0085 |
+| [0183](0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md) | Under pkexec the privilege-separation script accepts only the companion's own requests | Accepted |
+| [0184](0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md) | The macOS pkg runs its own copy of the privilege-separation script, and only over a root-owned app bundle | Accepted |
+| [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Accepted; amends 0021 |
+| [0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md) | The `.mcpb` shim trusts only handoff entries the service account owns; the daemon replaces a foreign control socket | Accepted; amends 0027 |

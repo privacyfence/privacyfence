@@ -203,9 +203,6 @@ if not os.environ.get("PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS"):
         allow_module_level=True,
     )
 
-mcp_client = pytest.importorskip(
-    "mcp", reason="mcp (Python MCP client) not installed -- pip install -e '.[test]'"
-)
 import httpx2  # noqa: E402
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
@@ -226,7 +223,7 @@ from tests.packaged_policy_probe import (  # noqa: E402
 # MCP/approval/audit scenario, just against a real Ubuntu org-mode service
 # instead of local mode. Also what tests/diagnostics.py's own CI-diagnostics
 # capture keys off of.
-pytestmark = [pytest.mark.system, pytest.mark.timeout(300)]
+pytestmark = [pytest.mark.system, pytest.mark.packaged, pytest.mark.timeout(300)]
 
 ISSUER_HOST = "pf.example.internal"
 ISSUER_URL = f"https://{ISSUER_HOST}"

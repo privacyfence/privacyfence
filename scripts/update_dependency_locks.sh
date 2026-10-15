@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate requirements/*.lock.txt from pyproject.toml -- see
+# Regenerate requirements/*.lock.txt from pyproject.toml and requirements/release.in -- see
 # requirements/README.md for what these two files are and why they're
 # hash-locked.
 #
@@ -80,10 +80,20 @@ uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate
   --output-file=requirements/runtime.lock.txt \
   pyproject.toml
 
+# dev.lock.txt: the dev/test/lint extras plus requirements/release.in (the release tooling), in one
+# resolution, constrained by the runtime lock compiled just above (`-c`) so every package the two
+# share gets the runtime lock's pin -- installing dev.lock.txt after runtime.lock.txt changes
+# nothing the runtime lock pinned. Keep the runtime compile first.
 uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
   --extra dev --extra test --extra lint \
+  -c requirements/runtime.lock.txt \
   --output-file=requirements/dev.lock.txt \
-  pyproject.toml
+  pyproject.toml requirements/release.in
+
+# release.lock.txt: the release tooling alone, for the steps that need only the tools.
+uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
+  --output-file=requirements/release.lock.txt \
+  requirements/release.in
 
 # docs.lock.txt holds the `docs` extra and nothing else -- not the package's runtime dependencies,
 # which the website build never installs (see requirements/README.md). `uv pip compile
@@ -93,4 +103,4 @@ python3 -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", 
   | uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
     --output-file=requirements/docs.lock.txt -
 
-echo "Regenerated requirements/runtime.lock.txt, requirements/dev.lock.txt and requirements/docs.lock.txt."
+echo "Regenerated requirements/runtime.lock.txt, dev.lock.txt, release.lock.txt and docs.lock.txt."

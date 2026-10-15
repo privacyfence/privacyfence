@@ -8,6 +8,8 @@ Implemented: `.github/workflows/connector-live-check.yml` (`93697e93`, 2026-09-1
 `.github/workflows/qa-record-fixture.yml` both run on the runner. The plan's choice of an
 `--ephemeral` runner registration was reversed in `214a4b6d` (2026-09-11); see Decision.
 
+Amended by [ADR 0181](0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md): an organization runner group now enforces Decision 2, and the recording workflow is dispatched on `main`.
+
 ## Context
 
 Every pull request is tested against recorded connector fixtures with no credentials at all. That

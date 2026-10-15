@@ -104,8 +104,6 @@ from typing import Callable
 
 import pytest
 
-pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
-
 from privacyfence import privilege_separation  # noqa: E402
 from privacyfence.privilege_separation import (  # noqa: E402
     HANDOFF_DIR_NAME,
