@@ -59,6 +59,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -1076,7 +1077,62 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     return results
 
 
-# Registered in CONNECTOR_CHECKS / EXPECTED_FIXTURES once its live fixtures are recorded.
+# Jira Assets ids are digit strings that the client joins on (an attribute value's
+# objectTypeAttributeId finds its definition) and validates (_check_id accepts digits only).
+# deidentify_structural_fields() would turn `id` into a non-digit placeholder and leave the same
+# id under the other keys, breaking both; Assets payloads also carry UUIDs (workspaceId, globalId,
+# URLs). check_assets therefore uses _deidentify_assets for all three of its recorded payloads.
+_ASSETS_ID_KEYS = frozenset({
+    "id", "objecttypeattributeid", "objectschemaid", "objecttypeid", "parentobjecttypeid", "objectid",
+})
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_REDACTED_UUID = "qa-placeholder-uuid"
+
+
+def _numeric_assets_ids(raw: Any) -> tuple[Any, dict[str, str]]:
+    """Rewrite every Assets id value to consecutive digit strings ("1", "2", ...) in order of
+    first appearance, the same real id getting the same digits under every id key. Returns the
+    payload and the identity map of the digits issued (pass it to deidentify_structural_fields
+    as ``_id_map`` so those digits survive that pass)."""
+    issued: dict[str, str] = {}
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            for k, v in value.items():
+                if k.lower() in _ASSETS_ID_KEYS and isinstance(v, (str, int)) and not isinstance(v, bool) and v != "":
+                    real = str(v)
+                    if real not in issued:
+                        issued[real] = str(len(issued) + 1)
+                    out[k] = issued[real]
+                else:
+                    out[k] = walk(v)
+            return out
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    numbered = walk(raw)
+    return numbered, {digits: digits for digits in issued.values()}
+
+
+def _redact_assets_identifiers(raw: Any) -> Any:
+    """Replace every UUID inside any string value with a non-UUID-shaped placeholder."""
+    if isinstance(raw, dict):
+        return {k: _redact_assets_identifiers(v) for k, v in raw.items()}
+    if isinstance(raw, list):
+        return [_redact_assets_identifiers(v) for v in raw]
+    if isinstance(raw, str):
+        return _UUID_RE.sub(_REDACTED_UUID, raw)
+    return raw
+
+
+def _deidentify_assets(raw: Any) -> Any:
+    numbered, id_map = _numeric_assets_ids(redact(raw))
+    # The UUID scrub runs last: before the id map it would collapse distinct UUID-valued ids.
+    return _redact_assets_identifiers(deidentify_structural_fields(numbered, id_map))
+
+
 def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("assets") or {}
     schema_key = cfg.get("schema_key", "PFQA")
@@ -1104,7 +1160,7 @@ def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         raw = None
         if record and ok and isinstance(cap.captured, dict):
             kept = [v for v in cap.captured.get("values") or [] if v.get("objectSchemaKey") == schema_key]
-            raw = deidentify_structural_fields(redact({**cap.captured, "values": kept}))
+            raw = _deidentify_assets({**cap.captured, "values": kept})
         results.append(CheckResult("assets", "list_schemas", schema_key, ok, note, raw, "list_schemas.json"))
     except AssetsClientError as exc:
         results.append(CheckResult("assets", "list_schemas", schema_key, False, str(exc)))
@@ -1133,7 +1189,7 @@ def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
             note = "id, key, label, type all present"
         raw = None
         if record and ok and len(cap.calls) >= 2:
-            raw = deidentify_structural_fields(redact({"object": cap.calls[0], "attributes": cap.calls[1]}))
+            raw = _deidentify_assets({"object": cap.calls[0], "attributes": cap.calls[1]})
         results.append(CheckResult("assets", "get_object", seed_object_label, ok, note, raw, "get_object.json"))
     except AssetsClientError as exc:
         results.append(CheckResult("assets", "get_object", seed_object_label, False, str(exc)))
@@ -1151,7 +1207,7 @@ def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
             note = f"object(s) {untagged} do not carry {QATEST_TAG} -- refusing to record"
         else:
             note = f"{len(objects)} object(s), all tagged {QATEST_TAG}"
-        raw = deidentify_structural_fields(redact(cap.captured)) if (record and ok and cap.captured) else None
+        raw = _deidentify_assets(cap.captured) if (record and ok and cap.captured) else None
         results.append(CheckResult("assets", "aql_search", aql, ok, note, raw, "aql_search.json"))
     except AssetsClientError as exc:
         results.append(CheckResult("assets", "aql_search", aql, False, str(exc)))
@@ -2121,6 +2177,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
     "slack": check_slack,
     "telegram": check_telegram,
     "peek": check_peek,
+    "assets": check_assets,
 }
 
 # Static manifest of the tests/fixtures/live/<connector>/*.json file(s) each
@@ -2149,6 +2206,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "slack": ("get_thread_replies.json",),
     "telegram": ("get_messages.json",),
     "peek": ("list_pages.json", "get_comments.json"),
+    "assets": ("list_schemas.json", "get_object.json", "aql_search.json"),
 }
 
 # In-module consistency check, not just the deferred one in

@@ -894,6 +894,57 @@ class _FakeAssetsClient:
         return self._obj(object_id, self._label)
 
 
+class TestDeidentifyAssets:
+    UUID_A = "0f3c9a52-7d1e-4b6a-9c20-1a2b3c4d5e6f"
+    UUID_B = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+
+    def test_same_id_under_id_and_attribute_id_gets_the_same_digits(self):
+        raw = {"objectTypeAttributes": [{"id": "4711"}],
+               "values": [{"attributes": [{"objectTypeAttributeId": "4711"}]}]}
+        out = recorder._deidentify_assets(raw)
+        assert out["objectTypeAttributes"][0]["id"] == "1"
+        assert out["values"][0]["attributes"][0]["objectTypeAttributeId"] == "1"
+
+    def test_different_ids_get_consecutive_digits(self):
+        out = recorder._deidentify_assets({"id": "4711", "objectType": {"id": "99", "objectSchemaId": "4711"}})
+        assert out["id"] == "1"
+        assert out["objectType"] == {"id": "2", "objectSchemaId": "1"}
+
+    def test_integer_ids_are_numbered_too(self):
+        numbered, id_map = recorder._numeric_assets_ids({"id": 4711, "parentObjectTypeId": "4711", "x": {"ID": 8}})
+        assert numbered == {"id": "1", "parentObjectTypeId": "1", "x": {"ID": "2"}}
+        assert id_map == {"1": "1", "2": "2"}
+
+    def test_empty_and_bool_values_are_left_alone(self):
+        numbered, id_map = recorder._numeric_assets_ids({"id": "", "objectId": True})
+        assert numbered == {"id": "", "objectId": True}
+        assert id_map == {}
+
+    def test_uuids_in_nested_strings_and_lists_are_scrubbed(self):
+        raw = {"workspaceId": self.UUID_A,
+               "link": {"href": f"https://x/{self.UUID_B}/object/1?w={self.UUID_A}"},
+               "tags": [self.UUID_B, "plain"]}
+        out = recorder._deidentify_assets(raw)
+        assert not recorder._UUID_RE.search(json.dumps(out))
+        assert out["tags"] == ["qa-placeholder-uuid", "plain"]
+        assert out["workspaceId"] == "qa-placeholder-uuid"
+
+    def test_uuid_valued_ids_stay_distinct_until_the_scrub(self):
+        out = recorder._deidentify_assets({"a": {"id": self.UUID_A}, "b": {"id": self.UUID_B}})
+        assert out["a"]["id"] == "1" and out["b"]["id"] == "2"
+
+    def test_object_key_and_label_are_unchanged(self):
+        out = recorder._deidentify_assets({"objectKey": "PFQA-7", "label": "Seed contract [QATEST]"})
+        assert out == {"objectKey": "PFQA-7", "label": "Seed contract [QATEST]"}
+
+    def test_account_id_is_redacted(self):
+        out = recorder._deidentify_assets({"user": {"accountId": "712020:abc"}})
+        assert out["user"]["accountId"] == "qa-placeholder-account-id"
+
+    def test_placeholder_is_not_uuid_shaped(self):
+        assert not recorder._UUID_RE.search(recorder._REDACTED_UUID)
+
+
 class TestCheckAssets:
     def _run(self, monkeypatch, client, record=True, cfg=None):
         monkeypatch.setattr(recorder, "_build_assets_client", lambda: client)
@@ -992,9 +1043,9 @@ class TestCheckAssets:
         results = self._run(monkeypatch, NoWorkspace())
         assert len(results) == 1 and "no Assets workspace" in results[0].note
 
-    def test_not_registered_yet(self):
-        assert "assets" not in recorder.CONNECTOR_CHECKS
-        assert "assets" not in recorder.EXPECTED_FIXTURES
+    def test_registered_with_its_three_fixtures(self):
+        assert recorder.CONNECTOR_CHECKS["assets"] is recorder.check_assets
+        assert recorder.EXPECTED_FIXTURES["assets"] == ("list_schemas.json", "get_object.json", "aql_search.json")
 
     def test_build_assets_client_uses_the_atlassian_token(self, monkeypatch):
         monkeypatch.setattr(recorder, "_load_atlassian_config", lambda: (
