@@ -54,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Hostile client names and connector values can no longer break the Settings page or the approval card's markup.**
 - **On a computer shared by several people, the live Settings updates go only to the owner, and the sign-in link no longer redirects to other sites.**
 - **Large or malformed Excel attachments are refused before they are read.**
+- **`pip install privacyfence` can no longer resolve a dependency version with a known advisory.** The minimum versions of `pypdf`, `PyJWT`, `cryptography` and `certifi` are raised, and `urllib3` gets a floor of its own.
 - **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
 - **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
 
