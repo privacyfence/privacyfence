@@ -18,7 +18,7 @@ an organization deployment, because local mode listens only on localhost.
 
 There is no PrivacyFence-operated infrastructure in either mode. No hosted service sits in the
 data path: every tool call goes from the machine or server running PrivacyFence straight to the
-provider (Google, Slack, Salesforce, Atlassian, Telegram).
+provider (Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server).
 
 A **packaged install** is the macOS `.pkg` (on the DMG), the Windows installer, or the `.deb`. A
 source checkout or a `pip`/`pipx install privacyfence` is not packaged. It is never
@@ -429,7 +429,7 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
   (default 300 seconds) ([ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)).
 - **Client secrets** belong to the deployment, not a person. Rotate a leaked one with the provider.
 - **Supply chain:** each release build produces CycloneDX SBOMs, and installers are signed as
-  described in [Platform support](platform-support.md). Release and QA-runner jobs install every build tool from hash-pinned locks
+  described in [Platform support](platform-support.md#signing). Release and QA-runner jobs install every build tool from hash-pinned locks
   ([ADR 0182](adr/0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md)).
 - **Operations:** one daemon per data directory (a file lock enforces it); organization mode is not
   clustered. Back up and restore the data directory with its owners and permissions intact.

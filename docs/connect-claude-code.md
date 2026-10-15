@@ -54,7 +54,7 @@ claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mc
   --header "Authorization: Bearer $(privacyfence-app --print-mcp-token)"
 ```
 
-- `mcp_url` holds `http://127.0.0.1:8765/mcp` unless you changed `web.port`
+- `mcp_url` holds `http://localhost:8765/mcp` unless you changed `web.port`
   ([Configuration reference](configuration-reference.md)).
 - `--print-mcp-token` mints your account's token the first time and prints the same one afterwards,
   the same token **Copy AI Client Token** copies. **Rotate token** in **Settings → AI clients**
@@ -140,7 +140,8 @@ Two things can ask you before a tool runs:
    [Approvals and policy](approvals-and-policy.md).
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). There is no switch that
 advertises writes as read-only. If you would rather confirm only once, on PrivacyFence's card,
 always-allow PrivacyFence's tools in Claude Code: choose the option not to ask again the first
