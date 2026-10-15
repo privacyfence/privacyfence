@@ -49,6 +49,7 @@ on:
     paths:
       - "pyproject.toml"
       - "requirements/*.lock.txt"
+      - "requirements/release.in"
       - "mcpb/shim/package.json"
       - "mcpb/shim/package-lock.json"
       - "cloudflare/downloads/package.json"
@@ -58,6 +59,7 @@ on:
     paths:
       - "pyproject.toml"
       - "requirements/*.lock.txt"
+      - "requirements/release.in"
       - "mcpb/shim/package.json"
       - "mcpb/shim/package-lock.json"
       - "cloudflare/downloads/package.json"
@@ -105,9 +107,16 @@ jobs:
           mkdir -p /tmp/lockcheck
           uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
             --output-file=/tmp/lockcheck/runtime.lock.txt pyproject.toml
+          # dev.lock.txt is constrained by the runtime lock and carries requirements/release.in too;
+          # the constraint is the committed runtime lock, by the same relative path as in
+          # update_dependency_locks.sh (the path is recorded in the `# via` trail, which is diffed;
+          # a stale runtime lock fails its own diff below).
           uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
             --extra dev --extra test --extra lint \
-            --output-file=/tmp/lockcheck/dev.lock.txt pyproject.toml
+            -c requirements/runtime.lock.txt \
+            --output-file=/tmp/lockcheck/dev.lock.txt pyproject.toml requirements/release.in
+          uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
+            --output-file=/tmp/lockcheck/release.lock.txt requirements/release.in
           python3 -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["docs"]))' \
             | uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
               --output-file=/tmp/lockcheck/docs.lock.txt -
@@ -120,7 +129,7 @@ jobs:
       # top-level and stay in the comparison.
       - name: Diff against committed lock files
         run: |
-          for name in runtime dev docs; do
+          for name in runtime dev release docs; do
             committed="requirements/${name}.lock.txt"
             fresh="/tmp/lockcheck/${name}.lock.txt"
             diff -u <(grep -v '^#' "$committed") <(grep -v '^#' "$fresh") \
@@ -148,10 +157,39 @@ jobs:
         if: always()
         run: pip-audit --strict -r requirements/docs.lock.txt
 
+      # The release tooling (build, SBOM, R2 upload, PyPI publish) runs holding signing and
+      # storage credentials, so it blocks like the runtime set.
+      - name: Audit release tooling (blocking)
+        if: always()
+        run: pip-audit --strict -r requirements/release.lock.txt
+
       - name: Audit dev/test dependencies (informational)
         if: always()
         continue-on-error: true
         run: pip-audit --strict -r requirements/dev.lock.txt
+
+  floor-audit:
+    # The runtime lock pins what packaged builds ship, but `pip install privacyfence` resolves
+    # fresh from pyproject.toml's ranges, so a user can land on the lowest version each range
+    # allows. This audits that lowest-direct resolution; a failure means a floor in pyproject.toml
+    # needs raising (with a one-line comment saying why).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # release.lock.txt carries uv and pip-audit, hash-pinned.
+      - name: Install audit tooling
+        run: pip install --require-hashes -r requirements/release.lock.txt
+
+      - name: Resolve the lowest direct versions
+        run: uv pip compile --resolution lowest-direct --python-version 3.11 pyproject.toml -o /tmp/lowest.txt
+
+      - name: Audit the lowest-direct set (blocking)
+        run: pip-audit --strict --no-deps --disable-pip -r /tmp/lowest.txt
 
   npm-audit:
     runs-on: ubuntu-latest
