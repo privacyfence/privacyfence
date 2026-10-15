@@ -45,8 +45,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
-- **Linux: the set-up script run through the companion's authentication prompt now accepts only the companion's own commands.** Under `pkexec` it refuses anything else (such as `--daemon-exec` or `uninstall`), and the prompt now says whether it is for managing the background service or for setting it up for your account. Paths containing `&`, `|` or `\` also render correctly in the installed service file.
+- **macOS: the installer runs its own copy of the setup script and skips setup when the app bundle is not owned by root.**
+- **Linux: separating an install refuses a daemon program that a non-root account can modify, and the password prompt now names what it is for and only ever starts, stops or restarts the service or sets it up for your account.** `--daemon-exec` must be root-owned along its whole path, e.g. `/opt/privacyfence/venv/bin/privacyfence-app`; paths containing `&`, `|` or `\` also render correctly in the installed service file.
 - **An approval now covers exactly the request and content the card showed.** A repeated call with any different argument, or whose content changed, gets a new card, so an approved message can no longer be swapped for another one.
 - **`trusted_sender_domain`, `approved_recipient_domain` and `to_is_myself` rules read the real email address**, so a display name such as `"CEO <ceo@trusted.com>" <attacker@evil.com>` no longer matches.
 - **`verify_audit_log.py` now reports a forged line placed after chained entries, a removed week, and entries cut from the end of the log** (unless the chain-state file was edited too).
@@ -56,11 +56,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Hostile client names and connector values can no longer break the Settings page or the approval card's markup.**
 - **On a computer shared by several people, the live Settings updates go only to the owner, and the sign-in link no longer redirects to other sites.**
 - **Large or malformed Excel attachments are refused before they are read.**
-- **Linux: a separated install refuses a daemon executable (or its script interpreter) that a non-root account could rewrite, and the layout step no longer walks into `handoff/`'s subdirectories.** `--daemon-exec` must now be root-owned along its whole path, e.g. `/opt/privacyfence/venv/bin/privacyfence-app`; macOS also checks a staged script's interpreter.
-- **`pip install privacyfence` can no longer resolve a dependency version with a known advisory.** The minimum versions of `pypdf`, `PyJWT`, `cryptography` and `certifi` are raised, and `urllib3` gets a floor of its own.
+- **Raised minimum versions of `pypdf`, `PyJWT` and `urllib3` for `pip install privacyfence`, to releases without known advisories.** `cryptography` and `certifi` minimums are raised too.
 - **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
 - **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
-- **The Claude Desktop extension now refuses a control socket or `mcp_url` file that the service account does not own, and an `mcp_url` that names another computer.** On a separated install the daemon removes a control socket another account left in the shared folder instead of running without one.
+- **Claude Desktop extension: it now connects only to a PrivacyFence on this computer whose files belong to PrivacyFence's own service account.** On a separated install the daemon removes a control socket another account left in the shared folder instead of running without one.
 
 ### Fixed
 
