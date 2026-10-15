@@ -85,9 +85,6 @@ import yaml
 import privacyfence
 from tests.control_channel_client import mint_bootstrap_code, resolve_posix_socket_path
 
-mcp_client = pytest.importorskip(
-    "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
-)
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 

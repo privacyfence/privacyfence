@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-pytest.importorskip("cryptography")
+import cryptography  # noqa: F401
 
 from privacyfence import org_bundle_signing as obs
 

@@ -315,11 +315,11 @@ testpaths = ["tests"]
 # A hung asyncio socket test (e.g. a fixture never closing a connection)
 # would otherwise block the whole suite indefinitely instead of failing.
 timeout = 30
+addopts = "--strict-markers"
 # The seven-layer taxonomy docs/testing-policy.md describes. Registered here
-# so `pytest -m <marker>` and `pytest -m "not live"` work and so an
-# unregistered-marker typo fails loudly (pytest's default
-# `--strict-markers`-independent warning) rather than silently matching
-# nothing. See testing-policy.md for which modules carry which marker.
+# so `pytest -m <marker>` and `pytest -m "not live"` work and, with
+# `--strict-markers`, so a typo'd or unregistered marker is a collection
+# error rather than a silent match of nothing. See testing-policy.md for which modules carry which marker.
 markers = [
     "unit: fast, fully offline",
     "integration: real internal stack, no external network",
