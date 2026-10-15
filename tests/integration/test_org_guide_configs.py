@@ -24,6 +24,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -283,6 +284,7 @@ def test_rendered_daemon_unit_verifies(tmp_path: Path) -> None:
     assert problems == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stub path contains '|', which a Windows filename cannot")
 def test_rendered_unit_keeps_special_characters_literal(tmp_path: Path) -> None:
     daemon = _stub_executable(tmp_path / "a&b|c" / "privacyfence-app")
     unit = _render_daemon_unit(tmp_path, daemon)
