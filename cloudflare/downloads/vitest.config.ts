@@ -16,5 +16,10 @@ export default defineConfig({
   ],
   test: {
     setupFiles: ["./test/setup.ts"],
+    coverage: {
+      provider: "istanbul",
+      include: ["src/**"],
+      thresholds: { lines: 94, branches: 85, functions: 98, statements: 93 },
+    },
   },
 });
