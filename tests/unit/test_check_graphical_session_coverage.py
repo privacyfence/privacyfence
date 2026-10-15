@@ -10,6 +10,8 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import pytest
+
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_graphical_session_coverage.py"
 _spec = importlib.util.spec_from_file_location("check_graphical_session_coverage", _SCRIPT_PATH)
 check_graphical_session_coverage = importlib.util.module_from_spec(_spec)
@@ -62,7 +64,82 @@ class TestEvaluate:
         assert message is None
 
 
+class TestEvaluateStaleness:
+    def test_a_green_run_older_than_a_watched_change_is_a_gap(self):
+        message = check_graphical_session_coverage.evaluate(
+            "linux-graphical-session.yml", _run(), True, ["src/privacyfence/companion.py", "b.py"]
+        )
+
+        assert message == (
+            "linux-graphical-session.yml: 2 file(s) it covers changed after its last run "
+            "(src/privacyfence/companion.py, ...) (see docs/testing-policy.md's layer 6)."
+        )
+
+    def test_no_stale_files_is_fine(self):
+        assert check_graphical_session_coverage.evaluate("linux-graphical-session.yml", _run(), True, []) is None
+
+
+class TestWatchedPaths:
+    def test_reads_quoted_and_unquoted_entries_and_skips_comments(self, tmp_path):
+        workflow = tmp_path / "wf.yml"
+        workflow.write_text(
+            "on:\n"
+            "  push:\n"
+            "    branches: [main]\n"
+            "    paths:\n"
+            "      - 'installer/**'\n"
+            "      # a comment line between entries\n"
+            "      - scripts/build.sh\n"
+            '      - "src/privacyfence/companion.py"\n'
+            "\n"
+            "      - 'last/**'   # trailing comment\n"
+            "  schedule:\n"
+            "    - cron: '0 7 * * 1'\n"
+        )
+
+        assert check_graphical_session_coverage.watched_paths(workflow) == [
+            "installer/**",
+            "scripts/build.sh",
+            "src/privacyfence/companion.py",
+            "last/**",
+        ]
+
+    def test_real_workflows_watch_their_runtime_modules(self):
+        root = check_graphical_session_coverage.REPO_ROOT / ".github" / "workflows"
+
+        windows = check_graphical_session_coverage.watched_paths(root / "windows-graphical-session.yml")
+
+        assert "src/privacyfence/windows_service.py" in windows
+        assert "tests/integration/test_windows_graphical_session_autostart.py" in windows
+
+
 class TestCheckAll:
+    @pytest.fixture(autouse=True)
+    def _nothing_changed_since_the_run(self, monkeypatch):
+        monkeypatch.setattr(check_graphical_session_coverage, "changed_since", lambda run_sha, commit: [])
+
+    def test_stale_files_are_reported(self, monkeypatch):
+        monkeypatch.setattr(check_graphical_session_coverage, "resolve_release_branch", lambda commit: "main")
+        monkeypatch.setattr(
+            check_graphical_session_coverage,
+            "fetch_latest_completed_run",
+            lambda repo, workflow, branch, token: _run(conclusion="success"),
+        )
+        monkeypatch.setattr(check_graphical_session_coverage, "is_ancestor", lambda sha, commit: True)
+        monkeypatch.setattr(
+            check_graphical_session_coverage,
+            "changed_since",
+            lambda run_sha, commit: ["src/privacyfence/windows_service.py", "README.md"],
+        )
+
+        warnings = check_graphical_session_coverage.check_all(
+            "privacyfence/privacyfence", "deadbeef", "test-token"
+        )
+
+        assert len(warnings) == 1
+        assert "windows-graphical-session.yml" in warnings[0]
+        assert "src/privacyfence/windows_service.py" in warnings[0]
+
     def test_collects_a_warning_per_failing_workflow(self, monkeypatch):
         runs = {
             "linux-graphical-session.yml": _run(conclusion="success", head_sha="good"),
@@ -200,6 +277,31 @@ class TestIsAncestor:
 
     def test_false_for_unrelated_sha(self):
         assert check_graphical_session_coverage.is_ancestor("0" * 40, "HEAD") is False
+
+
+class TestChangedSince:
+    def test_lists_files_changed_between_two_commits(self, tmp_path, monkeypatch):
+        def git(*args):
+            return subprocess.run(
+                ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+
+        git("init", "-q")
+        (tmp_path / "a.txt").write_text("1")
+        git("add", ".")
+        git("commit", "-q", "-m", "one")
+        first = git("rev-parse", "HEAD")
+        (tmp_path / "a.txt").write_text("2")
+        (tmp_path / "b.txt").write_text("x")
+        git("add", ".")
+        git("commit", "-q", "-m", "two")
+        second = git("rev-parse", "HEAD")
+
+        monkeypatch.chdir(tmp_path)
+
+        assert check_graphical_session_coverage.changed_since(first, second) == ["a.txt", "b.txt"]
+        assert check_graphical_session_coverage.changed_since(second, second) == []
 
 
 class TestMain:

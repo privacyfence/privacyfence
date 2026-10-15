@@ -32,6 +32,8 @@ on:
       - 'scripts/pyinstaller_common.py'
       - 'PrivacyFenceApp.spec'
       - 'src/privacyfence/privilege_separation.py'
+      - 'src/privacyfence/companion.py'
+      - 'src/privacyfence/service_control.py'
       - 'tests/integration/test_macos_graphical_session_autostart.py'
       - 'tests/integration/test_macos_pkg_install.py'
       - '.github/workflows/macos-graphical-session.yml'
