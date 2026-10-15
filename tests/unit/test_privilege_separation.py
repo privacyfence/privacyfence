@@ -1359,6 +1359,89 @@ class TestApplyLayoutLeavesSocketsAlone:
             assert chmods and all(line.startswith("chmod -h ") for line in chmods), chmods
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the Linux installer's own bash")
+class TestPkexecAllowList:
+    """Under pkexec (``PKEXEC_UID`` set) the Linux script accepts only the argument lists the
+    companion passes. ``--daemon-exec`` names a file the service account then runs, so it is never
+    one of them. Real bash, with ``id`` stubbed so no account needs to exist."""
+
+    POLICY = LINUX_TEMPLATE_DIR / "eu.privacyfence.daemon-control.policy"
+
+    def _check(self, args: list[str], *, pkexec_uid: str | None = "1000"):
+        array = " ".join(shlex.quote(arg) for arg in args)
+        script = "\n".join([
+            "set -uo pipefail",
+            "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }",
+            'id() { if [ "$1 $2" = "-nu 1000" ]; then echo alice; else return 1; fi; }',
+            TestApplyLayoutLeavesSocketsAlone._function("linux", "check_pkexec_arguments"),
+            f"ORIGINAL_ARGS=({array})",
+            "check_pkexec_arguments",
+        ])
+        env = {k: v for k, v in os.environ.items() if k != "PKEXEC_UID"}
+        if pkexec_uid is not None:
+            env["PKEXEC_UID"] = pkexec_uid
+        return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["enable", "--daemon-exec", "/tmp/x"],
+            ["enable", "--auto", "--daemon-exec", "/tmp/x"],
+            ["uninstall", "--purge"],
+            ["uninstall"],
+            ["enable", "--user", "bob"],
+            ["enable", "--machine-only"],
+            ["enable", "--for-user", "bob"],
+        ],
+    )
+    def test_refuses_lists_the_companion_never_passes(self, args):
+        result = self._check(args)
+        assert result.returncode == 1, result
+        assert "not allowed via pkexec" in result.stderr
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["daemon", "status"],
+            ["daemon", "restart"],
+            ["daemon", "ensure-running"],
+            ["enable", "--auto"],
+            ["enable", "--for-user", "alice"],
+        ],
+    )
+    def test_accepts_the_companions_lists(self, args):
+        result = self._check(args)
+        assert result.returncode == 0, result
+
+    def test_without_pkexec_nothing_is_restricted(self):
+        result = self._check(["enable", "--daemon-exec", "/tmp/x"], pkexec_uid=None)
+        assert result.returncode == 0, result
+
+    def test_the_whole_script_refuses_before_doing_anything(self):
+        env = {**os.environ, "PKEXEC_UID": "1000"}
+        result = subprocess.run(
+            ["bash", str(INSTALLERS["linux"]), "enable", "--daemon-exec", "/tmp/x"],
+            env=env, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 1, result
+        assert "not allowed via pkexec" in result.stderr
+
+    def test_the_policy_has_one_action_per_first_argument(self):
+        import xml.etree.ElementTree as ET
+
+        actions = ET.parse(self.POLICY).getroot().findall("action")
+        assert len(actions) == 2
+        by_argv1 = {}
+        for action in actions:
+            annotations = {a.get("key"): a.text for a in action.findall("annotate")}
+            assert annotations["org.freedesktop.policykit.exec.path"] == "/usr/sbin/privacyfence-privilege-separation"
+            by_argv1[annotations["org.freedesktop.policykit.exec.argv1"]] = action.findtext("message")
+        assert by_argv1 == {
+            "daemon": "Authentication is required to start, stop or restart PrivacyFence's background service",
+            "enable": "Authentication is required to set up PrivacyFence's background service for your account",
+        }
+
+
 class _StubbedStat:
     """A ``stat`` on ``PATH`` that prints a table-chosen answer, branching on
     its last argument (the path): ``table`` maps a path to the output, and

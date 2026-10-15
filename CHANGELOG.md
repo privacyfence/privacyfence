@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **Linux: the set-up script run through the companion's authentication prompt now accepts only the companion's own commands.** Under `pkexec` it refuses anything else (such as `--daemon-exec` or `uninstall`), and the prompt now says whether it is for managing the background service or for setting it up for your account. Paths containing `&`, `|` or `\` also render correctly in the installed service file.
 - **An approval now covers exactly the request and content the card showed.** A repeated call with any different argument, or whose content changed, gets a new card, so an approved message can no longer be swapped for another one.
 - **`trusted_sender_domain`, `approved_recipient_domain` and `to_is_myself` rules read the real email address**, so a display name such as `"CEO <ceo@trusted.com>" <attacker@evil.com>` no longer matches.
 - **`verify_audit_log.py` now reports a forged line placed after chained entries, a removed week, and entries cut from the end of the log** (unless the chain-state file was edited too).
