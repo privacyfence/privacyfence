@@ -396,6 +396,11 @@ checklist for the PR description.
       `scripts/update_dependency_locks.sh` (needs `uv` on `PATH`, see the script's own comments for
       why) and commit the resulting `requirements/*.lock.txt` — `dependency-audit.yml`'s
       `lockfile-freshness` job fails the build otherwise.
+- [ ] `sync/**`: `pip install -e "./sync[test]"`, then `pytest sync/tests -q --cov=privacyfence_sync
+      --cov-branch --cov-report=term-missing --cov-fail-under=100`, `mypy sync/src` and
+      `bandit -r sync/src` pass (CI's `sync` job, a required check, runs the same three). If
+      `sync/README.md` changed, copy it to
+      `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
 - [ ] `cloudflare/downloads/`: `npm test`, `npm run typecheck` and `npm run dry-run` there pass
       ([§1.9](#19-formatting-and-static-analysis)).
 
@@ -530,8 +535,9 @@ runtime or in review, so work through them deliberately.
 When changing PyInstaller specs, installers, Debian metadata, startup registration, MCPB contents,
 or release workflows, run the corresponding package/build checks and update
 [`platform-support.md`](platform-support.md) if user-visible behavior changes. The packaged-artifact
-smoke tests (`pytest.mark.packaged`) run only inside `build.yml`; dispatch it against the branch to
-exercise them before merging.
+smoke tests (`pytest.mark.packaged`) run only inside `build.yml` and the three graphical-session
+workflows (`linux-`, `windows-` and `macos-graphical-session.yml`); dispatch them against the branch
+to exercise them before merging.
 
 Do not use a source checkout as proof that a packaged artifact works — see
 [`dev-vs-live-setup.md`](dev-vs-live-setup.md).

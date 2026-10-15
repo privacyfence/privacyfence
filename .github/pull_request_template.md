@@ -53,6 +53,9 @@ reason rather than leaving it blank.
 - [ ] **A dependency in `pyproject.toml`** — `scripts/update_dependency_locks.sh` run (needs `uv`)
       and the resulting `requirements/*.lock.txt` committed, or `dependency-audit.yml`'s
       `lockfile-freshness` job fails.
+- [ ] **`sync/**`** — `pip install -e "./sync[test]"`, then `pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100`,
+      `mypy sync/src` and `bandit -r sync/src` pass; if `sync/README.md` changed, it is copied to
+      `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
 - [ ] **`cloudflare/downloads/`** — `npm test`, `npm run typecheck` and `npm run dry-run` pass
       there.
 
