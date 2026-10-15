@@ -3370,6 +3370,40 @@ class TestEnableSplitContract:
         assert 'CONSOLE_USER=""' in postinstall
         assert '"$SEPARATION_SCRIPT" enable --auto --app "$APP_PATH"' in postinstall
 
+    @staticmethod
+    def _postinstall_text() -> str:
+        return (REPO_ROOT / "installer" / "macos" / "pkg" / "postinstall").read_text(
+            encoding="utf-8"
+        )
+
+    def test_postinstall_runs_the_copy_beside_it_with_a_fixed_find(self):
+        postinstall = self._postinstall_text()
+
+        assert re.search(
+            r'^SEPARATION_SCRIPT="\$\(cd "\$\(dirname "\$0"\)" && pwd\)/scripts/macos_privilege_separation\.sh"$',
+            postinstall,
+            re.MULTILINE,
+        )
+        assert re.search(r"^FIND=/usr/bin/find$", postinstall, re.MULTILINE)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash function")
+    @pytest.mark.parametrize(("stub_output", "expected_ok"), [("/Applications/x", False), ("", True)])
+    def test_postinstall_skips_a_bundle_not_owned_by_root(self, tmp_path, stub_output, expected_ok):
+        match = re.search(
+            r"^bundle_is_root_owned\(\) \{.*\}$", self._postinstall_text(), re.MULTILINE
+        )
+        assert match is not None
+        find = tmp_path / "find"
+        find.write_text(f"#!/bin/sh\nprintf '%s' '{stub_output}'\n", encoding="utf-8")
+        find.chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", "-c", f'FIND={shlex.quote(str(find))}\nAPP_PATH=/x\n{match.group(0)}\nbundle_is_root_owned'],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+
+        assert (result.returncode == 0) is expected_ok
+
 
 class TestForUserKeepsTheRecordedOwner:
     """ADR 0043: the marker's ``owner_user`` is written once and then kept.

@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **Linux: the set-up script run through the companion's authentication prompt now accepts only the companion's own commands.** Under `pkexec` it refuses anything else (such as `--daemon-exec` or `uninstall`), and the prompt now says whether it is for managing the background service or for setting it up for your account. Paths containing `&`, `|` or `\` also render correctly in the installed service file.
 - **An approval now covers exactly the request and content the card showed.** A repeated call with any different argument, or whose content changed, gets a new card, so an approved message can no longer be swapped for another one.
 - **`trusted_sender_domain`, `approved_recipient_domain` and `to_is_myself` rules read the real email address**, so a display name such as `"CEO <ceo@trusted.com>" <attacker@evil.com>` no longer matches.
@@ -185,6 +186,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **Salesforce and Confluence.** A report id is checked to be a Salesforce id before a report runs, so a crafted id can no longer turn a report run into a different query; record ids in `salesforce_get_record` are checked the same way. Confluence page ids must be numeric, and attachment ids must look like Confluence attachment ids, for the same reason.
 - **Claude Desktop extension.** The `.mcpb` shim moves to `@modelcontextprotocol/sdk` 1.31.0, past a published advisory, along with patched `hono` and `proxy-addr`.
 
@@ -535,6 +537,7 @@ website.
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **An auto-accept rule for your own Slack DM matched every one-to-one DM.** `dm_with_myself` and
   `send_to_myself` checked only that the channel was a DM, so reads of, and messages to, a DM with
   anyone else went through without a card. They now match only your DM with yourself, as Slack
@@ -709,6 +712,7 @@ website.
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **An organization server trusts `X-Forwarded-For`/`X-Forwarded-Proto` only from the addresses
   given with `--server-trusted-proxy`.** Before, its web server also trusted them from
   `127.0.0.1` and `::1` (or from `$FORWARDED_ALLOW_IPS`) by default, so any local process could
@@ -918,6 +922,7 @@ website.
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
   /security/recover` now records every refused attempt in the audit log
   (`webauthn_recovery_refused`, with the reason and never the code), not just a successful one. On a
@@ -1059,6 +1064,7 @@ website.
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **Org mode's own sensitive settings actions — adding or removing an auto-accept rule, and
   editing the install-wide privacy/PII policy — now go through the same passkey step-up gate
   local mode's dispatcher has enforced since #426 Phase 3.** Before this, `routes_org_settings.
@@ -1155,6 +1161,7 @@ Everything 4.2.0 would have carried is folded in below: from the outside this is
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - The bespoke-settings-route classification guard (`routes_settings.build_routes()` — every
   non-dispatcher POST route must be listed as sensitive or explicitly exempt, see
   [ADR 0014](docs/adr/0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md)) is
@@ -1288,6 +1295,7 @@ carried is folded in below: from the outside this is a single 4.1.2 → 4.1.5 ch
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **Confirming an auto-accept rule an AI client asked for now needs the same proof as approving
   one of its writes.** PrivacyFence has two kinds of confirmation dialog and they had been treated
   as one. The kind that follows an **Always allow** click is a second step inside a decision whose
@@ -2871,6 +2879,7 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` / `v4.0.0b*` pre-release.
 
 ### Security
 
+- **macOS: the installer now runs its own copy of the set-up script from the package, and skips setting up the background service if the installed app bundle is not owned by root throughout.**
 - **`privacyfence_get_sign_in_link` is deliberately not gated.** It issues a single-use,
   short-lived, localhost-only bootstrap credential for the approval UI, in local mode only, and it
   does so without asking for approval first — because the approval would have to be granted in the
