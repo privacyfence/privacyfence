@@ -1166,7 +1166,7 @@ class GmailConnector(Connector):
                 # Not an image -- extract_text() below feeds a rich
                 # "markdown" preview_blocks entry (see this call's
                 # gated_call below) instead of a visual thumbnail.
-                pii_scan_text = extract_text(fetched_bytes, attachment.mime_type)
+                pii_scan_text = await asyncio.to_thread(extract_text, fetched_bytes, attachment.mime_type)
 
         # Gate before touching disk: gated_call raises on denial, and only a
         # decision made here should ever cause the attachment to be written.

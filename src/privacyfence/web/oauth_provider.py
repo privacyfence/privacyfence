@@ -60,6 +60,7 @@ section on it) -- it's the in-process backstop for whatever gets through.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import secrets
@@ -67,6 +68,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -85,8 +87,10 @@ from .. import org_identity, scoped_tokens
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..principal import Principal
+from ..agent_identity import sanitize_client_string
 from ..secure_files import atomic_write_json
 from .agent_pins import AgentPinStore, pins_file_path
+from .oauth_consent import UNNAMED_CLIENT_LABEL, ConsentStore, ConsentView
 from .sealed_refresh_store import (
     REFRESH_STORE_FILE_NAME,
     SealedRefreshRecord,
@@ -97,10 +101,12 @@ logger = logging.getLogger(__name__)
 
 CLIENTS_FILE_NAME = "oauth_clients.json"
 IDP_CALLBACK_PATH = "/oauth/idp/callback"
+CONSENT_PATH = "/oauth/consent"
 
 _AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60
 _ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 _PENDING_AUTHORIZATION_TTL_SECONDS = 5 * 60
+_PENDING_CONSENT_TTL_SECONDS = 5 * 60
 
 # DCR's
 # ``/register`` endpoint is unauthenticated by design (RFC 7591 -- that's
@@ -218,6 +224,20 @@ class _PendingAuthorization:
 
 
 @dataclass
+class _PendingConsent:
+    """An IdP-authenticated ``/authorize`` request waiting for the person to allow or refuse the
+    client on the consent page (ADR 0177). Single-use, keyed by an unguessable consent id that
+    exists only in the browser that completed the IdP sign-in; ``csrf`` is the token the page's
+    form must send back."""
+
+    client_id: str
+    principal: Principal
+    params: AuthorizationParams
+    csrf: str
+    created_at: float
+
+
+@dataclass
 class _IssuedCode:
     """PrivacyFence's own authorization code, bound to the principal the
     IdP leg resolved -- exchanged exactly once (``exchange_authorization_
@@ -254,6 +274,8 @@ class OrgOAuthProvider:
         # A pin outlives a pruned registration on purpose (agent_pins.py's docstring).
         self.agent_pins = AgentPinStore(pins_file_path())
         self._pending: dict[str, _PendingAuthorization] = {}
+        self._pending_consents: dict[str, _PendingConsent] = {}
+        self._consents = ConsentStore()
         self._codes: dict[str, _IssuedCode] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, _OrgRefreshToken] = {}
@@ -437,6 +459,12 @@ class OrgOAuthProvider:
             ]
             for s in stale:
                 del self._pending[s]
+            stale_consents = [
+                c for c, p in self._pending_consents.items()
+                if (now - p.created_at) > _PENDING_CONSENT_TTL_SECONDS
+            ]
+            for c in stale_consents:
+                del self._pending_consents[c]
 
     async def handle_idp_callback(self, *, state: str, code: str) -> str:
         """Called by web/routes_mcp.py's own IdP-facing route (``GET
@@ -444,15 +472,20 @@ class OrgOAuthProvider:
         not part of the SDK's ``OAuthAuthorizationServerProvider`` Protocol,
         since nothing in the spec has an opinion on how an AS talks to
         *its own* upstream IdP. Returns the URL to redirect the browser to
-        next: back to the original client's own ``redirect_uri``, carrying
-        PrivacyFence's own freshly-minted code and the original client's
-        own ``state`` -- exactly the return value ``authorize()`` would
-        have produced directly, had this AS trusted the human's identity
-        on its own instead of asking the IdP.
+        next, one of two:
+
+        - the original client's own ``redirect_uri``, carrying PrivacyFence's
+          own freshly-minted code and the original client's own ``state``,
+          when this person has already allowed this client at this redirect
+          URI; or
+        - ``/oauth/consent/<id>``, the consent page, when they have not. A
+          silent IdP re-authentication proves who the person is, not that
+          they know which client is asking, so no code is minted until
+          ``decide_consent`` hears "allow" (ADR 0177).
         """
         with self._lock:
             pending = self._pending.pop(state, None)
-        if pending is None:
+        if pending is None or (time.time() - pending.created_at) > _PENDING_AUTHORIZATION_TTL_SECONDS:
             raise ValueError("invalid or expired authorization attempt")
         tokens = await asyncio.to_thread(
             org_identity.exchange_code_for_tokens,
@@ -470,13 +503,70 @@ class OrgOAuthProvider:
         # call in a catch-all that logs and returns a generic failure.
         org_identity.check_authz_policy(principal, claims, self._policy)
 
+        if self._consents.has(principal, pending.client_id, str(pending.params.redirect_uri)):
+            return self._issue_code(pending.client_id, principal, pending.params)
+        consent_id = secrets.token_urlsafe(32)
+        with self._lock:
+            if len(self._pending_consents) >= _MAX_PENDING_AUTHORIZATIONS:
+                raise ValueError("too many pending consents")
+            self._pending_consents[consent_id] = _PendingConsent(
+                client_id=pending.client_id, principal=principal, params=pending.params,
+                csrf=secrets.token_urlsafe(32), created_at=time.time(),
+            )
+        return f"{CONSENT_PATH}/{consent_id}"
+
+    def _issue_code(self, client_id: str, principal: Principal, params: AuthorizationParams) -> str:
+        """Mints PrivacyFence's own code for ``principal`` and returns the client's redirect URL."""
         own_code = secrets.token_urlsafe(32)
         with self._lock:
             self._codes[own_code] = _IssuedCode(
-                client_id=pending.client_id, principal=principal, params=pending.params,
+                client_id=client_id, principal=principal, params=params,
                 expires_at=time.time() + _AUTHORIZATION_CODE_TTL_SECONDS,
             )
-        return construct_redirect_uri(str(pending.params.redirect_uri), code=own_code, state=pending.params.state)
+        return construct_redirect_uri(str(params.redirect_uri), code=own_code, state=params.state)
+
+    # ------------------------------------------------------------------ #
+    # Consent page (ADR 0177)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def redirect_host(redirect_url: str) -> str:
+        """Where the person will land: the URL's host, or its scheme for a custom one."""
+        parts = urlsplit(redirect_url)
+        return parts.netloc or f"{parts.scheme}:"
+
+    def consent_view(self, consent_id: str) -> ConsentView | None:
+        """What the consent page for ``consent_id`` shows, or None when it is unknown or expired."""
+        with self._lock:
+            pending = self._pending_consents.get(consent_id)
+        if pending is None or (time.time() - pending.created_at) > _PENDING_CONSENT_TTL_SECONDS:
+            return None
+        name = sanitize_client_string(self.client_name(pending.client_id) or "")
+        return ConsentView(
+            client_name=name or UNNAMED_CLIENT_LABEL,
+            redirect_host=self.redirect_host(str(pending.params.redirect_uri)),
+            principal_label=pending.principal.email or pending.principal.id,
+            csrf=pending.csrf,
+        )
+
+    def decide_consent(self, consent_id: str, *, csrf: str, allow: bool) -> str:
+        """The person's answer. Single-use: the pending consent is consumed even when ``csrf``
+        is wrong. Returns the client's redirect URL -- with a code on allow (and the choice
+        remembered), with ``error=access_denied`` on deny."""
+        with self._lock:
+            pending = self._pending_consents.pop(consent_id, None)
+        if (
+            pending is None
+            or (time.time() - pending.created_at) > _PENDING_CONSENT_TTL_SECONDS
+            or not hmac.compare_digest(csrf, pending.csrf)
+        ):
+            raise ValueError("invalid or expired consent")
+        if not allow:
+            return construct_redirect_uri(
+                str(pending.params.redirect_uri), error="access_denied", state=pending.params.state,
+            )
+        self._consents.record(pending.principal, pending.client_id, str(pending.params.redirect_uri))
+        return self._issue_code(pending.client_id, pending.principal, pending.params)
 
     # ------------------------------------------------------------------ #
     # Authorization code -> tokens

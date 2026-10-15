@@ -2520,6 +2520,68 @@ def local_server_with_settings(pf_home):
         server.stop()
 
 
+class TestHostileContentStaysText:
+    """The two pages that rebuild their DOM from a pushed state (``/approvals`` and
+    ``/settings``) write it with ``innerHTML`` through a JS ``esc()``. Nothing else
+    exercises that function in a browser, so a regression there is invisible to every
+    Python-side escaping test: these push markup-shaped strings through the live
+    re-render and look at the DOM."""
+
+    def test_list_rerender_escapes_row_fields(self, page, local_server):
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_gated_card(
+            web_ui, gate_kind="popup", dedupe_key="xss", summary="<img src=x id=pfxss>",
+            tool="gmail_create_draft", tool_name="<img src=x id=pfxss2>",
+        )
+        thread_b = card_b = None
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-approval-id="{card_a.id}"]')
+            thread_b, card_b = _register_gated_card(
+                web_ui, gate_kind="popup", dedupe_key="xss-2", summary="second",
+                tool="gmail_add_label", tool_name="Add Gmail Label",
+            )
+            page.wait_for_function("() => document.querySelectorAll('[data-approval-id]').length === 2")
+            assert page.locator("#pfxss").count() == 0
+            assert page.locator("#pfxss2").count() == 0
+            row_text = page.locator(f'[data-approval-id="{card_a.id}"]').inner_text()
+            assert "<img" in row_text
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread is not None and thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_settings_rerender_escapes_state(self, page, local_server_with_settings):
+        server, _web_ui = local_server_with_settings
+        controller = server.controller
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_selector(".pf-navitem")
+        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
+        page.evaluate(
+            "() => { var render = window.__pfRender; window.__pfRenders = 0;"
+            " window.__pfRender = function (s) { window.__pfRenders++; return render(s); }; }"
+        )
+        real_snapshot = controller.snapshot
+
+        def hostile_snapshot():
+            state = real_snapshot()
+            state["general"]["org_installed"] = True
+            state["general"]["org_installed_date"] = "<b id=pfxss3>x</b>"
+            return state
+
+        controller.snapshot = hostile_snapshot
+        try:
+            call_soon_threadsafe(controller._push_snapshot)
+            page.wait_for_function("() => window.__pfRenders > 0")
+            assert page.locator("#pfxss3").count() == 0
+            assert "Installed <b id=pfxss3>x</b>" in page.locator("#app").inner_text()
+        finally:
+            controller.snapshot = real_snapshot
+
+
 class TestSettingsPageRendering:
     """Local mode's settings page and org mode's (admin and non-admin) all
     render through the same settings_window_html.build_html() (ADR 0033) --

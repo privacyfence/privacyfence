@@ -148,6 +148,8 @@ How the settings combine:
   a fresh sign-in at the identity provider instead of a passkey for a single decision, and refuses
   a batch that needs step-up (`400`, nothing applied): approve each item from its card, or add a
   passkey ([ADR 0066](adr/0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md)).
+  That sign-in starts only from the card's own button, by a request the page checks, never from a
+  link ([ADR 0179](adr/0179-an-idp-step-up-starts-only-from-the-card-by-post.md)).
 - **Batch approval:** one assertion covers a selected set of approvals and is bound to that exact
   set and each item's result. It cannot be replayed for a larger, smaller or altered set.
   `batch: per_item` sends every item that needs step-up back to its own card. PII confirmations
@@ -325,6 +327,8 @@ python3 scripts/verify_audit_log.py <dir> --week 2026-W38     # one ISO week
 ```
 
 Exit status: `0` intact, `1` a week failed (or no files found), `2` directory missing.
+
+The script also checks that each week's first entry continues the previous week's last one, and that the newest entry matches `.audit_chain_state.json`, so a removed week or a cut-off tail is reported, unless the `.audit_chain_state.json` file was edited too (it is not keyed). Lines written before chaining existed are accepted only at the top of a file ([ADR 0176](adr/0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md)).
 
 The chain detects edits, insertions and deletions made without the key. Anyone who can read the
 key can rebuild a consistent chain. On a separated install that means root or the service account.

@@ -819,6 +819,7 @@ class SalesforceClient:
         """
         if not report_id:
             raise SalesforceClientError("run_report_page requires a report_id")
+        report_id = _validate_salesforce_id(report_id, "report_id")
         if pages_done >= self.report_max_pages:
             raise ReportPagingError(
                 "page_limit",

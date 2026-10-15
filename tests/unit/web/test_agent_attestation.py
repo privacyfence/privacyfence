@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from types import SimpleNamespace
 
 import pytest
@@ -521,6 +522,27 @@ class TestAgentsPageState:
 
         assert r.status_code == 200
         assert client_id not in r.text.split("window.__pfInitialState = ", 1)[1].split("</script>", 1)[0]
+
+    async def test_a_hostile_client_name_cannot_break_the_admin_page(self, org_home, monkeypatch):
+        hostile = "</script><a href=//evil.example style=position:fixed;inset:0>x"
+        provider = _provider(org_home, monkeypatch)
+        await _register(provider, "c1", hostile)
+        client, sessions = _settings_client(provider)
+        _sign_in(client, sessions, ADMIN)
+
+        page = client.get("/settings").text
+
+        links: list[dict] = []
+
+        class _Links(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                if tag == "a":
+                    links.append(dict(attrs))
+
+        _Links().feed(page)
+        assert not [a for a in links if a.get("href") == "//evil.example"]
+        assert "</script><a href=//evil.example" not in page
+        assert "\\u003c/script\\u003e\\u003ca href=//evil.example" in page
 
     async def test_the_admin_page_embeds_the_ai_systems_section(self, org_home, monkeypatch):
         provider = _provider(org_home, monkeypatch)

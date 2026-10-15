@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,6 +18,7 @@ from privacyfence.salesforce_client import (
     ReportPage,
     ReportPagingError,
     SalesforceClient,
+    SalesforceClientError,
 )
 from tests.fixtures.salesforce_analytics import (
     CITY,
@@ -202,3 +204,20 @@ def test_fake_matches_recorded_shape():
     recorded_cell_keys = {k for row in recorded["factMap"]["T!T"]["rows"] for c in row["dataCells"] for k in c}
     our_cell_keys = {k for row in ours["factMap"]["T!T"]["rows"] for c in row["dataCells"] for k in c}
     assert our_cell_keys <= recorded_cell_keys
+
+
+@pytest.mark.parametrize("bad", [
+    "../../query?q=SELECT Name,Email FROM Contact",
+    f"{REPORT_ID}?includeDetails=false",
+    f"{REPORT_ID}/../../query",
+    "report-1",
+])
+def test_non_id_report_id_is_refused_before_any_request(bad, monkeypatch):
+    sf = MagicMock()
+    client = SalesforceClient(config={"access_token": "tok", "instance_url": "https://my.salesforce.com"})
+    monkeypatch.setattr(client, "_get_sf", lambda: sf)
+
+    with pytest.raises(SalesforceClientError, match="report_id must be a 15- or 18-character"):
+        client.run_report_page(bad, KEY)
+
+    assert sf.mock_calls == []

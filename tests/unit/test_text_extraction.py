@@ -333,6 +333,57 @@ class TestZipBombProtection:
         pptx = make_pptx("This slide's XML is already over the cap.")
         assert extract_text(pptx, PPTX_MIME) == ""
 
+    def test_xlsx_member_over_the_cap_returns_empty_string(self, monkeypatch):
+        monkeypatch.setattr(text_extraction, "_MAX_ZIP_ENTRY_BYTES", 10)
+        assert extract_text(make_xlsx({"S": [["a"]]}), XLSX_MIME) == ""
+
+    @staticmethod
+    def _bomb_xlsx(member: str) -> bytes:
+        # Start from a real workbook so the member is one openpyxl would parse.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(make_xlsx({"S": [["a"]]}))) as src, zipfile.ZipFile(
+            buf, "w", zipfile.ZIP_DEFLATED
+        ) as zf:
+            for info in src.infolist():
+                if info.filename != member:
+                    zf.writestr(info.filename, src.read(info.filename))
+            with zf.open(member, "w", force_zip64=True) as fh:
+                fh.write(b"<sst><t>")
+                chunk = b"a" * (1024 * 1024)
+                for _ in range(50):
+                    fh.write(chunk)
+                fh.write(b"</t></sst>")
+        return buf.getvalue()
+
+    def test_xlsx_shared_strings_bomb_is_refused(self):
+        import tracemalloc
+
+        bomb = self._bomb_xlsx("xl/sharedStrings.xml")
+        tracemalloc.start()
+        try:
+            result = extract_text(bomb, XLSX_MIME)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert result == ""
+        assert peak < 20 * 1024 * 1024
+
+    def test_xlsx_bomb_in_styles_is_refused(self):
+        assert extract_text(self._bomb_xlsx("xl/styles.xml"), XLSX_MIME) == ""
+
+    def test_xlsx_row_cap_shows_the_first_200_rows(self):
+        rows = [["h"]] + [[f"r{i}"] for i in range(249)]
+        result = extract_text(make_xlsx({"S": rows}), XLSX_MIME)
+        assert "| r198 |" in result
+        assert "| r199 |" not in result
+        assert result.endswith("*(showing the first 200 rows of 250)*")
+
+    def test_pptx_slide_count_is_capped(self, monkeypatch):
+        monkeypatch.setattr(text_extraction, "_PPTX_MAX_SLIDES", 2)
+        result = extract_text(make_pptx("a", "b", "c"), PPTX_MIME)
+        assert "## Slide 2" in result and "## Slide 3" not in result
+        assert result.endswith("*(showing the first 2 slides of 3)*")
+
     def test_declared_size_within_cap_still_reads_normally(self, monkeypatch):
         # Cap set generously above the fixture's real size -- a sanity check
         # that the cap itself doesn't break ordinary small documents.

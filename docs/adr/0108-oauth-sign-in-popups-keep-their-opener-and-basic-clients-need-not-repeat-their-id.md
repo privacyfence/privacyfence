@@ -4,6 +4,7 @@
 
 Accepted — 2026-09-29. Implemented. Part of
 [issue 393](https://github.com/privacyfence/privacyfence/issues/393).
+Amended by [ADR 0177](0177-an-org-mode-mcp-client-needs-the-persons-consent-once.md).
 
 ## Context
 

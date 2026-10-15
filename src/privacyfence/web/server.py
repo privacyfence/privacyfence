@@ -135,7 +135,7 @@ from .mcp_auth import (
     single_token_verifier,
 )
 from .mcp_dispatch import McpDispatcher
-from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
+from .oauth_provider import CONSENT_PATH, IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
@@ -549,8 +549,14 @@ def _clear_web_base_url_file() -> None:
 # browsing-context group and nulls its ``window.opener`` -- and a client
 # whose redirect page hands the code back through ``window.opener``
 # (Gemini Enterprise's does) then never exchanges it. Neither path renders
-# a document, so COOP protected nothing on them. ADR 0108.
+# a document, so COOP protected nothing on them. ADR 0108. The consent pages
+# (``CONSENT_PATH``/<id>, ADR 0177) are the one exception to "neither renders a
+# document": they do, but they sit in the same chain and must keep the opener too.
 _OAUTH_POPUP_PATHS = frozenset({"/authorize", IDP_CALLBACK_PATH})
+
+
+def _keeps_popup_opener(path: str) -> bool:
+    return path in _OAUTH_POPUP_PATHS or path.startswith(CONSENT_PATH + "/")
 
 
 class _SecurityHeadersMiddleware:
@@ -629,7 +635,7 @@ class _SecurityHeadersMiddleware:
                 headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
                 headers["cross-origin-opener-policy"] = (
-                    "unsafe-none" if scope.get("path") in _OAUTH_POPUP_PATHS else "same-origin"
+                    "unsafe-none" if _keeps_popup_opener(scope.get("path") or "") else "same-origin"
                 )
                 if self._hsts:
                     headers["strict-transport-security"] = _HSTS
@@ -896,7 +902,10 @@ class _BootstrapMiddleware:
         if not code:
             await self._app(scope, receive, send)
             return
-        response = RedirectResponse(request.url.path, status_code=303)
+        response = RedirectResponse(
+            # A leading "//" or "/\\" would be read as a scheme-relative URL to another host.
+            "/" + request.url.path.lstrip("/\\"), status_code=303,
+        )
         # The code carries its own provenance (web/session_auth.py's
         # ``PROVENANCE_*``) and, since ADR 0008, the principal that minted it
         # (which OS user's control-channel connection asked), and the session
@@ -931,8 +940,13 @@ def _state_stream_route(stream: StateStream, *, sessions: LocalSessionStore) -> 
         session_id = request.cookies.get(_SESSION_COOKIE, "")
         if not session_id or not sessions.touch(session_id):
             return _unauthorized_response(request)
+        # The settings snapshot is the owner's: another OS user's stream carries approvals only.
+        receives_settings = current_principal().id == LOCAL_PRINCIPAL.id
         return StreamingResponse(
-            stream.subscribe(request.is_disconnected, touch=lambda: sessions.touch(session_id)),
+            stream.subscribe(
+                request.is_disconnected, touch=lambda: sessions.touch(session_id),
+                receives_settings=receives_settings,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store"},
         )
