@@ -92,7 +92,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
+import mcp  # noqa: F401
 
 from tests.diagnostics import (  # noqa: E402
     capture_directory_manifest,

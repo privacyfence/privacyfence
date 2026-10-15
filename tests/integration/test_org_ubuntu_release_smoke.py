@@ -203,9 +203,6 @@ if not os.environ.get("PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS"):
         allow_module_level=True,
     )
 
-mcp_client = pytest.importorskip(
-    "mcp", reason="mcp (Python MCP client) not installed -- pip install -e '.[test]'"
-)
 import httpx2  # noqa: E402
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402

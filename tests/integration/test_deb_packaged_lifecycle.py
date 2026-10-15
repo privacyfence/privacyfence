@@ -136,9 +136,6 @@ import httpx2
 import pytest
 import yaml
 
-mcp_client = pytest.importorskip(
-    "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
-)
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
