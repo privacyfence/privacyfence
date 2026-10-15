@@ -11,8 +11,6 @@ import sys
 
 import pytest
 
-import cryptography  # noqa: F401
-
 from privacyfence import org_bundle_signing as obs
 
 

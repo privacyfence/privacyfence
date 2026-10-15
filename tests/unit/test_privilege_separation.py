@@ -1470,7 +1470,10 @@ def _executable(path: Path, content: str = "#!/bin/sh\n") -> Path:
     return path
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="runs the Linux installer's own bash")
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="runs the Linux installer's own bash, which needs GNU realpath -s and stat -c",
+)
 class TestLinuxDaemonImageMustBeRootOwned:
     """The service account runs ``--daemon-exec``, so a file or any
     directory above it that a non-root account can write is a way to run code
@@ -1534,7 +1537,10 @@ class TestLinuxDaemonImageMustBeRootOwned:
         assert "owned by uid 1000" in result.stderr
         assert "--daemon-exec interpreter" in result.stderr
 
-    @pytest.mark.skipif(os.geteuid() != 0, reason="real system paths are root-owned only when the test runs as root's view of them; CI runners differ")
+    @pytest.mark.skipif(
+        getattr(os, "geteuid", lambda: -1)() != 0,
+        reason="real system paths are root-owned only when the test runs as root's view of them; CI runners differ",
+    )
     @pytest.mark.parametrize("path", ["/bin/sh", "/usr/bin/python3"])
     def test_real_system_paths_pass(self, path):
         if not Path(path).exists():

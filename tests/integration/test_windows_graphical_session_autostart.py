@@ -92,8 +92,6 @@ from pathlib import Path
 
 import pytest
 
-import mcp  # noqa: F401
-
 from tests.diagnostics import (  # noqa: E402
     capture_directory_manifest,
     copy_named_logs,

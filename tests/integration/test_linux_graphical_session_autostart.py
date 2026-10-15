@@ -104,8 +104,6 @@ from typing import Callable
 
 import pytest
 
-import mcp  # noqa: F401
-
 from privacyfence import privilege_separation  # noqa: E402
 from privacyfence.privilege_separation import (  # noqa: E402
     HANDOFF_DIR_NAME,
