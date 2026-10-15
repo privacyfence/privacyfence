@@ -19,5 +19,8 @@
     "esbuild": "0.28.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
+  },
+  "overrides": {
+    "tmp": "^0.2.7"
   }
 }
