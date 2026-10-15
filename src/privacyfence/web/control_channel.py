@@ -1482,6 +1482,7 @@ class _LineProtocolServer:
         thread_name: str,
         verify_peer: Callable[[socket.socket, str], str | None] | None = None,
         scope_by_peer_principal: bool = False,
+        replace_foreign_socket: bool = False,
     ) -> None:
         self._handler = handler
         self._socket_path_fn = socket_path
@@ -1499,6 +1500,11 @@ class _LineProtocolServer:
         # account relaying an ``OPEN``/``CONFIRM`` call that already carries
         # no principal-scoped state of its own to get right or wrong.
         self._scope_by_peer_principal = scope_by_peer_principal
+        # ``ControlChannelServer`` only: the daemon's service account owns
+        # ``handoff/``, so a socket there owned by anyone else was planted
+        # and is the daemon's to remove. ``CompanionChannelServer`` keeps
+        # refusing a foreign socket (ADR 0027 decision 2).
+        self._replace_foreign_socket = replace_foreign_socket
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         # What a client needs to connect: the socket path (POSIX) or pipe
@@ -1533,8 +1539,16 @@ class _LineProtocolServer:
         sock_path = self._socket_path_fn()
         problem = _existing_socket_owner_problem(sock_path)
         if problem is not None:
-            logger.warning("Could not start the %s: %s", self._thread_name, problem)
-            return
+            if not self._replace_foreign_socket:
+                logger.warning("Could not start the %s: %s", self._thread_name, problem)
+                return
+            try:
+                foreign_uid = sock_path.lstat().st_uid
+                sock_path.unlink()
+            except OSError:
+                logger.warning("Could not start the %s: %s", self._thread_name, problem)
+                return
+            logger.warning("Removed %s: it was owned by uid %s, not this process", sock_path, foreign_uid)
         # Any file already at this path is stale (and, as of the check
         # above, was left by *this* process's own account): the caller
         # (WebServer or companion.py, constructed only after their own
@@ -1813,6 +1827,7 @@ class ControlChannelServer:
             # ADR 0008: every command below is dispatched inside its
             # connecting peer's own principal_scope.
             scope_by_peer_principal=True,
+            replace_foreign_socket=True,
         )
 
     def _handle(self, line: str) -> str:

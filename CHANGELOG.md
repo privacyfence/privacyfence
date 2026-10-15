@@ -60,6 +60,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`pip install privacyfence` can no longer resolve a dependency version with a known advisory.** The minimum versions of `pypdf`, `PyJWT`, `cryptography` and `certifi` are raised, and `urllib3` gets a floor of its own.
 - **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
 - **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
+- **The Claude Desktop extension now refuses a control socket or `mcp_url` file that the service account does not own, and an `mcp_url` that names another computer.** On a separated install the daemon removes a control socket another account left in the shared folder instead of running without one.
 
 ### Fixed
 

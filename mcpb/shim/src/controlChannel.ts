@@ -33,7 +33,13 @@
  * for the token (ADR 0041: only the current install layout is supported).
  */
 import net from "node:net";
-import { posixControlSocketPath, windowsControlPipeName } from "./protocol.js";
+import {
+  checkHandoffEntry,
+  type OwnershipFs,
+  posixControlSocketPath,
+  privilegeSeparationRoot,
+  windowsControlPipeName,
+} from "./protocol.js";
 
 /** How long ``mintMcpToken()`` waits for a connection and a reply before
  * giving up, when the caller doesn't override it. Generous relative to the
@@ -48,6 +54,8 @@ const DEFAULT_TIMEOUT_MS = 5000;
 export interface MintMcpTokenOptions {
   /** Overridable for tests; defaults to DEFAULT_TIMEOUT_MS. */
   timeoutMs?: number;
+  /** Overridable for tests: the ownership check's filesystem calls. */
+  fsx?: OwnershipFs;
 }
 
 /**
@@ -80,7 +88,7 @@ export class ControlChannelError extends Error {
  */
 export async function mintMcpToken(opts: MintMcpTokenOptions = {}): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const reply = await sendControlChannelLine("MINT MCP\n", timeoutMs);
+  const reply = await sendControlChannelLine("MINT MCP\n", timeoutMs, opts.fsx);
   return parseMintReply(reply);
 }
 
@@ -125,10 +133,24 @@ function parseMintReply(reply: string): string {
  * (connects, then goes silent) without this function needing to track
  * elapsed wall-clock time itself.
  */
-function sendControlChannelLine(message: string, timeoutMs: number): Promise<string> {
+function sendControlChannelLine(message: string, timeoutMs: number, fsx?: OwnershipFs): Promise<string> {
   return new Promise((resolve, reject) => {
     const target =
       process.platform === "win32" ? windowsControlPipeName() : posixControlSocketPath();
+    if (process.platform !== "win32") {
+      // On a separated install the socket sits in a group-writable handoff
+      // directory: connect only to one the service account created, since
+      // the reply carries this account's bearer token.
+      const root = privilegeSeparationRoot();
+      if (root !== null) {
+        try {
+          checkHandoffEntry(target, "socket", root, fsx);
+        } catch (err) {
+          reject(err);
+          return;
+        }
+      }
+    }
     const sock = net.createConnection({ path: target });
     let settled = false;
     let received = "";
