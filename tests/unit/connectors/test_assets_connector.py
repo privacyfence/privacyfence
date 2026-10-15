@@ -150,7 +150,9 @@ class TestDispatch:
                 assert auto_accept.TOOL_TO_GATE[spec.name] == "auto"
             else:
                 assert auto_accept.TOOL_TO_GATE[spec.name] == "review"
-                assert auto_accept.TOOL_TO_OPERATION[spec.name] == "assets.read_object"
+                expected = ("assets.read_tickets" if spec.name == "assets_get_connected_tickets"
+                            else "assets.read_object")
+                assert auto_accept.TOOL_TO_OPERATION[spec.name] == expected
 
 
 class TestListSchemas:
@@ -706,17 +708,21 @@ class TestSchemaAutoAccept:
 
         assert len(popups) == 1
 
-    async def test_connected_tickets_of_an_approved_object_skip_the_card(self, tmp_path):
+    async def test_schema_rule_never_covers_connected_tickets(self, tmp_path, monkeypatch):
+        from privacyfence import gate
+
         init_audit_logger(str(tmp_path))
         self._rule("approved_schema_ids")
+        popups: list[Any] = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(1) or "deny", None))
         connector, client = make_connector()
         client.get_object.return_value = make_object(schema_id="2")
         client.connected_tickets.return_value = [make_ticket()]
 
-        result = await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+        with pytest.raises(GateDeniedError):
+            await connector.call("assets_get_connected_tickets", {"object_id": "123"})
 
-        assert result["tickets"][0]["key"] == "PFQA-9"
-        assert self._entries(tmp_path)[-1]["decision"] == "auto_accepted"
+        assert len(popups) == 1
 
 
 EXPORT_ARGS = {"aql": "objectType = Contract", "destination_dir": "~/out"}

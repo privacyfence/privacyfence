@@ -164,7 +164,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "assets_get_object":              "assets.read_object",
     "assets_search_objects":          "assets.read_object",
     "assets_get_related_objects":     "assets.read_object",
-    "assets_get_connected_tickets":   "assets.read_object",
+    "assets_get_connected_tickets":   "assets.read_tickets",
     "assets_export_objects":          "assets.read_object",
     "confluence_get_page":            "confluence.read_page",
     "confluence_get_page_by_title":   "confluence.read_page",

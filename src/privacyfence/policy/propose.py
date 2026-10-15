@@ -360,8 +360,8 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     _scope("i_am_reporter", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm reporter", group="jira.my_issues/reporter"),
     _scope("i_am_assignee", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm assignee", group="jira.my_issues/assignee"),
     # ── Assets ────────────────────────────────────────────────────────────────────────────────
-    _scope("approved_schema_ids", "assets.schema", "assets", (Verb.READ,), _assets_schema_ids, "this schema"),
-    _scope("approved_schema_ids_all_results", "assets.schema", "assets", (Verb.SEARCH,), _assets_result_schema_ids, "this schema"),
+    _scope("approved_schema_ids", "assets.schema", "assets", (Verb.READ,), _assets_schema_ids, "this schema", excludes=("assets.read_tickets",)),
+    _scope("approved_schema_ids_all_results", "assets.schema", "assets", (Verb.SEARCH,), _assets_result_schema_ids, "this schema", excludes=("assets.read_tickets",)),
     # ── Confluence ────────────────────────────────────────────────────────────────────────────
     _scope(
         "approved_space_keys", "confluence.space", "confluence",
