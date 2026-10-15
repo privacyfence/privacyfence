@@ -105,6 +105,7 @@ jobs:
       - name: Website guardrails on the built site
         env:
           PRIVACYFENCE_SITE_DIR: _site-next
+          PRIVACYFENCE_REQUIRE_BROWSER: "1"
         run: |
           pytest -v -p no:cacheprovider \
             tests/unit/test_build_site.py \

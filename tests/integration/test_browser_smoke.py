@@ -83,7 +83,7 @@ from privacyfence.web.state_stream import call_soon_threadsafe  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode  # noqa: E402
 
-pytestmark = pytest.mark.timeout(60)
+pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
 
 ISSUER = "https://idp.example.com"
 
