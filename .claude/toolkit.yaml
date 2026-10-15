@@ -62,6 +62,12 @@ verify:
       do: >-
         If a dependency changed: run scripts/update_dependency_locks.sh (needs uv) and commit the resulting
         requirements/*.lock.txt.
+    - when: ["sync/**"]
+      do: >-
+        In sync/: `pip install -e "./sync[test]"`, then `pytest sync/tests -q --cov=privacyfence_sync --cov-branch
+        --cov-report=term-missing --cov-fail-under=100`, `mypy sync/src` and `bandit -r sync/src` must pass. If
+        sync/README.md changed, copy it to
+        plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md.
     - when: ["cloudflare/downloads/**"]
       do: "In cloudflare/downloads/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
   dod_manual:
@@ -88,8 +94,10 @@ ci:
     - workflow: qa-record-fixture.yml
       use_when: A fixture for a newly added connector
       notes: >-
-        Input `connector` names one of CONNECTOR_CHECKS in scripts/qa_fixture_recorder.py. Runs on the
-        self-hosted runner and commits the recorded fixture back to the dispatched branch: pull before continuing.
+        Dispatch it on `main` (the self-hosted runner admits only workflows as they stand on `main`) with
+        inputs `connector` (one of CONNECTOR_CHECKS in scripts/qa_fixture_recorder.py) and `branch` (the pushed
+        branch to record for). It records on the self-hosted runner, then commits the fixture to that branch:
+        pull before continuing.
     - workflow: connector-live-check.yml
       use_when: "`qa_fixture_recorder.py --check` for the definition-of-done QA row"
       notes: No inputs. The report lands as the `connector-live-check-report` artifact; link the run in the PR.

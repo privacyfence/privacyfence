@@ -8,6 +8,7 @@ gained a row. This checks that every command §2.7 names also appears in each co
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -18,6 +19,7 @@ pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUIDELINES = REPO_ROOT / "docs" / "coding-and-testing-guidelines.md"
 COPIES = (REPO_ROOT / ".github" / "pull_request_template.md",)
+TESTING_POLICY = REPO_ROOT / "docs" / "testing-policy.md"
 
 # A code span is a command when it starts with one of these; §2.7's other spans are paths, file
 # names and identifiers, which the copies may legitimately phrase differently.
@@ -64,4 +66,23 @@ def test_every_section_2_7_command_appears_in_the_toolkit_profile(command):
     profile = REPO_ROOT / ".claude" / "toolkit.yaml"
     assert command in _normalize(profile.read_text(encoding="utf-8")), (
         f"§2.7 of {GUIDELINES.name} names `{command}`, but .claude/toolkit.yaml does not"
+    )
+
+
+def _required_status_checks() -> list[str]:
+    path = REPO_ROOT / "scripts" / "update_branch_protection.py"
+    spec = importlib.util.spec_from_file_location("update_branch_protection", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return list(module.REQUIRED_STATUS_CHECKS)
+
+
+@pytest.mark.parametrize("check", _required_status_checks())
+def test_every_required_check_is_named_in_the_testing_policy(check):
+    # A matrix job reports one check per leg ("Sync client (Python 3.11)"); the policy names the
+    # job, not each leg, so the stem before " (" is what must appear.
+    stem = check.split(" (")[0]
+    assert stem in TESTING_POLICY.read_text(encoding="utf-8"), (
+        f"REQUIRED_STATUS_CHECKS lists {check!r}, but {TESTING_POLICY.relative_to(REPO_ROOT)} "
+        f"never names {stem!r}"
     )

@@ -80,6 +80,18 @@ def main() -> int:
         "bandit", ["bandit", "-c", "pyproject.toml", "-r", "src"], cwd=REPO_ROOT
     )
 
+    # CI's `sync` job (tests.yml) installs privacyfence-sync alone and runs these three.
+    results["sync tests"] = run(
+        "sync tests",
+        [
+            "python3", "-m", "pytest", "sync/tests", "-q", "--cov=privacyfence_sync",
+            "--cov-branch", "--cov-report=term-missing", "--cov-fail-under=100",
+        ],
+        cwd=REPO_ROOT,
+    )
+    results["sync mypy"] = run("sync mypy", ["python3", "-m", "mypy", "sync/src"], cwd=REPO_ROOT)
+    results["sync bandit"] = run("sync bandit", ["bandit", "-r", "sync/src"], cwd=REPO_ROOT)
+
     print("=== Pre-release check summary ===")
     for name, ok in results.items():
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}")

@@ -417,7 +417,12 @@ classes (see [`tests/fixtures/live/README.md`](../tests/fixtures/live/README.md)
 
 A dedicated Linux host or VM, not shared with other repositories or workloads:
 
-- a GitHub Actions runner registered to this repository with the label `privacyfence-test`;
+- a GitHub Actions runner registered to this repository with the label `privacyfence-test`, in the
+  organization runner group `privacyfence-test`. The group allows public repositories but is set to
+  **Selected workflows**: only `connector-live-check.yml` and `qa-record-fixture.yml` as they stand
+  on `main`, so a pull request, a fork or any other branch's copy of a workflow can never be
+  scheduled on it. Fork pull requests from outside collaborators also require approval before any
+  workflow runs;
 - installed as a service in persistent (non-ephemeral) mode — an `--ephemeral` registration
   deregisters itself after one job;
 - running as a dedicated unprivileged user whose home directory holds the persistent QA state;
@@ -430,7 +435,8 @@ A dedicated Linux host or VM, not shared with other repositories or workloads:
 - OS updates enabled and key-only SSH.
 
 If the repository restricts allowed actions, `peter-evans/create-pull-request` must be on the
-allowlist for the drift PR step.
+allowlist for the drift PR step, which runs in `connector-live-check.yml`'s `open-drift-pr` job on a
+GitHub-hosted runner, not on this host.
 
 ### Persistent QA state
 
@@ -478,16 +484,23 @@ above.
 
 ### Recording one connector
 
-`.github/workflows/qa-record-fixture.yml` (`workflow_dispatch` only, input `connector`, default
-`apps_script`) records one connector's fixture and commits it to the branch it was dispatched
-against. Use it to record the first fixture for a newly added `check_<connector>()`, which the live
+`.github/workflows/qa-record-fixture.yml` (`workflow_dispatch` only, dispatched **on `main`**, inputs
+`connector`, default `apps_script`, and `branch`, the pushed branch to record for) records one
+connector's fixture and commits it to that branch. Use it to record the first fixture for a newly added `check_<connector>()`, which the live
 check never records because its `--check` does not fail. It:
 
-- refuses to run on `main` or a `releases/*` branch, because it pushes directly to the branch;
+- the `record` job (self-hosted, read-only `contents`) refuses to run unless dispatched on `main`,
+  refuses a `branch` that is `main`, `stable`, `releases/*` or starts with `refs/` or `pull/`, and
+  one that does not exist on `origin` as a branch, so no pull-request ref (fork code included) can
+  reach the runner; the branch is passed through an environment variable, never interpolated into a
+  script;
 - fails unless the connector is registered in `CONNECTOR_CHECKS`;
 - runs `--record <connector>` without `continue-on-error`, so a refused recording fails the job;
-- stages only `tests/fixtures/live/**`, commits as `github-actions[bot]` and pushes;
-- copies refreshed credentials back and uploads the report as `qa-record-report-<connector>`.
+- copies refreshed credentials back, uploads the report as `qa-record-report-<connector>` and the
+  recorded `tests/fixtures/live/<connector>` as the `recorded-fixture` artifact;
+- the `commit-fixture` job (`ubuntu-latest`, the only one with `contents: write`) checks out
+  `branch`, restores that artifact, commits as `github-actions[bot]` and pushes, skipping when
+  nothing changed.
 
 It shares the `connector-live-check` concurrency group with the live check (no cancellation), so
 the two never race on the credential store. A queued run is waiting for the other one. GitHub
