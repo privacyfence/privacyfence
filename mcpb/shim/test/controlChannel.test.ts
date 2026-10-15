@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { ControlChannelError, mintMcpToken } from "../src/controlChannel.js";
+import type { OwnershipFs } from "../src/protocol.js";
 
 /** Points dataDir()'s HOME lookup -- and therefore posixControlSocketPath(),
  * which mintMcpToken() calls with no override of its own -- at a fresh temp
@@ -85,6 +86,38 @@ function startFakeControlChannel(
 function closeServer(server: net.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
+
+describe("mintMcpToken on a separated install", () => {
+  it("refuses a control socket the service account does not own, without connecting", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-cc-root-"));
+    const originalRoot = process.env.PRIVACYFENCE_SYSTEM_ROOT;
+    let connections = 0;
+    let server: net.Server | undefined;
+    try {
+      fs.writeFileSync(
+        path.join(root, "privilege-separation.json"),
+        JSON.stringify({ version: 1, platform: process.platform }),
+      );
+      fs.mkdirSync(path.join(root, "handoff"));
+      process.env.PRIVACYFENCE_SYSTEM_ROOT = root;
+      server = await startFakeControlChannel(path.join(root, "handoff", "control.sock"), "OK sometoken\n");
+      server.on("connection", () => {
+        connections += 1;
+      });
+      const fsx = {
+        lstatSync: () => ({ isSocket: () => true, isFile: () => false, uid: 501 }),
+        statSync: () => ({ uid: 999 }),
+      } as unknown as OwnershipFs;
+      await assert.rejects(mintMcpToken({ timeoutMs: 2000, fsx }), /not owned by the service account/);
+      assert.equal(connections, 0);
+    } finally {
+      if (server) await closeServer(server);
+      if (originalRoot === undefined) delete process.env.PRIVACYFENCE_SYSTEM_ROOT;
+      else process.env.PRIVACYFENCE_SYSTEM_ROOT = originalRoot;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("mintMcpToken", () => {
   it("resolves with the token from a well-formed OK reply", async () => {

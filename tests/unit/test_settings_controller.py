@@ -33,10 +33,13 @@ import pytest
 from privacyfence import auto_accept, daemon_main, org_mode, resource_names, scoped_tokens, settings_controller as sc, update_checker
 from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
-from privacyfence import peek_client
+from privacyfence import peek_client, policy_upgrade
+from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import engine as policy_engine
 from privacyfence.policy import propose as policy_propose
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
+from privacyfence.policy.registry import Verb
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -310,24 +313,6 @@ class TestConfigHelpers:
         )
 
         controller._save_config({"a": 1})  # must not raise
-
-    def test_save_and_reload_persists_and_triggers_rule_reload(self, controller, monkeypatch):
-        reload_calls = []
-        monkeypatch.setattr(sc, "notify_rules_changed", lambda: reload_calls.append(True))
-
-        section = {"version": 2, "rules": [
-            {"id": "r1", "predicate": "i_am_sender", "value": None, "operations": ["gmail.read_message"],
-             "conditions": []},
-        ]}
-        controller._save_and_reload({"auto_accept": section})
-
-        assert reload_calls == [True]
-        assert controller._load_config()["auto_accept"] == section
-
-    def test_save_and_reload_swallows_reload_failures(self, controller, monkeypatch):
-        monkeypatch.setattr(sc, "notify_rules_changed", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-
-        controller._save_and_reload({})  # must not raise
 
 
 class TestExtractDriveId:
@@ -1935,25 +1920,25 @@ class TestPolicyScopeCatalogue:
 
     def test_gmail_and_slack_unconditional_extras_need_no_value(self):
         by_id = {e["id"]: e for e in sc._policy_scope_catalogue()}
-        assert by_id["gmail.configure"]["needs_value"] is False
-        assert by_id["gmail.configure"]["verbs"] == ["configure"]
-        assert by_id["slack.share_anything"]["needs_value"] is False
-        assert by_id["slack.share_anything"]["verbs"] == ["share"]
+        assert by_id["gmail.filters"]["needs_value"] is False
+        assert by_id["gmail.filters"]["verbs"] == ["restructure"]
+        assert by_id["slack.group_chats"]["needs_value"] is False
+        assert by_id["slack.group_chats"]["verbs"] == ["send"]
 
     def test_drive_folder_entry_unions_verbs_across_every_predicate_in_the_group(self):
         entry = next(e for e in sc._policy_scope_catalogue() if e["id"] == "drive.folder")
-        # approved_folder (read/download) + approved_sandbox_folder (update/format/restructure/
-        # comment/delete) + parent_folder_allowlist (create) + move_within_approved_folders (move, copy).
+        # approved_folder (read/download) + approved_sandbox_folder (update/restructure/delete)
+        # + parent_folder_allowlist (add) + move_within_approved_folders (move).
         assert set(entry["verbs"]) == {
-            "read", "download", "update", "format", "restructure", "comment", "delete", "create", "move", "copy",
+            "read", "download", "update", "restructure", "delete", "add", "move",
         }
 
 
 class TestAddPolicyRule:
-    """add_policy_rule is the Auto-accept page's one writer, straight to the on-disk v2
+    """add_policy_rule is the Auto-accept page's one writer, straight to the on-disk version-3
     ``auto_accept:`` section -- never through v1's auto_accept_rules/auto_accept_grants."""
 
-    def test_adds_a_scope_rule_to_the_v2_section(self, controller):
+    def test_adds_a_scope_row_to_the_version_3_section(self, controller):
         state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read", "download"])
 
         rules = state["auto_accept"]["rules"]
@@ -1963,23 +1948,88 @@ class TestAddPolicyRule:
         assert "FOLDER1" in rules[0]["value"]
 
         cfg = controller._load_config()
-        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["predicate"] == "approved_folder"
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["version"] == 3
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["scope"] == "drive.folder"
         # Writes only the current section: nothing a later load_config would refuse, and no marker.
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
 
-    def test_add_policy_rule_with_personal_data_stores_the_flag(self, controller):
-        controller.add_policy_rule("grist.document", "DOC1", ["read"], personal_data=True)
+    @pytest.mark.parametrize("method", ["add", "remove", "set_verbs", "update"])
+    def test_rules_changed_listeners_see_the_new_rule(self, controller, method):
+        """The rule cache is reloaded before the listeners fire, so a listener that re-checks a
+        pending card reads the rules the write just saved, not the previous set."""
+        if method != "add":
+            controller.add_policy_rule("drive.folder", "FOLDER1", ["read", "download"])
+        row_id = next(iter(controller.snapshot()["auto_accept"]["rules"]), {}).get("id")
+        if method == "update":
+            # Strip one operation so the row has something missing for "Update rule" to add.
+            cfg = controller._load_config()
+            cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["operations"].pop()
+            controller._save_and_reload_policy_v2(cfg)
+        seen: list = []
+        def listener() -> None:
+            seen.append(list(auto_accept.get_policy_v2_store_rules()))
 
-        rules = controller._load_config()[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"]
-        assert len(rules) == 1
-        assert rules[0]["allow_personal_data"] is True
+        auto_accept.add_rules_changed_listener(listener)
+        try:
+            if method == "add":
+                controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+            elif method == "remove":
+                controller.remove_policy_rule(row_id)
+            elif method == "set_verbs":
+                controller.set_policy_rule_verbs(row_id, ["read"])
+            else:
+                controller.update_policy_rule(row_id)
+        finally:
+            auto_accept.remove_rules_changed_listener(listener)
+        assert seen, "the listener never fired"
+        assert seen[-1] == list(auto_accept.get_policy_v2_store_rules())
 
-    def test_add_policy_rule_personal_data_on_an_unsupported_group_adds_nothing(self, controller):
-        state = controller.add_policy_rule("gmail.label", "Label_1", ["read"], personal_data=True)
+    async def test_a_pending_card_is_auto_accepted_when_settings_adds_a_covering_rule(
+        self, controller, tmp_path,
+    ):
+        from privacyfence import approval_ui
+        from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
+        from privacyfence.audit_log import init_audit_logger
+        from privacyfence.web_approval_ui import WebApprovalUI
 
-        assert state["auto_accept"]["rules"] == []
-        assert policy_store.AUTO_ACCEPT_CONFIG_KEY not in controller._load_config()
+        init_audit_logger(str(tmp_path))
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+
+        with pytest.raises(ApprovalPending):
+            await gate_module.gated_call(
+                connector="drive", tool="drive_get_file_content", tool_name="Read Drive file",
+                summary="a file", sender="", raw_data=SimpleNamespace(parent_ids=["FOLDER1"]),
+                filtered_data="body", gate="review", preview={}, details_text="body",
+                my_email="me@example.com",
+            )
+        card = registry.list_pending()[0]
+
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+
+        assert card.final_decision == "auto_accepted"
+
+    def test_a_failed_policy_reload_after_a_remove_is_logged_and_leaves_no_wider_rule(
+        self, controller, monkeypatch, caplog,
+    ):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        row_id = controller.snapshot()["auto_accept"]["rules"][0]["id"]
+        assert auto_accept.get_policy_v2_store_rules()
+        monkeypatch.setattr(
+            policy_store, "compile_rules_from_config",
+            lambda cfg: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with caplog.at_level("WARNING"):
+            controller.remove_policy_rule(row_id)
+
+        assert "Policy v2 store hot-reload failed" in caplog.text
+        assert auto_accept.get_policy_v2_store_rules() == []
+
+    def test_add_policy_rule_takes_no_personal_data_argument(self, controller):
+        with pytest.raises(TypeError):
+            controller.add_policy_rule("grist.document", "DOC1", ["read"], personal_data=True)
 
     def test_adding_more_verbs_for_the_same_value_widens_the_existing_row(self, controller):
         controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
@@ -1994,11 +2044,11 @@ class TestAddPolicyRule:
         tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
         assert {"apps_script_get_content", "apps_script_get_execution_log", "apps_script_write_content"} <= tools
 
-        state = controller.add_policy_rule("gmail.configure", "", ["configure"])
+        state = controller.add_policy_rule("gmail.filters", "", ["restructure"])
         tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
         assert "gmail_create_filter" in tools
 
-        state = controller.add_policy_rule("slack.share_anything", "", ["share"])
+        state = controller.add_policy_rule("slack.group_chats", "", ["send"])
         tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
         assert "slack_create_group_chat" in tools
 
@@ -2033,6 +2083,81 @@ class TestAddPolicyRule:
         assert rule_id == rules[0].id
 
 
+class TestPolicyRuleRows:
+    """The three rule writers work on rows, and upgrade a version-2 section first."""
+
+    def test_two_adds_on_one_scope_leave_one_row(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["update"])
+
+        # Asserts on the stored rows, not the snapshot: the snapshot's shape is not this
+        # writer's concern.
+        (row,) = scope_rows.rows_from_config(controller._load_config())
+        assert row.id == scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        assert row.verbs == {Verb.READ, Verb.UPDATE}
+
+    def test_add_upgrades_a_version_2_section_first(self, controller):
+        cfg = controller._load_config()
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(
+            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["FOLDER1"], [Verb.READ])
+        )
+        controller._save_and_reload_policy_v2(cfg)
+
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["update"])
+
+        section = controller._load_config()[policy_store.AUTO_ACCEPT_CONFIG_KEY]
+        assert section["version"] == 3
+        (row,) = scope_rows.rows_from_config(controller._load_config())
+        assert row.verbs == {Verb.READ, Verb.UPDATE}
+
+    def test_remove_by_row_id(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER2", ["read"])
+        keep = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        drop = scope_rows.row_id_for("drive.folder", ["FOLDER2"])
+
+        controller.remove_policy_rule(drop)
+
+        assert [r.id for r in scope_rows.rows_from_config(controller._load_config())] == [keep]
+
+    def test_update_fills_missing_on_row(self, controller):
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
+        cfg = controller._load_config()
+        (row,) = scope_rows.rows_from_config(cfg)
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = scope_rows.rows_to_config(
+            [dataclasses.replace(row, operations=row.operations - {"grist.import_csv"})]
+        )
+        controller._save_and_reload_policy_v2(cfg)
+
+        controller.update_policy_rule(row.id)
+
+        (updated,) = scope_rows.rows_from_config(controller._load_config())
+        assert updated.operations == row.operations
+
+    def test_writer_refuses_when_upgrade_fails(self, controller, monkeypatch):
+        cfg = controller._load_config()
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(
+            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["FOLDER1"], [Verb.READ])
+        )
+        controller._save_and_reload_policy_v2(cfg)
+        monkeypatch.setattr(policy_upgrade, "ensure_scope_rows", lambda *a, **k: False)
+        before = controller._load_config()
+        row_id = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+
+        for write in (
+            lambda: controller.add_policy_rule("drive.folder", "FOLDER2", ["read"]),
+            lambda: controller.remove_policy_rule(row_id),
+            lambda: controller.update_policy_rule(row_id),
+        ):
+            controller.error = ""
+            write()
+            assert controller.error == (
+                "Auto-accept rules could not be upgraded to the new format; "
+                "restart PrivacyFence and try again."
+            )
+            assert controller._load_config() == before
+
+
 class TestRemovePolicyRule:
     def test_removes_by_id(self, controller):
         state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
@@ -2059,12 +2184,13 @@ class TestUpdatePolicyRule:
     def _stale_grist_rule(self, controller):
         """A Grist document rule as saved before the CSV tools existed: the verbs are still
         read/create/update, the operation list lacks ``grist.import_csv``."""
-        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"], personal_data=True)
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
         cfg = controller._load_config()
-        (rule,) = policy_store.compile_rules_from_config(cfg)
-        stale = dataclasses.replace(rule, operations=rule.operations - {"grist.import_csv"})
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config([stale])
+        (row,) = scope_rows.rows_from_config(cfg)
+        stale_row = dataclasses.replace(row, operations=row.operations - {"grist.import_csv"})
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = scope_rows.rows_to_config([stale_row])
         controller._save_and_reload_policy_v2(cfg)
+        (stale,) = scope_rows.compile_row(stale_row)
         return stale
 
     def test_row_carries_the_missing_tools(self, controller):
@@ -2094,7 +2220,7 @@ class TestUpdatePolicyRule:
         assert row["missing_tools"] == []
         assert "grist_import_csv" in row["covered_tools"]
 
-    def test_update_keeps_the_id_the_value_and_the_personal_data_flag(self, controller):
+    def test_update_keeps_the_id_the_value_and_the_conditions(self, controller):
         stale = self._stale_grist_rule(controller)
 
         controller.update_policy_rule(stale.id)
@@ -2103,7 +2229,6 @@ class TestUpdatePolicyRule:
         assert rule.id == stale.id
         assert rule.value == stale.value
         assert rule.conditions == stale.conditions
-        assert rule.allow_personal_data is True
         assert [r.id for r in policy_store.compile_rules_from_config(controller._load_config())] == [stale.id]
 
     def test_update_leaves_other_rules_untouched(self, controller):
@@ -2167,6 +2292,73 @@ class TestUpdatePolicyRule:
         assert "grist.import_csv" in in_scope.operations
 
 
+class TestSetPolicyRuleVerbs:
+    """set_policy_rule_verbs edits a scoped row's verbs in place (scope_rows.set_verbs)."""
+
+    def _row(self, controller, verbs):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", verbs)
+        (row,) = state["auto_accept"]["rules"]
+        return row
+
+    def test_adding_a_verb_keeps_the_id_and_adds_its_tools(self, controller):
+        row = self._row(controller, ["read"])
+
+        state = controller.set_policy_rule_verbs(row["id"], ["read", "update"])
+
+        (after,) = state["auto_accept"]["rules"]
+        assert after["id"] == row["id"]
+        assert {v["verb"] for v in after["verbs"]} == {"read", "update"}
+        assert set(row["covered_tools"]) < set(after["covered_tools"])
+        assert after["missing_tools"] == []
+
+    def test_removing_a_verb_drops_its_tools(self, controller):
+        row = self._row(controller, ["read", "update"])
+
+        state = controller.set_policy_rule_verbs(row["id"], ["read"])
+
+        (after,) = state["auto_accept"]["rules"]
+        assert {v["verb"] for v in after["verbs"]} == {"read"}
+        assert set(after["covered_tools"]) < set(row["covered_tools"])
+
+    @pytest.mark.parametrize("verbs", [[], ["send"], ["not-a-verb"]])
+    def test_a_refusal_is_a_no_op_that_writes_nothing(self, controller, monkeypatch, verbs):
+        row = self._row(controller, ["read"])
+        before = controller._load_config()
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.set_policy_rule_verbs(row["id"], verbs)
+
+        assert saved == []
+        assert controller._load_config() == before
+
+    def test_an_unknown_id_is_a_no_op_that_writes_nothing(self, controller, monkeypatch):
+        self._row(controller, ["read"])
+        before = controller._load_config()
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.set_policy_rule_verbs("r-does-not-exist", ["read", "update"])
+
+        assert saved == []
+        assert controller._load_config() == before
+
+    def test_unchanged_verbs_write_nothing(self, controller, monkeypatch):
+        row = self._row(controller, ["read"])
+        saved = []
+        monkeypatch.setattr(controller, "_save_and_reload_policy_v2", lambda cfg: saved.append(cfg))
+
+        controller.set_policy_rule_verbs(row["id"], ["read"])
+
+        assert saved == []
+
+    def test_the_row_carries_its_scope_and_scope_verbs(self, controller):
+        row = self._row(controller, ["read"])
+
+        assert row["scope"] == "drive.folder"
+        assert "update" in row["scope_verbs"]
+
+
 class TestAutoAcceptRuleUsage:
     """Rule attribution and staleness: each Auto-accept row's own match_count/last_matched/
     never_matched, from the audit log's rule_id field (see AuditEntry.rule_id's own docstring)."""
@@ -2220,6 +2412,42 @@ class TestAutoAcceptRuleUsage:
         state = controller.snapshot()
         row = state["auto_accept"]["rules"][0]
         assert row["never_matched"] is True
+
+
+class TestScopeRowState:
+    """The Auto-accept page reads scope rows (ADR 0172), not one entry per stored predicate."""
+
+    FOLDER = "2RollingCashflowFolder"
+
+    def _v2_cfg(self):
+        return {"auto_accept": {"version": 2, "rules": [
+            {"id": "r-narrow", "predicate": "approved_folder", "value": [self.FOLDER],
+             "operations": ["drive.download_file"], "conditions": []},
+            {"id": "r-flagged", "predicate": "approved_folder", "value": [self.FOLDER],
+             "operations": ["drive.read_file_contents", "drive.download_file"], "conditions": [],
+             "allow_personal_data": True},
+        ]}}
+
+    def test_screenshot_case_renders_one_row(self, controller):
+        state = controller._auto_accept_state(self._v2_cfg())
+        (row,) = state["rules"]
+        assert [v["verb"] for v in row["verbs"]] == ["read", "download"]
+        assert row["scope"] == "drive.folder"
+        assert "read" in row["scope_verbs"] and "download" in row["scope_verbs"]
+        assert row["sentence"].endswith("allow read, download")
+
+    def test_usage_sums_former_ids(self, controller):
+        usage = {
+            "r-narrow": {"count": 2, "last_matched": "2026-07-06T12:00:00+00:00"},
+            "r-flagged": {"count": 3, "last_matched": "2026-07-08T12:00:00+00:00"},
+            "r-unrelated": {"count": 9, "last_matched": "2026-07-09T12:00:00+00:00"},
+        }
+        rows = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
+        state = sc._auto_accept_state_from_rows(rows, usage, resolve_value=lambda row: "v")
+        (row,) = state["rules"]
+        assert row["match_count"] == 5
+        assert row["never_matched"] is False
+        assert row["last_matched"] == sc._relative_time("2026-07-08T12:00:00+00:00")
 
 
 class TestResolvedRuleValue:
@@ -2705,3 +2933,25 @@ def _run_pair(work, done) -> None:
         done(False, exc)
     else:
         done(True, result)
+
+
+class TestPrivacyPolicyFailClosed:
+    def test_set_category_policy_rejects_an_unknown_policy(self, controller):
+        with open(controller._config_path, encoding="utf-8") as fh:
+            before = fh.read()
+
+        controller.set_category_policy("gmail", "body", "allow_everything")
+
+        with open(controller._config_path, encoding="utf-8") as fh:
+            after = fh.read()
+        assert after == before
+
+    def test_a_failed_privacy_filter_reload_is_logged(self, controller, monkeypatch, caplog):
+        monkeypatch.setattr(
+            sc, "init_privacy_filter", lambda cfg: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with caplog.at_level("WARNING"):
+            controller.set_default_policy("privacy", "redact")
+
+        assert "Privacy filter hot-reload failed" in caplog.text

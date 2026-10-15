@@ -27,6 +27,7 @@ from starlette.testclient import TestClient
 from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, update_checker
 from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
@@ -242,18 +243,6 @@ class TestActionDispatch:
         rules = r.json()["auto_accept"]["rules"]
         assert any(row["connector"] == "gmail" for row in rules)
 
-    def test_add_policy_rule_passes_personal_data(self):
-        controller = sc.SettingsController.__new__(sc.SettingsController)
-        with patch.object(sc.SettingsController, "add_policy_rule", autospec=True) as add_rule:
-            rs._call_action(
-                controller, "add_policy_rule",
-                {"group": "grist.document", "value": "DOC1", "verbs": ["read"], "personal_data": True},
-            )
-
-        add_rule.assert_called_once_with(
-            controller, group="grist.document", value="DOC1", verbs=["read"], personal_data=True,
-        )
-
     def test_bad_argument_type_is_400_not_500(self, client, sessions):
         csrf = _authed(client, sessions)
         r = client.post(
@@ -295,7 +284,7 @@ class TestActionDispatch:
             calls += 1
             return calls > 1
 
-        events = server.state_stream.subscribe(disconnected)
+        events = server.state_stream.subscribe(disconnected, receives_settings=True)
         first = await events.__anext__()
         controller._push_snapshot()
         await events.__anext__()  # the initial approvals event
@@ -620,6 +609,27 @@ class TestSensitiveActionStepUp:
         assert r.status_code == 428
         (after,) = policy_store.compile_rules_from_config(controller._load_config())
         assert after.operations == stale.operations
+
+    def test_set_policy_rule_verbs_is_sensitive_and_needs_step_up(self, controller, sessions):
+        """Changing a rule's verbs changes what a future call auto-accepts, so it demands the same
+        fresh passkey assertion ``add_policy_rule`` does, and applies nothing without it."""
+        assert "set_policy_rule_verbs" in _SENSITIVE_ACTIONS
+        self._enroll()
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        (row,) = state["auto_accept"]["rules"]
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+
+        r = client.post(
+            "/api/settings/set_policy_rule_verbs",
+            json={"rule_id": row["id"], "verbs": ["read", "update"], "csrf": csrf},
+        )
+
+        assert r.status_code == 428
+        (after,) = scope_rows.rows_from_config(controller._load_config())
+        assert {v.value for v in after.verbs} == {"read"}
 
     def test_update_policy_rule_with_an_unknown_id_is_harmless(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -1484,8 +1494,8 @@ def _scoped_wiring(calls: list, *, ok: bool = True, reason: str = "", create_err
 
     secret = "pfst_" + "A" * 43
 
-    def _create(label, days, rule_ids, tools):
-        calls.append(("create", label, days, rule_ids, tools))
+    def _create(label, days, rule_ids, tools, allow_personal_data):
+        calls.append(("create", label, days, rule_ids, tools, allow_personal_data))
         if create_error:
             raise ScopedTokenError(create_error)
         return _scoped_token(label=label), secret
@@ -1546,9 +1556,32 @@ class TestScopedTokenRoutes:
         assert r.json() == {"created": {"id": "st-0123456789ab", "label": "sales-sync", "expires_at": 2.0}}
         assert self.SECRET not in r.text
         assert calls == [
-            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"]),
+            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"], False),
             ("send", self.SECRET),
         ]
+
+    def test_the_personal_data_flag_reaches_the_store(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "allow_personal_data": True}})
+        assert r.status_code == 200
+        assert calls[0][-1] is True
+
+    @pytest.mark.parametrize("value", ["true", 1, None, []])
+    def test_a_non_bool_personal_data_flag_is_a_400(self, controller, sessions, value):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "allow_personal_data": value}})
+        assert r.status_code == 400
+        assert calls == []
+
+    def test_the_fingerprint_covers_the_personal_data_flag(self):
+        base = {"label": "a", "days": 1, "rule_ids": ["r"], "tools": ["t"]}
+        off = rs._scoped_create_fingerprint_body(base)
+        on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data": True})
+        assert off["allow_personal_data"] is False and on["allow_personal_data"] is True
+        assert off != on
+        assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data": "yes"}) is None
 
     @pytest.mark.usefixtures("_data_dir")
     @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL])

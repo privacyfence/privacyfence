@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-11. Implemented.
 Amends ADR 0155. Its alternative "exempting exports from the PII gate" stays rejected as a blanket exemption; a per-rule opt-in is now the way to let an export through.
+Amended by ADR 0173.
 
 ## Context
 

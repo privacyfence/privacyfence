@@ -9,6 +9,7 @@ per-user. #609 first recorded this inside ADR 0002's decision 2; it was moved he
 rules in [`README.md`](README.md) were adopted.
 
 Amended by [ADR 0029](0029-the-layout-step-never-re-owns-a-socket.md): the installers' layout step no longer re-owns sockets, which had turned every upgrade into a stale-socket lockout.
+Amended by [ADR 0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md): the daemon's control channel replaces a foreign socket; the companion channel keeps refusing.
 
 ## Context
 

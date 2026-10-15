@@ -29,6 +29,13 @@ finds itself unseparated refuses to serve. A `pip`/`pipx` or source install is n
 [Security and compliance](security-and-compliance.md) explains what separation does and does not
 protect.
 
+## Signing
+
+macOS: the DMG, and the app and installer it holds, are Developer ID signed and notarized for
+stable releases. Windows: the installer is Authenticode-signed for stable releases. Debian/Ubuntu:
+the `.deb` is not signed; check it by its SHA-256. Pre-releases may be unsigned. CycloneDX SBOMs are
+attached to stable releases only.
+
 ## Data locations
 
 Your installed PrivacyFence keeps all of its data in one directory:

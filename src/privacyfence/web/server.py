@@ -100,12 +100,13 @@ from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..policy import describe
+from ..policy import scope_rows
 from ..policy import propose as policy_propose
-from ..policy.engine import PolicyRule
+from ..policy.registry import TOOL_REGISTRY
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
 from ..resource_names import get_resolver
-from ..settings_controller import SettingsController, cached_rule_value, set_main_dispatcher
+from ..settings_controller import SettingsController, cached_row_value, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from ..web_push import PushNotifier, PushSubscriptionStore
@@ -134,7 +135,7 @@ from .mcp_auth import (
     single_token_verifier,
 )
 from .mcp_dispatch import McpDispatcher
-from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
+from .oauth_provider import CONSENT_PATH, IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
@@ -286,20 +287,48 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     )
 
 
-def _scoped_rule_entry(rule: PolicyRule, value_display: str) -> dict[str, Any]:
-    """One rule as the scoped token form shows it: ``title`` says which resource it covers,
+def _scoped_rule_entry(row: scope_rows.ScopeRow, value_display: str) -> dict[str, Any]:
+    """One row as the scoped token form shows it: ``title`` says which resource it covers,
     ``verbs`` what it allows there, ``tools`` which tools those verbs govern."""
-    connectors = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    compiled = scope_rows.compile_row(row)
+    connectors = sorted({policy_propose.connector_of_operation(op) for op in row.operations})
     connector = describe.connector_label(connectors[0]) if connectors else ""
-    scope_type = describe.scope_type_of(rule)
-    subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip() if scope_type else rule.predicate
+    scope_type = describe.scope_type_of(compiled[0]) if compiled else ""
+    if scope_type:
+        subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip()
+    else:
+        subject = compiled[0].predicate if compiled else (row.predicate or row.scope or "")
     return {
-        "id": rule.id,
+        "id": row.id,
         "title": f"{connector} — {subject}" if connector else subject,
-        "verbs": [verb.value for verb in describe.rule_verbs(rule)],
-        "sentence": describe.rule_sentence(rule, value_display=value_display or None),
-        "tools": list(describe.covered_tools(rule)),
+        "verbs": [verb.value for verb in sorted(row.verbs, key=policy_propose.verb_sort_key)],
+        "sentence": describe.row_sentence(row, value_display=value_display or None),
+        "tools": sorted({tool for rule in compiled for tool in describe.covered_tools(rule)}),
     }
+
+
+def _limited_tools(row: scope_rows.ScopeRow, limit: frozenset[tuple[str, str]]) -> list[str]:
+    """The tools of ``row`` whose ``(predicate, operation)`` pair is in a token's ``limit``."""
+    return sorted({
+        entry.tool
+        for rule in scope_rows.compile_row(row)
+        for entry in TOOL_REGISTRY.values()
+        if entry.operation in rule.operations and entry.verb is not None
+        and entry.tool in describe.covered_tools(rule) and (rule.predicate, entry.operation) in limit
+    })
+
+
+def _token_rule_entry(
+    token: ScopedToken, rule_id: str, rows: dict[str, scope_rows.ScopeRow], rules: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if rule_id not in rules:
+        return {"id": rule_id, "missing": True}
+    entry = {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
+    limit = token.rule_limits.get(rule_id)
+    # A token's limit is narrower than the row when some of the row's pairs are not in it.
+    if limit is not None and scope_rows.pairs_of(rows.values(), rule_id) - limit:
+        entry["limited_to"] = _limited_tools(rows[rule_id], limit)
+    return entry
 
 
 def scoped_token_page_data(
@@ -312,15 +341,15 @@ def scoped_token_page_data(
     ADR 0165). Must not be called under another principal's scope.
 
     Each rule's resource ids are shown by the names the Auto-accept page has
-    cached (``cached_rule_value``), so the two pages name a rule alike. A
+    cached (``cached_row_value``), so the two pages name a rule alike. A
     rule's ``title`` names what it covers without its verbs, which the form
     shows separately; ``auto_tools`` are the tools that need no rule at all.
     """
     now = time.time()
     with principal_scope(principal):
         resolver = get_resolver()
-        rules = {rule.id: _scoped_rule_entry(rule, cached_rule_value(rule, resolver))
-                 for rule in auto_accept.get_policy_v2_store_rules()}
+        rows = {row.id: row for row in auto_accept.get_policy_rows()}
+        rules = {row.id: _scoped_rule_entry(row, cached_row_value(row, resolver)) for row in rows.values()}
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
         connector = name.split("_", 1)[0]
@@ -334,13 +363,9 @@ def scoped_token_page_data(
             "id": token.id, "label": token.label, "created_at": token.created_at,
             "expires_at": token.expires_at, "days_left": days_left,
             "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
-            "rules": [
-                {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
-                if rule_id in rules
-                else {"id": rule_id, "missing": True}
-                for rule_id in sorted(token.rule_ids)
-            ],
+            "rules": [_token_rule_entry(token, rule_id, rows, rules) for rule_id in sorted(token.rule_ids)],
             "tools": sorted(token.tools),
+            "allow_personal_data": token.allow_personal_data,
         })
     return {
         "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
@@ -362,10 +387,13 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
     """
     policy = scoped_tokens.policy_from_org_config({}, org_mode=False)
 
-    def _create(label: str, days: int, rule_ids: list[str], tools: list[str]) -> tuple[ScopedToken, str]:
+    def _create(
+        label: str, days: int, rule_ids: list[str], tools: list[str], allow_personal_data: bool,
+    ) -> tuple[ScopedToken, str]:
         with principal_scope(LOCAL_PRINCIPAL):
             return scoped_tokens.get_store().create(
                 LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=tools, policy=policy,
+                allow_personal_data=allow_personal_data,
             )
 
     def _revoke(token_id: str) -> ScopedToken | None:
@@ -521,8 +549,14 @@ def _clear_web_base_url_file() -> None:
 # browsing-context group and nulls its ``window.opener`` -- and a client
 # whose redirect page hands the code back through ``window.opener``
 # (Gemini Enterprise's does) then never exchanges it. Neither path renders
-# a document, so COOP protected nothing on them. ADR 0108.
+# a document, so COOP protected nothing on them. ADR 0108. The consent pages
+# (``CONSENT_PATH``/<id>, ADR 0177) are the one exception to "neither renders a
+# document": they do, but they sit in the same chain and must keep the opener too.
 _OAUTH_POPUP_PATHS = frozenset({"/authorize", IDP_CALLBACK_PATH})
+
+
+def _keeps_popup_opener(path: str) -> bool:
+    return path in _OAUTH_POPUP_PATHS or path.startswith(CONSENT_PATH + "/")
 
 
 class _SecurityHeadersMiddleware:
@@ -601,7 +635,7 @@ class _SecurityHeadersMiddleware:
                 headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
                 headers["cross-origin-opener-policy"] = (
-                    "unsafe-none" if scope.get("path") in _OAUTH_POPUP_PATHS else "same-origin"
+                    "unsafe-none" if _keeps_popup_opener(scope.get("path") or "") else "same-origin"
                 )
                 if self._hsts:
                     headers["strict-transport-security"] = _HSTS
@@ -868,7 +902,10 @@ class _BootstrapMiddleware:
         if not code:
             await self._app(scope, receive, send)
             return
-        response = RedirectResponse(request.url.path, status_code=303)
+        response = RedirectResponse(
+            # A leading "//" or "/\\" would be read as a scheme-relative URL to another host.
+            "/" + request.url.path.lstrip("/\\"), status_code=303,
+        )
         # The code carries its own provenance (web/session_auth.py's
         # ``PROVENANCE_*``) and, since ADR 0008, the principal that minted it
         # (which OS user's control-channel connection asked), and the session
@@ -903,8 +940,13 @@ def _state_stream_route(stream: StateStream, *, sessions: LocalSessionStore) -> 
         session_id = request.cookies.get(_SESSION_COOKIE, "")
         if not session_id or not sessions.touch(session_id):
             return _unauthorized_response(request)
+        # The settings snapshot is the owner's: another OS user's stream carries approvals only.
+        receives_settings = current_principal().id == LOCAL_PRINCIPAL.id
         return StreamingResponse(
-            stream.subscribe(request.is_disconnected, touch=lambda: sessions.touch(session_id)),
+            stream.subscribe(
+                request.is_disconnected, touch=lambda: sessions.touch(session_id),
+                receives_settings=receives_settings,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store"},
         )

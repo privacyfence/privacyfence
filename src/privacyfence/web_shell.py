@@ -21,13 +21,13 @@ makes "one live indicator" true instead of aspirational.
 """
 from __future__ import annotations
 
-import json
 import secrets
 from html import escape as _html_escape
 from pathlib import Path
 
 from . import approval_icons
 from .design_css import DOCUMENT_CSS
+from .html_embed import json_for_script
 
 # Browser-tab favicon -- the same bundled shield mark approval_icons.py
 # already hands the approval card (resources/icon_32.png, the
@@ -706,10 +706,10 @@ def wrap(
     if live_updates:
         stream_js = _STREAM_JS % {
             "notifications_enabled": "true" if notifications_enabled else "false",
-            "notifications_detail": json.dumps(notifications_detail),
-            "stream_url": json.dumps(stream_url),
-            "push_public_key": json.dumps(push_public_key),
-            "push_csrf": json.dumps(csrf if push_public_key else ""),
+            "notifications_detail": json_for_script(notifications_detail),
+            "stream_url": json_for_script(stream_url),
+            "push_public_key": json_for_script(push_public_key),
+            "push_csrf": json_for_script(csrf if push_public_key else ""),
         }
         stream_script = f'<script nonce="{nonce}">{stream_js}</script>'
     live_html = (

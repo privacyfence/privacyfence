@@ -1,15 +1,10 @@
 """Tests for web/routes_connect.py: /connect and the GET /oauth/start/
 {service}+/oauth/callback/{service} server-redirect flow.
 
-httpx's TestClient does not enforce SameSite cookie semantics the way a
-real browser does, so it would happily pass a naive implementation that
-reads the session cookie at callback time -- see routes_connect.py's own
-module docstring on why that would be wrong. TestCallback's own tests
-below drive the callback with **no** cookie at all on that specific
-request, which is what actually proves the module doesn't depend on one.
-That stays true now that the cookie is SameSite=Lax and a real browser
-would send it here: not depending on it is the point, since the principal
-has to come from the flow that started, not from whoever is signed in.
+The callback only finishes in the signed-in session that started it (ADR 0178), so every
+callback that is expected to succeed sends the starting principal's session cookie, and
+TestOAuthCallback drives it with another principal's cookie and with none to prove nothing is
+saved.
 """
 from __future__ import annotations
 
@@ -344,17 +339,15 @@ class TestOAuthCallback:
         start = client.get("/oauth/start/slack", cookies={org_session.SESSION_COOKIE: session_id})
         state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
 
-        r = client.get(f"/oauth/callback/slack?error=access_denied&state={state}")
+        r = client.get(f"/oauth/callback/slack?error=access_denied&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
         assert r.status_code == 302
         assert r.headers["location"] == "/connect?error=slack"
 
-    def test_happy_path_saves_token_evicts_registry_and_needs_no_session_cookie(self, monkeypatch):
+    def test_happy_path_saves_token_and_evicts_registry(self, monkeypatch):
         app, sessions, registry = _app()
         session_id, principal = _signed_in(sessions)
         client = _client(app)
 
-        # Step 1: a same-site nav the user's own click made -- the cookie
-        # *is* present here.
         start = client.get("/oauth/start/slack", cookies={org_session.SESSION_COOKIE: session_id})
         state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
 
@@ -367,19 +360,75 @@ class TestOAuthCallback:
         evicted = []
         monkeypatch.setattr(registry, "evict", lambda pid: evicted.append(pid))
 
-        # Step 2: the real-world cross-site redirect landing -- deliberately
-        # NO cookie on this request at all. Under the SameSite=Strict this
-        # module was written against, that mirrored what a browser really
-        # sends; under Lax the cookie would now arrive, and withholding it
-        # here keeps proving the thing that matters either way -- the
-        # principal is resolved from `state`, never from the session.
-        r = client.get(f"/oauth/callback/slack?code=auth-code-1&state={state}")
+        # The provider's redirect back is a top-level GET, so the Lax session cookie rides along.
+        r = client.get(
+            f"/oauth/callback/slack?code=auth-code-1&state={state}",
+            cookies={org_session.SESSION_COOKIE: session_id},
+        )
 
         assert r.status_code == 302
         assert r.headers["location"] == "/connect?connected=slack"
         token_file = paths.user_dir(principal) / "credentials" / "slack_token.json"
         assert token_file.exists()
         assert evicted == [principal.id]
+
+    def test_callback_with_a_different_signed_in_principal_is_rejected(self, monkeypatch):
+        app, sessions, registry = _app()
+        alice_session, alice = _signed_in(sessions, "alice")
+        bob_session, bob = _signed_in(sessions, "bob")
+        client = _client(app)
+        start = client.get("/oauth/start/slack", cookies={org_session.SESSION_COOKIE: alice_session})
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+        exchanged = []
+        monkeypatch.setattr(rc.slack_client, "exchange_code", lambda *a, **kw: exchanged.append(1))
+        evicted = []
+        monkeypatch.setattr(registry, "evict", lambda pid: evicted.append(pid))
+
+        r = client.get(
+            f"/oauth/callback/slack?code=c&state={state}", cookies={org_session.SESSION_COOKIE: bob_session},
+        )
+
+        assert r.status_code == 302
+        assert r.headers["location"] == "/connect?error=slack"
+        assert r.headers["cache-control"] == "no-store"
+        assert exchanged == [] and evicted == []
+        assert not (paths.user_dir(alice) / "credentials" / "slack_token.json").exists()
+        assert not (paths.user_dir(bob) / "credentials" / "slack_token.json").exists()
+
+    def test_callback_with_no_session_is_rejected(self, monkeypatch):
+        app, sessions, _registry = _app()
+        session_id, principal = _signed_in(sessions)
+        client = _client(app)
+        start = client.get("/oauth/start/slack", cookies={org_session.SESSION_COOKIE: session_id})
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+        exchanged = []
+        monkeypatch.setattr(rc.slack_client, "exchange_code", lambda *a, **kw: exchanged.append(1))
+
+        r = client.get(f"/oauth/callback/slack?code=c&state={state}")
+
+        assert r.status_code == 302
+        assert r.headers["location"] == "/connect?error=slack"
+        assert exchanged == []
+        assert not (paths.user_dir(principal) / "credentials" / "slack_token.json").exists()
+
+    def test_callback_after_ttl_is_rejected(self, monkeypatch):
+        app, sessions, _registry = _app()
+        session_id, principal = _signed_in(sessions)
+        client = _client(app)
+        start = client.get("/oauth/start/slack", cookies={org_session.SESSION_COOKIE: session_id})
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+        exchanged = []
+        monkeypatch.setattr(rc.slack_client, "exchange_code", lambda *a, **kw: exchanged.append(1))
+        now = time.time()
+        monkeypatch.setattr(rc.time, "time", lambda: now + rc._PENDING_TTL_SECONDS + 1)
+
+        r = client.get(
+            f"/oauth/callback/slack?code=c&state={state}", cookies={org_session.SESSION_COOKIE: session_id},
+        )
+
+        assert r.status_code == 400
+        assert exchanged == []
+        assert not (paths.user_dir(principal) / "credentials" / "slack_token.json").exists()
 
     def test_apps_script_callback_saves_its_own_token_with_its_own_scopes(self, monkeypatch):
         app, sessions, registry = _app()
@@ -399,7 +448,7 @@ class TestOAuthCallback:
         monkeypatch.setattr(rc.google_oauth, "save_credentials", lambda token_file, creds: saved.append((token_file, creds)))
         monkeypatch.setattr(registry, "evict", lambda pid: None)
 
-        r = client.get(f"/oauth/callback/apps_script?code=auth-code-1&state={state}")
+        r = client.get(f"/oauth/callback/apps_script?code=auth-code-1&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
 
         assert r.status_code == 302
         assert r.headers["location"] == "/connect?connected=apps_script"
@@ -417,8 +466,8 @@ class TestOAuthCallback:
             lambda *a, **kw: {"access_token": "xoxp-fake", "team_name": "Acme"},
         )
 
-        first = client.get(f"/oauth/callback/slack?code=c&state={state}")
-        second = client.get(f"/oauth/callback/slack?code=c&state={state}")
+        first = client.get(f"/oauth/callback/slack?code=c&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
+        second = client.get(f"/oauth/callback/slack?code=c&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
 
         assert first.status_code == 302
         assert second.status_code == 400
@@ -447,7 +496,7 @@ class TestOAuthCallback:
         # The provider redirects back to the *grant's* callback URL
         # (/oauth/callback/atlassian), never /oauth/callback/jira -- that's
         # the whole point of building the redirect_uri from _GRANT_KEY.
-        r = client.get(f"/oauth/callback/atlassian?code=auth-code&state={state}")
+        r = client.get(f"/oauth/callback/atlassian?code=auth-code&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
 
         assert r.status_code == 302
         assert r.headers["location"] == "/connect?connected=jira"
@@ -462,7 +511,7 @@ class TestOAuthCallback:
 
         # A confused/forged request hitting the per-service path the
         # provider was never actually told about.
-        r = client.get(f"/oauth/callback/jira?code=auth-code&state={state}")
+        r = client.get(f"/oauth/callback/jira?code=auth-code&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
 
         assert r.status_code == 400
 
@@ -477,7 +526,7 @@ class TestOAuthCallback:
             raise rc.slack_client.SlackClientError("bad code")
 
         monkeypatch.setattr(rc.slack_client, "exchange_code", boom)
-        r = client.get(f"/oauth/callback/slack?code=c&state={state}")
+        r = client.get(f"/oauth/callback/slack?code=c&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
         assert r.status_code == 302
         assert r.headers["location"] == "/connect?error=slack"
 
@@ -496,13 +545,47 @@ class TestTelegramFlow:
         assert r.status_code == 303
         assert r.headers["location"] == "/signed-out"
 
-    def test_start_without_csrf_is_rejected(self):
+    @staticmethod
+    def _record_telegram_calls(monkeypatch):
+        calls: list[str] = []
+
+        async def send_code(*a, **kw):
+            calls.append("send_code")
+
+        async def sign_in(*a, **kw):
+            calls.append("sign_in")
+
+        async def sign_in_2fa(*a, **kw):
+            calls.append("sign_in_2fa")
+
+        monkeypatch.setattr(rc.telegram_auth, "send_code", send_code)
+        monkeypatch.setattr(rc.telegram_auth, "sign_in", sign_in)
+        monkeypatch.setattr(rc.telegram_auth, "sign_in_2fa", sign_in_2fa)
+        return calls
+
+    @pytest.mark.parametrize("step", ["start", "code", "2fa", "cancel"])
+    def test_post_without_csrf_is_rejected(self, monkeypatch, step):
         app, sessions, _registry = _app()
         session_id, _principal = _signed_in(sessions)
+        calls = self._record_telegram_calls(monkeypatch)
         r = _client(app).post(
-            "/connect/telegram/start", data={"phone": "+123"}, cookies={org_session.SESSION_COOKIE: session_id},
+            f"/connect/telegram/{step}", data={"csrf": "wrong", "phone": "+123", "code": "1", "password": "p"},
+            cookies={org_session.SESSION_COOKIE: session_id},
         )
         assert r.status_code == 401
+        assert calls == []
+
+    @pytest.mark.parametrize("step", ["start", "code", "2fa", "cancel"])
+    def test_post_from_another_origin_is_rejected(self, monkeypatch, step):
+        app, sessions, _registry = _app()
+        session_id, _principal = _signed_in(sessions)
+        calls = self._record_telegram_calls(monkeypatch)
+        r = _client(app).post(
+            f"/connect/telegram/{step}", data={"csrf": session_id, "phone": "+123", "code": "1", "password": "p"},
+            cookies={org_session.SESSION_COOKIE: session_id}, headers={"Origin": "https://evil.example"},
+        )
+        assert r.status_code == 403
+        assert calls == []
 
     def test_happy_path_advances_to_code_step(self, monkeypatch):
         app, sessions, _registry = _app()
@@ -844,6 +927,7 @@ class TestGristOAuth:
         monkeypatch.setattr(grist_auth, "discover", lambda auth_url, server_url: _GRIST_ENDPOINTS)
         client = _client(app)
         r = client.get("/oauth/start/grist", cookies={org_session.SESSION_COOKIE: session_id})
+        client.cookies.set(org_session.SESSION_COOKIE, session_id)
         return client, r, registry, principal
 
     def test_start_redirects_to_the_discovered_endpoint_with_pkce_and_scopes(self, monkeypatch):

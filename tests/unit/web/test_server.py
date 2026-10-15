@@ -6,13 +6,16 @@ instead.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 
 import pytest
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
-from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
+from privacyfence.policy import scope_rows
+from privacyfence.policy.registry import Verb
+from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
 from privacyfence.web.csp import build_csp
 from privacyfence.web.server import (
     DEFAULT_PORT,
@@ -773,6 +776,32 @@ class TestBootstrapFlow:
         assert r.headers["location"] == "/approvals"
         assert "pf_session" in r.headers.get("set-cookie", "")
 
+    @pytest.mark.parametrize("path", ["//evil.example.com", "/\\evil.example.com", "//evil.example.com/%2e%2e"])
+    async def test_double_slash_path_never_redirects_off_origin(self, path):
+        app, _sessions, bootstrap = self._app()
+        code = bootstrap.mint()
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+            "scheme": "http", "path": path, "raw_path": path.encode(), "root_path": "",
+            "query_string": f"bootstrap={code}".encode(), "headers": [(b"host", b"localhost")],
+            "client": ("127.0.0.1", 5000), "server": ("localhost", 8765),
+        }
+        sent: list[dict] = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        await app(scope, receive, send)
+
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        location = dict(start["headers"])[b"location"].decode()
+        assert location.startswith("/")
+        assert not location.startswith("//")
+        assert not location.startswith("/\\")
+
     def test_the_session_inherits_the_code_s_own_provenance(self):
         """The mint is the only moment
         anything knew how this credential came to exist (web/session_auth.py's
@@ -1389,6 +1418,92 @@ class TestStateStreamTouchesItsOwnSession:
         assert '{"a": 1}' in chunk
 
 
+class TestStateStreamIsScopedToTheRequestingPrincipal:
+    """Driven through ``WebServer``'s own wiring (its ``list_pending`` lambda and the settings
+    snapshot), not a ``StateStream`` the test builds itself, so a regression in that wiring shows."""
+
+    OTHER = Principal(id="os-1001")
+
+    @staticmethod
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    def _request(self, session_id: str):
+        from starlette.requests import Request
+
+        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
+        scope = {
+            "type": "http", "headers": headers, "method": "GET", "path": "/api/state/stream",
+            "scheme": "http", "server": ("localhost", 8765),
+        }
+        return Request(scope, receive=self._receive)
+
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web.server import _state_stream_route
+
+        web_ui = WebApprovalUI()
+        server = WebServer(web_ui, port=0, controller=_controller(tmp_path, monkeypatch))
+        ids = {}
+        for principal in (LOCAL_PRINCIPAL, self.OTHER):
+            with principal_scope(principal):
+                approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                    dedupe_key=f"k-{principal.id}", connector="gmail", tool="gmail_get_message",
+                    gate_kind="review", request_id=f"r-{principal.id}", summary="s", tool_name="t",
+                )
+            ids[principal.id] = approval.id
+        sessions = LocalSessionStore()
+        route = _state_stream_route(server.state_stream, sessions=sessions)
+        return server, sessions, route, ids
+
+    async def _events(self, route, sessions, principal, server, *, push=None, count=3) -> list[tuple[str, str]]:
+        session_id = sessions.create(principal_id=principal.id)
+        out: list[tuple[str, str]] = []
+        with principal_scope(principal):
+            response = await route.endpoint(self._request(session_id))
+            agen = response.body_iterator
+            try:
+                for i in range(count):
+                    if i == 1 and push is not None:
+                        server.state_stream.push_settings(push)
+                    try:
+                        chunk = await asyncio.wait_for(agen.__anext__(), 1.5)
+                    except (asyncio.TimeoutError, StopAsyncIteration):
+                        break
+                    event, _, data = chunk.strip("\n").partition("\n")
+                    out.append((event.removeprefix("event: "), data))
+            finally:
+                await agen.aclose()
+        return out
+
+    async def test_stream_carries_only_the_requesting_principals_approvals(self, tmp_path, monkeypatch):
+        server, sessions, route, ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, self.OTHER, server, count=1)
+
+        approvals = [data for event, data in events if event == "approvals"]
+        assert len(approvals) == 1
+        assert ids["os-1001"] in approvals[0]
+        assert ids["local"] not in approvals[0]
+
+    async def test_non_owner_stream_carries_no_settings_event(self, tmp_path, monkeypatch):
+        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, self.OTHER, server, push={"a": 1})
+
+        assert events  # the approvals event did arrive
+        assert all(event != "settings" for event, _ in events)
+
+    async def test_owner_stream_still_carries_settings(self, tmp_path, monkeypatch):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, LOCAL_PRINCIPAL, server, push={"a": 1})
+
+        assert [event for event, _ in events].count("settings") == 2
+
+
 class TestWebServerWiresTheStateStream:
     def test_controller_is_registered_as_a_change_listener(self, tmp_path, monkeypatch):
         controller = _controller(tmp_path, monkeypatch)
@@ -1900,7 +2015,12 @@ class TestScopedTokenWiring:
         rule = PolicyRule(
             id="r-sender", predicate="i_am_sender", value=None, operations=frozenset({"gmail.read_message"}),
         )
+        row = scope_rows.ScopeRow(
+            id="r-sender", scope=None, value=None, verbs=frozenset({Verb.READ}), predicate="i_am_sender",
+            operations=frozenset({"gmail.read_message"}),
+        )
         monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [row])
         return rule
 
     def test_the_scoped_token_wiring_is_built_only_with_an_mcp_endpoint(self, tmp_path, monkeypatch):
@@ -1931,7 +2051,12 @@ class TestScopedTokenWiring:
             id="r-doc", predicate="grist.document", value=["8CAN8gKdxY7z"],
             operations=frozenset({"grist.read_records", "grist.update_csv"}),
         )
+        row = scope_rows.ScopeRow(
+            id="r-doc", scope="grist.document", value=["8CAN8gKdxY7z"], verbs=frozenset({Verb.READ, Verb.UPDATE}),
+            operations=frozenset({"grist.read_records", "grist.update_csv"}),
+        )
         monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [row])
 
         class _Names:
             def cached_name(self, rt, resource_id):
@@ -1953,12 +2078,31 @@ class TestScopedTokenWiring:
 
         self._store(tmp_path, monkeypatch)
         monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [])
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
         data = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()
 
         assert "grist_list_tables" in data["auto_tools"]
         assert "grist_update_csv" not in data["auto_tools"]
         assert all(name.startswith("grist_") for name in data["auto_tools"])
         assert all(auto_accept.TOOL_TO_GATE[name] == "auto" for name in data["auto_tools"])
+
+    def test_the_wiring_passes_the_personal_data_flag_to_the_store_and_the_page(self, tmp_path, monkeypatch):
+        from privacyfence import scoped_tokens
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        monkeypatch.setattr(
+            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
+        )
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
+
+        flagged, _ = wiring.store_create("flagged", 30, [rule.id], ["gmail_list_messages"], True)
+        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], False)
+
+        assert (flagged.allow_personal_data, plain.allow_personal_data) == (True, False)
+        tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
+        assert (tokens["flagged"]["allow_personal_data"], tokens["plain"]["allow_personal_data"]) == (True, False)
 
     def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
         import time
@@ -2003,4 +2147,43 @@ class TestScopedTokenWiring:
         assert "gmail_list_messages" in data["tools"][1]["tools"]
 
         monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
+        monkeypatch.setattr("privacyfence.auto_accept.get_policy_rows", lambda: [])
         assert wiring.page_data()["tokens"][0]["rules"] == [{"id": rule.id, "missing": True}]
+
+
+def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
+    """A token carries the pairs its rule had when it was made; a row extended afterwards is wider
+    than that limit, and the token list says which tools the token is still limited to."""
+    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence.policy import catalogue as policy_catalogue
+    from privacyfence.policy.registry import Verb
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+
+    def page():
+        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
+        return {t["label"]: t["rules"][0] for t in data["tokens"]}
+
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+        auto_accept.add_policy_v2_rules(policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.READ]))
+        store.create(alice, label="before", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
+        assert "limited_to" not in page()["before"]
+
+        auto_accept.add_policy_v2_rules(
+            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.DOWNLOAD])
+        )
+        store.create(alice, label="after", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
+        entries = page()
+
+    assert "drive_download_file" not in entries["before"]["limited_to"]
+    assert entries["before"]["limited_to"]
+    assert "limited_to" not in entries["after"]

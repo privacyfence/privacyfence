@@ -2352,6 +2352,185 @@ class TestOrgModeConnectorRegistry:
         assert "slack" not in bob_host.connectors
 
 
+class TestScopeRowsUpgrade:
+    """The v2 -> v3 ``auto_accept:`` upgrade at load and at org startup (ADR 0172)."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path, monkeypatch):
+        from privacyfence import paths, scoped_tokens
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(scoped_tokens, "_STORE", None)
+        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))  # the local principal's settings.yaml
+        daemon_main._deferred_warnings.clear()
+        yield
+        daemon_main._deferred_warnings.clear()
+
+    @staticmethod
+    def _v2_rules():
+        return [
+            PolicyRule(id="r-a", predicate="approved_folder", value=["V1"],
+                       operations=frozenset({"drive.download_file"})),
+            PolicyRule(id="r-b", predicate="approved_folder", value=["V1"],
+                       operations=frozenset({"drive.read_file_contents"})),
+        ]
+
+    def _write_v2(self, path, rules=None):
+        section = policy_store.rules_to_config(rules or self._v2_rules())
+        section["version"] = 2
+        path.write_text(yaml.safe_dump({"auto_accept": section}))
+
+    def test_load_config_upgrades_with_principal(self, tmp_path):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        path = tmp_path / "settings.yaml"
+        self._write_v2(path)
+
+        config = daemon_main.load_config(str(path), principal=LOCAL_PRINCIPAL)
+
+        assert config["auto_accept"]["version"] == 3
+        assert yaml.safe_load(path.read_text())["auto_accept"]["version"] == 3
+        assert (tmp_path / "settings.yaml.pre-scope-rules.bak").exists()
+        assert any("converted to one rule per scope" in w for w in daemon_main._deferred_warnings)
+
+    def test_load_config_without_principal_does_not_upgrade(self, tmp_path):
+        path = tmp_path / "settings.yaml"
+        self._write_v2(path)
+        before = path.read_text()
+
+        config = daemon_main.load_config(str(path))
+
+        assert config["auto_accept"]["version"] == 2
+        assert path.read_text() == before
+        assert not (tmp_path / "settings.yaml.pre-scope-rules.bak").exists()
+        assert daemon_main._deferred_warnings == []
+
+    def test_upgrade_all_principals_runs_before_the_token_store_loads(self, monkeypatch, tmp_path):
+        from privacyfence import org_identity, scoped_tokens
+        from privacyfence.web.server import WebServer
+
+        order: list[str] = []
+        real_upgrade = daemon_main._upgrade_all_principals
+        real_init = WebServer.__init__
+
+        def upgrade():
+            order.append("upgrade")
+            real_upgrade()
+
+        def server_init(self, *args, **kwargs):
+            order.append("server")
+            real_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(daemon_main, "_upgrade_all_principals", upgrade)
+        monkeypatch.setattr(WebServer, "__init__", server_init)
+        monkeypatch.setattr(WebServer, "start", lambda self: None)
+        monkeypatch.setattr(
+            org_identity, "discover_idp",
+            lambda issuer: {
+                "authorization_endpoint": "https://idp.example.com/authorize",
+                "token_endpoint": "https://idp.example.com/token", "jwks_uri": "https://idp.example.com/jwks",
+            },
+        )
+        org_config = {
+            "mode": "org",
+            "server": {"issuer_url": "https://pf.example.com", "bind_host": "0.0.0.0", "port": 8765},
+            "idp": {"issuer": "https://idp.example.com", "client_id": "cid", "client_secret": "sec"},
+        }
+        alice_cfg = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
+        alice_cfg.parent.mkdir(parents=True)
+        self._write_v2(alice_cfg)
+
+        from privacyfence.connector_host import ConnectorHost
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, ConnectorHost([]),
+            unattended_sessions_enabled=False, org_config=org_config,
+        )
+
+        assert order == ["upgrade", "server"]
+        assert yaml.safe_load(alice_cfg.read_text())["auto_accept"]["version"] == 3
+        assert scoped_tokens.current_store() is not None
+
+    def test_upgrade_all_principals_skips_a_principal_without_a_settings_file(self, tmp_path):
+        (tmp_path / "users" / "bob").mkdir(parents=True)
+
+        daemon_main._upgrade_all_principals()
+
+        assert not (tmp_path / "users" / "bob" / "authority" / "config" / "settings.yaml").exists()
+
+    def test_fresh_install_seed_is_already_version_3(self, tmp_path, caplog):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        path = tmp_path / "settings.yaml"
+
+        config = daemon_main.load_config(str(path), principal=LOCAL_PRINCIPAL)
+
+        assert config["auto_accept"]["version"] == 3
+        assert not (tmp_path / "settings.yaml.pre-scope-rules.bak").exists()
+        assert daemon_main._deferred_warnings == []
+
+    def test_unscoped_decisions_unchanged_by_upgrade(self, tmp_path):
+        from privacyfence.auto_accept import ReviewContext
+        from privacyfence.policy import catalogue, propose
+        from privacyfence.policy.engine import evaluate
+        from privacyfence.policy.registry import Verb
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        v2: list[PolicyRule] = []
+        for group in [*propose.SCOPES_BY_GROUP, *catalogue.EXTRA_SCOPES]:
+            extra = catalogue.EXTRA_SCOPES.get(group)
+            needs_value = extra.needs_value if extra else propose.scope_needs_value(propose.SCOPES_BY_GROUP[group][0])
+            from privacyfence.policy import scope_rows
+            verbs = list(scope_rows.scope_verbs(group))
+            v2.extend(catalogue.rules_for_catalogue_entry(group, ["V1"] if needs_value else None, verbs))
+        # the custom cases the scope_rows round-trip test covers
+        v2 += [
+            PolicyRule(id="r-d76028ec0b", predicate="always_allow", value=None,
+                       operations=frozenset({"contacts.edit"}), conditions=(("no_contact_info_change", None),)),
+            PolicyRule(id="my-handwritten", predicate="approved_folder", value=["V1"],
+                       operations=frozenset({"drive.write_file"})),
+            PolicyRule(id="r-unknown", predicate="some_predicate", value=["V1"],
+                       operations=frozenset({"gmail.read_message"})),
+            PolicyRule(id="r-drivefile", predicate="drive.file", value=["V1"],
+                       operations=frozenset({"drive.read_file_contents"})),
+            PolicyRule(id="r-partial", predicate="approved_sandbox_folder", value=["V1"],
+                       operations=frozenset({"sheets.format_range"})),
+        ]
+        assert Verb.READ in {v for g in propose.SCOPES_BY_GROUP for v in scope_rows.scope_verbs(g)}
+        path = tmp_path / "settings.yaml"
+        section = policy_store.rules_to_config(v2)
+        section["version"] = 2
+        path.write_text(yaml.safe_dump({"auto_accept": section}))
+        before = policy_store.compile_rules_from_config(yaml.safe_load(path.read_text()))
+
+        config = daemon_main.load_config(str(path), principal=LOCAL_PRINCIPAL)
+        after = policy_store.compile_rules_from_config(yaml.safe_load(path.read_text()))
+
+        assert config["auto_accept"]["version"] == 3
+        file_ = SimpleNamespace(id="V1", parent_ids=["V1"], mime_type="V1", owners=["me@example.com"])
+        channel_msg = SimpleNamespace(channel_id="V1", is_private=False)
+        keys = [
+            "channel_id", "channel", "calendar_id", "space_key", "destination_folder_id", "parent_folder_id",
+            "label_name", "to", "project_key", "issue_key", "object_type", "report_id", "task_list_id",
+            "source_list_id", "destination_list_id", "chat_id", "script_id", "doc_id", "slug",
+        ]
+        contexts = [
+            ReviewContext(connector="x", tool="t", args={**{k: "V1" for k in keys}, "is_self_dm": True},
+                          raw_data=[channel_msg], my_email="me@example.com"),
+            ReviewContext(connector="x", tool="t", args={k: ["V1"] for k in keys}, raw_data={"file": file_},
+                          my_email="me@example.com"),
+            ReviewContext(connector="x", tool="t", args={k: "OTHER" for k in keys}, raw_data=file_),
+            ReviewContext(connector="x", tool="t", args={}, raw_data=None),
+        ]
+        operations = sorted({op for rule in v2 for op in rule.operations})
+        decisions = []
+        for op in operations:
+            for ctx in contexts:
+                was = evaluate(before, op, ctx)[0]
+                assert evaluate(after, op, ctx)[0] is was, (op, ctx.args.get("channel_id"))
+                decisions.append(was)
+        assert True in decisions and False in decisions  # the comparison is not vacuous
+
+
 # ---------------------------------------------------------------------------- #
 # parse_args
 # ---------------------------------------------------------------------------- #
@@ -3410,12 +3589,12 @@ class TestAuditForwardingWiring:
 
 class TestMain:
     def _patch_config(self, monkeypatch, config=None):
-        monkeypatch.setattr(daemon_main, "load_config", lambda path: config or {})
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: config or {})
         monkeypatch.setattr(daemon_main, "setup_logging", lambda cfg: None)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
 
     def test_config_load_failure_prints_error_and_returns_1(self, monkeypatch, capsys):
-        def raiser(path):
+        def raiser(path, **kwargs):
             raise ValueError("bad yaml")
         monkeypatch.setattr(daemon_main, "load_config", raiser)
 
@@ -3602,7 +3781,7 @@ class TestMain:
         # it -- a silent policy reset rather than a visible failure.
         self._patch_config(monkeypatch)
         loaded = []
-        monkeypatch.setattr(daemon_main, "load_config", lambda path: loaded.append(path) or {})
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: loaded.append(path) or {})
         monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
 
         def refuse() -> None:
@@ -3914,7 +4093,7 @@ class TestPrintSignInLink:
             raise privilege_separation.PrivilegeSeparationError("wrong account")
 
         monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
-        monkeypatch.setattr(daemon_main, "load_config", lambda path: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
         monkeypatch.setattr(daemon_main, "run_print_sign_in_link", lambda: 0)
 
         assert daemon_main.main(["--print-sign-in-link"]) == 0
@@ -3980,7 +4159,7 @@ class TestPrintMcpToken:
             raise privilege_separation.PrivilegeSeparationError("wrong account")
 
         monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
-        monkeypatch.setattr(daemon_main, "load_config", lambda path: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
         monkeypatch.setattr(daemon_main, "run_print_mcp_token", lambda: 0)
 
         assert daemon_main.main(["--print-mcp-token"]) == 0
@@ -4042,7 +4221,7 @@ class TestRevokeScopedTokens:
             calls.append("identity")
 
         monkeypatch.setattr(privilege_separation, "check_runtime_identity", _check)
-        monkeypatch.setattr(daemon_main, "load_config", lambda path: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
         monkeypatch.setattr(
             daemon_main, "run_revoke_scoped_tokens", lambda principal_id: calls.append(principal_id) or 0,
         )

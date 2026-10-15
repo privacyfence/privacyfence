@@ -6,6 +6,7 @@ that controller's docstring for the same reasoning these mirror.
 """
 from __future__ import annotations
 
+import base64
 import html
 import re
 
@@ -163,6 +164,23 @@ class TestBuildCardHtml:
             **self._kwargs(layout=WIDE, preview_bytes=b"\x89PNG fake", preview_mime_type="image/png")
         )
         assert "data:image/png;base64," in html
+
+    def test_hostile_preview_mime_type_cannot_break_out_of_img_src(self):
+        from html.parser import HTMLParser
+
+        tags: list[str] = []
+
+        class _Tags(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                tags.append(tag)
+
+        html = card_builder.build_card_html(**self._kwargs(
+            layout=WIDE, preview_bytes=b"\x89PNG fake",
+            preview_mime_type='image/png"><iframe src="data:text/html,x">',
+        ))
+        _Tags().feed(html)
+        assert "iframe" not in tags
+        assert base64.b64encode(b"\x89PNG fake").decode() not in html  # no image rendered at all
 
     def test_table_only_suppresses_details_text_when_a_table_is_present(self):
         html = card_builder.build_card_html(

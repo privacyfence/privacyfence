@@ -10,6 +10,8 @@ own coverage in test_oauth_provider.py and test_org_identity.py, which is why it
 from __future__ import annotations
 
 import contextlib
+import html
+import re
 import urllib.parse as up
 
 import httpx
@@ -39,6 +41,8 @@ def isolate_org_oauth_stores(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
     monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
     monkeypatch.setattr("privacyfence.web.oauth_provider.pins_file_path", lambda: tmp_path / "agent_pins.json")
+    # Remembered consents live under the person's data directory.
+    monkeypatch.setattr("privacyfence.paths.data_dir", lambda: tmp_path)
 
 
 async def register_client(client: httpx.AsyncClient, body: dict | None = None) -> dict:
@@ -75,7 +79,17 @@ async def authorize_and_get_code(
     )
     cb = await client.get("/oauth/idp/callback", params={"code": "idp-code", "state": own_state})
     assert cb.status_code == 302, cb.text
-    parsed = up.urlparse(cb.headers["location"])
+    location = cb.headers["location"]
+    if location.startswith("/oauth/consent/"):
+        page = await client.get(location)
+        assert page.status_code == 200, page.text
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        decided = await client.post(
+            location, data={"csrf": csrf, "decision": "allow"}, headers={"Origin": ISSUER},
+        )
+        assert decided.status_code == 200, decided.text
+        location = html.unescape(re.search(r'<a href="([^"]+)">Continue</a>', decided.text).group(1))
+    parsed = up.urlparse(location)
     assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == redirect_uri
     qs = dict(up.parse_qsl(parsed.query))
     assert qs["state"] == CLIENT_STATE

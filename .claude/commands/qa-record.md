@@ -14,9 +14,11 @@ is explicit that the real QA grants live only on the self-hosted runner. So this
    recorder implementation yet" and then *exit 0*: a green run that recorded nothing. If no
    connector was named above, ask me which one rather than guessing.
 
-2. **Dispatch `qa-record-fixture.yml`** with `ref` set to the current branch and `connector` set to
-   that name. It runs on the `privacyfence-test` self-hosted runner and commits the recorded fixture
-   back to the branch it was dispatched against.
+2. **Dispatch `qa-record-fixture.yml`** with `ref` set to `main` and inputs `connector` set to
+   that name and `branch` set to the current branch (it must already be pushed). It runs on the
+   `privacyfence-test` self-hosted runner, which admits only the workflow as it stands on `main`;
+   a GitHub-hosted job then commits the recorded fixture to the named branch. It refuses `main`,
+   `stable`, `releases/*`, `refs/…`, `pull/…` and any branch that does not exist.
 
 3. **Expect to queue.** It shares a concurrency group (`connector-live-check`,
    `cancel-in-progress: false`) with `connector-live-check.yml`, because both copy the runner's one

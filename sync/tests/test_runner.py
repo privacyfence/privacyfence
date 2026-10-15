@@ -140,13 +140,25 @@ async def test_export_via_link_downloads_into_work_dir(write_recipe: RecipeWrite
     assert client.args_of("grist_export_records")["destination_dir"] == str(tmp_path / "work")
 
 
-async def test_export_on_local_disk_is_copied_and_checked(write_recipe: RecipeWriter, tmp_path: Path) -> None:
-    elsewhere = tmp_path / "elsewhere.csv"
-    elsewhere.write_text("a\n1\n")
-    sha = hashlib.sha256(b"a\n1\n").hexdigest()
-    client = FakeClient({"grist_export_records": {"delivery": "local_disk", "path": str(elsewhere), "sha256": sha}})
-    await run(write_recipe([export_step()]), client)
-    assert (tmp_path / "work" / "t.csv").read_text() == "a\n1\n"
+async def test_a_download_path_outside_the_work_folder_is_refused(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    client = FakeClient({"grist_export_records": {"delivery": "local_disk", "path": str(outside)}})
+    with pytest.raises(SyncError, match="outside the work folder"):
+        await run(write_recipe([export_step()]), client)
+    assert outside.exists()
+
+
+async def test_a_symlinked_download_path_is_refused(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    link = tmp_path / "work" / "link.txt"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside)
+    client = FakeClient({"grist_export_records": {"delivery": "local_disk", "path": str(link)}})
+    with pytest.raises(SyncError, match="outside the work folder"):
+        await run(write_recipe([export_step()]), client)
+    assert outside.exists()
 
 
 async def test_export_written_in_place_is_checked_where_it_is(write_recipe: RecipeWriter, tmp_path: Path) -> None:

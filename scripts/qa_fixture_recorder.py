@@ -310,6 +310,9 @@ def deidentify_structural_fields(value: Any, _id_map: dict[Any, str] | None = No
 # already committed. Applied as a connector-specific pass, before the
 # generic redact() runs, since the QA seed thread is sent to yourself, so
 # both From and To carry your real address.
+# Message-ID carries the sending host (<random@mail.gmail.com>), which the
+# email-address redaction above does not reach.
+_REDACTED_MESSAGE_ID = "<qa-placeholder-message-id@example.com>"
 _SENSITIVE_GMAIL_HEADERS = {"from", "to", "cc", "bcc", "reply-to", "sender", "delivered-to", "return-path"}
 
 
@@ -319,6 +322,8 @@ def redact_gmail_message(raw: dict[str, Any]) -> dict[str, Any]:
     for header in headers:
         if isinstance(header, dict) and str(header.get("name", "")).lower() in _SENSITIVE_GMAIL_HEADERS:
             header["value"] = _REDACTED_EMAIL
+        elif isinstance(header, dict) and str(header.get("name", "")).lower() == "message-id":
+            header["value"] = _REDACTED_MESSAGE_ID
     return raw
 
 
@@ -412,6 +417,28 @@ _REDACTED_JIRA_USER_URL = (
 )
 
 
+_REDACTED_JIRA_ENTITY_ID = "qa-placeholder-entity-id"
+_JIRA_ENTITY_ID_KEYS = ("entityId", "uuid")
+
+
+def _redact_jira_entity_ids(value: Any) -> Any:
+    """Replace the site-unique entity ids (a project's entityId, and the
+    identical uuid beside it) wherever they sit in the structure."""
+    if isinstance(value, dict):
+        return {
+            k: _REDACTED_JIRA_ENTITY_ID if k in _JIRA_ENTITY_ID_KEYS and isinstance(v, str)
+            else _redact_jira_entity_ids(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_jira_entity_ids(v) for v in value]
+    return value
+
+
+def redact_jira_projects(raw: list[Any]) -> list[Any]:
+    return _redact_jira_entity_ids(copy.deepcopy(raw))
+
+
 def redact_jira_issue(raw: dict[str, Any]) -> dict[str, Any]:
     """Jira's creator/reporter/assignee objects carry the real accountId a
     second time, URL-encoded inside their own "self" link
@@ -422,7 +449,7 @@ def redact_jira_issue(raw: dict[str, Any]) -> dict[str, Any]:
     addressed indirectly through a sibling field, found by checking a real
     recorded fixture, not assumed safe.
     """
-    raw = copy.deepcopy(raw)
+    raw = _redact_jira_entity_ids(copy.deepcopy(raw))
     fields = raw.get("fields")
     if not isinstance(fields, dict):
         return raw
@@ -980,7 +1007,9 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         note = "found" if ok else f"project key {project_key!r} not in list_projects() result"
         raw = None
         if record and ok and isinstance(cap.captured, list):
-            raw = deidentify_structural_fields(redact([p for p in cap.captured if p.get("key") == project_key]))
+            raw = deidentify_structural_fields(
+                redact(redact_jira_projects([p for p in cap.captured if p.get("key") == project_key]))
+            )
         results.append(CheckResult("jira", "list_projects", project_key, ok, note, raw, "list_projects.json"))
     except JiraClientError as exc:
         results.append(CheckResult("jira", "list_projects", project_key, False, str(exc)))

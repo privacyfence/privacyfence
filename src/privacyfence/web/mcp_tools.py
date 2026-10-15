@@ -179,17 +179,18 @@ PROPOSE_POLICY_CHANGE_TOOL = types.Tool(
     name="privacyfence_propose_policy_change",
     description=(
         "Propose adding, updating or removing an auto-accept rule (a scope plus allowed verbs). "
-        "ALWAYS blocks on a dialog a human must approve. If declined, or in an unattended session, it "
-        "errors -- check the result, never assume success. Call privacyfence_list_policy first: "
-        "group, verbs and rule_id must be listed, not guessed; a verb not in that group's "
-        "scope_groups entry is rejected before any popup.\n\n"
+        "ALWAYS blocks on a human-approved dialog. If declined, or in an unattended session, it "
+        "errors -- never assume success. Call privacyfence_list_policy first: group, verbs and "
+        "rule_id must be listed, not guessed; a verb not in that group's scope_groups entry is "
+        "rejected before any popup.\n\n"
         "operation='add'/'update' need group (a scope_groups id, e.g. 'drive.folder'), value "
-        "(resource ids/names the scope matches, e.g. a Drive folder id; omit when the group's "
+        "(resource ids/names the scope matches, e.g. a Drive folder id; omit if the group's "
         "needs_value is false) and verbs (a non-empty subset of the group's verbs, e.g. ['read', "
-        "'update']). 'update' also takes rule_id (that rule is removed, then re-added). 'remove' "
+        "'update']). Verbs: read, download, search, add, update, restructure, move, send, delete "
+        "(older names are mapped). 'update' also takes rule_id (replaces that rule). 'remove' "
         "needs only rule_id.\n\n"
-        "Returns {confirmed, changed, description, rule_ids}: changed is false when confirmed but "
-        "nothing differed; rule_ids names the rules affected.\n\n"
+        "Returns {confirmed, changed, description, rule_ids}: changed is false if nothing "
+        "differed; rule_ids names the rules affected.\n\n"
         "reason: one sentence on why you're proposing this (logged, unverified)."
     ),
     input_schema={

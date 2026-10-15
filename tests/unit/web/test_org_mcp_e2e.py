@@ -18,6 +18,9 @@ see web/test_routes_mcp.py.)
 """
 from __future__ import annotations
 
+import re
+import urllib.parse as up
+
 import httpx
 from starlette.applications import Starlette
 
@@ -196,3 +199,105 @@ class TestIdpCallbackRouteErrorHandling:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
             r = await client.get("/oauth/idp/callback", params={"state": "s", "code": "c"})
         assert r.status_code == 400
+
+
+async def _authorize_up_to_the_idp_callback(client, registration, monkeypatch) -> str:
+    """/authorize and the faked IdP callback for a client nobody has allowed yet; returns the
+    callback's Location."""
+    from privacyfence import org_identity as oi
+
+    _verifier, challenge = oi.generate_pkce_pair()
+    r = await client.get("/authorize", params={
+        "response_type": "code", "client_id": registration["client_id"], "redirect_uri": CLAUDE_REDIRECT_URI,
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": "clients-own-state",
+    })
+    assert r.status_code == 302, r.text
+    own_state = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))["state"]
+    monkeypatch.setattr("privacyfence.org_identity.exchange_code_for_tokens", lambda *a, **kw: {"id_token": "opaque"})
+    monkeypatch.setattr(
+        "privacyfence.org_identity.verify_id_token",
+        lambda idp, token, *, nonce: {"sub": "alice", "email": "alice@example.com", "nonce": nonce},
+    )
+    cb = await client.get("/oauth/idp/callback", params={"code": "idp-code", "state": own_state})
+    assert cb.status_code == 302, cb.text
+    return cb.headers["location"]
+
+
+async def test_authorize_for_unconsented_client_stops_at_consent_page(tmp_path, monkeypatch):
+    app, _provider, _session_manager = _build_app(tmp_path, monkeypatch)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
+        registration = await register_client(client, {
+            "client_name": "Claude", "redirect_uris": [CLAUDE_REDIRECT_URI], "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+        })
+        location = await _authorize_up_to_the_idp_callback(client, registration, monkeypatch)
+
+        assert location.startswith("/oauth/consent/")
+        assert "code=" not in location
+        page = await client.get(location)
+
+    assert page.status_code == 200
+    assert "Claude" in page.text
+    assert "claude.ai" in page.text
+    assert "code=" not in page.text
+    assert page.headers["cache-control"] == "no-store"
+
+
+async def test_consent_post_from_a_foreign_origin_is_refused_and_leaves_the_consent_usable(tmp_path, monkeypatch):
+    app, _provider, _session_manager = _build_app(tmp_path, monkeypatch)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
+        registration = await register_client(client)
+        location = await _authorize_up_to_the_idp_callback(client, registration, monkeypatch)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', (await client.get(location)).text).group(1)
+
+        refused = await client.post(
+            location, data={"csrf": csrf, "decision": "allow"}, headers={"Origin": "https://evil.example"},
+        )
+        still_there = await client.get(location)
+
+    assert refused.status_code == 403
+    assert still_there.status_code == 200
+
+
+async def test_consent_post_with_an_unknown_decision_is_a_bad_request(tmp_path, monkeypatch):
+    app, _provider, _session_manager = _build_app(tmp_path, monkeypatch)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
+        registration = await register_client(client)
+        location = await _authorize_up_to_the_idp_callback(client, registration, monkeypatch)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', (await client.get(location)).text).group(1)
+
+        maybe = await client.post(location, data={"csrf": csrf, "decision": "maybe"})
+        no_csrf = await client.post(location, data={"decision": "allow"})
+
+    assert maybe.status_code == 400
+    assert no_csrf.status_code == 400
+
+
+async def test_consent_post_with_the_wrong_csrf_gets_nothing_and_burns_the_consent(tmp_path, monkeypatch):
+    app, _provider, _session_manager = _build_app(tmp_path, monkeypatch)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
+        registration = await register_client(client)
+        location = await _authorize_up_to_the_idp_callback(client, registration, monkeypatch)
+
+        wrong = await client.post(location, data={"csrf": "nope", "decision": "allow"})
+        after = await client.get(location)
+
+    assert wrong.status_code == 400
+    assert "code=" not in wrong.text
+    assert after.status_code == 400
+
+
+async def test_deny_sends_access_denied_to_the_client_and_is_not_remembered(tmp_path, monkeypatch):
+    app, provider, _session_manager = _build_app(tmp_path, monkeypatch)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
+        registration = await register_client(client)
+        location = await _authorize_up_to_the_idp_callback(client, registration, monkeypatch)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', (await client.get(location)).text).group(1)
+
+        denied = await client.post(location, data={"csrf": csrf, "decision": "deny"})
+        again = await _authorize_up_to_the_idp_callback(client, registration, monkeypatch)
+
+    assert denied.status_code == 200
+    assert "error=access_denied" in denied.text
+    assert "code=" not in denied.text
+    assert again.startswith("/oauth/consent/")

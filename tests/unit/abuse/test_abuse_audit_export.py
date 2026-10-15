@@ -25,7 +25,7 @@ import pytest
 
 from privacyfence.audit_log import AuditLogger, _excel_literal
 
-openpyxl = pytest.importorskip("openpyxl")
+import openpyxl
 
 # Payloads covering every formula-trigger character _excel_literal guards
 # against, plus a couple of realistic attack strings and a tab/CR used to

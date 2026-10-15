@@ -727,7 +727,7 @@ class SalesforceConnector(Connector):
         )
         n = len(rows)
         report_name = first_metadata.get("name") or report_id
-        data = await asyncio.to_thread(export_files.render, names, rows, fmt)
+        data = await asyncio.to_thread(export_files.render, names, rows, fmt, spreadsheet_safe=True)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
         saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)

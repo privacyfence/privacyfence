@@ -62,6 +62,14 @@ def _signed_in(client: TestClient, sessions: org_session.OrgSessionStore, princi
     return session_id
 
 
+def _start(client: TestClient, approval_id: str, *, csrf: str | None, result: str = "accept",
+           choice=None, origin: str = ISSUER):
+    body = {"result": result, "choice": choice}
+    if csrf is not None:
+        body["csrf"] = csrf
+    return client.post(f"/api/approvals/{approval_id}/stepup/idp", json=body, headers={"Origin": origin})
+
+
 def _register(web_ui, principal: Principal, *, gate_kind="review", pii_detected=False, dedupe_key="k1"):
     with principal_scope(principal):
         approval, _ = web_ui.deferred_registry.register_or_coalesce(
@@ -724,8 +732,8 @@ class TestStepUpRequirePasskey:
         )
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        r = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
+        session_id = _signed_in(client, sessions, ALICE)
+        r = _start(client, approval.id, csrf=session_id)
         assert r.status_code == 403
 
 
@@ -733,28 +741,103 @@ class TestIdpStepUp:
     def test_start_requires_a_signed_in_session(self):
         app, _sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         approval = _register(web_ui, ALICE, gate_kind="popup")
-        r = _client(app).get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
-        assert r.status_code == 302
-        assert r.headers["location"].startswith("/login?next=")
+        r = _start(_client(app), approval.id, csrf="x")
+        assert r.status_code == 401
+        assert r.json() == {"error": "signed_out"}
+
+    def test_start_rejects_get_without_csrf(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
+        assert r.status_code == 405
+
+    def test_start_from_a_cross_site_navigation_is_refused(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        with patch.object(routes_org_stepup._StepUpAuthAttemptStore, "put") as put:
+            r = _start(client, approval.id, csrf=session_id, origin="https://evil.example")
+        assert r.status_code == 403
+        put.assert_not_called()
+
+    def test_start_without_csrf_is_rejected(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        assert _start(client, approval.id, csrf=None).status_code == 403
+        assert _start(client, approval.id, csrf="not-the-session-id").status_code == 403
+
+    def test_start_is_404_when_step_up_is_off(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=False))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        assert _start(client, approval.id, csrf=session_id).status_code == 404
+
+    def test_start_rejects_a_non_json_body(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.post(
+            f"/api/approvals/{approval.id}/stepup/idp", content=b"not json", headers={"Origin": ISSUER},
+        )
+        assert r.status_code == 400
 
     def test_start_rejects_an_invalid_result(self):
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        r = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=deny&choice=")
+        session_id = _signed_in(client, sessions, ALICE)
+        r = _start(client, approval.id, csrf=session_id, result="deny")
         assert r.status_code == 400
 
     def test_start_redirects_to_the_idp_with_reauth_hints(self):
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        r = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
-        assert r.status_code == 302
-        qs = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))
+        session_id = _signed_in(client, sessions, ALICE)
+        r = _start(client, approval.id, csrf=session_id)
+        assert r.status_code == 200
+        qs = dict(up.parse_qsl(up.urlparse(r.json()["redirect"]).query))
         assert qs["prompt"] == "login"
         assert qs["max_age"] == "0"
+
+    def test_the_428_link_has_no_query_and_the_shim_posts_from_a_button(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+        assert "?" not in r.json()["idp_stepup_url"]
+        page = client.get(f"/approvals/{approval.id}").text
+        assert "addEventListener('click'" in page
+        assert "<a href=\"' + data.idp_stepup_url" not in page
+
+    def test_callback_after_ttl_is_rejected(self, monkeypatch):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
+        later = routes_org_stepup.time.time() + routes_org_stepup._STEP_UP_ATTEMPT_TTL_SECONDS + 1
+        monkeypatch.setattr(routes_org_stepup.time, "time", lambda: later)
+        exchanged = []
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "exchange_code_for_tokens",
+            lambda *a, **kw: exchanged.append(1) or {"id_token": "t"},
+        )
+        cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        r = cb_client.get(f"/oauth/stepup/callback?code=abc&state={qs['state']}")
+        assert r.status_code == 400
+        assert not exchanged
+        assert not web_ui.deferred_registry.get(approval.id).event.is_set()
 
     def test_callback_with_an_unknown_state_is_a_clean_400(self):
         app, _sessions, _web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
@@ -766,9 +849,9 @@ class TestIdpStepUp:
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
-        qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
 
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
         r = cb_client.get(f"/oauth/stepup/callback?error=access_denied&state={qs['state']}")
@@ -779,9 +862,9 @@ class TestIdpStepUp:
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
-        qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
 
         monkeypatch.setattr(
             routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
@@ -810,9 +893,9 @@ class TestIdpStepUp:
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
-        qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
 
         def _boom(*a, **kw):
             raise RuntimeError("IdP unreachable")
@@ -828,9 +911,9 @@ class TestIdpStepUp:
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
-        qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
 
         monkeypatch.setattr(
             routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
@@ -850,9 +933,9 @@ class TestIdpStepUp:
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"), idp=idp)
         approval = _register(web_ui, ALICE, gate_kind="popup")
         client = _client(app)
-        _signed_in(client, sessions, ALICE)
-        start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
-        qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
         assert qs["acr_values"] == "phr"
 
         monkeypatch.setattr(

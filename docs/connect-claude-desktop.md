@@ -79,7 +79,8 @@ Two things can ask you before a tool runs:
    [Approvals and policy](approvals-and-policy.md).
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So Claude Desktop may
 ask before a write, in front of PrivacyFence's own card. There is one extension and no switch that
 advertises writes as read-only. If you would rather confirm only once, on PrivacyFence's card,

@@ -96,7 +96,7 @@
         <h2 id="confirmations-heading">Gemini shows its steps. PrivacyFence's card decides.</h2>
       </div>
       <div class="page-copy stack">
-        <p>PrivacyFence tells Gemini Enterprise truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. Before a tool call, Gemini Enterprise shows its own steps, ending in <strong>Action Confirmed</strong>.</p>
+        <p>PrivacyFence tells Gemini Enterprise truthfully what each tool does: reads are read-only, writes are writes, and the tools that delete something (<code>calendar_delete_event</code>, <code>drive_sheets_delete_dimensions</code> and <code>peek_delete_page</code>) are marked destructive. Before a tool call, Gemini Enterprise shows its own steps, ending in <strong>Action Confirmed</strong>.</p>
         <p>A gated call still waits for PrivacyFence's approval card at <code>/approvals</code>, whatever Gemini was told or allowed. Gemini Enterprise does not wait for it: it posts the approval link in the chat and asks you to say when you have approved. Approve the card, tell Gemini, and it makes the call again.</p>
       </div>
     </section>

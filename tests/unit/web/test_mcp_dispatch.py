@@ -25,6 +25,7 @@ from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedback
+from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.scoped_tokens import ScopedToken
@@ -158,6 +159,19 @@ class TestCall:
         await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "reason": "because"})
         assert connector.calls == [("gmail_tool", {"x": 1})]
 
+    async def test_the_connector_sees_the_whole_request_minus_reason(self):
+        seen: list[str | None] = []
+
+        class Recorder(FakeConnector):
+            async def call(self, tool, args):
+                seen.append(gate.current_request_args())
+                return "ok"
+
+        dispatcher = _dispatcher({"gmail": Recorder("gmail")})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "reason": "r"})
+        assert seen == ['{"x": 1}']
+        assert gate.current_request_args() is None
+
     async def test_unknown_connector_raises(self):
         dispatcher = _dispatcher({})
         with pytest.raises(ValueError, match="Unknown connector"):
@@ -254,6 +268,46 @@ class TestCall:
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert len(connector.calls) == 1
+
+    async def test_an_identical_call_from_another_session_is_not_deduped(self):
+        connector = FakeConnector("gmail", result="r", delay=0.05)
+        dispatcher = _dispatcher({"gmail": connector})
+        await asyncio.gather(
+            dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}),
+            dispatcher.call("s2", "gmail", "gmail_tool", {"x": 1}),
+        )
+        assert len(connector.calls) == 2
+
+    async def test_an_unattended_session_never_gets_another_sessions_result(self):
+        connector = UnattendedAwareConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector}, unattended_sessions_enabled=True)
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        dispatcher.begin_unattended_session("s2", "why")
+        await dispatcher.call("s2", "gmail", "gmail_tool", {"x": 1})
+        assert connector.observed_unattended == [False, True]
+
+    async def test_cancelled_leader_does_not_poison_the_dedupe_key(self):
+        release = asyncio.Event()
+
+        class Waiting(FakeConnector):
+            async def call(self, tool, args):
+                self.calls.append((tool, args))
+                await release.wait()
+                return "r"
+
+        connector = Waiting("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        first = asyncio.create_task(dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert first.cancelled()
+        release.set()
+        assert await asyncio.wait_for(dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}), 1) == "r"
+        assert len(connector.calls) == 2
+        assert dispatcher._inflight  # the completed second call is cached, the cancelled one left no stale key
+        assert all(fut.done() and not fut.cancelled() for fut, _ in dispatcher._inflight.values())
 
     async def test_a_pending_approval_result_is_never_cached_for_reuse(self):
         # A gated call that went pending (gate.gated_call raises
@@ -555,6 +609,23 @@ class TestListPolicy:
         assert "folder1" in row["sentence"]
         assert "drive_get_file_content" in row["covered_tools"]
 
+    async def test_a_listed_row_carries_the_scope_row_keys(self, monkeypatch):
+        from privacyfence import gate
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read", "download"],
+        )
+
+        (row,) = _dispatcher({}).list_policy()["rules"]
+        assert set(row) == {
+            "id", "sentence", "connector", "scope", "scope_type", "value", "operations", "verbs",
+            "conditions", "covered_tools",
+        }
+        assert row["scope"] == "drive.folder"
+        assert row["scope_type"] == "drive.folder"
+        assert [v["verb"] for v in row["verbs"]] == ["read", "download"]
+        assert row["conditions"] == []
+
     def test_records_a_policy_listed_audit_entry(self):
         _dispatcher({}).list_policy("checking before a scheduled run")
         entries = self._read_entries()
@@ -579,7 +650,7 @@ class TestProposePolicyChangeDispatch:
             "group": "drive.folder", "value": ["folder1"], "verbs": ["read"],
         })
         assert result["confirmed"] is True
-        assert "approved_folder" in self._config_path.read_text(encoding="utf-8")
+        assert "scope: drive.folder" in self._config_path.read_text(encoding="utf-8")
 
     async def test_denied_immediately_when_this_sessions_unattended_flag_is_set(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)

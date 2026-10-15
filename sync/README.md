@@ -108,27 +108,27 @@ PrivacyFence's **Settings → Auto-accept → Add a rule**. Each one asks for yo
 | `drive_list_files` | none needed | |
 | `grist_export_records`, `grist_export_sql`, `grist_get_records` | **Grist — document**, the document id | read |
 | `grist_update_csv`, `grist_update_records` | **Grist — document** | update |
-| `grist_import_csv`, `grist_add_records` | **Grist — document** | create |
-| `peek_upload_page` with a `slug` | **Peek — page**, the page's slug | update (new versions) |
+| `grist_import_csv`, `grist_add_records` | **Grist — document** | add |
+| `peek_upload_page` with a `slug` | **Peek — page**, the page's slug | add |
 
 Notes:
 
 - **Personal data.** PrivacyFence scans what a read returns for personal data (names, email
   addresses, phone numbers and similar). When it finds some, it asks a person, and an unattended
   run is denied, even when a rule matches. For the tools whose data goes to a file or a page
-  rather than to an AI model, the rule can say otherwise. When you add it, tick:
-  - **Exports may include personal data** on a Salesforce report, Jira project or Grist document
-    rule (it covers `salesforce_export_report`, `jira_export_issues`, `grist_export_records` and
-    `grist_export_sql`);
-  - **Downloads may include personal data** on a Drive folder rule (it covers
-    `drive_download_file` when the file is delivered as a file; on an organization server a small
+  rather than to an AI model, the recipe's scoped token can say otherwise. When you create the
+  token, tick **Let exports, downloads and page uploads carry personal data**. It covers:
+  - `salesforce_export_report`, `jira_export_issues`, `grist_export_records` and
+    `grist_export_sql`;
+  - `drive_download_file` when the file is delivered as a file (on an organization server a small
     file, up to about 75 KB by default, comes back inside the tool result instead, and is still
     scanned);
-  - **New versions may include personal data** on a Peek page rule.
+  - `peek_upload_page`.
 
-  Only you can set these boxes, in Settings, behind your passkey; an AI client cannot propose
-  them. `salesforce_run_report`, `grist_get_records` and the other reads that return data in the
-  tool result are always scanned.
+  The box is on the token, not on the rule, so a run that uses your own token (not a scoped one)
+  always stops for review when personal data is found. Only you can tick it, in Settings, behind
+  your passkey; an AI client cannot propose it. `salesforce_run_report`, `grist_get_records` and
+  the other reads that return data in the tool result are always scanned.
 - **A Jira project rule** covers an export only when every exported issue belongs to an approved
   project. A JQL query that reaches into another project needs that project in the rule too.
 - **A Drive folder rule** covers files whose parent folder is the one named. A file in a subfolder
@@ -369,10 +369,10 @@ python <run> <args...>
   small check after your plan step: it reads the plan's summary and exits non-zero on warnings, a
   row count that moved more than you expect, or an empty parse. Nothing after it runs, and a
   person looks at it.
-- **Environment.** The script runs in the work folder and gets your environment **without** any
-  variable whose name starts with `PRIVACYFENCE_`, so it never sees the token. It has no
-  PrivacyFence access: everything it needs comes in as files, and everything it produces goes out
-  as files. It may read and write your own files elsewhere (state, run history).
+- **Environment.** The script runs in the work folder and gets your environment without any
+  variable whose name starts with `PRIVACYFENCE_`, and without the variable `--token-env` names, so
+  it never sees the token. It runs as you, so it can read anything you can, including the stored
+  sign-in file.
 - The script's own folder is on its import path, so it can import modules that sit next to it.
   The work folder is not, so a file that lands there is never imported by accident.
 - `run` must be inside the recipe's folder. Keep the recipe, its scripts and templates in one

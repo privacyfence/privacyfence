@@ -28,6 +28,8 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 from privacyfence.settings_window_html import build_html
 
 
@@ -56,7 +58,8 @@ def _make_state(**overrides):
         "auto_accept": {
             "rules": [
                 {"id": "r-abc123", "sentence": "Gmail - sender: allow read", "connector": "gmail",
-                 "connector_label": "Gmail", "scope_type": "gmail.sender", "value": "", "value_ids": [],
+                 "connector_label": "Gmail", "scope_type": "gmail.sender", "scope": "gmail.sender",
+                 "scope_verbs": ["read", "download", "move"], "value": "", "value_ids": [],
                  "verbs": [{"verb": "read", "family": "read"}], "covered_tools": ["gmail_get_message"],
                  "match_count": 0, "last_matched": "", "never_matched": True},
             ],
@@ -64,7 +67,7 @@ def _make_state(**overrides):
                 {"id": "drive.folder", "label": "Drive — folder", "connector": "drive", "needs_value": True,
                  "value_hint": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms", "verbs": ["read", "download"]},
                 {"id": "gmail.sender", "label": "Gmail — sender", "connector": "gmail", "needs_value": False,
-                 "value_hint": "", "verbs": ["read", "download", "archive"]},
+                 "value_hint": "", "verbs": ["read", "download", "move"]},
             ],
             "connectors": ["drive", "gmail"],
         },
@@ -148,15 +151,29 @@ class TestStateEmbedding:
         embedded = _extract_initial_state(html)
         assert embedded["error"] == "Gmail authentication failed: boom"
 
-    def test_html_special_characters_in_state_do_not_break_the_script_tag(self):
-        # json.dumps escapes "</script>" sequences by default only if they
-        # appear literally -- confirm a value containing one doesn't split
-        # the embedding <script> tag early.
+    HOSTILE = "</script><script>alert(1)</script>"
+
+    @pytest.mark.parametrize("embed", ["state", "ai_client", "initial_section", "scoped_rule"])
+    def test_html_special_characters_in_state_do_not_break_the_script_tag(self, embed):
+        # json.dumps leaves "</script>" literal, which would end the embedding
+        # <script> tag early: every embedded value must be escaped.
         state = _make_state()
-        state["general"]["org_installed_date"] = "</script><script>alert(1)</script>"
-        html = build_html(state)
-        embedded = _extract_initial_state(html)
-        assert embedded["general"]["org_installed_date"] == "</script><script>alert(1)</script>"
+        kwargs: dict = {}
+        if embed == "state":
+            state["general"]["org_installed_date"] = self.HOSTILE
+        elif embed == "ai_client":
+            kwargs["ai_client"] = {"mcp_url": self.HOSTILE}
+        elif embed == "initial_section":
+            kwargs["initial_section"] = self.HOSTILE
+        else:
+            data = json.loads(json.dumps(TestScopedTokensSection.DATA))
+            data["tokens"][0]["rules"][0]["sentence"] = self.HOSTILE
+            kwargs["scoped_tokens"] = data
+        html = build_html(state, **kwargs)
+        assert "</script><script>alert(1)" not in html
+        assert html.count("</script>") == html.count("<script")
+        if embed == "state":
+            assert _extract_initial_state(html)["general"]["org_installed_date"] == self.HOSTILE
 
 
 class TestToggleTemplate:
@@ -253,7 +270,7 @@ class TestAutoAcceptTemplate:
         non-empty; the DOM behaviour is proved in tests/integration/test_settings_update_rule_browser.py."""
         html = build_html(_make_state())
         assert "r.missing_tools && r.missing_tools.length" in html
-        assert "Newer tools aren\\'t covered yet" in html
+        assert "These verbs also cover tools this rule doesn\\'t allow yet" in html
         assert "dataAttr('update_policy_rule', { rule_id: r.id })" in html
 
     def test_update_rule_confirm_names_the_tools(self):
@@ -270,30 +287,45 @@ class TestAutoAcceptTemplate:
         assert "data-aa-verb-toggle" in html
         assert "data-aa-add" in html
 
-    def test_move_copy_needs_two_ids_hint_and_block(self):
+    def test_move_needs_two_ids_hint_and_block(self):
         html = build_html(_make_state())
         assert "function aaPairHint(group)" in html
-        assert "['move', 'copy']" in html
+        assert "['move'].filter" in html
+        assert "['move', 'copy']" not in html
         assert "Enter at least two ids, separated by a comma." in html
         assert "pf-aa-pair-hint" in html
         # The invalid state disables the button and the submit path refuses too.
         assert "pairHint && pairHint.invalid ? ' aria-disabled=\"true\"'" in html
         assert "if (submitHint && submitHint.invalid) return;" in html
 
-    def test_personal_data_chip_is_rendered_for_a_group_with_a_label(self):
+    def test_the_move_pair_rule_names_exactly_drive_folder_and_tasks_list(self):
+        """One constant lists the scopes whose move has a source and a destination; the add form's
+        hint and the Edit verbs toggle both go through the helper that reads it."""
         html = build_html(_make_state())
-        assert "group.personal_data_label" in html
-        assert 'data-aa-personal-data="1"' in html
-        assert "closest('[data-aa-personal-data]')" in html
-        assert "ui.aaPersonalData = !ui.aaPersonalData" in html
-        # Switching group drops a choice that belonged to the previous one.
-        assert "ui.aaGroup = el.value;\n      ui.aaValue = '';\n      ui.aaCheckedVerbs = {};\n      ui.aaPersonalData = false;" in html
+        assert "var AA_MOVE_PAIR_SCOPES = ['drive.folder', 'tasks.list'];" in html
+        assert "function aaMoveNeedsPair(scopeId)" in html
+        assert "!aaMoveNeedsPair(group.id)) return null;" in html
+        assert "aaMoveNeedsPair(r.scope) && r.value_ids.length < 2" in html
 
-    def test_add_rule_posts_personal_data(self):
+    def test_edit_verbs_hooks_and_confirm_text_are_present(self):
         html = build_html(_make_state())
-        assert "personal_data: !!ui.aaPersonalData" in html
-        # The flag is cleared once the rule is submitted.
-        assert "ui.aaValue = '';\n    ui.aaPersonalData = false;" in html
+        assert 'data-aa-edit="' in html
+        assert "data-aa-edit-verb" in html
+        assert "data-aa-edit-save" in html
+        assert "data-aa-edit-cancel" in html
+        assert "dataAttr('set_policy_rule_verbs', { rule_id: r.id, verbs: selected })" in html
+        assert "Change this rule to allow ' + selected.join(', ') + '? Added verbs cover all of their tools. " in html
+        assert "Tools that only removed verbs cover stop being auto-accepted." in html
+        # Custom rows (scope null) get no link; Save is inert while no verb is selected.
+        assert "r.scope && r.scope_verbs && r.scope_verbs.length" in html
+        assert "aria-label=\"Save verbs\" aria-disabled=\"true\"" in html
+
+    def test_rule_form_has_no_personal_data_checkbox(self):
+        html = build_html(_make_state())
+        assert "data-aa-personal-data" not in html
+        assert "personal_data_label" not in html
+        assert "aaPersonalData" not in html
+        assert "verbs: checked });" in html
 
     def test_filter_bar_wired(self):
         html = build_html(_make_state())
@@ -709,6 +741,14 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_the_form_offers_the_personal_data_checkbox_and_the_list_shows_its_badge(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "Let exports, downloads and page uploads carry personal data" in html
+        assert "Only for calls made with this token, and only for Drive downloads delivered as a file, Grist, " in html
+        assert "Other calls still stop for review when personal data is found." in html
+        assert "allow_personal_data: !!ui.stPersonalData" in html
+        assert "personal data allowed" in html
+
     def test_rules_show_their_resource_with_the_verbs_as_a_detail(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "esc(r.title) +" in html
@@ -731,6 +771,23 @@ class TestScopedTokensSection:
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "a rule that no longer exists" in html
         assert "r.missing ? 'a rule that no longer exists' : esc(r.sentence)" in html
+
+    def test_a_token_can_be_duplicated_and_the_form_cleared(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-duplicate="' in html
+        assert "aria-label=\"Duplicate ' + esc(t.label)" in html
+        assert "data-st-clear" in html
+        assert ">Clear form</div>" in html
+        assert "of this token\\'s rules no longer exist and were left out." in html
+        assert "The new token gets these rules as they are now. " in html
+        assert "The original only allowed part of them; check the tools below before creating it." in html
+        assert "/^(.*) (\\d+)$/" in html
+
+    def test_tools_follow_the_chosen_rules(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "data-st-other-tools" in html
+        assert "Tools that need no rule, from other connectors (" in html
+        assert "Select a rule to see the tools it covers." in html
 
 
 class TestOrgCapabilities:
