@@ -9,7 +9,7 @@
 # Node/TypeScript and is rebuilt on every run so it always reflects the
 # current checkout. The shim carries no protocol version of its own to keep
 # in sync with the daemon's (it has no schema knowledge at all -- see
-# mcpb/shim/'s own README/module comments), so there's no version pinning
+# the module docstring at the top of mcpb/shim/src/index.ts), so there's no version pinning
 # to do here beyond a plain build.
 #
 # Usage:

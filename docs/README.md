@@ -13,7 +13,7 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   approval, and troubleshooting shared by every platform.
 - [`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md),
   [`install-linux.md`](install-linux.md) — install, first start, troubleshoot, uninstall. One page
-  per platform; connecting an AI client is under "AI agent setup" below.
+  per platform.
 - [`platform-support.md`](platform-support.md) — supported OS versions and architectures, where
   PrivacyFence keeps its data, logs, and start/stop commands.
 - [`connecting-a-service.md`](connecting-a-service.md) — connecting Gmail, Slack and the other
@@ -58,7 +58,8 @@ Connecting each AI client, in local mode and in an organization deployment:
 
 - [`connect-claude-desktop.md`](connect-claude-desktop.md) — Claude Desktop, through the extension
   or as a custom connector
-- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code
+- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code, over HTTP with your own token
+  or through OAuth sign-in to an organization deployment
 - [`connect-claude-ai.md`](connect-claude-ai.md) — claude.ai, through an organization deployment
 - [`connect-chatgpt.md`](connect-chatgpt.md) — ChatGPT desktop on your own computer, and ChatGPT
   (Developer Mode) through an organization deployment

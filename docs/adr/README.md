@@ -13,7 +13,7 @@ describe whatever the code does today, and neither keeps a rejected alternative 
 | Kind | Answers | Home | Lifecycle |
 |---|---|---|---|
 | **Plan** | What are we about to do, and in what order? | A GitHub issue (preferred), or a `docs/*-plan.md` while its work is open | Temporary. Deleted when its work lands, **after** its decisions have been extracted here |
-| **ADR** | Why is it this way, and what was rejected? | `docs/adr/NNNN-*.md` | Permanent. Never deleted; after acceptance only its Status changes |
+| **ADR** | Why is it this way, and what was rejected? | `docs/adr/NNNN-*.md` | Permanent. Never deleted (the one exception: the parked plugin ADRs, see the Index); after acceptance only its Status changes |
 | **Reference** | How does it work, or how do I do X, today? | `docs/*.md`, `CONTRIBUTING.md`, code docstrings | Living. Edited in the same PR as the behavior. Links here for the *why* instead of retelling it |
 
 ## When a decision needs an ADR
@@ -103,6 +103,10 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 ```
 
 ## Index
+
+0120–0131 and 0136–0141 are reserved for the plugin framework, parked on
+`feature/plugin-framework-parked` and removed from `main` in `6142f9de`; read them with
+`git show 6142f9de^:docs/adr/<file>`. Do not reuse these numbers.
 
 | # | Decision | Status |
 |---|---|---|
