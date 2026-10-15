@@ -429,15 +429,22 @@ MARKER
 
 # ── systemd / XDG wiring ──────────────────────────────────────────────────────
 
+# Escape the characters that are special in the replacement half of an
+# `s|...|...|` expression (the delimiter, `&` and the backslash), so a path
+# containing any of them renders literally.
+sed_escape() {
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
 render_template() {
   local template="$1" destination="$2"
   [ -f "$template" ] || die "missing template: ${template}"
   sed \
-    -e "s|__DAEMON_EXECUTABLE__|${DAEMON_EXECUTABLE}|g" \
-    -e "s|__COMPANION_EXECUTABLE__|${COMPANION_EXECUTABLE}|g" \
-    -e "s|__SERVICE_ACCOUNT__|${SERVICE_ACCOUNT}|g" \
-    -e "s|__SERVICE_GROUP__|${SERVICE_GROUP}|g" \
-    -e "s|__SYSTEM_ROOT__|${SYSTEM_ROOT}|g" \
+    -e "s|__DAEMON_EXECUTABLE__|$(sed_escape "$DAEMON_EXECUTABLE")|g" \
+    -e "s|__COMPANION_EXECUTABLE__|$(sed_escape "$COMPANION_EXECUTABLE")|g" \
+    -e "s|__SERVICE_ACCOUNT__|$(sed_escape "$SERVICE_ACCOUNT")|g" \
+    -e "s|__SERVICE_GROUP__|$(sed_escape "$SERVICE_GROUP")|g" \
+    -e "s|__SYSTEM_ROOT__|$(sed_escape "$SYSTEM_ROOT")|g" \
     "$template" > "$destination"
   chown root:root "$destination"
   chmod 644 "$destination"
@@ -906,6 +913,45 @@ cmd_status() {
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
+# Saved before any `shift`: check_pkexec_arguments() judges the argument list
+# exactly as the caller wrote it.
+ORIGINAL_ARGS=("$@")
+
+# The companion runs this script through pkexec, so whoever can run pkexec
+# gets to choose the arguments. polkit's own action only names the path (and
+# the first argument, ADR 0183); this is the guard. Under pkexec (PKEXEC_UID
+# set) it accepts exactly the lists the companion passes and nothing else --
+# in particular never --daemon-exec, which names a file the service account
+# then runs. The .deb's postinst runs the script as root without pkexec, so it
+# is not restricted.
+check_pkexec_arguments() {
+  [ -n "${PKEXEC_UID:-}" ] || return 0
+  local count="${#ORIGINAL_ARGS[@]}"
+  case "${ORIGINAL_ARGS[0]:-}" in
+    daemon)
+      if [ "$count" -eq 2 ]; then
+        case "${ORIGINAL_ARGS[1]}" in
+          start|stop|restart|ensure-running|status) return 0 ;;
+        esac
+      fi
+      ;;
+    enable)
+      if [ "$count" -eq 2 ] && [ "${ORIGINAL_ARGS[1]}" = "--auto" ]; then
+        return 0
+      fi
+      if [ "$count" -eq 3 ] && [ "${ORIGINAL_ARGS[1]}" = "--for-user" ]; then
+        local caller
+        caller="$(id -nu "$PKEXEC_UID" 2>/dev/null)" || caller=""
+        if [ -n "$caller" ] && [ "${ORIGINAL_ARGS[2]}" = "$caller" ]; then
+          return 0
+        fi
+        die "not allowed via pkexec: --for-user must name the account that ran pkexec"
+      fi
+      ;;
+  esac
+  die "not allowed via pkexec: ${ORIGINAL_ARGS[*]-}"
+}
+
 [ $# -ge 1 ] || usage
 COMMAND="$1"; shift
 # `daemon`'s sub-verb is a positional, consumed here, before the generic
@@ -931,6 +977,8 @@ while [ $# -gt 0 ]; do
     *) die "unknown option: $1" ;;
   esac
 done
+
+check_pkexec_arguments
 
 # The two halves of ADR 0003 decision 3 are complements, not modifiers of one
 # another: naming a user and then asking for the half that deliberately has no
