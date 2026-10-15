@@ -115,9 +115,10 @@ disable or re-enable a service in Settings, connected clients are told to refres
 
 The tool list holds one tool per enabled, signed-in connector tool, plus the eight `privacyfence_*`
 tools below. Each connector tool carries MCP annotations that say what it does: a read is
-read-only and idempotent; a write is neither. Only the two tools that delete something,
-`calendar_delete_event` (an event) and `drive_sheets_delete_dimensions` (rows or columns of a
-spreadsheet), are marked destructive; an overwrite is a write, not a deletion.
+read-only and idempotent; a write is neither. Only the three tools that delete something,
+`calendar_delete_event` (an event), `drive_sheets_delete_dimensions` (rows or columns of a
+spreadsheet) and `peek_delete_page` (a Peek page with its comments and visit history), are marked
+destructive; an overwrite is a write, not a deletion.
 
 These annotations are always true. PrivacyFence is a privacy tool and does not tell an AI system
 anything false, so there is no setting, header or extension that advertises a write as read-only.

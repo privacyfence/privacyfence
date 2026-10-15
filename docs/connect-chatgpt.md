@@ -31,7 +31,7 @@ You need two things from PrivacyFence: the MCP URL and your token. Both are on *
 clients**.
 
 1. In PrivacyFence, open **Settings → AI clients**. Note the **MCP URL**, normally
-   `http://127.0.0.1:8765/mcp`.
+   `http://localhost:8765/mcp`.
 2. Click **Copy token** there, or choose **Copy AI Client Token** in the companion's menu bar menu.
    Your token is now on the clipboard. Treat it like a password.
 3. In ChatGPT desktop, open **Settings** → **MCP servers** → **Add server**. The form is titled
@@ -152,7 +152,8 @@ Two things can ask you before a tool runs:
    [Approvals and policy](approvals-and-policy.md).
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). There is no switch that
 advertises writes as read-only ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)).
 

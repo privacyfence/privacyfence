@@ -145,7 +145,8 @@ chat and asks you to say when you have approved it. Approve the card, tell Gemin
 call again.
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)).
 
 ## Files
@@ -188,7 +189,7 @@ an administrator registers it again (step 3) and updates the data store's client
 
 | What you see | What to do |
 |---|---|
-| **Verify Auth** or **Authorise** signs you in, but the connector never connects; the deployment's access log shows `/oauth/idp/callback` and then no `POST /token` | The deployment runs 5.1.0 or earlier, whose sign-in page cut off Gemini's popup. Ask your administrator to upgrade to the release that carries [ADR 0108](adr/0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md). |
+| **Verify Auth** or **Authorise** signs you in, but the connector never connects; the deployment's access log shows `/oauth/idp/callback` and then no `POST /token` | The deployment runs 5.1.0 or earlier, whose sign-in page cut off Gemini's popup. Ask your administrator to upgrade to 5.2.1 or later ([ADR 0108](adr/0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md). |
 | `/token` refuses the client with "Missing client_id" | The deployment runs 5.1.0 or earlier with **Use HTTP Basic Authentication** ticked. Register a `client_secret_post` client and untick it (step 3), or upgrade. |
 | Sign-in or tool calls fail behind a reverse proxy or firewall | It must let Google's servers through: they call `/token` with the User-Agent `Google` and `/mcp` with `python-httpx`. A User-Agent allow-list or bot rule has to accept both. |
 | **Reload custom actions** fails with "Could not acquire the stored end-user credentials" | Nobody has authorised from the web app yet. Do [step 5](#5-each-person-authorises-from-the-web-app), then reload. Check that the APIs in [step 2](#2-enable-the-apis) are enabled. |

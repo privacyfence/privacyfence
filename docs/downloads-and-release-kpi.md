@@ -248,7 +248,8 @@ Neither stops a crawler that ignores `robots.txt` and `nofollow`; its `GET`s are
 **counts recorded before the `robots.txt` route was deployed may include crawler downloads**:
 there is no way to separate them afterwards, since nothing about the requester is stored.
 
-The write goes through `ctx.waitUntil()` and is best-effort: a D1 failure is logged and swallowed
+The write goes through `ctx.waitUntil()` and is best-effort: a D1 failure is logged (visible only in a live
+`wrangler tail`) and swallowed
 and never blocks the byte stream; an R2 miss returns 404 before any count.
 
 ### What is stored
@@ -271,6 +272,8 @@ CREATE TABLE download_counts (
 `day` is the UTC date. One row per key; a download increments it in place. No IP address, user
 ID, cookie ID, fingerprint, email, Cloudflare Ray ID or User-Agent is stored anywhere — the schema
 has no column for any of them.
+The Worker keeps no request logs either: Workers observability is off
+([ADR 0186](adr/0186-the-download-worker-keeps-no-request-logs.md)).
 
 ## The KPI
 

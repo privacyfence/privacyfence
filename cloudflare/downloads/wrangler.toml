@@ -32,4 +32,4 @@ database_id = "1cb5c99c-6d34-4031-a5f6-2f3a406e4979"
 migrations_dir = "migrations"
 
 [observability]
-enabled = true
+enabled = false

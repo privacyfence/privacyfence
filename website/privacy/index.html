@@ -47,9 +47,11 @@
         server. It sends nothing to the project: no emails, files, messages, approvals, audit
         records, usage statistics or crash reports, because there is no PrivacyFence server to send
         them to. Its only connections are to the AI assistant and the services you connect it to
-        (such as Google, Slack, Salesforce, Atlassian or Telegram, and in an organization
-        deployment your identity provider), and to GitHub's public API to check for a newer
-        release.
+        (such as Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server,
+        and in an organization deployment your identity provider), in an organization deployment
+        with push notifications turned on to the browser vendor's push service (Apple, Google,
+        Mozilla or Microsoft), which receives only an encrypted, fixed-size notice that approvals
+        are waiting, and to GitHub's public API to check for a newer release.
       </p>
       <p>
         Whoever runs the software, you or your organization, is therefore responsible for the
@@ -89,7 +91,7 @@
       <h2 id="downloads">Downloads and download counts</h2>
       <p>
         Installers are served by <strong>downloads.privacyfence.eu</strong>, a small service run
-        on Cloudflare (Workers, R2 storage and a D1 database). The download page also asks it for the
+        on Cloudflare (Workers, R2 storage and a D1 database). The download and release history pages also ask it for the
         list of current releases, and the homepage and download page for the total number of
         downloads. When you
         download an installer, it adds one to a counter, and that counter is all it stores:
