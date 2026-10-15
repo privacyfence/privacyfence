@@ -18,10 +18,13 @@ Two kinds of check:
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -211,6 +214,82 @@ def test_systemd_analyze_verifies_the_unit(tmp_path: Path) -> None:
     problems = [line for line in output.splitlines() if UNIT_NAME in line]
     assert result.returncode == 0, output
     assert problems == []
+
+
+# --- The shipped Linux daemon unit, rendered by the installer's own render_template ---------------
+
+LINUX_SCRIPT = REPO_ROOT / "scripts" / "linux_privilege_separation.sh"
+LINUX_UNIT_TEMPLATE = REPO_ROOT / "installer" / "linux" / "privacyfence-daemon.service.tmpl"
+
+
+def _script_function(name: str) -> str:
+    text = LINUX_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL)
+    assert match is not None, f"no {name}() in {LINUX_SCRIPT.name}"
+    return match.group(0)
+
+
+def _render_daemon_unit(tmp_path: Path, daemon_executable: Path) -> Path:
+    """Run the script's real ``render_template`` (``chown``/``chmod`` stubbed, so no root is needed)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("chown", "chmod"):
+        stub = bin_dir / tool
+        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        stub.chmod(0o755)
+    unit = tmp_path / "privacyfence-daemon.service"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }",
+            _script_function("sed_escape"),
+            _script_function("render_template"),
+            f"DAEMON_EXECUTABLE={shlex.quote(str(daemon_executable))}",
+            "COMPANION_EXECUTABLE=/nonexistent",
+            "SERVICE_ACCOUNT=nobody SERVICE_GROUP=nogroup",
+            f"SYSTEM_ROOT={shlex.quote(str(tmp_path))}",
+            f"render_template {shlex.quote(str(LINUX_UNIT_TEMPLATE))} {shlex.quote(str(unit))}",
+        ]
+    )
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30, check=True)
+    return unit
+
+
+def _stub_executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_rendered_daemon_unit_verifies(tmp_path: Path) -> None:
+    systemd_analyze = _require("systemd-analyze")
+    unit = _render_daemon_unit(tmp_path, _stub_executable(tmp_path / "privacyfence-app"))
+
+    result = subprocess.run(
+        [systemd_analyze, "verify", "--man=no", str(unit)],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    # As above: an unknown key is only logged, with exit 0, so any line naming the unit is a failure.
+    # The one exception is systemd's note that the stand-in account is "nobody": the real service
+    # account is `privacyfence`, and the test only needs a user and group that exist on any host.
+    output = result.stdout + result.stderr
+    problems = [line for line in output.splitlines() if unit.name in line and "Special user nobody" not in line]
+    assert result.returncode == 0, output
+    assert problems == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stub path contains '|', which a Windows filename cannot")
+def test_rendered_unit_keeps_special_characters_literal(tmp_path: Path) -> None:
+    daemon = _stub_executable(tmp_path / "a&b|c" / "privacyfence-app")
+    unit = _render_daemon_unit(tmp_path, daemon)
+
+    assert f"\nExecStart={daemon}\n" in unit.read_text(encoding="utf-8")
 
 
 def test_nginx_accepts_the_server_block(tmp_path: Path) -> None:

@@ -1697,6 +1697,17 @@ class TestExportIssues:
         assert call["delivery"] == "local_disk"
         assert call["preview"]["Fields"] == "standard fields only"
 
+    async def test_formula_leading_cells_are_written_as_text(self, gated_call_spy, delivered):
+        issue = make_issue(key="ENG-1", summary='=HYPERLINK("x")')
+        issue.extra_fields = {}
+        connector, client = make_connector()
+        client.resolve_fields.return_value = []
+        client.export_issues.return_value = [issue]
+
+        await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        assert "\"'=HYPERLINK(\"\"x\"\")\"" in delivered[0]["data"].decode("utf-8")
+
     async def test_raw_data_carries_keys_only(self, gated_call_spy, delivered):
         connector, _client = self._setup()
 

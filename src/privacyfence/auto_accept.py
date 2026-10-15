@@ -395,10 +395,14 @@ def _file_from(raw: Any) -> Any:
 
 
 def _domain_of(sender: str) -> str:
-    email_part = sender
-    if "<" in sender and ">" in sender:
-        email_part = sender[sender.index("<") + 1 : sender.index(">")]
-    return email_part.split("@", 1)[-1].lower().strip()
+    """The lower-cased domain of the real address in a header-shaped string, or "" when it has none.
+
+    Parsed with `_address_of`, so a display name that merely contains an address cannot supply the
+    domain. An address without exactly one "@" has no domain: some Python 3.11 releases return
+    `x@evil.com@trusted.com` from parseaddr (CVE-2023-27043), and an empty domain matches no rule.
+    """
+    addr = _address_of(sender)
+    return addr.rsplit("@", 1)[1].strip() if addr.count("@") == 1 else ""
 
 
 def _address_of(raw: str) -> str:

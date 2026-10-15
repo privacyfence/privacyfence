@@ -13,7 +13,7 @@ describe whatever the code does today, and neither keeps a rejected alternative 
 | Kind | Answers | Home | Lifecycle |
 |---|---|---|---|
 | **Plan** | What are we about to do, and in what order? | A GitHub issue (preferred), or a `docs/*-plan.md` while its work is open | Temporary. Deleted when its work lands, **after** its decisions have been extracted here |
-| **ADR** | Why is it this way, and what was rejected? | `docs/adr/NNNN-*.md` | Permanent. Never deleted; after acceptance only its Status changes |
+| **ADR** | Why is it this way, and what was rejected? | `docs/adr/NNNN-*.md` | Permanent. Never deleted (the one exception: the parked plugin ADRs, see the Index); after acceptance only its Status changes |
 | **Reference** | How does it work, or how do I do X, today? | `docs/*.md`, `CONTRIBUTING.md`, code docstrings | Living. Edited in the same PR as the behavior. Links here for the *why* instead of retelling it |
 
 ## When a decision needs an ADR
@@ -104,6 +104,10 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 
 ## Index
 
+0120–0131 and 0136–0141 are reserved for the plugin framework, parked on
+`feature/plugin-framework-parked` and removed from `main` in `6142f9de`; read them with
+`git show 6142f9de^:docs/adr/<file>`. Do not reuse these numbers.
+
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-remove-macos-native-extra.md) | No macOS-native (AppKit/PyObjC) runtime extra | Accepted; superseded in part by 0002 |
@@ -124,15 +128,15 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0016](0016-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive) |
 | [0017](0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive); amended by 0092 |
 | [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive); amended by 0039, 0044 |
-| [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive) |
+| [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive); amended by 0181 |
 | [0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md) | PyPI/TestPyPI publishing uses OIDC Trusted Publisher only | Accepted (retroactive) |
-| [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive) |
+| [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive); amended by 0185 |
 | [0022](0022-one-release-tag-per-commit.md) | One release tag per commit; a stuck release is fixed forward | Accepted (retroactive) |
 | [0023](0023-changelog-is-the-only-source-of-release-notes.md) | `CHANGELOG.md` is the only source of stable release notes, and rendering fails loudly | Accepted (retroactive) |
 | [0024](0024-pre-releases-are-publicly-downloadable.md) | Pre-releases are publicly downloadable through the download Worker | Accepted (retroactive) |
 | [0025](0025-no-certified-security-framework.md) | No certified security framework (ISO 27001/BCP/SLA): a risk-acceptance posture | Accepted (retroactive) |
 | [0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md) | The companion manages the daemon through the platform's service manager, one elevation prompt per action | Accepted |
-| [0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) | A service-group member cannot take over another member's companion socket | Accepted; amended by 0029 |
+| [0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) | A service-group member cannot take over another member's companion socket | Accepted; amended by 0029, 0187 |
 | [0028](0028-clients-without-the-shim-get-capability-urls.md) | Clients without the shim move files through single-use capability URLs | Accepted |
 | [0029](0029-the-layout-step-never-re-owns-a-socket.md) | The installers' layout step never re-owns a socket | Accepted |
 | [0030](0030-preflight-dispatches-build-yml-before-tagging.md) | Cutting a release first dispatches `build.yml` on the untagged commit | Accepted |
@@ -176,9 +180,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0068](0068-step-up-is-turned-on-from-the-ui-and-off-only-by-a-config-edit.md) | Step-up is turned on from the UI and off only by a config edit | Accepted (retroactive) |
 | [0069](0069-require-passkey-with-nothing-enrolled-starts-and-releases-nothing.md) | With `require_passkey` on and nothing enrolled, the daemon starts and releases nothing step-up covers | Accepted (retroactive) |
 | [0070](0070-enabling-a-connector-is-sensitive-and-disabling-is-not.md) | Enabling a connector is a sensitive action, and disabling one is not | Accepted (retroactive) |
-| [0071](0071-audit-log-integrity-is-a-keyed-hash-chain-plus-off-host-forwarding.md) | Audit-log integrity is a keyed hash chain on the host, plus off-host forwarding | Accepted (retroactive) |
+| [0071](0071-audit-log-integrity-is-a-keyed-hash-chain-plus-off-host-forwarding.md) | Audit-log integrity is a keyed hash chain on the host, plus off-host forwarding | Accepted (retroactive); amended by 0176 |
 | [0072](0072-org-mode-persists-only-sealed-refresh-tokens.md) | Org mode persists only refresh tokens, each sealed to its bearer | Accepted (retroactive) |
-| [0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md) | An approved write is single-use; an approved read replays within the ledger TTL | Accepted (retroactive) |
+| [0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md) | An approved write is single-use; an approved read replays within the ledger TTL | Accepted (retroactive); amended by 0175 |
 | [0074](0074-auto-accept-rules-are-identified-by-a-content-derived-id.md) | Auto-accept rules are identified by a content-derived id, and decisions are attributed by it | Accepted (retroactive); amended by 0172 |
 | [0075](0075-apps-script-gets-no-run-tool.md) | The Apps Script connector has no tool that runs a script | Accepted (retroactive) |
 | [0076](0076-every-connector-tool-is-advertised-read-only.md) | Every connector tool is advertised to MCP clients as read-only | Superseded by 0086 |
@@ -213,7 +217,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md) | A Google API read is retried once when its connection drops; PrivacyFence never retries a write | Accepted |
 | [0106](0106-google-not-found-and-not-shared-errors-reach-the-agent.md) | A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic | Accepted |
 | [0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md) | Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise | Accepted |
-| [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted |
+| [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted; amended by 0177 |
 | [0109](0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md) | Gemini Enterprise is matched by the name its admin registers it with | Accepted |
 | [0110](0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md) | Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command | Accepted |
 | [0111](0111-a-duplicate-release-run-cancels-itself.md) | A duplicate release run cancels itself | Accepted |
@@ -242,7 +246,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0152](0152-which-peek-server-is-used-and-a-token-stays-with-it.md) | Which Peek server is used, and a Peek token stays with the server it was issued for | Accepted |
 | [0153](0153-peek-comments-are-posted-only-through-the-account-comment-endpoint.md) | Peek comments are posted only through the account comment endpoint | Accepted |
 | [0154](0154-peek-visit-stats-carry-names-and-times-never-ip-addresses.md) | Peek visit stats carry counts, visitor names and times, never IP addresses | Accepted |
-| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted; amended by 0157, 0160 |
+| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted; amended by 0157, 0160, 0180 |
 | [0156](0156-grist-export-sql-reads-through-the-sql-endpoint.md) | `grist_export_sql` reads through Grist's SQL endpoint | Accepted; amends 0146 |
 | [0157](0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) | A rule can let personal data through the tools whose result holds no row | Accepted; amends 0155; amended by 0173 |
 | [0158](0158-peek-rules-name-pages-and-cover-only-new-versions.md) | Peek rules name pages and cover only new versions | Accepted |
@@ -262,3 +266,16 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074 |
 | [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164 |
 | [0174](0174-a-rules-verbs-are-edited-in-place.md) | A rule's verbs are edited in place | Accepted; amends 0166 |
+| [0175](0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md) | An approval is bound to the whole request and to what its card showed | Accepted; amends 0073 |
+| [0176](0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md) | A chain-less audit line is accepted only before the first chained line | Accepted; amends 0071 |
+| [0177](0177-an-org-mode-mcp-client-needs-the-persons-consent-once.md) | An org-mode MCP client needs the person's consent once | Accepted; amends 0108 |
+| [0178](0178-a-sign-in-or-connect-flow-is-finished-in-the-session-that-started-it.md) | A sign-in or connect flow is finished in the session that started it | Accepted |
+| [0179](0179-an-idp-step-up-starts-only-from-the-card-by-post.md) | An IdP step-up starts only from the card, by POST | Accepted |
+| [0180](0180-jira-and-salesforce-csv-exports-neutralise-formula-cells.md) | Jira and Salesforce CSV exports neutralise formula cells | Accepted; amends 0155 |
+| [0181](0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md) | The QA runner is reachable only from `main`'s two QA workflows, and its jobs hold read-only tokens | Accepted; amends 0019 |
+| [0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md) | Every tool a release or QA-runner job installs comes from a hash-pinned lock or an exact npm pin | Accepted; extends 0085 |
+| [0183](0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md) | Under pkexec the privilege-separation script accepts only the companion's own requests | Accepted |
+| [0184](0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md) | The macOS pkg runs its own copy of the privilege-separation script, and only over a root-owned app bundle | Accepted |
+| [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Accepted; amends 0021 |
+| [0186](0186-the-download-worker-keeps-no-request-logs.md) | The download Worker keeps no request logs | Accepted |
+| [0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md) | The `.mcpb` shim trusts only handoff entries the service account owns; the daemon replaces a foreign control socket | Accepted; amends 0027 |

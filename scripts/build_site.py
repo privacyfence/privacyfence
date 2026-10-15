@@ -780,6 +780,24 @@ def readme_descriptions(readme: str) -> dict[str, str]:
     return descriptions
 
 
+def doc_descriptions(raw: dict[str, str], readme: str, titles: dict[str, str]) -> dict[str, str]:
+    """Each doc's description: its index line in docs/README.md ("Configuration reference: every
+    settings.yaml key ..."), or its opening paragraph where the index gives it none or only
+    repeats the title."""
+    from_readme = readme_descriptions(readme)
+    descriptions = {}
+    for stem, text in raw.items():
+        line = from_readme.get(stem, "")
+        words = re.findall(r"\w+", line.lower())
+        repeats_title = sum(word in titles[stem].lower() for word in words) >= 0.6 * len(words)
+        if line and not repeats_title:
+            descriptions[stem] = _shorten(f"{titles[stem]}: {line}", 200)
+        else:
+            descriptions[stem] = doc_description(text)
+        descriptions[stem] = _curly_quotes(descriptions[stem])
+    return descriptions
+
+
 def _curly_quotes(text: str) -> str:
     """Straight double quotes as typographic ones. A description ends up in a `content="..."`
     attribute the generator writes without escaping, where a straight quote would end it."""
@@ -893,17 +911,7 @@ def export_docs(source: DocsSource, version_label: str) -> DocsExport:
     titles = {stem: doc_title(text, stem) for stem, text in raw.items()}
     # A page's description is its index line ("Configuration reference: every settings.yaml
     # key ..."), or its opening paragraph where the index gives it none or only repeats the title.
-    from_readme = readme_descriptions(readme)
-    descriptions = {}
-    for stem, text in raw.items():
-        line = from_readme.get(stem, "")
-        words = re.findall(r"\w+", line.lower())
-        repeats_title = sum(word in titles[stem].lower() for word in words) >= 0.6 * len(words)
-        if line and not repeats_title:
-            descriptions[stem] = _shorten(f"{titles[stem]}: {line}", 200)
-        else:
-            descriptions[stem] = doc_description(text)
-        descriptions[stem] = _curly_quotes(descriptions[stem])
+    descriptions = doc_descriptions(raw, readme, titles)
     markdown = {stem: rewrite_links(text, resolver) for stem, text in raw.items()}
     absolute = {stem: rewrite_links(text, lambda t: resolver(t, absolute=True)) for stem, text in raw.items()}
 

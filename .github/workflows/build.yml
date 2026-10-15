@@ -76,7 +76,7 @@ jobs:
         # This is what actually ends up in the DMG -- PyInstaller freezes whatever's importable
         # once this job's install steps finish, and it's the SBOM (below, "Generate Python SBOM")
         # that's supposed to describe exactly that. Installing from the hash-verified lockfile
-        # first, before the unpinned editable install below, is what makes both of those true: a
+        # first, before the hash-locked dev install below, is what makes both of those true: a
         # compromised or substituted package on the index fails this install instead of landing in
         # the shipped app silently (requirements/README.md), and pip-audit --strict
         # (dependency-audit.yml) is auditing the dependency set that's actually bundled, not just
@@ -91,9 +91,13 @@ jobs:
         #
         # The runtime dependencies themselves were already installed, pinned and hash-verified, by
         # the step above; pip only installs a requirement it doesn't already have a satisfying
-        # version of, so this step adds the dev/test extras on top without re-resolving or
-        # loosening anything the previous step pinned.
-        run: pip install -e ".[dev,test]"
+        # version of, so this step adds the dev/test tooling from requirements/dev.lock.txt (hash-
+        # verified, compiled against the runtime lock so shared packages carry the same pin) on top
+        # without re-resolving or loosening anything the previous step pinned. The package itself
+        # goes in with --no-deps --no-build-isolation: the lock carries the build backend.
+        run: |
+          pip install --require-hashes -r requirements/dev.lock.txt
+          pip install --no-deps --no-build-isolation -e .
 
       # tests/integration/test_macos_packaged_smoke.py drives a real headless
       # Chromium page against the packaged app's own approval UI -- same
@@ -239,6 +243,8 @@ jobs:
       # headless browser against the real served approval UI. A failure here
       # fails this job before the DMG reaches R2/GitHub Releases below.
       - name: Run packaged smoke test
+        env:
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
         run: pytest tests/integration/test_macos_packaged_smoke.py -v
 
       # tests/diagnostics.py's own capture (environment info, an installed-file manifest, and any
@@ -260,6 +266,8 @@ jobs:
       # real `sudo installer -pkg ...` + launchd verification (test_macos_pkg_install.py) lives in
       # the separate, weekly-scheduled macos-graphical-session.yml instead.
       - name: Run pkg smoke test
+        env:
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
         run: pytest tests/integration/test_macos_pkg_smoke.py -v
 
       - name: Upload pkg smoke failure diagnostics
@@ -328,7 +336,7 @@ jobs:
           CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
-          python3 -m pip install --quiet --user boto3
+          python3 -m pip install --quiet --user --require-hashes -r requirements/release.lock.txt
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*.dmg \
             scripts/build_org_bundle.py \
@@ -375,7 +383,7 @@ jobs:
       - name: Install pinned runtime dependencies
         # Same reasoning as the `build` (macOS) job's identically-named step above: this is what
         # actually ends up in the Windows installer, so it needs to come from the hash-verified
-        # lockfile rather than an unpinned resolve.
+        # lockfile rather than a fresh resolve.
         run: pip install --require-hashes -r requirements/runtime.lock.txt
 
       - name: Install Python dependencies
@@ -385,8 +393,10 @@ jobs:
         # already a runtime dependency.
         #
         # The runtime dependencies were already installed, pinned and hash-verified, by the step
-        # above; this only layers the dev/test extras on top -- see that step's comment.
-        run: pip install -e ".[dev,test]"
+        # above; this only layers the hash-locked dev/test tooling on top -- see that step's comment.
+        run: |
+          pip install --require-hashes -r requirements/dev.lock.txt
+          pip install --no-deps --no-build-isolation -e .
 
       # Same version/channel resolution as the `build` job's identically-
       # named step -- see its comments for why the channel lookup is
@@ -518,6 +528,8 @@ jobs:
       # the test, and a failed separation failing Setup rather than shipping quietly. A failure
       # here fails this job before the installer reaches R2/GitHub Releases below.
       - name: Run packaged installer smoke test
+        env:
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
         run: pytest tests/integration/test_windows_packaged_smoke.py -v
 
       # Same tests/diagnostics.py capture as the `build` job's identically-named step --
@@ -555,7 +567,7 @@ jobs:
           R2_BUCKET: privacyfence-releases
         shell: bash
         run: |
-          python3 -m pip install --quiet boto3
+          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*-setup.exe
 
@@ -597,7 +609,7 @@ jobs:
       - name: Install pinned runtime dependencies
         # Same reasoning as the `build` (macOS) job's identically-named step above: this is what
         # actually ends up in the .deb, so it needs to come from the hash-verified lockfile rather
-        # than an unpinned resolve.
+        # than a fresh resolve.
         run: pip install --require-hashes -r requirements/runtime.lock.txt
 
       - name: Install Python dependencies
@@ -606,10 +618,11 @@ jobs:
         # after the build -- not otherwise required by this job's own .deb build.
         #
         # The runtime dependencies were already installed, pinned and hash-verified, by the step
-        # above; this only layers the dev/test extras (and pyinstaller, already a `dev` extra --
-        # named again here for emphasis, since it's what turns this job's own output into the
-        # .deb) on top -- see that step's comment.
-        run: pip install -e ".[dev,test]" pyinstaller
+        # above; this only layers the hash-locked dev/test tooling (pyinstaller included, which is
+        # what turns this job's own output into the .deb) on top -- see that step's comment.
+        run: |
+          pip install --require-hashes -r requirements/dev.lock.txt
+          pip install --no-deps --no-build-isolation -e .
 
       # The release-workflow smoke test for the Ubuntu org-mode service --
       # strict startup, reverse-proxy/Host handling, route mounting,
@@ -624,6 +637,7 @@ jobs:
       - name: Run org-mode Ubuntu release smoke test
         env:
           PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS: "1"
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
         run: pytest tests/integration/test_org_ubuntu_release_smoke.py -v
 
       # Same version/channel resolution as the `build` job above, independently -- see that job's
@@ -658,6 +672,8 @@ jobs:
       # passwordless sudo (see that test module's own `_can_install_packages` skip condition). A
       # failure here fails this job before the .deb reaches R2/GitHub Releases below.
       - name: Run packaged .deb lifecycle test
+        env:
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
         run: pytest tests/integration/test_deb_packaged_lifecycle.py -v
 
       # Same tests/diagnostics.py capture as the `build`/`build-windows` jobs' own
@@ -694,7 +710,7 @@ jobs:
           CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
-          python3 -m pip install --quiet boto3
+          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/privacyfence_*.deb
 
@@ -725,7 +741,7 @@ jobs:
           cache-dependency-path: mcpb/shim/package-lock.json
 
       # Same version/channel resolution as the `build` job above, independently -- this job
-      # doesn't `pip install -e .` the package itself (see the "Generate Python SBOM" step's own
+      # doesn't install the package itself (see the "Generate Python SBOM" step's own
       # comment for why it deliberately doesn't), so it reads the tag-derived version straight
       # from setuptools_scm instead of from an installed __version__.
       # See the `build` job's identically-named step for why the channel lookup is skipped
@@ -733,7 +749,7 @@ jobs:
       - name: Determine version and release channel
         id: release
         run: |
-          pip install --quiet setuptools_scm
+          pip install --quiet --require-hashes -r requirements/release.lock.txt
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -746,12 +762,12 @@ jobs:
           echo "Resolved version=$VERSION channel=$CHANNEL"
 
       # From requirements/runtime.lock.txt, not a fresh resolve -- the SBOM
-      # should describe exactly what a `pip install privacyfence` gets
+      # should describe exactly what a plain PyPI install of privacyfence gets
       # (and what pip-audit's blocking job in dependency-audit.yml already
       # vetted), not whatever the resolver would pick today.
       - name: Generate Python SBOM
         run: |
-          pip install cyclonedx-bom
+          pip install --require-hashes -r requirements/release.lock.txt
           cyclonedx-py requirements requirements/runtime.lock.txt \
             --pyproject pyproject.toml \
             --of JSON -o sbom-python.cdx.json
@@ -788,7 +804,7 @@ jobs:
           CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
-          python3 -m pip install --quiet boto3
+          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             sbom-python.cdx.json \
             sbom-shim-npm.cdx.json
@@ -851,13 +867,13 @@ jobs:
           python-version: '3.13'
 
       # Same lightweight resolution the `sbom` job uses: read the tag-derived version straight
-      # from setuptools_scm rather than `pip install -e .`-ing the package just to import
+      # from setuptools_scm rather than installing the package just to import
       # __version__, which this job has no other use for. Channel is needed here too: it decides
       # whether the GitHub Release below gets the full artifact set or stays asset-less.
       - name: Determine version and release channel
         id: release
         run: |
-          pip install --quiet setuptools_scm
+          pip install --quiet --require-hashes -r requirements/release.lock.txt
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
@@ -958,7 +974,7 @@ jobs:
           CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
-          python3 -m pip install --quiet boto3
+          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
           python3 scripts/r2_release.py finalize --version "${{ steps.release.outputs.version }}"
 
       # HEAD, never GET: a release-CI check must never inflate the download KPI it is verifying

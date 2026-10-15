@@ -28,6 +28,8 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 from privacyfence.settings_window_html import build_html
 
 
@@ -149,15 +151,29 @@ class TestStateEmbedding:
         embedded = _extract_initial_state(html)
         assert embedded["error"] == "Gmail authentication failed: boom"
 
-    def test_html_special_characters_in_state_do_not_break_the_script_tag(self):
-        # json.dumps escapes "</script>" sequences by default only if they
-        # appear literally -- confirm a value containing one doesn't split
-        # the embedding <script> tag early.
+    HOSTILE = "</script><script>alert(1)</script>"
+
+    @pytest.mark.parametrize("embed", ["state", "ai_client", "initial_section", "scoped_rule"])
+    def test_html_special_characters_in_state_do_not_break_the_script_tag(self, embed):
+        # json.dumps leaves "</script>" literal, which would end the embedding
+        # <script> tag early: every embedded value must be escaped.
         state = _make_state()
-        state["general"]["org_installed_date"] = "</script><script>alert(1)</script>"
-        html = build_html(state)
-        embedded = _extract_initial_state(html)
-        assert embedded["general"]["org_installed_date"] == "</script><script>alert(1)</script>"
+        kwargs: dict = {}
+        if embed == "state":
+            state["general"]["org_installed_date"] = self.HOSTILE
+        elif embed == "ai_client":
+            kwargs["ai_client"] = {"mcp_url": self.HOSTILE}
+        elif embed == "initial_section":
+            kwargs["initial_section"] = self.HOSTILE
+        else:
+            data = json.loads(json.dumps(TestScopedTokensSection.DATA))
+            data["tokens"][0]["rules"][0]["sentence"] = self.HOSTILE
+            kwargs["scoped_tokens"] = data
+        html = build_html(state, **kwargs)
+        assert "</script><script>alert(1)" not in html
+        assert html.count("</script>") == html.count("<script")
+        if embed == "state":
+            assert _extract_initial_state(html)["general"]["org_installed_date"] == self.HOSTILE
 
 
 class TestToggleTemplate:

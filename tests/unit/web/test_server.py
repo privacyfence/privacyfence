@@ -6,6 +6,7 @@ instead.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 
 import pytest
@@ -775,6 +776,32 @@ class TestBootstrapFlow:
         assert r.headers["location"] == "/approvals"
         assert "pf_session" in r.headers.get("set-cookie", "")
 
+    @pytest.mark.parametrize("path", ["//evil.example.com", "/\\evil.example.com", "//evil.example.com/%2e%2e"])
+    async def test_double_slash_path_never_redirects_off_origin(self, path):
+        app, _sessions, bootstrap = self._app()
+        code = bootstrap.mint()
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+            "scheme": "http", "path": path, "raw_path": path.encode(), "root_path": "",
+            "query_string": f"bootstrap={code}".encode(), "headers": [(b"host", b"localhost")],
+            "client": ("127.0.0.1", 5000), "server": ("localhost", 8765),
+        }
+        sent: list[dict] = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        await app(scope, receive, send)
+
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        location = dict(start["headers"])[b"location"].decode()
+        assert location.startswith("/")
+        assert not location.startswith("//")
+        assert not location.startswith("/\\")
+
     def test_the_session_inherits_the_code_s_own_provenance(self):
         """The mint is the only moment
         anything knew how this credential came to exist (web/session_auth.py's
@@ -1389,6 +1416,92 @@ class TestStateStreamTouchesItsOwnSession:
         chunk = await agen.__anext__()
         assert "settings" in chunk
         assert '{"a": 1}' in chunk
+
+
+class TestStateStreamIsScopedToTheRequestingPrincipal:
+    """Driven through ``WebServer``'s own wiring (its ``list_pending`` lambda and the settings
+    snapshot), not a ``StateStream`` the test builds itself, so a regression in that wiring shows."""
+
+    OTHER = Principal(id="os-1001")
+
+    @staticmethod
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    def _request(self, session_id: str):
+        from starlette.requests import Request
+
+        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
+        scope = {
+            "type": "http", "headers": headers, "method": "GET", "path": "/api/state/stream",
+            "scheme": "http", "server": ("localhost", 8765),
+        }
+        return Request(scope, receive=self._receive)
+
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web.server import _state_stream_route
+
+        web_ui = WebApprovalUI()
+        server = WebServer(web_ui, port=0, controller=_controller(tmp_path, monkeypatch))
+        ids = {}
+        for principal in (LOCAL_PRINCIPAL, self.OTHER):
+            with principal_scope(principal):
+                approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                    dedupe_key=f"k-{principal.id}", connector="gmail", tool="gmail_get_message",
+                    gate_kind="review", request_id=f"r-{principal.id}", summary="s", tool_name="t",
+                )
+            ids[principal.id] = approval.id
+        sessions = LocalSessionStore()
+        route = _state_stream_route(server.state_stream, sessions=sessions)
+        return server, sessions, route, ids
+
+    async def _events(self, route, sessions, principal, server, *, push=None, count=3) -> list[tuple[str, str]]:
+        session_id = sessions.create(principal_id=principal.id)
+        out: list[tuple[str, str]] = []
+        with principal_scope(principal):
+            response = await route.endpoint(self._request(session_id))
+            agen = response.body_iterator
+            try:
+                for i in range(count):
+                    if i == 1 and push is not None:
+                        server.state_stream.push_settings(push)
+                    try:
+                        chunk = await asyncio.wait_for(agen.__anext__(), 1.5)
+                    except (asyncio.TimeoutError, StopAsyncIteration):
+                        break
+                    event, _, data = chunk.strip("\n").partition("\n")
+                    out.append((event.removeprefix("event: "), data))
+            finally:
+                await agen.aclose()
+        return out
+
+    async def test_stream_carries_only_the_requesting_principals_approvals(self, tmp_path, monkeypatch):
+        server, sessions, route, ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, self.OTHER, server, count=1)
+
+        approvals = [data for event, data in events if event == "approvals"]
+        assert len(approvals) == 1
+        assert ids["os-1001"] in approvals[0]
+        assert ids["local"] not in approvals[0]
+
+    async def test_non_owner_stream_carries_no_settings_event(self, tmp_path, monkeypatch):
+        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, self.OTHER, server, push={"a": 1})
+
+        assert events  # the approvals event did arrive
+        assert all(event != "settings" for event, _ in events)
+
+    async def test_owner_stream_still_carries_settings(self, tmp_path, monkeypatch):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, LOCAL_PRINCIPAL, server, push={"a": 1})
+
+        assert [event for event, _ in events].count("settings") == 2
 
 
 class TestWebServerWiresTheStateStream:

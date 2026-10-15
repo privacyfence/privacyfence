@@ -199,6 +199,11 @@ class TestBuildSender:
         config = org_mode.AuditForwardingConfig(enabled=True, kind="http", http_url="https://siem.example.com")
         assert callable(af.build_sender(config))
 
+    def test_build_sender_rejects_an_unknown_kind(self):
+        config = org_mode.AuditForwardingConfig(enabled=True, kind="carrier-pigeon")
+        with pytest.raises(ValueError, match="Unknown audit_forwarding kind"):
+            af.build_sender(config)
+
 
 class TestAuditForwarder:
     @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default

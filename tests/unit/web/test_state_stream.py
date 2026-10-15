@@ -48,7 +48,7 @@ class TestSubscribe:
     async def test_first_connect_gets_full_state_immediately(self):
         stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
         chunks = []
-        async for chunk in stream.subscribe(_Disconnector(after=0)):
+        async for chunk in stream.subscribe(_Disconnector(after=0), receives_settings=True):
             chunks.append(chunk)
         events = [_parse_sse(c) for c in chunks]
         assert ("settings", {"a": 1}) in events
@@ -57,7 +57,7 @@ class TestSubscribe:
     async def test_no_settings_event_when_no_controller_is_wired(self):
         stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
         chunks = []
-        async for chunk in stream.subscribe(_Disconnector(after=0)):
+        async for chunk in stream.subscribe(_Disconnector(after=0), receives_settings=True):
             chunks.append(chunk)
         events = [_parse_sse(c)[0] for c in chunks]
         assert "settings" not in events
@@ -67,7 +67,7 @@ class TestSubscribe:
         stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
 
         async def driver():
-            gen = stream.subscribe(_Disconnector(after=2))
+            gen = stream.subscribe(_Disconnector(after=2), receives_settings=True)
             out = []
             async for chunk in gen:
                 out.append(chunk)
@@ -83,22 +83,22 @@ class TestSubscribe:
 
     async def test_reconnect_gets_full_state_again_not_a_patch(self):
         stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
-        first = [c async for c in stream.subscribe(_Disconnector(after=0))]
-        second = [c async for c in stream.subscribe(_Disconnector(after=0))]
+        first = [c async for c in stream.subscribe(_Disconnector(after=0), receives_settings=True)]
+        second = [c async for c in stream.subscribe(_Disconnector(after=0), receives_settings=True)]
         assert first == second
 
     async def test_subscriber_is_removed_on_disconnect(self):
         stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
-        async for _ in stream.subscribe(_Disconnector(after=0)):
+        async for _ in stream.subscribe(_Disconnector(after=0), receives_settings=True):
             pass
-        assert stream._subscribers == set()
+        assert stream._subscribers == {}
 
     async def test_approvals_change_is_delivered_without_an_explicit_push(self):
         pending = []
         stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: pending)
 
         async def driver():
-            gen = stream.subscribe(_Disconnector(after=3))
+            gen = stream.subscribe(_Disconnector(after=3), receives_settings=True)
             out = []
             async for chunk in gen:
                 out.append(chunk)
@@ -127,7 +127,7 @@ class TestSubscribeTouch:
             calls.append(1)
             return True
 
-        async for _ in stream.subscribe(_Disconnector(after=3), touch=touch):
+        async for _ in stream.subscribe(_Disconnector(after=3), touch=touch, receives_settings=True):
             pass
 
         assert len(calls) == 3
@@ -143,7 +143,7 @@ class TestSubscribeTouch:
             calls.append(1)
             return len(calls) < 2
 
-        chunks = [c async for c in stream.subscribe(_Disconnector(after=100), touch=touch)]
+        chunks = [c async for c in stream.subscribe(_Disconnector(after=100), touch=touch, receives_settings=True)]
 
         assert len(calls) == 2
         events = [_parse_sse(c)[0] for c in chunks]
@@ -154,8 +154,26 @@ class TestSubscribeTouch:
         # with no session store of their own (there are none left in local
         # mode, but nothing here should require passing it).
         stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
-        chunks = [c async for c in stream.subscribe(_Disconnector(after=2))]
+        chunks = [c async for c in stream.subscribe(_Disconnector(after=2), receives_settings=True)]
         assert len(chunks) == 1
+
+
+class TestReceivesSettings:
+    async def test_a_subscriber_without_it_never_gets_a_settings_event(self):
+        stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
+        gen = stream.subscribe(_Disconnector(after=3), receives_settings=False)
+        events = [_parse_sse(await gen.__anext__())[0]]
+        stream.push_settings({"a": 2})
+        events += [_parse_sse(c)[0] async for c in gen]
+        assert events == ["approvals"]
+
+    async def test_a_settings_push_still_reaches_the_subscriber_that_receives_them(self):
+        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
+        gen = stream.subscribe(_Disconnector(after=3), receives_settings=True)
+        await gen.__anext__()
+        stream.push_settings({"a": 2})
+        assert _parse_sse(await gen.__anext__()) == ("settings", {"a": 2})
+        await gen.aclose()
 
 
 class _FakeApproval:
@@ -170,7 +188,7 @@ class TestPushDebouncing:
     def test_a_burst_of_pushes_collapses_to_the_latest(self):
         stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
         queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-        stream._subscribers.add(queue)
+        stream._subscribers[queue] = True
 
         stream.push_settings({"a": 1})
         stream.push_settings({"a": 2})
@@ -227,7 +245,7 @@ class TestClose:
 
     async def test_close_ends_an_open_subscription(self):
         stream = self._stream()
-        gen = stream.subscribe(_Disconnector(after=10**6))
+        gen = stream.subscribe(_Disconnector(after=10**6), receives_settings=True)
         await gen.__anext__()
         await gen.__anext__()
         stream.close()
@@ -237,7 +255,7 @@ class TestClose:
     async def test_a_subscription_opened_after_close_ends_after_its_initial_events(self):
         stream = self._stream()
         stream.close()
-        gen = stream.subscribe(_Disconnector(after=10**6))
+        gen = stream.subscribe(_Disconnector(after=10**6), receives_settings=True)
         await gen.__anext__()
         await gen.__anext__()
         with pytest.raises(StopAsyncIteration):

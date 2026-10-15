@@ -128,3 +128,43 @@ class TestExamplePaths:
             assert "authority/logs/audit" in text
         assert "sudo python3 scripts/verify_audit_log.py /var/lib/privacyfence/authority/logs/audit" in doc
         assert "Audit log integrity" in doc
+
+
+class TestContinuityAndTail:
+    def _three_weeks(self, tmp_path):
+        for week in ("2026-W28", "2026-W29", "2026-W30"):
+            _record_entries(tmp_path, week, 2)
+
+    def test_intact_set_returns_0(self, tmp_path, capsys):
+        self._three_weeks(tmp_path)
+        assert verify_audit_log.main([str(tmp_path)]) == 0
+        assert "FAILED" not in capsys.readouterr().out
+
+    def test_removed_middle_week_returns_1(self, tmp_path, capsys):
+        self._three_weeks(tmp_path)
+        (tmp_path / "2026-W29.jsonl").unlink()
+        rc = verify_audit_log.main([str(tmp_path)])
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert ("2026-W30: FAILED -- its first entry does not continue 2026-W28's last entry "
+                "(a week may have been removed or replaced)") in out
+
+    def test_truncated_tail_returns_1(self, tmp_path, capsys):
+        self._three_weeks(tmp_path)
+        newest = tmp_path / "2026-W30.jsonl"
+        lines = newest.read_text(encoding="utf-8").splitlines()
+        newest.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+        rc = verify_audit_log.main([str(tmp_path)])
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert ("2026-W30: FAILED -- the last entry does not match .audit_chain_state.json "
+                "(entries may have been removed from the end)") in out
+
+    def test_week_restarting_at_genesis_is_a_note(self, tmp_path, capsys):
+        _record_entries(tmp_path, "2026-W28", 2)
+        (tmp_path / ".audit_chain_state.json").unlink()
+        _record_entries(tmp_path, "2026-W29", 2)
+        rc = verify_audit_log.main([str(tmp_path)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "2026-W29: note -- starts a new chain segment" in out

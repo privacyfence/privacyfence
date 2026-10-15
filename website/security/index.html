@@ -38,7 +38,7 @@
       <div class="card-grid grid-auto">
         <article class="card stack" id="deployment-modes">
           <h3>Where it runs</h3>
-          <p>On one person's own computer (local mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). There is no PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian or Telegram.</p>
+          <p>On one person's own computer (local mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). There is no PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server.</p>
           <a class="text-link" href="/docs/security-and-compliance/#deployment-modes">Deployment modes →</a>
         </article>
         <article class="card stack" id="trust-boundary">
@@ -83,7 +83,7 @@
         </article>
         <article class="card stack" id="other-controls">
           <h3>Other controls</h3>
-          <p>Session cookies, CSRF and same-origin checks, a host allowlist and a per-response Content Security Policy on the web pages; limits on the organization's OAuth server; a validated, optionally signed organization config; signed installers and CycloneDX SBOMs for every release.</p>
+          <p>Session cookies, CSRF and same-origin checks, a host allowlist and a per-response Content Security Policy on the web pages; limits on the organization's OAuth server; a validated, optionally signed organization config; the macOS installer is signed and notarized and the Windows installer Authenticode-signed for stable releases (the Linux .deb is not signed; check it by its SHA-256), and each stable release publishes CycloneDX SBOMs.</p>
           <a class="text-link" href="/docs/security-and-compliance/#other-controls">Other controls →</a>
         </article>
       </div>

@@ -66,8 +66,9 @@ _XLSX_MAX_COLS = 20
 _ARCHIVE_MAX_ENTRIES = 200
 
 # Cap on bytes decompressed from a single zip member (DOCX/PPTX's
-# word/document.xml, ppt/slides/slideN.xml) before it's handed to the XML
-# parser. A DOCX/PPTX is a zip archive of attacker-controlled content --
+# word/document.xml, ppt/slides/slideN.xml, and every member of an XLSX --
+# xl/sharedStrings.xml, xl/styles.xml, the rels parts) before it's handed to
+# the XML parser. A DOCX/PPTX/XLSX is a zip archive of attacker-controlled content --
 # gmail.py/drive.py/confluence.py all fetch and extract attachment bytes
 # pre-approval, before a human has looked at the file -- so a crafted entry
 # that's tiny on disk but decompresses to gigabytes (a zip bomb) would
@@ -75,6 +76,12 @@ _ARCHIVE_MAX_ENTRIES = 200
 # extract_text()'s truncation to MAX_SCAN_CHARS ever gets a chance to run.
 # See _read_zip_member_bounded().
 _MAX_ZIP_ENTRY_BYTES = 10 * 1024 * 1024  # 10 MiB
+
+# An XLSX's members are summed against this, not just capped one by one.
+_XLSX_MAX_TOTAL_BYTES = 4 * _MAX_ZIP_ENTRY_BYTES
+
+# Slides read from a PPTX before truncating.
+_PPTX_MAX_SLIDES = 500
 
 # MIME types extract_text() can do something with, beyond the text/* prefix.
 EXTRACTABLE_MIME_TYPES = frozenset({"application/pdf", _DOCX_MIME, _PPTX_MIME, _XLSX_MIME, _ARCHIVE_MIME})
@@ -355,12 +362,15 @@ def _extract_pptx_markdown(data: bytes) -> str:
     if not paths:
         return ""
     sections = []
+    total = len(paths)
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        for i, path in enumerate(paths, start=1):
+        for i, path in enumerate(paths[:_PPTX_MAX_SLIDES], start=1):
             root = ET.fromstring(_read_zip_member_bounded(zf, path))
             raw_lines = (_pptx_paragraph_markdown(p) for p in root.iter() if _local(p.tag) == "p")
             body = _join_markdown_lines([line for line in raw_lines if line])
             sections.append(f"## Slide {i}\n\n{body}" if body else f"## Slide {i}")
+    if total > _PPTX_MAX_SLIDES:
+        sections.append(f"*(showing the first {_PPTX_MAX_SLIDES} slides of {total})*")
     return "\n\n".join(sections)
 
 
@@ -407,12 +417,33 @@ def _extract_xlsx_markdown(data: bytes) -> str:
     except ImportError:
         logger.warning("extract_text: openpyxl not installed -- skipping XLSX extraction")
         return ""
+    if not _xlsx_within_cap(data):
+        logger.warning("Refusing to parse %s: decompressed size over the cap", _XLSX_MIME)
+        return ""
     wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
         sections = [s for s in (_xlsx_sheet_markdown(ws) for ws in wb.worksheets) if s]
     finally:
         wb.close()
     return "\n\n".join(sections)
+
+
+def _xlsx_within_cap(data: bytes) -> bool:
+    """Read every member of the workbook under the per-member cap and check
+    the sum against _XLSX_MAX_TOTAL_BYTES -- openpyxl parses sharedStrings,
+    styles, content types and rels, so no member is exempt."""
+    total = 0
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            try:
+                total += len(_read_zip_member_bounded(zf, info.filename))
+            except _ZipEntryTooLarge:
+                return False
+            if total > _XLSX_MAX_TOTAL_BYTES:
+                return False
+    return True
 
 
 def _xlsx_sheet_markdown(ws) -> str:

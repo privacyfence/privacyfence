@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -296,6 +297,11 @@ class TestRedactGmailMessage:
         ]}}
         assert recorder.redact_gmail_message(raw) == raw
 
+    def test_message_id_header_redacted(self):
+        raw = {"payload": {"headers": [{"name": "Message-ID", "value": "<abc@mail.gmail.com>"}]}}
+        out = recorder.redact_gmail_message(raw)
+        assert out["payload"]["headers"][0]["value"] == "<qa-placeholder-message-id@example.com>"
+
     def test_missing_payload_does_not_raise(self):
         assert recorder.redact_gmail_message({}) == {}
 
@@ -326,6 +332,12 @@ class TestRedactJiraIssue:
         raw = {"fields": {"creator": {"self": "https://x/user?accountId=712020%3Areal"}, "assignee": None}}
         out = recorder.redact_jira_issue(raw)
         assert out["fields"]["creator"]["self"] == recorder._REDACTED_JIRA_USER_URL
+
+    def test_entity_ids_redacted_in_issue_and_projects(self):
+        issue = recorder.redact_jira_issue({"fields": {"project": {"entityId": "4633c0de-4f6f-472d-98f8-2eb4361d642f"}}})
+        assert issue["fields"]["project"]["entityId"] == "qa-placeholder-entity-id"
+        projects = recorder.redact_jira_projects([{"entityId": "x-1", "uuid": "x-1", "key": "K"}])
+        assert projects == [{"entityId": "qa-placeholder-entity-id", "uuid": "qa-placeholder-entity-id", "key": "K"}]
 
     def test_missing_fields_does_not_raise(self):
         assert recorder.redact_jira_issue({}) == {}
@@ -1176,10 +1188,10 @@ class TestReportPagingCheck:
         sf.restful.side_effect = restful
         return sf
 
-    def _check(self, sf, *, summary="sum", record=False, label="PF QA Number"):
+    def _check(self, sf, *, summary="00O5e000004SumARY1", record=False, label="PF QA Number"):
         client = SalesforceClient(config={"access_token": "t", "instance_url": "https://my.salesforce.com"})
         client._get_sf = lambda: sf
-        return recorder._check_salesforce_report_paging(client, "rep", summary, label, "QA Report", record)
+        return recorder._check_salesforce_report_paging(client, "00O5e000004RepORT1", summary, label, "QA Report", record)
 
     def test_report_paging_check_passes(self):
         res = self._check(self._sf())
@@ -1225,7 +1237,7 @@ class TestReportPagingCheck:
             return page
 
         client.run_report_page = run_report_page
-        res = recorder._check_salesforce_report_paging(client, "rep", "sum", "PF QA Number", "QA Report", False)
+        res = recorder._check_salesforce_report_paging(client, "00O5e000004RepORT1", "00O5e000004SumARY1", "PF QA Number", "QA Report", False)
         assert not res.ok and res.note == "greaterThan on page_by not honoured"
 
     def test_report_paging_check_summary_report_without_rows(self):
@@ -2111,6 +2123,57 @@ class TestFixturePresence:
             assert path.is_file(), f"missing recorded fixture: {path}"
             data = json.loads(path.read_text(encoding="utf-8"))
             assert data, f"recorded fixture is empty: {path}"
+
+    def test_every_expected_fixture_is_replayed_by_a_unit_test(self):
+        # A recorded fixture no test loads is dead weight that can rot
+        # unnoticed: every manifest file name must appear in a
+        # _load("<name>") call (or a LIVE_FIXTURES_DIR / "<name>" read)
+        # somewhere under tests/unit.
+        unit_dir = Path(__file__).resolve().parent
+        sources = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in unit_dir.rglob("*.py")
+            if p.resolve() != Path(__file__).resolve()
+        )
+        missing = [
+            f"{connector}/{filename}"
+            for connector, filenames in recorder.EXPECTED_FIXTURES.items()
+            for filename in filenames
+            if not re.search(r"(_load\(|LIVE_FIXTURES_DIR\s*/\s*)\s*[\"']" + re.escape(filename), sources)
+        ]
+        assert not missing, f"fixtures no unit test replays: {missing}"
+
+    def test_committed_fixtures_carry_no_unredacted_identifiers(self):
+        email = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+        patterns = [
+            re.compile(p)
+            for p in (
+                r"\bBearer [A-Za-z0-9._-]{10,}",
+                r"\bxox[abpr]-",
+                r"\bya29\.",
+                r"\beyJ[A-Za-z0-9_-]{10,}",
+                r"\bsk-[A-Za-z0-9]{20,}",
+                r"\bghp_[A-Za-z0-9]{20,}",
+            )
+        ]
+        uuid_re = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+        allowed_uuids: set[str] = set()
+        problems = []
+        for path in sorted(recorder.FIXTURES_DIR.glob("**/*.json")):
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(recorder.FIXTURES_DIR)
+            for match in email.finditer(text):
+                if match.group(1).lower() != "example.com" and not match.group(1).lower().endswith(".example.com"):
+                    problems.append(f"{rel}: email domain {match.group(1)}")
+            if "@mail.gmail.com" in text:
+                problems.append(f"{rel}: @mail.gmail.com")
+            for pattern in patterns:
+                if pattern.search(text):
+                    problems.append(f"{rel}: matches {pattern.pattern}")
+            for match in uuid_re.finditer(text):
+                if match.group(0).lower() not in allowed_uuids:
+                    problems.append(f"{rel}: UUID {match.group(0)}")
+        assert not problems, problems
 
     def test_no_undocumented_fixture_files_are_silently_ignored(self):
         # The inverse direction: a fixture file sitting on disk that no

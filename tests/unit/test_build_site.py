@@ -102,6 +102,19 @@ def test_export_without_rendering_writes_llms_full(tmp_path):
     assert report.docs_pages == []  # nothing rendered, so nothing to list or lay out
 
 
+def test_no_published_doc_description_is_a_fragment():
+    descriptions = build_site.export_docs(build_site.DocsSource(None), "test").descriptions
+    assert descriptions
+    assert [stem for stem, text in descriptions.items() if text.endswith(":")] == []
+    assert [stem for stem, text in descriptions.items() if " below" in text] == []
+
+
+def test_fragment_guard_catches_a_title_only_index_line():
+    readme = "## User and operator docs\n\n- [`x.md`](x.md) — X\n\n## Contributor docs\n"
+    descriptions = build_site.doc_descriptions({"x": "# X\n\nX works with both deployments:\n"}, readme, {"x": "X"})
+    assert descriptions["x"].endswith(":")
+
+
 # ---- Partials -----------------------------------------------------------------------------------
 
 

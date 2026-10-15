@@ -57,6 +57,12 @@ class TestBuildListHtml:
         assert "Nothing is waiting" in html
         assert "PrivacyFence is watching" in html
 
+    def test_a_hostile_script_value_cannot_close_the_script(self, monkeypatch):
+        monkeypatch.setattr(approval_list_html, "UNRECOGNISED_LABEL", "</script><b>x")
+        html = approval_list_html.build_list_html([], csrf="tok")
+        assert "</script><b>x" not in html
+        assert "\\u003c/script\\u003e\\u003cb\\u003ex" in html
+
     def test_renders_a_row_per_pending_approval(self):
         rows = [approval_list_html.row_from_approval(_card(id="a")), approval_list_html.row_from_approval(_card(id="b"))]
         html = approval_list_html.build_list_html(rows, csrf="tok")

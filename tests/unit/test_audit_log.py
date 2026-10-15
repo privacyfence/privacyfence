@@ -1,9 +1,11 @@
 """Unit tests for privacyfence.audit_log — the append-only decision trail."""
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
+import openpyxl
 import pytest
 from freezegun import freeze_time
 
@@ -231,7 +233,6 @@ class TestExportWeekToExcel:
         assert logger.export_week_to_excel("2026-W28") is None
 
     def test_export_produces_workbook_with_expected_content(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(
@@ -280,7 +281,6 @@ class TestExportWeekToExcel:
         assert summary_rows["IBAN (bank account number)"] == 1
 
     def test_a_scoped_token_denial_gets_the_unattended_fill_and_its_own_summary_row(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="denied_unattended"))
@@ -303,8 +303,6 @@ class TestExportWeekToExcel:
         )
 
     def test_export_omits_category_breakdown_when_no_entry_has_categories(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="approved"))
@@ -316,7 +314,6 @@ class TestExportWeekToExcel:
         assert "By PII category (refinement trial)" not in labels
 
     def test_export_skips_malformed_lines(self, tmp_path):
-        pytest.importorskip("openpyxl")
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry())
         week_file = tmp_path / "2026-W28.jsonl"
@@ -328,7 +325,6 @@ class TestExportWeekToExcel:
         assert output is not None
 
     def test_export_empty_file_returns_none(self, tmp_path):
-        pytest.importorskip("openpyxl")
         logger = AuditLogger(str(tmp_path))
         week_file = tmp_path / "2026-W28.jsonl"
         week_file.write_text("", encoding="utf-8")
@@ -497,7 +493,6 @@ class TestRuleUsage:
 
 class TestExportAllPending:
     def test_exports_only_weeks_missing_xlsx(self, tmp_path):
-        pytest.importorskip("openpyxl")
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(week="2026-W01"))
         logger.record(make_entry(week="2026-W02"))
@@ -732,12 +727,71 @@ class TestHashChain:
             summary="s", sender="a@example.com", decision="approved",
             auto_accept_rule="", latency_seconds=1.0,
         )
-        week_file.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+        week_file.write_text((json.dumps(legacy) + "\n") * 2, encoding="utf-8")
 
         logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry())
+        logger.record(make_entry())
         result = logger.verify_chain("2026-W28")
         assert result.ok is True
-        assert result.entries_checked == 1
+        assert result.entries_checked == 4
+
+    def _three_entries(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        for _ in range(3):
+            logger.record(make_entry())
+        week_file = tmp_path / "2026-W28.jsonl"
+        return logger, week_file, week_file.read_text(encoding="utf-8").splitlines()
+
+    def test_verify_chain_rejects_chainless_line_after_chained_entries(self, tmp_path):
+        logger, week_file, lines = self._three_entries(tmp_path)
+        forged = json.loads(lines[1])
+        del forged["entry_hash"], forged["prev_hash"]
+        forged["decision"] = "approved"
+        lines[1] = json.dumps(forged)
+        week_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = logger.verify_chain("2026-W28")
+        assert result.ok is False
+        assert result.first_break_line == 2
+
+    def test_verify_chain_rejects_a_junk_line_replacing_a_chained_one(self, tmp_path):
+        logger, week_file, lines = self._three_entries(tmp_path)
+        lines[0] = json.dumps({"summary": "junk"})
+        week_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = logger.verify_chain("2026-W28")
+        assert result.ok is False
+        assert result.first_break_line == 2
+
+    @pytest.mark.parametrize(
+        "field",
+        [f.name for f in dataclasses.fields(AuditEntry) if f.name not in ("entry_hash", "prev_hash")],
+    )
+    def test_editing_any_recorded_field_breaks_the_chain(self, tmp_path, field):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry())
+        logger.record(make_entry())
+        week_file = tmp_path / "2026-W28.jsonl"
+        lines = week_file.read_text(encoding="utf-8").splitlines()
+        data = json.loads(lines[0])
+        value = data[field]
+        if isinstance(value, bool):
+            data[field] = not value
+        elif isinstance(value, (int, float)):
+            data[field] = value + 1
+        elif isinstance(value, str):
+            data[field] = value + "x"
+        elif isinstance(value, list):
+            data[field] = value + ["x"]
+        elif isinstance(value, dict):
+            data[field] = {"x": 1}
+        else:
+            data[field] = "x"
+        lines[0] = json.dumps(data)
+        week_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        assert logger.verify_chain("2026-W28").ok is False
 
     def test_chain_key_and_state_persist_across_logger_instances(self, tmp_path):
         # A daemon restart constructs a brand-new AuditLogger over the same
@@ -915,8 +969,6 @@ class TestForwarding:
 
 class TestExportIncludesIntegrityColumns:
     def test_new_columns_present_with_expected_values(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path), deployment_id="dep-1", security_config_hash="cfg-1")
         entry = make_entry()
@@ -935,8 +987,6 @@ class TestExportIncludesIntegrityColumns:
 
 class TestExportIncludesBinderColumns:
     def test_decided_via_and_batch_id_present_with_expected_values(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path))
         entry = make_entry(decided_via="binder", batch_id="batch-123")
@@ -953,8 +1003,6 @@ class TestExportIncludesBinderColumns:
         assert row == ["binder", "batch-123"]
 
     def test_batch_id_formula_injection_is_neutralised(self, tmp_path):
-        pytest.importorskip("openpyxl")
-        import openpyxl
 
         logger = AuditLogger(str(tmp_path))
         entry = make_entry(decided_via="binder", batch_id="=WEBSERVICE(\"evil\")")
@@ -1056,7 +1104,6 @@ class TestAgentFields:
         assert logger.verify_chain("2026-W28").ok is False
 
     def test_excel_export_appends_agent_columns(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
         from privacyfence.agent_identity import AgentSource, agent_scope, identify
 
         logger = AuditLogger(str(tmp_path))
@@ -1135,7 +1182,6 @@ class TestDenyFeedbackFields:
         assert logger.verify_chain("2026-W28").ok is False
 
     def test_excel_export_appends_deny_columns(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="rejected", deny_intent="rewrite", deny_note_chars=42))
@@ -1177,7 +1223,6 @@ class TestApprovalLinkageFields:
         assert entry.expired_decision == ""
 
     def test_excel_export_appends_request_id_and_expired_decision(self, tmp_path):
-        openpyxl = pytest.importorskip("openpyxl")
 
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(request_id="req-1", decision="expired", expired_decision="approved"))

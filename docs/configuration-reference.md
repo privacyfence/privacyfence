@@ -169,7 +169,7 @@ or empty `auto_accept` section means nothing auto-accepts.
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download tool delivers in local mode; it also caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`) write. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
+| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download tool delivers in local mode; it also caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
 
 ### Passkey step-up (local mode)
 
@@ -326,9 +326,26 @@ options below are for running it by hand.
 | `--grist-oauth` | The same for Grist, when the organization config carries a Grist OAuth app. With an API key, use **Settings > Connectors** instead. |
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
 | `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
+| `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (`local` in local mode, or the principal id the audit log and the org Settings page show) and exit. Run it as the account the daemon runs as. |
 
 The sign-in options are for an install that is not privilege-separated (a source checkout or a
 `pip`/`pipx` install). On a packaged install the daemon refuses to run as your account, so they
 fail; connect services from **Settings > Connectors** instead (see
 [Connecting a service](connecting-a-service.md)). They need the organization config bundle
 installed first, except `--telegram-setup` and `--peek-login` (the latter asks for the Peek server address when the bundle names none).
+
+### privacyfence-companion
+
+The companion app's own command. The packaged installs start it for you. `--action`, `--serve` and
+`--launch` are mutually exclusive.
+
+| Option | What it does |
+|---|---|
+| (no option) | Run the tray (Windows) or menu-bar (macOS) companion. Linux has no tray, so there `--action` or `--serve` is required. |
+| `--launch` | Open Approvals, starting the tray or menu-bar companion first if none is running. This is what clicking the app icon or the Start Menu entry runs ([ADR 0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md)). |
+| `--serve` | Run only the companion's control channel, with no tray or menu, and stay up, so a separated daemon can hand this session a sign-in link to open. A separated Linux install's autostart entry runs this. |
+| `--action open-approvals` / `open-settings` | Open Approvals / Settings and exit. |
+| `--action copy-mcp-token` | Copy this account's AI client token to the clipboard ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md)). |
+| `--action recovery-code` | Ask the daemon for a new one-time passkey recovery code and show it in a dialog. |
+| `--action service-status`, `service-start`, `service-restart`, `service-stop` | Report on, start, restart or stop the background service; the last three ask for an administrator's password. |
+| `--action quit` | Ask the daemon to shut down, as Settings' Quit button does (only when the install allows quitting). |

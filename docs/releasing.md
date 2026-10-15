@@ -18,20 +18,18 @@ together with other pending CRs", from back when that was still how it worked).
 
 ## Cutting a release
 
-**Cutting a release is a tag, not a commit.** Once `main` is at the commit you want to release, tag
-it and push the tag:
+**Cutting a release is a tag, not a commit.** Once `main` is at the commit you want to release,
+dispatch `release.yml` (below). Versions are PEP 440 short form: `v4.0.0` stable, `v4.0.0a13`
+pre-release (a=alpha, b=beta, rc=release-candidate).
 
-```
-git tag v4.0.0            # stable
-git tag v4.0.0a13          # pre-release: a=alpha, b=beta, rc=release-candidate (PEP 440 short form)
-git push origin <tag>
-```
+`release.yml` is the only way to cut a release. A `v*` tag ruleset on the repository refuses a tag
+pushed by an account without the repository admin role, and the account whose fine-grained token is
+`RELEASE_TAG_TOKEN` must hold that role. A person with that role could still push a tag by hand;
+that is not the procedure, because it skips every check below. `scripts/tag_release.py <version>`
+is the script the workflow runs for them (clean tree, at `origin/main`'s tip, no second tag on the
+commit, PEP 440 short form, sequential with no gaps) — see its own docstring.
 
-`scripts/tag_release.py <version> [--push]` does the same thing with the checks this step otherwise
-has no gate for (clean tree, at `origin/main`'s tip, no second tag on the commit, PEP 440 short
-form, sequential with no gaps) — see its own docstring.
-
-**Or cut it from the Actions tab.** `.github/workflows/release.yml` (`workflow_dispatch`, inputs
+**Cut it from the Actions tab.** `.github/workflows/release.yml` (`workflow_dispatch`, inputs
 `version` and `dry_run`) runs `r2_release.py channel`, then `changelog_section.py` on the stable
 channel, then `tag_release.py`, against `main`'s tip on a runner. `dry_run` **defaults to true**:
 the default dispatch runs every check and creates the tag on the runner without pushing it, which

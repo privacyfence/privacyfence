@@ -1005,6 +1005,17 @@ def both_run():
 
 
 class TestExportReport:
+    async def test_formula_leading_cells_are_written_as_text(self, gated_call_spy, delivered):
+        result = export_run(make_rows(1))
+        result["factMap"]["T!T"]["rows"][0]["dataCells"][1] = {
+            "value": '=HYPERLINK("x")', "label": '=HYPERLINK("x")',
+        }
+        connector, _client = export_connector(result)
+
+        await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert "\"'=HYPERLINK(\"\"x\"\")\"" in delivered[0]["data"].decode("utf-8")
+
     async def test_unpaged_tabular_report_writes_all_rows(self, gated_call_spy, delivered):
         connector, client = export_connector()
 
@@ -1141,7 +1152,7 @@ class TestExportReport:
 
         lines = delivered[0]["data"].decode("utf-8").splitlines()
         assert f"{COLUMNS[1]}.currency" in lines[0].split(",")
-        assert lines[1].split(",")[2:5] == ["", "-", ""]
+        assert lines[1].split(",")[2:5] == ["", "'-", ""]
 
     async def test_value_and_label_formats_are_unchanged(self, gated_call_spy, delivered):
         connector, _client = export_connector(amount_run())

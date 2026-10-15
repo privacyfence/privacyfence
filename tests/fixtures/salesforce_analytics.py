@@ -17,7 +17,7 @@ CITY = "BILLING_CITY"
 TYPE = "TYPE"
 COLUMNS = [KEY, NAME, CITY, TYPE]
 CITIES = ["Boston", "Chicago", "Denver"]
-REPORT_ID = "00OEXAMPLE0000001"
+REPORT_ID = "00OEXAMPLE00000001"
 
 
 def make_rows(n: int, *, start: int = 1) -> list[dict]:

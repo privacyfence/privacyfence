@@ -12,8 +12,8 @@ fails the build if a committed file has drifted from what `pyproject.toml` actua
   what a plain `pip install privacyfence` resolves — pip doesn't auto-discover or apply a lock file,
   so that command still resolves fresh from `pyproject.toml`'s version ranges (see the literal
   install command in [`org-mode-setup-guide.md`](../docs/org-mode-setup-guide.md#3-service-account-and-install)). This file is
-  installed from explicitly, by name, in exactly three places: `build.yml`'s macOS/Windows/Linux
-  jobs (`pip install --require-hashes -r requirements/runtime.lock.txt`), before PyInstaller freezes
+  installed from explicitly, by name, in a handful of places: `build.yml`'s macOS/Windows/Linux
+  jobs and `macos-graphical-session.yml` (`pip install --require-hashes -r requirements/runtime.lock.txt`), before PyInstaller freezes
   whatever's importable into the `.app`/installer/`.deb` — so it pins what actually ships in a
   *packaged desktop build*, not what a `pip`/PyPI install resolves. It's also the blocking half of
   `dependency-audit.yml`'s `pip-audit` severity policy, and the input to the release SBOM
@@ -24,9 +24,20 @@ fails the build if a committed file has drifted from what `pyproject.toml` actua
   command work correctly on all three of `build.yml`'s OS-specific jobs — including a
   platform-only transitive dependency like `mcp`'s `pywin32` (Windows only), which a lock file
   compiled on just one platform would silently omit for every other one.
-- **`dev.lock.txt`** — the above plus the `dev`, `test`, and `lint` extras: build/release/test/static-
-  analysis tooling CI and contributors install, that never reaches an end user's machine. Audited
-  too, but informationally, by the same workflow.
+- **`dev.lock.txt`** — the `dev`, `test`, and `lint` extras plus everything in `release.in`, in one
+  resolution: build/release/test/static-analysis tooling CI and contributors install, that never
+  reaches an end user's machine. It is compiled with `-c requirements/runtime.lock.txt`, so every
+  package it shares with the runtime lock gets the runtime lock's exact pin; install it after the
+  runtime lock and nothing the runtime lock pinned changes. It carries the build backend
+  (`setuptools`, `wheel`, `setuptools-scm`), so `pip install --no-deps --no-build-isolation -e .`
+  works from it. Audited too, but informationally, by the same workflow.
+
+- **`release.in`** — the hand-written input for the release tooling: `setuptools`, `wheel`,
+  `setuptools_scm`, `build`, `boto3`, `cyclonedx-bom`, `uv` and `pip-audit`. It is not a package
+  extra, because an extra would ship in PyPI metadata as `privacyfence[release]`.
+- **`release.lock.txt`** — `release.in` compiled alone, for the SBOM, finalize, R2-upload, PyPI and
+  MCP-registry steps and the `floor-audit` job, which need only the tools. Audited, blocking, by
+  `dependency-audit.yml`, because these tools run next to signing and storage credentials.
 
 - **`docs.lock.txt`** — the `docs` extra only (the docs generator and its own dependencies), without
   the package's runtime dependencies. `.github/workflows/pages.yml` and `website-build.yml` install

@@ -43,6 +43,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.2.0] — 2026-10-15
+
+### Security
+
+- **macOS: the installer runs its own copy of the setup script and skips setup when the app bundle is not owned by root.**
+- **Linux: separating an install refuses a daemon program that a non-root account can modify, and the password prompt now names what it is for and only ever starts, stops or restarts the service or sets it up for your account.** `--daemon-exec` must be root-owned along its whole path, e.g. `/opt/privacyfence/venv/bin/privacyfence-app`; paths containing `&`, `|` or `\` also render correctly in the installed service file.
+- **An approval now covers exactly the request and content the card showed.** A repeated call with any different argument, or whose content changed, gets a new card, so an approved message can no longer be swapped for another one.
+- **`trusted_sender_domain`, `approved_recipient_domain` and `to_is_myself` rules read the real email address**, so a display name such as `"CEO <ceo@trusted.com>" <attacker@evil.com>` no longer matches.
+- **`verify_audit_log.py` now reports a forged line placed after chained entries, a removed week, and entries cut from the end of the log** (unless the chain-state file was edited too).
+- **Organization mode: the first time an MCP client signs in for you, PrivacyFence shows which client is asking and where it returns, and issues nothing until you allow it.**
+- **Organization mode: connecting Google, Slack, Atlassian or Grist, and signing in, must be finished in the browser that started them.**
+- **Organization mode: the identity-provider check for an approval starts only from the approval card.**
+- **Hostile client names and connector values can no longer break the Settings page or the approval card's markup.**
+- **On a computer shared by several people, the live Settings updates go only to the owner, and the sign-in link no longer redirects to other sites.**
+- **Large or malformed Excel attachments are refused before they are read.**
+- **Raised minimum versions of `pypdf`, `PyJWT` and `urllib3` for `pip install privacyfence`, to releases without known advisories.** `cryptography` and `certifi` minimums are raised too.
+- **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
+- **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
+- **Claude Desktop extension: it now connects only to a PrivacyFence on this computer whose files belong to PrivacyFence's own service account.** On a separated install the daemon removes a control socket another account left in the shared folder instead of running without one.
+
+### Fixed
+
+- **A rule added in Settings now resolves the pending approvals it covers right away.**
+- **The docs and privacyfence.eu now list all three tools marked destructive, name Grist and Peek wherever they list the services PrivacyFence connects to, and say which installers are signed.** downloads.privacyfence.eu no longer keeps request logs ([ADR 0186](docs/adr/0186-the-download-worker-keeps-no-request-logs.md)).
+
 ### Changed
 
 - **Auto-accept rules now use nine verbs: read, download, search, add, update, restructure, move, send and delete.** Grist and Peek verbs no longer carry bracketed labels. The older verb names are still accepted wherever a verb is typed.
@@ -3310,7 +3335,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...HEAD
+[6.2.0]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...v6.2.0
 [6.1.1]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...v6.1.1
 [6.1.0]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...v6.0.0

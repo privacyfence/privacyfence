@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Create a release tag safely -- the checks this repo's release history says a human keeps missing.
 
-Cutting a release is "tag `main`'s tip and push the tag" (docs/releasing.md
-section) -- there's no version-bump commit and no build step to catch a mistake before it's live.
+Cutting a release is "tag `main`'s tip and push the tag", which `release.yml` does by running this
+script (docs/releasing.md, ADR 0185) -- there's no version-bump commit and no build step to catch a
+mistake before it's live.
 This script runs the checks that step has no other gate for, before creating the tag locally:
 
   1. **Top of main.** The checkout is on `main`, the working tree is clean, and local `main` is
@@ -31,8 +32,9 @@ commits rather than tags) and the `v4.1.0a6`/`v4.1.0a7` double-tag above. It doe
 missing or unmerged `[Unreleased]` section fails loudly there rather than being duplicated here.
 
 Only creates the tag locally by default -- pushing it starts `build.yml` and `publish-pypi.yml`
-immediately (docs/releasing.md), which is not something this script does without
-`--push` being passed explicitly.
+immediately (docs/releasing.md), which is not something this script does without `--push` being
+passed explicitly. `release.yml` is the only documented way to cut a release (ADR 0185); running
+this by hand is for checking a version number.
 
 Stdlib only, no PrivacyFence install required -- same as scripts/r2_release.py and
 scripts/changelog_section.py. Deliberately doesn't import either: this script carries its own copy
@@ -41,10 +43,10 @@ stated reason for doing the same relative to src/privacyfence/update_checker.py.
 
 Examples:
     python3 scripts/tag_release.py 4.2.0a1
-        -> checks pass -> creates local tag v4.2.0a1 -> prints the `git push` command to run by hand
+        -> checks pass -> creates local tag v4.2.0a1 -> prints the `git push` command
 
     python3 scripts/tag_release.py 4.2.0 --push
-        -> checks pass -> creates and pushes v4.2.0
+        -> checks pass -> creates and pushes v4.2.0 (what `release.yml` runs)
 
     python3 scripts/tag_release.py 4.2.0a3
         -> error: next a-release for 4.2.0 must be a2 (got a3) if only 4.2.0a1 exists

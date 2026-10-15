@@ -43,7 +43,7 @@ reason rather than leaving it blank.
 - [ ] **`src/privacyfence/*_client.py` or `src/privacyfence/connectors/**`** —
       `scripts/qa_fixture_recorder.py --check <connector>` run against a dedicated QA account per
       `docs/connector-qa.md`, report pasted below. Without local QA credentials, dispatch
-      `connector-live-check.yml` against the branch and link the run instead.
+      `qa-record-fixture.yml` on `main` with `connector` and `branch` and link the run instead.
 - [ ] **`web/mcp_dispatch.py`, `web/routes_mcp.py`, `connector.py`'s `ToolSpec`/`ToolParam`, or
       `web/server.py`'s socket-binding/lifecycle** — `pytest tests/integration -v` run locally,
       `test_mcp_daemon_contract.py` still passes.
@@ -53,17 +53,20 @@ reason rather than leaving it blank.
 - [ ] **A dependency in `pyproject.toml`** — `scripts/update_dependency_locks.sh` run (needs `uv`)
       and the resulting `requirements/*.lock.txt` committed, or `dependency-audit.yml`'s
       `lockfile-freshness` job fails.
+- [ ] **`sync/**`** — `pip install -e "./sync[test]"`, then `pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100`,
+      `mypy sync/src` and `bandit -r sync/src` pass; if `sync/README.md` changed, it is copied to
+      `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
 - [ ] **`cloudflare/downloads/`** — `npm test`, `npm run typecheck` and `npm run dry-run` pass
       there.
 
 ## QA fixture report
 
 <!--
-Paste the `qa_fixture_recorder.py --check` report, or the link to the `connector-live-check.yml`
+Paste the `qa_fixture_recorder.py --check` report, or the link to the `qa-record-fixture.yml`
 run, here if the row above applies; delete this section otherwise.
 
 No live QA credentials to hand (a Claude Code on the web session never has them)? Don't skip the
-row — dispatch `connector-live-check.yml` or `qa-record-fixture.yml` and link the run instead of
+row — dispatch `qa-record-fixture.yml` on `main` with `branch=` and link the run instead of
 pasting. See `ci.dispatchable` in .claude/toolkit.yaml, and .claude/skills/steward/SKILL.md,
 "Why live connector checks leave this machine".
 -->
