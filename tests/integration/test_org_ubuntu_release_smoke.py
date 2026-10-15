@@ -226,7 +226,7 @@ from tests.packaged_policy_probe import (  # noqa: E402
 # MCP/approval/audit scenario, just against a real Ubuntu org-mode service
 # instead of local mode. Also what tests/diagnostics.py's own CI-diagnostics
 # capture keys off of.
-pytestmark = [pytest.mark.system, pytest.mark.timeout(300)]
+pytestmark = [pytest.mark.system, pytest.mark.packaged, pytest.mark.timeout(300)]
 
 ISSUER_HOST = "pf.example.internal"
 ISSUER_URL = f"https://{ISSUER_HOST}"

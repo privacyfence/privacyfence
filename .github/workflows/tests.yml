@@ -39,6 +39,7 @@ jobs:
     # cost with no signal, since the shim is a separate Node runtime not
     # affected by which CPython version the daemon runs under.
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -115,6 +116,7 @@ jobs:
       - name: Run test suite (100% pass rate required)
         env:
           CLAUDE_CODE_BIN: ${{ github.workspace }}/tests/integration/ai_clients/node_modules/.bin/claude
+          PRIVACYFENCE_REQUIRE_BROWSER: "1"
         run: |
           pytest -v --cov=src/privacyfence --cov-branch \
             --cov-report=term-missing \
@@ -201,6 +203,7 @@ jobs:
   test-python-compat:
     name: Test (Python ${{ matrix.python-version }}, core suite)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -256,6 +259,7 @@ jobs:
   # subset chosen ahead of time would have included.
   platform-windows:
     runs-on: windows-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -298,6 +302,7 @@ jobs:
   # to tests/platform/, for the same reason platform-windows above gives.
   platform-macos:
     runs-on: macos-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -340,6 +345,7 @@ jobs:
   # minutes) without waiting for a release tag to find out org mode broke.
   org-mode-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -385,6 +391,7 @@ jobs:
   # setup or shim build the `test` job carries for pytest's sake.
   static-analysis:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -431,6 +438,7 @@ jobs:
   sync:
     name: Sync client (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
