@@ -62,7 +62,7 @@ There is no tracking issue.
   - `policy/propose.py:366-368`: the `approved_object_types` scope covers `(Verb.READ,
     Verb.SEARCH)` and excludes `salesforce.run_report`
   - `tests/unit/policy/test_propose.py:79-82`, the per-tool context list
-- **Scope matcher.** `scopes._approved_object_types_matches` (`policy/scopes.py:311-318`) reads
+- **Scope matcher.** `scopes._approved_object_types_matches` (`policy/scopes.py:309-316`) reads
   `ctx.args["object_type"]`. A write tool's `args` must carry `object_type` for a rule to match.
 - **Generated docs and their drift tests:**
   - `docs/tools-reference.md` comes from `scripts/generate_tools_reference.py` and is checked by
@@ -96,12 +96,21 @@ There is no tracking issue.
   `grist.py:136`. A bare `RuntimeError`, which is what `_fetch` raises, becomes "Tool call failed.
   See the PrivacyFence log for details." A `ValueError` is shown as it is.
 - **QA.**
-  - `scripts/qa_fixture_recorder.py` `check_salesforce` (`:1374-1460`) runs reads only.
-  - `--lifecycle` (`LIFECYCLE_CHECKS`, `:2683`) has a create/read/update/read check for calendar,
-    confluence, grist, jira, peek and tasks. `lifecycle_grist` (`:2462-2510`) never deletes and
+  - `scripts/qa_fixture_recorder.py` `check_salesforce` (`:1403`) runs reads only.
+  - `--lifecycle` (`LIFECYCLE_CHECKS`, `:2712`) has a create/read/update/read check for calendar,
+    confluence, grist, jira, peek and tasks. `lifecycle_grist` (`:2491`) never deletes and
     reports `cleanup_ok=None`.
-  - `connector-live-check.yml` runs `--check`, `--record` and `--lifecycle` on the self-hosted
-    runner, and is dispatchable.
+  - The self-hosted runner admits only `connector-live-check.yml` and `qa-record-fixture.yml` as
+    they stand on `main` (ADR 0181).
+    - `qa-record-fixture.yml` is dispatched on `main` with the inputs `connector` and `branch`. It
+      runs `--record <connector>` (the `--check` calls, plus recording) against that branch's code,
+      and commits the fixture to the branch. This is how a branch gets its
+      `coding-and-testing-guidelines.md` §2.7 QA row.
+    - `connector-live-check.yml` runs `--check`, `--record` and `--lifecycle` against `main`'s code
+      only: weekly, or when dispatched.
+    - So the new `--lifecycle salesforce` check cannot run on the runner against the feature branch
+      before it merges. Someone with local QA credentials runs it, or it first runs on the Monday
+      after the merge.
 
 ## Design
 
@@ -255,9 +264,6 @@ Functions, with these exact signatures:
   - `None` or `""` becomes `"(empty)"`, and bool becomes `"true"` or `"false"`. Anything else is
     `str()`.
   - Cut to `limit` characters with a trailing `"…"` when it is longer. `limit=None` means no cut.
-- `payload_sha256(payload: Any) -> str`
-  - `hashlib.sha256` of
-    `json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))` as UTF-8.
 
 ### D3. Client additions in `salesforce_client.py`
 
@@ -400,9 +406,11 @@ Common to all four tools:
 5. Pass `raw_data` holding names and counts only, never values:
    `{"object_type", "fields": sorted names}` for a single write, and
    `{"object_type", "records": n, "fields": sorted union of names}` for a batch.
-6. Pass `args` with `"object_type"`, which the `approved_object_types` matcher reads, and
-   `"sha256": payload_sha256(<the exact write payload>)`, which binds the approval to the payload
-   (ADR 0073). Also pass `"record_id"` on update_record and `"key_field"` on update_records.
+6. Pass `args` as the policy args only: `"object_type"` (which the `approved_object_types`
+   matcher reads), plus `"record_id"` on update_record and `"key_field"` on update_records. Never
+   pass a field value or a hash of the payload. The gate already binds an approval to the agent's
+   whole request and to everything the card showed (`approvals.binding_key`, ADR 0175), so an
+   approval cannot release a different payload, and `args` stays a small rule-matching context.
 7. After approval, run the client write through a new connector helper
    `async def _write(self, func, *args) -> Any`. It runs `asyncio.to_thread(func, *args)`, and:
    - re-raises `SalesforceWriteError` as `SalesforceWriteRefusedError(str(exc))`;
@@ -429,7 +437,6 @@ Per tool:
     `preview={"Object type": object_type, "Fields": str(len(resolved))}`.
   - `preview_tables=[{"headers": ["Field", "Label", "Value"], "rows": [[name, index[name.lower()].label, cell_text(v)] ...]}]`.
   - `details_text`: one `f"{name}: {cell_text(v, None)}"` line per field, in input order.
-  - Payload hashed: `{"object_type": object_type, "fields": resolved}`.
 - **`salesforce_update_record`**
   1. Validate `record_id` with `_validate_salesforce_id`; a `SalesforceClientError` becomes
      `ValueError`.
@@ -449,7 +456,6 @@ Per tool:
      - `details_text`: one line per change,
        `f"{name}: {cell_text(old, None)} → {cell_text(new, None)}"`
   7. Write only the changed fields.
-  8. Payload hashed: `{"object_type", "record_id", "fields": {changed}}`.
 - **`salesforce_create_records`**
   - Run `resolve_fields` for each record with `where=f"records[{i}]"`.
   - `tool_name="Create Salesforce Records"` and
@@ -459,7 +465,6 @@ Per tool:
     `[str(i + 1)]` plus `cell_text` of each value, with `""` where a record lacks that field.
   - `details_text`: a `f"Record {i + 1}"` line per record, followed by that record's
     `f"  {name}: {cell_text(v, None)}"` lines.
-  - Payload hashed: `{"object_type", "records": [resolved...]}`.
 - **`salesforce_update_records`**
   1. `key = resolve_key_field(key_field, index, object_type)` and
      `is_id = key.type == "id"`.
@@ -493,7 +498,6 @@ Per tool:
        `f"{key_value} {name}: {old} → {new}"`, using `cell_text(..., None)`
   6. Write `[{"Id": row["Id"], **changed}]` in input order with `update_records`.
   7. Return the ids of the written records.
-  8. Payload hashed: `{"object_type", "key_field": key.name, "records": <the write list>}`.
 
 ### D5. Gate and policy registration
 
@@ -591,12 +595,12 @@ These go into the ADRs as rejected alternatives:
 The retirement phase writes these three ADRs. The numbers are provisional: use the next three free
 numbers in `docs/adr/` when that phase runs, in this order (see Risks).
 
-- **ADR 0175: Salesforce writes create and update one record or a batch of up to 200, all or
+- **ADR 0188: Salesforce writes create and update one record or a batch of up to 200, all or
   none, and never delete.**
   - Covers D1 and D7.
   - Rejected: CSV-file tools, Bulk API 2.0, native upsert and `create_missing`, delete, and
     multi-object batches.
-- **ADR 0176: A Salesforce write is checked against the object's describe and its current values
+- **ADR 0189: A Salesforce write is checked against the object's describe and its current values
   before the card.**
   - Covers D2 and D4: field, type and nullability checks before any approval.
   - Updates read the current values and show only the fields that change; a call that changes
@@ -610,7 +614,7 @@ numbers in `docs/adr/` when that phase runs, in this order (see Risks).
     the provider's own text", with the reason from D7.
   - A 5xx after a write says the write may or may not have been saved, and nothing is retried
     (ADR 0105).
-- **ADR 0177: The Salesforce object-type rule also covers creating and updating records of that
+- **ADR 0190: The Salesforce object-type rule also covers creating and updating records of that
   type.**
   - Covers D5: `approved_object_types` gains `add` and `update`, offered from the card.
   - Each tool has its own operation key, so the batch tools can be left out later.
@@ -620,20 +624,29 @@ numbers in `docs/adr/` when that phase runs, in this order (see Risks).
 
 ## Manual steps
 
-There is no `manual_before`. The live checks run on the self-hosted runner through
-`connector-live-check.yml`, and the lifecycle check's settings have code defaults.
+There is no `manual_before`. The `--check` run for the §2.7 QA row is dispatched by p5
+(`qa-record-fixture.yml` on `main` with `branch=`), and the lifecycle check's settings have code
+defaults.
 
-There is one `manual_after`, because CI cannot see a real approval card in a real Salesforce org.
-Try one single-record update and one batch create from an AI client against your Salesforce
-sandbox, and confirm what the cards show. The steps are in the
+There are two `manual_after` items:
+
+- **`ma1-real-cards`.** CI cannot see a real approval card in a real Salesforce org. Try one
+  single-record update and one batch create from an AI client against your Salesforce sandbox, and
+  confirm what the cards show.
+- **`ma2-lifecycle`.** The runner runs `--lifecycle` only against `main` (ADR 0181). Run
+  `qa_fixture_recorder.py --lifecycle salesforce` on the feature branch with local QA credentials,
+  and paste its row into the PR. If you have no local QA credentials, tick the item with "deferred
+  to the first weekly connector-live-check.yml run after merge", and check that run.
+
+The steps are in the
 [manual steps page](https://claude.ai/artifact/KrHGUXsa4AEMY6Du8VPzag).
 
 ## Risks and open questions
 
-- **ADR numbers.** `feature/jira-assets-connector` adds ADRs numbered 0171-0173, which collide with
-  `main`. When it is renumbered, it will likely take 0175-0177. The retirement phase takes the next
-  free numbers on the feature branch when it runs. Whichever PR merges second renumbers its ADRs
-  and their index rows.
+- **ADR numbers.** `main` is at ADR 0187. `feature/jira-assets-connector` still carries ADRs
+  numbered 0171-0173, which collide with `main`, and will take the next free numbers when it is
+  renumbered. The retirement phase takes the next free numbers on the feature branch when it
+  runs. Whichever PR merges second renumbers its ADRs and their index rows.
 - **Tool totals.** The 144 on the website is `main`'s current total. Phases p3 and p4 each **add
   2** to whatever total the files hold, and do not set an absolute number. If
   `tests/unit/test_website_connectors_page.py` still fails after that, stop with `status=blocked`:
@@ -642,11 +655,11 @@ sandbox, and confirm what the cards show. The steps are in the
   `result.json()`, or as `result.text` when the body is not JSON. `_write_failures` must return
   `[WriteFailure(0, "UNKNOWN", [], "")]` for a str and must never raise. A test asserts this.
 - **The composite API needs API version 42.0 or later.** `simple-salesforce`'s default version is
-  far newer. If a lifecycle check reports `NOT_FOUND` on `composite/sobjects`, stop and report it,
-  rather than lowering anything.
+  far newer. If the lifecycle run in `ma2-lifecycle` reports `NOT_FOUND` on `composite/sobjects`,
+  that is a finding to fix before merging; do not lower the API version.
 - **QA user permissions.** The QA Salesforce user must be able to create and edit Tasks. Standard
-  profiles can. If `lifecycle_salesforce` fails with `INSUFFICIENT_ACCESS`, the p5 worker reports
-  it as a `manual_after` finding for the maintainer and does not change the code.
+  profiles can. If `lifecycle_salesforce` fails with `INSUFFICIENT_ACCESS` in `ma2-lifecycle`,
+  that is a QA-org setting, not a code change.
 - **Datetime comparison.** Salesforce returns `2026-10-14T10:00:00.000+0000`. If `values_differ`
   ever reports a change for the same instant, the card would show a no-op change. The D2 tests
   pin this case.
@@ -664,6 +677,9 @@ manual_after:
   - id: ma1-real-cards
     title: Check a single-record update card and a batch create card against a real Salesforce sandbox
     why: CI drives the gate with a spy; only a person can confirm the real cards show Current/New values, the field labels and the "Always allow" offer for the object type in a real org
+  - id: ma2-lifecycle
+    title: Run qa_fixture_recorder.py --lifecycle salesforce on the feature branch with local QA credentials, or defer it to the first weekly run on main
+    why: the self-hosted runner runs --lifecycle only against main's code (ADR 0181), so no phase can prove the real create/update calls against Salesforce before merge
 verify_after_merge:
   - python3 -m pytest tests/unit/test_salesforce_client.py tests/unit/test_salesforce_writes.py tests/unit/connectors/test_salesforce_connector.py tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_systemic_gate_invariants.py -q
 final_checks:
@@ -766,7 +782,7 @@ phases:
          Import SalesforceField from .salesforce_client.
       2. Implement the constants and the functions parse_fields_object, parse_records,
          field_index, resolve_fields, resolve_key_field, key_text, key_norm, values_differ,
-         cell_text and payload_sha256 exactly as D2 specifies, with the shared _check_object
+         and cell_text exactly as D2 specifies, with the shared _check_object
          helper.
       3. Create tests/unit/test_salesforce_writes.py (module docstring naming the module and the
          invariant "no error message contains a value read from Salesforce"; pytestmark unit).
@@ -793,7 +809,6 @@ phases:
          - TestCellText: (empty), true/false, the 200-character cut with "…", limit=None.
          - TestNoValueInMessages: build a describe index and call resolve_fields with a value
            "SECRET-VALUE-123" in each failing shape; assert "SECRET-VALUE-123" is in no message.
-         - payload_sha256 is stable for key order and differs for a changed value.
       4. Run `ruff check .`, `python3 -m pytest tests/unit/test_salesforce_writes.py -q` and
          `python3 -m mypy src/privacyfence`.
     acceptance:
@@ -858,7 +873,8 @@ phases:
            a SalesforceRecord. Cover: gate "popup" and sender == object_type; preview has exactly
            the D4 keys and none of the values from fields or from the current record (use
            "SECRET-CURRENT" as the current Name and assert it is not in any preview value);
-           preview_tables headers; args carry object_type and sha256 (and record_id);
+           preview_tables headers; args == {"object_type": ...} (plus record_id on update)
+           and hold no field value;
            raw_data holds no value; a malformed fields JSON and an unknown field raise ValueError
            with no describe/gate call for the JSON case and no gate call for the field case;
            update with no change raises the D4 "nothing to change" error and never gates; update
@@ -950,7 +966,7 @@ phases:
            refused; a key matching two rows refused; 12 unmatched keys list 10 and "and 2 more";
            a record with only the key refused; unchanged records counted and not written; all
            unchanged refused without a gate call; preview keys exactly the D4 set; args carry
-           object_type, key_field and sha256; the error text never contains a current value read
+           exactly object_type and key_field; the error text never contains a current value read
            from find_records (use "SECRET-CURRENT" as a current value and assert it is absent from
            every raised message).
          - Extend the audit-trail call's arg_overrides for both tools:
@@ -1000,14 +1016,15 @@ phases:
       (tests/unit/test_code_no_history.py enforces this).
       1. scripts/qa_fixture_recorder.py: add lifecycle_salesforce(manifest) after lifecycle_peek
          (alphabetical order of the existing lifecycle_* functions), modelled on lifecycle_grist
-         (scripts/qa_fixture_recorder.py:2462-2510): build the client the way check_salesforce
+         (scripts/qa_fixture_recorder.py, def lifecycle_grist, around line 2491): build the client the way check_salesforce
          does, run the D6 steps, return LifecycleResult("salesforce", ok, note,
          cleanup_ok=None) with note "create, get, update, batch create, find, batch update all
          verified" on success. Docstring states it never deletes and why. Register it in
          LIFECYCLE_CHECKS in alphabetical position. Also fix the places that say Salesforce has
-         no lifecycle check: the module docstring list (scripts/qa_fixture_recorder.py:31-34),
-         the lifecycle scope list (around :2059-2062), and the "salesforce, telegram ... nothing
-         to create" note (around :2086-2088), which becomes telegram only.
+         no lifecycle check: the module docstring's --lifecycle list (scripts/qa_fixture_recorder.py,
+         around line 31), and the comment above LIFECYCLE_CHECKS (the "salesforce, telegram --
+         ... nothing to create" entry, around line 2115, becomes telegram only, and Salesforce
+         moves to the list of included connectors with a note that it never deletes).
       2. tests/fixtures/qa_environment.yaml.example: under salesforce:, add commented
          lifecycle_object_type: Task, lifecycle_name_field: Subject, lifecycle_note_field:
          Description, with a comment that they are the --lifecycle check's defaults.
@@ -1015,24 +1032,29 @@ phases:
          MagicMock client (patch the builder the function uses) through success, and one where
          update_record raises, asserting ok False and the note carries the error; and that
          "salesforce" is in LIFECYCLE_CHECKS.
-      4. docs/testing-policy.md: add salesforce to the lifecycle connector list (around line 210).
+      4. docs/testing-policy.md: add `salesforce` to the `--lifecycle` connector list (around
+         line 232, "create, read, update, delete a tagged QA object in ...").
          docs/connector-qa.md: add Salesforce to the "--lifecycle runs for" list (around line 393) and the
          manifest-keys table row (around line 342), and a short paragraph in "Salesforce checks"
-         (around 641-650) saying the lifecycle check creates and updates Tasks tagged with the
+         (around line 654) saying the lifecycle check creates and updates Tasks tagged with the
          lifecycle tag and never deletes them, so they are deleted by hand now and then.
       5. Run `ruff check .` and `python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q`.
-      6. Push the phase branch, then dispatch connector-live-check.yml (no inputs) against it with
-         the GitHub MCP actions_run_trigger tool. If the run has not started within 30 minutes
-         (self-hosted runner offline), stop with status=blocked. Read the Salesforce row from the
-         job log of the step "Run qa_fixture_recorder.py --lifecycle" (get_job_logs), and record
-         the run URL and that row in your phase report. If the run's --record step opens a
-         fixture-drift PR, do not merge or follow it. A red Salesforce lifecycle row from
-         INSUFFICIENT_ACCESS is a finding for the maintainer, not a code change: report it and
-         finish. Any other red Salesforce row: stop with status=blocked and paste the row.
+      6. Push the phase branch. Then, for the §2.7 QA row of the client change p1 made, dispatch
+         qa-record-fixture.yml on ref main with inputs connector=salesforce and
+         branch=<this phase's pushed branch name>, using the GitHub MCP actions_run_trigger tool.
+         Do not dispatch connector-live-check.yml: it checks main's code (ADR 0181).
+         - If the run has not started within 30 minutes (self-hosted runner offline), stop with
+           status=blocked.
+         - Record the run URL and its Salesforce --check result in your phase report.
+         - If the run commits a fixture to the branch, git pull, and read the diff as
+           docs/connector-qa.md "Reviewing recorded fixtures" says: no real account identifier,
+           tenant URL, token or private content. If it has any, stop with status=blocked.
+         - A red Salesforce check: stop with status=blocked and paste the row.
+         --lifecycle is not run here; it is the plan's manual_after item ma2-lifecycle.
     acceptance:
       - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q passes
       - grep -n 'lifecycle_salesforce,' scripts/qa_fixture_recorder.py matches
-      - the phase report contains the connector-live-check.yml run URL and its Salesforce lifecycle row
+      - the phase report contains the qa-record-fixture.yml run URL (dispatched on main with branch= this phase's branch) and a green Salesforce check
 
   - id: p6-docs-and-copy
     title: User docs, website copy and changelog for Salesforce writes
@@ -1109,7 +1131,7 @@ phases:
          Status "Accepted — <today>. Implemented.". Context/Decision/Alternatives/Consequences
          come from the plan's Goal, D1-D7 and Risks; Verification names the test classes added in
          p1-p5; Related links src/privacyfence/salesforce_client.py, salesforce_writes.py,
-         connectors/salesforce.py and ADRs 0073, 0077, 0105, 0144, 0145, 0148, 0166, 0171, 0174.
+         connectors/salesforce.py and ADRs 0077, 0105, 0144, 0145, 0148, 0166, 0171, 0174, 0175.
          No link to the plan.
       2. Add the three rows to docs/adr/README.md's index table in number order.
       3. Delete docs/salesforce-write-tools-plan.md and

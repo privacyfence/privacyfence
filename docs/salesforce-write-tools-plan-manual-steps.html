@@ -46,7 +46,7 @@ ol.steps li.done > div { color: var(--muted); text-decoration: line-through; tex
   <header style="display:flex;flex-direction:column;gap:8px">
     <h2>PrivacyFence · Salesforce write tools</h2>
     <h1>Hands-on checks for the Salesforce write tools</h1>
-    <p class="lede">These are the steps that only you can do. CI tests the cards with a stand-in for the approval window, and the live lifecycle check runs on the QA runner. What is left is looking at the real cards against a real org.</p>
+    <p class="lede">These are the steps that only you can do. CI tests the cards with a stand-in for the approval window, and the QA runner checks the read calls on the branch. What is left is looking at the real cards against a real org, and running the write lifecycle check, which the runner only runs on <code>main</code>.</p>
   </header>
 
   <section style="display:flex;flex-direction:column;gap:12px">
@@ -82,6 +82,24 @@ ol.steps li.done > div { color: var(--muted); text-decoration: line-through; tex
         <b>Report back:</b> tick the PR's <code>ma1-real-cards</code> item, and paste one line into the PR:
         <pre>ma1-real-cards: PASS (update card, no-op refusal, batch create deny+approve, audit) — org: sandbox</pre>
         If any step failed, write <code>FAIL</code>, the step number and what you saw.
+      </div>
+    </article>
+
+    <article class="item" id="ma2">
+      <h3>2. Run the Salesforce lifecycle check against the feature branch</h3>
+      <div class="meta"><span>Takes <b>about 10 minutes</b></span><span>Needs the <b>QA credentials</b> on your machine</span></div>
+      <p>The QA runner only runs <code>--lifecycle</code> against <code>main</code>, so no phase could run the new create and update calls against Salesforce before the merge.</p>
+      <ol class="steps" data-group="ma2">
+        <li><input type="checkbox" id="ma2-s1" aria-label="Step 1 done"><div>On a machine that has the QA account's Salesforce credentials, check out <code>feature/salesforce-write-tools</code>.
+          <span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/connector-qa.md">connector-qa.md</a> for where the QA credentials and <code>qa_environment.yaml</code> live.</span></div></li>
+        <li><input type="checkbox" id="ma2-s2" aria-label="Step 2 done"><div>Run <code>.venv/bin/python scripts/qa_fixture_recorder.py --lifecycle salesforce</code>.
+          <span class="see">The report has one Salesforce row. Result is <b>pass</b> and Cleanup is <b>n/a</b>: the check never deletes the Tasks it creates.</span></div></li>
+        <li><input type="checkbox" id="ma2-s3" aria-label="Step 3 done"><div>Now and then, delete the <code>[QATEST-LIFECYCLE]</code> Tasks in the QA org by hand.</div></li>
+        <li><input type="checkbox" id="ma2-s4" aria-label="Step 4 done"><div>No local QA credentials? Tick the PR item with the note below instead. After the merge, open the first Monday run of <a href="https://github.com/privacyfence/privacyfence/actions/workflows/connector-live-check.yml">Connector live check</a> and read its Salesforce lifecycle row.</div></li>
+      </ol>
+      <div class="report">
+        <b>Report back:</b> tick the PR's <code>ma2-lifecycle</code> item, and paste the report's Salesforce row into the PR, or:
+        <pre>ma2-lifecycle: deferred to the first weekly connector-live-check.yml run after merge</pre>
       </div>
     </article>
   </section>
