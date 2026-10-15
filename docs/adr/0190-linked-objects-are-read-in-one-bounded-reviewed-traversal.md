@@ -32,6 +32,8 @@ hop, each needing its own approval.
 - A user approves or declines exactly what the agent will see; a larger neighbourhood needs a
   second call from a narrower starting object.
 - Inbound traversal costs an AQL query per batch of frontier ids.
+- The review cards summarise (eight attribute columns, 120 characters per cell) and say when they
+  cut, in a "Not shown" line; the PII scan and the data the agent receives cover every value.
 
 ## Verification
 

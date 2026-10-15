@@ -44,6 +44,20 @@ def _cell(text: str) -> str:
     return text if len(text) <= _MAX_CELL_CHARS else text[:_MAX_CELL_CHARS - 1] + "…"
 
 
+_NOT_SHOWN_LABEL = "Not shown"
+
+
+def _cut_note(cells: list[str], hidden_attributes: int) -> str:
+    """What a card's table leaves out: attribute columns beyond the first eight, and cells over 120 characters."""
+    cut = sum(1 for cell in cells if len(cell) > _MAX_CELL_CHARS)
+    parts = []
+    if hidden_attributes:
+        parts.append(f"{hidden_attributes} more attribute{'s' if hidden_attributes != 1 else ''}")
+    if cut:
+        parts.append(f"{cut} value{'s' if cut != 1 else ''} cut at {_MAX_CELL_CHARS} characters")
+    return "; ".join(parts)
+
+
 def _joined(values: list[str]) -> str:
     return "; ".join(values)
 
@@ -307,16 +321,21 @@ class AssetsConnector(Connector):
     async def _search_objects(self, aql: str, max_results: int = 25) -> Any:
         limit = max(1, min(int(max_results), 100))
         objects = await self._fetch(self._assets.search_objects, aql, limit)
-        names: list[str] = []
+        all_names: list[str] = []
         for o in objects:
             for name in o.attributes:
-                if name not in names and len(names) < _MAX_CARD_ATTRIBUTES:
-                    names.append(name)
-        rows = [
-            [_cell(o.key), _cell(o.label), _cell(o.type_name),
-             *(_cell(_joined(o.attributes.get(n, []))) for n in names)]
+                if name not in all_names:
+                    all_names.append(name)
+        names = all_names[:_MAX_CARD_ATTRIBUTES]
+        texts = [
+            [o.key, o.label, o.type_name, *(_joined(o.attributes.get(n, [])) for n in names)]
             for o in objects
         ]
+        rows = [[_cell(c) for c in row] for row in texts]
+        note = _cut_note([c for row in texts for c in row], len(all_names) - len(names))
+        preview = {"Query": aql[:200], "Objects": str(len(objects))}
+        if note:
+            preview[_NOT_SHOWN_LABEL] = note
         return await gated_call(
             connector=self.name,
             tool="assets_search_objects",
@@ -326,7 +345,7 @@ class AssetsConnector(Connector):
             raw_data=objects,
             filtered_data=[o.to_dict() for o in objects],
             gate="review",
-            preview={"Query": aql[:200], "Objects": str(len(objects))},
+            preview=preview,
             details_text="\n".join(_details_line(o) for o in objects) or "(no matches)",
             pii_scan_text=_scan_text(objects),
             preview_tables=[{"headers": ["Key", "Label", "Type", *names], "rows": rows}] if objects else [],
@@ -337,6 +356,11 @@ class AssetsConnector(Connector):
 
     async def _get_object(self, object_id: str) -> Any:
         obj = await self._fetch(self._assets.get_object, object_id)
+        preview = {"Key": obj.key, "Label": obj.label, "Type": obj.type_name,
+                   "Schema": obj.schema_id}
+        note = _cut_note([_joined(v) for v in obj.attributes.values()], 0)
+        if note:
+            preview[_NOT_SHOWN_LABEL] = note
         return await gated_call(
             connector=self.name,
             tool="assets_get_object",
@@ -346,8 +370,7 @@ class AssetsConnector(Connector):
             raw_data=obj,
             filtered_data=obj.to_dict(),
             gate="review",
-            preview={"Key": obj.key, "Label": obj.label, "Type": obj.type_name,
-                     "Schema": obj.schema_id},
+            preview=preview,
             details_text=_details_line(obj),
             pii_scan_text=_scan_text([obj]),
             preview_tables=[{
@@ -372,29 +395,41 @@ class AssetsConnector(Connector):
         for o in graph.objects:
             by_type.setdefault(o.type_name, []).append(o)
         tables: list[dict[str, Any]] = []
+        cells: list[str] = []
+        hidden = 0
         for objs in by_type.values():
-            names: list[str] = []
+            all_names: list[str] = []
             for o in objs:
                 for name in o.attributes:
-                    if name not in names and len(names) < _MAX_CARD_ATTRIBUTES:
-                        names.append(name)
+                    if name not in all_names:
+                        all_names.append(name)
+            names = all_names[:_MAX_CARD_ATTRIBUTES]
+            hidden += len(all_names) - len(names)
+            texts = [
+                [o.key, o.label, *(_joined(o.attributes.get(n, [])) for n in names)]
+                for o in objs
+            ]
+            cells.extend(c for row in texts for c in row)
             tables.append({
                 "headers": ["Key", "Label", *names],
-                "rows": [
-                    [_cell(o.key), _cell(o.label),
-                     *(_cell(_joined(o.attributes.get(n, []))) for n in names)]
-                    for o in objs
-                ],
+                "rows": [[_cell(c) for c in row] for row in texts],
             })
         if graph.edges:
+            texts = [
+                [keys.get(e.source_id, e.source_id), e.attribute,
+                 keys.get(e.target_id, e.target_id)]
+                for e in graph.edges
+            ]
+            cells.extend(c for row in texts for c in row)
             tables.append({
                 "headers": ["From", "Attribute", "To"],
-                "rows": [
-                    [_cell(keys.get(e.source_id, e.source_id)), _cell(e.attribute),
-                     _cell(keys.get(e.target_id, e.target_id))]
-                    for e in graph.edges
-                ],
+                "rows": [[_cell(c) for c in row] for row in texts],
             })
+        preview = {"Root": root_key, "Direction": direction, "Depth": str(depth),
+                   "Objects": str(linked)}
+        note = _cut_note(cells, hidden)
+        if note:
+            preview[_NOT_SHOWN_LABEL] = note
         return await gated_call(
             connector=self.name,
             tool="assets_get_related_objects",
@@ -412,8 +447,7 @@ class AssetsConnector(Connector):
                 "truncated": graph.truncated,
             },
             gate="review",
-            preview={"Root": root_key, "Direction": direction, "Depth": str(depth),
-                     "Objects": str(linked)},
+            preview=preview,
             details_text="\n".join(_details_line(o) for o in graph.objects),
             pii_scan_text=_scan_text(graph.objects),
             preview_tables=tables,
@@ -426,6 +460,11 @@ class AssetsConnector(Connector):
     async def _get_connected_tickets(self, object_id: str) -> Any:
         obj = await self._fetch(self._assets.get_object, object_id)
         tickets = await self._fetch(self._assets.connected_tickets, object_id)
+        preview = {"Object": obj.key, "Tickets": str(len(tickets))}
+        note = _cut_note(
+            [c for t in tickets for c in (t.key, t.summary, t.status, t.issue_type, t.priority)], 0)
+        if note:
+            preview[_NOT_SHOWN_LABEL] = note
         return await gated_call(
             connector=self.name,
             tool="assets_get_connected_tickets",
@@ -442,7 +481,7 @@ class AssetsConnector(Connector):
                 ],
             },
             gate="review",
-            preview={"Object": obj.key, "Tickets": str(len(tickets))},
+            preview=preview,
             details_text="\n".join(
                 f"{t.key} — {t.summary} ({t.status}, {t.issue_type}, {t.priority})"
                 for t in tickets

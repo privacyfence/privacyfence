@@ -45,7 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Jira Assets connector (read-only, off by default).** Browse schemas and object types, search objects with AQL, read an object with its linked objects and connected Jira tickets, and export objects to CSV or JSON. Switching it on asks for one extra Atlassian consent. It needs the site's Assets workspace id, set in the bundle (`--atlassian-assets-workspace-id`) or in settings (`connectors.assets.workspace_id`).
+- **Jira Assets connector (read-only, off by default).** Browse schemas and object types, search objects with AQL, read an object with its linked objects and connected Jira tickets, and export objects to CSV or JSON. Switching it on asks for one extra Atlassian consent. It needs the site's Assets workspace id, set in the bundle (`--atlassian-assets-workspace-id`) or in settings (`connectors.assets.workspace_id`). Review cards say when they cut attributes or values, and connected tickets always need your approval.
 
 ## [6.2.0] — 2026-10-15
 

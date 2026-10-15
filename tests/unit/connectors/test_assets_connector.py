@@ -533,6 +533,96 @@ class TestGetConnectedTickets:
 FIXTURES = Path(__file__).parent.parent.parent / "fixtures" / "assets"
 
 
+class TestCutNote:
+    def test_empty_when_nothing_is_cut(self):
+        assert assets_module._cut_note(["a" * 120, "b"], 0) == ""
+
+    def test_singular_attribute(self):
+        assert assets_module._cut_note([], 1) == "1 more attribute"
+
+    def test_plural_attributes(self):
+        assert assets_module._cut_note([], 2) == "2 more attributes"
+
+    def test_singular_and_plural_values(self):
+        assert assets_module._cut_note(["a" * 121], 0) == "1 value cut at 120 characters"
+        assert assets_module._cut_note(["a" * 121, "b" * 200], 0) == "2 values cut at 120 characters"
+
+    def test_both_are_joined(self):
+        assert assets_module._cut_note(["a" * 121], 2) == "2 more attributes; 1 value cut at 120 characters"
+
+
+def ten_attributes(long_value: bool = False):
+    attributes = {f"A{i}": ["v"] for i in range(10)}
+    if long_value:
+        attributes["A0"] = ["x" * 121]
+    return attributes
+
+
+class TestCardCutNotes:
+    async def test_search_card_notes(self, gated_call_spy):
+        connector, client = make_connector()
+        label = assets_module._NOT_SHOWN_LABEL
+        client.search_objects.return_value = [make_object(attributes=ten_attributes())]
+        await connector.call("assets_search_objects", {"aql": "x"})
+        client.search_objects.return_value = [make_object(attributes={"Name": ["x" * 121]})]
+        await connector.call("assets_search_objects", {"aql": "x"})
+        client.search_objects.return_value = [make_object(attributes=ten_attributes(True))]
+        await connector.call("assets_search_objects", {"aql": "x"})
+        client.search_objects.return_value = [make_object()]
+        await connector.call("assets_search_objects", {"aql": "x"})
+        assert [c["preview"].get(label) for c in gated_call_spy] == [
+            "2 more attributes", "1 value cut at 120 characters",
+            "2 more attributes; 1 value cut at 120 characters", None]
+
+    async def test_get_object_card_notes(self, gated_call_spy):
+        connector, client = make_connector()
+        label = assets_module._NOT_SHOWN_LABEL
+        client.get_object.return_value = make_object(attributes=ten_attributes())
+        await connector.call("assets_get_object", {"object_id": "1"})
+        client.get_object.return_value = make_object(attributes=ten_attributes(True))
+        await connector.call("assets_get_object", {"object_id": "1"})
+        assert [c["preview"].get(label) for c in gated_call_spy] == [
+            None, "1 value cut at 120 characters"]
+
+    async def test_related_card_notes(self, gated_call_spy):
+        connector, client = make_connector()
+        label = assets_module._NOT_SHOWN_LABEL
+        for attributes in (ten_attributes(), {"Name": ["x" * 121]}, ten_attributes(True)):
+            client.related_objects.return_value = make_graph(
+                objects=[make_object(attributes=attributes)], edges=[])
+            await connector.call("assets_get_related_objects", {"object_id": "123"})
+        client.related_objects.return_value = make_graph()
+        await connector.call("assets_get_related_objects", {"object_id": "123"})
+        client.related_objects.return_value = make_graph(
+            objects=[make_object(), make_object(id="9", key="K-9", label="y" * 121)],
+            edges=[AssetsEdge("123", "9", "Account")])
+        await connector.call("assets_get_related_objects", {"object_id": "123"})
+        assert [c["preview"].get(label) for c in gated_call_spy] == [
+            "2 more attributes", "1 value cut at 120 characters",
+            "2 more attributes; 1 value cut at 120 characters", None,
+            "1 value cut at 120 characters"]
+
+    async def test_related_hidden_attributes_are_summed_over_the_type_tables(self, gated_call_spy):
+        connector, client = make_connector()
+        client.related_objects.return_value = make_graph(
+            objects=[make_object(attributes=ten_attributes()),
+                     make_object(id="2", key="K-2", type_name="Account", attributes=ten_attributes())],
+            edges=[])
+        await connector.call("assets_get_related_objects", {"object_id": "123"})
+        assert gated_call_spy[0]["preview"][assets_module._NOT_SHOWN_LABEL] == "4 more attributes"
+
+    async def test_tickets_card_notes(self, gated_call_spy):
+        connector, client = make_connector()
+        label = assets_module._NOT_SHOWN_LABEL
+        client.get_object.return_value = make_object()
+        client.connected_tickets.return_value = [make_ticket(summary="s" * 121)]
+        await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+        client.connected_tickets.return_value = [make_ticket()]
+        await connector.call("assets_get_connected_tickets", {"object_id": "123"})
+        assert [c["preview"].get(label) for c in gated_call_spy] == [
+            "1 value cut at 120 characters", None]
+
+
 class TestFieldCompleteness:
     """Fixture JSON -> the real AssetsClient.get_object parser -> the real card building."""
 
