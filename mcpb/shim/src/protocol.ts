@@ -278,16 +278,59 @@ export function windowsControlPipeName(env: NodeJS.ProcessEnv = process.env): st
   return pipeNameFor(dataDir(env));
 }
 
+/** The two filesystem calls ``checkHandoffEntry()`` makes, so a test can
+ * report an owner it cannot create (a unit test is not root and cannot
+ * ``chown``). */
+export type OwnershipFs = Pick<typeof fs, "lstatSync" | "statSync">;
+
+/** Throws unless ``entry`` is itself a ``kind`` (a socket or a regular file,
+ * never a symlink to one) owned by the same uid as ``root``. On a separated
+ * install ``handoff/`` is group-writable with the sticky bit, so any account
+ * in the shared group can plant a file there; only the service account owns
+ * ``root``, so an entry whose owner differs from it was not written by the
+ * daemon and must not be believed (a foreign ``mcp_url`` or control socket
+ * would hand this shim's bearer token to someone else). */
+export function checkHandoffEntry(
+  entry: string,
+  kind: "socket" | "file",
+  root: string,
+  fsx: OwnershipFs = fs,
+): void {
+  const st = fsx.lstatSync(entry);
+  const rightKind = kind === "socket" ? st.isSocket() : st.isFile();
+  if (!rightKind || st.uid !== fsx.statSync(root).uid) {
+    throw new Error(`${entry} is not owned by the service account`);
+  }
+}
+
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+export interface ReadMcpUrlOptions {
+  /** The separated root to check ownership against; defaults to
+   * ``privilegeSeparationRoot()``. Overridable for tests. */
+  root?: string | null;
+  fsx?: OwnershipFs;
+}
+
 /** Reads and validates the daemon's current /mcp URL. Throws if the file is
  * missing, empty, or doesn't parse as an absolute URL -- callers only reach
  * this after daemon.ts's socketConnectable() has already confirmed the file
  * names a reachable host:port, so a throw here means the file's *contents*
- * are malformed, not merely that the daemon hasn't started yet. */
-export function readMcpUrl(mcpUrlFile = MCP_URL_FILE): string {
+ * are malformed, not merely that the daemon hasn't started yet. Also throws
+ * when the file is not the service account's own (on a separated install)
+ * or names a host other than this computer: the bearer token is sent there. */
+export function readMcpUrl(mcpUrlFile = MCP_URL_FILE, opts: ReadMcpUrlOptions = {}): string {
+  const root = opts.root === undefined ? privilegeSeparationRoot() : opts.root;
+  if (root !== null) {
+    checkHandoffEntry(mcpUrlFile, "file", root, opts.fsx);
+  }
   const text = fs.readFileSync(mcpUrlFile, "utf8").trim();
   if (!text) {
     throw new Error(`Empty MCP URL in ${mcpUrlFile}`);
   }
-  new URL(text); // throws SyntaxError / TypeError if not a valid absolute URL
+  const { hostname } = new URL(text); // throws SyntaxError / TypeError if not a valid absolute URL
+  if (!LOOPBACK_HOSTNAMES.has(hostname)) {
+    throw new Error(`mcp_url names ${hostname}, not this computer`);
+  }
   return text;
 }
