@@ -1,8 +1,15 @@
 name: Record QA fixture
 
 # On-demand counterpart to connector-live-check.yml: re-records *one*
-# connector's live fixture and commits it to the branch this run was
-# dispatched against.
+# connector's live fixture and commits it to the branch named in the `branch`
+# input.
+#
+# Dispatched on `main`, never on the feature branch: the runner group that holds the
+# QA credentials admits only main's copies of this workflow and connector-live-check.yml,
+# so a branch can't edit the workflow it would then run on the runner. The feature branch's
+# code is checked out only after the `branch` input has passed the refusals below. The
+# `record` job holds the runner and the credentials with a read-only token; the
+# `commit-fixture` job, on a GitHub-hosted runner, is the only one that can push.
 #
 # Why this exists separately from connector-live-check.yml, which can also
 # run --record: that workflow only records as *drift remediation* (its
@@ -23,13 +30,8 @@ name: Record QA fixture
 # a non-maintainer controls. Dispatching requires write access by
 # definition.
 #
-# Note that GitHub only offers workflow_dispatch for workflows already on
-# the default branch, so this is dispatchable once it has merged, not from
-# a feature branch that adds it. Bootstrapping it for apps_script needed a
-# single-branch `push:` trigger, added and removed again in this branch's
-# own history (see the "Trigger the QA fixture recorder from this branch's
-# own push" commit for the reasoning, if the same corner ever comes up for
-# a future connector).
+# GitHub only offers workflow_dispatch for workflows already on the default
+# branch, so this is dispatchable once it has merged to main.
 on:
   workflow_dispatch:
     inputs:
@@ -38,9 +40,13 @@ on:
         required: true
         default: apps_script
         type: string
+      branch:
+        description: 'Branch to record the fixture for (the feature branch that adds the connector)'
+        required: true
+        type: string
 
 permissions:
-  contents: write   # needed to commit the recorded fixture back to the branch
+  contents: read
 
 concurrency:
   # Deliberately the *same* group as connector-live-check.yml, not a group
@@ -58,6 +64,8 @@ jobs:
   record:
     runs-on: [self-hosted, privacyfence-test]
     timeout-minutes: 20
+    permissions:
+      contents: read   # this job holds live credentials and never gets a write token
 
     env:
       # Read through the shell's environment rather than interpolated into
@@ -71,22 +79,39 @@ jobs:
       # recorded nothing. Worth a default and the guard step below rather
       # than trusting that no such path ever appears.
       CONNECTOR: ${{ inputs.connector || 'apps_script' }}
+      BRANCH: ${{ inputs.branch }}
 
     steps:
-      - name: Refuse to run against a protected branch
+      - name: Refuse anything but a dispatch on main for an existing feature branch
         run: |
           set -euo pipefail
-          # releases/* is protected the same as main (see CONTRIBUTING.md) -- this workflow commits
-          # straight to the branch it runs on, which a ruleset-protected branch must never accept
-          # outside a PR merge.
-          if [ "${GITHUB_REF_NAME}" = "main" ] || [[ "${GITHUB_REF_NAME}" == releases/* ]]; then
-            echo "##[error] This workflow commits the recorded fixture to the branch it runs on." \
-                 "Dispatch it against the feature branch that adds the connector, never main or a releases/* branch."
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "##[error] Dispatch this workflow on main and name the branch in the 'branch' input."
+            exit 1
+          fi
+          # releases/* is protected the same as main (see CONTRIBUTING.md), and so is stable --
+          # this workflow commits straight to the branch, which a ruleset-protected branch must
+          # never accept outside a PR merge. refs/ and pull/ would reach a pull-request ref, and
+          # with it a fork's code, on the runner that holds the QA credentials.
+          if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "main" ] || [ "${BRANCH}" = "stable" ] \
+             || [[ "${BRANCH}" == releases/* ]] || [[ "${BRANCH}" == refs/* ]] \
+             || [[ "${BRANCH}" == pull/* ]] || [[ "${BRANCH}" == -* ]] \
+             || ! git check-ref-format --branch "${BRANCH}" >/dev/null 2>&1; then
+            echo "##[error] The 'branch' input must name a feature branch -- never main, stable," \
+                 "a releases/* branch, or a refs/ or pull/ ref."
+            exit 1
+          fi
+          # No checkout has happened yet, so ask the repository by URL. Only a real branch head
+          # passes: no pull-request ref, fork code included, can reach this runner.
+          if ! git ls-remote --exit-code --heads \
+               "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "refs/heads/${BRANCH}" >/dev/null; then
+            echo "##[error] Branch '${BRANCH}' does not exist in ${GITHUB_REPOSITORY}."
             exit 1
           fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/heads/${{ inputs.branch }}
           # fetch-depth: 0 for the same reason tests.yml/build.yml pass it:
           # setuptools_scm resolves the version from tag history, and a
           # shallow clone silently falls back to fallback_version (see
@@ -98,8 +123,8 @@ jobs:
       - name: Build this run's venv
         run: |
           python3 -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -e ".[test]"
+          .venv/bin/pip install --require-hashes -r requirements/dev.lock.txt
+          .venv/bin/pip install --no-deps --no-build-isolation -e .
 
       # Mirrors connector-live-check.yml's copy-in step exactly -- see that
       # workflow's comment for why QA_SECRETS_DIR lives outside the
@@ -147,25 +172,16 @@ jobs:
             --record "${CONNECTOR}" \
             --report-file /tmp/qa-record-report.md
 
-      # add-paths equivalent: only ever stage the recorded fixture itself.
-      # The checkout also holds this runner's copied-in credentials and
-      # qa_environment.yaml at this point -- all three are git-ignored, but
-      # staging narrowly rather than relying on .gitignore keeps that a
-      # belt-and-braces guarantee rather than a single point of failure.
-      - name: Commit and push the recorded fixture
-        run: |
-          set -euo pipefail
-          git add -- 'tests/fixtures/live/**'
-          if git diff --cached --quiet; then
-            echo "No fixture change for ${CONNECTOR} -- nothing to commit."
-            exit 0
-          fi
-          git -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit \
-                -m "Record live ${CONNECTOR} fixture" \
-                -m "Recorded on the privacyfence-test runner by .github/workflows/qa-record-fixture.yml against the QA account's [QATEST]-tagged seed artifact. Identity fields and structural resource ids/URLs are de-identified by scripts/qa_fixture_recorder.py before writing; review this diff before merging, per docs/testing-policy.md 2.1."
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+      # Hands only the recorded fixture to the `commit-fixture` job. The checkout also holds
+      # this runner's copied-in credentials and qa_environment.yaml at this point -- all three
+      # are git-ignored, but uploading just this directory keeps them out of the artifact.
+      - name: Upload the recorded fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: recorded-fixture
+          path: tests/fixtures/live/${{ env.CONNECTOR }}
+          if-no-files-found: error
+          retention-days: 7
 
       # Mirrors connector-live-check.yml's copy-back step, and matters for
       # the same reason: a *_client.py that refreshed an expired access
@@ -188,3 +204,39 @@ jobs:
           name: qa-record-report-${{ inputs.connector || 'apps_script' }}
           path: /tmp/qa-record-report.md
           retention-days: 90
+
+  # The only job here that can push. Runs on a GitHub-hosted runner, so the write token never
+  # reaches the machine that holds the QA credentials.
+  commit-fixture:
+    needs: record
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit the recorded fixture back to the branch
+    env:
+      CONNECTOR: ${{ inputs.connector || 'apps_script' }}
+      BRANCH: ${{ inputs.branch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/${{ inputs.branch }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: recorded-fixture
+          path: tests/fixtures/live/${{ env.CONNECTOR }}
+
+      # Only ever stage the recorded fixture itself.
+      - name: Commit and push the recorded fixture
+        run: |
+          set -euo pipefail
+          git add -- 'tests/fixtures/live/**'
+          if git diff --cached --quiet; then
+            echo "No fixture change for ${CONNECTOR} -- nothing to commit."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit \
+                -m "Record live ${CONNECTOR} fixture" \
+                -m "Recorded on the privacyfence-test runner by .github/workflows/qa-record-fixture.yml against the QA account's [QATEST]-tagged seed artifact. Identity fields and structural resource ids/URLs are de-identified by scripts/qa_fixture_recorder.py before writing; review this diff before merging, per docs/testing-policy.md 2.1."
+          git push origin "HEAD:refs/heads/${BRANCH}"
