@@ -52,6 +52,12 @@ _REQUIRE_BROWSER = "PRIVACYFENCE_REQUIRE_BROWSER"
 # A browser test may skip for a reason unrelated to the browser (the docs site
 # was not built in a job without zensical); only a missing Chromium/Playwright
 # is a CI misconfiguration.
+_PACKAGED_SKIP_REASON = re.compile(
+    r"(?i)no dist/|built yet|not installed|not on PATH|missing after build|could not build"
+    r"|needs root|only meaningful|systemd|not present|chromium|playwright"
+)
+# Skips a dispatched (unsigned, un-notarized) build legitimately takes -- "is unsigned for this
+# build", "is signed but not notarized" -- match none of the above and stay skips.
 _BROWSER_SKIP_REASON = re.compile(r"(?i)chromium|playwright")
 _BROWSER_COLLECT_SKIP_REASON = re.compile(r"(?i)playwright")
 
@@ -65,7 +71,11 @@ def _skip_reason(longrepr) -> str:
 
 def _required_run_switch(markers, reason: str) -> str | None:
     """The REQUIRE switch (if any) that turns this skip into a failure."""
-    if os.environ.get(_REQUIRE_PACKAGED) == "1" and "packaged" in markers:
+    if (
+        os.environ.get(_REQUIRE_PACKAGED) == "1"
+        and "packaged" in markers
+        and _PACKAGED_SKIP_REASON.search(reason)
+    ):
         return _REQUIRE_PACKAGED
     if (
         os.environ.get(_REQUIRE_BROWSER) == "1"

@@ -43,13 +43,41 @@ def test_packaged_skip_fails_when_required(project, monkeypatch):
 
         @pytest.mark.packaged
         def test_it():
-            pytest.skip("x")
+            pytest.skip("no dist/x built yet")
         """
     )
     monkeypatch.setenv("PRIVACYFENCE_REQUIRE_PACKAGED", "1")
     result = _run(project)
     result.assert_outcomes(failed=1)
-    result.stdout.fnmatch_lines(["*skipped while PRIVACYFENCE_REQUIRE_PACKAGED=1 requires it to run: x*"])
+    result.stdout.fnmatch_lines(["*skipped while PRIVACYFENCE_REQUIRE_PACKAGED=1 requires it to run: no dist/x built yet*"])
+
+
+def test_packaged_skip_fails_when_the_artifact_is_missing(project, monkeypatch):
+    project.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.packaged
+        def test_it():
+            pytest.skip("no dist/PrivacyFence-*.pkg built yet")
+        """
+    )
+    monkeypatch.setenv("PRIVACYFENCE_REQUIRE_PACKAGED", "1")
+    _run(project).assert_outcomes(failed=1)
+
+
+def test_packaged_skip_for_an_unsigned_build_stays_a_skip_when_required(project, monkeypatch):
+    project.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.packaged
+        def test_it():
+            pytest.skip("x.dmg is signed but not notarized for this build (NOTARIZE_PROFILE unset)")
+        """
+    )
+    monkeypatch.setenv("PRIVACYFENCE_REQUIRE_PACKAGED", "1")
+    _run(project).assert_outcomes(skipped=1)
 
 
 def test_packaged_skip_stays_a_skip_without_the_switch(project):
@@ -59,7 +87,7 @@ def test_packaged_skip_stays_a_skip_without_the_switch(project):
 
         @pytest.mark.packaged
         def test_it():
-            pytest.skip("x")
+            pytest.skip("no dist/x built yet")
         """
     )
     _run(project).assert_outcomes(skipped=1)
