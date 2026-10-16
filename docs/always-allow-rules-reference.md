@@ -244,6 +244,13 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `peek_set_visibility` |  |
 | `peek_upload_page` |  |
 
+### Salesforce
+
+| Tool | Always allow buttons |
+|---|---|
+| `salesforce_create_record` | this object type |
+| `salesforce_update_record` | this object type |
+
 ### Slack
 
 | Tool | Always allow buttons |

@@ -401,7 +401,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | you are the reporter; you are the assignee |
 | Confluence space | identity | space keys | `approved_space_keys` | the page's space is one of these |
 | Confluence pages I wrote | attribute | — | `i_am_author` | you are the page's author |
-| Salesforce object type | attribute | object names | `approved_object_types` | every requested object type is one of these |
+| Salesforce object type | attribute | object names | `approved_object_types` | every requested or written object type is one of these |
 | Salesforce report | identity | report ids | `approved_report_ids` | the report is one of these |
 | Contacts label | identity | label names | `label_name_allowlist` | the label being applied or removed is one of these |
 | Apps Script project | identity | script ids | `apps_script.project` | the script is one of these |

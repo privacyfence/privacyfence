@@ -28,14 +28,24 @@ from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import salesforce as salesforce_module
 from privacyfence.connectors.salesforce import SalesforceConnector
 from privacyfence import cursors
+from privacyfence import safe_errors
+from privacyfence.connectors.salesforce import (
+    SalesforceWriteRefusedError,
+    SalesforceWriteUnconfirmedError,
+)
 from privacyfence.salesforce_client import (
     ReportFilter,
     ReportPage,
     ReportPagingError,
     SalesforceClient,
     SalesforceClientError,
+    SalesforceField,
+    SalesforceObjectNotFoundError,
     SalesforceRecord,
     SalesforceReport,
+    SalesforceWriteError,
+    SalesforceWriteUncertainError,
+    WriteFailure,
 )
 
 from ...fixtures.salesforce_analytics import (
@@ -106,6 +116,8 @@ SALESFORCE_SIBLINGS: dict[str, tuple[str, ...]] = {
     "salesforce_export_report": ("salesforce_run_report",),
     "salesforce_search": ("salesforce_get_record",),
     "salesforce_get_record": ("salesforce_search",),
+    "salesforce_create_record": ("salesforce_get_record",),
+    "salesforce_update_record": ("salesforce_get_record",),
 }
 
 
@@ -933,9 +945,10 @@ class TestEveryToolIsAudited:
         # get_record's/search's results are asdict()'d unconditionally, so
         # they need real SalesforceRecord instances -- a bare MagicMock
         # isn't a dataclass instance.
-        client.get_record.return_value = SalesforceRecord(object_type="Account", id="001", fields={})
         client.search.return_value = [SalesforceRecord(object_type="Account", id="001", fields={})]
         client.run_report.return_value = export_run(make_rows(2))
+        client.describe_fields.return_value = ACCOUNT_FIELDS
+        client.get_record.return_value = SalesforceRecord("Account", "001000000000001AAA", {"Name": "Old"})
         monkeypatch.setattr(
             salesforce_module.local_files, "deliver_export",
             lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
@@ -947,8 +960,267 @@ class TestEveryToolIsAudited:
                 "salesforce_export_report": {
                     "report_id": "00O000000000001", "destination_dir": str(tmp_path),
                 },
+                "salesforce_create_record": {"fields": '{"Name": "A"}'},
+                "salesforce_update_record": {
+                    "record_id": "001000000000001AAA", "fields": '{"Name": "New"}',
+                },
             },
         )
+
+
+# ---------------------------------------------------------------------- #
+# Single-record writes
+# ---------------------------------------------------------------------- #
+
+ACCOUNT_FIELDS = [
+    SalesforceField("Id", "Record ID", "id", False, False, False, False),
+    SalesforceField("Name", "Account Name", "string", True, True, False, False),
+    SalesforceField("Phone", "Phone", "phone", True, True, True, False),
+    SalesforceField("NumberOfEmployees", "Employees", "int", True, True, True, False),
+]
+RECORD_ID = "001000000000001AAA"
+
+
+def write_connector():
+    connector, client = make_connector()
+    client.describe_fields.return_value = ACCOUNT_FIELDS
+    client.get_record.return_value = SalesforceRecord(
+        "Account", RECORD_ID, {"Name": "SECRET-CURRENT", "Phone": "555-0100", "NumberOfEmployees": 5},
+    )
+    return connector, client
+
+
+class TestCreateRecord:
+    async def test_gates_with_popup_and_returns_the_new_id(self, gated_call_spy):
+        connector, client = write_connector()
+        client.create_record.return_value = RECORD_ID
+
+        result = await connector.call("salesforce_create_record", {
+            "object_type": "Account", "fields": '{"name": "Acme", "NumberOfEmployees": 7}',
+        })
+
+        assert result == {"object_type": "Account", "id": RECORD_ID}
+        kwargs = gated_call_spy[0]
+        assert kwargs["gate"] == "popup"
+        assert kwargs["tool"] == "salesforce_create_record"
+        assert kwargs["sender"] == "Account"
+        assert kwargs["filtered_data"] is None
+        # Canonical field names are what reach the client, in input order.
+        client.create_record.assert_called_once_with("Account", {"Name": "Acme", "NumberOfEmployees": 7})
+
+    async def test_card_contents(self, gated_call_spy):
+        connector, _client = write_connector()
+        await connector.call("salesforce_create_record", {
+            "object_type": "Account", "fields": '{"Name": "Acme"}',
+        })
+        kwargs = gated_call_spy[0]
+        assert kwargs["summary"] == "Create Account record"
+        assert kwargs["tool_name"] == "Create Salesforce Record"
+        assert kwargs["preview"] == {"Object type": "Account", "Fields": "1"}
+        assert kwargs["preview_tables"] == [{
+            "headers": ["Field", "Label", "Value"],
+            "rows": [["Name", "Account Name", "Acme"]],
+        }]
+        assert kwargs["details_text"] == "Name: Acme"
+        assert kwargs["args"] == {"object_type": "Account"}
+        assert kwargs["raw_data"] == {"object_type": "Account", "fields": ["Name"]}
+        assert kwargs["table_only"] is True
+
+    async def test_preview_args_and_raw_data_hold_no_value(self, gated_call_spy):
+        connector, _client = write_connector()
+        await connector.call("salesforce_create_record", {
+            "object_type": "Account", "fields": '{"Name": "SECRET-NEW"}',
+        })
+        kwargs = gated_call_spy[0]
+        assert "SECRET-NEW" not in json.dumps(kwargs["preview"])
+        assert "SECRET-NEW" not in json.dumps(kwargs["args"])
+        assert "SECRET-NEW" not in json.dumps(kwargs["raw_data"])
+
+    async def test_malformed_json_costs_no_describe_and_no_card(self, gated_call_spy):
+        connector, client = write_connector()
+        with pytest.raises(ValueError, match="fields: invalid JSON"):
+            await connector.call("salesforce_create_record", {"object_type": "Account", "fields": "{nope"})
+        client.describe_fields.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_bad_object_type_is_a_value_error(self, gated_call_spy):
+        connector, client = write_connector()
+        with pytest.raises(ValueError, match="Invalid Salesforce object type name"):
+            await connector.call("salesforce_create_record", {"object_type": "Account/x", "fields": '{"Name": "A"}'})
+        client.describe_fields.assert_not_called()
+
+    async def test_unknown_field_is_refused_before_the_card(self, gated_call_spy):
+        connector, client = write_connector()
+        with pytest.raises(ValueError, match="Account has no field 'Nope'"):
+            await connector.call("salesforce_create_record", {"object_type": "Account", "fields": '{"Nope": 1}'})
+        assert gated_call_spy == []
+        client.create_record.assert_not_called()
+
+    async def test_unknown_object_type_is_a_value_error_with_no_card(self, gated_call_spy):
+        connector, client = write_connector()
+        client.describe_fields.side_effect = SalesforceObjectNotFoundError(
+            "Acount is not an object type your Salesforce user can see"
+        )
+        with pytest.raises(ValueError, match="Acount is not an object type"):
+            await connector.call("salesforce_create_record", {"object_type": "Acount", "fields": '{"Name": "A"}'})
+        assert gated_call_spy == []
+
+    async def test_other_describe_failure_is_a_runtime_error(self, gated_call_spy):
+        connector, client = write_connector()
+        client.describe_fields.side_effect = SalesforceClientError("boom")
+        with pytest.raises(RuntimeError, match="boom") as info:
+            await connector.call("salesforce_create_record", {"object_type": "Account", "fields": '{"Name": "A"}'})
+        assert type(info.value) is RuntimeError
+        assert gated_call_spy == []
+
+    async def test_refused_write_is_shown_to_the_model_verbatim(self, gated_call_spy):
+        connector, client = write_connector()
+        client.create_record.side_effect = SalesforceWriteError(
+            [WriteFailure(0, "REQUIRED_FIELD_MISSING", ["Name"], "Required fields are missing")], 1,
+        )
+        with pytest.raises(SalesforceWriteRefusedError) as info:
+            await connector.call("salesforce_create_record", {"object_type": "Account", "fields": '{"Phone": "1"}'})
+        assert "REQUIRED_FIELD_MISSING (Name)" in str(info.value)
+        assert safe_errors.public_message(info.value) == str(info.value)
+
+    async def test_uncertain_write_is_shown_to_the_model_verbatim(self, gated_call_spy):
+        connector, client = write_connector()
+        client.create_record.side_effect = SalesforceWriteUncertainError(
+            "The connection to Salesforce failed; the write may or may not have been saved."
+        )
+        with pytest.raises(SalesforceWriteUnconfirmedError) as info:
+            await connector.call("salesforce_create_record", {"object_type": "Account", "fields": '{"Name": "A"}'})
+        assert safe_errors.public_message(info.value) == str(info.value)
+
+    async def test_any_other_client_error_is_a_plain_runtime_error(self, gated_call_spy):
+        connector, client = write_connector()
+        client.create_record.side_effect = SalesforceClientError("odd")
+        with pytest.raises(RuntimeError) as info:
+            await connector.call("salesforce_create_record", {"object_type": "Account", "fields": '{"Name": "A"}'})
+        assert type(info.value) is RuntimeError
+        assert safe_errors.public_message(info.value) != "odd"
+
+
+class TestUpdateRecord:
+    async def test_card_shows_current_and_new_without_leaking_the_current_name(self, gated_call_spy):
+        connector, client = write_connector()
+
+        result = await connector.call("salesforce_update_record", {
+            "object_type": "Account", "record_id": RECORD_ID,
+            "fields": '{"Phone": "555-0199", "numberofemployees": 5}',
+        })
+
+        assert result == {"object_type": "Account", "id": RECORD_ID, "fields": ["Phone", "NumberOfEmployees"]}
+        kwargs = gated_call_spy[0]
+        assert kwargs["gate"] == "popup"
+        assert kwargs["sender"] == "Account"
+        assert kwargs["tool_name"] == "Update Salesforce Record"
+        assert kwargs["summary"] == "Update Account: SECRET-CURRENT"
+        assert kwargs["preview"] == {"Object type": "Account", "Record ID": RECORD_ID, "Fields changed": "1"}
+        assert "SECRET-CURRENT" not in json.dumps(kwargs["preview"])
+        assert kwargs["preview_tables"] == [{
+            "headers": ["Field", "Current", "New"],
+            "rows": [["Phone", "555-0100", "555-0199"], ["NumberOfEmployees", "5", "5"]],
+        }]
+        assert kwargs["details_text"] == "Phone: 555-0100 → 555-0199\nNumberOfEmployees: 5 → 5"
+        assert kwargs["args"] == {"object_type": "Account", "record_id": RECORD_ID}
+        assert "555-0199" not in json.dumps(kwargs["args"])
+        assert kwargs["raw_data"] == {"object_type": "Account", "fields": ["NumberOfEmployees", "Phone"]}
+        # Only the changed field is written.
+        client.update_record.assert_called_once_with("Account", RECORD_ID, {"Phone": "555-0199"})
+
+    async def test_summary_falls_back_to_the_record_id(self, gated_call_spy):
+        connector, client = write_connector()
+        client.get_record.return_value = SalesforceRecord("Account", RECORD_ID, {"Phone": "1"})
+        await connector.call("salesforce_update_record", {
+            "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Phone": "2"}',
+        })
+        assert gated_call_spy[0]["summary"] == f"Update Account: {RECORD_ID}"
+
+    async def test_nothing_to_change_still_gates_and_writes_nothing(self, gated_call_spy):
+        connector, client = write_connector()
+
+        result = await connector.call("salesforce_update_record", {
+            "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Phone": "555-0100"}',
+        })
+
+        assert gated_call_spy[0]["preview"]["Fields changed"] == "0"
+        client.update_record.assert_not_called()
+        assert result == {"object_type": "Account", "id": RECORD_ID, "fields": ["Phone"]}
+
+    async def test_null_clears_a_nillable_field(self, gated_call_spy):
+        connector, client = write_connector()
+        await connector.call("salesforce_update_record", {
+            "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Phone": null}',
+        })
+        assert gated_call_spy[0]["preview_tables"][0]["rows"] == [["Phone", "555-0100", "(empty)"]]
+        client.update_record.assert_called_once_with("Account", RECORD_ID, {"Phone": None})
+
+    async def test_bad_record_id_is_a_value_error_before_any_call(self, gated_call_spy):
+        connector, client = write_connector()
+        with pytest.raises(ValueError, match="record_id must be a 15- or 18-character"):
+            await connector.call("salesforce_update_record", {
+                "object_type": "Account", "record_id": "nope", "fields": '{"Phone": "1"}',
+            })
+        client.describe_fields.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_malformed_fields_and_unknown_fields_cost_no_card(self, gated_call_spy):
+        connector, client = write_connector()
+        with pytest.raises(ValueError, match="fields: invalid JSON"):
+            await connector.call("salesforce_update_record", {
+                "object_type": "Account", "record_id": RECORD_ID, "fields": "[",
+            })
+        client.describe_fields.assert_not_called()
+        with pytest.raises(ValueError, match="has no field 'Nope'"):
+            await connector.call("salesforce_update_record", {
+                "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Nope": 1}',
+            })
+        assert gated_call_spy == []
+        client.get_record.assert_not_called()
+
+    async def test_unknown_object_type_is_a_value_error(self, gated_call_spy):
+        connector, client = write_connector()
+        client.describe_fields.side_effect = SalesforceObjectNotFoundError("Acount is not an object type")
+        with pytest.raises(ValueError, match="Acount"):
+            await connector.call("salesforce_update_record", {
+                "object_type": "Acount", "record_id": RECORD_ID, "fields": '{"Phone": "1"}',
+            })
+        assert gated_call_spy == []
+
+    async def test_refused_and_uncertain_writes_keep_their_text(self, gated_call_spy):
+        connector, client = write_connector()
+        refused = SalesforceWriteError([WriteFailure(0, "FIELD_CUSTOM_VALIDATION_EXCEPTION", ["Phone"], "bad")], 1)
+        client.update_record.side_effect = refused
+        with pytest.raises(SalesforceWriteRefusedError) as info:
+            await connector.call("salesforce_update_record", {
+                "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Phone": "1"}',
+            })
+        assert str(info.value) == str(refused)
+        assert safe_errors.public_message(info.value) == str(info.value)
+
+        client.update_record.side_effect = SalesforceWriteUncertainError("Salesforce returned HTTP 503; may or may not")
+        with pytest.raises(SalesforceWriteUnconfirmedError) as info2:
+            await connector.call("salesforce_update_record", {
+                "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Phone": "1"}',
+            })
+        assert safe_errors.public_message(info2.value) == str(info2.value)
+
+        client.update_record.side_effect = SalesforceClientError("odd")
+        with pytest.raises(RuntimeError) as info3:
+            await connector.call("salesforce_update_record", {
+                "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Phone": "1"}',
+            })
+        assert type(info3.value) is RuntimeError
+
+    async def test_read_failure_is_a_runtime_error(self, gated_call_spy):
+        connector, client = write_connector()
+        client.get_record.side_effect = SalesforceClientError("not found")
+        with pytest.raises(RuntimeError, match="not found"):
+            await connector.call("salesforce_update_record", {
+                "object_type": "Account", "record_id": RECORD_ID, "fields": '{"Phone": "1"}',
+            })
+        assert gated_call_spy == []
 
 
 # ---------------------------------------------------------------------- #
