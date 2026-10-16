@@ -121,6 +121,7 @@ restart.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import inspect
@@ -1458,7 +1459,7 @@ def build_org_routes(
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
-) -> list[Route]:
+) -> list[BaseRoute]:
     """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
     ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
     settings_window_html.build_html() local mode's own
@@ -1755,6 +1756,63 @@ def build_org_routes(
             "Your PrivacyFence settings file uses an auto-accept format this version no longer reads. "
             "An administrator needs to update it; the server log names the file."
         )
+
+    @contextlib.contextmanager
+    def _open_personal_scope(principal: Principal) -> typing.Iterator[None]:
+        """``principal_scope`` plus the lazy settings load; a ``V1PolicyConfigError`` propagates
+        to ``_personal_scope_error``."""
+        with principal_scope(principal):
+            _ensure_principal_settings_loaded()
+            yield
+
+    def _personal_scope_error(principal: Principal, exc: Exception) -> Response | None:
+        if isinstance(exc, policy_store.V1PolicyConfigError):
+            return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
+        return None
+
+    def _personal_check_mutation(request: Request, csrf: str | None) -> Response | None:
+        if not org_session.check_csrf(request, csrf):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        return None
+
+    def _personal_step_up_gate(
+        principal: Principal, fingerprint_body: dict[str, Any], assertion: object,
+    ) -> Response | None:
+        if not (step_up is not None and step_up.enabled and step_up.require_passkey):
+            return None
+        confirmed_step_up: StepUpConfig = step_up
+        response = _verify_or_challenge(
+            principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+            subject_key=STEP_UP_SUBJECT_KEY,
+            fingerprint=_action_fingerprint(STEP_UP_SUBJECT_KEY, fingerprint_body), assertion=assertion,
+            challenges=challenges,
+            step_up_response=lambda: _settings_step_up_response(
+                principal, STEP_UP_SUBJECT_KEY, fingerprint_body,
+                step_up=confirmed_step_up, challenges=challenges,
+            ),
+        )
+        if response is not None:
+            with principal_scope(principal):
+                _record_settings_audit(
+                    principal,
+                    f"Step-up required for {STEP_UP_SUBJECT_KEY!r}, refused (principal={principal.id})",
+                )
+        return response
+
+    personal_hooks = PersonalSettingsHooks(
+        authenticate=_current_principal,
+        check_mutation=_personal_check_mutation,
+        open_scope=_open_personal_scope,
+        scope_error=_personal_scope_error,
+        read_rows=lambda: auto_accept.get_policy_rows(),
+        merge_rules=lambda rules: auto_accept.add_policy_v2_rules(rules),
+        step_up_state=lambda: (step_up.enabled, step_up.scope),
+        step_up_gate=_personal_step_up_gate,
+        audit=_record_settings_audit,
+        mode="org",
+    )
 
     def _org_scoped_token_data(principal: Principal) -> dict[str, Any] | None:
         if not token_policy.enabled or scoped_token_page_data is None:
@@ -2132,5 +2190,6 @@ def build_org_routes(
         Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
         Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
+        *build_personal_routes(personal_hooks),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]
