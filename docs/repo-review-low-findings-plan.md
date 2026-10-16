@@ -19,7 +19,7 @@ The feature PR body closes #923, #924, #925 and #926.
 
 ### SEC-A5 (Atlassian identity)
 
-- `src/privacyfence/policy/scopes.py:296-305` - `_i_am_reporter_matches` / `_i_am_assignee_matches` test
+- `src/privacyfence/policy/scopes.py:322-331` - `_i_am_reporter_matches` / `_i_am_assignee_matches` test
   `ctx.my_email.lower() in reporter.lower()`, where `reporter` is `JiraIssue.reporter`, which
   `JiraClient._parse_issue` (`src/privacyfence/jira_client.py:762-763`) fills from the user-editable
   `displayName`.
@@ -96,19 +96,29 @@ The feature PR body closes #923, #924, #925 and #926.
    returns `""`, logged at debug). `resolve_resource_and_save` adds `"account_id": _fetch_account_id(access_token, cloud_id)`
    to the token record, next to `account_email`. `_fetch_account_email` is unchanged (existing tests patch it).
 2. **Carry it.** `JiraClient`, `ConfluenceClient` and `AssetsClient` each add
-   `"account_id": self._config.get("account_id", "")` to the dict they pass to `save_token_file` on a refresh.
+   `"account_id"` to the dict they pass to `save_token_file` on a refresh: `self._config.get("account_id", "")`, and when
+   that is empty, the `account_id` already in the token file on disk (the refresh code already reads that file; reuse
+   how it gets the stored refresh token). Reason: each client copies its config (`self._config = dict(config)`), so
+   one client's backfill is invisible to the others, and a refresh in a client that never saw the id must not erase it.
    `JiraClient` and `ConfluenceClient` each get a read-only property
    `account_id -> str` returning `str(self._config.get("account_id", "") or "")`.
 3. **Backfill for existing installs.** `JiraClient.check_connection` already has `myself`. After it,
    `account_id = myself.get("accountId", "")`; when non-empty and different from `self._config.get("account_id")`,
-   it sets `self._config["account_id"]` and, if `self._token_file` is set, calls
-   `save_token_file(self._token_file, self._token_record())`. `_token_record()` is a new private method returning
-   the dict `_try_refresh` saves today (including `account_id`), and `_try_refresh` calls it too. An install with
-   Jira enabled therefore gets the id on its first start after upgrading. An install with only Confluence enabled
-   gets it at its next Atlassian sign-in (the Confluence rule never matched before, so nothing regresses).
+   it sets `self._config["account_id"]` and, if `self._token_file` is set, persists it by **read-modify-write**:
+   `record = dict(load_token_file(self._token_file)); record["account_id"] = account_id; save_token_file(self._token_file, record)`
+   (so a stale in-memory token is never written back), inside `try/except (AtlassianOAuthError, OSError)` that logs a
+   warning (`"Could not save the Atlassian account id: %s"`) and carries on: a failed save must not disable the connector.
+   `daemon_main.build_connectors` then shares the id: right after `jira_client.check_connection()` it runs
+   `if jira_client.account_id: atlassian_config["account_id"] = jira_client.account_id`, before the Confluence and Assets
+   clients are built from that dict. An install with Jira enabled therefore gets the id on its first start after upgrading,
+   for all three connectors. An install with only Confluence enabled gets it at its next Atlassian sign-in (the Confluence
+   rule never matched before, so nothing regresses).
 4. **Issue objects.** `JiraIssue` stays a dataclass with the same fields (so `asdict`, what the agent receives,
    is unchanged). `__post_init__` adds two plain attributes, `reporter_account_id: str = ""` and
-   `assignee_account_id: str = ""` (not dataclass fields, like `display_description`). `JiraClient._parse_issue`
+   `assignee_account_id: str = ""` (not dataclass fields, like `display_description`, so `asdict(issue)`, what the agent
+   receives, is unchanged). `JiraConnector._get_issue` builds the rule context's `raw_data` from `asdict`, which drops them, so it
+   passes `raw_data={**result, "reporter_account_id": issue.reporter_account_id, "assignee_account_id": issue.assignee_account_id}`
+   and keeps `filtered_data=result` (`connectors/jira.py` around lines 809 and 894). `JiraClient._parse_issue`
    sets them from `(f.get("reporter") or {}).get("accountId", "")` and `(f.get("assignee") or {}).get("accountId", "")`.
 5. **Context.** `ReviewContext` gains `my_account_id: str = ""` **after** `session_created_ids` (so positional
    construction is unchanged). `gate.gated_call` gains the keyword parameter `my_account_id: str = ""` directly after
@@ -149,18 +159,20 @@ that read `my_email` ambiguous.
    - `pinned_serial_path(org_dir: Path) -> Path`.
    - `load_pinned_serial(org_dir: Path) -> int | None`: `None` when the file does not exist; the integer when it
      holds a positive integer; **raises `ValueError`** when the file exists but holds anything else (fail closed).
-   - `BundleTrust` gains `serial: int | None = None` and `rollback: bool = False`.
+   - `BundleTrust` gains `serial: int | None = None` and `remedy: str = "key"`: which sentence the two refusal messages
+     end with (`"key"` is today's text about deleting the key pin; `"serial"` names the serial pin; `"none"` adds no remedy).
    - `verify_and_maybe_pin` keeps its signature. After the signature has verified (both the pinned-key path and the
      first-pin path) it runs the serial check; it still writes only the key pin:
      - `serial = bundle.get("serial")`. Present but not a positive int (including `bool`):
-       `BundleTrust(ok=False, detail="serial is not a positive integer")`.
+       `BundleTrust(ok=False, remedy="none", detail="serial is not a positive integer")`.
      - `pinned = load_pinned_serial(org_dir)`; on `ValueError`:
-       `BundleTrust(ok=False, detail="the pinned serial file is unreadable")`.
+       `BundleTrust(ok=False, remedy="serial", detail="the pinned serial file is unreadable")`.
      - `pinned is not None and serial is None`:
-       `BundleTrust(ok=False, rollback=True, detail=f"this bundle carries no serial, but this install has already accepted serial {pinned}")`.
+       `BundleTrust(ok=False, remedy="serial", detail=f"this bundle carries no serial, but this install has already accepted serial {pinned}")`.
      - `pinned is not None and serial < pinned`:
-       `BundleTrust(ok=False, rollback=True, detail=f"serial {serial} is older than serial {pinned}, the newest this install has accepted (rollback refused)")`.
-     - otherwise the existing `ok=True` result with `serial=serial`. Equal is accepted, because every daemon start
+       `BundleTrust(ok=False, remedy="serial", detail=f"serial {serial} is older than serial {pinned}, the newest this install has accepted (rollback refused)")`.
+     - otherwise the existing `ok=True` result with `serial=serial`. **In the first-pin path the serial check runs before
+       `_pin_public_key`**, so a bundle refused for its serial pins no key. Equal is accepted, because every daemon start
        re-verifies the installed bundle.
    - **Unsigned or key-less paths are unchanged** (an unsigned bundle with no key pinned has no serial to check).
    - `record_accepted_serial(trust: BundleTrust, org_dir: Path) -> None`: when `trust.ok and trust.serial is not None`
@@ -174,11 +186,13 @@ that read `my_email` ambiguous.
    - `SettingsController.install_org_config_bytes`: after `atomic_write_json(dest, data, indent=2)` succeeds, call it.
      (Recording before the write would leave the pin ahead of the installed file and refuse the old file at the next
      start.)
-5. **Messages.** When `trust.rollback` is true the two refusals say so instead of pointing at the key pin:
-   - `load_org_config` raises `ConfigurationError(f"Organization config at {path} was refused ({trust.detail}) -- refusing to start. To deliberately go back to an older bundle, an administrator must delete {org_bundle_signing.pinned_serial_path(org_dir())} first.")`.
-   - `install_org_config_bytes` sets `self.error = f"Refusing to install: {trust.detail}. To deliberately go back to an older bundle, an administrator must delete {org_bundle_signing.pinned_serial_path(org_dir())} first."`.
-   Other failures keep today's text exactly.
-6. **Key rotation** (delete `org_config_signing_pubkey.txt`) keeps the serial pin; the new bundle's default serial is a
+5. **Messages.** By `trust.remedy`:
+   - `"key"`: today's text, unchanged.
+   - `"serial"`: `load_org_config` raises `ConfigurationError(f"Organization config at {path} was refused ({trust.detail}) -- refusing to start. To deliberately go back to an older bundle, an administrator must delete {org_bundle_signing.pinned_serial_path(org_dir())} first.")`;
+     `install_org_config_bytes` sets `self.error = f"Refusing to install: {trust.detail}. To deliberately go back to an older bundle, an administrator must delete {org_bundle_signing.pinned_serial_path(org_dir())} first."`.
+   - `"none"`: `ConfigurationError(f"Organization config at {path} was refused ({trust.detail}) -- refusing to start.")` and `self.error = f"Refusing to install: {trust.detail}."`.
+6. **`--merge`** in `build_org_bundle.py` drops `signature` and `signing_public_key` before re-signing; it also drops `serial` (`bundle.pop("serial", None)`), so a merged bundle gets a fresh serial.
+7. **Key rotation** (delete `org_config_signing_pubkey.txt`) keeps the serial pin; the new bundle's default serial is a
    current timestamp, so it is higher. Deleting both files is the full reset. A signed bundle with **no** serial is
    accepted while no serial has ever been pinned (installs that have not rebuilt their bundle keep working); once any
    serial is pinned, a serial-less bundle is refused.
@@ -202,9 +216,9 @@ bundle applies unchanged. *Refusing serial-less bundles outright* - breaks every
    `pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json`;
    a new step `Windows coverage floors` runs `python scripts/check_coverage_floor.py --platform windows coverage.json`;
    a new `if: always()` step uploads `coverage.json` as the artifact `platform-windows-coverage` (14 days).
-4. **Floor values** are whole numbers equal to `floor(measured) - 1` where `measured` is the percent the
-   `platform-windows` job printed on the feature branch (the convention the file already uses: "one point under what the
-   suite measured"). They cannot be measured in the Linux container, so the phase first lands the values `0.0`,
+4. **Floor values** are whole numbers equal to `math.floor(measured)` (written with `.0`) where `measured` is the percent
+   the `platform-windows` job printed on the feature branch (the file's convention: whole percent, rounded down; a larger
+   margin would trip the stale-floor warning, which fires above `floor + 1.0`). They cannot be measured in the Linux container, so the phase first lands the values `0.0`,
    dispatches `tests.yml` on its branch (the workflow exists on `main`, so `workflow_dispatch` with
    `ref=<phase branch>` runs the branch's copy), reads the numbers from the job log, writes the real floors,
    and dispatches again to see `Coverage ratchet passed.`
@@ -214,10 +228,9 @@ bundle applies unchanged. *Refusing serial-less bundles outright* - breaks every
    - `TestResolvePath::test_relative_path_is_joined_with_project_root`: `monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))`,
      `assert daemon_main._resolve_path("credentials/x.json") == os.path.join(str(tmp_path), "credentials/x.json")`.
    - `TestResolveAuthorityPath::test_absolute_path_is_returned_unchanged`: as the first, with `_resolve_authority_path`.
-   - the Telegram `test_built_when_creds_and_session_present`: the worker reads why it differs on Windows; the
-     expected fix is the same kind (a literal POSIX path in the assertions or the fake). If, after one honest attempt, the
-     Windows job still fails it for a reason that is a real product bug, the test keeps a `skipif` whose reason is
-     exactly `"fails on Windows: https://github.com/privacyfence/privacyfence/issues/925"`.
+   - the Telegram `test_built_when_creds_and_session_present`: `_resolve_path` returns `os.path.join(PROJECT_ROOT, "credentials/telegram.session")`
+     (`TOKEN_FILES["telegram"]`), which on Windows differs from `str(tmp_path / "credentials" / "telegram.session")` only in
+     separators. The expected `session_file` becomes `os.path.join(str(tmp_path), "credentials/telegram.session")`.
    No `not otherwise tracked`, `a known gap` or `wrong-drive` text may remain for these tests.
 
 ### D4. Website security headers (WEB-9)
@@ -237,7 +250,7 @@ headers, proves a browser accepts the site under them, and re-checks the live si
    - `CSP_DOCS`: `CSP_SITE` with `script-src` replaced by
      `script-src 'self' 'unsafe-inline' https://www.googletagmanager.com` and `style-src` by `style-src 'self' 'unsafe-inline'`
      (the docs generator's inline bootstrap scripts and table alignment styles; accepted and recorded in the ADR).
-   - `def headers_for_path(path: str) -> dict[str, str]`: the five headers
+   - `def headers_for_path(path: str) -> dict[str, str]`: the four headers
      (`Strict-Transport-Security`, `X-Content-Type-Options`, `Referrer-Policy`, `Content-Security-Policy`),
      with `CSP_DOCS` when `path == "/docs"` or `path.startswith("/docs/")`, else `CSP_SITE`.
    - `main()` printing, for the Cloudflare dashboard, the three rules below.
@@ -312,16 +325,20 @@ deploys. There are no `manual_before` steps. Instructions with exact links:
 - **HSTS `includeSubDomains`** also covers `downloads.privacyfence.eu` (a Cloudflare Worker, HTTPS only) and any other
   subdomain. If the user runs a plain-HTTP subdomain, `ma1` says to drop `includeSubDomains` from the rule; the
   repository constant then differs and the check reports it.
-- **p1:** if `JiraClient._token_file` is empty or `_config` lacks `cloud_id`, `check_connection` cannot persist; it must
-  not raise (the id then lives in memory for that run only). A worker that finds `JiraIssue` is copied with
-  `dataclasses.replace` or rebuilt anywhere in `src/` (grep `JiraIssue(` and `replace(`) stops with `status=blocked`,
-  because the two plain attributes would be lost on copy.
+- **p1:** if `JiraClient._token_file` is empty, `check_connection` cannot persist; it must not raise (the id then lives in
+  memory for that run only). A worker that finds `JiraIssue` is copied with `dataclasses.replace` or rebuilt anywhere in
+  `src/` (grep `JiraIssue(` and `replace(`) stops with `status=blocked`, because the two plain attributes would be lost on copy.
+- **p2:** the definition of done owes a live-connector QA report for the changed `*_client.py` and connector files; p2
+  dispatches `qa-record-fixture.yml` and reads the fixture diff. A fixture diff that contains a real account id, email or
+  tenant URL is a stop (`status=blocked`).
 - **p2:** if `ConfluenceClient` has another parse path that fills `ConfluencePage.author` with a display name (grep
   `author=` shows only the v2 `authorId` today), stop with `status=blocked`.
 - **p3:** a signed bundle written by an older `build_org_bundle.py` has no serial and is accepted until a serial is
   pinned. If `tests/integration/test_org_ubuntu_release_smoke.py` or `scripts/sync_room_directory.py` break, they build
   bundles without a serial and need no change; if one fails for another reason, stop.
-- **p4:** the floors need two `tests.yml` dispatches on the phase branch (the Windows job takes about 25 minutes).
+- **p4:** the floors need two `tests.yml` dispatches on the phase branch (the Windows job takes about 25 minutes). This is a
+  deliberate exception to the steward skill's "cross-platform pytest is not dispatched": that line assumes a pull request, and
+  phase branches are never PR'd.
   `platform-windows` red for a reason outside the four rewritten tests means stop with `status=blocked`; do not skip
   a test to get green. The exact measured percentages are only known once Windows runs.
 
@@ -372,35 +389,34 @@ phases:
          `resp.json().get("accountId", "")` and `""` on `requests.RequestException`. In
          `resolve_resource_and_save` add `"account_id": _fetch_account_id(access_token, cloud_id)` to
          `token_record`, after the `"account_email"` entry. Leave `_fetch_account_email` as it is.
-      2. src/privacyfence/jira_client.py: (a) add a private method `_token_record(self) -> dict[str, Any]`
-         returning exactly the dict `_try_refresh` passes to `save_token_file` today plus
-         `"account_id": self._config.get("account_id", "")`; make `_try_refresh` call
-         `save_token_file(self._token_file, self._token_record())`. (b) add the read-only property
-         `account_id` returning `str(self._config.get("account_id", "") or "")`. (c) in `check_connection`, after
-         `myself` is read, set `account_id = myself.get("accountId", "")`; when it is non-empty and differs from
-         `self._config.get("account_id")`, set `self._config["account_id"] = account_id` and, if `self._token_file`
-         is truthy, call `save_token_file(self._token_file, self._token_record())`. This must never raise
-         beyond what `check_connection` already raises. (d) in `JiraIssue.__post_init__` add two plain attributes
-         `self.reporter_account_id: str = ""` and `self.assignee_account_id: str = ""` with a comment that, like
-         `display_description`, they are not dataclass fields so the agent never receives them. In `_parse_issue`,
-         after the `JiraIssue(...)` is built, set them from `(f.get("reporter") or {}).get("accountId", "")` and
-         `(f.get("assignee") or {}).get("accountId", "")`.
-      3. src/privacyfence/confluence_client.py: add the same `account_id` property, and add
-         `"account_id": self._config.get("account_id", "")` to the dict it saves on refresh (the
-         `save_token_file` call next to `"account_email"`).
-      4. src/privacyfence/assets_client.py: add `"account_id": self._config.get("account_id", "")` to the dict it saves
-         on refresh (next to `"account_email"`). No property.
-      5. Tests (extend the existing files, copy the style of the neighbouring tests; no network):
-         - test_atlassian_oauth.py: a new `TestFetchAccountId` with `test_returns_the_account_id`,
-           `test_returns_empty_when_the_request_fails`; extend the `resolve_resource_and_save` test whose expected token
-           dict is at the `"account_email": "me@x.com"` assertion so it expects `"account_id"` (patch
-           `_fetch_account_id` in `_setup` the way `_fetch_account_email` is patched; default `""`).
-         - test_jira_client.py: `test_check_connection_records_the_account_id`,
-           `test_check_connection_persists_a_missing_account_id` (the saved token file holds `account_id`),
-           `test_check_connection_does_not_rewrite_an_unchanged_account_id`,
-           `test_refresh_keeps_the_account_id`, `test_parse_issue_records_reporter_and_assignee_account_ids`
-           (and that `dataclasses.asdict(issue)` has no `reporter_account_id` key).
-         - test_confluence_client.py and test_assets_client.py: `test_refresh_keeps_the_account_id`; Confluence also
+      2. src/privacyfence/jira_client.py: (a) in `_try_refresh`, add `"account_id"` to the dict passed to `save_token_file`
+         as Design D1 point 2 says (the in-memory value, else the one in the token file on disk). (b) add the read-only
+         property `account_id` returning `str(self._config.get("account_id", "") or "")`. (c) in `check_connection`, after
+         `myself` is read, backfill as Design D1 point 3 says (read-modify-write inside
+         `try/except (AtlassianOAuthError, OSError)` logging a warning; import `AtlassianOAuthError` and `load_token_file`
+         from `.atlassian_oauth` if not already imported). A failed save must never make `check_connection` raise.
+         (d) in `JiraIssue.__post_init__` add two plain attributes `self.reporter_account_id: str = ""` and
+         `self.assignee_account_id: str = ""` with a comment that, like `display_description`, they are not dataclass
+         fields so the agent never receives them. In `_parse_issue`, after the `JiraIssue(...)` is built, set them from
+         `(f.get("reporter") or {}).get("accountId", "")` and `(f.get("assignee") or {}).get("accountId", "")`.
+      3. src/privacyfence/confluence_client.py: add the same `account_id` property, and the same `"account_id"` entry
+         (in-memory, else on disk) in the dict it saves on refresh (the `save_token_file` call next to `"account_email"`).
+      4. src/privacyfence/assets_client.py: the same `"account_id"` entry in the dict it saves on refresh. No property.
+      5. Tests (extend the existing files; copy the style of the neighbouring tests; no network, ever):
+         - test_atlassian_oauth.py: every test that patches `_fetch_account_email` (the `monkeypatch.setattr(atlassian_oauth_module,
+           "_fetch_account_email", ...)` lines) must also patch `_fetch_account_id` to a lambda returning `""` (or the id the test
+           asserts), otherwise it makes a real HTTP call; update the exact token-dict assertion (the one containing
+           `"account_email": "me@x.com", "scopes": []`) to include `"account_id"`. Add `TestFetchAccountId` with
+           `test_returns_the_account_id` and `test_returns_empty_when_the_request_fails`.
+         - test_jira_client.py: update the exact-dict assertion in `test_successful_refresh_persists_to_shared_token_file` to
+           include `"account_id"`; add `test_check_connection_records_the_account_id`,
+           `test_check_connection_persists_a_missing_account_id` (the saved token file holds `account_id` and keeps the other
+           fields as they were on disk), `test_check_connection_does_not_rewrite_an_unchanged_account_id`,
+           `test_check_connection_survives_a_failed_account_id_save`, `test_refresh_keeps_the_account_id_from_disk_when_config_lacks_it`,
+           `test_parse_issue_records_reporter_and_assignee_account_ids` (and `dataclasses.asdict(issue)` has no
+           `reporter_account_id` key).
+         - test_confluence_client.py and test_assets_client.py: update their exact refresh-dict assertions the same way and add
+           `test_refresh_keeps_the_account_id_from_disk_when_config_lacks_it`; Confluence also
            `test_account_id_property_reads_the_config`.
       6. Run `grep -rn "JiraIssue(" src` and `grep -rn "replace(" src/privacyfence/jira_client.py src/privacyfence/connectors/jira.py`.
          If any code copies or rebuilds a `JiraIssue` after `_parse_issue`, stop with status=blocked and say where.
@@ -410,7 +426,7 @@ phases:
       - python3 -m pytest tests/unit/test_atlassian_oauth.py -q passes
       - python3 -m pytest tests/unit/test_jira_client.py -q -k "account_id" passes
       - python3 -m pytest tests/unit/test_confluence_client.py tests/unit/test_assets_client.py -q -k "account_id" passes
-      - grep -n '"account_id": self._config.get("account_id", "")' src/privacyfence/jira_client.py src/privacyfence/confluence_client.py src/privacyfence/assets_client.py matches in all three files
+      - grep -c '"account_id"' src/privacyfence/jira_client.py src/privacyfence/confluence_client.py src/privacyfence/assets_client.py prints at least 1 for each file
       - ruff check . passes
   - id: p2-account-id-rules
     title: Match the Jira reporter/assignee and Confluence author rules on the account id
@@ -424,6 +440,8 @@ phases:
       - src/privacyfence/connectors/confluence.py
       - src/privacyfence/daemon_main.py
       - tests/helpers.py
+      - tests/fixtures/**
+      - tests/unit/policy/_v1_reference.py
       - tests/unit/policy/test_scopes.py
       - tests/unit/test_gate_real_evaluator.py
       - tests/unit/connectors/test_jira_connector.py
@@ -438,16 +456,25 @@ phases:
       3. src/privacyfence/connectors/jira.py and connectors/confluence.py: in `__init__`, next to
          `self.my_email: str = ""`, add `self.my_account_id: str = ""`; at every `my_email=self.my_email,` argument of a
          `gated_call` (jira.py 7 sites, confluence.py 5 sites) add `my_account_id=self.my_account_id,` on the next
-         line. `grep -c "my_account_id=self.my_account_id" ` must equal the `my_email=self.my_email` count in each file.
-         Do not touch connectors/assets.py.
-      4. src/privacyfence/daemon_main.py in `build_connectors`: after `jira_connector.my_email = ...` add
+         line. `grep -c "my_account_id=self.my_account_id"` must equal the `my_email=self.my_email` count in each file.
+         In `JiraConnector._get_issue` (the `jira_get_issue` tool, around lines 809 and 894) the context's `raw_data` is
+         `asdict(issue)` plus comments, which drops the two plain attributes: pass
+         `raw_data={**result, "reporter_account_id": issue.reporter_account_id, "assignee_account_id": issue.assignee_account_id}`
+         and keep `filtered_data=result`. Do not touch connectors/assets.py.
+      4. src/privacyfence/daemon_main.py in `build_connectors`: right after `info = jira_client.check_connection()` add
+         `if jira_client.account_id: atlassian_config["account_id"] = jira_client.account_id` (so the Confluence and Assets
+         clients built after it start with the id); after `jira_connector.my_email = ...` add
          `jira_connector.my_account_id = jira_client.account_id`; after `confluence_connector.my_email = ...` add
-         `confluence_connector.my_account_id = confluence_client.account_id`. If `fake_client_class` in
-         tests/unit/test_daemon_main.py lacks an `account_id` attribute, add `account_id = ""` to the fake it builds.
-      5. src/privacyfence/policy/scopes.py: replace the three matchers exactly as Design D1 point 6 says. Update the
-         comment above them (there is none about substring today; add none).
+         `confluence_connector.my_account_id = confluence_client.account_id`. In tests/unit/test_daemon_main.py,
+         `fake_client_class`'s `_FakeClient` gets the class attribute `account_id = ""` (every Jira and Confluence
+         `build_connectors` test needs it).
+      5. src/privacyfence/policy/scopes.py: replace the three matchers exactly as Design D1 point 6 says.
       6. tests/helpers.py: `make_ctx` defaults gain `my_account_id=""`.
-      7. Tests:
+      7. tests/unit/policy/_v1_reference.py is the frozen v1 oracle that `test_scopes.py::test_agrees_on_every_fixture`
+         compares every selector against; its `_rule_i_am_reporter`, `_rule_i_am_assignee` and `_rule_i_am_author` still hold
+         the substring rules. Rewrite those three to the account-id comparison of Design D1 point 6 and add a comment that this
+         is a deliberate divergence from v1 (ADR 0194).
+      8. Tests:
          - tests/unit/policy/test_scopes.py: replace the `i_am_reporter`, `i_am_assignee` and `i_am_author` entries of the
            table that holds them (around lines 93, 215, 220) so their matching cases use `my_account_id` and a
            `SimpleNamespace` or dict raw with `reporter_account_id` / `assignee_account_id` / `author`, and add
@@ -461,16 +488,26 @@ phases:
            "name containing my email does not match" case and make it meaningful for reporter and assignee too.
          - tests/unit/connectors/test_jira_connector.py and test_confluence_connector.py: one test each,
            `test_gated_calls_pass_the_account_id`, that a read through the connector reaches `gated_call` with
-           `my_account_id` equal to the connector's attribute (copy how the neighbouring tests capture `gated_call`).
+           `my_account_id` equal to the connector's attribute (copy how the neighbouring tests capture `gated_call`). Jira also
+           `test_get_issue_raw_data_carries_the_reporter_and_assignee_account_ids` (present in `raw_data`, absent from
+           `filtered_data`). Update the stale module docstring at the top of test_jira_connector.py that says `asdict(issue)`
+           already matches what the rules expect.
          - tests/unit/test_daemon_main.py: `test_jira_and_confluence_connectors_get_the_clients_account_id`.
-      8. Run `ruff check .`, `python3 -m mypy src/privacyfence`, `python3 scripts/mypy_strict_modules.py`, and
+      9. Run `ruff check .`, `python3 -m mypy src/privacyfence`, `python3 scripts/mypy_strict_modules.py`, and
          `python3 -m pytest tests/unit -q -x` (the whole unit suite, because `ReviewContext` and `gated_call` are shared).
          Stop with status=blocked if a test outside the touched files fails and the fix is not an `account_id` default.
+      10. Definition of done (`verify.dod_conditional`: the change touches `*_client.py` and `connectors/**`): push the phase
+         branch, then for each of `jira`, `confluence` and `assets` that is a key of `CONNECTOR_CHECKS` in
+         scripts/qa_fixture_recorder.py, dispatch `qa-record-fixture.yml` on `main` with inputs `connector=<name>` and
+         `branch=<this phase branch>` (one at a time: the runs share a concurrency group and a queued run is not a hang),
+         wait, `git pull` the fixture commits, and read the fixture diff. If it contains a real account id, email address or
+         tenant URL, stop with status=blocked; do not commit it. Note the three results for the PR body.
     acceptance:
       - python3 -m pytest tests/unit/policy/test_scopes.py -q -k "i_am_reporter_ignores_a_display_name_that_contains_my_email or i_am_reporter_matches_only_my_account_id or i_am_author_matches_only_my_account_id" passes
       - python3 -m pytest tests/unit/test_gate_real_evaluator.py tests/unit/connectors/test_jira_connector.py tests/unit/connectors/test_confluence_connector.py -q passes
       - python3 -m pytest tests/unit/test_daemon_main.py -q -k "account_id" passes
-      - grep -n "my_email.lower() in" src/privacyfence/policy/scopes.py prints nothing
+      - python3 -m pytest tests/unit/policy -q passes
+      - grep -n "my_email.lower() in" src/privacyfence/policy/scopes.py tests/unit/policy/_v1_reference.py shows no line inside the i_am_reporter, i_am_assignee or i_am_author rules
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
   - id: p3-bundle-serial
@@ -490,25 +527,28 @@ phases:
       Implements Design D2 in full; read it first, and docs/adr/0016-org-config-bundle-hash-log-and-signing.md.
       1. src/privacyfence/org_bundle_signing.py: add `PINNED_SERIAL_FILENAME = "org_config_serial.txt"`,
          `SERIAL_FIELD = "serial"`, `pinned_serial_path`, `load_pinned_serial`, the two new `BundleTrust` fields
-         (`serial: int | None = None`, `rollback: bool = False`), the serial check in `verify_and_maybe_pin` (both the
-         pinned-key success path and the first-pin path; the detail strings are in Design D2 point 3 and are exact),
+         (`serial: int | None = None`, `remedy: str = "key"`), the serial check in `verify_and_maybe_pin` (both the
+         pinned-key success path and the first-pin path, where it runs before `_pin_public_key`; the detail strings are in
+         Design D2 point 3 and are exact),
          and `record_accepted_serial`. Update `__all__` and the module docstring's last paragraph of the TOFU
          description with two sentences on the serial pin. `would_pin_new_key` is unchanged.
-      2. src/privacyfence/daemon_main.py `load_org_config`: handle `trust.rollback` with the message in Design D2
-         point 5 (the existing message stays for every other failure) and call
+      2. src/privacyfence/daemon_main.py `load_org_config`: choose the message by `trust.remedy` as Design D2
+         point 5 says (`"key"` keeps today's text) and call
          `org_bundle_signing.record_accepted_serial(trust, org_dir())` immediately before `return data`.
-      3. src/privacyfence/settings_controller.py `install_org_config_bytes`: same two changes (message from point 5;
+      3. src/privacyfence/settings_controller.py `install_org_config_bytes`: same two changes (messages from point 5;
          call `record_accepted_serial` after the successful `atomic_write_json`, before `self.error = ""`).
       4. scripts/build_org_bundle.py: add `import time` if missing; argparse `--serial` (type: a positive int, same
          style as `_scoped_token_days`, help "Serial signed into the bundle (default: the current Unix time). Installs refuse a bundle whose serial is lower than the highest they have accepted."); after parsing, when
          `--serial` is given without `--sign-key`, `parser.error("--serial needs --sign-key (only a signed bundle carries a serial).")`;
          when signing, set `bundle["serial"] = args.serial if args.serial is not None else int(time.time())` before
-         `_sign_bundle` is called. Mention `--serial` in the module docstring's signing paragraph.
+         `_sign_bundle` is called; in the `--merge` branch that pops `signature` and `signing_public_key`, also
+         `bundle.pop("serial", None)`. Mention `--serial` in the module docstring's signing paragraph.
       5. Tests (named; copy `_write_signed_bundle` and the neighbouring style):
          - tests/unit/test_org_bundle_signing.py: `test_a_lower_serial_than_the_pinned_one_is_refused_as_a_rollback`,
            `test_the_same_serial_is_accepted_on_reload`, `test_a_bundle_without_a_serial_is_refused_once_a_serial_is_pinned`,
            `test_a_bundle_without_a_serial_is_accepted_while_none_is_pinned`,
-           `test_a_boolean_or_non_positive_serial_is_refused`, `test_an_unreadable_serial_pin_fails_closed`,
+           `test_a_boolean_or_non_positive_serial_is_refused_with_no_remedy`,
+           `test_an_unreadable_serial_pin_fails_closed_with_the_serial_remedy`, `test_a_rollback_bundle_with_a_new_key_does_not_pin_the_key`,
            `test_record_accepted_serial_only_raises_the_pin`, `test_record_accepted_serial_swallows_a_write_error`,
            `test_deleting_the_serial_pin_allows_an_older_bundle`.
          - tests/unit/test_daemon_main.py, in `TestLoadOrgConfigSigning`:
@@ -519,7 +559,7 @@ phases:
            `test_install_org_config_records_the_serial_only_after_the_write` (patch `atomic_write_json` to raise
            `OSError`: no pin written).
          - tests/unit/test_build_org_bundle.py: `test_signing_adds_a_serial_that_defaults_to_the_current_time`,
-           `test_serial_flag_sets_the_serial`, `test_serial_without_sign_key_is_an_error`,
+           `test_serial_flag_sets_the_serial`, `test_serial_without_sign_key_is_an_error`, `test_merge_does_not_carry_the_old_serial`,
            `test_a_script_signed_bundle_with_a_serial_verifies_in_the_daemon_copy`.
       6. Run `ruff check .`, `bandit -c pyproject.toml -r src`, `python3 -m mypy src/privacyfence`,
          `python3 scripts/mypy_strict_modules.py`, and confirm `org_bundle_signing.py` stays at 100% with
@@ -542,7 +582,7 @@ phases:
       - tests/unit/test_daemon_main.py
     brief: |
       Implements Design D3 in full; read it first, and docs/testing-policy.md. This phase needs two real Windows CI runs;
-      the Linux container cannot measure Windows coverage, and the steward skill says to dispatch rather than skip.
+      the Linux container cannot measure Windows coverage, so the floors come from a dispatched run.
       1. scripts/check_coverage_floor.py: add `WINDOWS_MODULE_FLOORS` (keys exactly as in Design D3 point 1, values `0.0`
          for now, with a comment saying these are the platform-windows job's floors and why they are separate from
          MODULE_FLOORS: the same modules read differently on Windows), `--platform {linux,windows}`, the
@@ -559,17 +599,17 @@ phases:
          (it says nothing gates; make it say what gates now).
       4. tests/unit/test_daemon_main.py: apply Design D3 point 5 to the four skipped tests (`TestResolvePath` x2,
          `TestResolveAuthorityPath::test_absolute_path_is_returned_unchanged`, and the Telegram
-         `test_built_when_creds_and_session_present`), removing their `skipif`. Read the Telegram test and the code it
-         exercises to find what is POSIX-specific; if it is not a literal path, stop with status=blocked and say what it is.
+         `test_built_when_creds_and_session_present`), removing their `skipif`.
       5. Run `ruff check .`, `python3 -m pytest tests/unit/test_check_coverage_floor.py tests/unit/test_daemon_main.py -q`,
          and `python3 scripts/check_coverage_floor.py coverage.json` after a full `pytest --cov=src/privacyfence --cov-branch
          --cov-report=json:coverage.json` (the Linux gate must still pass unchanged).
       6. Push the phase branch. Dispatch `tests.yml` on it with `mcp__github__actions_run_trigger`
-         (`workflow_id: tests.yml`, `ref: <this phase branch>`). Wait for the run (`actions_get`), then read the
+         (`workflow_id: tests.yml`, `ref: <this phase branch>`). This is a deliberate exception to the steward skill's
+         "cross-platform pytest is not dispatched": phase branches are never PR'd, so no pull_request run exists. Wait for the run (`actions_get`), then read the
          `platform-windows` job log (`get_job_logs`). With every floor at `0.0` expect a green job whose log prints
          `[ ok ] src/privacyfence/...: NN.NN%` for the three modules. If any step or test failed, read the log, fix the cause in the four rewritten tests, and dispatch again;
          after two failed attempts stop with status=blocked and paste the failing assertion.
-      7. Set each Windows floor to `floor(measured) - 1` (a whole number written with `.0`, e.g. measured 87.4 -> 86.0), amend
+      7. Set each Windows floor to `math.floor(measured)` (a whole number written with `.0`, e.g. measured 87.4 -> 87.0), amend
          the comment to say the numbers were measured on the platform-windows job on <today's date>, push, dispatch
          `tests.yml` again, and confirm the `platform-windows` log shows `Coverage ratchet passed.` with no
          `stale coverage floor` warning for the three Windows modules.
@@ -603,8 +643,8 @@ phases:
          header lines.
       2. Create scripts/check_site_headers.py as Design D4 point 3 says (stdlib `urllib.request` with a handler that
          does not follow redirects; a `check(base_url) -> list[str]` function returning the mismatch lines so tests can
-         call it; `main(argv)` printing and returning 0 or 1). Import `site_security_headers` the way other scripts
-         import their siblings (look at scripts/build_site.py or scripts/release_stats.py).
+         call it; `main(argv)` printing and returning 0 or 1). Import `site_security_headers` after
+         `sys.path.insert(0, str(Path(__file__).resolve().parent))`, as scripts/build_site.py does at line ~81.
       3. tests/website_site.py: make `serve()`'s `Handler` send `headers_for_path(self.path.split("?")[0])` by overriding
          `end_headers`; import the function with the `sys.path.insert(0, str(REPO / "scripts"))` the file already does.
       4. Tests, as listed in Design D4 point 4, with these names:
@@ -625,24 +665,26 @@ phases:
          `Check the security headers` running `python3 scripts/check_site_headers.py https://privacyfence.eu`.
       6. Run `ruff check .`, then build the site the way the CI does and run the tests against it:
          `pip install --require-hashes -r requirements/docs.lock.txt` (into a venv outside the repo),
-         `python scripts/build_site.py --out _site --offline`, then
+         `python scripts/build_site.py --out _site --offline --docs-ref worktree` (without `--docs-ref worktree` the docs
+         come from the newest stable tag and may be skipped, which would let the CSP test pass without ever seeing the docs'
+         inline scripts), confirm `test -f _site/docs/index.html`, then
          `PRIVACYFENCE_SITE_DIR=_site python3 -m pytest tests/unit/test_website_*.py tests/unit/test_check_site_headers.py tests/integration/test_website_csp.py tests/integration/test_website_consent.py tests/integration/test_website_layout.py -q`
-         (the steward skill explains `PRIVACYFENCE_TEST_CHROMIUM`; a SKIPPED browser test is not a pass). Remove `_site`
-         afterwards; do not commit it.
+         (the steward skill explains `PRIVACYFENCE_TEST_CHROMIUM`; a SKIPPED browser test is not a pass). Keep `_site` until
+         the acceptance below has run, then remove it; never commit it.
          If `test_no_page_violates_its_csp` reports a violation, stop with status=blocked naming the page and the blocked URL.
       7. Do not run the new script against the live site (the Cloudflare rules do not exist yet) and do not edit docs, ADRs or
          CHANGELOG; the last phase does.
     acceptance:
       - python3 -m pytest tests/unit/test_website_security_headers.py tests/unit/test_check_site_headers.py -q passes
-      - PRIVACYFENCE_SITE_DIR=_site python3 -m pytest tests/integration/test_website_csp.py -q passes with no test skipped
+      - after python scripts/build_site.py --out _site --offline --docs-ref worktree, test -f _site/docs/index.html succeeds and PRIVACYFENCE_SITE_DIR=_site python3 -m pytest tests/integration/test_website_csp.py -q passes with no test skipped
       - grep -n "test_website_csp.py" .github/workflows/website-build.yml matches
       - grep -n "check_site_headers.py https://privacyfence.eu" .github/workflows/pages.yml matches
       - python3 scripts/site_security_headers.py prints the three rule names pf-security-headers-all, pf-csp-site and pf-csp-docs
       - ruff check . passes
-  - id: p6-retire-plan
-    title: Write the ADRs, update the docs and the changelog, and delete the plan
+  - id: p6-adrs
+    title: Write ADRs 0194, 0195 and 0196 and amend the index
     depends_on: [p1-atlassian-account-id, p2-account-id-rules, p3-bundle-serial, p4-windows-coverage-gate, p5-website-security-headers]
-    complexity: M
+    complexity: S
     touches:
       - docs/adr/0194-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md
       - docs/adr/0195-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md
@@ -650,8 +692,34 @@ phases:
       - docs/adr/0016-org-config-bundle-hash-log-and-signing.md
       - docs/adr/0053-the-website-is-hosted-on-github-pages-behind-cloudflare.md
       - docs/adr/README.md
+    brief: |
+      Extract the plan's decisions into ADRs before the plan is deleted. Read CONTRIBUTING.md "Decisions, plans and ADRs",
+      docs/adr/README.md (template, rules) and the Design and ADRs sections of docs/repo-review-low-findings-plan.md. All five
+      code phases have landed; describe what the code does now (read it), not what the plan intended.
+      1. Write the three files named in `touches` in the README template, Status `Accepted - <today's date>. Implemented.`,
+         with Context, Decision, Alternatives considered (the "Rejected" items of the plan's D1, D2 and D4), Consequences,
+         Verification (the tests and files the phases created) and Related (issues #923, #924, #926; ADR 0195 `Amends 0016`;
+         ADR 0196 `Amends 0053`; ADR 0194 relates to 0117 and 0118). ADR 0196's Consequences must say that Cloudflare can drop
+         the rules without a commit, that `pages.yml`'s post-deploy `Check the security headers` step is how that is caught, and
+         that the `/docs/` policy allows inline scripts and styles because the docs generator emits them. ADR 0195's
+         Consequences must say that a signed bundle without a serial is accepted until a serial is pinned. Link to source files
+         and issues only, never to the plan.
+      2. docs/adr/0016-...md and docs/adr/0053-...md: add one line to each Status section pointing forward
+         (`Amended by [0195](0195-...md): ...` / `Amended by [0196](0196-...md): ...`); change nothing else in them.
+      3. docs/adr/README.md: add three rows after the 0193 row (`Accepted; amends 0016` / `Accepted; amends 0053` / `Accepted`)
+         and change the 0016 and 0053 rows' status to end `; amended by 0195` and `; amended by 0196`.
+    acceptance:
+      - ls docs/adr/0194-*.md docs/adr/0195-*.md docs/adr/0196-*.md lists three files
+      - grep -c "0194\|0195\|0196" docs/adr/README.md prints at least 5
+      - grep -n "amended by 0195" docs/adr/README.md matches the 0016 row and grep -n "amended by 0196" docs/adr/README.md matches the 0053 row
+      - grep -rn "repo-review-low-findings" docs/adr prints nothing
+      - ruff check . passes
+  - id: p7-retire-plan
+    title: Update the reference docs and the changelog, and delete the plan
+    depends_on: [p6-adrs]
+    complexity: M
+    touches:
       - docs/approvals-and-policy.md
-      - docs/always-allow-rules-reference.md
       - docs/connector-qa.md
       - docs/org-mode-setup-guide.md
       - docs/configuration-reference.md
@@ -660,49 +728,38 @@ phases:
       - docs/repo-review-low-findings-plan.md
       - docs/repo-review-low-findings-plan-manual-steps.html
     brief: |
-      Retire the plan. Read CONTRIBUTING.md "Decisions, plans and ADRs", docs/adr/README.md (template, rules) and the
-      Design and ADRs sections of docs/repo-review-low-findings-plan.md before you delete it. All five code phases have landed.
-      1. Write docs/adr/0194-...md, 0195-...md and 0196-...md (file names above) in the README template, Status
-         `Accepted — <today's date>. Implemented.`, with Context, Decision, Alternatives considered (the "Rejected" items in
-         the plan's D1, D2 and D4), Consequences, Verification (the tests and files the phases created) and Related
-         (issues #923, #924 and #926; ADR 0195 `Amends 0016`; ADR 0196 `Amends 0053`; 0194 relates to 0117 and 0118). ADR 0196's
-         Consequences must say that Cloudflare can drop the rules without a commit, that `pages.yml`'s post-deploy
-         `Check the security headers` step is how that is caught, and that the `/docs/` policy allows inline scripts and styles
-         because the docs generator emits them. Link to source files and issues only, never to the plan.
-      2. docs/adr/0016-...md and docs/adr/0053-...md: add one line to each Status section pointing forward
-         (`Amended by [0195](0195-...md): ...` / `Amended by [0196](0196-...md): ...`); change nothing else in them.
-         docs/adr/README.md: add three rows after the 0193 row (`Accepted; amends 0016` / `Accepted; amends 0053` / `Accepted`)
-         and change the 0016 and 0053 rows' status to end `; amended by 0195` and `; amended by 0196`.
-      3. Reference docs, describing today's behaviour (mention the new behaviour; do not retell the why, link the ADR):
-         - docs/approvals-and-policy.md (~line 401-403) and docs/always-allow-rules-reference.md (~line 102) and docs/connector-qa.md
-           (~lines 304, 345, 721-733): "you are the reporter / assignee / author" now means "your Atlassian account is the
-           reporter ... (compared by account id)"; `grep -rn "i_am_reporter\|i_am_assignee\|i_am_author" docs` and fix every
-           sentence that implies an email or name match.
+      Retire the plan. The ADRs exist (p6). Read CONTRIBUTING.md "Decisions, plans and ADRs" and the Design section of
+      docs/repo-review-low-findings-plan.md before you delete it.
+      1. Reference docs, describing today's behaviour (state the new behaviour; link the ADR for the why, never retell it):
+         - docs/approvals-and-policy.md (~lines 401-403) and docs/connector-qa.md (~lines 304, 345, 721-733): "you are the
+           reporter / assignee / author" now means your Atlassian account is the reporter, assignee or author, compared by account
+           id, never by a name or email; `grep -rn "i_am_reporter\|i_am_assignee\|i_am_author" docs` and fix every sentence that
+           implies an email or name match. Do not hand-edit docs/always-allow-rules-reference.md: it is generated by
+           scripts/generate_always_allow_reference.py from labels that did not change.
          - docs/org-mode-setup-guide.md section 6 "Signing key and bundle" (~lines 219-260) and its flag table (~line 303):
-           document `--serial`, the default, the pin file `org_config_serial.txt`, that an older serial is refused, and that
-           deleting that file (or both pin files, to rotate the key) allows a deliberate rollback. docs/configuration-reference.md:
-           add the `serial` bundle field wherever `signing_public_key` / `signature` are listed
-           (`grep -n "signing_public_key" docs/configuration-reference.md`).
-         - docs/testing-policy.md (~lines 36, 167-172): add `test_website_csp.py` to the website browser tests and describe
-           the `platform-windows` coverage floors (`check_coverage_floor.py --platform windows`).
-      4. CHANGELOG.md under `## [Unreleased]` (never a version heading; match the neighbouring entries' style), three lines:
-         Jira "if I'm reporter / assignee" and Confluence "if I'm the author" rules match your Atlassian account id instead of
-         your email in a display name (the Confluence rule now works); sign in to Atlassian again once if you use Confluence
-         without Jira, and Jira installs pick the id up on their next start. Organization bundles signed with
-         `build_org_bundle.py --sign-key` carry a `serial`, and an install refuses a bundle with a lower serial than it has
-         accepted (delete `org_config_serial.txt` to roll back on purpose). privacyfence.eu now sends HSTS, a
-         Content-Security-Policy, nosniff and a Referrer-Policy. The Windows gate and tests are internal and need no line.
-      5. Delete docs/repo-review-low-findings-plan.md and docs/repo-review-low-findings-plan-manual-steps.html. Then
-         `grep -rn "repo-review-low-findings" . --include=* -I --exclude-dir=.git --exclude-dir=.venv` must print nothing.
-      6. Run the full definition of done with `/dod` (profile `verify.dod`, including `check_coverage_floor.py`); the three new
-         ADR files must be listed in docs/adr/README.md (`python3 -m pytest tests/unit -q -k adr` if an ADR-index test exists,
-         otherwise the grep in acceptance).
+           document `--serial`, its default, the pin file `org_config_serial.txt`, that an older serial is refused, and that
+           deleting that file (or both pin files, to rotate the key and reset the serial) allows a deliberate rollback. Add a
+           troubleshooting row for the rollback refusal where that file lists startup refusals (~line 1149; search for "refusing to
+           start"). docs/configuration-reference.md: add the `serial` bundle field wherever `signing_public_key` / `signature` are
+           listed (`grep -n "signing_public_key" docs/configuration-reference.md`).
+         - docs/testing-policy.md: add `test_website_csp.py` to the browser-marker list (~lines 33-36) and to the website-build
+           description (~lines 167-172); update the `platform-windows` row (~line 60) and the ratchet paragraph (~lines 83-86)
+           to say the Windows job now gates `WINDOWS_MODULE_FLOORS` through `check_coverage_floor.py --platform windows`.
+      2. CHANGELOG.md under `## [Unreleased]` (never a version heading; match the neighbouring entries' style), three lines:
+         (a) the Jira "if I'm reporter / assignee" and Confluence "if I'm the author" rules match your Atlassian account id
+         instead of your email in a display name, and the Confluence rule now works; installs with Jira pick the id up on their
+         next start, installs with only Confluence need to sign in to Atlassian once more. (b) organization bundles signed with
+         `build_org_bundle.py --sign-key` carry a `serial`, and an install refuses a bundle with a lower serial than it has accepted
+         (delete `org_config_serial.txt` to go back on purpose). (c) privacyfence.eu sends HSTS, a Content-Security-Policy,
+         nosniff and a Referrer-Policy. The Windows gate and tests are internal and need no line.
+      3. Delete docs/repo-review-low-findings-plan.md and docs/repo-review-low-findings-plan-manual-steps.html. Then
+         `grep -rIn "repo-review-low-findings" . --exclude-dir=.git --exclude-dir=.venv` must print nothing.
+      4. Run the full definition of done with `/dod` (profile `verify.dod`, including `check_coverage_floor.py`).
     acceptance:
-      - ls docs/adr/0194-*.md docs/adr/0195-*.md docs/adr/0196-*.md lists three files
-      - grep -c "0194\|0195\|0196" docs/adr/README.md prints at least 5
-      - grep -n "amended by 0195" docs/adr/README.md matches the 0016 row and "amended by 0196" matches the 0053 row
-      - grep -n "Atlassian account" CHANGELOG.md and grep -n "org_config_serial.txt" CHANGELOG.md and grep -n "Content-Security-Policy" CHANGELOG.md each match under ## [Unreleased]
+      - grep -n "org_config_serial.txt" CHANGELOG.md docs/org-mode-setup-guide.md prints a line in each file
+      - sed -n '/## \[Unreleased\]/,/^## \[[0-9]/p' CHANGELOG.md contains "Atlassian account", "serial" and "Content-Security-Policy"
       - grep -rn "repo-review-low-findings" . -I --exclude-dir=.git --exclude-dir=.venv prints nothing
+      - test ! -e docs/repo-review-low-findings-plan.md
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
 ```
