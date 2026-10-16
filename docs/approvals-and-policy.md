@@ -363,6 +363,10 @@ auto_accept:
 - `id` is derived from the predicate, value and conditions, so the same rule always has the same
   id — the audit log and the Auto-accept page's match counts use it.
 
+To move your rules to another install, use **Export…** and **Import…** on Settings > Auto-accept.
+The file carries your always-allow rules and your step-up level only, and import only adds. See
+[Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
+
 Prefer the three surfaces above to hand-editing: they validate the rule and mint its id. A
 hand-edited entry that is malformed, or names an unknown predicate or condition, never matches
 anything. A `settings.yaml` that still has an `auto_accept_rules:` or `auto_accept_grants:` section

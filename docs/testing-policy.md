@@ -32,7 +32,7 @@ error. Today `system` is on `tests/system/test_local_mode_system.py` and
 every module in layer 6, `test_org_ubuntu_release_smoke.py` included; `browser` on every module that
 drives Chromium (`test_browser_smoke.py`, `test_settings_grist_modal_browser.py`,
 `test_settings_edit_verbs_browser.py`, `test_settings_scoped_token_form_browser.py`,
-`test_settings_update_rule_browser.py`, `test_download_page.py`, `test_releases_page.py`,
+`test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_releases_page.py`,
 `test_website_layout.py`, `test_website_consent.py`); `live` on nothing, since layer 5 is a
 script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
 `tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit

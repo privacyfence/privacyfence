@@ -48,7 +48,8 @@ organization account when asked, and connect your services at `https://pf.exampl
 2. **Connect your services.** Open **Settings** from the companion, upload your organization
    configuration if you have one, and sign in to the services you want on the **Connectors** page
    ([Connecting a service](connecting-a-service.md)). Your AI client sees the new tools without
-   reconnecting.
+   reconnecting. Moving to an organization server later? You can bring your always-allow rules with you:
+   [Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
 3. **Ask your AI client for something**, such as "summarize my last email". If policy allows it,
    it runs and is written to the audit log. Otherwise the call waits for you: open **Approvals**
    from the companion (or the link the client relays), choose **Review →**, and read the card.
