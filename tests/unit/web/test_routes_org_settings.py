@@ -40,10 +40,12 @@ type is a ``policy/scopes.py`` scope.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -53,7 +55,7 @@ import yaml
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import auto_accept, paths, privacy_filter, scoped_tokens
+from privacyfence import auto_accept, paths, personal_settings, privacy_filter, scoped_tokens, step_up_config
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
@@ -1673,3 +1675,175 @@ class TestScopedTokenRoutes:
         body = client.get("/settings").text
         assert "Create this token? It is shown once and cannot be shown again." in body
         assert "window.__pfShowScopedSecret(res.state.secret" in body
+
+
+class TestPersonalSettingsRoutes:
+    """Export/import of a person's own rules and step-up level in organization mode
+    (web/personal_settings_routes.py, wired by build_org_routes)."""
+
+    NOW = datetime(2026, 10, 16, 9, 30, tzinfo=timezone.utc)
+    FILE_FIELD = ("privacyfence-personal-settings.json", None, "application/json")
+    ENROLLED = SimpleNamespace(new_sign_count=1, credential_device_type=None, credential_backed_up=False)
+
+    @pytest.fixture(autouse=True)
+    def _data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    @staticmethod
+    def _row(scope: str, value: list[str]) -> scope_rows.ScopeRow:
+        verbs = scope_rows.scope_verbs(scope)
+        return scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, value), scope=scope, value=value,
+            verbs=frozenset(verbs), operations=scope_rows.implied_operations(scope, verbs),
+        )
+
+    def _file(self, rows, step_up_scope=None, *, mode="org") -> bytes:
+        return personal_settings.export_bytes(
+            personal_settings.build_export(rows, step_up_scope, mode=mode, version="6.3.0", now=self.NOW),
+        )
+
+    @staticmethod
+    def _import(client, raw: bytes, csrf: str, **fields):
+        fields.setdefault("sha256", hashlib.sha256(raw).hexdigest())
+        fields.setdefault("confirmed", "true")
+        return client.post(
+            "/api/settings/personal/import", data={"csrf": csrf, **fields},
+            files={"file": ("privacyfence-personal-settings.json", raw, "application/json")},
+        )
+
+    def _setup(self, tmp_path, monkeypatch, principal=ALICE, *, step_up=None, seed=("alice", "bob")):
+        for principal_id in seed:
+            _seed(tmp_path, monkeypatch, principal_id)
+        app, sessions = _app(step_up=step_up)
+        client = _client(app)
+        return client, _signed_in(client, sessions, principal)
+
+    @staticmethod
+    def _rows_of(principal: Principal) -> list:
+        with principal_scope(principal):
+            from privacyfence.daemon_main import _load_principal_settings
+            _load_principal_settings(install_wide_config={})
+            return auto_accept.get_policy_rows()
+
+    def test_a_signed_in_user_exports_a_file_that_parses(self, tmp_path, monkeypatch):
+        client, _csrf = self._setup(tmp_path, monkeypatch)
+        r = client.get("/api/settings/personal/export")
+        assert r.status_code == 200
+        assert r.headers["content-disposition"] == f'attachment; filename="{personal_settings.FILE_NAME}"'
+        document = personal_settings.parse_document(r.content)
+        assert document.rows == ()
+        assert document.source_mode == "org"
+
+    def test_two_principals_are_isolated(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("gmail.sender", "read", ["a@example.com"]))
+        _seed(tmp_path, monkeypatch, "bob", rules=_catalogue_rules("gmail.sender", "read", ["b@example.com"]))
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        exported = client.get("/api/settings/personal/export").content.decode()
+        assert "a@example.com" in exported and "b@example.com" not in exported
+
+        bob_before = _on_disk_rules(tmp_path, "bob")
+        raw = self._file([self._row("drive.folder", ["FOLDER"])])
+        assert self._import(client, raw, csrf).status_code == 200
+        assert _on_disk_rules(tmp_path, "bob") == bob_before
+        assert len(self._rows_of(BOB)) == 1
+        assert {tuple(row.value or ()) for row in self._rows_of(ALICE)} == {("a@example.com",), ("FOLDER",)}
+
+    def test_import_by_a_non_admin_works(self, tmp_path, monkeypatch):
+        assert not ALICE.is_admin
+        client, csrf = self._setup(tmp_path, monkeypatch)
+        r = self._import(client, self._file([self._row("drive.folder", ["F"])]), csrf)
+        assert r.status_code == 200
+        assert r.json()["added"] == 1
+
+    def test_all_three_routes_are_401_when_signed_out(self, tmp_path, monkeypatch):
+        app, _sessions = _app()
+        client = _client(app)
+        raw = self._file([])
+        files = {"file": ("f.json", raw, "application/json")}
+        assert client.get("/api/settings/personal/export").status_code == 401
+        assert client.post("/api/settings/personal/preview", data={"csrf": "x"}, files=files).status_code == 401
+        assert client.post("/api/settings/personal/import", data={"csrf": "x"}, files=files).status_code == 401
+
+    def test_a_bad_csrf_is_refused(self, tmp_path, monkeypatch):
+        client, _csrf = self._setup(tmp_path, monkeypatch)
+        assert self._import(client, self._file([]), "wrong").status_code == 401
+
+    def test_a_v1_settings_file_is_a_500_with_the_message(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        path = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
+        path.write_text(yaml.safe_dump({"auto_accept_rules": [{"scope": "x"}]}), encoding="utf-8")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/api/settings/personal/export")
+        assert r.status_code == 500
+        assert "auto_accept_rules" not in r.json()["error"]  # a non-admin gets the generic text
+
+    def test_import_with_require_passkey_needs_the_assertion(self, tmp_path, monkeypatch):
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+        client, csrf = self._setup(tmp_path, monkeypatch, step_up=step_up)
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        raw = self._file([self._row("drive.folder", ["NEW"])])
+
+        r = self._import(client, raw, csrf)
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+        assert _on_disk_rules(tmp_path, "alice") == []
+
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=self.ENROLLED):
+            r = self._import(client, raw, csrf, webauthn_assertion=json.dumps({"id": "Y3JlZC0x"}))
+        assert r.status_code == 200
+        assert r.json()["added"] == 1
+        assert len(_on_disk_rules(tmp_path, "alice")) == 1
+
+    def test_a_refused_step_up_is_audited(self, tmp_path, monkeypatch):
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+        client, csrf = self._setup(tmp_path, monkeypatch, step_up=step_up)
+        lines: list[str] = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: lines.append(summary))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        assert self._import(client, self._file([]), csrf).status_code == 428
+        assert any("Step-up required" in line and "principal=alice" in line for line in lines)
+
+    def test_the_file_step_up_scope_widens_the_persons_scope_and_never_goes_below_the_floor(
+        self, tmp_path, monkeypatch,
+    ):
+        floor = StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_pii_reads")
+        client, csrf = self._setup(tmp_path, monkeypatch, step_up=floor)
+
+        wider = self._import(client, self._file([], step_up_scope="writes_and_reads"), csrf).json()
+        assert wider["step_up_applied"] is True
+        assert step_up_config.personal_scope(ALICE) == "writes_and_reads"
+        assert step_up_config.personal_scope(BOB) is None
+
+        narrower = self._import(client, self._file([], step_up_scope="writes"), csrf).json()
+        assert narrower["step_up_applied"] is False
+        assert step_up_config.personal_scope(ALICE) == "writes_and_reads"
+        assert step_up_config.effective_scope(floor, ALICE) == "writes_and_reads"
+
+        # A file narrower than the org floor, for someone with no choice of their own, changes nothing.
+        other_sessions = org_session.OrgSessionStore()
+        other_app, other_sessions = _app(step_up=floor, sessions=other_sessions)
+        other_client = _client(other_app)
+        bob_csrf = _signed_in(other_client, other_sessions, BOB)
+        below = self._import(other_client, self._file([], step_up_scope="writes"), bob_csrf).json()
+        assert below["step_up_applied"] is False
+        assert step_up_config.personal_scope(BOB) is None
+        assert step_up_config.effective_scope(floor, BOB) == "writes_and_pii_reads"
+
+    def test_a_local_shaped_file_imports_into_an_org_principal(self, tmp_path, monkeypatch):
+        client, csrf = self._setup(tmp_path, monkeypatch)
+        raw = self._file([self._row("drive.folder", ["FROM-DESKTOP"])], mode="local")
+        r = self._import(client, raw, csrf)
+        assert r.status_code == 200
+        assert r.json()["added"] == 1
+        assert [tuple(row.value or ()) for row in self._rows_of(ALICE)] == [("FROM-DESKTOP",)]
+        assert len(_on_disk_rules(tmp_path, "alice")) == 1
+        assert _on_disk_rules(tmp_path, "bob") == []
