@@ -239,6 +239,8 @@ _VERB_MATRIX: dict[str, Verb] = {
     "salesforce_search": Verb.SEARCH,
     "salesforce_create_record": Verb.ADD,
     "salesforce_update_record": Verb.UPDATE,
+    "salesforce_create_records": Verb.ADD,
+    "salesforce_update_records": Verb.UPDATE,
     "grist_get_records": Verb.READ,
     "grist_export_records": Verb.READ,
     "grist_export_sql": Verb.READ,
@@ -291,5 +293,5 @@ _VERB_MATRIX: dict[str, Verb] = {
 
 
 def test_tool_to_verb_matches_the_verb_matrix():
-    assert len(_VERB_MATRIX) == 100
+    assert len(_VERB_MATRIX) == 102
     assert TOOL_TO_VERB == _VERB_MATRIX

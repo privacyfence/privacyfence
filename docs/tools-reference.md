@@ -97,13 +97,13 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Apps Script](#apps-script) | 4 | 1 | 2 | 1 |
 | [Slack](#slack) | 11 | 6 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
-| [Salesforce](#salesforce) | 7 | 1 | 4 | 2 |
+| [Salesforce](#salesforce) | 9 | 1 | 4 | 4 |
 | [Jira](#jira) | 13 | 6 | 3 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
 | [Jira Assets](#jira-assets) | 8 | 3 | 5 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **154** | **54** | **35** | **65** |
+| **Total** | **156** | **54** | **35** | **67** |
 
 ## Gmail
 
@@ -250,7 +250,9 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `salesforce_run_report` | read | `review` | Run a Salesforce report by id and return the results. |
 | `salesforce_search` | read | `review` | Search Salesforce by name or id across one or more object types — the same mechanism as the search bar at the top of the Salesforce UI. |
 | `salesforce_create_record` | write | `popup` | Create one new Salesforce record. |
+| `salesforce_create_records` | write | `popup` | Create 1 to 200 new records of one Salesforce object type in one approval, all or none: if Salesforce refuses one record, none is created and the error names each refused record by its position. |
 | `salesforce_update_record` | write | `popup` | Change fields of one existing Salesforce record, by its id. |
+| `salesforce_update_records` | write | `popup` | Change 1 to 200 existing records of one Salesforce object type in one approval, all or none. |
 
 ## Jira
 

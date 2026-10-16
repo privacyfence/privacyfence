@@ -136,6 +136,8 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "salesforce_search":              "salesforce.search",
     "salesforce_create_record":       "salesforce.create_record",
     "salesforce_update_record":       "salesforce.update_record",
+    "salesforce_create_records":      "salesforce.create_records",
+    "salesforce_update_records":      "salesforce.update_records",
     "grist_get_records":              "grist.read_records",
     "grist_export_records":           "grist.read_records",
     "grist_export_sql":               "grist.read_records",
@@ -301,6 +303,8 @@ TOOL_TO_GATE: dict[str, str] = {
     "salesforce_search":               "review",
     "salesforce_create_record":        "popup",
     "salesforce_update_record":        "popup",
+    "salesforce_create_records":       "popup",
+    "salesforce_update_records":       "popup",
     # Jira
     "jira_list_projects":              "auto",
     "jira_search_issues":              "auto",

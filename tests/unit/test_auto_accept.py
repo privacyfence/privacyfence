@@ -96,6 +96,10 @@ class TestToolToOperationMapping:
         assert TOOL_TO_OPERATION["salesforce_update_record"] == "salesforce.update_record"
         assert TOOL_TO_GATE["salesforce_create_record"] == "popup"
         assert TOOL_TO_GATE["salesforce_update_record"] == "popup"
+        assert TOOL_TO_OPERATION["salesforce_create_records"] == "salesforce.create_records"
+        assert TOOL_TO_OPERATION["salesforce_update_records"] == "salesforce.update_records"
+        assert TOOL_TO_GATE["salesforce_create_records"] == "popup"
+        assert TOOL_TO_GATE["salesforce_update_records"] == "popup"
 
     def test_salesforce_search_maps_to_clean_operation_key(self):
         assert TOOL_TO_OPERATION["salesforce_search"] == "salesforce.search"

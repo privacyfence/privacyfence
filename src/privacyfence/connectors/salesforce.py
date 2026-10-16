@@ -30,8 +30,12 @@ from ..salesforce_client import (
 from ..salesforce_writes import (
     cell_text,
     field_index,
+    key_norm,
+    key_text,
     parse_fields_object,
+    parse_records,
     resolve_fields,
+    resolve_key_field,
     values_differ,
 )
 
@@ -546,6 +550,54 @@ class SalesforceConnector(Connector):
                 ],
                 read_only=False,
             ),
+            ToolSpec(
+                name="salesforce_create_records",
+                description=(
+                    "Create 1 to 200 new records of one Salesforce object type in one approval, "
+                    "all or none: if Salesforce refuses one record, none is created and the error "
+                    "names each refused record by its position. Returns {object_type, created, "
+                    "ids}, the new ids in input order. Use salesforce_create_record for a single "
+                    "record. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_type", "str",
+                              description="API name of the Salesforce object, e.g. 'Account', 'Contact', "
+                                          "'Opportunity' or a custom object like 'Invoice__c'."),
+                    ToolParam("records", "str",
+                              description="A JSON array of 1 to 200 objects, each mapping field API names "
+                                          "to one new record's values, as fields on "
+                                          "salesforce_create_record."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="salesforce_update_records",
+                description=(
+                    "Change 1 to 200 existing records of one Salesforce object type in one "
+                    "approval, all or none. Each record is found by key_field: Id (default) or a "
+                    "field marked External ID. Only the fields listed change, records that already "
+                    "have those values are left alone, and a key that matches no record or several "
+                    "records refuses the whole call. Returns {object_type, updated, ids}. Use "
+                    "salesforce_update_record for one record by id and salesforce_search to find "
+                    "ids. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_type", "str",
+                              description="API name of the Salesforce object, e.g. 'Account', 'Contact', "
+                                          "'Opportunity' or a custom object like 'Invoice__c'."),
+                    ToolParam("records", "str",
+                              description="A JSON array of 1 to 200 objects, each holding key_field's "
+                                          "value and the fields to change, such as "
+                                          '[{"Id": "001...", "Phone": "+1 555 0100"}]. null clears a field.'),
+                    ToolParam("key_field", "str", required=False, default="Id",
+                              description="Field that identifies each record: Id (the default), or the "
+                                          "API name of a field marked External ID on this object, such "
+                                          "as 'Customer_Number__c'. It is never changed itself."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=False,
+            ),
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
@@ -563,6 +615,10 @@ class SalesforceConnector(Connector):
             return await self._create_record(**args)
         if tool == "salesforce_update_record":
             return await self._update_record(**args)
+        if tool == "salesforce_create_records":
+            return await self._create_records(**args)
+        if tool == "salesforce_update_records":
+            return await self._update_records(**args)
         raise ValueError(f"Unknown Salesforce tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -1010,6 +1066,166 @@ class SalesforceConnector(Connector):
         if changed:
             await self._write(self._sf.update_record, object_type, record_id, changed)
         return {"object_type": object_type, "id": record_id, "fields": list(resolved)}
+
+    async def _create_records(self, object_type: str, records: str) -> Any:
+        object_type = _check_object_type(object_type)
+        parsed = parse_records(records)
+        index = await self._field_index(object_type)
+        resolved = [
+            resolve_fields(values, index, object_type, "create", f"records[{i}]")
+            for i, values in enumerate(parsed)
+        ]
+        n = len(resolved)
+        names: list[str] = []
+        for record in resolved:
+            for name in record:
+                if name not in names:
+                    names.append(name)
+
+        summary = f"Create {n} {object_type} record(s)"
+        preview = {"Object type": object_type, "Records": str(n)}
+        preview_tables = [{
+            "headers": ["#", *names],
+            "rows": [
+                [str(i + 1), *[cell_text(record[name]) if name in record else "" for name in names]]
+                for i, record in enumerate(resolved)
+            ],
+        }]
+        details_text = "\n".join(
+            "\n".join([f"Record {i + 1}", *[f"  {name}: {cell_text(value, None)}" for name, value in record.items()]])
+            for i, record in enumerate(resolved)
+        )
+        raw_data = {"object_type": object_type, "records": n, "fields": sorted(names)}
+        args = {"object_type": object_type}
+        await gated_call(
+            connector=self.name,
+            tool="salesforce_create_records",
+            gate="popup",
+            tool_name="Create Salesforce Records",
+            summary=summary,
+            sender=object_type,
+            raw_data=raw_data,
+            filtered_data=None,
+            preview=preview,
+            preview_tables=preview_tables,
+            details_text=details_text,
+            table_only=True,
+            my_email=self.my_email,
+            args=args,
+        )
+        ids = await self._write(self._sf.create_records, object_type, resolved)
+        return {"object_type": object_type, "created": n, "ids": ids}
+
+    async def _update_records(self, object_type: str, records: str, key_field: str = "Id") -> Any:
+        object_type = _check_object_type(object_type)
+        parsed = parse_records(records)
+        index = await self._field_index(object_type)
+        key = resolve_key_field(key_field, index, object_type)
+        is_id = key.type == "id"
+
+        key_values: list[str] = []
+        changes_wanted: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for i, values in enumerate(parsed):
+            where = f"records[{i}]"
+            key_entries = [name for name in values if name.lower() == key.name.lower()]
+            if len(key_entries) > 1:
+                raise ValueError(f"{where}: field {key.name} is named twice")
+            if not key_entries:
+                raise ValueError(f"{where}: has no {key.name} value")
+            key_value = key_text(values[key_entries[0]], where, key.name)
+            if is_id:
+                try:
+                    key_value = _validate_salesforce_id(key_value, key.name)
+                except SalesforceClientError as exc:
+                    raise ValueError(f"{where}: {key.name} must be a 15- or 18-character Salesforce id") from exc
+            rest = {name: value for name, value in values.items() if name != key_entries[0]}
+            if not rest:
+                raise ValueError(f"{where}: names no field to change")
+            resolved = resolve_fields(rest, index, object_type, "update", where)
+            norm = key_norm(key_value, is_id)
+            if norm in seen:
+                raise ValueError(f"{where}: {key.name} {key_value!r} is listed twice")
+            seen.add(norm)
+            key_values.append(key_value)
+            changes_wanted.append(resolved)
+
+        union = sorted({name for resolved in changes_wanted for name in resolved})
+        found = await self._fetch(self._sf.find_records, object_type, key.name, key_values, union)
+        by_key: dict[str, list[dict[str, Any]]] = {}
+        for row in found:
+            by_key.setdefault(key_norm(str(row[key.name]), is_id), []).append(row)
+        for key_value in key_values:
+            matches = by_key.get(key_norm(key_value, is_id), [])
+            if len(matches) > 1:
+                raise ValueError(
+                    f"{key.name} {key_value!r} matches {len(matches)} {object_type} records; it must match one"
+                )
+        unmatched = [k for k in key_values if key_norm(k, is_id) not in by_key]
+        if unmatched:
+            shown = ", ".join(repr(k) for k in unmatched[:10])
+            more = f" and {len(unmatched) - 10} more" if len(unmatched) > 10 else ""
+            raise ValueError(f"No {object_type} record has {key.name} {shown}{more}")
+
+        # An update that would change nothing still gets a card (and no write): whether a field
+        # already holds a value is Salesforce data, so refusing before the card would hand it to
+        # the caller with no review and no audit entry.
+        matched: list[dict[str, Any]] = []
+        shown_changes: list[tuple[str, str, Any, Any]] = []
+        write_records: list[dict[str, Any]] = []
+        unchanged_keys: list[str] = []
+        for key_value, resolved in zip(key_values, changes_wanted, strict=True):
+            row = by_key[key_norm(key_value, is_id)][0]
+            matched.append(row)
+            changed = {
+                name: new for name, new in resolved.items()
+                if values_differ(new, row.get(name), index[name.lower()].type)
+            }
+            if not changed:
+                unchanged_keys.append(key_value)
+                continue
+            for name, new in changed.items():
+                shown_changes.append((key_value, name, row.get(name), new))
+            write_records.append({"Id": row["Id"], **changed})
+
+        n = len(parsed)
+        summary = f"Update {n} {object_type} record(s)"
+        preview = {
+            "Object type": object_type,
+            "Matched by": key.name,
+            "Records to update": str(len(write_records)),
+            "Unchanged records": str(len(unchanged_keys)),
+            "Fields changed": str(len(shown_changes)),
+        }
+        rows = [[k, name, cell_text(old), cell_text(new)] for k, name, old, new in shown_changes]
+        rows += [[k, "(unchanged)", "", ""] for k in unchanged_keys]
+        preview_tables = [{"headers": ["Record", "Field", "Current", "New"], "rows": rows}]
+        detail_lines = [
+            f"{k} {name}: {cell_text(old, None)} → {cell_text(new, None)}" for k, name, old, new in shown_changes
+        ]
+        detail_lines += [f"{k}: unchanged" for k in unchanged_keys]
+        details_text = "\n".join(detail_lines)
+        raw_data = {"object_type": object_type, "records": n, "fields": union}
+        args = {"object_type": object_type, "key_field": key.name}
+        await gated_call(
+            connector=self.name,
+            tool="salesforce_update_records",
+            gate="popup",
+            tool_name="Update Salesforce Records",
+            summary=summary,
+            sender=object_type,
+            raw_data=raw_data,
+            filtered_data=None,
+            preview=preview,
+            preview_tables=preview_tables,
+            details_text=details_text,
+            table_only=True,
+            my_email=self.my_email,
+            args=args,
+        )
+        if write_records:
+            await self._write(self._sf.update_records, object_type, write_records)
+        return {"object_type": object_type, "updated": n, "ids": [row["Id"] for row in matched]}
 
     # ------------------------------------------------------------------ #
     # Helpers
