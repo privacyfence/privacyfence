@@ -1418,7 +1418,7 @@ class TestV1PerUserSettings:
 
 
 class TestScopedTokenRoutes:
-    """The three scoped token routes of org mode (ADR 0165): the administrator's opt-in, the
+    """The four scoped token routes of org mode (ADR 0165): the administrator's opt-in, the
     org gates, the one-time secret and the token working on /mcp as its owner."""
 
     ENABLED = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30)
@@ -1613,6 +1613,40 @@ class TestScopedTokenRoutes:
 
             summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
         assert any("Revoked all scoped tokens (2)" in text for text in summaries)
+
+    def test_rename(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        for label in ("one", "two"):
+            assert self._post(client, "create", {**self.BODY, "label": label, "confirmed": True}, csrf).status_code == 200
+        bob_token, _secret = store.create(
+            BOB, label="bobs", days=5, rule_ids=[], tools=["gmail_get_message"], policy=self.ENABLED,
+        )
+        one = next(t for t in store.tokens_for(ALICE) if t.label == "one")
+
+        done = self._post(client, "rename", {"token_id": one.id, "label": "uno", "confirmed": True}, csrf)
+        assert (done.status_code, done.json()) == (200, {"renamed": {"id": one.id, "label": "uno"}})
+        assert sorted(t.label for t in store.tokens_for(ALICE)) == ["two", "uno"]
+        miss = self._post(client, "rename", {"token_id": bob_token.id, "label": "x", "confirmed": True}, csrf)
+        assert (miss.status_code, miss.json()) == (404, {"error": "No such token."})
+        assert store.get("bob", bob_token.id).label == "bobs"
+        taken = self._post(client, "rename", {"token_id": one.id, "label": "two", "confirmed": True}, csrf)
+        assert (taken.status_code, taken.json()) == (400, {"error": "You already have a token with that name."})
+        same = self._post(client, "rename", {"token_id": one.id, "label": "uno", "confirmed": True}, csrf)
+        assert same.status_code == 200
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        renamed = [t for t in summaries if "Renamed scoped token" in t]
+        assert len(renamed) == 1
+        assert renamed[0] == f"Renamed scoped token 'one' to 'uno' ({one.id}) (principal=alice)"
+
+    def test_rename_is_refused_when_scoped_tokens_are_disabled(self, tmp_path, monkeypatch):
+        client, csrf, _store = self._setup(
+            tmp_path, monkeypatch, policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90),
+        )
+        r = self._post(client, "rename", {"token_id": "st-x", "label": "y", "confirmed": True}, csrf)
+        assert r.status_code == 403
 
     def test_the_page_offers_the_section_only_once_enabled(self, tmp_path, monkeypatch):
         data = {"delivery": "once", "max_days": 30, "default_days": 30, "warn_days": 14,

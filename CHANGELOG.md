@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Scoped tokens can be renamed.** Rename on the Scoped tokens page changes only the token's name; the token itself, its rules, tools and expiry stay the same, so clients using it keep working.
+
 ## [6.2.0] — 2026-10-15
 
 ### Security
