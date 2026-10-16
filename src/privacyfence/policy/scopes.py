@@ -291,6 +291,34 @@ def _approved_project_keys_all_results_matches(value: Any, ctx: ReviewContext) -
     return bool(keys) and all("-" in k and k.rsplit("-", 1)[0].upper() in allowed for k in keys)
 
 
+# ── Assets ────────────────────────────────────────────────────────────────────────────────────
+
+
+def _assets_raw_items(ctx: ReviewContext) -> list[Any]:
+    return ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+
+
+def _approved_schema_ids_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    allowed = {str(v) for v in _values_of(value)}
+    items = _assets_raw_items(ctx)
+    if len(items) != 1:
+        return False
+    schema_id = str(getattr(items[0], "schema_id", "") or "")
+    return bool(schema_id) and schema_id in allowed
+
+
+def _approved_schema_ids_all_results_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    allowed = {str(v) for v in _values_of(value)}
+    if not isinstance(ctx.raw_data, list):
+        return False
+    ids = [str(getattr(i, "schema_id", "") or "") for i in ctx.raw_data]
+    return bool(ids) and all(i and i in allowed for i in ids)
+
+
 def _i_am_reporter_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
     reporter = (raw.get("reporter") if isinstance(raw, dict) else getattr(raw, "reporter", "")) or ""
@@ -474,6 +502,14 @@ SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "approved_project_keys_all_results": ScopeSelector(
         predicate="approved_project_keys_all_results", scope_type="jira.project", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.FETCHED, matches=_approved_project_keys_all_results_matches,
+    ),
+    "approved_schema_ids": ScopeSelector(
+        predicate="approved_schema_ids", scope_type="assets.schema", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_approved_schema_ids_matches,
+    ),
+    "approved_schema_ids_all_results": ScopeSelector(
+        predicate="approved_schema_ids_all_results", scope_type="assets.schema", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_approved_schema_ids_all_results_matches,
     ),
     "i_am_reporter": ScopeSelector(
         predicate="i_am_reporter", scope_type="jira.my_issues", kind=ScopeKind.ATTRIBUTE,

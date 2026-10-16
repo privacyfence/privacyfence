@@ -279,3 +279,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Accepted; amends 0021 |
 | [0186](0186-the-download-worker-keeps-no-request-logs.md) | The download Worker keeps no request logs | Accepted |
 | [0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md) | The `.mcpb` shim trusts only handoff entries the service account owns; the daemon replaces a foreign control socket | Accepted; amends 0027 |
+| [0188](0188-jira-assets-is-a-separate-read-only-connector-whose-atlassian-scopes-are-requested-only-when-switched-on.md) | Jira Assets is a separate read-only connector whose Atlassian scopes are requested only when it is switched on | Accepted |
+| [0189](0189-assets-schemas-types-and-attributes-are-auto-approved-and-object-reads-are-reviewed-per-schema.md) | Assets schemas, object types and attribute definitions are auto-approved; object reads are reviewed and can be auto-accepted per schema | Accepted |
+| [0190](0190-linked-objects-are-read-in-one-bounded-reviewed-traversal.md) | Linked objects are read in one bounded, reviewed traversal | Accepted |

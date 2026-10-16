@@ -56,6 +56,24 @@
       </div>
     </section>
 
+    <section class="page-section shell" id="jira-assets" aria-labelledby="assets-heading">
+      <div class="section-heading">
+        <p class="kicker">Jira Assets</p>
+        <h2 id="assets-heading">Jira Assets, read-only and off by default.</h2>
+        <p>Jira Service Management Assets holds your structured objects, such as contracts and hardware. The Jira Assets connector never writes to it, and it asks Atlassian for its extra read permissions only when you switch it on. The <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/tools-reference.md#jira-assets">Tools reference</a> lists each tool.</p>
+      </div>
+      <div class="card-grid connector-grid grid-auto">
+        <article class="card stack">
+          <h3>Jira Assets</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Object schemas, their object types, and the attribute definitions of a type.</dd>
+            <dt>Reviewed before release</dt><dd>Objects matched by an AQL search, one object with every attribute value, the objects linked to it, the Jira tickets connected to it, and exports of an AQL search to a file.</dd>
+            <dt>Needs your approval</dt><dd>Nothing: the connector cannot change Assets.</dd>
+          </dl>
+        </article>
+      </div>
+    </section>
+
     <section class="page-section proof-section" aria-labelledby="pii-heading">
       <div class="shell walkthrough split">
         <div class="stack">

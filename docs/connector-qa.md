@@ -303,6 +303,27 @@ every run.
 | Approved project | `approved_project_keys` | `[PFQA]` | `jira.read_issue` |
 | Own issues | `i_am_reporter` / `i_am_assignee` | — | `jira.read_issue` |
 
+### Seed: Jira Assets
+
+- [ ] Create an Assets schema with key exactly `PFQA`, holding the object types Account, Contract
+      and Asset. Contract references Account, and Asset references Contract.
+- [ ] Create two accounts, two contracts and three assets, every label tagged `[QATEST]`.
+- [ ] Name one contract `PrivacyFence QA seed contract [QATEST]`.
+- [ ] Optional: link the seed contract to a `[QATEST]` Jira issue through an **Assets objects**
+      custom field (object schema `PFQA`, filter `objectType = Contract`), so connected tickets has
+      something to return; without it the recording holds an empty list. The field is created in
+      the site-wide Fields admin and attaches only to a company-managed space; a team-managed
+      space's own field dialog has no Assets type.
+- [ ] Build the QA bundle with `--atlassian-assets --atlassian-assets-workspace-id <workspaceId>`,
+      the id shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`.
+- [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
+      `PrivacyFence QA seed contract [QATEST]`) and optionally `assets.seed_object_key` (blank to
+      resolve by label inside the schema).
+
+| Optional rule | Predicate | Value | Operations |
+|---|---|---|---|
+| Approved schema | `approved_schema_ids` | `[<PFQA schema id>]` | `assets.read_object` |
+
 ### Seed: Confluence
 
 - [ ] Create a space with key exactly `PFQA`.

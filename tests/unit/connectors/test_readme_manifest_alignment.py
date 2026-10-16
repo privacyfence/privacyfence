@@ -21,6 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from privacyfence.auto_accept import TOOL_TO_GATE
+from privacyfence.connectors.assets import AssetsConnector
 from privacyfence.connectors.apps_script import AppsScriptConnector
 from privacyfence.connectors.calendar import CalendarConnector
 from privacyfence.connectors.confluence import ConfluenceConnector
@@ -38,7 +39,7 @@ from privacyfence.connectors.telegram import TelegramConnector
 CONNECTOR_CLASSES = [
     GmailConnector, DriveConnector, SlackConnector, CalendarConnector,
     ContactsConnector, SalesforceConnector, JiraConnector, ConfluenceConnector,
-    TasksConnector, TelegramConnector, AppsScriptConnector, GristConnector, PeekConnector,
+    TasksConnector, TelegramConnector, AppsScriptConnector, GristConnector, PeekConnector, AssetsConnector,
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

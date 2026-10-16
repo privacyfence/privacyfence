@@ -100,9 +100,10 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Salesforce](#salesforce) | 5 | 1 | 4 | 0 |
 | [Jira](#jira) | 13 | 6 | 3 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
+| [Jira Assets](#jira-assets) | 8 | 3 | 5 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **144** | **51** | **30** | **63** |
+| **Total** | **152** | **54** | **35** | **63** |
 
 ## Gmail
 
@@ -283,6 +284,19 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `confluence_get_page_by_title` | read | `review` | Fetch a Confluence page by space key and exact title. |
 | `confluence_create_page` | write | `popup` | Create a new Confluence page in the given space. |
 | `confluence_update_page` | write | `popup` | Update the title and/or body of an existing Confluence page. |
+
+## Jira Assets
+
+| Tool | Direction | Gate | What it does |
+|---|---|---|---|
+| `assets_list_attributes` | read | `auto` | List the attribute definitions of one Jira Assets object type, including which attributes reference other object types. |
+| `assets_list_object_types` | read | `auto` | List the object types in one Jira Assets schema. |
+| `assets_list_schemas` | read | `auto` | List the Jira Assets object schemas on the connected Atlassian site. |
+| `assets_export_objects` | read | `review` | Write every Jira Assets object an AQL query matches, up to 10,000, to a CSV or JSON file on the user's computer, in one approval. |
+| `assets_get_connected_tickets` | read | `review` | List the Jira tickets connected to one Jira Assets object. |
+| `assets_get_object` | read | `review` | Read one Jira Assets object with every attribute value and its outbound references. |
+| `assets_get_related_objects` | read | `review` | Read the Jira Assets objects linked to one object, following references outbound, inbound or both, up to three hops. |
+| `assets_search_objects` | read | `review` | Search Jira Assets objects with an AQL query and return them with their attribute values. |
 
 ## Grist
 

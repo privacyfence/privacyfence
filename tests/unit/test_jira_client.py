@@ -354,7 +354,26 @@ class TestTryRefresh:
         assert saved == {
             "access_token": "new-tok", "refresh_token": "new-rt",
             "cloud_id": "cloud-1", "site_url": "https://acme.atlassian.net", "account_email": "me@x.com",
+            "scopes": [],
         }
+
+    def test_refresh_keeps_the_recorded_scopes(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(jira_client_module, "atlassian_refresh",
+                             lambda cid, cs, rt: {"access_token": "new-tok", "refresh_token": "new-rt"})
+        monkeypatch.setattr(
+            jira_client_module, "load_token_file",
+            lambda path: (_ for _ in ()).throw(AtlassianOAuthError("no file yet")),
+        )
+        saved = {}
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saved.update(record))
+        client = make_client(
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "scopes": ["read:cmdb-object:jira"]},
+            token_file=str(tmp_path / "atlassian_token.json"),
+        )
+
+        client._try_refresh()
+
+        assert saved["scopes"] == ["read:cmdb-object:jira"]
 
     def test_picks_up_refresh_token_already_rotated_by_confluence_client(self, monkeypatch, tmp_path):
         # Jira/Confluence share one token file; if Confluence refreshed first

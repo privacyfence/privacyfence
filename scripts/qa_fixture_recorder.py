@@ -59,6 +59,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -75,6 +76,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from privacyfence import daemon_main  # noqa: E402
 from privacyfence.app_credentials import telegram_app_credentials  # noqa: E402
 from privacyfence import grist_auth  # noqa: E402
+from privacyfence.assets_client import AssetsClient, AssetsClientError  # noqa: E402
 from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientError  # noqa: E402
 from privacyfence.grist_client import GristAccessDenied, GristClient, GristClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
@@ -839,6 +841,11 @@ def _build_jira_client() -> JiraClient:
     return JiraClient(config=config, token_file=token_path)
 
 
+def _build_assets_client() -> AssetsClient:
+    config, token_path = _load_atlassian_config()
+    return AssetsClient(config=config, token_file=token_path)
+
+
 def check_confluence(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("confluence") or {}
     space_key = cfg.get("space_key", "PFQA")
@@ -1066,6 +1073,147 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
                                    f"{len(fields)} field(s)" if fields else "no fields returned"))
     except JiraClientError as exc:
         results.append(CheckResult("jira", "list_fields", project_key, False, str(exc)))
+
+    return results
+
+
+# Jira Assets ids are digit strings that the client joins on (an attribute value's
+# objectTypeAttributeId finds its definition) and validates (_check_id accepts digits only).
+# deidentify_structural_fields() would turn `id` into a non-digit placeholder and leave the same
+# id under the other keys, breaking both; Assets payloads also carry UUIDs (workspaceId, globalId,
+# URLs). check_assets therefore uses _deidentify_assets for all three of its recorded payloads.
+# A reference attribute's definition carries its target type twice, as referenceObjectTypeId and as
+# referenceObjectType.id; both must come out as the same digits.
+_ASSETS_ID_KEYS = frozenset({
+    "id", "objecttypeattributeid", "objectschemaid", "objecttypeid", "parentobjecttypeid", "objectid",
+    "referenceobjecttypeid",
+})
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_REDACTED_UUID = "qa-placeholder-uuid"
+
+
+def _numeric_assets_ids(raw: Any) -> tuple[Any, dict[str, str]]:
+    """Rewrite every Assets id value to consecutive digit strings ("1", "2", ...) in order of
+    first appearance, the same real id getting the same digits under every id key. Returns the
+    payload and the identity map of the digits issued (pass it to deidentify_structural_fields
+    as ``_id_map`` so those digits survive that pass)."""
+    issued: dict[str, str] = {}
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            for k, v in value.items():
+                if k.lower() in _ASSETS_ID_KEYS and isinstance(v, (str, int)) and not isinstance(v, bool) and v != "":
+                    real = str(v)
+                    if real not in issued:
+                        issued[real] = str(len(issued) + 1)
+                    out[k] = issued[real]
+                else:
+                    out[k] = walk(v)
+            return out
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    numbered = walk(raw)
+    return numbered, {digits: digits for digits in issued.values()}
+
+
+def _redact_assets_identifiers(raw: Any) -> Any:
+    """Replace every UUID inside any string value with a non-UUID-shaped placeholder."""
+    if isinstance(raw, dict):
+        return {k: _redact_assets_identifiers(v) for k, v in raw.items()}
+    if isinstance(raw, list):
+        return [_redact_assets_identifiers(v) for v in raw]
+    if isinstance(raw, str):
+        return _UUID_RE.sub(_REDACTED_UUID, raw)
+    return raw
+
+
+def _deidentify_assets(raw: Any) -> Any:
+    numbered, id_map = _numeric_assets_ids(redact(raw))
+    # The UUID scrub runs last: before the id map it would collapse distinct UUID-valued ids.
+    return _redact_assets_identifiers(deidentify_structural_fields(numbered, id_map))
+
+
+def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
+    cfg = manifest.get("assets") or {}
+    schema_key = cfg.get("schema_key", "PFQA")
+    seed_object_key = cfg.get("seed_object_key", "")
+    seed_object_label = cfg.get("seed_object_label", f"PrivacyFence QA seed contract {QATEST_TAG}")
+
+    results: list[CheckResult] = []
+    try:
+        client = _build_assets_client()
+        # Resolve the workspace id first so its lookup is not among the captured calls.
+        client.check_connection()
+    except AssetsClientError as exc:
+        return [CheckResult("assets", "list_schemas", schema_key, False, str(exc))]
+
+    # list_schemas -- only ever recorded filtered to the one QA schema.
+    schema_id = ""
+    try:
+        with RawCapture(client) as cap:
+            schemas = client.list_schemas()
+        match = next((s for s in schemas if s.key == schema_key), None)
+        ok = match is not None
+        note = "found" if ok else f"schema key {schema_key!r} not in list_schemas() result"
+        if match is not None:
+            schema_id = match.id
+        raw = None
+        if record and ok and isinstance(cap.captured, dict):
+            kept = [v for v in cap.captured.get("values") or [] if v.get("objectSchemaKey") == schema_key]
+            raw = _deidentify_assets({**cap.captured, "values": kept})
+        results.append(CheckResult("assets", "list_schemas", schema_key, ok, note, raw, "list_schemas.json"))
+    except AssetsClientError as exc:
+        results.append(CheckResult("assets", "list_schemas", schema_key, False, str(exc)))
+    if not schema_id:
+        return results
+
+    # get_object -- the seed object, by key if the manifest has it, else by label inside the QA schema.
+    try:
+        lookup = (
+            f'Key = "{seed_object_key}"' if seed_object_key
+            else f'objectSchemaId = {schema_id} AND Label = "{seed_object_label}"'
+        )
+        found = client.search_objects(lookup, max_results=1)
+        if not found:
+            raise AssetsClientError(f"no object found matching {lookup!r}")
+        with RawCapture(client) as cap:
+            obj = client.get_object(found[0].id)
+        tagged = QATEST_TAG in obj.label
+        complete = bool(obj.id and obj.key and obj.label and obj.type_name)
+        ok = tagged and complete
+        if not tagged:
+            note = f"fetched object label {obj.label!r} does not carry {QATEST_TAG} -- refusing to record"
+        elif not complete:
+            note = "missing field(s) -- id/key/label/type not all present"
+        else:
+            note = "id, key, label, type all present"
+        raw = None
+        if record and ok and len(cap.calls) >= 2:
+            raw = _deidentify_assets({"object": cap.calls[0], "attributes": cap.calls[1]})
+        results.append(CheckResult("assets", "get_object", seed_object_label, ok, note, raw, "get_object.json"))
+    except AssetsClientError as exc:
+        results.append(CheckResult("assets", "get_object", seed_object_label, False, str(exc)))
+
+    # aql_search -- the first page of the QA schema's objects; every one must be QA content.
+    aql = f"objectSchemaId = {schema_id}"
+    try:
+        with RawCapture(client) as cap:
+            objects = client.search_objects(aql, max_results=5)
+        untagged = [o.key for o in objects if QATEST_TAG not in o.label]
+        ok = bool(objects) and not untagged
+        if not objects:
+            note = f"AQL {aql!r} matched no object"
+        elif untagged:
+            note = f"object(s) {untagged} do not carry {QATEST_TAG} -- refusing to record"
+        else:
+            note = f"{len(objects)} object(s), all tagged {QATEST_TAG}"
+        raw = _deidentify_assets(cap.captured) if (record and ok and cap.captured) else None
+        results.append(CheckResult("assets", "aql_search", aql, ok, note, raw, "aql_search.json"))
+    except AssetsClientError as exc:
+        results.append(CheckResult("assets", "aql_search", aql, False, str(exc)))
 
     return results
 
@@ -2032,6 +2180,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
     "slack": check_slack,
     "telegram": check_telegram,
     "peek": check_peek,
+    "assets": check_assets,
 }
 
 # Static manifest of the tests/fixtures/live/<connector>/*.json file(s) each
@@ -2060,6 +2209,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "slack": ("get_thread_replies.json",),
     "telegram": ("get_messages.json",),
     "peek": ("list_pages.json", "get_comments.json"),
+    "assets": ("list_schemas.json", "get_object.json", "aql_search.json"),
 }
 
 # In-module consistency check, not just the deferred one in

@@ -65,6 +65,38 @@ DEFAULT_SCOPES: list[str] = [
     "offline_access",
 ]
 
+# Requested only when Jira Assets is switched on (see ``scopes_for``), so Jira
+# and Confluence users who never enable it keep their current consent.
+ASSETS_SCOPES: list[str] = [
+    "read:cmdb-schema:jira", "read:cmdb-type:jira", "read:cmdb-attribute:jira",
+    "read:cmdb-object:jira",
+    # Not read:servicedesk-request, although /rest/servicedeskapi/assets/workspace
+    # (the workspace id lookup) accepts only that scope: the developer console no
+    # longer offers the Jira Service Management API to every OAuth app, and asking
+    # for a scope the app lacks fails the whole sign-in. The workspace id is
+    # configured instead (atlassian.assets_workspace_id); see ADR 0188.
+]
+
+
+def scopes_for(*, assets: bool) -> list[str]:
+    return DEFAULT_SCOPES + ASSETS_SCOPES if assets else list(DEFAULT_SCOPES)
+
+
+def assets_enabled(config: dict[str, Any], org_config: dict[str, Any]) -> bool:
+    """Assets is off unless switched on. An explicit connectors.assets.enabled wins;
+    otherwise the org bundle's atlassian.assets flag is the default."""
+    explicit = ((config.get("connectors") or {}).get("assets") or {}).get("enabled")
+    if explicit is not None:
+        return bool(explicit)
+    return bool((org_config.get("atlassian") or {}).get("assets", False))
+
+
+def assets_workspace_override(config: dict[str, Any]) -> dict[str, str]:
+    """``{"assets_workspace_id": ...}`` from connectors.assets.workspace_id, which wins over the
+    bundle's atlassian.assets_workspace_id; empty when the setting is not given."""
+    value = ((config.get("connectors") or {}).get("assets") or {}).get("workspace_id")
+    return {"assets_workspace_id": str(value).strip()} if value else {}
+
 
 class AtlassianOAuthError(Exception):
     """Raised for unrecoverable Atlassian OAuth problems."""
@@ -163,6 +195,7 @@ def resolve_resource_and_save(
         "cloud_id": cloud_id,
         "site_url": resource.get("url", ""),
         "account_email": _fetch_account_email(access_token, cloud_id),
+        "scopes": sorted({s for r in resources if r.get("id") == cloud_id for s in r.get("scopes") or []}),
     }
     save_token_file(token_file, token_record)
     logger.info("Atlassian OAuth complete for site %s", token_record["site_url"])

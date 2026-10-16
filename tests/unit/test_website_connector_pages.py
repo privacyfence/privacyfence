@@ -37,6 +37,7 @@ CONNECTORS: dict[str, tuple[str, str, str]] = {
     "salesforce": ("/connectors/salesforce/", "salesforce-setup", "Salesforce"),
     "jira": ("/connectors/jira-confluence/", "atlassian-setup", "Jira"),
     "confluence": ("/connectors/jira-confluence/", "atlassian-setup", "Confluence"),
+    "assets": ("/connectors/jira-confluence/", "atlassian-setup", "Jira Assets"),
     "grist": ("/connectors/grist/", "grist-setup", "Grist"),
     "peek": ("/connectors/peek/", "peek-setup", "Peek"),
 }

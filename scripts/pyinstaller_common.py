@@ -82,6 +82,7 @@ HIDDEN_IMPORTS = [
     "privacyfence.connectors.salesforce",
     "privacyfence.connectors.jira",
     "privacyfence.connectors.confluence",
+    "privacyfence.connectors.assets",
     "privacyfence.connectors.apps_script",
     "privacyfence.connectors.grist",
     "privacyfence.connectors.peek",

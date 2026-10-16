@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,9 @@ _CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
     "atlassian": ("atlassian",),
     "grist": ("grist",),
 }
+
+# Mirrors assets_client.WORKSPACE_ID_RE; this script stays standard-library only.
+WORKSPACE_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
 def _grist_url(value: str) -> str:
@@ -248,6 +252,15 @@ def build_parser() -> argparse.ArgumentParser:
     atlassian = parser.add_argument_group("Atlassian (Jira + Confluence)")
     atlassian.add_argument("--atlassian-client-id")
     atlassian.add_argument("--atlassian-client-secret")
+    atlassian.add_argument(
+        "--atlassian-assets", action="store_true",
+        help="Request Jira Assets permissions at Atlassian sign-in (the app must have the read:cmdb-* scopes)",
+    )
+    atlassian.add_argument(
+        "--atlassian-assets-workspace-id", metavar="ID",
+        help="The site's Assets workspace id (the workspaceId shown at "
+             "https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace)",
+    )
 
     grist = parser.add_argument_group("Grist")
     grist.add_argument(
@@ -605,6 +618,16 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.atlassian_client_id and args.atlassian_client_secret):
             raise SystemExit("--atlassian-client-id and --atlassian-client-secret must be given together.")
         bundle["atlassian"] = {"client_id": args.atlassian_client_id, "client_secret": args.atlassian_client_secret}
+        if args.atlassian_assets:
+            bundle["atlassian"]["assets"] = True
+        if args.atlassian_assets_workspace_id:
+            workspace_id = args.atlassian_assets_workspace_id.strip()
+            if not WORKSPACE_ID_RE.fullmatch(workspace_id):
+                raise SystemExit("--atlassian-assets-workspace-id is not a workspace id (expected a UUID).")
+            bundle["atlassian"]["assets_workspace_id"] = workspace_id
+    elif args.atlassian_assets or args.atlassian_assets_workspace_id:
+        flag = "--atlassian-assets" if args.atlassian_assets else "--atlassian-assets-workspace-id"
+        raise SystemExit(f"{flag} needs --atlassian-client-id and --atlassian-client-secret.")
 
     if (
         args.grist_server_url or args.grist_client_id or args.grist_client_secret or args.grist_auth_server_url

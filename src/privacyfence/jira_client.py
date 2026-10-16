@@ -280,6 +280,7 @@ class JiraClient:
                 "cloud_id": self._config.get("cloud_id", ""),
                 "site_url": self._config.get("site_url", ""),
                 "account_email": self._config.get("account_email", ""),
+                "scopes": self._config.get("scopes", []),
             })
         logger.info("Jira access token refreshed")
         return True
