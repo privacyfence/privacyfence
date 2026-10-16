@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.3.0] — 2026-10-16
+
 ### Added
 
 - **Salesforce: create and update records.** One at a time or up to 200 of one object type in one approval, all or none. Updates show each field's current and new value; nothing deletes. An object-type "Always allow" rule can hold the add and update verbs.
@@ -3342,7 +3344,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...HEAD
+[6.3.0]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...v6.3.0
 [6.2.0]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...v6.2.0
 [6.1.1]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...v6.1.1
 [6.1.0]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...v6.1.0
