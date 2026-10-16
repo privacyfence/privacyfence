@@ -1069,3 +1069,53 @@ class TestExportAutoAccept:
         last = audit_lines(tmp_path)[-1]
         assert last["decision"] == "auto_accepted"
         assert last["pii_detected"] is True
+
+
+class TestLiveFixtureCards:
+    """The review cards built from the recorded live fixtures (tests/fixtures/live/assets/), read
+    through a real AssetsClient: the live response shape reaches the card, not only the
+    hand-written one."""
+
+    @staticmethod
+    def _client() -> tuple[AssetsClient, str]:
+        from ..test_assets_client import LIVE_FIXTURES_DIR, make_client, routed
+
+        def load(name: str) -> Any:
+            path = LIVE_FIXTURES_DIR / name
+            if not path.exists():
+                pytest.skip(f"{path} not recorded yet")
+            return json.loads(path.read_text(encoding="utf-8"))
+
+        get_object, aql = load("get_object.json"), load("aql_search.json")
+        object_id = get_object["object"]["id"]
+        client = make_client(routed({
+            f"GET object/{object_id}": get_object["object"],
+            f"GET object/{object_id}/attributes": get_object["attributes"],
+            "POST object/aql": aql,
+        }))
+        return client, object_id
+
+    async def test_get_object_card(self, gated_call_spy):
+        client, object_id = self._client()
+        result = await AssetsConnector(client).call("assets_get_object", {"object_id": object_id})
+        kw = gated_call_spy[0]
+        assert result["key"] == kw["preview"]["Key"] == "PFQA-3"
+        assert "[QATEST]" in kw["preview"]["Label"] and kw["preview"]["Type"] == "contract"
+        assert kw["preview"]["Schema"].isdigit() and assets_module._NOT_SHOWN_LABEL not in kw["preview"]
+        rows = dict(kw["preview_tables"][0]["rows"])
+        assert rows["Name"] == kw["preview"]["Label"]
+        assert rows["account"] == "Account A [QATEST] (PFQA-1)"
+
+    async def test_search_objects_card(self, gated_call_spy):
+        client, _ = self._client()
+        result = await AssetsConnector(client).call(
+            "assets_search_objects", {"aql": "objectSchemaId = 1", "max_results": 5})
+        kw = gated_call_spy[0]
+        assert len(result) == 5 and kw["preview"]["Objects"] == "5"
+        assert assets_module._NOT_SHOWN_LABEL not in kw["preview"]
+        table = kw["preview_tables"][0]
+        assert table["headers"][:3] == ["Key", "Label", "Type"]
+        assert {"Name", "Key", "Created", "Updated", "contract"} <= set(table["headers"][3:])
+        assert all("[QATEST]" in row[1] for row in table["rows"])
+        contract = table["headers"].index("contract")
+        assert "PrivacyFence QA seed contract [QATEST] (PFQA-3)" in [row[contract] for row in table["rows"]]
