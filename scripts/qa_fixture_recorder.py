@@ -30,7 +30,7 @@ this imports the same ``privacyfence`` package and third-party clients
 
     .venv/bin/python scripts/qa_fixture_recorder.py --lifecycle [connector ...]
         For each write-capable connector that supports it (calendar,
-        confluence, grist, jira, peek, tasks -- see the comment above LIFECYCLE_CHECKS
+        confluence, grist, jira, peek, salesforce, tasks -- see the comment above LIFECYCLE_CHECKS
         below for why the other connectors aren't included), creates a
         fresh, uniquely-tagged QA object, reads it back, updates it, reads
         it back again, then deletes it and confirms the deletion actually
@@ -2226,7 +2226,8 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 # ---------------------------------------------------------------------------- #
 # Bounded lifecycle tests -- create a fresh, uniquely-tagged QA object, read it back,
 # update it, read it back again, then (calendar/jira/tasks only -- see
-# lifecycle_confluence's own docstring for why Confluence is the exception)
+# lifecycle_confluence's own docstring for why Confluence is the exception,
+# and lifecycle_salesforce's for Salesforce, which never deletes)
 # delete it and confirm the deletion actually took. Unlike CONNECTOR_CHECKS
 # above (which only ever reads a durable, hand-created seed artifact), this
 # proves something neither --check nor --record can: that a real provider
@@ -2237,7 +2238,9 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #
 # Scoped to only the connectors whose PrivacyFence client exposes a full
 # create/get/update triple:
-#   - calendar, confluence, grist, jira, peek, tasks
+#   - calendar, confluence, grist, jira, peek, salesforce, tasks
+#     (grist and salesforce never delete: neither client has a delete, so their
+#     tagged QA objects accumulate until someone removes them by hand)
 # Deliberately excludes the rest of CONNECTOR_CHECKS's connectors, checked
 # against each *_client.py before writing this rather than assumed:
 #   - contacts -- ContactsClient.create_contact()'s own docstring says
@@ -2262,9 +2265,9 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #     overwriting the very artifact check_apps_script() reads, which is
 #     exactly what this section's "never touch anything but what this run
 #     just created" rule exists to prevent.
-#   - salesforce, telegram -- SalesforceClient and the QA Telegram flow are
-#     read-only from PrivacyFence's side (see CONNECTOR_CHECKS above); there
-#     is nothing to create in the first place.
+#   - telegram -- the QA Telegram flow is read-only from PrivacyFence's side
+#     (see CONNECTOR_CHECKS above); there is nothing to create in the first
+#     place.
 #
 # confluence_client.py/jira_client.py/tasks_client.py still expose no
 # delete_*() method, and no connectors/*.py registers a delete tool for
@@ -2793,6 +2796,54 @@ def lifecycle_peek(manifest: dict[str, Any]) -> LifecycleResult:
     return LifecycleResult("peek", ok, note, cleanup_ok)
 
 
+def lifecycle_salesforce(manifest: dict[str, Any]) -> LifecycleResult:
+    """Verifies create/get/update, batch create/find and batch update on one object type.
+
+    Never deletes: SalesforceClient has no delete (records are never removed through
+    PrivacyFence), so the tagged records this creates accumulate in the org and need
+    occasional manual cleanup there, like lifecycle_grist's rows.
+    """
+    cfg = manifest.get("salesforce") or {}
+    object_type = cfg.get("lifecycle_object_type", "Task")
+    name_field = cfg.get("lifecycle_name_field", "Subject")
+    note_field = cfg.get("lifecycle_note_field", "Description")
+    client = _build_salesforce_client()
+    suffix = uuid.uuid4().hex[:8]
+    name = f"{LIFECYCLE_TAG} salesforce {suffix}"
+
+    try:
+        fields = {f.name: f for f in client.describe_fields(object_type)}
+        name_meta = fields.get(name_field)
+        if name_meta is None or not name_meta.createable:
+            raise SalesforceClientError(f"{object_type}.{name_field} is not a createable field")
+        record_id = client.create_record(object_type, {
+            name_field: name, note_field: "created by qa_fixture_recorder.py --lifecycle",
+        })
+        fetched = client.get_record(object_type, record_id)
+        if fetched.fields.get(name_field) != name:
+            raise SalesforceClientError("get after create did not return the created record")
+        client.update_record(object_type, record_id, {note_field: "updated"})
+        refetched = client.get_record(object_type, record_id)
+        if refetched.fields.get(note_field) != "updated":
+            raise SalesforceClientError("get after update did not reflect the new note")
+
+        names = [f"{name} a", f"{name} b"]
+        ids = client.create_records(object_type, [{name_field: n} for n in names])
+        if len(ids) != 2:
+            raise SalesforceClientError(f"create_records returned {len(ids)} id(s), expected 2")
+        rows = client.find_records(object_type, "Id", ids, [name_field, note_field])
+        if sorted(str(r.get(name_field)) for r in rows) != names:
+            raise SalesforceClientError("find after batch create did not return the two records")
+        client.update_records(object_type, [{"Id": i, note_field: "batch updated"} for i in ids])
+        rows = client.find_records(object_type, "Id", ids, [name_field, note_field])
+        if len(rows) != 2 or any(r.get(note_field) != "batch updated" for r in rows):
+            raise SalesforceClientError("find after batch update did not reflect the new note")
+        ok, note = True, "create, get, update, batch create, find, batch update all verified"
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
+        ok, note = False, str(exc)
+    return LifecycleResult("salesforce", ok, note, cleanup_ok=None)
+
+
 def lifecycle_tasks(manifest: dict[str, Any]) -> LifecycleResult:
     cfg = manifest.get("tasks") or {}
     task_list_id = cfg.get("task_list_id", "")
@@ -2865,6 +2916,7 @@ LIFECYCLE_CHECKS: dict[str, Callable[[dict[str, Any]], LifecycleResult]] = {
     "grist": lifecycle_grist,
     "jira": lifecycle_jira,
     "peek": lifecycle_peek,
+    "salesforce": lifecycle_salesforce,
     "tasks": lifecycle_tasks,
 }
 
