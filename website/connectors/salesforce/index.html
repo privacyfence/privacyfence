@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Read-only Salesforce for AI assistants (MCP) — PrivacyFence</title>
-  <meta name="description" content="Let AI assistants look up Salesforce records, search and run reports through PrivacyFence: read-only, each result reviewed before the assistant sees it.">
+  <title>Salesforce for AI assistants (MCP), reviewed — PrivacyFence</title>
+  <meta name="description" content="Let AI assistants look up, search and report on Salesforce records, and create or update them, through PrivacyFence: every read reviewed, every write approved.">
   <meta name="pf-content-group" content="connector">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/connectors/salesforce/">
@@ -17,7 +17,7 @@
   <meta property="og:site_name" content="PrivacyFence">
   <meta property="og:url" content="https://privacyfence.eu/connectors/salesforce/">
   <meta property="og:title" content="PrivacyFence for Salesforce">
-  <meta property="og:description" content="Salesforce for AI assistants, read-only: records, search and reports reviewed before release, customer data checked locally for personal information.">
+  <meta property="og:description" content="Salesforce for AI assistants: records, search and reports reviewed before release; creating and updating records only with your approval, never deleting.">
   <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
 </head>
 <body>
@@ -27,13 +27,13 @@
     <section class="page-intro shell">
       <p class="kicker">Connector · Salesforce</p>
       <h1>Customer data for your AI assistant, one reviewed record at a time.</h1>
-      <p class="lede">PrivacyFence gives an AI assistant read-only access to Salesforce: records, search and reports. It changes nothing in your org, because PrivacyFence offers no Salesforce write. Every record and every report result is shown to you before the assistant gets it.</p>
+      <p class="lede">PrivacyFence lets an AI assistant read Salesforce records, search and reports, and create or update records. Every record and report result is shown to you before the assistant gets it, and every change waits for your approval. Nothing deletes.</p>
     </section>
 
     <section class="page-section shell" aria-labelledby="can-do-heading">
       <div class="section-heading">
         <p class="kicker">What the assistant can do</p>
-        <h2 id="can-do-heading">Read-only, and reviewed.</h2>
+        <h2 id="can-do-heading">Reviewed reads, approved writes.</h2>
         <p>Every Salesforce tool has a gate fixed in code. The <a href="/docs/tools-reference/#salesforce">Tools reference</a> lists each one.</p>
       </div>
       <div class="card-grid grid-auto">
@@ -47,7 +47,7 @@
         </article>
         <article class="card stack">
           <h3>Needs your approval</h3>
-          <p>Nothing, because there is nothing to change: the connector has no write tools. The assistant sees only what your own Salesforce user can see.</p>
+          <p>Creating a record or updating one, or up to 200 of one object type at once, all or none. The card shows each field's current and new value. The assistant can only change what your own Salesforce user can change.</p>
         </article>
       </div>
     </section>
@@ -74,10 +74,10 @@
       <div class="section-heading">
         <p class="kicker">Routine requests</p>
         <h2 id="routine-heading">Trust an object type or a report.</h2>
-        <p>An always-allow rule lets matching reads run without a card, and each one is still audited. For Salesforce, a rule can trust:</p>
+        <p>An always-allow rule lets matching requests run without a card, and each one is still audited. For Salesforce, a rule can trust:</p>
       </div>
       <div class="card-grid grid-auto">
-        <article class="card stack"><h3>Object types</h3><p>Records and searches of the object types you name, for example Opportunity, when every requested type is one of them.</p></article>
+        <article class="card stack"><h3>Object types</h3><p>Records and searches of the object types you name, for example Opportunity, when every requested type is one of them. A rule that also has the add and update verbs creates and updates records of those types without a card.</p></article>
         <article class="card stack"><h3>Named reports</h3><p>Running the reports you list by id.</p></article>
       </div>
       <p class="page-copy">Likely personal data in a read still goes to a card. Every scope is in <a href="/docs/approvals-and-policy/#scope-catalogue">the scope catalogue</a>.</p>
