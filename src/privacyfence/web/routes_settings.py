@@ -163,6 +163,7 @@ from ..settings_controller import (
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_install_policy, org_session, step_up_decide
+from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks, build_personal_routes
 from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
@@ -319,6 +320,9 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
     # A name is what the audit log shows for the token, so renaming goes
     # through the same gates as creating and revoking.
     "/api/settings/scoped_tokens/rename",
+    # Importing personal settings widens what is auto-accepted exactly as adding a rule does
+    # (merge-only, previewed, passkey bound to the file's hash).
+    "/api/settings/personal/import",
 })
 
 # Every other bespoke (non-generic-dispatch) route, and why it doesn't need
@@ -327,6 +331,8 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
 _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
     "/api/settings/quit_app": "its own confirmed=true gate -- doesn't change what gets gated",
     "/api/settings/audit_log/download": "a GET -- read-only export, no mutation",
+    "/api/settings/personal/preview": "parses an uploaded file and returns a preview; changes nothing",
+    "/api/settings/personal/export": "a GET -- read-only export, no mutation",
     "/api/settings/mcp_token/copy": (
         "puts the owner's own MCP token on the clipboard through the companion -- a token "
         "anything running as this user can already get over MINT MCP, and one that cannot "
@@ -1303,6 +1309,58 @@ def build_routes(
             headers={"Cache-Control": "no-store"},
         )
 
+    def _local_personal_hooks() -> PersonalSettingsHooks:
+        """Export/import of the person's own settings (web/personal_settings_routes.py), wired for
+        local mode: the one principal is ``LOCAL_PRINCIPAL``, rows go through the controller's own
+        writer so a hot-reload and the audit hash behave as for a rule added in Settings."""
+
+        def authenticate(request: Request) -> Principal | None:
+            return LOCAL_PRINCIPAL if _authenticated(request) else None
+
+        def check_mutation(request: Request, csrf: str | None) -> Response | None:
+            if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            if not _origin_ok(request):
+                return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+            if require_human_session and not _is_human_session(request, sessions):
+                body, status = _human_session_required_json("import personal settings")
+                return JSONResponse(body, status_code=status)
+            return None
+
+        def step_up_state() -> tuple[bool, str | None]:
+            if step_up is None:
+                return False, None
+            return step_up.enabled, step_up.scope
+
+        def step_up_gate(principal: Principal, fingerprint_body: dict[str, Any], assertion: object) -> Response | None:
+            if not _step_up_in_force():
+                return None
+            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
+            confirmed_step_up: StepUpConfig = step_up
+            return _verify_or_challenge(
+                principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+                subject_key=STEP_UP_SUBJECT_KEY,
+                fingerprint=_action_fingerprint(STEP_UP_SUBJECT_KEY, fingerprint_body), assertion=assertion,
+                challenges=challenges,
+                step_up_response=lambda: _settings_step_up_response(
+                    principal, STEP_UP_SUBJECT_KEY, fingerprint_body,
+                    step_up=confirmed_step_up, challenges=challenges,
+                ),
+            )
+
+        return PersonalSettingsHooks(
+            authenticate=authenticate,
+            check_mutation=check_mutation,
+            open_scope=principal_scope,
+            scope_error=lambda principal, exc: None,
+            read_rows=lambda: controller.policy_rows(),
+            merge_rules=lambda rules: controller.import_policy_rules(rules),
+            step_up_state=step_up_state,
+            step_up_gate=step_up_gate,
+            audit=_record_settings_audit,
+            mode="local",
+        )
+
     routes: list[BaseRoute] = [
         Route("/settings", settings_page),
         Route("/settings/connectors", settings_connectors_page),
@@ -1322,6 +1380,7 @@ def build_routes(
             Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         ]
+    routes += build_personal_routes(_local_personal_hooks())
     routes.append(Route("/api/settings/{action}", settings_action, methods=["POST"]))
     for route in routes:
         # isinstance, not getattr: every entry above is a plain Route (never
