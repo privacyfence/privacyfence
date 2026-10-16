@@ -217,6 +217,11 @@ class TestCatalogueIsDerived:
                     assert propose.connector_of_operation(operation) == entry.connector
                     assert verb in registry.operation_verbs(operation)
 
+    def test_no_scope_derives_the_assets_tickets_operation(self):
+        for entry in propose.PROPOSABLE_SCOPES:
+            for verb in entry.verbs:
+                assert "assets.read_tickets" not in propose.operations_for(entry, verb)
+
     def test_operations_for_a_verb_the_scope_does_not_govern_is_empty(self):
         folder = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_folder")
         assert propose.operations_for(folder, Verb.DELETE) == frozenset()
@@ -290,6 +295,23 @@ class TestProposalsAgainstTheV1Tables:
         assert proposals[0].value == ["R1"]
         assert [(p.scope.predicate, p.value) for p in propose.proposals_for("salesforce_run_report", ctx)] == [
             ("approved_report_ids", ["R1"]),
+        ]
+
+    def test_assets_reads_are_offered_this_schema(self):
+        from types import SimpleNamespace
+
+        one = make_ctx(connector="assets", args={"object_id": "1"}, raw_data=SimpleNamespace(schema_id="2"))
+        proposals = propose.proposals_for("assets_get_object", one)
+        assert [(p.scope.predicate, p.scope.hint, p.value) for p in proposals] == [
+            ("approved_schema_ids", "this schema", ["2"]),
+        ]
+        many = make_ctx(
+            connector="assets", args={"aql": "x"},
+            raw_data=[SimpleNamespace(schema_id="5"), SimpleNamespace(schema_id="2"), SimpleNamespace(schema_id="5")],
+        )
+        proposals = propose.proposals_for("assets_search_objects", many)
+        assert [(p.scope.predicate, p.scope.hint, p.value) for p in proposals] == [
+            ("approved_schema_ids_all_results", "this schema", ["2", "5"]),
         ]
 
     def test_an_ungoverned_or_unknown_tool_proposes_nothing(self):

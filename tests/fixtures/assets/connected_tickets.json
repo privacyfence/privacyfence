@@ -1,0 +1,17 @@
+{
+  "tickets": [
+    {
+      "key": "PFQA-1",
+      "title": "Renew ACME support contract [QATEST]",
+      "status": {
+        "name": "Open"
+      },
+      "type": {
+        "name": "Task"
+      },
+      "priority": {
+        "name": "Medium"
+      }
+    }
+  ]
+}

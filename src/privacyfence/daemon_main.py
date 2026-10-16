@@ -131,6 +131,7 @@ from .secure_files import (
     audit_directory_permissions,
 )
 from .connectors.apps_script import AppsScriptConnector
+from .connectors.assets import AssetsConnector
 from .connectors.calendar import CalendarConnector
 from .connectors.confluence import ConfluenceConnector
 from .connectors.contacts import ContactsConnector
@@ -144,11 +145,12 @@ from .connectors.tasks import TasksConnector
 from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
-from .atlassian_oauth import AtlassianOAuthError
+from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override, scopes_for
 from .atlassian_users import AtlassianUserDirectory
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
 from .calendar_client import CalendarClient, CalendarClientError
+from .assets_client import AssetsClient, AssetsClientError
 from .confluence_client import ConfluenceClient, ConfluenceClientError
 from .connector_host import ConnectorHost
 from .contacts_client import ContactsClient, ContactsClientError
@@ -1581,6 +1583,30 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.warning("Confluence connector disabled: %s", exc)
             failures["confluence"] = _classify_connector_failure(exc)
 
+    # Jira Assets — off unless switched on (connectors.assets.enabled, else the
+    # bundle's atlassian.assets), so it is guarded by assets_enabled(), not enabled().
+    if assets_enabled(config, org_config):
+        try:
+            if not atlassian_org.get("client_id"):
+                raise AssetsClientError("Atlassian organization config not installed")
+            if not atlassian_token:
+                raise AssetsClientError("Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+            assets_client = AssetsClient(
+                config={**atlassian_config, **assets_workspace_override(config)},
+                token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+            )
+            assets_client.check_connection()
+            logger.info("Jira Assets connector ready")
+            assets_connector = AssetsConnector(assets_client)
+            assets_connector.my_email = atlassian_token.get("account_email", "")
+            assets_connector.download_mode = download_mode
+            assets_connector.download_config = download_config
+            assets_connector.download_base_url = download_base_url
+            connectors.append(assets_connector)
+        except (AssetsClientError, FileNotFoundError) as exc:
+            logger.warning("Jira Assets connector disabled: %s", exc)
+            failures["assets"] = _classify_connector_failure(exc)
+
     # Telegram — the sole exception to browser OAuth (MTProto has no
     # equivalent for full user-session access). api_id/api_hash identify the
     # PrivacyFence app itself and are baked into the build (app_credentials.py),
@@ -1874,7 +1900,7 @@ def _cli_pick_atlassian_resource(resources: list[dict[str, Any]]) -> dict[str, A
         print("Invalid choice, try again.")
 
 
-def run_atlassian_oauth(org_config: dict[str, Any]) -> int:
+def run_atlassian_oauth(org_config: dict[str, Any], config: dict[str, Any] | None = None) -> int:
     atlassian_org = org_config.get("atlassian") or {}
     if not atlassian_org.get("client_id") or not atlassian_org.get("client_secret"):
         print("No Atlassian organization config installed.", file=sys.stderr)
@@ -1884,6 +1910,7 @@ def run_atlassian_oauth(org_config: dict[str, Any]) -> int:
             client_id=atlassian_org["client_id"],
             client_secret=atlassian_org["client_secret"],
             token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+            scopes=scopes_for(assets=assets_enabled(config or {}, org_config)),
             pick_resource=_cli_pick_atlassian_resource,
         )
     except AtlassianOAuthError as exc:
@@ -2421,7 +2448,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.salesforce_oauth:
                 return run_salesforce_oauth(org_config)
             if args.atlassian_oauth:
-                return run_atlassian_oauth(org_config)
+                return run_atlassian_oauth(org_config, config)
             if args.grist_oauth:
                 return run_grist_oauth(org_config)
             if args.telegram_setup:

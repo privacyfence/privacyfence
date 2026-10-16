@@ -65,6 +65,14 @@ class TestResolvers:
         client = SimpleNamespace(list_projects=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         assert _resolver_for("jira", "projects")(client, "ENG") is None
 
+    def test_resolve_assets_schema(self):
+        client = SimpleNamespace(get_schema=lambda sid: SimpleNamespace(name="Hardware"))
+        assert _resolver_for("assets", "schemas")(client, "2") == "Hardware"
+
+    def test_resolve_assets_schema_swallows_a_client_error(self):
+        client = SimpleNamespace(get_schema=lambda sid: (_ for _ in ()).throw(RuntimeError("boom")))
+        assert _resolver_for("assets", "schemas")(client, "2") is None
+
     def test_resolve_confluence_space(self):
         client = SimpleNamespace(list_spaces=lambda: [SimpleNamespace(key="ENG", name="Engineering")])
         assert _resolver_for("confluence", "spaces")(client, "ENG") == "Engineering"
