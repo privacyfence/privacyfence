@@ -316,6 +316,7 @@ _JS = r"""
     mode: 'local', is_admin: false,
     sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
     not_applicable_actions: [],
+    personalTransfer: false,
   };
 
   function notApplicable(action) {
@@ -888,6 +889,15 @@ _JS = r"""
     var html = '<div class="pf-page">';
     html += '<h1 class="pf-page-title">Auto-accept</h1>';
     html += '<div class="pf-page-subtitle">Every standing rule that lets Claude act without asking first, across every connector -- what a rule actually unblocks is shown before you add it, and again on its own row below.</div>';
+
+    if (CAPS.personalTransfer) {
+      html += '<div class="card pf-card pf-personal-transfer"><h2 class="pf-row-title">' + esc('Move your settings') + '</h2>';
+      html += '<div class="pf-page-subtitle">' + esc('Export your always-allow rules and your step-up level to a file, or bring them in from another PrivacyFence install. Importing only adds; it never removes or narrows anything.') + '</div>';
+      html += '<div class="pf-modal-buttons">';
+      html += '<div class="button" role="button" tabindex="0" aria-label="Export your settings" data-pf-personal-export="1">' + esc('Export…') + '</div>';
+      html += '<div class="button" role="button" tabindex="0" aria-label="Import your settings" data-pf-personal-import="1">' + esc('Import…') + '</div>';
+      html += '</div></div>';
+    }
 
     html += '<div class="pf-chips pf-aa-filterbar">';
     html += '<input type="text" class="field pf-aa-search" placeholder="Filter by connector, tool, or value…" aria-label="Filter rules" value="' +
@@ -2324,7 +2334,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
     mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
-    scoped_tokens: dict[str, Any] | None = None,
+    scoped_tokens: dict[str, Any] | None = None, personal_transfer: bool = False,
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
@@ -2378,12 +2388,17 @@ def build_html(
     wiring, or the org page's own for the signed-in principal once the
     administrator has enabled the feature, ADR 0165) turns on the "Scoped
     tokens" section the same way.
+
+    ``personal_transfer`` draws Auto-accept's "Move your settings" card (export and import of
+    the person's own rules, web/personal_settings_shim.py); like ``mode`` it only reaches
+    ``window.__pfCapabilities``.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json_for_script(state)
     capabilities = _capabilities_for(mode, is_admin=is_admin)
     capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
     capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
+    capabilities["personalTransfer"] = personal_transfer
     caps_json = json_for_script(capabilities)
     ai_client_script = ""
     if capabilities["sections"]["ai_client"]:

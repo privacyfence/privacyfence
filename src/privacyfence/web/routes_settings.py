@@ -164,6 +164,7 @@ from ..settings_controller import (
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_install_policy, org_session, step_up_decide
+from .personal_settings_shim import personal_transfer_shim
 from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks, build_personal_routes
 from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
@@ -890,6 +891,7 @@ def build_routes(
             state, nonce=nonce, initial_section=initial_section,
             ai_client={"mcp_url": ai_client.mcp_url} if ai_client is not None else None,
             scoped_tokens=scoped_tokens.page_data() if scoped_tokens is not None else None,
+            personal_transfer=True,
         )
         csrf = request.cookies.get(_SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS: the same ceremony helpers web/
@@ -900,6 +902,7 @@ def build_routes(
         # exercised depends on config, not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         # Read off this request's own fresh snapshot, not the notifications_
         # enabled/detail closure args above -- those are only the daemon-
         # startup defaults (server.py's own initial config read), and the
@@ -1970,7 +1973,7 @@ def build_org_routes(
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
             mode=ORG_MODE, is_admin=principal.is_admin,
-            scoped_tokens=_org_scoped_token_data(principal),
+            scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
@@ -1979,6 +1982,7 @@ def build_org_routes(
         # StepUpConfig, not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         html = web_shell.wrap(
             body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
             nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal.email or principal.display_name or principal.id,

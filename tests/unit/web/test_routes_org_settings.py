@@ -309,6 +309,18 @@ class TestPrincipalScopedRules:
         assert caps2["sections"]["general"] is True
 
 
+class TestMoveYourSettingsCard:
+    def test_page_carries_the_card_capability_and_the_shim(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        body = client.get("/settings").text
+        assert _capabilities(body)["personalTransfer"] is True
+        assert "Move your settings" in body
+        assert "/api/settings/personal/import" in body
+
+
 class TestOrgStepUpScope:
     """ADR 0091: any org principal, admin or not, can widen the org's
     ``step_up.scope`` for their own approvals, and never narrow it."""
