@@ -910,6 +910,13 @@ class TestDeidentifyAssets:
         assert out["id"] == "1"
         assert out["objectType"] == {"id": "2", "objectSchemaId": "1"}
 
+    def test_reference_type_id_joins_its_reference_type(self):
+        raw = {"objectTypeAttributes": [{"id": "13", "referenceObjectTypeId": "1",
+                                         "referenceObjectType": {"id": "1", "objectSchemaId": "1"}}]}
+        definition = recorder._deidentify_assets(raw)["objectTypeAttributes"][0]
+        assert definition["id"] == "1"
+        assert definition["referenceObjectTypeId"] == definition["referenceObjectType"]["id"] == "2"
+
     def test_integer_ids_are_numbered_too(self):
         numbered, id_map = recorder._numeric_assets_ids({"id": 4711, "parentObjectTypeId": "4711", "x": {"ID": 8}})
         assert numbered == {"id": "1", "parentObjectTypeId": "1", "x": {"ID": "2"}}
