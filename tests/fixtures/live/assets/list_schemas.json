@@ -1,0 +1,25 @@
+{
+  "isLast": true,
+  "last": true,
+  "maxResults": 100,
+  "startAt": 0,
+  "total": 1,
+  "values": [
+    {
+      "canManage": true,
+      "created": "2026-10-13T09:59:24.164Z",
+      "crossSchemaReferencingAllowed": false,
+      "description": "",
+      "displayName": "QA Placeholder",
+      "globalId": "qa-placeholder-uuid:1",
+      "id": "1",
+      "name": "PrivacyFence QA [QATEST]",
+      "objectCount": 11,
+      "objectSchemaKey": "PFQA",
+      "objectTypeCount": 3,
+      "status": "Ok",
+      "updated": "2026-10-13T09:59:24.164Z",
+      "workspaceId": "qa-placeholder-uuid"
+    }
+  ]
+}

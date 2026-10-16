@@ -31,6 +31,7 @@ from privacyfence.atlassian_oauth import AtlassianOAuthError
 from privacyfence.atlassian_users import UNKNOWN_USER_LABEL
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "assets"
+LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "assets"
 WORKSPACE = "11111111-2222-3333-4444-555555555555"
 JIRA_URL = "https://api.atlassian.com/ex/jira/cloud-1"
 API = f"{JIRA_URL}/jsm/assets/workspace/{WORKSPACE}/v1"
@@ -873,3 +874,58 @@ class TestConnectedTickets:
     def test_no_tickets(self, payload):
         client = make_client(routed({"GET objectconnectedtickets/1/tickets": payload}))
         assert client.connected_tickets("1") == []
+
+
+class TestLiveFixtureParsing:
+    """Replays fixtures recorded from the real, [QATEST]-tagged PFQA schema by
+    scripts/qa_fixture_recorder.py --record assets -- real API shape, not
+    hand-authored, de-identified by _deidentify_assets. Skipped (not failed)
+    until the files exist; see tests/fixtures/live/README.md and
+    docs/testing-policy.md. The replay client raises on any HTTP call.
+    """
+
+    def _load(self, name: str) -> dict:
+        path = LIVE_FIXTURES_DIR / name
+        if not path.exists():
+            pytest.skip(
+                f"{path} not recorded yet -- run "
+                "`python3 scripts/qa_fixture_recorder.py --record assets` locally first"
+            )
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _replay_client() -> AssetsClient:
+        def refuse(method, path, params, body):
+            raise AssertionError(f"unexpected HTTP call {method} {path}")
+
+        return make_client(refuse)
+
+    def test_list_schemas_fixture_still_parses(self):
+        raw = self._load("list_schemas.json")
+        schemas = [assets_module._parse_schema(v) for v in raw["values"]]
+        assert schemas, "recorded list_schemas.json has no values"
+        assert all(s.id and s.key and s.name for s in schemas)
+        assert all(s.key == "PFQA" for s in schemas)
+
+    def test_get_object_fixture_still_parses(self):
+        client = self._replay_client()
+        raw = self._load("get_object.json")
+        obj = client._parse_object({**raw["object"], "attributes": raw["attributes"]})
+        assert obj.id and obj.key and obj.label and obj.type_name and obj.schema_id
+        assert "[QATEST]" in obj.label
+        assert obj.attributes
+
+    def test_aql_search_fixture_still_parses(self):
+        client = self._replay_client()
+        raw = self._load("aql_search.json")
+        names = {a["id"]: a["name"] for a in raw.get("objectTypeAttributes", [])}
+        objects = [client._parse_object(v, names) for v in raw["values"]]
+        assert objects, "recorded aql_search.json has no values"
+        assert all("[QATEST]" in o.label for o in objects)
+
+    def test_aql_search_fixture_attribute_ids_still_join(self):
+        raw = self._load("aql_search.json")
+        known = {a["id"] for a in raw["objectTypeAttributes"]}
+        used = {e["objectTypeAttributeId"] for v in raw["values"] for e in v.get("attributes", [])}
+        assert used and used <= known
+        assert all(i.isdigit() for i in known | used)
