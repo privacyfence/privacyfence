@@ -52,17 +52,17 @@ There is no tracking issue.
   permission sets decide what they can actually change.
 - **Gate and policy tables** that every new tool must be added to, all checked by tests:
   - `auto_accept.TOOL_TO_OPERATION` (`auto_accept.py:133-136` for Salesforce)
-  - `auto_accept.TOOL_TO_GATE` (`auto_accept.py:290-294`)
+  - `auto_accept.TOOL_TO_GATE` (`auto_accept.py:295-299`)
   - `policy/registry.TOOL_TO_VERB` (`registry.py:174-177`), plus the test-side
     `_VERB_MATRIX`, whose length is asserted as 93 at `tests/unit/policy/test_registry.py:287`
   - `write_effects.EFFECT_BY_TOOL` (`write_effects.py:42-180`, no Salesforce group yet;
     `tests/unit/test_write_effects.py:31` scans connector sources for `gated_call(` blocks, cut at
     the first `\n\s*\)`, and looks for `tool="X"` and `gate="popup"` inside each block)
   - `gate._TOOL_LAYOUT` (`gate.py:263-264`)
-  - `policy/propose.py:366-368`: the `approved_object_types` scope covers `(Verb.READ,
+  - `policy/propose.py:383-385`: the `approved_object_types` scope covers `(Verb.READ,
     Verb.SEARCH)` and excludes `salesforce.run_report`
   - `tests/unit/policy/test_propose.py:79-82`, the per-tool context list
-- **Scope matcher.** `scopes._approved_object_types_matches` (`policy/scopes.py:309-316`) reads
+- **Scope matcher.** `scopes._approved_object_types_matches` (`policy/scopes.py:337-344`) reads
   `ctx.args["object_type"]`. A write tool's `args` must carry `object_type` for a rule to match.
 - **Generated docs and their drift tests:**
   - `docs/tools-reference.md` comes from `scripts/generate_tools_reference.py` and is checked by
@@ -71,8 +71,8 @@ There is no tracking issue.
   - `docs/always-allow-rules-reference.md` comes from `scripts/generate_always_allow_reference.py`
     and is checked by `tests/unit/test_generate_always_allow_reference.py`.
   - `website/connectors/index.html:122-131` has the Salesforce card
-    (`data-tools="5" data-auto="1" data-review="4" data-popup="0"`), and line 29 says "144 tools".
-    `website/how-it-works/index.html:54` says "144 connector tools". Both are checked by
+    (`data-tools="5" data-auto="1" data-review="4" data-popup="0"`), and line 29 says "152 tools".
+    `website/how-it-works/index.html:54` says "152 connector tools". Both are checked by
     `tests/unit/test_website_connectors_page.py` against the tools reference.
   - `tests/unit/connectors/test_readme_manifest_alignment.py` checks the gate of each tools-reference
     row against `TOOL_TO_GATE` and against the source regex `tool="X",.*?gate="popup"`.
@@ -96,9 +96,9 @@ There is no tracking issue.
   `grist.py:136`. A bare `RuntimeError`, which is what `_fetch` raises, becomes "Tool call failed.
   See the PrivacyFence log for details." A `ValueError` is shown as it is.
 - **QA.**
-  - `scripts/qa_fixture_recorder.py` `check_salesforce` (`:1403`) runs reads only.
-  - `--lifecycle` (`LIFECYCLE_CHECKS`, `:2712`) has a create/read/update/read check for calendar,
-    confluence, grist, jira, peek and tasks. `lifecycle_grist` (`:2491`) never deletes and
+  - `scripts/qa_fixture_recorder.py` `check_salesforce` (`:1551`) runs reads only.
+  - `--lifecycle` (`LIFECYCLE_CHECKS`, `:2862`) has a create/read/update/read check for calendar,
+    confluence, grist, jira, peek and tasks. `lifecycle_grist` (`:2641`) never deletes and
     reports `cleanup_ok=None`.
   - The self-hosted runner admits only `connector-live-check.yml` and `qa-record-fixture.yml` as
     they stand on `main` (ADR 0181).
@@ -608,12 +608,12 @@ These go into the ADRs as rejected alternatives:
 The retirement phase writes these three ADRs. The numbers are provisional: use the next three free
 numbers in `docs/adr/` when that phase runs, in this order (see Risks).
 
-- **ADR 0188: Salesforce writes create and update one record or a batch of up to 200, all or
+- **ADR 0191: Salesforce writes create and update one record or a batch of up to 200, all or
   none, and never delete.**
   - Covers D1 and D7.
   - Rejected: CSV-file tools, Bulk API 2.0, native upsert and `create_missing`, delete, and
     multi-object batches.
-- **ADR 0189: A Salesforce write is checked against the object's describe and its current values
+- **ADR 0192: A Salesforce write is checked against the object's describe and its current values
   before the card.**
   - Covers D2 and D4: field, type and nullability checks before any approval.
   - Updates read the current values and show only the fields that change; a call that changes
@@ -629,7 +629,7 @@ numbers in `docs/adr/` when that phase runs, in this order (see Risks).
     (ADR 0105).
   - Because the card shows current values, a deferred approval is collected only while the record
     is unchanged. A change between approval and re-issue gets a new card (ADR 0175).
-- **ADR 0190: The Salesforce object-type rule also covers creating and updating records of that
+- **ADR 0193: The Salesforce object-type rule also covers creating and updating records of that
   type.**
   - Covers D5: `approved_object_types` gains `add` and `update`, offered from the card.
   - Each tool has its own operation key, so the batch tools can be left out later.
@@ -658,11 +658,11 @@ The steps are in the
 
 ## Risks and open questions
 
-- **ADR numbers.** `main` is at ADR 0187. `feature/jira-assets-connector` still carries ADRs
-  numbered 0171-0173, which collide with `main`, and will take the next free numbers when it is
-  renumbered. The retirement phase takes the next free numbers on the feature branch when it
-  runs. Whichever PR merges second renumbers its ADRs and their index rows.
-- **Tool totals.** The 144 on the website is `main`'s current total. Phases p3 and p4 each **add
+- **ADR numbers.** `main` is at ADR 0190 (Jira Assets took 0188-0190). The provisional numbers
+  0191-0193 are only a guide: the retirement phase takes the next free numbers on the feature
+  branch when it runs. If another branch merges ADRs first, whichever PR merges second renumbers
+  its ADRs and their index rows.
+- **Tool totals.** The 152 on the website is `main`'s current total. Phases p3 and p4 each **add
   2** to whatever total the files hold, and do not set an absolute number. If
   `tests/unit/test_website_connectors_page.py` still fails after that, stop with `status=blocked`:
   another connector's count moved under you.
@@ -907,7 +907,7 @@ phases:
            the two tools (valid fields JSON, a valid record_id) and make its client return a
            describe list and a record so both reach the gate.
          - tests/unit/policy/test_registry.py: add the two rows to _VERB_MATRIX and change the
-           asserted length from 93 to 95.
+           asserted length from 98 to 100 (add 2 to whatever it is if main moved).
          - tests/unit/policy/test_propose.py: add both tools to CORPUS right after the
            confluence_update_page entry, with make_ctx(connector="salesforce",
            args={"object_type": "Account", ...}, raw_data={}); add a test that
@@ -997,7 +997,7 @@ phases:
            [{"Id": "001000000000001AAA", "Name": "Old"}], so both tools reach the gate.
          - A refusal from client.create_records / update_records raises
            SalesforceWriteRefusedError and safe_errors.public_message(err) == str(err).
-         - tests/unit/policy/test_registry.py: two rows, length 95 → 97.
+         - tests/unit/policy/test_registry.py: two rows, length +2 (100 → 102 if p3 left 100).
            tests/unit/policy/test_propose.py: both tools in the context list; operations_for for
            Verb.ADD/UPDATE also contain "salesforce.create_records"/"salesforce.update_records".
            tests/unit/test_auto_accept.py: extend test_salesforce_write_tools_have_their_own_operation_keys
@@ -1044,14 +1044,14 @@ phases:
       (tests/unit/test_code_no_history.py enforces this).
       1. scripts/qa_fixture_recorder.py: add lifecycle_salesforce(manifest) after lifecycle_peek
          (alphabetical order of the existing lifecycle_* functions), modelled on lifecycle_grist
-         (scripts/qa_fixture_recorder.py, def lifecycle_grist, around line 2491): build the client the way check_salesforce
+         (scripts/qa_fixture_recorder.py, def lifecycle_grist, around line 2641): build the client the way check_salesforce
          does, run the D6 steps, return LifecycleResult("salesforce", ok, note,
          cleanup_ok=None) with note "create, get, update, batch create, find, batch update all
          verified" on success. Docstring states it never deletes and why. Register it in
          LIFECYCLE_CHECKS in alphabetical position. Also fix the places that say Salesforce has
          no lifecycle check: the module docstring's --lifecycle list (scripts/qa_fixture_recorder.py,
          around line 31), and the comment above LIFECYCLE_CHECKS (the "salesforce, telegram --
-         ... nothing to create" entry, around line 2115, becomes telegram only, and Salesforce
+         ... nothing to create" entry, around line 2265, becomes telegram only, and Salesforce
          moves to the list of included connectors with a note that it never deletes).
       2. tests/fixtures/qa_environment.yaml.example: under salesforce:, add commented
          lifecycle_object_type: Task, lifecycle_name_field: Subject, lifecycle_note_field:
@@ -1065,16 +1065,16 @@ phases:
          "(create, read back and update a tagged QA object in `calendar`, `confluence`, `grist`,
          `jira`, `peek`, `salesforce` and `tasks`, and delete it where the connector can)".
          docs/connector-qa.md:
-         - add `salesforce` to the "--lifecycle runs for" list (around line 393);
-         - change "Confluence and Grist have no cleanup step." (around line 395) to
+         - add `salesforce` to the "--lifecycle runs for" list (around line 414);
+         - change "Confluence and Grist have no cleanup step." (around line 416) to
            "Confluence, Grist and Salesforce have no cleanup step.";
-         - in the manifest-keys table's `salesforce` row (around line 342), add
+         - in the manifest-keys table's `salesforce` row (around line 363), add
            `lifecycle_object_type`, `lifecycle_name_field`, `lifecycle_note_field` to the keys and
            set the `--lifecycle` column to "creates and updates one Task (`lifecycle_object_type`),
            then two more in one batch; never deletes them";
          - in the Troubleshooting row "`--lifecycle` shows `n/a` under Cleanup for Confluence"
-           (around line 533), name Grist and Salesforce too;
-         - add a short paragraph to "Salesforce checks" (around line 654) saying the lifecycle
+           (around line 554), name Grist and Salesforce too;
+         - add a short paragraph to "Salesforce checks" (around line 675) saying the lifecycle
            check creates and updates Tasks tagged with the lifecycle tag and never deletes them, so
            they are deleted by hand now and then.
       5. Run `ruff check .` and
