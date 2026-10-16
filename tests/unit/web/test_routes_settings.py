@@ -122,6 +122,13 @@ class TestSettingsPage:
         r = client.get("/settings")
         assert r.headers.get("cache-control") == "no-store"
 
+    def test_carries_the_move_your_settings_card_and_its_shim(self, client, sessions):
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '"personalTransfer": true' in r.text
+        assert "Move your settings" in r.text
+        assert "/api/settings/personal/preview" in r.text
+
     def test_notifications_enabled_config_reaches_the_page(self, controller, sessions):
         # settings_page reads this off the controller's own live snapshot
         # (general.notifications_enabled), not the notifications_enabled=
