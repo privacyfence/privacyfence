@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import pathlib
 import threading
 import time
 from types import SimpleNamespace
@@ -1966,9 +1967,10 @@ class TestImportPolicyRules:
 
     def test_an_unchanged_merge_writes_nothing(self, controller):
         controller.import_policy_rules(self._rules())
-        before = open(controller._config_path, encoding="utf-8").read()
+        before = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
         assert controller.import_policy_rules(self._rules()) is False
-        assert open(controller._config_path, encoding="utf-8").read() == before
+        after = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
+        assert after == before
 
     def test_does_nothing_when_the_rows_cannot_be_loaded(self, controller, monkeypatch):
         monkeypatch.setattr(controller, "_load_rows", lambda: None)

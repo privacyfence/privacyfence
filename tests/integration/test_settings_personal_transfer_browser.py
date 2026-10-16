@@ -8,6 +8,7 @@ come out as text. Skipped when Playwright or a Chromium build is missing, as tes
 from __future__ import annotations
 
 import json
+import pathlib
 import uuid
 from datetime import datetime, timezone
 
@@ -209,9 +210,11 @@ class TestExport:
         with page.expect_download() as download:
             page.locator("[data-pf-personal-export]").click()
         assert download.value.suggested_filename == personal_settings.FILE_NAME
-        document = personal_settings.parse_document(open(download.value.path(), "rb").read())
+        raw = pathlib.Path(download.value.path()).read_bytes()
+        document = personal_settings.parse_document(raw)
         assert [r.id for r in document.rows] == [PRESENT.id]
-        assert json.loads(open(download.value.path(), encoding="utf-8").read())["source"]["mode"] == "local"
+        source_mode = json.loads(raw.decode("utf-8"))["source"]["mode"]
+        assert source_mode == "local"
         assert page.locator("#app").count() == 1  # the page stayed where it was
         assert violations == []
 
