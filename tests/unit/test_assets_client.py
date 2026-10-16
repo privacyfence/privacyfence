@@ -922,3 +922,10 @@ class TestLiveFixtureParsing:
         objects = [client._parse_object(v, names) for v in raw["values"]]
         assert objects, "recorded aql_search.json has no values"
         assert all("[QATEST]" in o.label for o in objects)
+
+    def test_aql_search_fixture_attribute_ids_still_join(self):
+        raw = self._load("aql_search.json")
+        known = {a["id"] for a in raw["objectTypeAttributes"]}
+        used = {e["objectTypeAttributeId"] for v in raw["values"] for e in v.get("attributes", [])}
+        assert used and used <= known
+        assert all(i.isdigit() for i in known | used)
