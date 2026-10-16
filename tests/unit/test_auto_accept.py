@@ -91,6 +91,16 @@ class TestToolToOperationMapping:
         assert TOOL_TO_OPERATION["drive_docs_edit_content"] == "docs.edit_content"
         assert TOOL_TO_OPERATION["drive_docs_format_content"] == "docs.format_content"
 
+    def test_salesforce_write_tools_have_their_own_operation_keys(self):
+        assert TOOL_TO_OPERATION["salesforce_create_record"] == "salesforce.create_record"
+        assert TOOL_TO_OPERATION["salesforce_update_record"] == "salesforce.update_record"
+        assert TOOL_TO_GATE["salesforce_create_record"] == "popup"
+        assert TOOL_TO_GATE["salesforce_update_record"] == "popup"
+        assert TOOL_TO_OPERATION["salesforce_create_records"] == "salesforce.create_records"
+        assert TOOL_TO_OPERATION["salesforce_update_records"] == "salesforce.update_records"
+        assert TOOL_TO_GATE["salesforce_create_records"] == "popup"
+        assert TOOL_TO_GATE["salesforce_update_records"] == "popup"
+
     def test_salesforce_search_maps_to_clean_operation_key(self):
         assert TOOL_TO_OPERATION["salesforce_search"] == "salesforce.search"
 

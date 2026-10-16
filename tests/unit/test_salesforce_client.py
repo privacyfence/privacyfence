@@ -34,8 +34,15 @@ from privacyfence.salesforce_client import (
     ReportPagingError,
     SalesforceClient,
     SalesforceClientError,
+    SalesforceField,
+    SalesforceObjectNotFoundError,
     SalesforceRecord,
     SalesforceReport,
+    SalesforceWriteError,
+    SalesforceWriteUncertainError,
+    WriteFailure,
+    _soql_quote,
+    _write_failures,
     _escape_sosl_term,
     _is_expired_session_error,
     _validate_object_type_name,
@@ -1368,3 +1375,377 @@ class TestLiveFixtureParsing:
         page = client.run_report_page(REPORT_ID, raw["reportMetadata"]["detailColumns"][0])
 
         assert page.keys and page.all_data is True
+
+
+# ---------------------------------------------------------------------------- #
+# Record writes
+# ---------------------------------------------------------------------------- #
+
+NEW_ID = "001000000000001AAA"
+
+
+def _sf_exc(name: str, content, status: int = 400):
+    import simple_salesforce.exceptions as exc
+
+    return getattr(exc, name)("https://u", status, "n", content)
+
+
+def _bad_request(content):
+    return _sf_exc("SalesforceMalformedRequest", content)
+
+
+def _composite_result(*errors_by_index):
+    """Composite results: None means success, a (code, message, fields) tuple a failure."""
+    results = []
+    for i, err in enumerate(errors_by_index):
+        if err is None:
+            results.append({"id": f"001{i:015d}", "success": True, "errors": []})
+        else:
+            code, message, fields = err
+            results.append({
+                "success": False,
+                "errors": [{"statusCode": code, "message": message, "fields": fields}],
+            })
+    return results
+
+
+class TestDescribeFields:
+    def test_maps_describe_payload(self):
+        sf = MagicMock()
+        sf.restful.return_value = {"fields": [
+            {"name": "Name", "label": "Account Name", "type": "string", "createable": True,
+             "updateable": True, "nillable": False, "externalId": False},
+            {"name": "Num__c", "label": "Num", "type": "string", "createable": True,
+             "updateable": False, "nillable": True, "externalId": True},
+            {"name": "Bare"},
+        ]}
+        fields = with_fake_sf(make_client(), sf).describe_fields("Account")
+
+        sf.restful.assert_called_once_with("sobjects/Account/describe")
+        assert fields[0] == SalesforceField("Name", "Account Name", "string", True, True, False, False)
+        assert fields[1].external_id is True and fields[1].updateable is False
+        assert fields[2] == SalesforceField("Bare", "", "", False, False, False, False)
+
+    def test_unexpected_payload_gives_no_fields(self):
+        sf = MagicMock()
+        sf.restful.return_value = None
+        assert with_fake_sf(make_client(), sf).describe_fields("Account") == []
+
+    def test_rejects_path_traversal_before_any_call(self):
+        sf = MagicMock()
+        with pytest.raises(SalesforceClientError, match="Invalid Salesforce object type"):
+            with_fake_sf(make_client(), sf).describe_fields("Account/../x")
+        sf.restful.assert_not_called()
+
+    def test_unknown_object_type(self):
+        sf = MagicMock()
+        sf.restful.side_effect = _sf_exc("SalesforceResourceNotFound", "nope", 404)
+        with pytest.raises(SalesforceObjectNotFoundError) as info:
+            with_fake_sf(make_client(), sf).describe_fields("Acount")
+        assert str(info.value) == "Acount is not an object type your Salesforce user can see"
+
+
+class TestCreateRecord:
+    def test_posts_fields_and_returns_id(self):
+        sf = MagicMock()
+        sf.restful.return_value = {"id": NEW_ID, "success": True, "errors": []}
+        fields = {"Name": "Acme"}
+
+        assert with_fake_sf(make_client(), sf).create_record("Account", fields) == NEW_ID
+        sf.restful.assert_called_once_with("sobjects/Account/", method="POST", json=fields)
+
+    def test_unsuccessful_result_raises_write_error(self):
+        sf = MagicMock()
+        sf.restful.return_value = {
+            "success": False,
+            "errors": [{"errorCode": "REQUIRED_FIELD_MISSING", "message": "m", "fields": ["Name"]}],
+        }
+        with pytest.raises(SalesforceWriteError, match="REQUIRED_FIELD_MISSING"):
+            with_fake_sf(make_client(), sf).create_record("Account", {"X": 1})
+
+    def test_non_dict_result_gives_unknown_failure(self):
+        sf = MagicMock()
+        sf.restful.return_value = None
+        with pytest.raises(SalesforceWriteError, match="records\\[0\\]: UNKNOWN"):
+            with_fake_sf(make_client(), sf).create_record("Account", {"X": 1})
+
+    def test_error_text_is_exact(self):
+        sf = MagicMock()
+        sf.restful.side_effect = _bad_request([{
+            "errorCode": "REQUIRED_FIELD_MISSING",
+            "message": "Required fields are missing: [Name]",
+            "fields": ["Name"],
+        }])
+        with pytest.raises(SalesforceWriteError) as info:
+            with_fake_sf(make_client(), sf).create_record("Account", {"Phone": "1"})
+        assert str(info.value) == (
+            "Salesforce did not save the record: "
+            "records[0]: REQUIRED_FIELD_MISSING (Name): Required fields are missing: [Name]"
+        )
+
+    def test_refused_and_not_found_are_write_errors(self):
+        for name, status in (("SalesforceRefusedRequest", 403), ("SalesforceResourceNotFound", 404)):
+            sf = MagicMock()
+            sf.restful.side_effect = _sf_exc(name, [{"errorCode": "INSUFFICIENT_ACCESS", "message": "no"}], status)
+            with pytest.raises(SalesforceWriteError, match="INSUFFICIENT_ACCESS"):
+                with_fake_sf(make_client(), sf).create_record("Account", {"Name": "x"})
+
+    def test_non_json_body_gives_one_unknown_failure(self):
+        sf = MagicMock()
+        sf.restful.side_effect = _bad_request("not json")
+        with pytest.raises(SalesforceWriteError) as info:
+            with_fake_sf(make_client(), sf).create_record("Account", {"Name": "x"})
+        assert info.value.failures == [WriteFailure(0, "UNKNOWN", [], "")]
+        assert str(info.value) == "Salesforce did not save the record: records[0]: UNKNOWN"
+
+    def test_server_error_is_uncertain(self):
+        sf = MagicMock()
+        sf.restful.side_effect = _sf_exc("SalesforceGeneralError", "busy", 503)
+        with pytest.raises(SalesforceWriteUncertainError) as info:
+            with_fake_sf(make_client(), sf).create_record("Account", {"Name": "x"})
+        assert not isinstance(info.value, SalesforceWriteError)
+        assert "HTTP 503" in str(info.value)
+        assert "may or may not have been saved" in str(info.value)
+        assert "busy" not in str(info.value)
+
+    def test_dropped_connection_is_uncertain(self):
+        sf = MagicMock()
+        sf.restful.side_effect = requests.ConnectionError("reset by peer")
+        with pytest.raises(SalesforceWriteUncertainError) as info:
+            with_fake_sf(make_client(), sf).create_record("Account", {"Name": "x"})
+        assert str(info.value).startswith("The connection to Salesforce failed")
+        assert "reset by peer" not in str(info.value)
+
+    def test_expired_session_is_refreshed_and_retried(self, monkeypatch):
+        sf = MagicMock()
+        sf.restful.side_effect = [
+            _sf_exc("SalesforceExpiredSession", [
+                {"errorCode": "INVALID_SESSION_ID", "message": "Session expired or invalid"},
+            ], 401),
+            {"id": NEW_ID, "success": True, "errors": []},
+        ]
+        client = with_fake_sf(make_client(), sf)
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+
+        assert client.create_record("Account", {"Name": "x"}) == NEW_ID
+        assert sf.restful.call_count == 2
+
+    def test_write_error_on_retry_keeps_its_type(self, monkeypatch):
+        sf = MagicMock()
+        sf.restful.side_effect = [
+            _sf_exc("SalesforceExpiredSession", [
+                {"errorCode": "INVALID_SESSION_ID", "message": "Session expired or invalid"},
+            ], 401),
+            _bad_request([{"errorCode": "DUPLICATE_VALUE", "message": "dup", "fields": []}]),
+        ]
+        client = with_fake_sf(make_client(), sf)
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+
+        with pytest.raises(SalesforceWriteError, match="DUPLICATE_VALUE"):
+            client.create_record("Account", {"Name": "x"})
+
+
+class TestUpdateRecord:
+    def test_patches_only_given_fields(self):
+        sf = MagicMock()
+        sf.restful.return_value = None
+        client = with_fake_sf(make_client(), sf)
+
+        assert client.update_record("Account", NEW_ID, {"Phone": "1"}) is None
+        sf.restful.assert_called_once_with(f"sobjects/Account/{NEW_ID}", method="PATCH", json={"Phone": "1"})
+
+    def test_invalid_record_id_raises_before_any_call(self):
+        sf = MagicMock()
+        with pytest.raises(SalesforceClientError):
+            with_fake_sf(make_client(), sf).update_record("Account", "../x", {"Phone": "1"})
+        sf.restful.assert_not_called()
+
+
+class TestCompositeWrites:
+    def test_create_records_sends_all_or_none_and_returns_ids_in_order(self):
+        sf = MagicMock()
+        sf.restful.return_value = _composite_result(None, None)
+
+        ids = with_fake_sf(make_client(), sf).create_records("Account", [{"Name": "a"}, {"Name": "b"}])
+
+        assert ids == ["001000000000000000", "001000000000000001"]
+        sf.restful.assert_called_once_with("composite/sobjects", method="POST", json={
+            "allOrNone": True,
+            "records": [
+                {"attributes": {"type": "Account"}, "Name": "a"},
+                {"attributes": {"type": "Account"}, "Name": "b"},
+            ],
+        })
+
+    def test_failed_result_names_the_record_and_skips_rollbacks(self):
+        sf = MagicMock()
+        sf.restful.return_value = _composite_result(
+            ("ALL_OR_NONE_OPERATION_ROLLED_BACK", "Record rolled back", []),
+            ("DUPLICATE_VALUE", "dup", ["Name"]),
+        )
+        with pytest.raises(SalesforceWriteError) as info:
+            with_fake_sf(make_client(), sf).create_records("Account", [{"Name": "a"}, {"Name": "b"}])
+        assert str(info.value) == (
+            "Salesforce saved none of the 2 records: records[1]: DUPLICATE_VALUE (Name): dup"
+        )
+
+    def test_twelve_failures_list_ten_then_the_rest(self):
+        sf = MagicMock()
+        sf.restful.return_value = _composite_result(*[("X", "m", [])] * 12)
+        with pytest.raises(SalesforceWriteError) as info:
+            with_fake_sf(make_client(), sf).create_records("Account", [{"Name": "a"}] * 12)
+        text = str(info.value)
+        assert "records[9]: X" in text and "records[10]" not in text
+        assert text.endswith("; and 2 more")
+
+    def test_result_without_errors_list_is_unknown(self):
+        sf = MagicMock()
+        sf.restful.return_value = [{"success": False}, "odd"]
+        with pytest.raises(SalesforceWriteError) as info:
+            with_fake_sf(make_client(), sf).create_records("Account", [{"Name": "a"}] * 2)
+        assert [f.index for f in info.value.failures] == [0, 1]
+        assert {f.status_code for f in info.value.failures} == {"UNKNOWN"}
+
+    @pytest.mark.parametrize("answer", [None, [{"success": True, "id": "x"}]])
+    def test_unreadable_answer_is_uncertain(self, answer):
+        sf = MagicMock()
+        sf.restful.return_value = answer
+        with pytest.raises(SalesforceWriteUncertainError, match="could not be read"):
+            with_fake_sf(make_client(), sf).create_records("Account", [{"Name": "a"}] * 2)
+
+    @pytest.mark.parametrize("count", [0, 201])
+    def test_record_count_bounds(self, count):
+        sf = MagicMock()
+        client = with_fake_sf(make_client(), sf)
+        with pytest.raises(SalesforceClientError, match="1 to 200"):
+            client.create_records("Account", [{"Name": "a"}] * count)
+        with pytest.raises(SalesforceClientError, match="1 to 200"):
+            client.update_records("Account", [{"Id": NEW_ID}] * count)
+        sf.restful.assert_not_called()
+
+    def test_rejected_request_with_composite_body_names_the_record(self):
+        sf = MagicMock()
+        sf.restful.side_effect = _bad_request(_composite_result(
+            ("ALL_OR_NONE_OPERATION_ROLLED_BACK", "rolled back", []),
+            ("DUPLICATE_VALUE", "dup", ["Name"]),
+        ))
+        with pytest.raises(SalesforceWriteError) as info:
+            with_fake_sf(make_client(), sf).create_records("Account", [{"Name": "a"}, {"Name": "b"}])
+        assert "records[1]: DUPLICATE_VALUE" in str(info.value)
+        assert "records[0]" not in str(info.value)
+
+    def test_update_records_patches_and_returns_nothing(self):
+        sf = MagicMock()
+        sf.restful.return_value = _composite_result(None)
+        client = with_fake_sf(make_client(), sf)
+
+        assert client.update_records("Account", [{"Id": NEW_ID, "Phone": "1"}]) is None
+        sf.restful.assert_called_once_with("composite/sobjects", method="PATCH", json={
+            "allOrNone": True,
+            "records": [{"attributes": {"type": "Account"}, "Id": NEW_ID, "Phone": "1"}],
+        })
+
+    @pytest.mark.parametrize("record", [{"Phone": "1"}, {"Id": "../x"}, {"Id": 5}])
+    def test_update_records_needs_a_valid_id(self, record):
+        sf = MagicMock()
+        with pytest.raises(SalesforceClientError):
+            with_fake_sf(make_client(), sf).update_records("Account", [record])
+        sf.restful.assert_not_called()
+
+
+class TestWriteFailures:
+    def test_message_is_cut_and_fields_listed(self):
+        failures = _write_failures([{"statusCode": "X", "message": "m" * 500, "fields": ["A", "B"]}])
+        assert failures == [WriteFailure(0, "X", ["A", "B"], "m" * 200)]
+
+    @pytest.mark.parametrize("content", ["text", None, [], {}, [1], [{"message": "no code"}]])
+    def test_other_shapes_never_raise(self, content):
+        assert _write_failures(content) == [WriteFailure(0, "UNKNOWN", [], "")]
+
+    def test_error_entry_with_odd_types(self):
+        failures = _write_failures([{"errorCode": "X", "message": 5, "fields": "A"}])
+        assert failures == [WriteFailure(0, "X", [], "")]
+
+    def test_non_dict_error_entry_is_unknown(self):
+        assert _write_failures([{"success": False, "errors": ["odd"]}]) == [
+            WriteFailure(0, "UNKNOWN", [], ""),
+        ]
+
+    def test_composite_result_without_failure_falls_back_to_unknown(self):
+        assert _write_failures([{"success": True}]) == [WriteFailure(0, "UNKNOWN", [], "")]
+
+    def test_error_text_without_status_fields_or_message(self):
+        assert str(SalesforceWriteError([WriteFailure(2, "X", [], "")], 3)) == (
+            "Salesforce saved none of the 3 records: records[2]: X"
+        )
+
+
+class TestFindRecords:
+    def test_by_id_builds_exact_soql(self):
+        sf = MagicMock()
+        sf.query_all.return_value = {"records": [{"attributes": {"type": "Account"}, "Id": NEW_ID, "Name": "A"}]}
+
+        rows = with_fake_sf(make_client(), sf).find_records("Account", "Id", [NEW_ID], ["Name"])
+
+        sf.query_all.assert_called_once_with(f"SELECT Id, Name FROM Account WHERE Id IN ('{NEW_ID}')")
+        assert rows == [{"Id": NEW_ID, "Name": "A"}]
+
+    def test_external_id_value_is_escaped(self):
+        sf = MagicMock()
+        sf.query_all.return_value = {"records": []}
+
+        with_fake_sf(make_client(), sf).find_records("Account", "Num__c", ["O'Brien\\x"], ["Name"])
+
+        soql = sf.query_all.call_args.args[0]
+        assert soql == "SELECT Id, Num__c, Name FROM Account WHERE Num__c IN ('O\\'Brien\\\\x')"
+
+    def test_many_keys_are_chunked_and_rows_concatenated(self):
+        sf = MagicMock()
+        sf.query_all.side_effect = lambda soql: {"records": [{"Id": soql[-6:]}]}
+        keys = [f"{i:030d}" for i in range(200)]
+
+        rows = with_fake_sf(make_client(), sf).find_records("Account", "Num__c", keys, [])
+
+        assert sf.query_all.call_count > 1
+        assert len(rows) == sf.query_all.call_count
+        from urllib.parse import quote_plus
+        for call in sf.query_all.call_args_list:
+            in_list = call.args[0].split(" IN (", 1)[1][:-1]
+            assert len(quote_plus(in_list)) <= 4000
+        sent = ",".join(c.args[0].split(" IN (", 1)[1][:-1] for c in sf.query_all.call_args_list)
+        assert sent.count("'") == 400
+
+    def test_control_character_in_key_raises(self):
+        sf = MagicMock()
+        with pytest.raises(SalesforceClientError, match="control character"):
+            with_fake_sf(make_client(), sf).find_records("Account", "Num__c", ["a\nb"], [])
+        sf.query_all.assert_not_called()
+
+    def test_bad_identifiers_raise(self):
+        client = with_fake_sf(make_client(), MagicMock())
+        with pytest.raises(SalesforceClientError, match="field name"):
+            client.find_records("Account", "Id", [NEW_ID], ["Name; DROP"])
+        with pytest.raises(SalesforceClientError, match="field name"):
+            client.find_records("Account", "Num__c) OR (Id", ["k"], [])
+        with pytest.raises(SalesforceClientError, match="object type"):
+            client.find_records("Account x", "Id", [NEW_ID], [])
+
+    def test_bad_id_key_and_key_count(self):
+        client = with_fake_sf(make_client(), MagicMock())
+        with pytest.raises(SalesforceClientError, match="Invalid Salesforce ID"):
+            client.find_records("Account", "Id", ["x' OR '1"], [])
+        for keys in ([], ["k"] * 201):
+            with pytest.raises(SalesforceClientError, match="1 to 200"):
+                client.find_records("Account", "Num__c", keys, [])
+
+    def test_key_field_not_repeated_when_also_selected(self):
+        sf = MagicMock()
+        sf.query_all.return_value = {"records": []}
+
+        with_fake_sf(make_client(), sf).find_records("Account", "Num__c", ["k"], ["num__c", "Name", "id"])
+
+        assert sf.query_all.call_args.args[0] == "SELECT Id, Num__c, Name FROM Account WHERE Num__c IN ('k')"
+
+
+def test_soql_quote_escapes_backslash_and_quote():
+    assert _soql_quote("a'b\\c") == "'a\\'b\\\\c'"

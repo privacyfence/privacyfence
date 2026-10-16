@@ -360,7 +360,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 | `apps_script` | `seed_script_title`, `seed_script_id` | `get_content.json` | — |
 | `telegram` | `chat_id`, `history_limit` | `get_messages.json` | — |
 | `peek` | **`page_slug`** | `list_pages.json`, `get_comments.json` | uploads, publishes, renames, comments on and deletes one page |
-| `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id` | `list_reports.json`, `run_report_page.json`, `get_record.json` | — |
+| `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id`, `lifecycle_object_type`, `lifecycle_name_field`, `lifecycle_note_field` | `list_reports.json`, `run_report_page.json`, `get_record.json` | creates and updates one Task (`lifecycle_object_type`), then two more in one batch; never deletes them |
 | `grist` | **`doc_id`**, `table_id`, `lifecycle_table_id` | `list_documents.json`, `list_columns.json`, `get_records.json` | adds and updates one row in `lifecycle_table_id`; never deletes it |
 | `jira` | `project_key`, `seed_issue_summary`, `seed_issue_key` | `list_projects.json`, `get_issue.json` | creates, updates and deletes one issue in `project_key` |
 | `confluence` | `space_key`, `seed_page_title`, `seed_page_id` | `list_spaces.json`, `get_page.json` | creates and updates one page in `space_key`; never deletes it |
@@ -411,9 +411,9 @@ Always use the project venv; the recorder imports the same third-party clients a
 - `--record` makes the same calls, redacts identity fields (`redact()` and the connector-specific
   passes), de-identifies structural ids and URLs (`deidentify_structural_fields()`), and writes
   `tests/fixtures/live/<connector>/<method>.json` for every result that passed.
-- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira`, `peek` and `tasks` only (the comment above
+- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira`, `peek`, `salesforce` and `tasks` only (the comment above
   `LIFECYCLE_CHECKS` says why the others are excluded) and never writes a fixture. A cleanup that
-  ran but left the object behind fails the run. Confluence and Grist have no cleanup step.
+  ran but left the object behind fails the run. Confluence, Grist and Salesforce have no cleanup step.
 
 With no connector named, every connector implemented for the mode runs. `--report-file PATH` also
 saves the report; `-v`/`--verbose` turns on DEBUG logging on stderr. The exit status is non-zero
@@ -551,7 +551,7 @@ Never add a QA credential as a GitHub Actions secret as a workaround.
 | A result says the fetched object "does not carry [QATEST]" | The manifest id points at the wrong object, or the seed artifact was renamed. Repair the artifact or the id. |
 | `Telegram app credentials not available in this build.` | The `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` repository secrets are missing. An error naming `credentials/telegram.session` instead means the session file is missing from `~/privacyfence/credentials/`. |
 | Atlassian `401`/`403` while refreshing the token | Check that the copy-back step ran and that the runner user can write to `~/privacyfence/credentials/`. A spent Atlassian refresh token needs a fresh reconnect; a rerun will not fix it. A `403` from the token endpoint can also mean the client id/secret in `org_config.json` does not match the app at developer.atlassian.com. |
-| `--lifecycle` shows `n/a` under Cleanup for Confluence | Expected; see [Seed: Confluence](#seed-confluence). |
+| `--lifecycle` shows `n/a` under Cleanup for Confluence, Grist or Salesforce | Expected; see [Seed: Confluence](#seed-confluence). Grist and Salesforce have no delete either. |
 
 The runner holds real QA grants: patch it, watch its health, require review on changes to the two
 workflows above, and revoke every QA grant if the host is compromised.
@@ -682,6 +682,7 @@ For each representative read, list, search, create, update, send or upload tool:
   rejected before any card appears.
 - **Report overrides.** `salesforce_run_report` with `columns`, `filters` or `summary_only` narrows that run only. The approved-report rule still reads it without a card, and `--check`'s `run_report` row covers the three live.
 - **Report paging.** `--check`'s `run_report_page` row covers `sortBy`, `greaterThan`, the `RowCount` aggregate and flattening a summary report live, on the QA report's `PF QA Number` column. It records only the `[QATEST]` rows of the first page.
+- **Lifecycle.** `--lifecycle` creates and updates Tasks (`lifecycle_object_type`, `lifecycle_name_field`, `lifecycle_note_field`) tagged `[QATEST-LIFECYCLE]`: one single-record create and update, then two records in one batch. It never deletes them, so they are deleted by hand now and then.
 
 ### Grist checks
 

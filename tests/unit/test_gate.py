@@ -49,10 +49,12 @@ from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprov
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.connectors.gmail import GmailConnector
 from privacyfence.connectors.grist import GristConnector
+from privacyfence.connectors.salesforce import SalesforceConnector
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from privacyfence.gmail_client import GmailMessage, SendAsAlias
 from privacyfence.grist_client import GristColumn
+from privacyfence.salesforce_client import SalesforceField
 from privacyfence.pii_detector import init_pii_detection
 from privacyfence.principal import Principal, current_principal, principal_scope
 from privacyfence.policy import catalogue as policy_catalogue
@@ -2823,6 +2825,34 @@ class TestApprovalBinding:
         await dispatcher.call("s1", "grist", "grist_import_csv", dict(args))
 
         client.add_records.assert_called_once()
+        assert registry.list_pending() == []
+
+    async def test_identical_salesforce_update_records_reissue_collects_the_decision(
+        self, monkeypatch, audit_dir,
+    ):
+        registry = self._registry(monkeypatch)
+        client = MagicMock()
+        client.describe_fields.return_value = [
+            SalesforceField("Id", "Record ID", "id", False, False, False, False),
+            SalesforceField("Phone", "Phone", "phone", True, True, True, False),
+        ]
+        id_a, id_b = "001000000000001AAA", "001000000000002AAA"
+        rows = [{"Id": id_a, "Phone": "1"}, {"Id": id_b, "Phone": "2"}]
+        client.find_records.side_effect = [rows, list(reversed(rows))]
+        connector = SalesforceConnector(client)
+        dispatcher = McpDispatcher(lambda: {"salesforce": connector})
+        args = {
+            "object_type": "Account",
+            "records": json.dumps([{"Id": id_a, "Phone": "10"}, {"Id": id_b, "Phone": "20"}]),
+            "reason": "r",
+        }
+
+        first = await dispatcher.call("s1", "salesforce", "salesforce_update_records", dict(args))
+        assert first["status"] == "approval_pending"
+        await self._accept(registry, first)
+        await dispatcher.call("s1", "salesforce", "salesforce_update_records", dict(args))
+
+        client.update_records.assert_called_once()
         assert registry.list_pending() == []
 
     async def test_a_differing_write_does_not_coalesce_onto_a_pending_card(self, monkeypatch, audit_dir):

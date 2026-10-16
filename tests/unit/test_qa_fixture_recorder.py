@@ -3489,6 +3489,96 @@ class TestLifecycleGrist:
         assert recorder.LIFECYCLE_CHECKS["grist"] is recorder.lifecycle_grist
 
 
+class TestLifecycleSalesforce:
+    @staticmethod
+    def _client():
+        client = MagicMock()
+        store: dict[str, dict] = {}
+
+        def create_record(object_type, fields):
+            store["001000000000001AAA"] = dict(fields)
+            return "001000000000001AAA"
+
+        def update_record(object_type, record_id, fields):
+            store[record_id].update(fields)
+
+        def create_records(object_type, records):
+            ids = [f"001000000000002AA{i}" for i in range(len(records))]
+            for i, rec in zip(ids, records, strict=True):
+                store[i] = dict(rec)
+            return ids
+
+        def update_records(object_type, records):
+            for rec in records:
+                store[rec["Id"]].update({k: v for k, v in rec.items() if k != "Id"})
+
+        client.describe_fields.return_value = [
+            SimpleNamespace(name="Subject", createable=True),
+            SimpleNamespace(name="Description", createable=True),
+        ]
+        client.create_record.side_effect = create_record
+        client.update_record.side_effect = update_record
+        client.create_records.side_effect = create_records
+        client.update_records.side_effect = update_records
+        client.get_record.side_effect = lambda ot, rid: SimpleNamespace(id=rid, fields=dict(store[rid]))
+        client.find_records.side_effect = lambda ot, key, keys, fields: [
+            {"Id": k, **store[k]} for k in keys
+        ]
+        return client, store
+
+    def test_creates_and_updates_tagged_records_and_never_deletes(self, monkeypatch):
+        client, store = self._client()
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+
+        result = recorder.lifecycle_salesforce({})
+
+        assert (result.connector, result.ok, result.cleanup_ok) == ("salesforce", True, None)
+        assert result.note == "create, get, update, batch create, find, batch update all verified"
+        assert len(store) == 3
+        assert all(v["Subject"].startswith(recorder.LIFECYCLE_TAG) for v in store.values())
+        assert store["001000000000001AAA"]["Description"] == "updated"
+        assert store["001000000000002AA0"]["Description"] == "batch updated"
+        assert client.create_record.call_args.args[0] == "Task"
+
+    def test_manifest_overrides_object_type_and_fields(self, monkeypatch):
+        client, store = self._client()
+        client.describe_fields.return_value = [SimpleNamespace(name="Name", createable=True)]
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+        manifest = {"salesforce": {
+            "lifecycle_object_type": "Note__c", "lifecycle_name_field": "Name",
+            "lifecycle_note_field": "Body__c",
+        }}
+
+        result = recorder.lifecycle_salesforce(manifest)
+
+        assert result.ok
+        assert client.create_record.call_args.args[0] == "Note__c"
+        assert store["001000000000001AAA"]["Body__c"] == "updated"
+
+    def test_a_failing_update_is_reported_with_its_error(self, monkeypatch):
+        client, _ = self._client()
+        client.update_record.side_effect = recorder.SalesforceClientError("update refused")
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+
+        result = recorder.lifecycle_salesforce({})
+
+        assert not result.ok and "update refused" in result.note
+        assert result.cleanup_ok is None
+
+    def test_name_field_that_cannot_be_created_fails_before_writing(self, monkeypatch):
+        client, _ = self._client()
+        client.describe_fields.return_value = [SimpleNamespace(name="Subject", createable=False)]
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+
+        result = recorder.lifecycle_salesforce({})
+
+        assert not result.ok and "Subject" in result.note
+        client.create_record.assert_not_called()
+
+    def test_registered_for_lifecycle(self):
+        assert recorder.LIFECYCLE_CHECKS["salesforce"] is recorder.lifecycle_salesforce
+
+
 # ---------------------------------------------------------------------------- #
 # Peek
 # ---------------------------------------------------------------------------- #

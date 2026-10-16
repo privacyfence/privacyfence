@@ -262,6 +262,8 @@ _TOOL_LAYOUT: dict[str, str] = {
     "confluence_download_attachment": WIDE,
     "salesforce_get_record": WIDE, "salesforce_search": WIDE, "salesforce_run_report": WIDE,
     "salesforce_export_report": WIDE,
+    "salesforce_create_record": WIDE, "salesforce_update_record": WIDE,
+    "salesforce_create_records": WIDE, "salesforce_update_records": WIDE,
     "grist_get_records": WIDE, "grist_export_records": WIDE, "grist_export_sql": WIDE, "grist_add_records": WIDE, "grist_update_records": WIDE,
     "grist_import_csv": WIDE, "grist_update_csv": WIDE,
     "assets_get_object": WIDE, "assets_search_objects": WIDE,

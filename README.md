@@ -72,7 +72,7 @@ MCP-compatible client can connect. See
 | Google Apps Script | Read and write project source; read the result of a run you started (PrivacyFence never runs scripts) |
 | Slack | List and read channels, DMs and threads; search; send messages; start group chats |
 | Telegram | Read and search chats; send messages |
-| Salesforce | Read records, search, run reports (read-only) |
+| Salesforce | Read records, search, run reports; create and update records |
 | Jira | Read, create, update, comment on and transition issues |
 | Confluence | Search and read pages and attachments; create and update pages |
 | Jira Assets | Browse schemas, object types and attributes; search and read objects, linked objects and connected tickets; export to CSV/JSON (read-only) |
