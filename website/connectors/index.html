@@ -26,7 +26,7 @@
   <main id="top">
     <section class="page-intro shell">
       <p class="kicker">Connectors</p>
-      <h1>Fourteen connectors, 152 tools, each with a fixed gate.</h1>
+      <h1>Fourteen connectors, 154 tools, each with a fixed gate.</h1>
       <p class="lede">PrivacyFence governs a defined set of connectors and the operations each one supports. It is not a generic proxy for arbitrary MCP tools. Every tool's gate is fixed in code: it runs straight away, its result is <strong>reviewed</strong> before release, or it <strong>needs your approval</strong> before anything changes.</p>
     </section>
 
@@ -119,15 +119,15 @@
           </dl>
           <p class="cluster connector-links"><a href="/docs/tools-reference/#telegram">Every Telegram tool</a> <a href="/connectors/telegram/">Telegram connector</a></p>
         </article>
-        <article class="card stack connector-card" id="salesforce" data-connector="Salesforce" data-tools="5" data-auto="1" data-review="4" data-popup="0">
+        <article class="card stack connector-card" id="salesforce" data-connector="Salesforce" data-tools="7" data-auto="1" data-review="4" data-popup="2">
           <h3>Salesforce</h3>
-          <p class="connector-counts">5 tools: 1 without a card · 4 reviewed · 0 need approval</p>
+          <p class="connector-counts">7 tools: 1 without a card · 4 reviewed · 2 need approval</p>
           <dl class="connector-gates">
             <dt>Without a card</dt><dd>The list of reports you can run.</dd>
             <dt>Reviewed before release</dt><dd>A record, search results, a report's results, and a whole report exported to a file.</dd>
-            <dt>Needs your approval</dt><dd>Nothing: this connector has no writes.</dd>
+            <dt>Needs your approval</dt><dd>Creating or updating a record.</dd>
           </dl>
-          <p class="connector-note">Read-only: PrivacyFence offers no Salesforce write.</p>
+          <p class="connector-note">Writes create or update records, never delete, each behind a card.</p>
           <p class="cluster connector-links"><a href="/docs/tools-reference/#salesforce">Every Salesforce tool</a> <a href="/connectors/salesforce/">Salesforce connector</a></p>
         </article>
         <article class="card stack connector-card" id="jira" data-connector="Jira" data-tools="13" data-auto="6" data-review="3" data-popup="4">

@@ -378,10 +378,11 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     #
     # Both Salesforce read tools share the ``read`` verb, and each has its own scope: a record read
     # is scoped by object type, a report run by report id. Neither scope can measure the other's
-    # operation key.
+    # operation key. The object-type scope also covers adding and updating records of that type,
+    # including the batch tools.
     _scope(
         "approved_object_types", "salesforce.object_type", "salesforce",
-        (Verb.READ, Verb.SEARCH), _salesforce_object_types, "this object type",
+        (Verb.READ, Verb.SEARCH, Verb.ADD, Verb.UPDATE), _salesforce_object_types, "this object type",
         excludes=("salesforce.run_report",),
     ),
     _scope(

@@ -130,6 +130,10 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ("jira_transition_issue", make_ctx(connector="jira", args={"issue_key": "PROJ-1"})),
     ("confluence_create_page", make_ctx(connector="confluence", args={"space_key": "SP"})),
     ("confluence_update_page", make_ctx(connector="confluence", args={"space_key": "SP", "page_id": "p1"})),
+    ("salesforce_create_record", make_ctx(connector="salesforce", args={"object_type": "Account"}, raw_data={})),
+    ("salesforce_update_record", make_ctx(
+        connector="salesforce", args={"object_type": "Account", "record_id": "001000000000001AAA"}, raw_data={},
+    )),
     ("tasks_create_task", make_ctx(connector="tasks", args={"task_list_id": "L1"})),
     ("tasks_update_task", make_ctx(connector="tasks", args={"task_list_id": "L1", "task_id": "t"})),
     ("tasks_complete_task", make_ctx(connector="tasks", args={"task_list_id": "L1", "task_id": "t"})),
@@ -239,6 +243,11 @@ class TestCatalogueIsDerived:
         assert "salesforce.run_report" not in propose.operations_for(object_types, Verb.READ)
         reports = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_report_ids")
         assert "salesforce.read_record" not in propose.operations_for(reports, Verb.READ)
+
+    def test_object_type_scope_derives_the_salesforce_write_operations(self):
+        object_types = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_object_types")
+        assert "salesforce.create_record" in propose.operations_for(object_types, Verb.ADD)
+        assert "salesforce.update_record" in propose.operations_for(object_types, Verb.UPDATE)
 
     def test_catalogue_ids_are_unique(self):
         """`label_name_allowlist` serves two scope types, so an entry cannot always be identified
