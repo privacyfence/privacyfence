@@ -171,6 +171,13 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "salesforce_update_record":
         "The fields shown change to their new values on that record. PrivacyFence changes no "
         "other field or record; your org's own automation may still react.",
+    "salesforce_create_records":
+        "New records of that object type are created in Salesforce with the fields shown, all or "
+        "none. PrivacyFence changes no other record; your org's own automation may still react.",
+    "salesforce_update_records":
+        "The fields shown change to their new values on the records shown, all or none. "
+        "PrivacyFence changes no other field or record; your org's own automation may still "
+        "react.",
 
     # ── Peek ─────────────────────────────────────────────────────────────
     "peek_upload_page":

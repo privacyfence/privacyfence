@@ -134,6 +134,10 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ("salesforce_update_record", make_ctx(
         connector="salesforce", args={"object_type": "Account", "record_id": "001000000000001AAA"}, raw_data={},
     )),
+    ("salesforce_create_records", make_ctx(connector="salesforce", args={"object_type": "Account"}, raw_data={})),
+    ("salesforce_update_records", make_ctx(
+        connector="salesforce", args={"object_type": "Account", "key_field": "Id"}, raw_data={},
+    )),
     ("tasks_create_task", make_ctx(connector="tasks", args={"task_list_id": "L1"})),
     ("tasks_update_task", make_ctx(connector="tasks", args={"task_list_id": "L1", "task_id": "t"})),
     ("tasks_complete_task", make_ctx(connector="tasks", args={"task_list_id": "L1", "task_id": "t"})),
@@ -248,6 +252,8 @@ class TestCatalogueIsDerived:
         object_types = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_object_types")
         assert "salesforce.create_record" in propose.operations_for(object_types, Verb.ADD)
         assert "salesforce.update_record" in propose.operations_for(object_types, Verb.UPDATE)
+        assert "salesforce.create_records" in propose.operations_for(object_types, Verb.ADD)
+        assert "salesforce.update_records" in propose.operations_for(object_types, Verb.UPDATE)
 
     def test_catalogue_ids_are_unique(self):
         """`label_name_allowlist` serves two scope types, so an entry cannot always be identified

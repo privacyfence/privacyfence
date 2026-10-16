@@ -249,7 +249,9 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | Tool | Always allow buttons |
 |---|---|
 | `salesforce_create_record` | this object type |
+| `salesforce_create_records` | this object type |
 | `salesforce_update_record` | this object type |
+| `salesforce_update_records` | this object type |
 
 ### Slack
 
