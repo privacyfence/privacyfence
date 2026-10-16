@@ -36,6 +36,34 @@ The command-line options of `privacyfence-app` are at the end of this page
   only the `auto_accept` section is used. Keys marked *local mode only* have no effect on an
   organization server.
 
+### Exporting and importing personal settings
+
+**Settings > Auto-accept > Export…** writes `privacyfence-personal-settings.json` (UTF-8 JSON, at most
+256 KiB and 500 rules to import); **Import…** reads one back. It works in both modes and in every
+direction. Only the person's own `auto_accept` rules and step-up level move.
+
+| Key | Meaning |
+|---|---|
+| `format` | Always `privacyfence-personal-settings` |
+| `format_version` | `1`; a newer version is refused |
+| `exported_at` | UTC ISO-8601 time of the export |
+| `source` | `mode` (`local` or `org`) and the PrivacyFence `version` |
+| `auto_accept` | `version: 3` and the `rules` rows, without their former ids; custom rules are left out |
+| `step_up` | `scope`: the person's own step-up scope, or `null` |
+| `not_portable` | Informational list of what does not move; import ignores it |
+
+Import previews before it changes anything and gives each rule a status:
+
+| Status | Meaning |
+|---|---|
+| `add` | A new rule |
+| `extend` | Adds tools to a rule you already have |
+| `present` | Already covered; nothing to do |
+| `skip` | Not imported, with the reason shown (custom rule, unknown tool, cannot be applied by this version) |
+
+Import never removes or narrows anything. See
+[Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
+
 ### Earlier policy sections
 
 A `settings.yaml` that contains an `auto_accept_rules` or `auto_accept_grants` section (even an

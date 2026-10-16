@@ -752,6 +752,39 @@ Settings pages each person sees:
 Connector management, update checks, the log level, the Calendar free/busy and Gmail signature
 switches, and notification preferences are desktop-only settings and do not appear here.
 
+### Moving a person from a desktop install
+
+A person's always-allow rules and step-up level can move from their desktop install to the
+organization server (and back) as a file:
+
+1. On the desktop, open **Settings > Auto-accept** and choose **Export…**. The browser saves
+   `privacyfence-personal-settings.json`.
+2. Sign in to the organization server.
+3. Connect the same accounts at `/connect`. A rule names folders, channels and projects by id, so it
+   only matches when the same account is connected here.
+4. Open **Settings > Auto-accept** and choose **Import…**, then pick the file.
+5. Read the preview. Each rule is listed as will be added, will be extended, already there, or
+   skipped with the reason. Nothing has changed yet.
+6. Confirm. When step-up is in force, approve with your passkey; the approval is for that exact file.
+
+Import only adds: it never removes or narrows a rule or lowers a step-up level, and it applies to the
+signed-in person's own settings only. An administrator cannot import for someone else. What does not
+move:
+
+- Connector sign-ins and tokens: connect your accounts again on the new install.
+- Passkeys: enroll a passkey on the new install at `/security`.
+- Scoped tokens: create new ones if your administrator allows them.
+- Privacy filter and PII detection: install-wide, a desktop install's own or an administrator's on an
+  organization server.
+- Connector on/off switches, notification detail, AI system names, update checks and log level:
+  desktop-only settings.
+- The audit log: it stays on the install that wrote it.
+- Rules written by hand in `settings.yaml` that have no entry on the Auto-accept page (custom
+  rules): add them again on the page.
+
+See [ADR 0194](adr/0194-personal-settings-are-exported-as-a-file-of-auto-accept-rows-and-the-step-up-level.md)
+and [ADR 0195](adr/0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md).
+
 ## 11. AI systems
 
 Every approval card and audit entry names the AI system that made the request. How much that name
