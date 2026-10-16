@@ -100,7 +100,7 @@ def _template_step(recipe: Recipe, step: TemplateStep, files: dict[str, Path], r
     (recipe.work_dir / step.output).write_text(page, encoding="utf-8")
 
 
-def _json_text_args(args: dict[str, Any]) -> dict[str, Any]:
+def json_text_args(args: dict[str, Any]) -> dict[str, Any]:
     return {k: json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v for k, v in args.items()}
 
 
@@ -115,7 +115,7 @@ async def _tool_step(
 ) -> None:
     work_dir = recipe.work_dir
     reason = step.reason or f"privacyfence-sync {recipe.name}: step {step.id}"
-    args = _json_text_args(refs.substitute_value_refs(step.args, read_json))
+    args = json_text_args(refs.substitute_value_refs(step.args, read_json))
     args["reason"] = reason
     result: Any
 

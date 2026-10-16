@@ -1,4 +1,4 @@
-"""Command line entry point: ``privacyfence-sync run|login|check``."""
+"""Command line entry point: ``privacyfence-sync run|login|check|preflight``."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from .client import (
     connect_oauth,
     connect_token,
 )
+from .preflight import preflight_recipe
 from .recipe import RecipeError, load_recipe
 from .runner import run_recipe
 from .template import TemplateError
@@ -47,6 +48,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     check = sub.add_parser("check", help="validate a recipe without any network call")
     check.add_argument("recipe", type=Path)
+    preflight = sub.add_parser(
+        "preflight", help="check that your token can run a recipe, without running it", allow_abbrev=False
+    )
+    preflight.add_argument("recipe", type=Path)
+    preflight.add_argument("--server", help="the PrivacyFence MCP URL")
+    preflight.add_argument(
+        "--attended", action="store_true", help="check for a run that waits for approvals, not an unattended one"
+    )
+    preflight.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="environment variable holding the token")
     return parser
 
 
@@ -81,6 +91,16 @@ async def _run(recipe_path: Path, server_flag: str | None, attended: bool, token
         raise _first_leaf(group) from None
 
 
+async def _preflight(recipe_path: Path, server_flag: str | None, attended: bool, token_env: str) -> bool:
+    recipe = load_recipe(recipe_path)
+    client = _connect(_resolve_server(server_flag, recipe.server), token_env)
+    try:
+        async with client:
+            return await preflight_recipe(recipe, client, attended=attended, out=sys.stdout)
+    except BaseExceptionGroup as group:
+        raise _first_leaf(group) from None
+
+
 async def _login(server: str, callback_port: int) -> None:
     client = connect_oauth(
         server, FileTokenStorage(storage_path(server)), interactive=True, callback_port=callback_port
@@ -111,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "login":
             asyncio.run(_login(args.server, args.callback_port))
             return 0
+        if args.command == "preflight":
+            ok = asyncio.run(_preflight(args.recipe, args.server, args.attended, args.token_env))
+            return 0 if ok else 3
         asyncio.run(_run(args.recipe, args.server, args.attended, args.token_env))
         return 0
     except (RecipeError, TemplateError, RecipeRuntimeError) as exc:

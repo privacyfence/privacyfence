@@ -27,6 +27,10 @@ class FakeSession:
         self.results = results or {}
         self.enter_error = enter_error
         self.calls: list[str] = []
+        self.tool_names: frozenset[str] = frozenset()
+
+    async def list_tool_names(self) -> frozenset[str]:
+        return self.tool_names
 
     async def __aenter__(self) -> FakeSession:
         if self.enter_error is not None:
@@ -301,3 +305,50 @@ def test_running_the_module_exits_with_main_status(
         runpy.run_module("privacyfence_sync.cli", run_name="__main__")
     assert caught.value.code == 0
     assert "OK" in capsys.readouterr().out
+
+
+_META = {
+    "privacyfence_status",
+    "privacyfence_check_policy",
+    "privacyfence_create_upload_slot",
+    "privacyfence_begin_unattended_session",
+    "privacyfence_end_unattended_session",
+}
+
+
+def test_preflight_ok_exits_0(write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]) -> None:
+    daemon.session.tool_names = frozenset(_META | {"drive_list_files"})
+    daemon.session.results["privacyfence_check_policy"] = {"gate": "auto"}
+    assert cli.main(["preflight", simple(write_recipe)]) == 0
+    assert "preflight: 1 step(s) checked, 0 problem(s)" in capsys.readouterr().out
+    assert "privacyfence_end_unattended_session" in daemon.session.calls
+
+
+def test_preflight_problem_exits_3(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["preflight", simple(write_recipe), "--attended"]) == 3
+    captured = capsys.readouterr()
+    assert "NOT AVAILABLE" in captured.out and captured.err == ""
+
+
+def test_preflight_without_token_exits_4(
+    write_recipe: RecipeWriter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("PRIVACYFENCE_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
+    assert cli.main(["preflight", simple(write_recipe)]) == 4
+    assert "privacyfence-sync login" in capsys.readouterr().err
+
+
+def test_preflight_unwraps_task_group_errors(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.enter_error = ExceptionGroup("tg", [SignInError("expired")])
+    assert cli.main(["preflight", simple(write_recipe)]) == 4
+    assert capsys.readouterr().err == "privacyfence-sync: expired\n"
+
+
+def test_preflight_help_mentions_attended(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["preflight", "--help"]) == 0
+    assert "--attended" in capsys.readouterr().out
