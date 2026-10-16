@@ -138,8 +138,9 @@ class SalesforceWriteError(SalesforceClientError):
 
 
 class SalesforceWriteUncertainError(SalesforceClientError):
-    """A write got no clear answer from Salesforce (a 5xx or a dropped connection), so it may or
-    may not have been saved. The text never carries Salesforce's own text."""
+    """A write got no clear answer from Salesforce (a 5xx, a dropped connection, or a 2xx answer
+    that cannot be read), so it may or may not have been saved. The text never carries
+    Salesforce's own text."""
 
 
 class SalesforceObjectNotFoundError(SalesforceClientError):
@@ -563,7 +564,11 @@ def _guard_write(total: int, func: Callable[[], T]) -> T:
 
 def _composite_ids(results: Any, count: int) -> list[str]:
     """The ids of a composite write that Salesforce accepted; raises if any record failed."""
-    if not isinstance(results, list) or len(results) != count:
+    if (
+        not isinstance(results, list)
+        or len(results) != count
+        or any(not isinstance(r, dict) or not isinstance(r.get("success"), bool) for r in results)
+    ):
         raise SalesforceWriteUncertainError(
             f"Salesforce's answer could not be read; {_UNCERTAIN_SUFFIX}"
         )
@@ -974,9 +979,13 @@ class SalesforceClient:
             )
 
         result = self._call(_run)
+        if isinstance(result, dict) and result.get("success") is False:
+            raise SalesforceWriteError(_write_failures(result.get("errors")), 1)
         if not isinstance(result, dict) or result.get("success") is not True or not result.get("id"):
-            raise SalesforceWriteError(
-                _write_failures(result.get("errors") if isinstance(result, dict) else None), 1,
+            # A 2xx answer that is not a clear failure may still mean the record exists, so a
+            # caller that read "not saved" could create it twice.
+            raise SalesforceWriteUncertainError(
+                f"Salesforce's answer could not be read; {_UNCERTAIN_SUFFIX}"
             )
         logger.info("create_record %s: 1 record(s)", object_type)
         return str(result["id"])
