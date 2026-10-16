@@ -1,0 +1,31 @@
+[
+  {
+    "id": "5",
+    "name": "Account",
+    "objectSchemaId": "2",
+    "description": "Customer accounts [QATEST]",
+    "objectCount": 2
+  },
+  {
+    "id": "7",
+    "name": "Contract",
+    "objectSchemaId": "2",
+    "description": "Support contracts [QATEST]",
+    "objectCount": 2
+  },
+  {
+    "id": "9",
+    "name": "Asset",
+    "objectSchemaId": "2",
+    "description": "",
+    "objectCount": 3
+  },
+  {
+    "id": "10",
+    "name": "Hardware asset",
+    "objectSchemaId": "2",
+    "parentObjectTypeId": "9",
+    "description": "",
+    "objectCount": 0
+  }
+]

@@ -1113,6 +1113,92 @@ class TestBuildConnectorsAtlassian:
         assert [c.name for c in connectors] == ["confluence"]
 
 
+class TestBuildConnectorsAssets:
+    """Jira Assets is off by default and guarded by atlassian_oauth.assets_enabled()."""
+
+    _TOKEN = {"access_token": "at", "cloud_id": "c1", "account_email": "me@x.com",
+              "scopes": ["read:cmdb-object:jira"]}
+
+    def _setup(self, monkeypatch, token=None):
+        monkeypatch.setattr(daemon_main, "load_atlassian_token", lambda path: token or self._TOKEN)
+        monkeypatch.setattr(daemon_main, "JiraClient", fake_client_class(result="ok"))
+        monkeypatch.setattr(daemon_main, "ConfluenceClient", fake_client_class(result="ok"))
+        fake = fake_client_class(result=None)
+        monkeypatch.setattr(daemon_main, "AssetsClient", fake)
+        return fake
+
+    def _org(self, **extra):
+        return {"atlassian": {"client_id": "ac", "client_secret": "as", **extra}}
+
+    def test_not_built_by_default(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+
+        connectors, failures = daemon_main.build_connectors({}, self._org())
+
+        assert "assets" not in {c.name for c in connectors}
+        assert fake.instantiated is False
+        assert "assets" not in failures
+
+    def test_built_when_explicitly_enabled(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+
+        connectors, _ = daemon_main.build_connectors({"connectors": {"assets": {"enabled": True}}}, self._org())
+
+        assets = next(c for c in connectors if c.name == "assets")
+        assert assets.my_email == "me@x.com"
+        assert fake.captured_kwargs["config"]["scopes"] == ["read:cmdb-object:jira"]
+
+    def test_bundle_workspace_id_reaches_the_client(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+
+        daemon_main.build_connectors({}, self._org(assets=True, assets_workspace_id="ws-bundle"))
+
+        assert fake.captured_kwargs["config"]["assets_workspace_id"] == "ws-bundle"
+
+    def test_settings_workspace_id_wins_over_the_bundle(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+        config = {"connectors": {"assets": {"enabled": True, "workspace_id": " ws-settings "}}}
+
+        daemon_main.build_connectors(config, self._org(assets_workspace_id="ws-bundle"))
+
+        assert fake.captured_kwargs["config"]["assets_workspace_id"] == "ws-settings"
+
+    def test_built_when_the_bundle_flag_is_set(self, monkeypatch):
+        self._setup(monkeypatch)
+
+        connectors, _ = daemon_main.build_connectors({}, self._org(assets=True))
+
+        assert "assets" in {c.name for c in connectors}
+
+    def test_explicit_false_beats_the_bundle_flag(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+        config = {"connectors": {"assets": {"enabled": False}}}
+
+        connectors, _ = daemon_main.build_connectors(config, self._org(assets=True))
+
+        assert "assets" not in {c.name for c in connectors}
+        assert fake.instantiated is False
+
+    def test_token_without_the_assets_scope_is_not_authenticated(self, monkeypatch):
+        self._setup(monkeypatch, token={"access_token": "at", "cloud_id": "c1", "scopes": ["read:jira-work"]})
+        from privacyfence.assets_client import AssetsClient as RealAssetsClient
+        monkeypatch.setattr(daemon_main, "AssetsClient", RealAssetsClient)
+
+        connectors, failures = daemon_main.build_connectors(
+            {"connectors": {"assets": {"enabled": True}}}, self._org(),
+        )
+
+        assert "assets" not in {c.name for c in connectors}
+        assert failures["assets"] == "not_authenticated"
+
+    def test_missing_org_config_is_recorded(self, monkeypatch):
+        self._setup(monkeypatch)
+
+        _, failures = daemon_main.build_connectors({"connectors": {"assets": {"enabled": True}}}, {})
+
+        assert failures["assets"] == "no_org_config"
+
+
 # ---------------------------------------------------------------------------- #
 # build_connectors: Telegram
 # ---------------------------------------------------------------------------- #
@@ -2659,6 +2745,26 @@ class TestAtlassianOauthRunner:
         assert daemon_main.run_atlassian_oauth({}) == 1
         assert "No Atlassian organization config" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(("config", "org_extra", "expect_assets"), [
+        (None, {}, False),
+        ({"connectors": {"assets": {"enabled": True}}}, {}, True),
+        (None, {"assets": True}, True),
+        ({"connectors": {"assets": {"enabled": False}}}, {"assets": True}, False),
+    ])
+    def test_authorize_scopes_include_assets_only_when_enabled(self, monkeypatch, config, org_extra, expect_assets):
+        captured = {}
+
+        def fake_authorize(**kw):
+            captured.update(kw)
+            return {"site_url": "https://acme.atlassian.net"}
+
+        monkeypatch.setattr(daemon_main, "atlassian_authorize_interactive", fake_authorize)
+        org = {"atlassian": {"client_id": "ci", "client_secret": "cs", **org_extra}}
+
+        assert daemon_main.run_atlassian_oauth(org, config) == 0
+        assert ("read:cmdb-object:jira" in captured["scopes"]) is expect_assets
+        assert "read:jira-work" in captured["scopes"]
+
     def test_success_prints_site_url_and_returns_0(self, monkeypatch, capsys):
         monkeypatch.setattr(
             daemon_main, "atlassian_authorize_interactive",
@@ -3512,7 +3618,7 @@ class TestMain:
     def test_oauth_flag_dispatches_to_the_right_runner(self, monkeypatch, flag, runner_name):
         self._patch_config(monkeypatch)
         calls = []
-        monkeypatch.setattr(daemon_main, runner_name, lambda org_config: calls.append(1) or 0)
+        monkeypatch.setattr(daemon_main, runner_name, lambda org_config, *a: calls.append(1) or 0)
 
         result = daemon_main.main([flag])
 

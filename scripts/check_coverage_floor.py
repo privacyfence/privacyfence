@@ -149,6 +149,10 @@ MODULE_FLOORS: dict[str, float] = {
     # principal -- the same class of thing as the fail-closed load path
     # privacy_filter.py above is pinned at 100 for, just on the write side.
     "src/privacyfence/web/org_install_policy.py": 100.0,
+    # Jira Assets: the client is the only parser of Atlassian's Assets responses (replayed against
+    # the recorded live fixtures) and the connector builds the review cards from what it parses.
+    "src/privacyfence/assets_client.py": 100.0,
+    "src/privacyfence/connectors/assets.py": 100.0,
     # The daemon's own session-minting interface (MINT/QUIT) and
     # the companion's OPEN channel share this module's accept-loop plumbing,
     # including the peer-uid gate. 61.0, not a number in the

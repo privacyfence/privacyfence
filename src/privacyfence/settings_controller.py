@@ -88,6 +88,7 @@ from .update_checker import (
 )
 from .webauthn_stepup import has_credentials as _has_webauthn_credentials
 from .webauthn_stepup import observe_step_up_requirement
+from .atlassian_oauth import assets_enabled, scopes_for
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .slack_client import authorize_interactive as slack_authorize_interactive
@@ -100,7 +101,7 @@ LICENSE_NAME = "Apache-2.0"
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
-    "slack", "jira", "confluence", "salesforce", "telegram", "grist", "peek",
+    "slack", "jira", "confluence", "assets", "salesforce", "telegram", "grist", "peek",
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
@@ -114,7 +115,7 @@ NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed
 GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks", "apps_script"}
 
 # Display names for connectors whose key isn't just its label lower-cased.
-_CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script"}
+_CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script", "assets": "Jira Assets"}
 
 
 def connector_label(cname: str) -> str:
@@ -128,7 +129,7 @@ ORG_CONFIG_SERVICE: dict[str, str] = {
     "gmail": "google", "drive": "google", "contacts": "google",
     "calendar": "google", "tasks": "google", "apps_script": "google",
     "slack": "slack",
-    "jira": "atlassian", "confluence": "atlassian",
+    "jira": "atlassian", "confluence": "atlassian", "assets": "atlassian",
     "salesforce": "salesforce",
 }
 ORG_BUNDLE_SERVICES: list[str] = ["google", "slack", "salesforce", "atlassian"]
@@ -1239,7 +1240,7 @@ class SettingsController:
             self._authenticate_slack(org_config)
         elif connector == "salesforce":
             self._authenticate_salesforce(org_config)
-        elif connector in ("jira", "confluence"):
+        elif connector in ("jira", "confluence", "assets"):
             self._authenticate_atlassian(org_config)
         elif connector == "grist":
             self._authenticate_grist(org_config)
@@ -1364,6 +1365,7 @@ class SettingsController:
         token_file = str(data_dir() / TOKEN_FILES["atlassian"])
         self._busy_connectors.add("jira")
         self._busy_connectors.add("confluence")
+        self._busy_connectors.add("assets")
 
         def pick_resource(resources: list[dict[str, Any]]) -> dict[str, Any]:
             # Runs on work()'s own background thread (see _run_async) --
@@ -1383,17 +1385,22 @@ class SettingsController:
             )
             return resources[idx] if idx is not None else resources[0]
 
+        cfg = self._load_config()
+        scopes = scopes_for(assets=assets_enabled(cfg, org_config))
+
         def work() -> dict[str, Any]:
             return atlassian_authorize_interactive(
                 client_id=atlassian_org["client_id"],
                 client_secret=atlassian_org.get("client_secret", ""),
                 token_file=token_file,
+                scopes=scopes,
                 pick_resource=pick_resource,
             )
 
         def done(ok: bool, result: Any) -> None:
             self._busy_connectors.discard("jira")
             self._busy_connectors.discard("confluence")
+            self._busy_connectors.discard("assets")
             if ok:
                 self.error = ""
                 self.refresh_connectors()
@@ -2047,7 +2054,7 @@ class SettingsController:
         for cname in ALL_CONNECTORS:
             connected = cname in self._connectors
             conn_cfg = connectors_cfg.get(cname, {})
-            enabled = conn_cfg.get("enabled", True)
+            enabled = assets_enabled(cfg, org_config) if cname == "assets" else conn_cfg.get("enabled", True)
             busy = cname in self._busy_connectors
             if cname == "telegram":
                 has_org = telegram_app_credentials() is not None

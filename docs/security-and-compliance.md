@@ -238,6 +238,7 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   the token, with source `override`. It is attested because a person created the credential, and it
   outranks an organization pin for that call
   ([ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).
+  Renaming a token changes the name on later entries only; earlier entries keep the name it had.
 - **Local mode** copies the secret to the clipboard through the companion once. **Organization
   mode** shows it once in the browser, and only after the administrator turns scoped tokens on
   (`scoped_tokens.enabled`) and sets the longest lifetime (`scoped_tokens.max_days`).

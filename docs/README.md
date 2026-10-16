@@ -47,7 +47,7 @@ bundle:
   Contacts, Tasks and Apps Script
 - [`slack-setup.md`](slack-setup.md)
 - [`salesforce-setup.md`](salesforce-setup.md)
-- [`atlassian-setup.md`](atlassian-setup.md) — Jira and Confluence
+- [`atlassian-setup.md`](atlassian-setup.md) — Jira, Confluence and Jira Assets
 - [`telegram-setup.md`](telegram-setup.md)
 - [`grist-setup.md`](grist-setup.md)
 - [`peek-setup.md`](peek-setup.md)

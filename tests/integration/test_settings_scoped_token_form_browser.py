@@ -152,3 +152,37 @@ def test_clear_form_resets(page):
     assert page.get_attribute("[data-st-personal-data]", "aria-checked") == "false"
     assert page.query_selector("[data-st-clear]") is None
     assert page.query_selector("[data-st-dup-missing]") is None
+
+
+def _capture_posts(page):
+    page.evaluate(
+        "window.__posted = []; window.webkit = {messageHandlers: {pf: "
+        "{postMessage: function (m) { window.__posted.push(m); }}}};"
+    )
+
+
+def test_a_token_is_renamed_from_the_modal(page):
+    _capture_posts(page)
+    page.click('[aria-label="Rename Daily sync"]')
+    field = page.locator('.pf-modal input[aria-label="Token name"]')
+    assert field.input_value() == "Daily sync"
+    field.fill("Nightly sync")
+    page.click('.pf-modal [aria-label="Save name"]')
+    assert page.evaluate("window.__posted") == [
+        {"action": "rename_scoped_token", "token_id": "st-1", "label": "Nightly sync"}
+    ]
+    assert page.locator(".pf-modal").count() == 0
+
+
+def test_cancel_escape_and_an_unchanged_name_post_nothing(page):
+    _capture_posts(page)
+    for close in (
+        lambda: page.click('.pf-modal [aria-label="Cancel rename"]'),
+        lambda: page.keyboard.press("Escape"),
+        lambda: page.click('.pf-modal [aria-label="Save name"]'),
+    ):
+        page.click('[aria-label="Rename Daily sync"]')
+        assert page.locator(".pf-modal").count() == 1
+        close()
+        assert page.locator(".pf-modal").count() == 0
+        assert page.evaluate("window.__posted") == []

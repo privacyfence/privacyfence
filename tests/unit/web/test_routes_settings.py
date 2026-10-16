@@ -1489,7 +1489,10 @@ def _scoped_token(token_id: str = "st-0123456789ab", label: str = "sales-sync"):
     )
 
 
-def _scoped_wiring(calls: list, *, ok: bool = True, reason: str = "", create_error: str = "", known: bool = True):
+def _scoped_wiring(
+    calls: list, *, ok: bool = True, reason: str = "", create_error: str = "", known: bool = True,
+    rename_error: str = "",
+):
     from privacyfence.scoped_tokens import ScopedTokenError
 
     secret = "pfst_" + "A" * 43
@@ -1504,9 +1507,16 @@ def _scoped_wiring(calls: list, *, ok: bool = True, reason: str = "", create_err
         calls.append(("revoke", token_id))
         return _scoped_token(token_id) if known else None
 
+    def _rename(token_id, label):
+        calls.append(("rename", token_id, label))
+        if rename_error:
+            raise ScopedTokenError(rename_error)
+        return ("sales-sync", _scoped_token(token_id, label=label)) if known else None
+
     return rs.ScopedTokenWiring(
         store_create=_create,
         store_revoke=_revoke,
+        store_rename=_rename,
         store_revoke_all=lambda: calls.append(("revoke_all",)) or 3,
         send_secret=lambda s: calls.append(("send", s)) or (ok, reason),
         page_data=lambda: {"tokens": []},
@@ -1514,14 +1524,15 @@ def _scoped_wiring(calls: list, *, ok: bool = True, reason: str = "", create_err
 
 
 class TestScopedTokenRoutes:
-    """The Scoped tokens section's three routes (ADR 0164): create, revoke
-    and revoke all take the rotate route's gates, answer with no secret and
+    """The Scoped tokens section's four routes (ADR 0164): create, revoke,
+    revoke all and rename take the rotate route's gates, answer with no secret and
     no page state, and audit without naming the secret."""
 
     SECRET = "pfst_" + "A" * 43
     CREATE = "/api/settings/scoped_tokens/create"
     REVOKE = "/api/settings/scoped_tokens/revoke"
     REVOKE_ALL = "/api/settings/scoped_tokens/revoke_all"
+    RENAME = "/api/settings/scoped_tokens/rename"
     BODY = {
         "label": "sales-sync", "days": 90, "rule_ids": ["r2", "r1"],
         "tools": ["gmail_list_messages", "drive_list_files"], "confirmed": True,
@@ -1584,7 +1595,7 @@ class TestScopedTokenRoutes:
         assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data": "yes"}) is None
 
     @pytest.mark.usefixtures("_data_dir")
-    @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL])
+    @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL, RENAME])
     def test_create_needs_confirmation_a_human_session_and_the_passkey(self, controller, sessions, path):
         body = {**self.BODY, "token_id": "st-0123456789ab"}
         client, calls = self._client(controller, sessions)
@@ -1695,6 +1706,53 @@ class TestScopedTokenRoutes:
         assert r.status_code == 404
         assert r.json() == {"error": "No such token."}
 
+    def test_rename_changes_the_name_and_audits_it(self, controller, sessions, monkeypatch):
+        recorded: list = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(
+            self.RENAME, json={"csrf": csrf, "token_id": "st-0123456789ab", "label": "nightly", "confirmed": True},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"renamed": {"id": "st-0123456789ab", "label": "nightly"}}
+        assert calls == [("rename", "st-0123456789ab", "nightly")]
+        assert [s for _p, s in recorded] == ["Renamed scoped token 'sales-sync' to 'nightly' (st-0123456789ab)"]
+
+    def test_rename_to_the_same_name_is_not_audited(self, controller, sessions, monkeypatch):
+        recorded: list = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+        client, _calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(
+            self.RENAME, json={"csrf": csrf, "token_id": "st-0123456789ab", "label": "sales-sync", "confirmed": True},
+        )
+        assert r.status_code == 200
+        assert recorded == []
+
+    def test_rename_of_an_unknown_token_is_404(self, controller, sessions):
+        client, _calls = self._client(controller, sessions, wiring_kwargs={"known": False})
+        csrf = _authed(client, sessions)
+        r = client.post(self.RENAME, json={"csrf": csrf, "token_id": "st-nope", "label": "x", "confirmed": True})
+        assert r.status_code == 404
+        assert r.json() == {"error": "No such token."}
+
+    def test_rename_shows_the_validation_text(self, controller, sessions):
+        client, _calls = self._client(controller, sessions, wiring_kwargs={"rename_error": "Taken."})
+        csrf = _authed(client, sessions)
+        r = client.post(self.RENAME, json={"csrf": csrf, "token_id": "st-1", "label": "x", "confirmed": True})
+        assert r.status_code == 400
+        assert r.json() == {"error": "Taken."}
+
+    @pytest.mark.parametrize("missing", ["token_id", "label"])
+    def test_a_rename_missing_a_field_is_a_400(self, controller, sessions, missing):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        body = {"csrf": csrf, "token_id": "st-1", "label": "x", "confirmed": True}
+        del body[missing]
+        assert client.post(self.RENAME, json=body).status_code == 400
+        assert calls == []
+
     def test_audit_summaries_name_the_token_and_never_the_secret(self, controller, sessions, monkeypatch):
         recorded: list = []
         monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
@@ -1715,7 +1773,7 @@ class TestScopedTokenRoutes:
         client, _calls = self._client(controller, sessions)
         _authed(client, sessions)
         page = client.get("/settings").text
-        for route in ("create", "revoke", "revoke_all"):
+        for route in ("create", "revoke", "revoke_all", "rename"):
             assert f"['{route}'," in page
         assert "url = '/api/settings/scoped_tokens/' + scopedRoutes[action][0]; rest.confirmed = true;" in page
         assert (
@@ -1723,6 +1781,8 @@ class TestScopedTokenRoutes:
         )
         assert "Revoke this token? Clients using it stop working at once." in page
         assert "Revoke all your scoped tokens?" in page
+        assert "rename_scoped_token: ['rename', null]" in page
+        assert "if (scopedRoutes[action][1] && !window.confirm(scopedRoutes[action][1])) { return; }" in page
         assert "if (res.ok && scopedAction) { window.location.reload(); }" in page
         assert page.index("window.location.reload()") < page.index("window.__pfRender(res.state)")
 

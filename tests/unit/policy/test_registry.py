@@ -250,6 +250,11 @@ _VERB_MATRIX: dict[str, Verb] = {
     "contacts_create": Verb.ADD,
     "contacts_add_label": Verb.UPDATE,
     "contacts_remove_label": Verb.UPDATE,
+    "assets_get_object": Verb.READ,
+    "assets_search_objects": Verb.SEARCH,
+    "assets_get_related_objects": Verb.SEARCH,
+    "assets_get_connected_tickets": Verb.READ,
+    "assets_export_objects": Verb.SEARCH,
     "jira_get_issue": Verb.READ,
     "jira_search_issues_with_fields": Verb.SEARCH,
     "jira_export_issues": Verb.SEARCH,
@@ -284,5 +289,5 @@ _VERB_MATRIX: dict[str, Verb] = {
 
 
 def test_tool_to_verb_matches_the_verb_matrix():
-    assert len(_VERB_MATRIX) == 93
+    assert len(_VERB_MATRIX) == 98
     assert TOOL_TO_VERB == _VERB_MATRIX

@@ -45,6 +45,16 @@ the request on the card, once.
 | `apps_script_get_content` |  |
 | `apps_script_get_execution_log` |  |
 
+### Assets
+
+| Tool | Always allow buttons |
+|---|---|
+| `assets_export_objects` | this schema |
+| `assets_get_connected_tickets` |  |
+| `assets_get_object` | this schema |
+| `assets_get_related_objects` | this schema |
+| `assets_search_objects` | this schema |
+
 ### Calendar
 
 | Tool | Always allow buttons |

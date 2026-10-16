@@ -41,6 +41,10 @@ WARN_DAYS = 14
 MAX_TOKENS_PER_PRINCIPAL = 50
 LABEL_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}\Z")
 STORE_FILE_NAME = "scoped_tokens.json"
+_LABEL_MESSAGE = (
+    "A token name is 1 to 60 letters, digits, spaces, dots, dashes or underscores, "
+    "starting with a letter or digit."
+)
 
 _SECONDS_PER_DAY = 86400
 
@@ -315,10 +319,7 @@ class ScopedTokenStore:
                 "Your administrator turns them on in the organization config bundle."
             )
         if not LABEL_RE.match(label):
-            raise ScopedTokenError(
-                "A token name is 1 to 60 letters, digits, spaces, dots, dashes or underscores, "
-                "starting with a letter or digit."
-            )
+            raise ScopedTokenError(_LABEL_MESSAGE)
         rules = frozenset(rule_ids)
         tool_set = frozenset(tools)
         with self._lock:
@@ -376,6 +377,26 @@ class ScopedTokenStore:
             self._tokens[principal.id] = kept
             self._write(principal)
             return True
+
+    def rename(self, principal: Principal, token_id: str, label: str) -> tuple[str, ScopedToken] | None:
+        """Change only the token's name; the secret, digest, id, expiry and rules stay as they are."""
+        if not LABEL_RE.match(label):
+            raise ScopedTokenError(_LABEL_MESSAGE)
+        with self._lock:
+            self._refresh(principal)
+            tokens = self._tokens[principal.id]
+            position = next((i for i, t in enumerate(tokens) if t.id == token_id), None)
+            if position is None:
+                return None
+            token = tokens[position]
+            if token.label == label:
+                return label, token
+            if any(t.label == label for t in tokens):
+                raise ScopedTokenError("You already have a token with that name.")
+            renamed = replace(token, label=label)
+            tokens[position] = renamed
+            self._write(principal)
+            return token.label, renamed
 
     def revoke_all(self, principal_id: str) -> int:
         with self._lock:

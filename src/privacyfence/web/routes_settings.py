@@ -316,6 +316,9 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
     "/api/settings/scoped_tokens/create",
     "/api/settings/scoped_tokens/revoke",
     "/api/settings/scoped_tokens/revoke_all",
+    # A name is what the audit log shows for the token, so renaming goes
+    # through the same gates as creating and revoking.
+    "/api/settings/scoped_tokens/rename",
 })
 
 # Every other bespoke (non-generic-dispatch) route, and why it doesn't need
@@ -353,12 +356,16 @@ class ScopedTokenWiring:
     all of it run for the owner. ``store_create`` returns the new token and
     its secret and raises ``ScopedTokenError`` with text meant for the
     person; ``store_revoke`` returns the token it removed, or ``None``;
+    ``store_rename`` takes the token id and the new name and returns the old
+    name and the renamed token (or ``None`` for an unknown id), raising
+    ``ScopedTokenError`` like ``store_create``;
     ``send_secret`` hands the secret to the companion, which puts it on the
     clipboard, so no response from this module ever carries it;
     ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
 
     store_create: Callable[[str, int, list[str], list[str], bool], tuple[ScopedToken, str]]
     store_revoke: Callable[[str], ScopedToken | None]
+    store_rename: Callable[[str, str], tuple[str, ScopedToken] | None]
     store_revoke_all: Callable[[], int]
     send_secret: Callable[[str], tuple[bool, str]]
     page_data: Callable[[], dict[str, Any]]
@@ -387,6 +394,13 @@ def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
 def _scoped_revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
     token_id = payload.get("token_id")
     return {"token_id": token_id} if isinstance(token_id, str) else None
+
+
+def _scoped_rename_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+    token_id, label = payload.get("token_id"), payload.get("label")
+    if isinstance(token_id, str) and isinstance(label, str):
+        return {"token_id": token_id, "label": label}
+    return None
 
 
 class _BadAction(Exception):
@@ -572,11 +586,11 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  var scopedRoutes = {create_scoped_token: ['create', orgPage ? 'Create this token? It is shown once "
         "and cannot be shown again.' : 'Create this token? It is copied to your "
         "clipboard once and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
-        "Clients using it stop working at once.'], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
+        "Clients using it stop working at once.'], rename_scoped_token: ['rename', null], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
         "scoped tokens?']};"
         "  var scopedAction = scopedRoutes.hasOwnProperty(action);"
         "  if (scopedAction) {"
-        "    if (!window.confirm(scopedRoutes[action][1])) { return; }"
+        "    if (scopedRoutes[action][1] && !window.confirm(scopedRoutes[action][1])) { return; }"
         "    url = '/api/settings/scoped_tokens/' + scopedRoutes[action][0]; rest.confirmed = true;"
         "  }"
         "  if (action === 'quit_app') {"
@@ -827,7 +841,7 @@ def build_routes(
     ``require_human_session`` asks for one, and the passkey step-up whenever
     ``step_up.require_passkey`` is on.
 
-    ``scoped_tokens`` adds the "Scoped tokens" section's three routes
+    ``scoped_tokens`` adds the "Scoped tokens" section's four routes
     (ADR 0164): create, revoke and revoke all. Each takes the rotate
     route's gates -- an explicit confirmation, a human session where
     ``require_human_session`` asks for one, and the passkey step-up bound to
@@ -1151,7 +1165,7 @@ def build_routes(
     async def _scoped_token_request(
         request: Request, action: str, what: str, fingerprint_body: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> tuple[dict[str, Any], dict[str, Any]] | Response:
-        """The gates the three scoped token routes share, in the rotate
+        """The gates the four scoped token routes share, in the rotate
         route's order. Returns the JSON body and the step-up fingerprint
         body, or the response that refuses the request."""
         if not _authenticated(request):
@@ -1241,6 +1255,29 @@ def build_routes(
             _record_settings_audit(LOCAL_PRINCIPAL, f"Revoked scoped token '{revoked.label}' ({revoked.id})")
         return JSONResponse({"revoked": {"id": revoked.id}})
 
+    async def scoped_token_rename(request: Request) -> Response:
+        assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
+
+        gated = await _scoped_token_request(
+            request, "rename_scoped_token", "rename a scoped token", _scoped_rename_fingerprint_body,
+        )
+        if isinstance(gated, Response):
+            return gated
+        _payload, bound = gated
+        try:
+            result = await run_in_threadpool(scoped_tokens.store_rename, bound["token_id"], bound["label"])
+        except ScopedTokenError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if result is None:
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        old_label, renamed = result
+        if old_label != renamed.label:
+            with principal_scope(LOCAL_PRINCIPAL):
+                _record_settings_audit(
+                    LOCAL_PRINCIPAL, f"Renamed scoped token '{old_label}' to '{renamed.label}' ({renamed.id})",
+                )
+        return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
+
     async def scoped_token_revoke_all(request: Request) -> Response:
         assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
         gated = await _scoped_token_request(
@@ -1282,6 +1319,7 @@ def build_routes(
         routes += [
             Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
+            Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         ]
     routes.append(Route("/api/settings/{action}", settings_action, methods=["POST"]))
@@ -1423,7 +1461,7 @@ def build_org_routes(
     whatever names are already cached and a shortened id otherwise, never a lookup.
 
     ``scoped_token_policy`` is what the administrator's org config bundle says about scoped
-    tokens (ADR 0165); ``None`` is "not enabled". The three scoped token routes are always
+    tokens (ADR 0165); ``None`` is "not enabled". The four scoped token routes are always
     mounted and answer 403 until it is enabled. ``scoped_token_store`` is the process-wide
     store unless a test passes its own; ``scoped_token_page_data`` builds the Settings
     section's data for the signed-in principal (``None``: the section is not drawn).
@@ -1668,7 +1706,7 @@ def build_org_routes(
     async def _org_scoped_token_request(
         request: Request, action: str, fingerprint_body: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> tuple[Principal, dict[str, Any]] | Response:
-        """The gates the three org scoped token routes share (ADR 0165), in
+        """The gates the four org scoped token routes share (ADR 0165), in
         ``settings_action``'s order: session, CSRF, origin, the administrator's
         opt-in, confirmation, then the passkey step-up when the org requires
         one. Returns the principal and the step-up fingerprint body, or the
@@ -1758,6 +1796,28 @@ def build_org_routes(
                 principal, f"Revoked scoped token '{token.label}' ({token.id}) (principal={principal.id})",
             )
         return JSONResponse({"revoked": {"id": token.id}})
+
+    async def scoped_token_rename(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "rename_scoped_token", _scoped_rename_fingerprint_body)
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        store = scoped_token_store or get_store()
+        try:
+            result = await run_in_threadpool(store.rename, principal, bound["token_id"], bound["label"])
+        except ScopedTokenError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if result is None:
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        old_label, renamed = result
+        if old_label != renamed.label:
+            with principal_scope(principal):
+                _record_settings_audit(
+                    principal,
+                    f"Renamed scoped token '{old_label}' to '{renamed.label}' ({renamed.id}) "
+                    f"(principal={principal.id})",
+                )
+        return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
 
     async def scoped_token_revoke_all(request: Request) -> Response:
         gated = await _org_scoped_token_request(request, "revoke_all_scoped_tokens", lambda payload: {})
@@ -2011,6 +2071,7 @@ def build_org_routes(
         Route("/settings/privacy", privacy_page),
         Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
+        Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]

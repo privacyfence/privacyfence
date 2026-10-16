@@ -1289,7 +1289,8 @@ _JS = r"""
     t.tools.forEach(function (name) { detail += '<li><code>' + esc(name) + '</code></li>'; });
     detail += '</ul></details>';
     var control = chips + '<div class="button" role="button" tabindex="0" aria-label="Duplicate ' + esc(t.label) + '" data-st-duplicate="' +
-      esc(t.id) + '">Duplicate</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
+      esc(t.id) + '">Duplicate</div><div class="button" role="button" tabindex="0" aria-label="Rename ' + esc(t.label) +
+      '" data-st-rename="' + esc(t.id) + '">Rename</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
       dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div>';
     return rowHtml(t.label, esc(scopedExpiryText(t)) + detail, control, 'pf-st-row');
   }
@@ -1469,6 +1470,72 @@ _JS = r"""
       if (ui.stRules[r.id]) { r.tools.forEach(function (name) { ui.stTools[name] = true; }); }
     });
     render(pyState);
+  }
+
+  // Rename a token (only its name changes). The Enter/Escape keys are handled on
+  // the input alone: the page's body keydown handler already clicks any
+  // role="button" element on Enter/Space, so per-button listeners would post twice.
+  function renameScopedToken(tokenId) {
+    var t = SCOPED.tokens.filter(function (x) { return x.id === tokenId; })[0];
+    if (!t) { return; }
+    var overlay = document.createElement('div');
+    overlay.className = 'pf-modal-overlay';
+    overlay.setAttribute('role', 'presentation');
+    var box = document.createElement('div');
+    box.className = 'pf-modal';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Rename scoped token');
+    var title = document.createElement('div');
+    title.className = 'pf-modal-title';
+    title.textContent = 'Rename token';
+    var desc = document.createElement('div');
+    desc.className = 'pf-modal-desc';
+    desc.textContent = 'Only the name changes. The token, its rules, tools and expiry stay the same.';
+    var field = document.createElement('input');
+    field.type = 'text';
+    field.className = 'field';
+    field.maxLength = 60;
+    field.setAttribute('aria-label', 'Token name');
+    field.setAttribute('autocomplete', 'off');
+    field.value = t.label;
+    var buttons = document.createElement('div');
+    buttons.className = 'pf-modal-buttons';
+    var cancel = document.createElement('div');
+    cancel.className = 'button';
+    cancel.setAttribute('role', 'button');
+    cancel.setAttribute('tabindex', '0');
+    cancel.setAttribute('aria-label', 'Cancel rename');
+    cancel.textContent = 'Cancel';
+    var save = document.createElement('div');
+    save.className = 'button primary';
+    save.setAttribute('role', 'button');
+    save.setAttribute('tabindex', '0');
+    save.setAttribute('aria-label', 'Save name');
+    save.textContent = 'Save';
+    function close() { overlay.remove(); }
+    function doSave() {
+      var name = field.value.trim();
+      close();
+      if (name === '' || name === t.label) { return; }
+      post('rename_scoped_token', { token_id: tokenId, label: name });
+    }
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', doSave);
+    field.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); doSave(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+    });
+    buttons.appendChild(cancel);
+    buttons.appendChild(save);
+    box.appendChild(title);
+    box.appendChild(desc);
+    box.appendChild(field);
+    box.appendChild(buttons);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    field.focus();
+    field.select();
   }
 
   // The one-time delivery dialog (ADR 0165): the secret lives only in this
@@ -1973,6 +2040,8 @@ _JS = r"""
     if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
     var stDupEl = e.target.closest('[data-st-duplicate]');
     if (stDupEl) { duplicateScopedToken(stDupEl.getAttribute('data-st-duplicate')); return; }
+    var stRenameEl = e.target.closest('[data-st-rename]');
+    if (stRenameEl) { renameScopedToken(stRenameEl.getAttribute('data-st-rename')); return; }
     if (e.target.closest('[data-st-clear]')) { clearScopedForm(); return; }
     if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
     if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }
