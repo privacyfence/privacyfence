@@ -783,6 +783,12 @@ class TestScopedTokensSection:
         assert "The original only allowed part of them; check the tools below before creating it." in html
         assert "/^(.*) (\\d+)$/" in html
 
+    def test_a_token_can_be_renamed(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-rename="' in html
+        assert "aria-label=\"Rename ' + esc(t.label)" in html
+        assert "rename_scoped_token" in html
+
     def test_tools_follow_the_chosen_rules(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "data-st-other-tools" in html
