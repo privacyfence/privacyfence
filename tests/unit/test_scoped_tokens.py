@@ -162,6 +162,51 @@ class TestStore:
         assert store.find(third_secret, NOW) is None
         assert store.tokens_for(LOCAL_PRINCIPAL) == []
 
+    def test_rename_changes_only_the_label(self):
+        store = _store()
+        token, secret = _create(store, label="a")
+        old, renamed = store.rename(LOCAL_PRINCIPAL, token.id, "b")
+        assert renamed.label == "b"
+        found = store.find(secret, NOW)
+        assert found == renamed
+        for attr in ("digest", "id", "expires_at", "rule_ids", "tools", "allow_personal_data", "rule_limits"):
+            assert getattr(found, attr) == getattr(token, attr)
+        assert _store().tokens_for(LOCAL_PRINCIPAL)[0].label == "b"
+
+    def test_rename_returns_the_old_label(self):
+        store = _store()
+        token, _ = _create(store, label="a")
+        assert store.rename(LOCAL_PRINCIPAL, token.id, "b")[0] == "a"
+
+    def test_rename_to_a_taken_label_is_refused(self):
+        store = _store()
+        _create(store, label="a")
+        other, _ = _create(store, label="b")
+        with pytest.raises(ScopedTokenError) as err:
+            store.rename(LOCAL_PRINCIPAL, other.id, "a")
+        assert str(err.value) == "You already have a token with that name."
+
+    def test_rename_to_its_own_label_is_a_no_op(self, monkeypatch):
+        store = _store()
+        token, _ = _create(store, label="a")
+        monkeypatch.setattr(store, "_write", lambda p: pytest.fail("wrote"))
+        assert store.rename(LOCAL_PRINCIPAL, token.id, "a") == ("a", token)
+
+    def test_rename_rejects_an_invalid_label(self):
+        store = _store()
+        token, _ = _create(store, label="a")
+        with pytest.raises(ScopedTokenError, match="A token name is 1 to 60 letters"):
+            store.rename(LOCAL_PRINCIPAL, token.id, "-bad")
+
+    def test_rename_of_an_unknown_token_returns_none(self):
+        assert _store().rename(LOCAL_PRINCIPAL, "st-missing", "x") is None
+
+    def test_rename_keeps_an_expired_token_renamable(self):
+        store = _store()
+        token, secret = _create(store, label="a", days=1)
+        assert store.rename(LOCAL_PRINCIPAL, token.id, "b")[1].label == "b"
+        assert store.find(secret, token.expires_at) is None
+
     def test_revoke_all_for_a_principal_the_store_has_not_seen(self, tmp_path):
         other = Principal(id="alice", email="a@example.com", display_name="Alice")
         _create(_store(other), other)

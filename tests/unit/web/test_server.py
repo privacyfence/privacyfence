@@ -2104,6 +2104,27 @@ class TestScopedTokenWiring:
         tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
         assert (tokens["flagged"]["allow_personal_data"], tokens["plain"]["allow_personal_data"]) == (True, False)
 
+    def test_the_wiring_renames_in_the_store(self, tmp_path, monkeypatch):
+        import dataclasses
+
+        from privacyfence import scoped_tokens
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        monkeypatch.setattr(
+            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
+        )
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
+        token, _ = wiring.store_create("old", 30, [rule.id], ["gmail_list_messages"], False)
+
+        old_label, renamed = wiring.store_rename(token.id, "new")
+
+        assert old_label == "old"
+        assert renamed == dataclasses.replace(token, label="new")
+        assert wiring.store_rename("st-missing", "x") is None
+        assert [t["label"] for t in wiring.page_data()["tokens"]] == ["new"]
+
     def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
         import time
 

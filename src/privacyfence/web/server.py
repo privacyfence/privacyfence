@@ -401,6 +401,9 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
         token = store.get(LOCAL_PRINCIPAL.id, token_id)
         return token if token is not None and store.revoke(LOCAL_PRINCIPAL, token_id) else None
 
+    def _rename(token_id: str, label: str) -> tuple[str, ScopedToken] | None:
+        return scoped_tokens.get_store().rename(LOCAL_PRINCIPAL, token_id, label)
+
     def _revoke_all() -> int:
         return scoped_tokens.get_store().revoke_all(LOCAL_PRINCIPAL.id)
 
@@ -414,8 +417,8 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
         )
 
     return ScopedTokenWiring(
-        store_create=_create, store_revoke=_revoke, store_revoke_all=_revoke_all, send_secret=_send,
-        page_data=_page_data,
+        store_create=_create, store_revoke=_revoke, store_rename=_rename, store_revoke_all=_revoke_all,
+        send_secret=_send, page_data=_page_data,
     )
 
 
