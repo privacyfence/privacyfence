@@ -80,9 +80,11 @@ create rules, in Settings and behind their passkey, and that you cannot propose 
 Tell the user to test in this order:
 
 1. `privacyfence-sync check recipe.yaml`: validates the recipe, with no network call.
-2. `privacyfence-sync run recipe.yaml --attended`, once: each step without a rule shows an
+2. `privacyfence-sync preflight recipe.yaml`: connects with the token and reports, per step,
+   whether it is in the token's scope and covered by a rule; no data moves.
+3. `privacyfence-sync run recipe.yaml --attended`, once: each step without a rule shows an
    approval card, which finds the missing rules.
-3. `privacyfence-sync run recipe.yaml`, unattended: no card should appear.
+4. `privacyfence-sync run recipe.yaml`, unattended: no card should appear.
 
 Exit codes, from the reference:
 

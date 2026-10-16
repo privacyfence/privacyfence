@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`privacyfence-sync preflight`.** Tells you, before a scheduled run, whether your token can call each step of a recipe and whether an auto-accept rule covers it, without moving any data.
 - **Scoped tokens can be renamed.** Rename on the Scoped tokens page changes only the token's name; the token itself, its rules, tools and expiry stay the same, so clients using it keep working.
 
 ## [6.2.0] — 2026-10-15

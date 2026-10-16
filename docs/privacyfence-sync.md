@@ -54,7 +54,7 @@ personal data** ticked on the recipe's scoped token if the data holds personal d
 
 To find a missing rule, run the recipe once with `privacyfence-sync run recipe.yaml --attended`:
 each uncovered step shows a card, and the card's **Always allow** button or Settings adds the rule.
-Then run it without `--attended` and no card should appear.
+Then run it without `--attended` and no card should appear. Before scheduling, `privacyfence-sync preflight` reports with the token whether each step is in its scope and covered by a rule.
 
 ## The recipe-writing plugin
 

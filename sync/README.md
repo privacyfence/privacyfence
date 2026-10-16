@@ -555,6 +555,7 @@ Before the first scheduled run of any recipe:
 
 ```sh
 privacyfence-sync check recipe.yaml
+privacyfence-sync preflight recipe.yaml        # will my token work?
 privacyfence-sync run recipe.yaml --attended   # approve, and add any missing rule
 privacyfence-sync run recipe.yaml              # unattended: no card should appear
 ```
@@ -565,6 +566,7 @@ privacyfence-sync run recipe.yaml              # unattended: no card should appe
 privacyfence-sync run RECIPE [--server URL] [--attended] [--token-env NAME]
 privacyfence-sync login --server URL [--callback-port N]
 privacyfence-sync check RECIPE
+privacyfence-sync preflight RECIPE [--server URL] [--attended] [--token-env NAME]
 ```
 
 - **`run`** runs every step in order and stops at the first failure. Each step prints a line
@@ -577,6 +579,16 @@ privacyfence-sync check RECIPE
 - **`login`** signs in to an organization server, then checks the connection.
 - **`check`** validates the recipe, its references and its paths, and prints
   `<name>: <n> step(s), OK`. It makes no network call and runs no script.
+- **`preflight`** connects with the same token as `run` and reports, per tool step, whether the
+  token can call that tool and whether an unattended run would pass without an approval card, then
+  prints `preflight: <n> step(s) checked, <m> problem(s)`. It moves no data and runs no script. It
+  does write audit entries (a status call and one policy check per step) and, unless you pass
+  `--attended`, declares and ends an unattended session, which the PrivacyFence UI may show
+  briefly. It takes the same `--server`, `--attended` and `--token-env` options as `run`. A step
+  whose arguments are filled in at run time (`${...}`) is checked without them, and what depends
+  on content PrivacyFence only sees at run time is reported as `unknown`. In particular it cannot
+  predict the personal-data scan: a run is also denied when the data it reads holds personal data
+  the token does not allow. Use it after creating a scoped token or rules and before scheduling.
 
 The server address is, in order: `--server`, the recipe's `server`, the variable
 `PRIVACYFENCE_MCP_URL`, then `http://127.0.0.1:8765/mcp`.
@@ -588,7 +600,7 @@ Exit codes:
 | 0 | Every step succeeded, or a script step said there was nothing to do (exit 10) |
 | 1 | The recipe, a command-line argument, a reference or a template is wrong |
 | 2 | A tool call, a file transfer or a script failed, or the server refused the connection |
-| 3 | PrivacyFence denied a step (in an unattended run: no rule covers it) |
+| 3 | PrivacyFence denied a step (in an unattended run: no rule covers it); for `preflight`, a step is outside the token or would need approval |
 | 4 | Not signed in, the sign-in expired, or no token |
 
 Every error prints one line starting with `privacyfence-sync:` to the error output; when a script
