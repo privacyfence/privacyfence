@@ -54,7 +54,7 @@ There is no tracking issue.
   - `auto_accept.TOOL_TO_OPERATION` (`auto_accept.py:133-136` for Salesforce)
   - `auto_accept.TOOL_TO_GATE` (`auto_accept.py:295-299`)
   - `policy/registry.TOOL_TO_VERB` (`registry.py:174-177`), plus the test-side
-    `_VERB_MATRIX`, whose length is asserted as 93 at `tests/unit/policy/test_registry.py:287`
+    `_VERB_MATRIX`, whose length is asserted as 98 at `tests/unit/policy/test_registry.py:292`
   - `write_effects.EFFECT_BY_TOOL` (`write_effects.py:42-180`, no Salesforce group yet;
     `tests/unit/test_write_effects.py:31` scans connector sources for `gated_call(` blocks, cut at
     the first `\n\s*\)`, and looks for `tool="X"` and `gate="popup"` inside each block)
@@ -122,9 +122,16 @@ All four tools use `gate="popup"`, `read_only=False` and `destructive=False`, ha
 | Tool | Params (besides `reason`) | Returns |
 |---|---|---|
 | `salesforce_create_record` | `object_type`, `fields` | `{"object_type", "id"}` |
-| `salesforce_update_record` | `object_type`, `record_id`, `fields` | `{"object_type", "id", "changed_fields": [names]}` |
+| `salesforce_update_record` | `object_type`, `record_id`, `fields` | `{"object_type", "id", "fields": [canonical names of every field given]}` |
 | `salesforce_create_records` | `object_type`, `records` | `{"object_type", "created": n, "ids": [ids in input order]}` |
-| `salesforce_update_records` | `object_type`, `records`, `key_field` (default `"Id"`) | `{"object_type", "updated": n, "unchanged": m, "ids": [ids of updated records]}` |
+| `salesforce_update_records` | `object_type`, `records`, `key_field` (default `"Id"`) | `{"object_type", "updated": n, "ids": [ids of every matched record, input order]}`, n = number of records given |
+
+No result says which fields or records already held the given values: that is Salesforce data,
+which the caller gets only through a reviewed read.
+
+Every param is `ToolParam(<name>, "str", ...)`, in this order: `object_type`, `record_id`
+(update_record only), `fields` or `records`, `key_field` (update_records only, `required=False,
+default="Id"`), then the `reason` param.
 
 Tool descriptions. Use this exact text; each is under 1024 characters:
 
@@ -136,8 +143,8 @@ Tool descriptions. Use this exact text; each is under 1024 characters:
   approval."
 - `salesforce_update_record`: "Change fields of one existing Salesforce record, by its id. Only
   the fields you list change; a field set to null is cleared. The approval card shows each field's
-  current and new value, and a call that would change nothing is refused. Returns {object_type, id,
-  changed_fields}. Use salesforce_update_records to change several records in one approval, and
+  current and new value; fields that already hold the given value are left as they are. Returns
+  {object_type, id, fields}. Use salesforce_update_records to change several records in one approval, and
   salesforce_get_record to read the record first. Requires user approval."
 - `salesforce_create_records`: "Create 1 to 200 new records of one Salesforce object type in one
   approval, all or none: if Salesforce refuses one record, none is created and the error names
@@ -147,7 +154,7 @@ Tool descriptions. Use this exact text; each is under 1024 characters:
   one approval, all or none. Each record is found by key_field: Id (default) or a field marked
   External ID. Only the fields listed change, records that already have those values are left
   alone, and a key that matches no record or several records refuses the whole call. Returns
-  {object_type, updated, unchanged, ids}. Use salesforce_update_record for one record by id and
+  {object_type, updated, ids}. Use salesforce_update_record for one record by id and
   salesforce_search to find ids. Requires user approval."
 
 Param descriptions. Each is at least 20 characters:
@@ -204,6 +211,9 @@ Functions, with these exact signatures:
     - empty object: `f"{param}: names no field"`
     - a value that is not str, int, float, bool or None:
       `f"{param}: {name} must be text, a number, true/false or null"`
+    - a float that is not finite (JSON's NaN or Infinity): `f"{param}: {name} must be a finite number"`
+    - a name repeated within one object (use `json.loads(..., object_pairs_hook=...)`):
+      `f"{param}: {name} is named twice"`
 - `parse_records(raw: str) -> list[dict[str, Any]]`
   - Applies the same size check as above, with param `records`.
   - Errors:
@@ -221,7 +231,7 @@ Functions, with these exact signatures:
     2. the same field named twice in different case:
        `f"{where}: field {field.name} is named twice"`
     3. not writable in this mode (`createable` for create, `updateable` for update):
-       `f"{where}: {object_type}.{field.name} cannot be set when {'creating' if create else 'updating'} a record"`
+       `f"{where}: {object_type}.{field.name} cannot be set when {'creating' if mode == 'create' else 'updating'} a record"`
     4. type not in `WRITABLE_TYPES`:
        `f"{where}: {object_type}.{field.name} has type {field.type}, which PrivacyFence does not write"`
     5. `None` on create: `f"{where}: {field.name} is null; leave it out instead"`
@@ -315,9 +325,10 @@ New module-level helpers:
 - `_soql_quote(value: str) -> str`: raises `SalesforceClientError("key value contains a control character")`
   for any character below `" "`, and returns
   `"'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"`.
-- `_write_failures(content: Any) -> list[WriteFailure]`: reads a list of dicts with `errorCode` or
-  `statusCode`, `message` and `fields`, all at index 0. Any other shape gives
-  `[WriteFailure(0, "UNKNOWN", [], "")]`.
+- `_write_failures(content: Any) -> list[WriteFailure]`: if `content` is a non-empty list whose
+  items are dicts holding a `"success"` key, returns `_composite_failures(content)`. Otherwise it
+  reads a list of dicts with `errorCode` or `statusCode`, `message` and `fields`, all at index 0.
+  Any other shape gives `[WriteFailure(0, "UNKNOWN", [], "")]`.
 - `_composite_failures(results: list[dict]) -> list[WriteFailure]`: for the composite response
   `[{"id", "success", "errors": [...]}]`, one failure per error of each result that is not
   `success`, at that result's index.
@@ -336,9 +347,17 @@ Inside each write's `_run`, catch three `simple_salesforce.exceptions` classes:
 `SalesforceMalformedRequest`, `SalesforceRefusedRequest` and `SalesforceResourceNotFound`. Raise
 `SalesforceWriteError(_write_failures(exc.content), total)` for each.
 
-Catch `SalesforceGeneralError` separately. A 5xx after a POST or PATCH does not prove that nothing
-was saved, so raise `SalesforceClientError(f"Salesforce returned HTTP {exc.status}; the write may
-or may not have been saved. Check the records before trying again")`.
+Catch `SalesforceGeneralError` and `requests.RequestException` separately. A 5xx, or a dropped
+connection after a POST or PATCH, does not prove that nothing was saved. Raise
+`SalesforceWriteUncertainError`:
+
+- for a `SalesforceGeneralError`, with the text `f"Salesforce returned HTTP {exc.status}; the write
+  may or may not have been saved. Check the records before trying again."`;
+- for a `RequestException`, with the text "The connection to Salesforce failed; the write may or
+  may not have been saved. Check the records before trying again."
+
+Define `class SalesforceWriteUncertainError(SalesforceClientError)` next to `SalesforceWriteError`.
+Its text never carries Salesforce's own text.
 
 Import those exception classes inside `_run`, as `_build_sf` imports `Salesforce`. Do not catch
 `SalesforceExpiredSession`.
@@ -378,7 +397,7 @@ Import those exception classes inside `_run`, as `_build_sf` imports `Salesforce
   - Builds `SELECT <Id, key_field, *fields, de-duplicated case-insensitively in that order> FROM
     <object_type> WHERE <key_field> IN (<quoted, comma-joined>)`.
   - `query_all` sends the SOQL in the URL, so split `keys` into chunks whose quoted, comma-joined
-    IN list is at most 4,000 characters. Run one `sf.query_all(soql)` per chunk and concatenate
+    IN list is at most 4,000 characters once encoded with `urllib.parse.quote_plus`. Run one `sf.query_all(soql)` per chunk and concatenate
     the `records`, with `attributes` removed. Grist's lookups use the same bound
     (`_CSV_LOOKUP_JSON_CHARS`, `grist.py:127`).
   - The f-string query gets `# nosec B608  # identifiers match _OBJECT_TYPE_NAME_RE and values are quoted by _soql_quote`.
@@ -427,6 +446,7 @@ Common to all four tools:
 7. After approval, run the client write through a new connector helper
    `async def _write(self, func, *args) -> Any`. It runs `asyncio.to_thread(func, *args)`, and:
    - re-raises `SalesforceWriteError` as `SalesforceWriteRefusedError(str(exc))`;
+   - re-raises `SalesforceWriteUncertainError` as `SalesforceWriteUnconfirmedError(str(exc))`;
    - turns any other `SalesforceClientError` into `RuntimeError`, as `_fetch` does.
 
    Define `SalesforceWriteRefusedError` in `connectors/salesforce.py`, modelled on
@@ -439,7 +459,16 @@ Common to all four tools:
        which the caller needs to fix a validation-rule failure."""
    ```
 
-   It is a named subclass, so `safe_errors.public_message` passes its text through (after
+   Next to it, define:
+
+   ```python
+   class SalesforceWriteUnconfirmedError(RuntimeError):
+       """An approved write got no clear answer from Salesforce (a 5xx or a dropped connection), so
+       it may or may not have been saved. Shown to the model verbatim, so that it checks the
+       records instead of writing again; it never carries Salesforce's own text."""
+   ```
+
+   Both are named subclasses, so `safe_errors.public_message` passes their text through (after
    `redact_secrets`). A bare `RuntimeError` would be replaced by the generic message.
 
 Per tool:
@@ -456,8 +485,9 @@ Per tool:
   2. Resolve the fields with mode `"update"`.
   3. Run `current = await self._fetch(self._sf.get_record, object_type, record_id)`.
   4. `changes = [(name, current.fields.get(name), new) for name, new in resolved.items() if values_differ(new, current.fields.get(name), index[name.lower()].type)]`.
-  5. If `changes` is empty, raise
-     `ValueError("salesforce_update_record: every field already has the value given; nothing to change")`.
+  5. Never refuse when `changes` is empty. Whether a field already holds a value is Salesforce
+     data. A refusal before the card would tell the caller that value with no review and no audit
+     entry.
   6. Gate the call:
      - `tool_name="Update Salesforce Record"`
      - `summary=f"Update {object_type}: {name}"`, where `name` is
@@ -465,10 +495,12 @@ Per tool:
      - `preview={"Object type": object_type, "Record ID": record_id, "Fields changed": str(len(changes))}`.
        The record's name is read from Salesforce, so it goes only into `summary`, as on
        `salesforce_get_record`.
-     - `preview_tables=[{"headers": ["Field", "Current", "New"], "rows": [[name, cell_text(old), cell_text(new)] ...]}]`
-     - `details_text`: one line per change,
+     - `preview_tables=[{"headers": ["Field", "Current", "New"], "rows": ...}]`, with one row per
+       resolved field in input order: `[name, cell_text(old), cell_text(new)]`
+     - `details_text`: one line per resolved field,
        `f"{name}: {cell_text(old, None)} → {cell_text(new, None)}"`
-  7. Write only the changed fields.
+  7. After approval, write only the changed fields. When `changes` is empty, make no client call.
+  8. Return `{"object_type", "id": record_id, "fields": list(resolved)}`.
 - **`salesforce_create_records`**
   - Run `resolve_fields` for each record with `where=f"records[{i}]"`.
   - `tool_name="Create Salesforce Records"` and
@@ -482,9 +514,12 @@ Per tool:
   1. `key = resolve_key_field(key_field, index, object_type)` and
      `is_id = key.type == "id"`.
   2. Find each record's key entry case-insensitively.
+     - Every entry whose name equals `key.name` case-insensitively is the key. More than one raises
+       `ValueError(f"records[{i}]: field {key.name} is named twice")`.
      - Missing: `ValueError(f"records[{i}]: has no {key.name} value")`.
      - Get the text with `key_text(...)`.
-     - When `is_id`, check it with `_validate_salesforce_id`; a failure becomes
+     - When `is_id`, check it with `_validate_salesforce_id` and use the value it returns as the
+       key value. A failure becomes
        `ValueError(f"records[{i}]: {key.name} must be a 15- or 18-character Salesforce id")`.
      - Resolve the remaining fields with mode `"update"`. A record with no field besides the key
        raises `ValueError(f"records[{i}]: names no field to change")`.
@@ -497,20 +532,20 @@ Per tool:
      - Unmatched keys raise
        `ValueError(f"No {object_type} record has {key.name} " + ", ".join(repr(k) for k in first 10) + (f" and {n - 10} more" if n > 10 else ""))`.
   4. For each record, keep the changed fields, compared with `values_differ` as on update_record.
-     Records with none count as `unchanged`.
-     - If every record is unchanged, raise
-       `ValueError("salesforce_update_records: every record already has the values given; nothing to change")`.
+     Records with none count as unchanged; they are shown on the card and not written. Never refuse
+     an all-unchanged call.
   5. Gate the call:
      - `tool_name="Update Salesforce Records"`
-     - `summary=f"Update {u} {object_type} record(s)"`
+     - `summary=f"Update {n} {object_type} record(s)"`, where n is the number of records given
      - `preview={"Object type": object_type, "Matched by": key.name, "Records to update": str(u), "Unchanged records": str(m), "Fields changed": str(c)}`,
        where `c` is the total number of changed cells
      - `preview_tables=[{"headers": ["Record", "Field", "Current", "New"], "rows": ...}]`, with the
        key value as "Record"
      - `details_text`: one line per change,
        `f"{key_value} {name}: {old} → {new}"`, using `cell_text(..., None)`
-  6. Write `[{"Id": row["Id"], **changed}]` in input order with `update_records`.
-  7. Return the ids of the written records.
+  6. After approval, write `[{"Id": row["Id"], **changed}]` in input order with `update_records`,
+     for the records that have changes. When none has, make no client call.
+  7. Return `{"object_type", "updated": n, "ids": [row["Id"] of every matched record, input order]}`.
 
 ### D5. Gate and policy registration
 
@@ -616,17 +651,21 @@ numbers in `docs/adr/` when that phase runs, in this order (see Risks).
 - **ADR 0192: A Salesforce write is checked against the object's describe and its current values
   before the card.**
   - Covers D2 and D4: field, type and nullability checks before any approval.
-  - Updates read the current values and show only the fields that change; a call that changes
-    nothing is refused.
+  - Updates read the current values and show them on the card, and only fields whose value differs
+    are written. A call that would change nothing still gets a card. Refusing it before the card
+    would tell the caller a current value with no review and no audit entry, and no result says
+    which values already matched.
   - Batch updates match by `Id` or an External ID field, and a key that matches no record or
-    several records refuses the call.
+    several records refuses the call. That tells the caller whether a record with that key exists,
+    as `salesforce_get_record` already does for an id.
   - Pre-approval messages never carry a value read from Salesforce.
   - After approval, a refused write raises `SalesforceWriteRefusedError`, a named `RuntimeError`
     that `safe_errors.public_message` passes through. It carries Salesforce's status codes, field
     names and messages, cut to 200 characters. This is a deliberate exception to ADR 0148's "never
     the provider's own text", with the reason from D7.
-  - A 5xx after a write says the write may or may not have been saved, and nothing is retried
-    (ADR 0105).
+  - A 5xx or a dropped connection after a write raises `SalesforceWriteUnconfirmedError`, a named
+    error the caller sees, saying that the write may or may not have been saved. Nothing is
+    retried (ADR 0105).
   - Because the card shows current values, a deferred approval is collected only while the record
     is unchanged. A change between approval and re-issue gets a new card (ADR 0175).
 - **ADR 0193: The Salesforce object-type rule also covers creating and updating records of that
@@ -718,8 +757,8 @@ phases:
       this plan, and must not cite the new ADRs; cite existing ADRs or docs by path
       (tests/unit/test_code_no_history.py enforces this).
       1. In src/privacyfence/salesforce_client.py, add the dataclasses SalesforceField and
-         WriteFailure and the exceptions SalesforceWriteError and SalesforceObjectNotFoundError
-         (both subclasses of SalesforceClientError) exactly as in D3, next to the existing dataclasses (after ReportPage). Implement __init__ to store
+         WriteFailure and the exceptions SalesforceWriteError, SalesforceWriteUncertainError and
+         SalesforceObjectNotFoundError (all subclasses of SalesforceClientError) exactly as in D3, next to the existing dataclasses (after ReportPage). Implement __init__ to store
          `failures` and `total` and build the message D3 specifies.
       2. Add the module helpers _soql_quote, _write_failures and
          _composite_failures under a new "# ---- #" banner "Record writes" placed before
@@ -729,8 +768,9 @@ phases:
          In _call, add `except SalesforceClientError: raise` before the retry's
          `except Exception as retry_exc`, so the retry keeps the new error types.
          Writes map SalesforceMalformedRequest, SalesforceRefusedRequest and
-         SalesforceResourceNotFound to SalesforceWriteError, and SalesforceGeneralError to the
-         "may or may not have been saved" SalesforceClientError, all imported inside _run.
+         SalesforceResourceNotFound to SalesforceWriteError, and SalesforceGeneralError and
+         requests.RequestException to SalesforceWriteUncertainError, with D3's two texts. The
+         simple_salesforce classes are imported inside _run.
          SalesforceExpiredSession must stay uncaught so _call refreshes. find_records chunks the
          IN list at 4,000 characters. Log object type and counts only.
       4. Tests in tests/unit/test_salesforce_client.py, using the existing with_fake_sf(client, sf)
@@ -749,8 +789,10 @@ phases:
            raises SalesforceWriteError whose str() is exactly
            "Salesforce did not save the record: records[0]: REQUIRED_FIELD_MISSING (Name): Required fields are missing: [Name]";
            .content of the str "not json" gives one UNKNOWN failure and does not raise anything
-           else; a SalesforceGeneralError("u", 503, "n", "busy") raises SalesforceClientError (not
-           SalesforceWriteError) whose message contains "may or may not have been saved";
+           else; a SalesforceGeneralError("u", 503, "n", "busy") raises SalesforceWriteUncertainError
+           (not SalesforceWriteError) whose message contains "HTTP 503" and "may or may not have
+           been saved"; a requests.ConnectionError from restful raises SalesforceWriteUncertainError
+           whose message starts "The connection to Salesforce failed";
            expired session: sf.restful.side_effect = [SalesforceExpiredSession("u", 401, "n",
            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired or invalid"}]),
            {"id": "001000000000001AAA", "success": True, "errors": []}], monkeypatch
@@ -763,6 +805,8 @@ phases:
            DUPLICATE_VALUE and records[0] with ALL_OR_NONE_OPERATION_ROLLED_BACK raises with a
            message naming records[1] only and starting "Salesforce saved none of the 2 records: ";
            12 failures list 10 then "; and 2 more"; 0 and 201 records raise SalesforceClientError;
+           a SalesforceMalformedRequest whose .content is a composite result list with records[1]
+           failing DUPLICATE_VALUE raises SalesforceWriteError naming records[1];
            update_records rejects a record without a valid "Id".
          - TestFindRecords: by Id builds `SELECT Id, Name FROM Account WHERE Id IN ('001000000000001AAA')`
            (assert the exact string passed to sf.query_all); by an external id the Python value
@@ -807,8 +851,8 @@ phases:
          invariant "no error message contains a value read from Salesforce"; pytestmark unit).
          Classes and the cases each must cover:
          - TestParse: invalid JSON, a list where an object is expected, an empty object, a nested
-           value, over MAX_PAYLOAD_CHARS, 0 and 201 records, records[2] being a string — each
-           with its exact D2 message.
+           value, NaN and Infinity, a name repeated in one object, over MAX_PAYLOAD_CHARS, 0 and
+           201 records, records[2] being a string — each with its exact D2 message.
          - TestResolveFields: unknown field; same field twice in different case; not createable
            on create but fine on update; not updateable on update; type "address" refused;
            null on create refused; null on update allowed when nillable and refused when not;
@@ -869,7 +913,8 @@ phases:
          _validate_object_type_name/_validate_salesforce_id from ..salesforce_client. Add the
          ToolSpecs salesforce_create_record and salesforce_update_record after
          salesforce_search's spec, with read_only=False and the D1 texts. Add both to call().
-         Add the class SalesforceWriteRefusedError (D4 step 7) after _FILTERS_SHAPE_ERROR. Add
+         Add the classes SalesforceWriteRefusedError and SalesforceWriteUnconfirmedError (D4
+         step 7) after _FILTERS_SHAPE_ERROR. Add
          a "# ---- #" banner "Popup gate (writes)" and the methods _create_record and
          _update_record per D4, plus the helpers _check_object_type, _field_index and _write.
          Build every gated_call argument into a local first, and write `tool="..."` then
@@ -896,21 +941,31 @@ phases:
            and hold no field value;
            raw_data holds no value; a malformed fields JSON and an unknown field raise ValueError
            with no describe/gate call for the JSON case and no gate call for the field case;
-           update with no change raises the D4 "nothing to change" error and never gates; update
-           sends only the changed fields to client.update_record; SalesforceWriteError from the
+           an update where every field already holds the given value still gates, with preview
+           "Fields changed" == "0", never calls client.update_record, and returns the same result
+           shape as a real change; an update sends only the changed fields to
+           client.update_record; SalesforceWriteError from the
            client raises SalesforceWriteRefusedError with the same text and
-           safe_errors.public_message(err) == str(err); any other SalesforceClientError from the
-           write raises a plain RuntimeError; describe_fields raising
+           safe_errors.public_message(err) == str(err); SalesforceWriteUncertainError from the
+           client raises SalesforceWriteUnconfirmedError and safe_errors.public_message(err) ==
+           str(err); any other SalesforceClientError from the write raises a plain RuntimeError;
+           describe_fields raising
            SalesforceObjectNotFoundError raises ValueError with its text and no gate call;
            results match D1.
            Extend the existing assert_all_tools_leave_an_audit_trail call with arg_overrides for
-           the two tools (valid fields JSON, a valid record_id) and make its client return a
-           describe list and a record so both reach the gate.
+           the two tools: salesforce_create_record fields='{"Name": "A"}'; salesforce_update_record
+           record_id="001000000000001AAA" and fields='{"Name": "New"}'. Its client's
+           describe_fields returns [SalesforceField("Id", "Record ID", "id", False, False, False,
+           False), SalesforceField("Name", "Name", "string", True, True, False, False)] and its
+           get_record returns SalesforceRecord("Account", "001000000000001AAA", {"Name": "Old"}),
+           so both reach the gate.
          - tests/unit/policy/test_registry.py: add the two rows to _VERB_MATRIX and change the
            asserted length from 98 to 100 (add 2 to whatever it is if main moved).
          - tests/unit/policy/test_propose.py: add both tools to CORPUS right after the
            confluence_update_page entry, with make_ctx(connector="salesforce",
-           args={"object_type": "Account", ...}, raw_data={}); add a test that
+           args={"object_type": "Account"} for salesforce_create_record and
+           args={"object_type": "Account", "record_id": "001000000000001AAA"} for
+           salesforce_update_record, raw_data={}); add a test that
            propose.operations_for(<approved_object_types entry>, Verb.ADD) contains
            "salesforce.create_record" and, for Verb.UPDATE, "salesforce.update_record".
          - tests/unit/test_auto_accept.py: add test_salesforce_write_tools_have_their_own_operation_keys
@@ -984,8 +1039,11 @@ phases:
          - TestUpdateRecords: by Id (15-char input matches an 18-char row); by an external id
            field with case-different input; key_field not External ID refused; duplicate key
            refused; a key matching two rows refused; 12 unmatched keys list 10 and "and 2 more";
-           a record with only the key refused; unchanged records counted and not written; all
-           unchanged refused without a gate call; preview keys exactly the D4 set; args carry
+           a record with only the key refused; the key named twice in different case refused;
+           an Id key with surrounding spaces is used stripped; unchanged records shown on the card
+           and not written; an all-unchanged call still gates and never calls
+           client.update_records; the result lists every matched id and has no "unchanged" key;
+           preview keys exactly the D4 set; args carry
            exactly object_type and key_field; the error text never contains a current value read
            from find_records (use "SECRET-CURRENT" as a current value and assert it is absent from
            every raised message).
@@ -1050,14 +1108,14 @@ phases:
          verified" on success. Docstring states it never deletes and why. Register it in
          LIFECYCLE_CHECKS in alphabetical position. Also fix the places that say Salesforce has
          no lifecycle check: the module docstring's --lifecycle list (scripts/qa_fixture_recorder.py,
-         around line 31), and the comment above LIFECYCLE_CHECKS (the "salesforce, telegram --
+         around line 31), and the section comment above LIFECYCLE_TAG (the "salesforce, telegram --
          ... nothing to create" entry, around line 2265, becomes telegram only, and Salesforce
-         moves to the list of included connectors with a note that it never deletes).
+         moves to the included list around line 2240, with a note that it never deletes).
       2. tests/fixtures/qa_environment.yaml.example: under salesforce:, add commented
          lifecycle_object_type: Task, lifecycle_name_field: Subject, lifecycle_note_field:
          Description, with a comment that they are the --lifecycle check's defaults.
       3. tests/unit/test_qa_fixture_recorder.py: a test that drives lifecycle_salesforce with a
-         MagicMock client (patch the builder the function uses) through success, and one where
+         MagicMock client (monkeypatch recorder._build_salesforce_client to return it) through success, and one where
          update_record raises, asserting ok False and the note carries the error; and that
          "salesforce" is in LIFECYCLE_CHECKS.
       4. docs/testing-policy.md (around lines 232-233): replace the parenthesis "(create, read,
@@ -1133,9 +1191,12 @@ phases:
          - "Needs your approval" card (line 50): "Creating a record or updating one, or up to 200
            of one object type at once, all or none. The card shows each field's current and new
            value. The assistant can only change what your own Salesforce user can change."
-         - The "Routine requests" section (around lines 72-83) and its Object types card: say
-           that an object-type rule lets matching reads run, and, when it has the add and update
-           verbs, also creating and updating records of that type.
+         - "Routine requests" section: its intro <p> (around line 77) becomes "An always-allow
+           rule lets matching requests run without a card, and each one is still audited. For
+           Salesforce, a rule can trust:". The Object types card's <p> becomes "Records and
+           searches of the object types you name, for example Opportunity, when every requested
+           type is one of them. A rule that also has the add and update verbs creates and updates
+           records of those types without a card." Leave the rest of the section unchanged.
       2. website/compare/claude-connectors/index.html:78: "Salesforce (read-only)" becomes
          "Salesforce".
       3. README.md:75: "| Salesforce | Read records, search, run reports; create and update records |".
