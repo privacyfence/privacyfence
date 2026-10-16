@@ -1,0 +1,170 @@
+<title>Header Rules Checklist</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: one narrow reading column, steps as a checklist, copyable values in mono blocks. */
+  :root {
+    --bg: #f5f6f4;
+    --panel: #ffffff;
+    --fg: #1b2420;
+    --muted: #55625b;
+    --line: #d5dcd7;
+    --accent: #0f6b4f;
+    --accent-fg: #ffffff;
+    --code-bg: #eef2ef;
+    --warn: #8a5a00;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121815; --panel: #1b231f; --fg: #e6ece8; --muted: #9fb0a6; --line: #2e3a34;
+      --accent: #5fd0a4; --accent-fg: #0b1410; --code-bg: #0f1512; --warn: #e3b25a; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121815; --panel: #1b231f; --fg: #e6ece8; --muted: #9fb0a6; --line: #2e3a34;
+    --accent: #5fd0a4; --accent-fg: #0b1410; --code-bg: #0f1512; --warn: #e3b25a; color-scheme: dark;
+  }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.55;
+    padding-block: 28px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; min-width: 0; }
+  h1 { font-size: 1.7rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+  h2 { font-size: 1.15rem; margin: 0; text-wrap: balance; }
+  h3 { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  p { margin: 0; }
+  .lede { color: var(--muted); }
+  section.item { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .meta { color: var(--muted); font-size: 0.9rem; }
+  ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+  ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; min-width: 0; }
+  input[type="checkbox"] { width: 18px; height: 18px; margin-top: 4px; accent-color: var(--accent); }
+  .body { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  .body > p::before { content: counter(s) ". "; color: var(--muted); font-weight: 600; }
+  li.done .body > p:first-child { color: var(--muted); text-decoration: line-through; }
+  .body > span { display: block; }
+  .expect { color: var(--muted); font-size: 0.92rem; }
+  .expect b { color: var(--fg); font-weight: 600; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.5; white-space: pre; }
+  code { font-family: var(--font-mono); font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  .copyrow { display: flex; gap: 8px; align-items: stretch; }
+  .copyrow pre { flex: 1; min-width: 0; }
+  button { font: inherit; font-size: 0.85rem; background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a { color: var(--accent); }
+  .note { border-left: 3px solid var(--warn); padding: 4px 0 4px 12px; color: var(--muted); font-size: 0.92rem; }
+  .done-when { border-top: 1px solid var(--line); padding-top: 12px; }
+  .report { font-family: var(--font-mono); font-size: 0.82rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .tablewrap { overflow-x: auto; }
+</style>
+
+<main>
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h1>Header rules checklist</h1>
+    <p class="lede">Two jobs for after the last phase has merged into <code>fix/review-low-findings</code> and before you merge its pull request: create three Cloudflare header rules for privacyfence.eu, then check the live site. Nothing is needed before the work starts. Your ticks are remembered in this browser.</p>
+    <p class="meta">Work for issue #926 (WEB-9). Plan: <a href="https://github.com/privacyfence/privacyfence/blob/plan/repo-review-low-findings/docs/repo-review-low-findings-plan.md">repo-review-low-findings-plan.md</a>.</p>
+  </header>
+
+  <section aria-labelledby="after">
+    <h3 id="after">After implementation</h3>
+  </section>
+
+  <section class="item" id="ma1" aria-labelledby="ma1h">
+    <h2 id="ma1h">1. Create the three Cloudflare response-header rules</h2>
+    <p class="meta">About 15 minutes. GitHub Pages cannot send headers, so Cloudflare adds them; the check that runs after each website deploy fails until these exist.</p>
+
+    <ol class="steps">
+      <li><input type="checkbox" data-k="ma1-open"><div class="body"><p>Open <a href="https://dash.cloudflare.com/">dash.cloudflare.com</a>, choose the <code>privacyfence.eu</code> site, then <b>Rules</b> → <b>Transform Rules</b> → the <b>Modify Response Header</b> tab → <b>Create rule</b>.</p><span class="expect">You should see: a rule form with a name field, an expression editor and a header list. Cloudflare's own guide: <a href="https://developers.cloudflare.com/rules/transform/response-header-modification/create-dashboard/">Create a response header modification rule</a>.</span></div></li>
+
+      <li><input type="checkbox" data-k="ma1-rule1"><div class="body"><p>Create rule one. Name: <code>pf-security-headers-all</code>. Click <b>Edit expression</b> and paste:</p>
+        <div class="copyrow"><pre>(http.host eq "privacyfence.eu")</pre><button type="button" data-copy>Copy</button></div>
+        <span class="expect">Under <b>Then</b>, add three headers, each with the operation <b>Set static</b>:</span>
+        <div class="tablewrap"><table>
+          <tr><th>Header name</th><th>Value</th></tr>
+          <tr><td><code>Strict-Transport-Security</code></td><td><code>max-age=31536000; includeSubDomains</code></td></tr>
+          <tr><td><code>X-Content-Type-Options</code></td><td><code>nosniff</code></td></tr>
+          <tr><td><code>Referrer-Policy</code></td><td><code>strict-origin-when-cross-origin</code></td></tr>
+        </table></div>
+        <span class="note"><code>includeSubDomains</code> also makes browsers insist on HTTPS for every subdomain of privacyfence.eu, including downloads.privacyfence.eu. If you run any subdomain that serves plain HTTP, tell me before you save, and leave that word out.</span>
+        <span class="expect">Click <b>Deploy</b>. <b>You should see:</b> the rule listed as active.</span></div></li>
+
+      <li><input type="checkbox" data-k="ma1-rule2"><div class="body"><p>Create rule two. Name: <code>pf-csp-site</code>. Expression:</p>
+        <div class="copyrow"><pre>(http.host eq "privacyfence.eu" and http.request.uri.path ne "/docs" and not starts_with(http.request.uri.path, "/docs/"))</pre><button type="button" data-copy>Copy</button></div>
+        <span class="expect">Under <b>Then</b>, one header, <b>Set static</b>: name <code>Content-Security-Policy</code>, value (one line):</span>
+        <div class="copyrow"><pre>default-src 'self'; script-src 'self' https://www.googletagmanager.com; style-src 'self'; img-src 'self' data: https://*.google-analytics.com https://www.googletagmanager.com; connect-src 'self' https://downloads.privacyfence.eu https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'</pre><button type="button" data-copy>Copy</button></div>
+        <span class="expect">Click <b>Deploy</b>.</span></div></li>
+
+      <li><input type="checkbox" data-k="ma1-rule3"><div class="body"><p>Create rule three. Name: <code>pf-csp-docs</code>. Expression:</p>
+        <div class="copyrow"><pre>(http.host eq "privacyfence.eu" and (http.request.uri.path eq "/docs" or starts_with(http.request.uri.path, "/docs/")))</pre><button type="button" data-copy>Copy</button></div>
+        <span class="expect">One header, <b>Set static</b>: name <code>Content-Security-Policy</code>, value (one line). It differs from rule two only in allowing inline scripts and styles, which the documentation generator emits:</span>
+        <div class="copyrow"><pre>default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.google-analytics.com https://www.googletagmanager.com; connect-src 'self' https://downloads.privacyfence.eu https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'</pre><button type="button" data-copy>Copy</button></div>
+        <span class="expect">Click <b>Deploy</b>.</span></div></li>
+
+      <li><input type="checkbox" data-k="ma1-compare"><div class="body"><p>Compare with the repository's copy. In a checkout of <code>fix/review-low-findings</code> run the command below, or read <a href="https://github.com/privacyfence/privacyfence/blob/fix/review-low-findings/scripts/site_security_headers.py">scripts/site_security_headers.py</a>. The values above are generated from it; if they differ, the file wins, and please tell me.</p>
+        <div class="copyrow"><pre>python3 scripts/site_security_headers.py</pre><button type="button" data-copy>Copy</button></div></div></li>
+    </ol>
+
+    <div class="done-when"><h3>Report back</h3><p class="report">ma1: three rules active (pf-security-headers-all, pf-csp-site, pf-csp-docs) / not done: &lt;why&gt;</p></div>
+  </section>
+
+  <section class="item" id="ma2" aria-labelledby="ma2h">
+    <h2 id="ma2h">2. Check the live site</h2>
+    <p class="meta">About 10 minutes. The automated tests stub Google Analytics, so only a real visit shows whether the policy blocks something it needs.</p>
+
+    <ol class="steps">
+      <li><input type="checkbox" data-k="ma2-script"><div class="body"><p>In a checkout of <code>fix/review-low-findings</code>, run:</p>
+        <div class="copyrow"><pre>python3 scripts/check_site_headers.py https://privacyfence.eu</pre><button type="button" data-copy>Copy</button></div>
+        <span class="expect"><b>You should see:</b> twelve <code>[ ok ]</code> lines (four headers on <code>/</code>, <code>/docs/</code> and <code>/download/</code>) and the last line <code>Site security headers match.</code> If Cloudflare serves a cached copy without headers, wait a minute and run it again.</span></div></li>
+
+      <li><input type="checkbox" data-k="ma2-banner"><div class="body"><p>Open <a href="https://privacyfence.eu/">privacyfence.eu</a> in a private window with the developer console open (Console tab). Click <b>Accept</b> on the cookie banner.</p>
+        <span class="expect"><b>You should see:</b> the banner closes, and no console message starting with “Refused to load” or “Refused to connect”. In the Network tab a request to <code>googletagmanager.com/gtag/js</code> succeeds.</span></div></li>
+
+      <li><input type="checkbox" data-k="ma2-pages"><div class="body"><p>Click through <a href="https://privacyfence.eu/download/">/download/</a>, <a href="https://privacyfence.eu/docs/">/docs/</a> (switch the light/dark toggle, open one page with a table such as <a href="https://privacyfence.eu/docs/tools-reference/">/docs/tools-reference/</a>) and <a href="https://privacyfence.eu/releases/">/releases/</a>.</p>
+        <span class="expect"><b>You should see:</b> the release cards and download counts load, the docs navigation and search open, the table is right-aligned where it was, and the console stays free of “Refused to …” messages.</span></div></li>
+
+      <li><input type="checkbox" data-k="ma2-frame"><div class="body"><p>Check that the site cannot be framed: in the console on any other site (for example a blank tab), run the line below.</p>
+        <div class="copyrow"><pre>document.body.append(Object.assign(document.createElement("iframe"), {src: "https://privacyfence.eu/"}))</pre><button type="button" data-copy>Copy</button></div>
+        <span class="expect"><b>You should see:</b> an empty frame and a console error saying the site “refused to connect” or that <code>frame-ancestors 'none'</code> blocked it.</span></div></li>
+    </ol>
+
+    <p class="note">If a step shows a “Refused to …” message, copy the console line into the pull request and stop: the policy needs a change in the repository first, and the rules above must then be edited to match.</p>
+    <div class="done-when"><h3>Report back</h3><p class="report">ma2: check_site_headers 12/12 ok; consent flow, /download/, /docs/, /releases/ clean in the console; framing refused / failed: &lt;console line&gt;</p></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY = "pf-header-rules-checklist";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+  document.querySelectorAll('input[type="checkbox"][data-k]').forEach(function (box) {
+    var li = box.closest("li");
+    box.checked = !!state[box.dataset.k];
+    li.classList.toggle("done", box.checked);
+    box.addEventListener("change", function () {
+      state[box.dataset.k] = box.checked;
+      li.classList.toggle("done", box.checked);
+      save();
+    });
+  });
+  document.querySelectorAll("button[data-copy]").forEach(function (btn) {
+    btn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      var text = btn.parentElement.querySelector("pre").textContent;
+      var ok = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1500); };
+      var fail = function () {
+        var r = document.createRange(); r.selectNodeContents(btn.parentElement.querySelector("pre"));
+        var s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = "Press Ctrl+C";
+      };
+      try { navigator.clipboard.writeText(text).then(ok, fail); } catch (e) { fail(); }
+    });
+  });
+})();
+</script>
