@@ -275,7 +275,7 @@
           "updated": "2026-10-13T09:59:41.645Z",
           "workspaceId": "qa-placeholder-uuid"
         },
-        "referenceObjectTypeId": "1",
+        "referenceObjectTypeId": "4",
         "referenceType": {
           "color": "49a6ed",
           "description": "Reference",
@@ -578,7 +578,7 @@
             "updated": "2026-10-13T09:59:41.645Z",
             "workspaceId": "qa-placeholder-uuid"
           },
-          "referenceObjectTypeId": "1",
+          "referenceObjectTypeId": "4",
           "referenceType": {
             "color": "49a6ed",
             "description": "Reference",

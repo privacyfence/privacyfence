@@ -1082,8 +1082,11 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 # deidentify_structural_fields() would turn `id` into a non-digit placeholder and leave the same
 # id under the other keys, breaking both; Assets payloads also carry UUIDs (workspaceId, globalId,
 # URLs). check_assets therefore uses _deidentify_assets for all three of its recorded payloads.
+# A reference attribute's definition carries its target type twice, as referenceObjectTypeId and as
+# referenceObjectType.id; both must come out as the same digits.
 _ASSETS_ID_KEYS = frozenset({
     "id", "objecttypeattributeid", "objectschemaid", "objecttypeid", "parentobjecttypeid", "objectid",
+    "referenceobjecttypeid",
 })
 _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _REDACTED_UUID = "qa-placeholder-uuid"

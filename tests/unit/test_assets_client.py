@@ -929,3 +929,47 @@ class TestLiveFixtureParsing:
         used = {e["objectTypeAttributeId"] for v in raw["values"] for e in v.get("attributes", [])}
         assert used and used <= known
         assert all(i.isdigit() for i in known | used)
+
+    def test_get_object_fixture_attribute_ids_still_join(self):
+        raw = self._load("get_object.json")
+        for entry in raw["attributes"]:
+            assert entry["objectTypeAttributeId"].isdigit()
+            assert entry["objectTypeAttributeId"] == entry["objectTypeAttribute"]["id"]
+
+    def test_reference_definitions_still_join_their_target_type(self):
+        definitions = [e["objectTypeAttribute"] for e in self._load("get_object.json")["attributes"]]
+        definitions += self._load("aql_search.json")["objectTypeAttributes"]
+        references = [d for d in definitions if d.get("referenceObjectType")]
+        assert references, "no reference attribute in the recorded fixtures"
+        for raw in references:
+            parsed = assets_module._parse_attribute_def(raw)
+            assert parsed.kind == "reference"
+            assert parsed.reference_type_id == raw["referenceObjectType"]["id"]
+            assert assets_module._check_id(parsed.reference_type_id, "object type id")
+            assert parsed.reference_type_name and parsed.reference_kind
+
+    def test_get_and_search_replay_through_the_client(self):
+        get_object = self._load("get_object.json")
+        aql = self._load("aql_search.json")
+        object_id = get_object["object"]["id"]
+        client = make_client(routed({
+            f"GET object/{object_id}": get_object["object"],
+            f"GET object/{object_id}/attributes": get_object["attributes"],
+            "POST object/aql": aql,
+        }))
+
+        obj = client.get_object(object_id)
+        found = client.search_objects("objectSchemaId = 1", max_results=len(aql["values"]))
+
+        # Attribute names come from the payloads themselves: no attribute-definition lookup.
+        assert session_of(client).paths() == [
+            WORKSPACE_PATH, f"object/{object_id}", f"object/{object_id}/attributes", "object/aql"]
+        assert len(found) == len(aql["values"])
+        refs = [r for o in [obj, *found] for rs in o.references.values() for r in rs]
+        assert refs, "no reference value in the recorded fixtures"
+        for o in [obj, *found]:
+            for value in (o.id, o.type_id, o.schema_id):
+                assets_module._check_id(value, "id")
+        for ref in refs:
+            assets_module._check_id(ref.id, "object id")
+            assert ref.key.startswith("PFQA-") and "[QATEST]" in ref.label
