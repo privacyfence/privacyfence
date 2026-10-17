@@ -258,6 +258,12 @@ jobs:
   # ordinary modules with no platform marker (settings_controller.py,
   # drive.py, a shim-contract test, an audit-log test), none of which a
   # subset chosen ahead of time would have included.
+  #
+  # It gates coverage of the Windows-only code the Linux run cannot execute: the
+  # `Windows coverage floors` step holds windows_service.py, windows_acl.py and
+  # web/control_channel.py at WINDOWS_MODULE_FLOORS in scripts/check_coverage_floor.py
+  # (the overall floor and MODULE_FLOORS stay the `test` job's). coverage.json is
+  # uploaded as `platform-windows-coverage`.
   platform-windows:
     runs-on: windows-latest
     timeout-minutes: 90
@@ -279,7 +285,19 @@ jobs:
       # catch Windows-specific breakage in the Python core, not to
       # re-prove the (already cross-platform, Node-runtime) shim.
       - name: Run test suite (100% pass rate required)
-        run: pytest -v --cov=src/privacyfence --cov-report=term-missing
+        run: pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
+
+      - name: Windows coverage floors
+        run: python scripts/check_coverage_floor.py --platform windows coverage.json
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: platform-windows-coverage
+          path: coverage.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       # Same failure-diagnostics capture as the `test` job's identically-named step.
       - name: Upload failure diagnostics

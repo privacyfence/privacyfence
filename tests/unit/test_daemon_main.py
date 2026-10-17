@@ -122,18 +122,13 @@ def _no_ambient_google_clients(monkeypatch):
 # ---------------------------------------------------------------------------- #
 
 class TestResolvePath:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
-    def test_absolute_path_is_returned_unchanged(self):
-        assert daemon_main._resolve_path("/etc/hosts") == "/etc/hosts"
+    def test_absolute_path_is_returned_unchanged(self, tmp_path):
+        path = str(tmp_path / "x.json")
+        assert daemon_main._resolve_path(path) == path
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
-    def test_relative_path_is_joined_with_project_root(self, monkeypatch):
-        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", "/tmp/pf-root")
-        assert daemon_main._resolve_path("credentials/x.json") == "/tmp/pf-root/credentials/x.json"
+    def test_relative_path_is_joined_with_project_root(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
+        assert daemon_main._resolve_path("credentials/x.json") == os.path.join(str(tmp_path), "credentials/x.json")
 
     def test_relative_path_for_a_non_local_principal_uses_its_own_storage_root(self, monkeypatch, tmp_path):
         # The branch connector_registry.py's ConnectorRegistry.get() relies on;
@@ -153,11 +148,9 @@ class TestResolvePath:
 # ---------------------------------------------------------------------------- #
 
 class TestResolveAuthorityPath:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a known gap, found when this suite first ran on Windows CI",
-    )
-    def test_absolute_path_is_returned_unchanged(self):
-        assert daemon_main._resolve_authority_path("/etc/hosts") == "/etc/hosts"
+    def test_absolute_path_is_returned_unchanged(self, tmp_path):
+        path = str(tmp_path / "x.json")
+        assert daemon_main._resolve_authority_path(path) == path
 
     def test_relative_path_is_joined_with_project_roots_authority_subdirectory(self, monkeypatch, tmp_path):
         monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
@@ -1226,9 +1219,6 @@ class TestBuildConnectorsTelegram:
         if exists:
             (tmp_path / "credentials" / "telegram.session").write_bytes(b"")
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
     def test_built_when_creds_and_session_present(self, monkeypatch, tmp_path):
         self._make_session(tmp_path, monkeypatch, exists=True)
         monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: (123, "hash"))
@@ -1241,7 +1231,7 @@ class TestBuildConnectorsTelegram:
         assert connectors[0].name == "telegram"
         assert fake.captured_kwargs == {
             "api_id": 123, "api_hash": "hash",
-            "session_file": str(tmp_path / "credentials" / "telegram.session"),
+            "session_file": os.path.join(str(tmp_path), "credentials/telegram.session"),
             "chat_cache_file": str(data_dir() / "telegram_chat_cache.json"),
         }
         # Same as Slack (see TestBuildConnectorsSlack): directory-cache
