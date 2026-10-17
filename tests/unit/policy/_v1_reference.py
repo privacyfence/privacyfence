@@ -443,13 +443,15 @@ class V1Reference:
 
     def _rule_i_am_reporter(self, _v, ctx):
         raw = ctx.raw_data
-        reporter = (raw.get("reporter") if isinstance(raw, dict) else getattr(raw, "reporter", "")) or ""
-        return bool(ctx.my_email) and ctx.my_email.lower() in reporter.lower()
+        # Deliberate divergence from v1 (ADR 0194): the account id, not a substring of the display name.
+        reporter_id = raw.get("reporter_account_id") if isinstance(raw, dict) else getattr(raw, "reporter_account_id", "")
+        return bool(ctx.my_account_id) and (reporter_id or "") == ctx.my_account_id
 
     def _rule_i_am_assignee(self, _v, ctx):
         raw = ctx.raw_data
-        assignee = (raw.get("assignee") if isinstance(raw, dict) else getattr(raw, "assignee", "")) or ""
-        return bool(ctx.my_email) and ctx.my_email.lower() in assignee.lower()
+        # Deliberate divergence from v1 (ADR 0194): the account id, not a substring of the display name.
+        assignee_id = raw.get("assignee_account_id") if isinstance(raw, dict) else getattr(raw, "assignee_account_id", "")
+        return bool(ctx.my_account_id) and (assignee_id or "") == ctx.my_account_id
 
     # ── Confluence ────────────────────────────────────────────────────────
 
@@ -463,8 +465,9 @@ class V1Reference:
 
     def _rule_i_am_author(self, _v, ctx):
         raw = ctx.raw_data
-        author = (raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")) or ""
-        return bool(ctx.my_email) and ctx.my_email.lower() in author.lower()
+        # Deliberate divergence from v1 (ADR 0194): the account id (the v2 authorId), not a substring.
+        author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")
+        return bool(ctx.my_account_id) and (author or "") == ctx.my_account_id
 
     # ── Telegram ──────────────────────────────────────────────────────────
 

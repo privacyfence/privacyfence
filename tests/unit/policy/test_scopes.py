@@ -91,9 +91,9 @@ FIXTURES: dict[str, list] = {
         (None, make_ctx(my_email="me@example.com", raw_data={"organizer_email": "me@example.com"})),
     ],
     "i_am_author": [
-        (None, make_ctx(my_email="me@example.com", raw_data=SimpleNamespace(author="me@example.com"))),
-        (None, make_ctx(my_email="me@example.com", raw_data={"author": "me@example.com"})),
-        (None, make_ctx(my_email="me@example.com", raw_data=SimpleNamespace(author="other@example.com"))),
+        (None, make_ctx(my_account_id="acc-me", raw_data=SimpleNamespace(author="acc-me"))),
+        (None, make_ctx(my_account_id="acc-me", raw_data={"author": "acc-me"})),
+        (None, make_ctx(my_account_id="acc-me", raw_data=SimpleNamespace(author="acc-other"))),
     ],
     "approved_space_keys": [
         (["ENG"], make_ctx(args={"space_key": "eng"}, raw_data={})),
@@ -213,13 +213,14 @@ FIXTURES: dict[str, list] = {
         ([], make_ctx(raw_data=[SimpleNamespace(schema_id="2")])),
     ],
     "i_am_reporter": [
-        (None, make_ctx(my_email="me@example.com", raw_data=SimpleNamespace(reporter="me@example.com"))),
-        (None, make_ctx(my_email="me@example.com", raw_data={"reporter": "me@example.com"})),
-        (None, make_ctx(my_email="me@example.com", raw_data={"reporter": "other@example.com"})),
+        (None, make_ctx(my_account_id="acc-me", raw_data=SimpleNamespace(reporter_account_id="acc-me"))),
+        (None, make_ctx(my_account_id="acc-me", raw_data={"reporter_account_id": "acc-me"})),
+        (None, make_ctx(my_account_id="acc-me", raw_data={"reporter_account_id": "acc-other"})),
     ],
     "i_am_assignee": [
-        (None, make_ctx(my_email="me@example.com", raw_data={"assignee": "me@example.com"})),
-        (None, make_ctx(my_email="me@example.com", raw_data={"assignee": "other@example.com"})),
+        (None, make_ctx(my_account_id="acc-me", raw_data=SimpleNamespace(assignee_account_id="acc-me"))),
+        (None, make_ctx(my_account_id="acc-me", raw_data={"assignee_account_id": "acc-me"})),
+        (None, make_ctx(my_account_id="acc-me", raw_data={"assignee_account_id": "acc-other"})),
     ],
     "approved_object_types": [
         (["account"], make_ctx(args={"object_type": "Account"})),
@@ -497,3 +498,42 @@ class TestNewScopeSelectors:
         ctx = make_ctx(connector="peek", args={"slug": "dash"})
         assert selector.matches(["other"], ctx) is False
         assert selector.matches([], ctx) is False
+
+
+def _matches(predicate: str, ctx) -> bool:
+    return SCOPE_SELECTORS[predicate].matches(None, ctx)
+
+
+def test_i_am_reporter_ignores_a_display_name_that_contains_my_email():
+    ctx = make_ctx(
+        my_email="me@example.com", my_account_id="acc-me",
+        raw_data={"reporter": "Mallory (me@example.com)", "reporter_account_id": "other"},
+    )
+    assert _matches("i_am_reporter", ctx) is False
+
+
+def test_i_am_reporter_matches_only_my_account_id():
+    assert _matches("i_am_reporter", make_ctx(my_account_id="acc-me", raw_data={"reporter_account_id": "acc-me"}))
+    assert not _matches("i_am_reporter", make_ctx(my_account_id="acc-me", raw_data={"reporter_account_id": "acc-x"}))
+    assert not _matches("i_am_reporter", make_ctx(my_account_id="", raw_data={"reporter_account_id": ""}))
+
+
+def test_i_am_assignee_ignores_a_display_name_that_contains_my_email():
+    ctx = make_ctx(
+        my_email="me@example.com", my_account_id="acc-me",
+        raw_data={"assignee": "Mallory (me@example.com)", "assignee_account_id": "other"},
+    )
+    assert _matches("i_am_assignee", ctx) is False
+
+
+def test_i_am_assignee_matches_only_my_account_id():
+    assert _matches("i_am_assignee", make_ctx(my_account_id="acc-me", raw_data={"assignee_account_id": "acc-me"}))
+    assert not _matches("i_am_assignee", make_ctx(my_account_id="acc-me", raw_data={"assignee_account_id": "acc-x"}))
+    assert not _matches("i_am_assignee", make_ctx(my_account_id="", raw_data={"assignee_account_id": ""}))
+
+
+def test_i_am_author_matches_only_my_account_id():
+    assert _matches("i_am_author", make_ctx(my_account_id="acc-me", raw_data={"author": "acc-me"}))
+    assert not _matches("i_am_author", make_ctx(my_account_id="acc-me", raw_data={"author": "acc-x"}))
+    assert not _matches("i_am_author", make_ctx(my_email="me@example.com", my_account_id="", raw_data={"author": "me@example.com"}))
+    assert not _matches("i_am_author", make_ctx(my_account_id="", raw_data={"author": ""}))

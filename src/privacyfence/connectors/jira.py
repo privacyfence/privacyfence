@@ -318,6 +318,7 @@ class JiraConnector(Connector):
     def __init__(self, client: JiraClient) -> None:
         self._jira = client
         self.my_email: str = ""
+        self.my_account_id: str = ""
         self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
@@ -729,6 +730,7 @@ class JiraConnector(Connector):
             preview_tables=[{"headers": ["Key", "Summary", *names], "rows": rows}] if issues else [],
             table_only=True,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"jql": jql, "fields": fields},
         )
 
@@ -791,6 +793,7 @@ class JiraConnector(Connector):
             else "local_disk" if local_files.can_access_user_files(self.download_mode)
             else "client_bridge",
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={
                 "jql": jql, "fields": fields, "destination_dir": destination_dir,
                 "file_name": file_name, "sha256": sha256,
@@ -895,7 +898,11 @@ class JiraConnector(Connector):
             tool_name="Read Jira Issue",
             summary=f"{issue.key}: {issue.summary[:60]}",
             sender=getattr(issue, "reporter", "") or getattr(issue, "assignee", "") or issue_key,
-            raw_data=result,
+            raw_data={
+                **result,
+                "reporter_account_id": issue.reporter_account_id,
+                "assignee_account_id": issue.assignee_account_id,
+            },
             filtered_data=result,
             gate="review",
             preview=preview,
@@ -904,6 +911,7 @@ class JiraConnector(Connector):
             pii_scan_text=pii_scan_text,
             preview_blocks=blocks,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args=args,
         )
 
@@ -958,6 +966,7 @@ class JiraConnector(Connector):
             details_text=shown_description,
             preview_blocks=blocks,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args=payload,
         )
         issue = await self._fetch(
@@ -985,6 +994,7 @@ class JiraConnector(Connector):
             preview=preview,
             details_text=shown_body,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"issue_key": issue_key, "body": body},
         )
         comment = await self._fetch(self._jira.add_comment, issue_key, body, names)
@@ -1082,6 +1092,7 @@ class JiraConnector(Connector):
             preview=preview,
             details_text=details_text,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"issue_key": issue_key},
         )
         updated = await self._fetch(self._jira.update_issue, issue_key, fields)
@@ -1105,6 +1116,7 @@ class JiraConnector(Connector):
             preview=preview,
             details_text="The status change above is the only change; no other fields are affected.",
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"issue_key": issue_key, "transition_name": transition_name},
         )
         updated = await self._fetch(self._jira.transition_issue, issue_key, transition_name)

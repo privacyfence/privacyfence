@@ -144,8 +144,8 @@ def _i_am_organizer_matches(_value: Any, ctx: ReviewContext) -> bool:
 
 def _i_am_author_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
-    author = (raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")) or ""
-    return bool(ctx.my_email) and ctx.my_email.lower() in author.lower()
+    author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")
+    return bool(ctx.my_account_id) and (author or "") == ctx.my_account_id
 
 
 def _approved_space_keys_matches(value: Any, ctx: ReviewContext) -> bool:
@@ -321,14 +321,14 @@ def _approved_schema_ids_all_results_matches(value: Any, ctx: ReviewContext) -> 
 
 def _i_am_reporter_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
-    reporter = (raw.get("reporter") if isinstance(raw, dict) else getattr(raw, "reporter", "")) or ""
-    return bool(ctx.my_email) and ctx.my_email.lower() in reporter.lower()
+    reporter_id = raw.get("reporter_account_id") if isinstance(raw, dict) else getattr(raw, "reporter_account_id", "")
+    return bool(ctx.my_account_id) and (reporter_id or "") == ctx.my_account_id
 
 
 def _i_am_assignee_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
-    assignee = (raw.get("assignee") if isinstance(raw, dict) else getattr(raw, "assignee", "")) or ""
-    return bool(ctx.my_email) and ctx.my_email.lower() in assignee.lower()
+    assignee_id = raw.get("assignee_account_id") if isinstance(raw, dict) else getattr(raw, "assignee_account_id", "")
+    return bool(ctx.my_account_id) and (assignee_id or "") == ctx.my_account_id
 
 
 # ── Salesforce ────────────────────────────────────────────────────────────────────────────────
