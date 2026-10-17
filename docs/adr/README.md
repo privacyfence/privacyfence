@@ -287,3 +287,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0193](0193-the-salesforce-object-type-rule-also-covers-creating-and-updating-records-of-that-type.md) | The Salesforce object-type rule also covers creating and updating records of that type | Accepted |
 | [0194](0194-personal-settings-are-exported-as-a-file-of-auto-accept-rows-and-the-step-up-level.md) | Personal settings are exported as a file of auto-accept rows and the step-up level | Accepted |
 | [0195](0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md) | Importing personal settings is merge-only, previewed, and step-up gated on the file hash | Accepted |
+| [0196](0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md) | Every connector is offered only when the organization config has its section; Telegram, Peek and Grist take a bare `enabled` switch | Accepted |

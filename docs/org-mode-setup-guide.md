@@ -192,7 +192,7 @@ the connector's console must list it exactly.
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `--atlassian-client-id`, `--atlassian-client-secret` | [Atlassian setup](atlassian-setup.md) |
 | Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |
 | Peek | none (device sign-in) | `--peek-base-url` | [Peek setup](peek-setup.md) |
-| Telegram | none | none | [Telegram setup](telegram-setup.md) |
+| Telegram | none | `--enable-telegram` | [Telegram setup](telegram-setup.md) |
 
 Notes:
 
@@ -208,9 +208,10 @@ Notes:
   app accepts only one callback URL.
 - **Peek** has no OAuth app and no callback URL: each person approves a code in Peek itself on
   `/connect`. `--peek-base-url` names the Peek server; the connector is offered only with it.
-- **Telegram** needs nothing from you: its app credentials ship inside PrivacyFence. Each person
-  signs in with their phone number on `/connect`.
-- A connector appears on `/connect` only if its section is in the bundle.
+- **Telegram** needs no registration: its app credentials ship inside PrivacyFence. `--enable-telegram`
+  offers it, and each person signs in with their phone number on `/connect`.
+- A connector appears on `/connect` only if its section is in the bundle; the others are not listed
+  ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
 
 The same app registrations can also carry the loopback redirect URIs used by desktop installs; the
 setup guides cover both.

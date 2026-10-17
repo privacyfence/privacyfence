@@ -298,7 +298,7 @@ def _running_org_server(tmp_path, monkeypatch, *, push: bool = False):
         # step_up.enabled doesn't need to be True for this suite -- only
         # /security (webauthn_stepup.py's enrollment ceremony) is under
         # test here, not the write-approval step-up gate itself.
-        org_config={"step_up": {"enabled": True}, "slack": dict(_SLACK_ORG_CONFIG)},
+        org_config={"step_up": {"enabled": True}, "slack": dict(_SLACK_ORG_CONFIG), "telegram": {"enabled": True}},
         # A registry mounts /connect (web/routes_connect.py), and the Slack section above
         # gives it one configured service to offer, so the phone-layout tests measure a real
         # connections page rather than a 404. No test here connects anything.
@@ -2498,7 +2498,7 @@ class TestOrgModeWebAuthnUi:
 
 
 @pytest.fixture
-def local_server_with_settings(pf_home):
+def local_server_with_settings(pf_home, monkeypatch):
     """``local_server`` above never passes ``controller=``, so ``/settings``
     (web/server.py's own ``WebServer.__init__`` docstring: ``controller=
     None`` mounts nothing there) 404s for every existing test in this file
@@ -2510,6 +2510,8 @@ def local_server_with_settings(pf_home):
     config_path = pf_home / ".privacyfence" / "settings.yaml"
     config_path.write_text("{}\n", encoding="utf-8")
     controller = SettingsController(str(config_path), connectors=[], connector_host=None)
+    # Connectors are listed only when the org config enables them (ADR 0196).
+    monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"slack": {"client_id": "s"}})
     port = _free_port()
     server = WebServer(web_ui, host="localhost", port=port, controller=controller)
     server.start()
