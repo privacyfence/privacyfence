@@ -125,7 +125,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0013](0013-no-mcp-tool-mints-a-sign-in-credential.md) | No MCP tool may mint a sign-in credential | Accepted (retroactive) |
 | [0014](0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md) | Every bespoke settings POST route is classified sensitive/exempt, or the app refuses to start | Accepted (retroactive) |
 | [0015](0015-unattended-session-flag-is-advisory-only.md) | The self-declared unattended-session flag is advisory and never authorizes | Accepted (retroactive) |
-| [0016](0016-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive) |
+| [0016](0016-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive); amended by 0199 |
 | [0017](0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive); amended by 0092 |
 | [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive); amended by 0039, 0044 |
 | [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive); amended by 0181 |
@@ -162,7 +162,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0050](0050-website-analytics-is-ga4-behind-consent.md) | Website analytics is GA4, loaded only after consent; Google is the only search tooling | Accepted |
 | [0051](0051-privacyfence-eu-publishes-the-user-and-operator-docs-only.md) | privacyfence.eu publishes the user and operator docs only; links out of that set go to GitHub at the same tag | Accepted |
 | [0052](0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md) | The docs are built with Zensical, from the latest stable release tag | Accepted |
-| [0053](0053-the-website-is-hosted-on-github-pages-behind-cloudflare.md) | The website is hosted on GitHub Pages, behind the Cloudflare proxy | Accepted |
+| [0053](0053-the-website-is-hosted-on-github-pages-behind-cloudflare.md) | The website is hosted on GitHub Pages, behind the Cloudflare proxy | Accepted; amended by 0200 |
 | [0054](0054-the-windows-installer-refuses-anything-but-native-x64.md) | The Windows installer refuses anything but a native x64 Windows, Windows 11 on arm64 included | Accepted |
 | [0055](0055-step-up-passkey-enrollment-accepts-any-authenticator.md) | Step-up passkey enrollment accepts any authenticator: built in, security key or phone; user verification stays required | Accepted |
 | [0056](0056-code-carries-no-project-history.md) | Code carries no project history; a blocking test enforces it | Accepted |
@@ -289,3 +289,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0195](0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md) | Importing personal settings is merge-only, previewed, and step-up gated on the file hash | Accepted |
 | [0196](0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md) | Every connector is offered only when the organization config has its section; Telegram, Peek and Grist take a bare `enabled` switch | Accepted |
 | [0197](0197-an-organization-can-turn-the-export-tools-off.md) | An organization can turn the export tools off | Accepted |
+| [0198](0198-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md) | Jira and Confluence "mine" rules compare Atlassian account ids, never names or emails | Accepted |
+| [0199](0199-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md) | An organization bundle carries a signed serial, and an older one is refused | Accepted; amends 0016 |
+| [0200](0200-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md) | The website's security headers are set by Cloudflare and checked from the repository | Accepted; amends 0053 |

@@ -443,13 +443,13 @@ class V1Reference:
 
     def _rule_i_am_reporter(self, _v, ctx):
         raw = ctx.raw_data
-        # Deliberate divergence from v1 (ADR 0194): the account id, not a substring of the display name.
+        # Deliberate divergence from v1 (ADR 0198): the account id, not a substring of the display name.
         reporter_id = raw.get("reporter_account_id") if isinstance(raw, dict) else getattr(raw, "reporter_account_id", "")
         return bool(ctx.my_account_id) and (reporter_id or "") == ctx.my_account_id
 
     def _rule_i_am_assignee(self, _v, ctx):
         raw = ctx.raw_data
-        # Deliberate divergence from v1 (ADR 0194): the account id, not a substring of the display name.
+        # Deliberate divergence from v1 (ADR 0198): the account id, not a substring of the display name.
         assignee_id = raw.get("assignee_account_id") if isinstance(raw, dict) else getattr(raw, "assignee_account_id", "")
         return bool(ctx.my_account_id) and (assignee_id or "") == ctx.my_account_id
 
@@ -465,7 +465,7 @@ class V1Reference:
 
     def _rule_i_am_author(self, _v, ctx):
         raw = ctx.raw_data
-        # Deliberate divergence from v1 (ADR 0194): the account id (the v2 authorId), not a substring.
+        # Deliberate divergence from v1 (ADR 0198): the account id (the v2 authorId), not a substring.
         author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")
         return bool(ctx.my_account_id) and (author or "") == ctx.my_account_id
 
