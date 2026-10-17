@@ -1761,6 +1761,29 @@ class SettingsController:
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
+    def policy_rows(self) -> "list[policy_scope_rows.ScopeRow]":
+        """The current auto-accept rows (after the token-aware upgrade); ``[]`` when the section
+        could not be upgraded. What the personal-settings export and import preview read."""
+        loaded = self._load_rows()
+        return [] if loaded is None else loaded[1]
+
+    def import_policy_rules(self, rules: list[PolicyRule]) -> bool:
+        """Merges already-compiled rules from an imported personal-settings file into the on-disk
+        rows, exactly as ``add_policy_rule`` does for a rule added in Settings: additive only,
+        written and hot-reloaded through ``_save_and_reload_policy_v2`` so the audit logger's policy
+        hash is refreshed and listeners are notified. Returns whether anything changed; writes
+        nothing when the rows could not be loaded or the merge changes none of them."""
+        loaded = self._load_rows()
+        if loaded is None:
+            return False
+        cfg, existing = loaded
+        rows, _ = policy_scope_rows.add_rules(existing, rules)
+        if rows == existing:
+            return False
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(rows)
+        self._save_and_reload_policy_v2(cfg)
+        return True
+
     def remove_policy_rule(self, rule_id: str) -> dict[str, Any]:
         """Removes the row with this stable id from the on-disk ``auto_accept:`` section entirely
         -- narrowing (rather than adding a rule) is always a remove-and-re-add-narrower here, the

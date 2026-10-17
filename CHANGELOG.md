@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Export and import your personal settings.** From Settings > Auto-accept you can export your personal settings (always-allow rules and step-up level) to a file and import them on another install, to move from a desktop install to an organization server or back. Import previews every rule, only adds, and asks for your passkey when step-up applies.
+
 ## [6.3.0] — 2026-10-16
 
 ### Added

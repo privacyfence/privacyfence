@@ -121,6 +121,7 @@ restart.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import inspect
@@ -163,6 +164,8 @@ from ..settings_controller import (
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_install_policy, org_session, step_up_decide
+from .personal_settings_shim import personal_transfer_shim
+from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks, build_personal_routes
 from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
@@ -319,6 +322,9 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
     # A name is what the audit log shows for the token, so renaming goes
     # through the same gates as creating and revoking.
     "/api/settings/scoped_tokens/rename",
+    # Importing personal settings widens what is auto-accepted exactly as adding a rule does
+    # (merge-only, previewed, passkey bound to the file's hash).
+    "/api/settings/personal/import",
 })
 
 # Every other bespoke (non-generic-dispatch) route, and why it doesn't need
@@ -327,6 +333,8 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
 _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
     "/api/settings/quit_app": "its own confirmed=true gate -- doesn't change what gets gated",
     "/api/settings/audit_log/download": "a GET -- read-only export, no mutation",
+    "/api/settings/personal/preview": "parses an uploaded file and returns a preview; changes nothing",
+    "/api/settings/personal/export": "a GET -- read-only export, no mutation",
     "/api/settings/mcp_token/copy": (
         "puts the owner's own MCP token on the clipboard through the companion -- a token "
         "anything running as this user can already get over MINT MCP, and one that cannot "
@@ -883,6 +891,7 @@ def build_routes(
             state, nonce=nonce, initial_section=initial_section,
             ai_client={"mcp_url": ai_client.mcp_url} if ai_client is not None else None,
             scoped_tokens=scoped_tokens.page_data() if scoped_tokens is not None else None,
+            personal_transfer=True,
         )
         csrf = request.cookies.get(_SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS: the same ceremony helpers web/
@@ -893,6 +902,7 @@ def build_routes(
         # exercised depends on config, not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         # Read off this request's own fresh snapshot, not the notifications_
         # enabled/detail closure args above -- those are only the daemon-
         # startup defaults (server.py's own initial config read), and the
@@ -1303,6 +1313,58 @@ def build_routes(
             headers={"Cache-Control": "no-store"},
         )
 
+    def _local_personal_hooks() -> PersonalSettingsHooks:
+        """Export/import of the person's own settings (web/personal_settings_routes.py), wired for
+        local mode: the one principal is ``LOCAL_PRINCIPAL``, rows go through the controller's own
+        writer so a hot-reload and the audit hash behave as for a rule added in Settings."""
+
+        def authenticate(request: Request) -> Principal | None:
+            return LOCAL_PRINCIPAL if _authenticated(request) else None
+
+        def check_mutation(request: Request, csrf: str | None) -> Response | None:
+            if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            if not _origin_ok(request):
+                return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+            if require_human_session and not _is_human_session(request, sessions):
+                body, status = _human_session_required_json("import personal settings")
+                return JSONResponse(body, status_code=status)
+            return None
+
+        def step_up_state() -> tuple[bool, str | None]:
+            if step_up is None:
+                return False, None
+            return step_up.enabled, step_up.scope
+
+        def step_up_gate(principal: Principal, fingerprint_body: dict[str, Any], assertion: object) -> Response | None:
+            if not _step_up_in_force():
+                return None
+            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
+            confirmed_step_up: StepUpConfig = step_up
+            return _verify_or_challenge(
+                principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+                subject_key=STEP_UP_SUBJECT_KEY,
+                fingerprint=_action_fingerprint(STEP_UP_SUBJECT_KEY, fingerprint_body), assertion=assertion,
+                challenges=challenges,
+                step_up_response=lambda: _settings_step_up_response(
+                    principal, STEP_UP_SUBJECT_KEY, fingerprint_body,
+                    step_up=confirmed_step_up, challenges=challenges,
+                ),
+            )
+
+        return PersonalSettingsHooks(
+            authenticate=authenticate,
+            check_mutation=check_mutation,
+            open_scope=principal_scope,
+            scope_error=lambda principal, exc: None,
+            read_rows=lambda: controller.policy_rows(),
+            merge_rules=lambda rules: controller.import_policy_rules(rules),
+            step_up_state=step_up_state,
+            step_up_gate=step_up_gate,
+            audit=_record_settings_audit,
+            mode="local",
+        )
+
     routes: list[BaseRoute] = [
         Route("/settings", settings_page),
         Route("/settings/connectors", settings_connectors_page),
@@ -1322,6 +1384,7 @@ def build_routes(
             Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         ]
+    routes += build_personal_routes(_local_personal_hooks())
     routes.append(Route("/api/settings/{action}", settings_action, methods=["POST"]))
     for route in routes:
         # isinstance, not getattr: every entry above is a plain Route (never
@@ -1399,7 +1462,7 @@ def build_org_routes(
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
-) -> list[Route]:
+) -> list[BaseRoute]:
     """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
     ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
     settings_window_html.build_html() local mode's own
@@ -1697,6 +1760,63 @@ def build_org_routes(
             "An administrator needs to update it; the server log names the file."
         )
 
+    @contextlib.contextmanager
+    def _open_personal_scope(principal: Principal) -> typing.Iterator[None]:
+        """``principal_scope`` plus the lazy settings load; a ``V1PolicyConfigError`` propagates
+        to ``_personal_scope_error``."""
+        with principal_scope(principal):
+            _ensure_principal_settings_loaded()
+            yield
+
+    def _personal_scope_error(principal: Principal, exc: Exception) -> Response | None:
+        if isinstance(exc, policy_store.V1PolicyConfigError):
+            return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
+        return None
+
+    def _personal_check_mutation(request: Request, csrf: str | None) -> Response | None:
+        if not org_session.check_csrf(request, csrf):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        return None
+
+    def _personal_step_up_gate(
+        principal: Principal, fingerprint_body: dict[str, Any], assertion: object,
+    ) -> Response | None:
+        if not (step_up is not None and step_up.enabled and step_up.require_passkey):
+            return None
+        confirmed_step_up: StepUpConfig = step_up
+        response = _verify_or_challenge(
+            principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+            subject_key=STEP_UP_SUBJECT_KEY,
+            fingerprint=_action_fingerprint(STEP_UP_SUBJECT_KEY, fingerprint_body), assertion=assertion,
+            challenges=challenges,
+            step_up_response=lambda: _settings_step_up_response(
+                principal, STEP_UP_SUBJECT_KEY, fingerprint_body,
+                step_up=confirmed_step_up, challenges=challenges,
+            ),
+        )
+        if response is not None:
+            with principal_scope(principal):
+                _record_settings_audit(
+                    principal,
+                    f"Step-up required for {STEP_UP_SUBJECT_KEY!r}, refused (principal={principal.id})",
+                )
+        return response
+
+    personal_hooks = PersonalSettingsHooks(
+        authenticate=_current_principal,
+        check_mutation=_personal_check_mutation,
+        open_scope=_open_personal_scope,
+        scope_error=_personal_scope_error,
+        read_rows=lambda: auto_accept.get_policy_rows(),
+        merge_rules=lambda rules: auto_accept.add_policy_v2_rules(rules),
+        step_up_state=lambda: (step_up.enabled, step_up.scope),
+        step_up_gate=_personal_step_up_gate,
+        audit=_record_settings_audit,
+        mode="org",
+    )
+
     def _org_scoped_token_data(principal: Principal) -> dict[str, Any] | None:
         if not token_policy.enabled or scoped_token_page_data is None:
             return None
@@ -1853,7 +1973,7 @@ def build_org_routes(
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
             mode=ORG_MODE, is_admin=principal.is_admin,
-            scoped_tokens=_org_scoped_token_data(principal),
+            scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
@@ -1862,6 +1982,7 @@ def build_org_routes(
         # StepUpConfig, not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         html = web_shell.wrap(
             body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
             nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal.email or principal.display_name or principal.id,
@@ -2073,5 +2194,6 @@ def build_org_routes(
         Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
         Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
+        *build_personal_routes(personal_hooks),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]

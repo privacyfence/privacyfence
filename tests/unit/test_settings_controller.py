@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import pathlib
 import threading
 import time
 from types import SimpleNamespace
@@ -1932,6 +1933,78 @@ class TestPolicyScopeCatalogue:
         assert set(entry["verbs"]) == {
             "read", "download", "update", "restructure", "delete", "add", "move",
         }
+
+
+class TestImportPolicyRules:
+    """import_policy_rules is the personal-settings import's writer: add_policy_rule's merge for rules
+    that are already compiled, through the same save-and-reload path."""
+
+    @staticmethod
+    def _rules(scope="drive.folder", value=("FOLDER1",)):
+        row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, list(value)), scope=scope, value=list(value),
+            verbs=frozenset(scope_rows.scope_verbs(scope)),
+            operations=scope_rows.implied_operations(scope, scope_rows.scope_verbs(scope)),
+        )
+        return scope_rows.compile_row(row)
+
+    def test_policy_rows_reads_what_is_on_disk(self, controller):
+        assert controller.policy_rows() == []
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        assert [row.scope for row in controller.policy_rows()] == ["drive.folder"]
+
+    def test_policy_rows_is_empty_when_the_section_cannot_be_upgraded(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_load_rows", lambda: None)
+        assert controller.policy_rows() == []
+
+    def test_writes_the_rows_and_hot_reloads_the_rule_cache(self, controller):
+        assert controller.import_policy_rules(self._rules()) is True
+
+        cfg = controller._load_config()
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["version"] == 3
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["scope"] == "drive.folder"
+        assert auto_accept.get_policy_v2_store_rules()
+
+    def test_an_unchanged_merge_writes_nothing(self, controller):
+        controller.import_policy_rules(self._rules())
+        before = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
+        assert controller.import_policy_rules(self._rules()) is False
+        after = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
+        assert after == before
+
+    def test_does_nothing_when_the_rows_cannot_be_loaded(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_load_rows", lambda: None)
+        assert controller.import_policy_rules(self._rules()) is False
+
+    def test_keeps_existing_rows_and_extends_a_matching_one(self, controller):
+        controller.add_policy_rule("drive.folder", "KEEP", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        assert controller.import_policy_rules(self._rules()) is True
+        rows = {tuple(row.value or ()): row for row in controller.policy_rows()}
+        assert set(rows) == {("KEEP",), ("FOLDER1",)}
+        assert len(rows[("FOLDER1",)].verbs) > 1
+
+    def test_refreshes_the_audit_loggers_policy_hash_like_add_policy_rule(self, controller, monkeypatch):
+        seen: list[str] = []
+        logger = SimpleNamespace(set_security_config_hash=seen.append)
+        monkeypatch.setattr(sc, "get_audit_logger", lambda: logger)
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        added = list(seen)
+        controller.import_policy_rules(self._rules("drive.folder", ("OTHER",)))
+        assert len(seen) == len(added) + 1 and seen[-1] != added[-1]
+
+    def test_rules_changed_listeners_see_the_imported_rules(self, controller):
+        seen: list = []
+
+        def listener() -> None:
+            seen.append(list(auto_accept.get_policy_v2_store_rules()))
+
+        auto_accept.add_rules_changed_listener(listener)
+        try:
+            controller.import_policy_rules(self._rules())
+        finally:
+            auto_accept.remove_rules_changed_listener(listener)
+        assert seen and seen[-1] == list(auto_accept.get_policy_v2_store_rules()) and seen[-1]
 
 
 class TestAddPolicyRule:
