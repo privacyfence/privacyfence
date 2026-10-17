@@ -1,7 +1,7 @@
 # privacyfence-sync
 
 `privacyfence-sync` runs a data-sync recipe against PrivacyFence with no AI model involved. A recipe
-reads data from your connected services (Salesforce reports, Jira searches, Grist tables, files in
+reads data from your connected services (Salesforce reports, Jira searches, Jira Assets queries, Grist tables, files in
 Google Drive), runs your own scripts on the files, writes the result back to Grist, and can publish
 an HTML dashboard on Peek.
 
@@ -104,6 +104,7 @@ PrivacyFence's **Settings → Auto-accept → Add a rule**. Each one asks for yo
 |---|---|---|
 | `salesforce_export_report`, `salesforce_run_report` | **Salesforce — report**, the report id | read |
 | `jira_export_issues` | **Jira — project**, the project key(s) | search |
+| `assets_export_objects` | **Jira Assets — schema**, the schema id | search |
 | `drive_download_file` | **Drive — folder**, the folder id the file is in | download |
 | `drive_list_files` | none needed | |
 | `grist_export_records`, `grist_export_sql`, `grist_get_records` | **Grist — document**, the document id | read |
@@ -118,8 +119,8 @@ Notes:
   run is denied, even when a rule matches. For the tools whose data goes to a file or a page
   rather than to an AI model, the recipe's scoped token can say otherwise. When you create the
   token, tick **Let exports, downloads and page uploads carry personal data**. It covers:
-  - `salesforce_export_report`, `jira_export_issues`, `grist_export_records` and
-    `grist_export_sql`;
+  - `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`,
+    `grist_export_records` and `grist_export_sql`;
   - `drive_download_file` when the file is delivered as a file (on an organization server a small
     file, up to about 75 KB by default, comes back inside the tool result instead, and is still
     scanned);
@@ -131,6 +132,8 @@ Notes:
   the other reads that return data in the tool result are always scanned.
 - **A Jira project rule** covers an export only when every exported issue belongs to an approved
   project. A JQL query that reaches into another project needs that project in the rule too.
+- **A Jira Assets schema rule** covers an export only when every exported object belongs to an
+  approved schema. An AQL query that reaches into another schema needs that schema in the rule too.
 - **A Drive folder rule** covers files whose parent folder is the one named. A file in a subfolder
   needs the subfolder's id.
 - **A Peek page rule** covers new versions of pages that already exist. Publish the page once by
@@ -203,7 +206,8 @@ Two kinds of reference use them:
 
 ### Export steps
 
-`salesforce_export_report`, `jira_export_issues`, `grist_export_records`, `grist_export_sql`.
+`salesforce_export_report`, `jira_export_issues`, `assets_export_objects`, `grist_export_records`,
+`grist_export_sql`.
 
 ```yaml
 - id: issues
@@ -222,7 +226,7 @@ Two kinds of reference use them:
   organization server hands out a one-time download link, which `privacyfence-sync` fetches at
   once (the link expires after 5 minutes). Either way the file's SHA-256 is checked against what
   PrivacyFence reported, and the step fails if they differ.
-- A `jira_export_issues` query that matches no issue writes no file on PrivacyFence's side;
+- A `jira_export_issues` or `assets_export_objects` query that matches nothing writes no file on PrivacyFence's side;
   `privacyfence-sync` writes a CSV with just the header row (or `[]` for `.json`), so later steps
   still find their input.
 
@@ -232,6 +236,7 @@ What each export writes:
 |---|---|---|
 | `salesforce_export_report` | the report's detail columns, or `columns` | `cell_format: value` (default) writes raw values: dates as YYYY-MM-DD, amounts as numbers, record ids for lookups. `label` writes what Salesforce shows. `both` writes, for each column `C`, the raw value as `C` and the shown text as `C.label`, plus `C.currency` for money columns. A report over 2,000 rows or a grouped report needs `page_by`, a column unique per row. |
 | `jira_export_issues` | key, summary, status, issue_type, priority, assignee, reporter, labels, created, updated, url, then `fields` | People are display names. Lists (labels, multi-select fields) are JSON in a CSV cell. |
+| `assets_export_objects` | id, key, label, type, then one column per attribute name | A multi-value attribute is its values joined with `; `. |
 | `grist_export_records` | every column of the table, including formula columns | `filter` narrows rows by column values. |
 | `grist_export_sql` | what the `SELECT` returns | Cells are as Grist stores them: dates as seconds since 1970, true/false as 1/0. Only people who can copy the whole document may run SQL; others get a message pointing to `grist_export_records`. |
 
@@ -755,6 +760,7 @@ These come from PrivacyFence's tools, not from `privacyfence-sync`:
 | `grist_export_records`, `grist_export_sql` | 50,000 rows per export |
 | `salesforce_export_report` | 2,000 rows without `page_by`; with it, up to `salesforce.report_max_pages` runs (50 by default) |
 | `jira_export_issues` | 10,000 issues per export; narrow the JQL and export in parts above that |
+| `assets_export_objects` | 10,000 objects per export; narrow the AQL and export in parts above that |
 | Any delivered file | 200 MB (`file_bridge.max_download_bytes`) |
 | `grist_update_csv`, `grist_import_csv` | 20,000 rows, 100 columns, 10,000 characters per cell, 50 MB per file; one key column; formula columns can't be written |
 | Upload slot | 50 MB, valid 10 minutes |
