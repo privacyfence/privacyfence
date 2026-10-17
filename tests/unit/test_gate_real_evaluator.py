@@ -67,6 +67,7 @@ def make_kwargs(**overrides):
         preview={},
         details_text="ordinary, non-sensitive content",
         my_email="me@example.com",
+        my_account_id="acc-me",
         args={},
     )
     kwargs.update(overrides)
@@ -629,7 +630,7 @@ class TestJiraRules:
         result = await gate.gated_call(**make_kwargs(
             connector="jira", tool="jira_get_issue", gate="review",
             args={"issue_key": "OTHER-99"},
-            raw_data=SimpleNamespace(reporter="me@example.com", assignee="someone-else@example.com"),
+            raw_data=SimpleNamespace(reporter="Me", reporter_account_id="acc-me", assignee="Else", assignee_account_id="acc-else"),
         ))
 
         assert result is FILTERED
@@ -644,11 +645,26 @@ class TestJiraRules:
         result = await gate.gated_call(**make_kwargs(
             connector="jira", tool="jira_get_issue", gate="review",
             args={"issue_key": "OTHER-100"},
-            raw_data=SimpleNamespace(reporter="someone-else@example.com", assignee="me@example.com"),
+            raw_data=SimpleNamespace(reporter="Else", reporter_account_id="acc-else", assignee="Me", assignee_account_id="acc-me"),
         ))
 
         assert result is FILTERED
         assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == rule_id("i_am_assignee")
+
+
+    @pytest.mark.parametrize("predicate,field", [("i_am_reporter", "reporter"), ("i_am_assignee", "assignee")])
+    async def test_name_containing_my_email_does_not_match(self, predicate, field, monkeypatch, audit_dir):
+        install_rules({"jira.read_issue": [{"predicate": predicate}]})
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+
+        result = await gate.gated_call(**make_kwargs(
+            connector="jira", tool="jira_get_issue", gate="review",
+            args={"issue_key": "OTHER-101"},
+            raw_data=SimpleNamespace(**{field: "Mallory (me@example.com)", f"{field}_account_id": "acc-other"}),
+        ))
+
+        assert result is FILTERED
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
 
 class TestConfluenceRules:
@@ -689,7 +705,7 @@ class TestConfluenceRules:
         result = await gate.gated_call(**make_kwargs(
             connector="confluence", tool="confluence_get_page", gate="review",
             args={"space_key": "OTHERSPACE"},
-            raw_data=SimpleNamespace(author="me@example.com"),
+            raw_data=SimpleNamespace(author="acc-me"),
         ))
 
         assert result is FILTERED

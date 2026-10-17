@@ -222,6 +222,12 @@ The daemon refuses to start in organization mode unless the bundle is signed. Th
 bundle a server sees pins its signing key (trust on first use). Every later bundle must verify
 against that key.
 
+Each signed bundle also carries a `serial` (see [Build the bundle](#build-the-bundle)). The server
+pins the highest serial it has accepted in `org/org_config_serial.txt` and refuses a bundle with a
+lower one, so an old bundle cannot be put back by accident. Bundles built before this field existed
+are accepted until a serial has been pinned; from then on a bundle without one is refused. The
+reasoning is in [ADR 0200](adr/0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md).
+
 ### Generate the signing key
 
 Run this once per organization on an admin workstation, not on the server. It needs the
@@ -255,6 +261,12 @@ backed up: every future bundle, including `--merge` runs, must be signed with it
 ```
 
 The script writes `org_config.json` with mode `0600` and prints what it contains.
+
+A signed bundle gets a `serial`: the current Unix time unless you pass `--serial N`, so each new
+build is higher than the last without you tracking a counter. If you set `--serial` by hand, keep it
+increasing. `--merge` drops the old serial and signs a new one. To go back to an older bundle on
+purpose, stop the daemon and delete `org/org_config_serial.txt`; delete it together with
+`org/org_config_signing_pubkey.txt` to rotate the key and reset the serial in one step.
 
 | Option | Default | What it sets |
 |---|---|---|
@@ -303,6 +315,7 @@ The script writes `org_config.json` with mode `0600` and prints what it contains
 | `--audit-forwarding-http-bearer-token-env NAME` | none | The name of an environment variable the daemon reads a bearer token from. The token itself never goes in the bundle; set the variable in the systemd unit ([section 8](#8-hardened-systemd-unit)). |
 | `--generate-signing-key PATH` | | Create a signing key and exit. |
 | `--sign-key PATH` | none (required with `--mode org`) | Sign the bundle. |
+| `--serial N` | current Unix time | The serial signed into the bundle; needs `--sign-key`. An install refuses a bundle whose serial is lower than the highest it has accepted. |
 
 `python3 build_org_bundle.py --help` lists the same options. The daemon also reads a few bundle
 keys that the script does not set, and each person's policy lives in `settings.yaml`; the
@@ -365,7 +378,7 @@ sudo install -o privacyfence-org -g privacyfence-org -m 600 org_config.json \
 Copying the file is the only way to install a bundle on an organization server. The daemon reads
 it once at startup, so restart the service after replacing it (`sudo systemctl restart
 privacyfence-org`). It refuses to start, and says why, if the bundle is malformed, is missing its
-`server` or `idp` section, is unsigned, or does not verify against the pinned key.
+`server` or `idp` section, is unsigned, or does not verify against the pinned key, or carries a lower serial than the install has accepted.
 
 ## 7. Reverse proxy and TLS
 
@@ -969,6 +982,7 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 |---|---|
 | `org/org_config.json` | The installed bundle, including the identity provider and connector client secrets. |
 | `org/org_config_signing_pubkey.txt` | The pinned signing key. |
+| `org/org_config_serial.txt` | The highest bundle serial this install has accepted. |
 | `org/oauth_clients.json` | Registered AI clients. Without it every client has to register again. |
 | `org/oauth_refresh.json` | AI clients' refresh tokens, each sealed under its own token. |
 | `org/agent_pins.json` | AI-system pins. |
@@ -1150,7 +1164,9 @@ Notes:
 
 - **Bundle signing key:** generate a new key, build the bundle with it, stop the daemon, delete
   `org/org_config_signing_pubkey.txt`, install the new bundle and start. The first start pins the
-  new key and logs a warning saying so.
+  new key and logs a warning saying so. The serial pin (`org/org_config_serial.txt`) stays, and the
+  new bundle's default serial is a current timestamp, so it is accepted. Delete the serial file too
+  only to reset the serial.
 - **Identity provider client secret:** rebuild with `--merge --mode org` and every `--server-*` and
   `--idp-*` flag ([section 6](#changing-a-bundle-later)), install, restart.
 - **Connector client secrets:** rebuild with `--merge` and that connector's flags, install,
@@ -1185,6 +1201,7 @@ cause:
 |---|---|
 | `has "mode": "org" but is not signed` | Rebuild the bundle with `--sign-key`. |
 | `failed signing-key verification` | The bundle was signed with a different key than the pinned one. Sign it with the original key, or rotate the key ([section 14](#key-and-secret-rotation)). |
+| `rollback refused`, or `carries no serial, but this install has already accepted serial` | The bundle's serial is lower than the one in `org/org_config_serial.txt`, or it has none. Rebuild it with `--sign-key` (the default serial is the current time). To go back to an older bundle on purpose, delete `org/org_config_serial.txt` ([section 6](#build-the-bundle)). |
 | `requires an "idp" section` or `requires org_config.json's "server"."issuer_url"` | Rebuild with `--mode org` and all `--server-issuer-url` and `--idp-*` flags. |
 | `is not HTTPS -- org mode requires every IdP endpoint to be HTTPS`, or a discovery error | The identity provider's issuer or endpoints are not HTTPS, or the server cannot reach `<issuer>/.well-known/openid-configuration`. |
 | `Refusing to start in organization mode:` followed by a permissions finding | A directory in the data directory grants group or other access. Set it back to `0700`, owned by `privacyfence-org`. |

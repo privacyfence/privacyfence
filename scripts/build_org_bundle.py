@@ -33,6 +33,10 @@ docs/how-it-works.md's "Unattended sessions" section.
 Settings (--scoped-token-max-days N caps how long one lasts, 1-365); without
 it the feature is off in organization mode (ADR 0165).
 
+--sign-key also signs a "serial" into the bundle (--serial N, default: the
+current Unix time); an install refuses a bundle whose serial is lower than the
+highest it has accepted, so a later build always wins.
+
 Example:
     python3 scripts/build_org_bundle.py \\
         --org-name "Acme Corp" \\
@@ -50,6 +54,7 @@ import base64
 import json
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -114,6 +119,16 @@ def _scoped_token_days(value: str) -> int:
     if not 1 <= days <= 365:
         raise argparse.ArgumentTypeError("must be a whole number of days from 1 to 365.")
     return days
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive whole number.")
+    return number
 
 
 def _canonical_payload_bytes(bundle: dict[str, Any]) -> bytes:
@@ -584,12 +599,20 @@ def build_parser() -> argparse.ArgumentParser:
              "in org mode with an unsigned bundle. Optional but recommended otherwise. Needs the "
              "`cryptography` package.",
     )
+    signing.add_argument(
+        "--serial", type=_positive_int, metavar="N", default=None,
+        help="Serial signed into the bundle (default: the current Unix time). Installs refuse a "
+             "bundle whose serial is lower than the highest they have accepted.",
+    )
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.serial is not None and not args.sign_key:
+        parser.error("--serial needs --sign-key (only a signed bundle carries a serial).")
 
     if args.generate_signing_key:
         return _generate_signing_key(args.generate_signing_key)
@@ -606,6 +629,7 @@ def main(argv: list[str] | None = None) -> int:
     # signature/key forward implicitly.
     bundle.pop("signature", None)
     bundle.pop("signing_public_key", None)
+    bundle.pop("serial", None)
     # A 5.0.0a1 bundle may carry mcp.tool_annotations, which the daemon now
     # refuses to start with (ADR 0089). --merge is the way to rebuild one, so
     # drop the key here rather than carry forward a bundle that cannot load.
@@ -888,6 +912,7 @@ def main(argv: list[str] | None = None) -> int:
             "first with --generate-signing-key if you haven't yet)."
         )
     if args.sign_key:
+        bundle["serial"] = args.serial if args.serial is not None else int(time.time())
         bundle = _sign_bundle(bundle, args.sign_key)
 
     out_path.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")

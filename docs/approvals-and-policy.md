@@ -405,9 +405,9 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Calendar events I organize | attribute | — | `i_am_organizer` | you are the event's organizer |
 | Tasks list | identity | task list ids | `approved_task_list` | the list is one of these; for a move, both lists are |
 | Jira project | identity | project keys | `approved_project_keys`, `approved_project_keys_all_results` | the project (or the issue key's project) is one of these; for a search, every result is in one of them |
-| Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | you are the reporter; you are the assignee |
+| Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | your Atlassian account is the reporter; your Atlassian account is the assignee (compared by account id, never by a name or email; [ADR 0199](adr/0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md)) |
 | Confluence space | identity | space keys | `approved_space_keys` | the page's space is one of these |
-| Confluence pages I wrote | attribute | — | `i_am_author` | you are the page's author |
+| Confluence pages I wrote | attribute | — | `i_am_author` | your Atlassian account is the page's author (compared by account id) |
 | Salesforce object type | attribute | object names | `approved_object_types` | every requested or written object type is one of these |
 | Salesforce report | identity | report ids | `approved_report_ids` | the report is one of these |
 | Contacts label | identity | label names | `label_name_allowlist` | the label being applied or removed is one of these |

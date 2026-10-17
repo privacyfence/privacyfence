@@ -400,6 +400,7 @@ class ReviewContext:
     my_email: str = ""
     my_domain: str = field(init=False)
     session_created_ids: set = field(default_factory=set)
+    my_account_id: str = ""
 
     def __post_init__(self):
         self.my_domain = self.my_email.split("@", 1)[-1] if "@" in self.my_email else ""

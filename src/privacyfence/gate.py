@@ -987,6 +987,7 @@ async def gated_call(
         # itself (an inline download), so a rule's allow_personal_data flag does not apply
         # (ADR 0157).
     my_email: str = "",
+    my_account_id: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
     delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- which
@@ -1011,6 +1012,7 @@ async def gated_call(
         args=args or {},
         raw_data=raw_data,
         my_email=my_email,
+        my_account_id=my_account_id,
         session_created_ids=session_created_ids or set(),
     )
     details = details_text or _default_details(raw_data)

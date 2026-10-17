@@ -9,6 +9,7 @@ the review's own §15 roadmap" item 1, and Phase 1 rows 1.1 and 1.1b). Implement
 landed together** in one commit, `04cb47db` (2026-09-07, "Phase 1.1(a+b)"), so the sequencing the
 plan argued for never happened as a gap in time. What survives is the layering: the hash log was
 kept as an independent record next to signing, not treated as scaffolding.
+Amended by [0200](0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md): a signed bundle carries a serial and an older one is refused.
 
 ## Context
 

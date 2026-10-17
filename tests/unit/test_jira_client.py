@@ -262,6 +262,21 @@ class TestParseIssue:
         assert issue.url == "https://acme.atlassian.net/browse/ENG-1"
         assert issue.labels == ["urgent"]
 
+    def test_parse_issue_records_reporter_and_assignee_account_ids(self):
+        client = make_client()
+        raw = {"key": "ENG-1", "fields": {
+            "assignee": {"displayName": "Jane", "accountId": "acct-a"},
+            "reporter": {"displayName": "Bob", "accountId": "acct-r"},
+        }}
+        issue = client._parse_issue(raw)
+        assert issue.assignee_account_id == "acct-a"
+        assert issue.reporter_account_id == "acct-r"
+        assert "reporter_account_id" not in asdict(issue)
+        assert "assignee_account_id" not in asdict(issue)
+        unassigned = client._parse_issue({"key": "ENG-2", "fields": {"assignee": None}})
+        assert unassigned.assignee_account_id == ""
+        assert unassigned.reporter_account_id == ""
+
     def test_description_extracted_from_adf_when_requested(self):
         client = make_client()
         raw = {"key": "ENG-1", "fields": {
@@ -339,7 +354,7 @@ class TestTryRefresh:
                              lambda cid, cs, rt: {"access_token": "new-tok", "refresh_token": "new-rt"})
         token_file = str(tmp_path / "atlassian_token.json")
         client = make_client(
-            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "account_email": "me@x.com"},
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "account_email": "me@x.com", "account_id": "acct-1"},
             token_file=token_file,
         )
         monkeypatch.setattr(
@@ -354,8 +369,26 @@ class TestTryRefresh:
         assert saved == {
             "access_token": "new-tok", "refresh_token": "new-rt",
             "cloud_id": "cloud-1", "site_url": "https://acme.atlassian.net", "account_email": "me@x.com",
-            "scopes": [],
+            "account_id": "acct-1", "scopes": [],
         }
+
+    def test_refresh_keeps_the_account_id_from_disk_when_config_lacks_it(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(jira_client_module, "atlassian_refresh",
+                             lambda cid, cs, rt: {"access_token": "new-tok", "refresh_token": "new-rt"})
+        monkeypatch.setattr(
+            jira_client_module, "load_token_file",
+            lambda path: {"refresh_token": "rt", "account_id": "acct-disk"},
+        )
+        saved = {}
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saved.update(record))
+        client = make_client(
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt"},
+            token_file=str(tmp_path / "atlassian_token.json"),
+        )
+
+        client._try_refresh()
+
+        assert saved["account_id"] == "acct-disk"
 
     def test_refresh_keeps_the_recorded_scopes(self, monkeypatch, tmp_path):
         monkeypatch.setattr(jira_client_module, "atlassian_refresh",
@@ -465,6 +498,45 @@ class TestCheckConnection:
         client = make_client()
         client._client.myself.return_value = {"displayName": "Jane Doe"}
         assert client.check_connection() == "Jane Doe @ https://acme.atlassian.net"
+
+    def test_check_connection_records_the_account_id(self):
+        client = make_client()
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+        client.check_connection()
+        assert client.account_id == "acct-1"
+
+    def test_check_connection_persists_a_missing_account_id(self, monkeypatch, tmp_path):
+        on_disk = {"access_token": "disk-tok", "refresh_token": "disk-rt", "cloud_id": "cloud-1", "scopes": ["s"]}
+        saved = {}
+        monkeypatch.setattr(jira_client_module, "load_token_file", lambda path: on_disk)
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saved.update(record))
+        client = make_client(token_file=str(tmp_path / "t.json"))
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+
+        client.check_connection()
+
+        assert saved == {**on_disk, "account_id": "acct-1"}
+
+    def test_check_connection_does_not_rewrite_an_unchanged_account_id(self, monkeypatch, tmp_path):
+        saves = []
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saves.append(record))
+        client = make_client({"account_id": "acct-1"}, token_file=str(tmp_path / "t.json"))
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+
+        client.check_connection()
+
+        assert saves == []
+
+    def test_check_connection_survives_a_failed_account_id_save(self, monkeypatch, tmp_path):
+        def failing_save(path, record):
+            raise OSError("disk full")
+        monkeypatch.setattr(jira_client_module, "load_token_file", lambda path: {"refresh_token": "rt"})
+        monkeypatch.setattr(jira_client_module, "save_token_file", failing_save)
+        client = make_client(token_file=str(tmp_path / "t.json"))
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+
+        assert client.check_connection() == "Jane Doe @ https://acme.atlassian.net"
+        assert client.account_id == "acct-1"
 
     def test_error_becomes_jira_client_error(self):
         client = make_client()

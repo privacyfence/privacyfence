@@ -59,6 +59,7 @@ def fake_client_class(*, result=None, connection_error: Exception | None = None,
         instantiated = False
         authorize_called = False
         directories_refreshed = False
+        account_id = ""
 
         def __init__(self, **kwargs):
             type(self).instantiated = True
@@ -121,18 +122,13 @@ def _no_ambient_google_clients(monkeypatch):
 # ---------------------------------------------------------------------------- #
 
 class TestResolvePath:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
-    def test_absolute_path_is_returned_unchanged(self):
-        assert daemon_main._resolve_path("/etc/hosts") == "/etc/hosts"
+    def test_absolute_path_is_returned_unchanged(self, tmp_path):
+        path = str(tmp_path / "x.json")
+        assert daemon_main._resolve_path(path) == path
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
-    def test_relative_path_is_joined_with_project_root(self, monkeypatch):
-        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", "/tmp/pf-root")
-        assert daemon_main._resolve_path("credentials/x.json") == "/tmp/pf-root/credentials/x.json"
+    def test_relative_path_is_joined_with_project_root(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
+        assert daemon_main._resolve_path("credentials/x.json") == os.path.join(str(tmp_path), "credentials/x.json")
 
     def test_relative_path_for_a_non_local_principal_uses_its_own_storage_root(self, monkeypatch, tmp_path):
         # The branch connector_registry.py's ConnectorRegistry.get() relies on;
@@ -152,11 +148,9 @@ class TestResolvePath:
 # ---------------------------------------------------------------------------- #
 
 class TestResolveAuthorityPath:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a known gap, found when this suite first ran on Windows CI",
-    )
-    def test_absolute_path_is_returned_unchanged(self):
-        assert daemon_main._resolve_authority_path("/etc/hosts") == "/etc/hosts"
+    def test_absolute_path_is_returned_unchanged(self, tmp_path):
+        path = str(tmp_path / "x.json")
+        assert daemon_main._resolve_authority_path(path) == path
 
     def test_relative_path_is_joined_with_project_roots_authority_subdirectory(self, monkeypatch, tmp_path):
         monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
@@ -1088,6 +1082,21 @@ class TestBuildConnectorsAtlassian:
         assert jira_fake.instantiated is False
         assert confluence_fake.instantiated is False
 
+    def test_jira_and_confluence_connectors_get_the_clients_account_id(self, monkeypatch):
+        self._patch_token(monkeypatch, token={"access_token": "at", "account_email": "me@x.com"})
+        jira_fake = fake_client_class(result="jira info")
+        jira_fake.account_id = "acc-me"
+        confluence_fake = fake_client_class(result="https://x.atlassian.net/wiki")
+        confluence_fake.account_id = "acc-me"
+        monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
+        monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
+
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
+
+        assert {c.name: c.my_account_id for c in connectors} == {"jira": "acc-me", "confluence": "acc-me"}
+        # The id Jira learned reaches the clients built after it.
+        assert confluence_fake.captured_kwargs["config"]["account_id"] == "acc-me"
+
     def test_jira_disabled_does_not_affect_confluence(self, monkeypatch):
         self._patch_token(monkeypatch, token={"access_token": "at", "account_email": "me@x.com"})
         jira_fake = fake_client_class(result="ok")
@@ -1210,9 +1219,6 @@ class TestBuildConnectorsTelegram:
         if exists:
             (tmp_path / "credentials" / "telegram.session").write_bytes(b"")
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
     def test_built_when_creds_and_session_present(self, monkeypatch, tmp_path):
         self._make_session(tmp_path, monkeypatch, exists=True)
         monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: (123, "hash"))
@@ -1225,7 +1231,7 @@ class TestBuildConnectorsTelegram:
         assert connectors[0].name == "telegram"
         assert fake.captured_kwargs == {
             "api_id": 123, "api_hash": "hash",
-            "session_file": str(tmp_path / "credentials" / "telegram.session"),
+            "session_file": os.path.join(str(tmp_path), "credentials/telegram.session"),
             "chat_cache_file": str(data_dir() / "telegram_chat_cache.json"),
         }
         # Same as Slack (see TestBuildConnectorsSlack): directory-cache
@@ -4273,3 +4279,42 @@ class TestRevokeScopedTokens:
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
         assert daemon_main.run_revoke_scoped_tokens("local") == 0
         assert capsys.readouterr().out == "Revoked 0 scoped token(s) for local.\n"
+
+
+class TestLoadOrgConfigSerial:
+    """SEC-A7: the serial pin is wired into every load_org_config() call."""
+
+    def test_load_org_config_rejects_older_signed_bundle(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        key = _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 200})
+        daemon_main.load_org_config()
+
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 100}, key)
+
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.load_org_config()
+        assert "rollback refused" in str(excinfo.value)
+        assert str(org_bundle_signing.pinned_serial_path(tmp_path)) in str(excinfo.value)
+
+    def test_load_org_config_records_the_highest_serial(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        key = _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 100})
+        daemon_main.load_org_config()
+        assert org_bundle_signing.load_pinned_serial(tmp_path) == 100
+
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 300}, key)
+        daemon_main.load_org_config()
+
+        assert org_bundle_signing.load_pinned_serial(tmp_path) == 300
+
+    def test_load_org_config_refuses_an_invalid_serial_without_a_remedy(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 0})
+
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.load_org_config()
+        assert str(excinfo.value).endswith("(serial is not a positive integer) -- refusing to start.")

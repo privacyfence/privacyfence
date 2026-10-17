@@ -45,6 +45,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The Jira "if I'm the reporter / assignee" and Confluence "if I'm the author" rules match your Atlassian account id.** They no longer compare your email inside a display name, so nobody can make issues auto-readable by naming themselves after you, and the Confluence rule now works. Installs with Jira pick the id up on their next start; installs with only Confluence need to sign in to Atlassian once more. ([ADR 0199](docs/adr/0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md))
+- **An install refuses an older organization bundle.** Bundles signed with `build_org_bundle.py --sign-key` carry a `serial` (`--serial N`, default the current time), and an install refuses a bundle with a lower serial than the highest it has accepted. Delete `org_config_serial.txt` to go back on purpose. ([ADR 0200](docs/adr/0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md))
+- **privacyfence.eu sends security headers.** HSTS, a Content-Security-Policy, `X-Content-Type-Options: nosniff` and a Referrer-Policy. ([ADR 0201](docs/adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md))
 - **Connectors are enabled by the organization config, all of them.** Telegram, Peek and Grist now need a section in the organization config too (`build_org_bundle.py --enable-telegram`, `--enable-peek`, `--enable-grist`; `--peek-base-url` and `--grist-server-url` imply theirs). Settings > Connectors and the organization sign-in page list only the connectors it enables and hide the rest. An install without a bundle lists none until an administrator adds the sections ([ADR 0196](docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
 
 ### Added

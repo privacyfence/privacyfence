@@ -4,6 +4,7 @@
 
 Accepted — 2026-09-25 (recorded when the site gained its build step; the hosting itself predates
 it). Implemented in `.github/workflows/pages.yml`.
+Amended by [0201](0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md): Cloudflare sets the security headers, checked after every deploy.
 
 ## Context
 

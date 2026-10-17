@@ -1126,12 +1126,21 @@ class SettingsController:
 
         trust = org_bundle_signing.verify_and_maybe_pin(data, org_dir())
         if not trust.ok:
-            self.error = (
-                f"Refusing to install: organization config bundle failed signing-key "
-                f"verification ({trust.detail}). If a legitimate signing-key rotation is "
-                f"expected, an administrator must delete "
-                f"{org_bundle_signing.pinned_public_key_path(org_dir())} first."
-            )
+            if trust.remedy == "serial":
+                self.error = (
+                    f"Refusing to install: {trust.detail}. To deliberately go back to an older "
+                    f"bundle, an administrator must delete "
+                    f"{org_bundle_signing.pinned_serial_path(org_dir())} first."
+                )
+            elif trust.remedy == "none":
+                self.error = f"Refusing to install: {trust.detail}."
+            else:
+                self.error = (
+                    f"Refusing to install: organization config bundle failed signing-key "
+                    f"verification ({trust.detail}). If a legitimate signing-key rotation is "
+                    f"expected, an administrator must delete "
+                    f"{org_bundle_signing.pinned_public_key_path(org_dir())} first."
+                )
             return
         if data.get("mode") == "org" and not trust.signed:
             self.error = (
@@ -1152,6 +1161,7 @@ class SettingsController:
             self.error = f"Could not install organization config: {exc}"
             return
 
+        org_bundle_signing.record_accepted_serial(trust, org_dir())
         self.error = ""
         # The live connectors were built from the previous bundle's client
         # credentials and download settings; rebuild them now, or they keep

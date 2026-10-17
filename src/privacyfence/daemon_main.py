@@ -465,6 +465,16 @@ def load_org_config() -> dict[str, Any]:
 
     trust = org_bundle_signing.verify_and_maybe_pin(data, org_dir())
     if not trust.ok:
+        if trust.remedy == "serial":
+            raise org_mode.ConfigurationError(
+                f"Organization config at {path} was refused ({trust.detail}) -- refusing to start. "
+                f"To deliberately go back to an older bundle, an administrator must delete "
+                f"{org_bundle_signing.pinned_serial_path(org_dir())} first."
+            )
+        if trust.remedy == "none":
+            raise org_mode.ConfigurationError(
+                f"Organization config at {path} was refused ({trust.detail}) -- refusing to start."
+            )
         raise org_mode.ConfigurationError(
             f"Organization config at {path} failed signing-key verification ({trust.detail}) -- "
             f"refusing to start. If a legitimate signing-key rotation is expected, an "
@@ -483,6 +493,7 @@ def load_org_config() -> dict[str, Any]:
             "requires a signed bundle (build one with scripts/build_org_bundle.py --sign-key ...; "
             "generate a signing key first with --generate-signing-key if you haven't yet)."
         )
+    org_bundle_signing.record_accepted_serial(trust, org_dir())
     return data
 
 
@@ -1549,9 +1560,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 user_directory=atlassian_users,
             )
             info = jira_client.check_connection()
+            if jira_client.account_id:
+                atlassian_config["account_id"] = jira_client.account_id
             logger.info("Jira connector ready: %s", info)
             jira_connector = JiraConnector(jira_client)
             jira_connector.my_email = atlassian_token.get("account_email", "")
+            jira_connector.my_account_id = jira_client.account_id
             jira_connector.download_mode = download_mode
             jira_connector.download_config = download_config
             jira_connector.download_base_url = download_base_url
@@ -1575,6 +1589,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Confluence connector ready: %s", url)
             confluence_connector = ConfluenceConnector(confluence_client)
             confluence_connector.my_email = atlassian_token.get("account_email", "")
+            confluence_connector.my_account_id = confluence_client.account_id
             confluence_connector.download_mode = download_mode
             confluence_connector.download_config = download_config
             confluence_connector.download_base_url = download_base_url

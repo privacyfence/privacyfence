@@ -27,7 +27,11 @@ start (``daemon_main.load_org_config``) -- must verify against that
 pinned key or is rejected outright. That closes the obvious downgrade
 this would otherwise still allow (an attacker replacing a signed bundle
 with an unsigned or self-signed one) without requiring any out-of-band
-key distribution beyond the bundle itself.
+key distribution beyond the bundle itself. A signed bundle may also carry
+a ``serial``; the highest one an install has accepted is pinned beside the
+key (``pinned_serial_path()``) and a bundle with a lower serial is refused
+as a rollback. Deleting that one file is how an administrator deliberately
+goes back to an older bundle.
 
 An install that never adopts signing (no ``--sign-key`` ever used) never
 pins a key and keeps working exactly as before -- signing is opt-in for
@@ -68,6 +72,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -81,17 +86,22 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from .secure_files import atomic_write_text
 
+logger = logging.getLogger(__name__)
+
 # Bundle fields written by scripts/build_org_bundle.py --sign-key, read
 # here. Both are standard-alphabet base64 of the raw fixed-size Ed25519
 # bytes -- 32 for the public key, 64 for the signature.
 SIGNATURE_FIELD = "signature"
 SIGNING_PUBLIC_KEY_FIELD = "signing_public_key"
+SERIAL_FIELD = "serial"
 
 # Lives alongside org_config.json itself (in the caller's own org_dir),
 # not inside org_config.json -- the whole point is that once a key is
 # pinned, this file's trust doesn't come from anything the bundle itself
 # claims.
 PINNED_PUBKEY_FILENAME = "org_config_signing_pubkey.txt"
+# The highest bundle serial this install has accepted, beside the key pin.
+PINNED_SERIAL_FILENAME = "org_config_serial.txt"
 
 
 def sha256_hex(raw: bytes) -> str:
@@ -153,12 +163,76 @@ def _pin_public_key(org_dir: Path, raw_public_key: bytes) -> None:
     atomic_write_text(path, base64.b64encode(raw_public_key).decode("ascii") + "\n")
 
 
+def pinned_serial_path(org_dir: Path) -> Path:
+    return org_dir / PINNED_SERIAL_FILENAME
+
+
+def load_pinned_serial(org_dir: Path) -> int | None:
+    """None when no serial has been pinned; raises ValueError when the
+    file exists but does not hold a positive integer (fail closed)."""
+    path = pinned_serial_path(org_dir)
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    if not text.isascii() or not text.isdigit() or int(text) < 1:
+        raise ValueError(f"{path} does not hold a positive integer")
+    return int(text)
+
+
 @dataclass(frozen=True)
 class BundleTrust:
     ok: bool
     detail: str
     signed: bool = False
     newly_pinned: bool = False
+    serial: int | None = None
+    # Which sentence a refusal message ends with: "key" (delete the key
+    # pin), "serial" (delete the serial pin) or "none".
+    remedy: str = "key"
+
+
+def _serial_refusal(bundle: dict[str, Any], org_dir: Path) -> BundleTrust | None:
+    """The serial check, run once the signature has verified. None means
+    the serial is acceptable."""
+    serial = bundle.get(SERIAL_FIELD)
+    if SERIAL_FIELD in bundle and (isinstance(serial, bool) or not isinstance(serial, int) or serial < 1):
+        return BundleTrust(ok=False, remedy="none", detail="serial is not a positive integer")
+    try:
+        pinned = load_pinned_serial(org_dir)
+    except ValueError:
+        return BundleTrust(ok=False, remedy="serial", detail="the pinned serial file is unreadable")
+    if pinned is None:
+        return None
+    if serial is None:
+        return BundleTrust(
+            ok=False,
+            remedy="serial",
+            detail=f"this bundle carries no serial, but this install has already accepted serial {pinned}",
+        )
+    if serial < pinned:
+        return BundleTrust(
+            ok=False,
+            remedy="serial",
+            detail=f"serial {serial} is older than serial {pinned}, the newest this install has accepted (rollback refused)",
+        )
+    return None
+
+
+def record_accepted_serial(trust: BundleTrust, org_dir: Path) -> None:
+    """Raises the serial pin to ``trust.serial`` after a caller has
+    accepted the bundle. Never raises: a failed write is logged and the
+    caller carries on."""
+    if not trust.ok or trust.serial is None:
+        return
+    try:
+        pinned = load_pinned_serial(org_dir)
+        if pinned is None or pinned < trust.serial:
+            atomic_write_text(pinned_serial_path(org_dir), f"{trust.serial}\n")
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not record the accepted organization config serial: %s", exc)
 
 
 def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
@@ -217,7 +291,15 @@ def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
 
     if pinned is not None:
         if _verify_against(bundle, pinned):
-            return BundleTrust(ok=True, detail="signature verified against the pinned signing key", signed=True)
+            refusal = _serial_refusal(bundle, org_dir)
+            if refusal is not None:
+                return refusal
+            return BundleTrust(
+                ok=True,
+                detail="signature verified against the pinned signing key",
+                signed=True,
+                serial=bundle.get(SERIAL_FIELD),
+            )
         if has_signature_fields:
             return BundleTrust(
                 ok=False,
@@ -241,12 +323,17 @@ def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
     if len(embedded_key) != 32 or not _verify_against(bundle, embedded_key):
         return BundleTrust(ok=False, detail="signature does not verify against its own embedded signing_public_key")
 
+    refusal = _serial_refusal(bundle, org_dir)
+    if refusal is not None:
+        return refusal
+
     _pin_public_key(org_dir, embedded_key)
     return BundleTrust(
         ok=True,
         detail="first signed bundle seen for this install -- its signing key is now pinned (TOFU)",
         signed=True,
         newly_pinned=True,
+        serial=bundle.get(SERIAL_FIELD),
     )
 
 
@@ -282,13 +369,17 @@ def sign_bundle(bundle: dict[str, Any], private_key: Ed25519PrivateKey) -> dict[
 
 __all__ = [
     "PINNED_PUBKEY_FILENAME",
+    "PINNED_SERIAL_FILENAME",
     "SIGNATURE_FIELD",
     "SIGNING_PUBLIC_KEY_FIELD",
     "BundleTrust",
     "generate_keypair",
     "load_pinned_public_key",
+    "load_pinned_serial",
     "pinned_public_key_path",
+    "pinned_serial_path",
     "public_key_b64",
+    "record_accepted_serial",
     "sha256_hex",
     "sign_bundle",
     "verify_and_maybe_pin",

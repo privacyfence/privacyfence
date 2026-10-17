@@ -464,6 +464,15 @@ class TestGetPageEveryDeliveredNameIsShownAndScanned:
 
 
 class TestGetPage:
+    async def test_gated_calls_pass_the_account_id(self, gated_call_spy):
+        connector, client = make_connector()
+        connector.my_account_id = "acc-me"
+        client.get_page.return_value = make_page()
+
+        await connector.call("confluence_get_page", {"page_id": "p1"})
+
+        assert gated_call_spy[0]["my_account_id"] == connector.my_account_id == "acc-me"
+
     async def test_preview_shows_real_last_modified_not_blank(self, gated_call_spy):
         # Regression test for the last_modified bug: preview must reflect
         # page.updated, not silently be blank.

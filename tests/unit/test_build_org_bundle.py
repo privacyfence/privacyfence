@@ -177,6 +177,93 @@ class TestMainSigningIntegration:
         assert bundle["slack"]["client_id"] == "id1"  # the earlier merge survives
         assert bundle["salesforce"]["consumer_key"] == "ckey"
 
+    def test_signing_adds_a_serial_that_defaults_to_the_current_time(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(build_org_bundle.time, "time", lambda: 1_700_000_000.9)
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path),
+        ])
+
+        assert json.loads(out_path.read_text())["serial"] == 1_700_000_000
+
+    def test_serial_flag_sets_the_serial(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path), "--serial", "42",
+        ])
+
+        assert json.loads(out_path.read_text())["serial"] == 42
+
+    def test_serial_without_sign_key_is_an_error(self, tmp_path, capsys):
+        out_path = tmp_path / "org_config.json"
+
+        with pytest.raises(SystemExit):
+            build_org_bundle.main([
+                "-o", str(out_path), "--org-name", "Acme",
+                "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+                "--serial", "42",
+            ])
+
+        assert "--serial needs --sign-key" in capsys.readouterr().err
+        assert not out_path.exists()
+
+    @pytest.mark.parametrize("value", ["0", "-1", "abc"])
+    def test_serial_must_be_a_positive_integer(self, tmp_path, value):
+        with pytest.raises(SystemExit):
+            build_org_bundle.main([
+                "-o", str(tmp_path / "o.json"), "--org-name", "Acme",
+                "--sign-key", str(tmp_path / "key.pem"), "--serial", value,
+            ])
+
+    def test_merge_does_not_carry_the_old_serial(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path), "--serial", "42",
+        ])
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--merge",
+            "--salesforce-consumer-key", "ckey", "--salesforce-consumer-secret", "csecret",
+        ])
+        assert "serial" not in json.loads(out_path.read_text())
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--merge",
+            "--salesforce-consumer-key", "ckey", "--salesforce-consumer-secret", "csecret",
+            "--sign-key", str(key_path),
+        ])
+        assert json.loads(out_path.read_text())["serial"] != 42
+
+    def test_a_script_signed_bundle_with_a_serial_verifies_in_the_daemon_copy(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path), "--serial", "42",
+        ])
+        bundle = json.loads(out_path.read_text())
+
+        trust = org_bundle_signing.verify_and_maybe_pin(bundle, tmp_path / "orgdir")
+
+        assert trust.ok and trust.signed
+        assert trust.serial == 42
+
     def test_authz_flags_write_the_authz_section(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
