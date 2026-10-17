@@ -540,6 +540,9 @@ class TestAgentLinksFlag:
     def test_no_agent_links_writes_false(self, tmp_path):
         assert self._build(tmp_path, "--no-agent-links")["download_delivery"]["agent_links"] is False
 
+    def test_no_exports_writes_false(self, tmp_path):
+        assert self._build(tmp_path, "--no-exports")["download_delivery"]["allow_exports"] is False
+
     def test_agent_links_writes_true(self, tmp_path):
         assert self._build(tmp_path, "--agent-links")["download_delivery"]["agent_links"] is True
 

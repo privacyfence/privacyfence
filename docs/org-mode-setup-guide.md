@@ -939,7 +939,10 @@ removed the next time that person stages or claims a download, and every staged 
 when the daemon starts. The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`,
 `jira_export_issues`) use the same staged link: after the approval the file is staged and the tool
 result carries the link, with no `destination_dir`. They respect `allow_disk_staging` and are
-refused before any request when it is off
+refused before any request when it is off. Set `download_delivery.allow_exports: false`
+(`--no-exports`) to remove them altogether, `assets_export_objects` included: they are then not
+listed and a call is refused, so no export file is held on the server
+([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md))
 ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
 
 The approval gate, not the delivery channel, is where the privacy decision

@@ -499,6 +499,15 @@ def build_parser() -> argparse.ArgumentParser:
              "the signed-in browser route (/downloads/<token>) instead.",
     )
 
+    downloads.add_argument(
+        "--exports", action=argparse.BooleanOptionalAction, default=None,
+        help="The export tools (grist_export_records, grist_export_sql, salesforce_export_report, "
+             "jira_export_issues, assets_export_objects), which stage the whole file on the server "
+             "until the user claims it. On by default; --no-exports writes "
+             "download_delivery.allow_exports=false, which leaves them out of the tool list and "
+             "refuses them.",
+    )
+
     push = parser.add_argument_group("Web push notifications (org mode, docs/adr/0081-*)")
     push.add_argument(
         "--web-push", action=argparse.BooleanOptionalAction, default=None,
@@ -775,6 +784,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.downloads_link_ttl_seconds is not None
         or args.downloads_disable_staging
         or args.agent_links is not None
+        or args.exports is not None
     ):
         if bundle.get("mode") != "org":
             raise SystemExit(
@@ -789,6 +799,8 @@ def main(argv: list[str] | None = None) -> int:
             downloads_section["allow_disk_staging"] = False
         if args.agent_links is not None:
             downloads_section["agent_links"] = args.agent_links
+        if args.exports is not None:
+            downloads_section["allow_exports"] = args.exports
         bundle["download_delivery"] = downloads_section
 
     if args.web_push is not None:
@@ -897,6 +909,7 @@ def main(argv: list[str] | None = None) -> int:
     if "download_delivery" in bundle:
         summary += f", download_delivery.allow_disk_staging={bundle['download_delivery'].get('allow_disk_staging', True)}"
         summary += f", download_delivery.agent_links={bundle['download_delivery'].get('agent_links', True)}"
+        summary += f", download_delivery.allow_exports={bundle['download_delivery'].get('allow_exports', True)}"
     if "authz" in bundle:
         n_domains = len(bundle["authz"].get("allowed_domains") or [])
         n_groups = len(bundle["authz"].get("required_groups") or [])

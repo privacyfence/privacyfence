@@ -236,6 +236,13 @@ class DownloadDeliveryConfig:
     # human to be the one who actually opens a staged download, not the
     # agent fetching it directly on their behalf.
     agent_links: bool = True
+    # Whether the export tools (grist_export_records, grist_export_sql,
+    # salesforce_export_report, jira_export_issues, assets_export_objects)
+    # exist at all. Each stages the full file on this server until the user
+    # claims it, so an organization that does not want user data held there
+    # turns them off: they are then left out of the tool list and refused if
+    # called. Unlike allow_disk_staging, which only refuses at call time.
+    allow_exports: bool = True
 
     def staged_link_path(self, token: bytes) -> str:
         """The URL path a staged download's ``download_url`` should use,
@@ -332,6 +339,7 @@ class DownloadDeliveryConfig:
             link_ttl_seconds=link_ttl_seconds,
             allow_disk_staging=bool(raw.get("allow_disk_staging", True)),
             agent_links=bool(raw.get("agent_links", True)),
+            allow_exports=bool(raw.get("allow_exports", True)),
         )
 
 

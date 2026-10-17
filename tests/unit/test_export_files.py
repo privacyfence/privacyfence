@@ -138,3 +138,31 @@ class TestExportSummary:
     def test_merges_delivery(self):
         out = export_files.export_summary(["a"], [[1], [2]], "h", {"path": "/p", "delivery": "local_disk"})
         assert out == {"rows": 2, "columns": ["a"], "sha256": "h", "path": "/p", "delivery": "local_disk"}
+
+
+class _Spec:
+    def __init__(self, name):
+        self.name = name
+
+
+class TestExportsOff:
+    def _cfg(self, allow_exports):
+        from privacyfence.org_mode import DownloadDeliveryConfig
+        return DownloadDeliveryConfig(allow_exports=allow_exports)
+
+    def test_specs_lose_only_export_tools_in_org_mode_when_off(self):
+        specs = [_Spec("grist_get_records"), _Spec("grist_export_sql"), _Spec("jira_export_issues")]
+        kept = export_files.visible_specs(specs, "org", self._cfg(False))
+        assert [s.name for s in kept] == ["grist_get_records"]
+
+    @pytest.mark.parametrize("mode,cfg", [("org", True), ("local", False), ("org", None)])
+    def test_specs_untouched_otherwise(self, mode, cfg):
+        specs = [_Spec("grist_export_sql")]
+        config = None if cfg is None else self._cfg(cfg)
+        assert export_files.visible_specs(specs, mode, config) == specs
+
+    def test_call_refused_when_off(self):
+        with pytest.raises(ValueError, match="allow_exports"):
+            export_files.refuse_if_exports_off("assets_export_objects", "org", self._cfg(False))
+        export_files.refuse_if_exports_off("assets_get_object", "org", self._cfg(False))
+        export_files.refuse_if_exports_off("assets_export_objects", "org", self._cfg(True))
