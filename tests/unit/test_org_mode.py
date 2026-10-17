@@ -122,6 +122,11 @@ class TestDownloadDeliveryConfigFromOrgConfig:
         # Defaults to the capability link -- see agent_links' own
         # docstring.
         assert config.agent_links is True
+        assert config.allow_exports is True
+
+    def test_allow_exports_false(self):
+        config = org_mode.DownloadDeliveryConfig.from_org_config({"download_delivery": {"allow_exports": False}})
+        assert config.allow_exports is False
 
     def test_every_field_set(self):
         config = org_mode.DownloadDeliveryConfig.from_org_config({

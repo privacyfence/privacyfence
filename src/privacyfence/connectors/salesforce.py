@@ -365,6 +365,9 @@ class SalesforceConnector(Connector):
         return "salesforce"
 
     def tool_specs(self) -> list[ToolSpec]:
+        return export_files.visible_specs(self._all_tool_specs(), self.download_mode, self.download_config)
+
+    def _all_tool_specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(
                 name="salesforce_list_reports",
@@ -601,6 +604,7 @@ class SalesforceConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
+        export_files.refuse_if_exports_off(tool, self.download_mode, self.download_config)
         if tool == "salesforce_list_reports":
             return await self._list_reports()
         if tool == "salesforce_get_record":

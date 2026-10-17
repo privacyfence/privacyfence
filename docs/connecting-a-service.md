@@ -101,7 +101,8 @@ sign-in already in progress?"*
 - **Peek** uses Peek's own device sign-in, so there is no OAuth app to register: PrivacyFence shows
   a code, you approve it in Peek in your browser, then choose **Done**. Your organization pins the
   Peek server in the bundle (`--peek-base-url`); without that you type the server's address, and
-  organization mode offers Peek only when it is pinned. See [peek-setup.md](peek-setup.md).
+  organization mode offers Peek only when it is pinned. A connector the organization config does not
+  enable is not listed in Settings. See [peek-setup.md](peek-setup.md).
 
 ### Reconnect
 

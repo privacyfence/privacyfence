@@ -1219,7 +1219,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert len(connectors) == 1
         assert connectors[0].name == "telegram"
@@ -1234,13 +1234,25 @@ class TestBuildConnectorsTelegram:
         # _warm_connector_caches() (see run_app()).
         assert fake.directories_refreshed is False
 
+    def test_skipped_without_the_org_config_section(self, monkeypatch, tmp_path):
+        self._make_session(tmp_path, monkeypatch, exists=True)
+        monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: (123, "hash"))
+        fake = fake_client_class()
+        monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
+
+        connectors, failures = daemon_main.build_connectors({}, {})
+
+        assert connectors == []
+        assert failures["telegram"] == "no_org_config"
+        assert fake.instantiated is False
+
     def test_skipped_when_no_app_credentials(self, monkeypatch, tmp_path):
         self._make_session(tmp_path, monkeypatch, exists=True)
         monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: None)
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -1251,7 +1263,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -1262,7 +1274,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({"connectors": {"telegram": {"enabled": False}}}, {})
+        connectors, _failures = daemon_main.build_connectors({"connectors": {"telegram": {"enabled": False}}}, {"telegram": {"enabled": True}})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -1278,7 +1290,7 @@ class TestBuildConnectorsTelegram:
             fake_client_class(init_error=RuntimeError("unexpected MTProto failure")),
         )
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert connectors == []
 
@@ -1289,7 +1301,7 @@ class TestBuildConnectorsTelegram:
 
 class TestBuildConnectorsCrossCutting:
     def test_no_connectors_configured_returns_empty_list_not_fatal(self):
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
         assert connectors == []
 
     def test_all_ten_connectors_built_together(self, monkeypatch, tmp_path):
@@ -1316,6 +1328,7 @@ class TestBuildConnectorsCrossCutting:
             "slack": {"client_id": "x"},
             "salesforce": {"consumer_key": "x"},
             "atlassian": {"client_id": "x"},
+            "telegram": {"enabled": True},
         }
         connectors, _failures = daemon_main.build_connectors({}, org_config)
 
@@ -1355,9 +1368,9 @@ class TestBuildConnectorsGrist:
         monkeypatch.setattr(daemon_main, "load_grist_token", load)
         monkeypatch.setattr(GristClient, "check_connection", check)
 
-    def test_api_key_file_builds_connector_without_a_bundle_section(self, monkeypatch):
+    def test_api_key_file_builds_connector_with_only_the_bare_section(self, monkeypatch):
         self._patch(monkeypatch, self.API_KEY)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"grist": {"enabled": True}})
         assert [c.name for c in connectors] == ["grist"]
         assert connectors[0].download_mode == "local"
         assert "grist" not in failures
@@ -1379,7 +1392,7 @@ class TestBuildConnectorsGrist:
 
     def test_no_file_is_not_authenticated(self, monkeypatch):
         self._patch(monkeypatch, None)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"grist": {"enabled": True}})
         assert connectors == []
         assert failures["grist"] == "not_authenticated"
 
@@ -1396,10 +1409,16 @@ class TestBuildConnectorsGrist:
         assert connectors == []
         assert failures["grist"] == "not_authenticated"
 
+    def test_without_the_section_is_no_org_config_in_local_mode_too(self, monkeypatch):
+        self._patch(monkeypatch, self.API_KEY)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["grist"] == "no_org_config"
+
     def test_disabled_has_no_entry(self, monkeypatch):
         self._patch(monkeypatch, self.API_KEY)
         config = {"connectors": {"grist": {"enabled": False}}}
-        connectors, failures = daemon_main.build_connectors(config, {})
+        connectors, failures = daemon_main.build_connectors(config, {"grist": {"enabled": True}})
         assert connectors == []
         assert "grist" not in failures
 
@@ -1423,9 +1442,9 @@ class TestBuildConnectorsPeek:
         monkeypatch.setattr(daemon_main, "load_peek_token", load)
         monkeypatch.setattr(PeekClient, "check_connection", check)
 
-    def test_token_file_builds_connector_without_a_bundle_section(self, monkeypatch):
+    def test_token_file_builds_connector_with_only_the_bare_section(self, monkeypatch):
         self._patch(monkeypatch, self.RECORD)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
         assert [c.name for c in connectors] == ["peek"]
         assert connectors[0].download_mode == "local"
         assert "peek" not in failures
@@ -1452,7 +1471,7 @@ class TestBuildConnectorsPeek:
 
     def test_no_file_is_not_authenticated(self, monkeypatch):
         self._patch(monkeypatch, None)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
         assert connectors == []
         assert failures["peek"] == "not_authenticated"
 
@@ -1465,14 +1484,20 @@ class TestBuildConnectorsPeek:
             status=401,
         )
         self._patch(monkeypatch, self.RECORD, check_error=err)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
         assert connectors == []
         assert failures["peek"] == "not_authenticated"
+
+    def test_without_the_section_is_no_org_config_in_local_mode_too(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["peek"] == "no_org_config"
 
     def test_disabled_has_no_entry(self, monkeypatch):
         self._patch(monkeypatch, self.RECORD)
         config = {"connectors": {"peek": {"enabled": False}}}
-        connectors, failures = daemon_main.build_connectors(config, {})
+        connectors, failures = daemon_main.build_connectors(config, {"peek": {"enabled": True}})
         assert connectors == []
         assert "peek" not in failures
 

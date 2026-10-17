@@ -206,7 +206,7 @@ client ([ADR 0007](adr/0007-local-file-bridge.md),
   credential; up to 50 MB, valid for 10 minutes, single use), then passes the returned `upload_id`
   to the tool (`drive_upload_file`'s `upload_id`, or `"upload:<upload_id>"` in `attachments`). For
   a download, the tool returns a one-time link instead of writing to `destination_dir`.
-- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write a file to `destination_dir` and return only counts and a hash. On an organization-managed install nothing is saved: the result carries a one-time download link instead, unless the organization turned off `download_delivery.allow_disk_staging`
+- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write a file to `destination_dir` and return only counts and a hash. On an organization-managed install nothing is saved: the result carries a one-time download link instead, unless the organization turned off `download_delivery.allow_disk_staging`; an organization can also turn the export tools off entirely with `download_delivery.allow_exports: false` ([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md))
   ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
 - **An install that is not privilege-separated** (a source checkout, a `pip`/`pipx` install): the
   daemon runs as you and reads and writes the file itself.

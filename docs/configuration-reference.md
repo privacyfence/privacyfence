@@ -36,6 +36,34 @@ The command-line options of `privacyfence-app` are at the end of this page
   only the `auto_accept` section is used. Keys marked *local mode only* have no effect on an
   organization server.
 
+### Exporting and importing personal settings
+
+**Settings > Auto-accept > Export…** writes `privacyfence-personal-settings.json` (UTF-8 JSON, at most
+256 KiB and 500 rules to import); **Import…** reads one back. It works in both modes and in every
+direction. Only the person's own `auto_accept` rules and step-up level move.
+
+| Key | Meaning |
+|---|---|
+| `format` | Always `privacyfence-personal-settings` |
+| `format_version` | `1`; a newer version is refused |
+| `exported_at` | UTC ISO-8601 time of the export |
+| `source` | `mode` (`local` or `org`) and the PrivacyFence `version` |
+| `auto_accept` | `version: 3` and the `rules` rows, without their former ids; custom rules are left out |
+| `step_up` | `scope`: the person's own step-up scope, or `null` |
+| `not_portable` | Informational list of what does not move; import ignores it |
+
+Import previews before it changes anything and gives each rule a status:
+
+| Status | Meaning |
+|---|---|
+| `add` | A new rule |
+| `extend` | Adds tools to a rule you already have |
+| `present` | Already covered; nothing to do |
+| `skip` | Not imported, with the reason shown (custom rule, unknown tool, cannot be applied by this version) |
+
+Import never removes or narrows anything. See
+[Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
+
 ### Earlier policy sections
 
 A `settings.yaml` that contains an `auto_accept_rules` or `auto_accept_grants` section (even an
@@ -253,6 +281,9 @@ How the daemon treats the file:
 | `--atlassian-assets` | off | `atlassian.assets` | Request the Jira Assets scopes at Atlassian sign-in; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--atlassian-assets-workspace-id ID` | none | `atlassian.assets_workspace_id` | The site's Assets workspace id, the `workspaceId` at `https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace`; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--peek-base-url URL` | none | `peek.base_url` | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
+| `--enable-telegram` | off | `telegram.enabled` | Offer Telegram. Its app credentials ship in the build, so the section is only a switch. Without it Telegram is neither listed nor usable ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). |
+| `--enable-peek` | off | `peek.enabled` | Offer Peek without pinning a server (local mode). `--peek-base-url` implies it. |
+| `--enable-grist` | off | `grist.enabled` | Offer Grist with an API key and no pinned server (local mode). `--grist-server-url` implies it. |
 | `--grist-server-url URL` | none | `grist.server_url` | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
@@ -281,6 +312,7 @@ How the daemon treats the file:
 | `--downloads-inline-max-bytes BYTES` | not written (`100000`) | `download_delivery.inline_max_bytes` | A download comes back inside the tool result when the whole result, the base64-encoded file included, is at most this many bytes (a file of about 75 KB at the default); otherwise it gets a one-time link. The default fits claude.ai's and Claude Desktop's tool-result limit ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)); raise it only if every client your organization uses accepts larger results. `0` sends every download through a one-time link. |
 | `--downloads-link-ttl-seconds SECONDS` | not written (`300`) | `download_delivery.link_ttl_seconds` | How long a one-time download link can be claimed. Must be above 0. |
 | `--downloads-disable-staging` | not written (staging on) | `download_delivery.allow_disk_staging: false` | Refuse a download too large to return inline instead of staging it (encrypted) for a link. |
+| `--exports` / `--no-exports` | not written (on) | `download_delivery.allow_exports` | Off: the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`) are left out of the tool list and refused, so no export file is staged on the server ([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md)). |
 | `--agent-links` / `--no-agent-links` | not written (on) | `download_delivery.agent_links` | On: a staged download is a link the AI system can fetch itself (`/mcp-files/fetch/…`), if it can reach this host: claude.ai needs it on **Settings → Capabilities → Domain allowlist** ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)). Off: only a signed-in browser can fetch it (`/downloads/…`). |
 | `--web-push` / `--no-web-push` | not written (on) | `web_push.enabled` | On: a person who allows notifications gets a count-only push ("N approvals pending") through their browser's push service when an approval is waiting. Off: nothing is pushed and no page offers it. See [ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md). |
 | `--enable-audit-forwarding` / `--disable-audit-forwarding` | not written (off) | `audit_forwarding.enabled` | Forward every audit entry to a syslog server or an HTTPS endpoint as well. The local audit log stays the authoritative record. |

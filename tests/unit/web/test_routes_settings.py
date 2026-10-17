@@ -68,7 +68,12 @@ def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "resource_name_cache.json")
     monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
     monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
-    monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+    # A connector is listed only when the org config enables it (ADR 0196).
+    monkeypatch.setattr(daemon_main, "load_org_config", lambda: {
+        "google": {"client_id": "g"}, "slack": {"client_id": "s"}, "salesforce": {"consumer_key": "k"},
+        "atlassian": {"client_id": "a"}, "telegram": {"enabled": True}, "grist": {"enabled": True},
+        "peek": {"enabled": True},
+    })
 
     org_dir_path = tmp_path / "org"
     org_dir_path.mkdir()
@@ -121,6 +126,13 @@ class TestSettingsPage:
         _authed(client, sessions)
         r = client.get("/settings")
         assert r.headers.get("cache-control") == "no-store"
+
+    def test_carries_the_move_your_settings_card_and_its_shim(self, client, sessions):
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '"personalTransfer": true' in r.text
+        assert "Move your settings" in r.text
+        assert "/api/settings/personal/preview" in r.text
 
     def test_notifications_enabled_config_reaches_the_page(self, controller, sessions):
         # settings_page reads this off the controller's own live snapshot
@@ -927,7 +939,8 @@ class TestConnectorAuthenticationEndToEnd:
         release.set()
         assert wait_until(lambda: "slack" not in controller._busy_connectors)
 
-    def test_missing_org_config_surfaces_an_error_not_a_500(self, client, sessions):
+    def test_missing_org_config_surfaces_an_error_not_a_500(self, client, controller, sessions, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
         csrf = _authed(client, sessions)
         r = client.post(
             "/api/settings/authenticate_connector", json={"connector": "slack", "csrf": csrf},

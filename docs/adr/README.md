@@ -285,3 +285,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0191](0191-salesforce-writes-create-and-update-one-record-or-a-batch-of-up-to-200-all-or-none-and-never-delete.md) | Salesforce writes create and update one record or a batch of up to 200, all or none, and never delete | Accepted |
 | [0192](0192-a-salesforce-write-is-checked-against-the-objects-describe-and-its-current-values-before-the-card.md) | A Salesforce write is checked against the object's describe and its current values before the card | Accepted |
 | [0193](0193-the-salesforce-object-type-rule-also-covers-creating-and-updating-records-of-that-type.md) | The Salesforce object-type rule also covers creating and updating records of that type | Accepted |
+| [0194](0194-personal-settings-are-exported-as-a-file-of-auto-accept-rows-and-the-step-up-level.md) | Personal settings are exported as a file of auto-accept rows and the step-up level | Accepted |
+| [0195](0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md) | Importing personal settings is merge-only, previewed, and step-up gated on the file hash | Accepted |
+| [0196](0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md) | Every connector is offered only when the organization config has its section; Telegram, Peek and Grist take a bare `enabled` switch | Accepted |
+| [0197](0197-an-organization-can-turn-the-export-tools-off.md) | An organization can turn the export tools off | Accepted |

@@ -51,9 +51,13 @@ reviewed: ADR 0148 set the rule that errors never carry the provider's own cell 
   This departs from ADR 0148's "never the provider's own text": a validation rule's message is
   written by the org's administrator, it is the only way the caller can learn what to fix, and it
   reaches the client only after the write was approved.
-- **A 5xx or a dropped connection after a write raises `SalesforceWriteUnconfirmedError`**, also a
-  named error the caller sees. It says the write may or may not have been saved and to check the
-  records before trying again, and never carries Salesforce's own text. Nothing is retried; only an
+- **A 5xx, a dropped connection, or an answer that cannot be read after a write raises
+  `SalesforceWriteUnconfirmedError`**, also a named error the caller sees. An answer that cannot be
+  read is a 2xx reply that is not a clear success or failure: a single create without a boolean
+  `success` and an id, or a batch result of the wrong length or with an entry that is not an object
+  with a boolean `success`. Only an explicit `success: false`, or a 4xx, counts as refused. The
+  error says the write may or may not have been saved and to check the records before trying
+  again, and never carries Salesforce's own text. Nothing is retried; only an
   expired session is refreshed and the request repeated, because Salesforce refused it before
   running it ([ADR 0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md)).
 - **The result and the audit data hold names and counts only.** `raw_data` carries the object type,

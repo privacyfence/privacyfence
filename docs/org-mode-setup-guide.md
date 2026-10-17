@@ -192,7 +192,7 @@ the connector's console must list it exactly.
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `--atlassian-client-id`, `--atlassian-client-secret` | [Atlassian setup](atlassian-setup.md) |
 | Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |
 | Peek | none (device sign-in) | `--peek-base-url` | [Peek setup](peek-setup.md) |
-| Telegram | none | none | [Telegram setup](telegram-setup.md) |
+| Telegram | none | `--enable-telegram` | [Telegram setup](telegram-setup.md) |
 
 Notes:
 
@@ -208,9 +208,10 @@ Notes:
   app accepts only one callback URL.
 - **Peek** has no OAuth app and no callback URL: each person approves a code in Peek itself on
   `/connect`. `--peek-base-url` names the Peek server; the connector is offered only with it.
-- **Telegram** needs nothing from you: its app credentials ship inside PrivacyFence. Each person
-  signs in with their phone number on `/connect`.
-- A connector appears on `/connect` only if its section is in the bundle.
+- **Telegram** needs no registration: its app credentials ship inside PrivacyFence. `--enable-telegram`
+  offers it, and each person signs in with their phone number on `/connect`.
+- A connector appears on `/connect` only if its section is in the bundle; the others are not listed
+  ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
 
 The same app registrations can also carry the loopback redirect URIs used by desktop installs; the
 setup guides cover both.
@@ -752,6 +753,39 @@ Settings pages each person sees:
 Connector management, update checks, the log level, the Calendar free/busy and Gmail signature
 switches, and notification preferences are desktop-only settings and do not appear here.
 
+### Moving a person from a desktop install
+
+A person's always-allow rules and step-up level can move from their desktop install to the
+organization server (and back) as a file:
+
+1. On the desktop, open **Settings > Auto-accept** and choose **Export…**. The browser saves
+   `privacyfence-personal-settings.json`.
+2. Sign in to the organization server.
+3. Connect the same accounts at `/connect`. A rule names folders, channels and projects by id, so it
+   only matches when the same account is connected here.
+4. Open **Settings > Auto-accept** and choose **Import…**, then pick the file.
+5. Read the preview. Each rule is listed as will be added, will be extended, already there, or
+   skipped with the reason. Nothing has changed yet.
+6. Confirm. When step-up is in force, approve with your passkey; the approval is for that exact file.
+
+Import only adds: it never removes or narrows a rule or lowers a step-up level, and it applies to the
+signed-in person's own settings only. An administrator cannot import for someone else. What does not
+move:
+
+- Connector sign-ins and tokens: connect your accounts again on the new install.
+- Passkeys: enroll a passkey on the new install at `/security`.
+- Scoped tokens: create new ones if your administrator allows them.
+- Privacy filter and PII detection: install-wide, a desktop install's own or an administrator's on an
+  organization server.
+- Connector on/off switches, notification detail, AI system names, update checks and log level:
+  desktop-only settings.
+- The audit log: it stays on the install that wrote it.
+- Rules written by hand in `settings.yaml` that have no entry on the Auto-accept page (custom
+  rules): add them again on the page.
+
+See [ADR 0194](adr/0194-personal-settings-are-exported-as-a-file-of-auto-accept-rows-and-the-step-up-level.md)
+and [ADR 0195](adr/0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md).
+
 ## 11. AI systems
 
 Every approval card and audit entry names the AI system that made the request. How much that name
@@ -905,7 +939,10 @@ removed the next time that person stages or claims a download, and every staged 
 when the daemon starts. The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`,
 `jira_export_issues`) use the same staged link: after the approval the file is staged and the tool
 result carries the link, with no `destination_dir`. They respect `allow_disk_staging` and are
-refused before any request when it is off
+refused before any request when it is off. Set `download_delivery.allow_exports: false`
+(`--no-exports`) to remove them altogether, `assets_export_objects` included: they are then not
+listed and a call is refused, so no export file is held on the server
+([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md))
 ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
 
 The approval gate, not the delivery channel, is where the privacy decision

@@ -236,6 +236,13 @@ class DownloadDeliveryConfig:
     # human to be the one who actually opens a staged download, not the
     # agent fetching it directly on their behalf.
     agent_links: bool = True
+    # Whether the export tools (grist_export_records, grist_export_sql,
+    # salesforce_export_report, jira_export_issues, assets_export_objects)
+    # exist at all. Each stages the full file on this server until the user
+    # claims it, so an organization that does not want user data held there
+    # turns them off: they are then left out of the tool list and refused if
+    # called. Unlike allow_disk_staging, which only refuses at call time.
+    allow_exports: bool = True
 
     def staged_link_path(self, token: bytes) -> str:
         """The URL path a staged download's ``download_url`` should use,
@@ -332,6 +339,7 @@ class DownloadDeliveryConfig:
             link_ttl_seconds=link_ttl_seconds,
             allow_disk_staging=bool(raw.get("allow_disk_staging", True)),
             agent_links=bool(raw.get("agent_links", True)),
+            allow_exports=bool(raw.get("allow_exports", True)),
         )
 
 
@@ -506,10 +514,31 @@ class WebPushConfig:
         return WebPushConfig(enabled=enabled)
 
 
+# Which org_config.json section switches each connector on (ADR 0196). A connector with no
+# non-empty section is not offered at all, whatever else is in place: Google's six share one
+# section, Jira, Confluence and Jira Assets share Atlassian's. Telegram, Peek and Grist carry
+# no secret an administrator must supply, so their section can be the bare marker
+# ``{"enabled": true}``; Peek and Grist may add the server they are pinned to.
+CONNECTOR_ORG_SECTION: dict[str, str] = {
+    "gmail": "google", "drive": "google", "contacts": "google",
+    "calendar": "google", "tasks": "google", "apps_script": "google",
+    "slack": "slack",
+    "jira": "atlassian", "confluence": "atlassian", "assets": "atlassian",
+    "salesforce": "salesforce",
+    "telegram": "telegram", "grist": "grist", "peek": "peek",
+}
+
+
+def connector_enabled_by_org(org_config: dict[str, Any], connector: str) -> bool:
+    """True when ``org_config`` carries a non-empty section for ``connector``."""
+    return bool(org_config.get(CONNECTOR_ORG_SECTION[connector]))
+
+
 __all__ = [
     "AuditForwardingConfig",
     "AuditForwardingKind",
     "AuthzPolicyConfig",
+    "CONNECTOR_ORG_SECTION",
     "ConfigurationError",
     "DEFAULT_AUDIT_FORWARDING_KIND",
     "DEFAULT_INLINE_MAX_BYTES",
@@ -519,6 +548,7 @@ __all__ = [
     "DEFAULT_SYSLOG_PROTOCOL",
     "DownloadDeliveryConfig",
     "Mode",
+    "connector_enabled_by_org",
     "ServerConfig",
     "SyslogProtocol",
     "WebPushConfig",

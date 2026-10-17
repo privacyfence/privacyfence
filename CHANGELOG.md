@@ -43,6 +43,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Connectors are enabled by the organization config, all of them.** Telegram, Peek and Grist now need a section in the organization config too (`build_org_bundle.py --enable-telegram`, `--enable-peek`, `--enable-grist`; `--peek-base-url` and `--grist-server-url` imply theirs). Settings > Connectors and the organization sign-in page list only the connectors it enables and hide the rest. An install without a bundle lists none until an administrator adds the sections ([ADR 0196](docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
+
+### Added
+
+- **An organization can turn the export tools off.** `download_delivery.allow_exports: false` in the organization config (`--no-exports` on `scripts/build_org_bundle.py`) leaves `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` and `assets_export_objects` out of the tool list and refuses them, so no export file is staged on the server. On by default; local mode is unaffected.
+- **Export and import your personal settings.** From Settings > Auto-accept you can export your personal settings (always-allow rules and step-up level) to a file and import them on another install, to move from a desktop install to an organization server or back. Import previews every rule, only adds, and asks for your passkey when step-up applies.
+- **Show IDs or names on Auto-accept and Scoped tokens.** A "Show IDs" toggle on both pages switches a rule's folders, projects, channels and so on between their names and their raw IDs. An ID that a live lookup could not find, most likely because it was deleted, is shown in red. Drive items now name their origin: `My Drive: Reports` or `<Shared Drive name>: Reports`.
+
+## [6.3.0] — 2026-10-16
+
 ### Added
 
 - **Salesforce: create and update records.** One at a time or up to 200 of one object type in one approval, all or none. Updates show each field's current and new value; nothing deletes. An object-type "Always allow" rule can hold the add and update verbs.
@@ -3342,7 +3354,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...HEAD
+[6.3.0]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...v6.3.0
 [6.2.0]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...v6.2.0
 [6.1.1]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...v6.1.1
 [6.1.0]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...v6.1.0

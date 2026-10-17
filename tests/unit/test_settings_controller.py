@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import pathlib
 import threading
 import time
 from types import SimpleNamespace
@@ -57,12 +58,21 @@ def _drain_run_async(recorded) -> None:
         func(*args, **kwargs)
 
 
+# A connector is listed and usable only when the org config carries its section (ADR 0196); the
+# default fixture enables them all so tests of one connector don't each have to say so.
+ORG_CONFIG_ENABLING_EVERY_CONNECTOR = {
+    "google": {"client_id": "g"}, "slack": {"client_id": "s"}, "salesforce": {"consumer_key": "k"},
+    "atlassian": {"client_id": "a"}, "telegram": {"enabled": True}, "grist": {"enabled": True},
+    "peek": {"enabled": True},
+}
+
+
 @pytest.fixture
 def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "resource_name_cache.json")
     monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
     monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
-    monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+    monkeypatch.setattr(daemon_main, "load_org_config", lambda: dict(ORG_CONFIG_ENABLING_EVERY_CONNECTOR))
 
     org_dir_path = tmp_path / "org"
     org_dir_path.mkdir()
@@ -1934,6 +1944,78 @@ class TestPolicyScopeCatalogue:
         }
 
 
+class TestImportPolicyRules:
+    """import_policy_rules is the personal-settings import's writer: add_policy_rule's merge for rules
+    that are already compiled, through the same save-and-reload path."""
+
+    @staticmethod
+    def _rules(scope="drive.folder", value=("FOLDER1",)):
+        row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, list(value)), scope=scope, value=list(value),
+            verbs=frozenset(scope_rows.scope_verbs(scope)),
+            operations=scope_rows.implied_operations(scope, scope_rows.scope_verbs(scope)),
+        )
+        return scope_rows.compile_row(row)
+
+    def test_policy_rows_reads_what_is_on_disk(self, controller):
+        assert controller.policy_rows() == []
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        assert [row.scope for row in controller.policy_rows()] == ["drive.folder"]
+
+    def test_policy_rows_is_empty_when_the_section_cannot_be_upgraded(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_load_rows", lambda: None)
+        assert controller.policy_rows() == []
+
+    def test_writes_the_rows_and_hot_reloads_the_rule_cache(self, controller):
+        assert controller.import_policy_rules(self._rules()) is True
+
+        cfg = controller._load_config()
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["version"] == 3
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["scope"] == "drive.folder"
+        assert auto_accept.get_policy_v2_store_rules()
+
+    def test_an_unchanged_merge_writes_nothing(self, controller):
+        controller.import_policy_rules(self._rules())
+        before = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
+        assert controller.import_policy_rules(self._rules()) is False
+        after = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
+        assert after == before
+
+    def test_does_nothing_when_the_rows_cannot_be_loaded(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_load_rows", lambda: None)
+        assert controller.import_policy_rules(self._rules()) is False
+
+    def test_keeps_existing_rows_and_extends_a_matching_one(self, controller):
+        controller.add_policy_rule("drive.folder", "KEEP", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        assert controller.import_policy_rules(self._rules()) is True
+        rows = {tuple(row.value or ()): row for row in controller.policy_rows()}
+        assert set(rows) == {("KEEP",), ("FOLDER1",)}
+        assert len(rows[("FOLDER1",)].verbs) > 1
+
+    def test_refreshes_the_audit_loggers_policy_hash_like_add_policy_rule(self, controller, monkeypatch):
+        seen: list[str] = []
+        logger = SimpleNamespace(set_security_config_hash=seen.append)
+        monkeypatch.setattr(sc, "get_audit_logger", lambda: logger)
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        added = list(seen)
+        controller.import_policy_rules(self._rules("drive.folder", ("OTHER",)))
+        assert len(seen) == len(added) + 1 and seen[-1] != added[-1]
+
+    def test_rules_changed_listeners_see_the_imported_rules(self, controller):
+        seen: list = []
+
+        def listener() -> None:
+            seen.append(list(auto_accept.get_policy_v2_store_rules()))
+
+        auto_accept.add_rules_changed_listener(listener)
+        try:
+            controller.import_policy_rules(self._rules())
+        finally:
+            auto_accept.remove_rules_changed_listener(listener)
+        assert seen and seen[-1] == list(auto_accept.get_policy_v2_store_rules()) and seen[-1]
+
+
 class TestAddPolicyRule:
     """add_policy_rule is the Auto-accept page's one writer, straight to the on-disk version-3
     ``auto_accept:`` section -- never through v1's auto_accept_rules/auto_accept_grants."""
@@ -2443,11 +2525,42 @@ class TestScopeRowState:
             "r-unrelated": {"count": 9, "last_matched": "2026-07-09T12:00:00+00:00"},
         }
         rows = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
-        state = sc._auto_accept_state_from_rows(rows, usage, resolve_value=lambda row: "v")
+        state = sc._auto_accept_state_from_rows(
+            rows, usage, resolve_value=lambda row: "v", resolver=sc.get_resolver(),
+        )
         (row,) = state["rules"]
         assert row["match_count"] == 5
         assert row["never_matched"] is False
         assert row["last_matched"] == sc._relative_time("2026-07-08T12:00:00+00:00")
+
+    def test_row_carries_its_values_and_the_sentence_around_them(self, controller):
+        (row,) = controller._auto_accept_state(self._v2_cfg())["rules"]
+        assert row["value_items"] == [
+            {"id": i, "short_id": sc._short_id(i), "name": None, "status": "pending"} for i in row["value_ids"]
+        ]
+        before, after = row["sentence_parts"]
+        assert before + ", ".join(row["value_ids"]) + after != ""
+        assert before + row["value"] + after == row["sentence"]
+
+    def test_an_id_a_live_lookup_could_not_find_is_invalid(self, controller):
+        (scope_row,) = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
+        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
+        resolver = sc.get_resolver()
+        gone = scope_row.value[0]
+        resolver.resolve(rt, gone, type("C", (), {"get_file_metadata": lambda self, i: (_ for _ in ()).throw(KeyError(i))})())
+        (item, *_) = sc.row_value_items(scope_row, resolver)
+        assert item["id"] == gone and item["status"] == "invalid"
+
+    def test_a_row_that_compiles_to_nothing_lists_its_values_as_plain(self):
+        row = sc.policy_scope_rows.ScopeRow(
+            id="r-empty", scope="drive.folder", value=["a", "b"], verbs=frozenset(), operations=frozenset(),
+        )
+        assert [(i["id"], i["status"]) for i in sc.row_value_items(row, sc.get_resolver())] == [
+            ("a", "plain"), ("b", "plain"),
+        ]
+        assert sc.sentence_parts(sc.policy_scope_rows.ScopeRow(
+            id="r-none", scope="drive.folder", value=None, verbs=frozenset(), operations=frozenset(),
+        )) is None
 
 
 class TestResolvedRuleValue:
@@ -2630,12 +2743,43 @@ class TestSnapshotStructure:
         assert row["has_org"] is True
         assert row["auth_label"] == "Authenticate…"
 
-    def test_peek_row_needs_no_bundle_in_local_mode(self, controller, monkeypatch):
-        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+    def test_peek_row_needs_only_the_bare_section_in_local_mode(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"peek": {"enabled": True}})
         row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "peek")
         assert row["label"] == "Peek"
         assert row["has_org"] is True
         assert row["authed"] is False
+
+    def test_only_connectors_the_org_config_enables_are_listed(self, controller, monkeypatch):
+        monkeypatch.setattr(
+            controller, "_org_config_or_empty",
+            lambda: {"slack": {"client_id": "s"}, "telegram": {"enabled": True}, "atlassian": {}},
+        )
+        assert [c["key"] for c in controller.snapshot()["connectors"]] == ["slack", "telegram"]
+
+    def test_no_org_config_lists_no_connectors(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        assert controller.snapshot()["connectors"] == []
+
+    def test_status_still_reports_connectors_the_org_config_does_not_enable(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        controller._connector_failures = {"telegram": "no_org_config"}
+        rows = {r["name"]: r for r in controller.status_connectors()}
+        assert set(rows) == set(sc.ALL_CONNECTORS)
+        assert rows["telegram"]["blocked_by"] == "no_org_config"
+
+    @pytest.mark.parametrize("name", ["telegram", "peek", "grist", "gmail", "slack"])
+    def test_a_connector_the_org_config_does_not_enable_cannot_be_signed_in(self, controller, monkeypatch, name):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda *a: calls.append(a))
+        monkeypatch.setattr(sc, "telegram_app_credentials", lambda: ("1", "h"))
+        controller.authenticate_connector(name)
+        controller.telegram_start_auth("+15550100")
+        controller.peek_start_login("https://peek.example.com")
+        controller.grist_connect("key", "https://docs.getgrist.com")
+        assert calls == []
+        assert "isn't enabled in your organization config" in controller.error
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()

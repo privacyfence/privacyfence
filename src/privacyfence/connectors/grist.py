@@ -423,6 +423,9 @@ class GristConnector(Connector):
         return "grist"
 
     def tool_specs(self) -> list[ToolSpec]:
+        return export_files.visible_specs(self._all_tool_specs(), self.download_mode, self.download_config)
+
+    def _all_tool_specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(
                 name="grist_list_documents",
@@ -705,6 +708,7 @@ class GristConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
+        export_files.refuse_if_exports_off(tool, self.download_mode, self.download_config)
         if tool == "grist_list_documents":
             return await self._list_documents()
         if tool == "grist_list_tables":

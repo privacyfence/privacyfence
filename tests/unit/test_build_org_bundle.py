@@ -540,6 +540,9 @@ class TestAgentLinksFlag:
     def test_no_agent_links_writes_false(self, tmp_path):
         assert self._build(tmp_path, "--no-agent-links")["download_delivery"]["agent_links"] is False
 
+    def test_no_exports_writes_false(self, tmp_path):
+        assert self._build(tmp_path, "--no-exports")["download_delivery"]["allow_exports"] is False
+
     def test_agent_links_writes_true(self, tmp_path):
         assert self._build(tmp_path, "--agent-links")["download_delivery"]["agent_links"] is True
 
@@ -793,6 +796,20 @@ class TestGristFlags:
         with pytest.raises(SystemExit) as exc:
             build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
         return str(exc.value)
+
+    def test_enable_flags_write_the_bare_sections(self, tmp_path):
+        bundle = self._build(tmp_path, "--enable-telegram", "--enable-peek", "--enable-grist")
+        assert bundle["telegram"] == {"enabled": True}
+        assert bundle["peek"] == {"enabled": True}
+        assert bundle["grist"] == {"enabled": True}
+
+    def test_a_pinned_server_is_not_replaced_by_the_bare_section(self, tmp_path):
+        bundle = self._build(
+            tmp_path, "--enable-peek", "--peek-base-url", "https://peek.example.com",
+            "--enable-grist", "--grist-server-url", "https://grist.example.com",
+        )
+        assert bundle["peek"] == {"base_url": "https://peek.example.com"}
+        assert bundle["grist"] == {"server_url": "https://grist.example.com"}
 
     def test_server_url_alone_writes_just_the_server_with_the_trailing_slash_stripped(self, tmp_path):
         bundle = self._build(tmp_path, "--grist-server-url", "https://grist.example.com/")

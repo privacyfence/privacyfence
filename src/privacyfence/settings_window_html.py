@@ -218,6 +218,12 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-aa-usage-stale { color: var(--warning); font-weight: 650; }
 .pf-aa-usage-stale::before { content: "\\26A0\\FE0E  "; }
 .pf-aa-row { gap: var(--space-2xs); }
+/* A resource value by name or id. Pending (no lookup finished yet) is muted; invalid (a live lookup
+   found no such resource, most likely deleted) is red with a marker, so it never rests on colour alone. */
+.pf-val-pending { color: var(--muted); }
+.pf-val-invalid { color: var(--danger); }
+.pf-val-invalid::before { content: "\\26A0\\FE0E\\00a0"; }
+.pf-val-legend { font-size: var(--step-small); color: var(--danger); }
 
 /* ---- Copy-ID toast (right-click a grant row -- see data-copy-id) ---- */
 .pf-copy-toast {
@@ -316,6 +322,7 @@ _JS = r"""
     mode: 'local', is_admin: false,
     sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
     not_applicable_actions: [],
+    personalTransfer: false,
   };
 
   function notApplicable(action) {
@@ -736,8 +743,8 @@ _JS = r"""
     html += '<div class="pf-row-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
       'real accounts (Gmail, Drive, Slack, and similar) -- it governs access to them, it does not provide them ' +
       'itself. Nothing is governed until at least one connector below is authenticated. If your IT team gave ' +
-      'you an organization config bundle, install it first from the General page; otherwise authenticate a ' +
-      'connector directly below, then go back to Claude.</div></div>';
+      'you an organization config bundle, install it first from the General page; only the connectors it ' +
+      'enables are listed. Authenticate one below, then go back to Claude.</div></div>';
     html += '<div class="pf-banner-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
       'data-dismiss-welcome="1">✕</div>';
     html += '</div></div>';
@@ -750,6 +757,11 @@ _JS = r"""
     html += '<div class="pf-page-subtitle">Authenticate a connector to let Claude access it, subject to approval and policy. ' +
       'Signing in opens a browser window on the machine running PrivacyFence -- not necessarily this device.</div>';
     html += renderWelcomeBanner(state);
+    if (!state.connectors.length) {
+      html += '<div class="card"><div class="pf-row-title">No connectors are enabled</div>' +
+        '<div class="pf-row-desc">Connectors appear here once your organization config enables them. ' +
+        'Install it from the General page.</div></div>';
+    }
     html += '<div class="pf-connector-list">';
     var gristSignin = state.grist_signin || 'unavailable';
     var gristAuth = state.grist_auth || { error: '' };
@@ -820,6 +832,54 @@ _JS = r"""
   // has, answering "which of my rules have never matched".
   // -------------------------------------------------------------------- //
 
+  // A rule's resource values (a Drive folder, a Jira project, ...) by name or by id: one choice for
+  // the Auto-accept and Scoped tokens pages, remembered in this browser when it lets us.
+  function readShowIds() {
+    try { return window.localStorage.getItem('pf-show-ids') === '1'; } catch (err) { return false; }
+  }
+  function writeShowIds(on) {
+    try { window.localStorage.setItem('pf-show-ids', on ? '1' : '0'); } catch (err) { /* per-viewer convenience only */ }
+  }
+  ui.showIds = readShowIds();
+
+  function valueLabel(item) {
+    return ui.showIds ? item.id : (item.name || item.short_id);
+  }
+
+  function valueHtml(item) {
+    var cls = item.status === 'invalid' ? ' pf-val-invalid' : (item.status === 'pending' ? ' pf-val-pending' : '');
+    var title = item.status === 'invalid' ? ' title="Not found -- it may have been deleted"' : '';
+    return '<span class="pf-val' + cls + '"' + title + '>' + esc(valueLabel(item)) + '</span>';
+  }
+
+  // `parts` is the text before and after the value, `items` the value itself; either missing falls
+  // back to `text`, the ready-made by-name rendering.
+  function withValuesHtml(parts, items, text) {
+    if (!parts || !items || !items.length) { return esc(text); }
+    return esc(parts[0]) + items.map(valueHtml).join(', ') + esc(parts[1]);
+  }
+
+  function withValuesText(parts, items, text) {
+    if (!parts || !items || !items.length) { return text; }
+    return parts[0] + items.map(valueLabel).join(', ') + parts[1];
+  }
+
+  function anyInvalidValue(rules) {
+    return rules.some(function (r) {
+      return (r.value_items || []).some(function (item) { return item.status === 'invalid'; });
+    });
+  }
+
+  function showIdsToggleHtml() {
+    return '<div class="pf-chip' + (ui.showIds ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
+      (ui.showIds ? 'true' : 'false') + '" aria-label="Show ids instead of names" data-show-ids-toggle="1">Show IDs</div>';
+  }
+
+  function invalidLegendHtml(rules) {
+    return anyInvalidValue(rules)
+      ? '<div class="pf-val-legend" role="status">Shown in red: not found, it may have been deleted.</div>' : '';
+  }
+
   // A verb's family as a badge: read is the accent, send a warning,
   // destructive a danger; the verb's own name is always the text.
   var VERB_BADGE = { read: 'badge-accent', write: '', send: 'badge-warning', destructive: 'badge-danger' };
@@ -889,6 +949,15 @@ _JS = r"""
     html += '<h1 class="pf-page-title">Auto-accept</h1>';
     html += '<div class="pf-page-subtitle">Every standing rule that lets Claude act without asking first, across every connector -- what a rule actually unblocks is shown before you add it, and again on its own row below.</div>';
 
+    if (CAPS.personalTransfer) {
+      html += '<div class="card pf-card pf-personal-transfer"><h2 class="pf-row-title">' + esc('Move your settings') + '</h2>';
+      html += '<div class="pf-page-subtitle">' + esc('Export your always-allow rules and your step-up level to a file, or bring them in from another PrivacyFence install. Importing only adds; it never removes or narrows anything.') + '</div>';
+      html += '<div class="pf-modal-buttons">';
+      html += '<div class="button" role="button" tabindex="0" aria-label="Export your settings" data-pf-personal-export="1">' + esc('Export…') + '</div>';
+      html += '<div class="button" role="button" tabindex="0" aria-label="Import your settings" data-pf-personal-import="1">' + esc('Import…') + '</div>';
+      html += '</div></div>';
+    }
+
     html += '<div class="pf-chips pf-aa-filterbar">';
     html += '<input type="text" class="field pf-aa-search" placeholder="Filter by connector, tool, or value…" aria-label="Filter rules" value="' +
       esc(ui.aaSearch) + '" data-aa-search="1"/>';
@@ -904,13 +973,16 @@ _JS = r"""
         (active ? 'true' : 'false') + '" aria-label="Filter to ' + esc(fam) + ' rules" data-aa-family-filter="' +
         fam + '">' + esc(fam) + '</div>';
     });
+    html += showIdsToggleHtml();
     html += '</div>';
+    html += invalidLegendHtml(aa.rules);
 
     var rows = aa.rules.filter(function (r) {
       if (connFilter.length && connFilter.indexOf(r.connector) === -1) return false;
       if (famFilter.length && !r.verbs.some(function (v) { return famFilter.indexOf(v.family) !== -1; })) return false;
       if (!search) return true;
-      var haystack = (r.sentence + ' ' + r.connector + ' ' + r.covered_tools.join(' ') + ' ' + r.value_ids.join(' ')).toLowerCase();
+      var haystack = (r.sentence + ' ' + r.connector + ' ' + r.covered_tools.join(' ') + ' ' + r.value_ids.join(' ') + ' ' +
+        (r.value_items || []).map(function (item) { return item.name || ''; }).join(' ')).toLowerCase();
       return haystack.indexOf(search) !== -1;
     });
 
@@ -924,7 +996,7 @@ _JS = r"""
       var copyAttr = r.value_ids.length ? ' data-copy-id="' + esc(r.value_ids.join(', ')) +
         '" title="' + esc(r.value_ids.join(', ')) + ' -- right-click to copy"' : '';
       html += '<div class="card pf-card pf-aa-row"' + copyAttr + '>';
-      html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + esc(r.sentence) + '</div>';
+      html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + withValuesHtml(r.sentence_parts, r.value_items, r.sentence) + '</div>';
       html += '<div class="pf-aa-verbs">' + verbChipsHtml(r.verbs) + '</div></div>';
       html += '<div class="pf-aa-links">';
       html += '<div class="pf-link" role="button" tabindex="0" aria-expanded="' + (isExpanded ? 'true' : 'false') +
@@ -1281,7 +1353,7 @@ _JS = r"""
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
     t.rules.forEach(function (r) {
-      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : esc(r.sentence) +
+      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : withValuesHtml(r.sentence_parts, r.value_items, r.sentence) +
         (r.limited_to ? ' (limited to: ' + esc(r.limited_to.join(', ')) + ')' : '')) + '</li>';
     });
     detail += '</ul><div class="pf-hint">Tools</div><ul class="pf-st-list">';
@@ -1355,6 +1427,7 @@ _JS = r"""
       (SCOPED.delivery === 'once'
         ? 'A new token is shown once and cannot be shown again.'
         : 'A new token is copied to your clipboard once and cannot be shown again.') + '</div>';
+    html += '<div class="pf-chips">' + showIdsToggleHtml() + '</div>' + invalidLegendHtml(SCOPED.rules);
 
     html += '<h2 class="pf-group-title">Your tokens</h2><div class="card pf-card">';
     if (SCOPED.tokens.length === 0) {
@@ -1397,7 +1470,8 @@ _JS = r"""
       var on = !!ui.stRules[r.id];
       var allows = r.verbs.length ? 'allows ' + r.verbs.join(', ') : '';
       html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
-        esc(r.title + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' + esc(r.title) +
+        esc(withValuesText(r.title_parts, r.value_items, r.title) + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' +
+        withValuesHtml(r.title_parts, r.value_items, r.title) +
         (allows ? ' <span class="pf-st-meta">· ' + esc(allows) + '</span>' : '') + '</div>';
     });
     html += '</div>';
@@ -1933,6 +2007,13 @@ _JS = r"""
       return;
     }
 
+    if (e.target.closest('[data-show-ids-toggle]')) {
+      ui.showIds = !ui.showIds;
+      writeShowIds(ui.showIds);
+      render(pyState);
+      return;
+    }
+
     var aaExpandEl = e.target.closest('[data-aa-expand]');
     if (aaExpandEl) {
       var ruleId = aaExpandEl.getAttribute('data-aa-expand');
@@ -2324,7 +2405,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
     mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
-    scoped_tokens: dict[str, Any] | None = None,
+    scoped_tokens: dict[str, Any] | None = None, personal_transfer: bool = False,
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
@@ -2378,12 +2459,17 @@ def build_html(
     wiring, or the org page's own for the signed-in principal once the
     administrator has enabled the feature, ADR 0165) turns on the "Scoped
     tokens" section the same way.
+
+    ``personal_transfer`` draws Auto-accept's "Move your settings" card (export and import of
+    the person's own rules, web/personal_settings_shim.py); like ``mode`` it only reaches
+    ``window.__pfCapabilities``.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json_for_script(state)
     capabilities = _capabilities_for(mode, is_admin=is_admin)
     capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
     capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
+    capabilities["personalTransfer"] = personal_transfer
     caps_json = json_for_script(capabilities)
     ai_client_script = ""
     if capabilities["sections"]["ai_client"]:

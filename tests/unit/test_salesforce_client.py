@@ -1463,11 +1463,32 @@ class TestCreateRecord:
         with pytest.raises(SalesforceWriteError, match="REQUIRED_FIELD_MISSING"):
             with_fake_sf(make_client(), sf).create_record("Account", {"X": 1})
 
-    def test_non_dict_result_gives_unknown_failure(self):
+    def test_failed_result_without_errors_is_an_unknown_failure(self):
         sf = MagicMock()
-        sf.restful.return_value = None
+        sf.restful.return_value = {"success": False}
         with pytest.raises(SalesforceWriteError, match="records\\[0\\]: UNKNOWN"):
             with_fake_sf(make_client(), sf).create_record("Account", {"X": 1})
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            None,
+            "created",
+            {},
+            {"id": NEW_ID},
+            {"success": "true", "id": NEW_ID},
+            {"success": True},
+            {"success": True, "id": ""},
+        ],
+    )
+    def test_unreadable_answer_is_uncertain_not_refused(self, answer):
+        # The record may exist, so the caller must be told to check before creating it again.
+        sf = MagicMock()
+        sf.restful.return_value = answer
+        with pytest.raises(SalesforceWriteUncertainError, match="may or may not have been saved") as info:
+            with_fake_sf(make_client(), sf).create_record("Account", {"X": 1})
+        assert not isinstance(info.value, SalesforceWriteError)
+        assert "could not be read" in str(info.value)
 
     def test_error_text_is_exact(self):
         sf = MagicMock()
@@ -1600,11 +1621,31 @@ class TestCompositeWrites:
 
     def test_result_without_errors_list_is_unknown(self):
         sf = MagicMock()
-        sf.restful.return_value = [{"success": False}, "odd"]
+        sf.restful.return_value = [{"success": False}, {"success": False, "errors": "odd"}]
         with pytest.raises(SalesforceWriteError) as info:
             with_fake_sf(make_client(), sf).create_records("Account", [{"Name": "a"}] * 2)
         assert [f.index for f in info.value.failures] == [0, 1]
         assert {f.status_code for f in info.value.failures} == {"UNKNOWN"}
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            [{"success": True, "id": NEW_ID}, "odd"],
+            [{"success": True, "id": NEW_ID}, {"id": NEW_ID}],
+            [{"success": "yes", "id": NEW_ID}, {"success": True, "id": NEW_ID}],
+        ],
+    )
+    def test_unreadable_entry_is_uncertain_not_saved_none(self, answer):
+        # One entry reports success, so "saved none of the records" would be a wrong claim.
+        sf = MagicMock()
+        sf.restful.return_value = answer
+        for call in (
+            lambda c: c.create_records("Account", [{"Name": "a"}] * 2),
+            lambda c: c.update_records("Account", [{"Id": NEW_ID}] * 2),
+        ):
+            with pytest.raises(SalesforceWriteUncertainError, match="could not be read") as info:
+                call(with_fake_sf(make_client(), sf))
+            assert not isinstance(info.value, SalesforceWriteError)
 
     @pytest.mark.parametrize("answer", [None, [{"success": True, "id": "x"}]])
     def test_unreadable_answer_is_uncertain(self, answer):

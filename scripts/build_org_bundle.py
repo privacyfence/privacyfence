@@ -11,12 +11,15 @@ is installed on the server instead: copy it to <data>/org/org_config.json
 and restart the daemon (see docs/org-mode-setup-guide.md) — Settings has no
 install button in org mode.
 
-Telegram is not part of this bundle: its api_id/api_hash identify the
-PrivacyFence app itself (not your organization) and are baked into the
-release build — see docs/telegram-setup.md and src/privacyfence/app_credentials.py.
+Telegram's api_id/api_hash identify the PrivacyFence app itself (not your
+organization) and are baked into the release build — see docs/telegram-setup.md
+and src/privacyfence/app_credentials.py — so the bundle carries no secret for it,
+only the --enable-telegram switch.
 
 Only pass the flags for services you've set up; a connector is offered to
-users only if its section is present in the bundle. Stdlib only — no
+users only if its section is present in the bundle (--enable-telegram,
+--enable-peek and --enable-grist write the bare section for the three that
+need nothing else, ADR 0196). Stdlib only — no
 PrivacyFence install required to run this -- except --sign-key/
 --generate-signing-key (bundle signing, below), which need the
 `cryptography` package (pip install cryptography) specifically, not a
@@ -283,6 +286,21 @@ def build_parser() -> argparse.ArgumentParser:
              "organization mode offers Peek only with it.",
     )
 
+    enable = parser.add_argument_group("Connectors that need no credentials in the bundle")
+    enable.add_argument(
+        "--enable-telegram", action="store_true",
+        help="Offer Telegram. Its app credentials are baked into the build, so the section is just a switch.",
+    )
+    enable.add_argument(
+        "--enable-peek", action="store_true",
+        help="Offer Peek without pinning a server (local mode; people enter their own address). "
+             "Implied by --peek-base-url.",
+    )
+    enable.add_argument(
+        "--enable-grist", action="store_true",
+        help="Offer Grist with an API key and no pinned server (local mode). Implied by --grist-server-url.",
+    )
+
     mode = parser.add_argument_group(
         "Deployment mode",
     )
@@ -481,6 +499,15 @@ def build_parser() -> argparse.ArgumentParser:
              "the signed-in browser route (/downloads/<token>) instead.",
     )
 
+    downloads.add_argument(
+        "--exports", action=argparse.BooleanOptionalAction, default=None,
+        help="The export tools (grist_export_records, grist_export_sql, salesforce_export_report, "
+             "jira_export_issues, assets_export_objects), which stage the whole file on the server "
+             "until the user claims it. On by default; --no-exports writes "
+             "download_delivery.allow_exports=false, which leaves them out of the tool list and "
+             "refuses them.",
+    )
+
     push = parser.add_argument_group("Web push notifications (org mode, docs/adr/0081-*)")
     push.add_argument(
         "--web-push", action=argparse.BooleanOptionalAction, default=None,
@@ -647,9 +674,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.grist_auth_server_url:
             raise SystemExit("--grist-auth-server-url needs --grist-client-id and --grist-client-secret.")
         bundle["grist"] = grist_section
+    elif args.enable_grist:
+        bundle["grist"] = {"enabled": True}
 
     if args.peek_base_url:
         bundle["peek"] = {"base_url": _peek_url(args.peek_base_url)}
+    elif args.enable_peek:
+        bundle["peek"] = {"enabled": True}
+
+    if args.enable_telegram:
+        bundle["telegram"] = {"enabled": True}
 
     if args.enable_unattended_sessions:
         bundle["unattended_sessions"] = {"enabled": True}
@@ -750,6 +784,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.downloads_link_ttl_seconds is not None
         or args.downloads_disable_staging
         or args.agent_links is not None
+        or args.exports is not None
     ):
         if bundle.get("mode") != "org":
             raise SystemExit(
@@ -764,6 +799,8 @@ def main(argv: list[str] | None = None) -> int:
             downloads_section["allow_disk_staging"] = False
         if args.agent_links is not None:
             downloads_section["agent_links"] = args.agent_links
+        if args.exports is not None:
+            downloads_section["allow_exports"] = args.exports
         bundle["download_delivery"] = downloads_section
 
     if args.web_push is not None:
@@ -834,7 +871,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         bundle["audit_forwarding"] = forwarding_section
 
-    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "peek") if k in bundle]
+    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "peek", "telegram") if k in bundle]
     if (
         not services and "unattended_sessions" not in bundle and "scoped_tokens" not in bundle
         and "mode" not in bundle
@@ -872,6 +909,7 @@ def main(argv: list[str] | None = None) -> int:
     if "download_delivery" in bundle:
         summary += f", download_delivery.allow_disk_staging={bundle['download_delivery'].get('allow_disk_staging', True)}"
         summary += f", download_delivery.agent_links={bundle['download_delivery'].get('agent_links', True)}"
+        summary += f", download_delivery.allow_exports={bundle['download_delivery'].get('allow_exports', True)}"
     if "authz" in bundle:
         n_domains = len(bundle["authz"].get("allowed_domains") or [])
         n_groups = len(bundle["authz"].get("required_groups") or [])

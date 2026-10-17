@@ -751,7 +751,7 @@ class TestScopedTokensSection:
 
     def test_rules_show_their_resource_with_the_verbs_as_a_detail(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
-        assert "esc(r.title) +" in html
+        assert "withValuesHtml(r.title_parts, r.value_items, r.title)" in html
         assert "'allows ' + r.verbs.join(', ')" in html
         assert "Pick the tools below as well: a tool that needs approval works only where a selected rule covers it." in html
 
@@ -770,7 +770,14 @@ class TestScopedTokensSection:
     def test_a_missing_rule_is_shown_as_no_longer_existing(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "a rule that no longer exists" in html
-        assert "r.missing ? 'a rule that no longer exists' : esc(r.sentence)" in html
+        assert "r.missing ? 'a rule that no longer exists' : withValuesHtml(r.sentence_parts" in html
+
+    def test_resource_values_toggle_between_ids_and_names_on_both_pages(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-show-ids-toggle="1"' in html
+        assert "withValuesHtml(r.sentence_parts, r.value_items, r.sentence)" in html
+        assert "pf-val-invalid" in html
+        assert "Shown in red: not found, it may have been deleted." in html
 
     def test_a_token_can_be_duplicated_and_the_form_cleared(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
@@ -884,3 +891,34 @@ class TestOrgCapabilities:
         nav_fn_end = html_non_admin.index("function renderNotificationsDetailControl")
         nav_fn = html_non_admin[nav_fn_start:nav_fn_end]
         assert "CAPS.sections[key] === false" in nav_fn
+
+
+class TestPersonalTransferCard:
+    """"Move your settings" (Auto-accept) is drawn client-side only when the page is told the
+    routes behind it exist: the capability is the switch, the card text lives in the JS."""
+
+    @staticmethod
+    def _caps(html: str) -> dict:
+        match = re.search(r"window\.__pfCapabilities = (\{.*?\});</script>", html, re.DOTALL)
+        assert match
+        return json.loads(match.group(1))
+
+    @pytest.mark.parametrize("mode", ["local", "org"])
+    def test_capability_is_on_when_requested(self, mode):
+        html = build_html(_make_state(), mode=mode, is_admin=True, personal_transfer=True)
+        assert self._caps(html)["personalTransfer"] is True
+        assert "if (CAPS.personalTransfer)" in html
+        assert "Move your settings" in html
+        assert 'data-pf-personal-export="1"' in html
+        assert 'data-pf-personal-import="1"' in html
+        assert "Importing only adds; it never removes or narrows anything." in html
+
+    @pytest.mark.parametrize("mode", ["local", "org"])
+    def test_capability_is_off_by_default(self, mode):
+        html = build_html(_make_state(), mode=mode)
+        assert self._caps(html)["personalTransfer"] is False
+
+    def test_card_sits_between_the_subtitle_and_the_filter_bar(self):
+        html = build_html(_make_state(), personal_transfer=True)
+        body = html.split("function renderAutoAccept", 1)[1]
+        assert body.index("pf-page-subtitle") < body.index("CAPS.personalTransfer") < body.index("pf-aa-filterbar")
