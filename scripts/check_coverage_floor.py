@@ -221,10 +221,12 @@ MODULE_FLOORS: dict[str, float] = {
 # The platform-windows job's floors, kept apart from MODULE_FLOORS because the same modules read
 # differently on Windows: the pywin32 and named-pipe code that the Linux run cannot execute is
 # covered there, and the POSIX half is not. These numbers gate only `--platform windows`.
+# Whole-percent, rounded down, measured on the platform-windows job on 2026-10-17
+# (control_channel.py 35.81%, windows_acl.py 89.66%, windows_service.py 32.00%).
 WINDOWS_MODULE_FLOORS: dict[str, float] = {
-    "src/privacyfence/windows_service.py": 0.0,
-    "src/privacyfence/windows_acl.py": 0.0,
-    "src/privacyfence/web/control_channel.py": 0.0,
+    "src/privacyfence/windows_service.py": 32.0,
+    "src/privacyfence/windows_acl.py": 89.0,
+    "src/privacyfence/web/control_channel.py": 35.0,
 }
 
 
