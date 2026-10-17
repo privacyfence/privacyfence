@@ -112,6 +112,7 @@ jobs:
             tests/unit/test_website_*.py \
             tests/integration/test_website_layout.py \
             tests/integration/test_website_consent.py \
+            tests/integration/test_website_csp.py \
             tests/integration/test_download_page.py \
             tests/integration/test_releases_page.py
 
