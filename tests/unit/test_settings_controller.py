@@ -783,6 +783,49 @@ class TestOrgConfigInstallSigning:
         installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
         assert installed == first_bundle  # unchanged -- the bad update was never written
 
+    def test_install_org_config_refuses_an_older_serial_and_keeps_the_installed_file(self, controller):
+        from privacyfence import org_bundle_signing
+
+        key, _ = org_bundle_signing.generate_keypair()
+        newer = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Acme", "serial": 200}, key)
+        controller.install_org_config_bytes(json.dumps(newer).encode())
+        assert controller.error == ""
+        assert org_bundle_signing.load_pinned_serial(sc.org_dir()) == 200
+
+        older = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Old", "serial": 100}, key)
+        controller.install_org_config_bytes(json.dumps(older).encode())
+
+        assert "rollback refused" in controller.error
+        assert str(org_bundle_signing.pinned_serial_path(sc.org_dir())) in controller.error
+        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        assert installed == newer
+        assert org_bundle_signing.load_pinned_serial(sc.org_dir()) == 200
+
+    def test_install_org_config_refuses_an_invalid_serial_without_a_remedy(self, controller):
+        from privacyfence import org_bundle_signing
+
+        key, _ = org_bundle_signing.generate_keypair()
+        bundle = org_bundle_signing.sign_bundle({"version": 1, "serial": True}, key)
+
+        controller.install_org_config_bytes(json.dumps(bundle).encode())
+
+        assert controller.error == "Refusing to install: serial is not a positive integer."
+
+    def test_install_org_config_records_the_serial_only_after_the_write(self, controller, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        key, _ = org_bundle_signing.generate_keypair()
+        bundle = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Acme", "serial": 50}, key)
+
+        def boom(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sc, "atomic_write_json", boom)
+        controller.install_org_config_bytes(json.dumps(bundle).encode())
+
+        assert "Could not install organization config" in controller.error
+        assert not org_bundle_signing.pinned_serial_path(sc.org_dir()).exists()
+
 
 @pytest.mark.usefixtures("stub_connector_build")
 class TestWouldPinNewOrgSigningKey:

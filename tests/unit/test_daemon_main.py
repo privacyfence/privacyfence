@@ -4286,3 +4286,42 @@ class TestRevokeScopedTokens:
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
         assert daemon_main.run_revoke_scoped_tokens("local") == 0
         assert capsys.readouterr().out == "Revoked 0 scoped token(s) for local.\n"
+
+
+class TestLoadOrgConfigSerial:
+    """SEC-A7: the serial pin is wired into every load_org_config() call."""
+
+    def test_load_org_config_rejects_older_signed_bundle(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        key = _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 200})
+        daemon_main.load_org_config()
+
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 100}, key)
+
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.load_org_config()
+        assert "rollback refused" in str(excinfo.value)
+        assert str(org_bundle_signing.pinned_serial_path(tmp_path)) in str(excinfo.value)
+
+    def test_load_org_config_records_the_highest_serial(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        key = _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 100})
+        daemon_main.load_org_config()
+        assert org_bundle_signing.load_pinned_serial(tmp_path) == 100
+
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 300}, key)
+        daemon_main.load_org_config()
+
+        assert org_bundle_signing.load_pinned_serial(tmp_path) == 300
+
+    def test_load_org_config_refuses_an_invalid_serial_without_a_remedy(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 0})
+
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.load_org_config()
+        assert str(excinfo.value).endswith("(serial is not a positive integer) -- refusing to start.")
