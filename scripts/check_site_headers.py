@@ -29,8 +29,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def _fetch_headers(url: str) -> dict[str, str]:
     """The response headers for `url`, lower-cased names; a 3xx/4xx/5xx still has headers."""
-    # An empty ProxyHandler: never consult system proxy settings (macOS _scproxy can stall on first use).
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(url, timeout=TIMEOUT_SECONDS) as response:
             return {k.lower(): v for k, v in response.headers.items()}
