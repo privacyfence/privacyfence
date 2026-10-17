@@ -3,7 +3,7 @@
 ## Goal
 
 Fix four findings the whole-repository review at `3766d50` (review document:
-the review document of 2026-10-14, kept on its own `review/` branch and never merged to `main`)
+the review document of 2026-10-14, on its `review/` branch)
 decided to fix. They are independent of each other; one feature branch and one PR carry all four.
 
 | Finding | Issue | What changes for the user |
