@@ -2062,6 +2062,9 @@ class TestScopedTokenWiring:
             def cached_name(self, rt, resource_id):
                 return "Salesforce mirror" if resource_id == "8CAN8gKdxY7z" else None
 
+            def is_invalid(self, rt, resource_id):
+                return False
+
         monkeypatch.setattr(server_module, "get_resolver", lambda: _Names())
         [entry] = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()["rules"]
 
@@ -2071,6 +2074,11 @@ class TestScopedTokenWiring:
         assert entry["verbs"] == ["read", "update"]
         assert "Salesforce mirror" in entry["sentence"]
         assert "grist_update_csv" in entry["tools"]
+        assert entry["title_parts"] == ["Grist — document ", ""]
+        assert entry["sentence_parts"] == ["Grist - document ", ": allow read, update"]
+        assert entry["value_items"] == [
+            {"id": "8CAN8gKdxY7z", "short_id": "8CAN8gKdxY7z", "name": "Salesforce mirror", "status": "resolved"},
+        ]
 
     def test_page_data_lists_the_tools_that_need_no_rule(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept

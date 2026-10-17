@@ -1650,6 +1650,7 @@ def build_org_routes(
             "grist_auth": {"error": ""},
             "auto_accept": _auto_accept_state_from_rows(
                 rows, _rule_usage_map(), resolve_value=lambda row: cached_row_value(row, resolver),
+                resolver=resolver,
             ),
             "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
@@ -1725,7 +1726,7 @@ def build_org_routes(
                 rt, resource_ids = rule_resource_ids(compiled[0]) if compiled else (None, [])
                 if rt is not None:
                     pending.extend(
-                        (rt, rid) for rid in resource_ids if rid and resolver.cached_name(rt, rid) is None
+                        (rt, rid) for rid in resource_ids if rid and resolver.needs_resolve(rt, rid)
                     )
         if not pending:
             return

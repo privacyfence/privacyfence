@@ -41,7 +41,7 @@ class TestResolve:
 
         name = resolver.resolve(_folder_type(), "F1", client)
 
-        assert name == "Q3 Reports"
+        assert name == "My Drive: Q3 Reports"
         assert client.calls == 1
 
     def test_second_resolve_within_ttl_does_not_call_the_client_again(self, tmp_path, monkeypatch):
@@ -66,7 +66,7 @@ class TestResolve:
         resolver.resolve(_folder_type(), "F1", _FakeClient({"F1": "Q3 Reports"}))
 
         # Later call with no live connection -- should still know the name.
-        assert resolver.resolve(_folder_type(), "F1", None) == "Q3 Reports"
+        assert resolver.resolve(_folder_type(), "F1", None) == "My Drive: Q3 Reports"
 
     def test_failing_client_falls_back_to_cached_name_without_raising(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
@@ -75,7 +75,7 @@ class TestResolve:
 
         name = resolver.resolve(_folder_type(), "F1", _FailingClient())
 
-        assert name == "Q3 Reports"
+        assert name == "My Drive: Q3 Reports"
 
     def test_failing_client_with_no_prior_cache_returns_none(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
@@ -94,8 +94,8 @@ class TestResolve:
         resolver = rn.ResourceNameResolver()
         client = _FakeClient({"F1": "Alpha", "F2": "Beta"})
 
-        assert resolver.resolve(_folder_type(), "F1", client) == "Alpha"
-        assert resolver.resolve(_folder_type(), "F2", client) == "Beta"
+        assert resolver.resolve(_folder_type(), "F1", client) == "My Drive: Alpha"
+        assert resolver.resolve(_folder_type(), "F2", client) == "My Drive: Beta"
 
 
 class TestCachedName:
@@ -110,7 +110,7 @@ class TestCachedName:
         resolver = rn.ResourceNameResolver()
         resolver.resolve(_folder_type(), "F1", _FakeClient({"F1": "Q3 Reports"}))
 
-        assert resolver.cached_name(_folder_type(), "F1") == "Q3 Reports"
+        assert resolver.cached_name(_folder_type(), "F1") == "My Drive: Q3 Reports"
 
 
 class TestDiskPersistence:
@@ -123,7 +123,7 @@ class TestDiskPersistence:
 
         # Simulate a daemon restart: brand new instance, no live client yet.
         second = rn.ResourceNameResolver()
-        assert second.cached_name(_folder_type(), "F1") == "Q3 Reports"
+        assert second.cached_name(_folder_type(), "F1") == "My Drive: Q3 Reports"
 
     def test_corrupt_disk_cache_is_ignored_not_raised(self, tmp_path, monkeypatch):
         cache_file = tmp_path / "cache.json"
@@ -153,3 +153,70 @@ class TestGetResolverSingleton:
         first = rn.get_resolver()
         second = rn.get_resolver()
         assert first is second
+
+
+class _DriveClient:
+    """A Drive client with one Shared Drive: ``D1`` is its root, ``F2`` a folder inside it."""
+
+    def get_file_metadata(self, resource_id: str):
+        from types import SimpleNamespace
+        files = {
+            "F1": SimpleNamespace(name="Reports", drive_id=""),
+            "D1": SimpleNamespace(name="Finance", drive_id="D1"),
+            "F2": SimpleNamespace(name="Reports", drive_id="D1"),
+            "F3": SimpleNamespace(name="Orphan", drive_id="GONE"),
+        }
+        return files[resource_id]
+
+    def get_shared_drive_name(self, drive_id: str) -> str:
+        if drive_id == "D1":
+            return "Finance"
+        raise RuntimeError("no such drive")
+
+
+class TestDriveOrigin:
+    def test_names_say_which_drive_they_live_in(self):
+        assert rg._resolve_drive_file(_DriveClient(), "F1") == "My Drive: Reports"
+        assert rg._resolve_drive_file(_DriveClient(), "F2") == "Finance: Reports"
+
+    def test_a_shared_drives_root_is_just_the_drive_name(self):
+        assert rg._resolve_drive_file(_DriveClient(), "D1") == "Finance"
+
+    def test_an_unreadable_shared_drive_name_still_resolves(self):
+        assert rg._resolve_drive_file(_DriveClient(), "F3") == "Shared Drive: Orphan"
+
+
+class TestInvalid:
+    def test_a_failed_live_lookup_marks_the_id_invalid_but_keeps_the_last_name(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
+        resolver = rn.ResourceNameResolver()
+        rt = _folder_type()
+        resolver.resolve(rt, "F1", _FakeClient({"F1": "Q3"}))
+        assert not resolver.is_invalid(rt, "F1")
+
+        monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 0)
+        assert resolver.resolve(rt, "F1", _FakeClient({})) == "My Drive: Q3"
+        monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 900)
+        assert resolver.is_invalid(rt, "F1")
+        assert resolver.cached_name(rt, "F1") == "My Drive: Q3"
+
+    def test_no_client_is_not_invalid(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
+        resolver = rn.ResourceNameResolver()
+        resolver.resolve(_folder_type(), "F1", None)
+        assert not resolver.is_invalid(_folder_type(), "F1")
+        assert resolver.needs_resolve(_folder_type(), "F1")
+
+    def test_a_later_success_clears_invalid_and_a_fresh_outcome_stops_lookups(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
+        resolver = rn.ResourceNameResolver()
+        rt = _folder_type()
+        client = _FakeClient({})
+        resolver.resolve(rt, "F1", client)
+        assert resolver.is_invalid(rt, "F1") and not resolver.needs_resolve(rt, "F1")
+
+        monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 0)
+        resolver.resolve(rt, "F1", _FakeClient({"F1": "Back"}))
+        monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 900)
+        assert not resolver.is_invalid(rt, "F1")
+        assert resolver.cached_name(rt, "F1") == "My Drive: Back"
