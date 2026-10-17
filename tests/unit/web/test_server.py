@@ -2040,6 +2040,18 @@ class TestScopedTokenWiring:
         self._store(tmp_path, monkeypatch)
         assert _status(mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok").count("No such token.") == 1
 
+    def test_a_row_that_compiles_to_no_rule_is_titled_by_its_scope_and_has_no_value_to_toggle(self):
+        from privacyfence.web.server import _scoped_rule_entry
+
+        row = scope_rows.ScopeRow(
+            id="r-empty", scope="drive.folder", value=["f"], verbs=frozenset(), operations=frozenset(),
+        )
+        entry = _scoped_rule_entry(row, "f", [])
+
+        assert entry["title"] == "drive.folder"
+        assert entry["title_parts"] is None
+        assert entry["value_items"] == []
+
     def test_page_data_names_rules_by_their_cached_resource_names(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept
         from privacyfence.policy.engine import PolicyRule

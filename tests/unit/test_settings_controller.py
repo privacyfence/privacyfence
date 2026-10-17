@@ -2542,6 +2542,17 @@ class TestScopeRowState:
         (item, *_) = sc.row_value_items(scope_row, resolver)
         assert item["id"] == gone and item["status"] == "invalid"
 
+    def test_a_row_that_compiles_to_nothing_lists_its_values_as_plain(self):
+        row = sc.policy_scope_rows.ScopeRow(
+            id="r-empty", scope="drive.folder", value=["a", "b"], verbs=frozenset(), operations=frozenset(),
+        )
+        assert [(i["id"], i["status"]) for i in sc.row_value_items(row, sc.get_resolver())] == [
+            ("a", "plain"), ("b", "plain"),
+        ]
+        assert sc.sentence_parts(sc.policy_scope_rows.ScopeRow(
+            id="r-none", scope="drive.folder", value=None, verbs=frozenset(), operations=frozenset(),
+        )) is None
+
 
 class TestResolvedRuleValue:
     """Rule values resolve through the shared cached-name machinery, reusing

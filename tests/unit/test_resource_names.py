@@ -156,7 +156,7 @@ class TestGetResolverSingleton:
 
 
 class _DriveClient:
-    """A Drive client with one Shared Drive: ``D1`` is its root, ``F2`` a folder inside it."""
+    """A Drive client with one Shared Drive, its root and a second folder inside it."""
 
     def get_file_metadata(self, resource_id: str):
         from types import SimpleNamespace
@@ -220,3 +220,18 @@ class TestInvalid:
         monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 900)
         assert not resolver.is_invalid(rt, "F1")
         assert resolver.cached_name(rt, "F1") == "My Drive: Back"
+
+
+class TestInvalidSkipsTheClient:
+    def test_a_fresh_not_found_answers_from_the_cache_without_asking_again(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
+        resolver = rn.ResourceNameResolver()
+        rt = _folder_type()
+        resolver.resolve(rt, "F1", _FakeClient({"F1": "Q3"}))
+        monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 0)
+        resolver.resolve(rt, "F1", _FakeClient({}))
+        monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 900)
+        client = _FakeClient({"F1": "Back"})
+
+        assert resolver.resolve(rt, "F1", client) == "My Drive: Q3"
+        assert client.calls == 0
