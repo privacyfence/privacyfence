@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.server
+import socketserver
 import sys
 import threading
 from contextlib import contextmanager
@@ -11,6 +12,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from check_site_headers import check, main  # noqa: E402 -- scripts/ is not a package
 from site_security_headers import headers_for_path  # noqa: E402
+
+
+class _Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # The stock bind does a reverse DNS lookup (socket.getfqdn) that hangs on macOS CI runners.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 @contextmanager
@@ -26,7 +34,7 @@ def _server(mutate=lambda path, headers: headers):
         def log_message(self, *args):  # noqa: A003
             pass
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = _Server(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}"
