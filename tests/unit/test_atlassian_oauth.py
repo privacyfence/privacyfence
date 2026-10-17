@@ -137,6 +137,7 @@ class TestAuthorizeInteractiveBuildUrl:
             lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
         )
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "me@x.com")
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
 
         atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
 
@@ -157,6 +158,7 @@ class TestAuthorizeInteractiveBuildUrl:
             lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
         )
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
 
         atlassian_oauth_module.authorize_interactive(
             "ci", "cs", str(tmp_path / "token.json"), scopes=["read:jira-work"],
@@ -173,6 +175,7 @@ class TestAuthorizeInteractiveBuildUrl:
             lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
         )
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
 
         atlassian_oauth_module.authorize_interactive(
             "ci", "cs", str(tmp_path / "token.json"),
@@ -242,6 +245,7 @@ class TestAuthorizeInteractiveExchange:
             lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
         )
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
 
         atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
 
@@ -296,6 +300,7 @@ class TestHoistedFunctions:
             lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
         )
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "me@x.com")
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
 
         record = atlassian_oauth_module.resolve_resource_and_save(str(tmp_path / "token.json"), "at-1", "rt-1")
 
@@ -310,6 +315,7 @@ class TestHoistedFunctions:
         ]
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_accessible_resources", lambda token: resources)
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
 
         record = atlassian_oauth_module.resolve_resource_and_save(
             str(tmp_path / "token.json"), "at-1", "rt-1", pick_resource=lambda rs: rs[0],
@@ -333,11 +339,12 @@ class TestHoistedFunctions:
 # ---------------------------------------------------------------------------- #
 
 class TestAuthorizeInteractiveTokenAssembly:
-    def _setup(self, monkeypatch, exchange_json, resources, pick_resource=None, account_email=""):
+    def _setup(self, monkeypatch, exchange_json, resources, pick_resource=None, account_email="", account_id=""):
         capture_run_browser_oauth(monkeypatch)
         monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response(exchange_json))
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_accessible_resources", lambda token: resources)
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: account_email)
+        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: account_id)
 
     def test_loopback_error_becomes_atlassian_oauth_error(self, monkeypatch, tmp_path):
         from privacyfence.oauth_loopback import OAuthLoopbackError
@@ -359,7 +366,7 @@ class TestAuthorizeInteractiveTokenAssembly:
     def test_single_resource_auto_selected(self, monkeypatch, tmp_path):
         self._setup(
             monkeypatch, {"access_token": "tok", "refresh_token": "rt"},
-            [{"id": "cloud1", "url": "https://x.atlassian.net"}], account_email="me@x.com",
+            [{"id": "cloud1", "url": "https://x.atlassian.net"}], account_email="me@x.com", account_id="acct-1",
         )
         token_file = str(tmp_path / "token.json")
 
@@ -367,7 +374,7 @@ class TestAuthorizeInteractiveTokenAssembly:
 
         assert result == {
             "access_token": "tok", "refresh_token": "rt", "cloud_id": "cloud1",
-            "site_url": "https://x.atlassian.net", "account_email": "me@x.com", "scopes": [],
+            "site_url": "https://x.atlassian.net", "account_email": "me@x.com", "account_id": "acct-1", "scopes": [],
         }
         assert load_token_file(token_file) == result
 
@@ -469,3 +476,18 @@ class TestFetchAccountEmail:
     def test_http_error_status_also_swallowed(self, monkeypatch):
         monkeypatch.setattr(atlassian_oauth_module.requests, "get", lambda *a, **kw: fake_response(status_ok=False))
         assert atlassian_oauth_module._fetch_account_email("tok", "cloud1") == ""
+
+
+class TestFetchAccountId:
+    def test_returns_the_account_id(self, monkeypatch):
+        monkeypatch.setattr(
+            atlassian_oauth_module.requests, "get",
+            lambda url, **kw: fake_response({"accountId": "acct-1"}),
+        )
+        assert atlassian_oauth_module._fetch_account_id("tok", "cloud1") == "acct-1"
+
+    def test_returns_empty_when_the_request_fails(self, monkeypatch):
+        def raiser(*a, **kw):
+            raise requests.ConnectionError("network down")
+        monkeypatch.setattr(atlassian_oauth_module.requests, "get", raiser)
+        assert atlassian_oauth_module._fetch_account_id("tok", "cloud1") == ""

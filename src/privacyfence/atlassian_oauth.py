@@ -195,6 +195,7 @@ def resolve_resource_and_save(
         "cloud_id": cloud_id,
         "site_url": resource.get("url", ""),
         "account_email": _fetch_account_email(access_token, cloud_id),
+        "account_id": _fetch_account_id(access_token, cloud_id),
         "scopes": sorted({s for r in resources if r.get("id") == cloud_id for s in r.get("scopes") or []}),
     }
     save_token_file(token_file, token_record)
@@ -281,6 +282,26 @@ def _fetch_account_email(access_token: str, cloud_id: str) -> str:
         return resp.json().get("emailAddress", "")
     except requests.RequestException as exc:
         logger.debug("Could not resolve Atlassian account email (non-fatal): %s", exc)
+        return ""
+
+
+def _fetch_account_id(access_token: str, cloud_id: str) -> str:
+    """Best-effort lookup of the signed-in account's Atlassian account id via Jira's ``myself``.
+
+    Used to populate connector.my_account_id for the i_am_reporter / i_am_assignee /
+    i_am_author rules, which compare account ids rather than names. Never raises: an
+    empty string just means those rules won't match.
+    """
+    try:
+        resp = requests.get(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("accountId", "")
+    except requests.RequestException as exc:
+        logger.debug("Could not resolve Atlassian account id (non-fatal): %s", exc)
         return ""
 
 

@@ -309,7 +309,7 @@ class TestTryRefresh:
         monkeypatch.setattr(confluence_client_module, "save_token_file", lambda path, record: saved.update(record))
 
         client = make_client(
-            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "account_email": "me@x.com"},
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "account_email": "me@x.com", "account_id": "acct-1"},
             token_file=str(tmp_path / "atlassian_token.json"),
         )
         client._try_refresh()
@@ -317,8 +317,30 @@ class TestTryRefresh:
         assert saved == {
             "access_token": "new-tok", "refresh_token": "new-rt",
             "cloud_id": "cloud-1", "site_url": "https://acme.atlassian.net", "account_email": "me@x.com",
-            "scopes": [],
+            "account_id": "acct-1", "scopes": [],
         }
+
+    def test_refresh_keeps_the_account_id_from_disk_when_config_lacks_it(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(confluence_client_module, "atlassian_refresh",
+                             lambda cid, cs, rt: {"access_token": "new-tok", "refresh_token": "new-rt"})
+        monkeypatch.setattr(
+            confluence_client_module, "load_token_file",
+            lambda path: {"refresh_token": "rt", "account_id": "acct-disk"},
+        )
+        saved = {}
+        monkeypatch.setattr(confluence_client_module, "save_token_file", lambda path, record: saved.update(record))
+
+        client = make_client(
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt"},
+            token_file=str(tmp_path / "atlassian_token.json"),
+        )
+        client._try_refresh()
+
+        assert saved["account_id"] == "acct-disk"
+
+    def test_account_id_property_reads_the_config(self):
+        assert make_client({"account_id": "acct-1"}).account_id == "acct-1"
+        assert make_client().account_id == ""
 
 
 class TestRequest:

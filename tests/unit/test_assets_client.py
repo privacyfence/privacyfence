@@ -38,7 +38,8 @@ API = f"{JIRA_URL}/jsm/assets/workspace/{WORKSPACE}/v1"
 CONFIG = {
     "access_token": "tok", "refresh_token": "rt", "cloud_id": "cloud-1",
     "client_id": "ci", "client_secret": "cs", "site_url": "https://acme.atlassian.net",
-    "account_email": "me@example.com", "scopes": [ASSETS_REQUIRED_SCOPE, "read:jira-work"],
+    "account_email": "me@example.com", "account_id": "acct-1",
+    "scopes": [ASSETS_REQUIRED_SCOPE, "read:jira-work"],
 }
 
 
@@ -235,8 +236,21 @@ class TestRefresh:
         assert saved == {
             "access_token": "new-tok", "refresh_token": "new-rt", "cloud_id": "cloud-1",
             "site_url": "https://acme.atlassian.net", "account_email": "me@example.com",
-            "scopes": [ASSETS_REQUIRED_SCOPE, "read:jira-work"],
+            "account_id": "acct-1", "scopes": [ASSETS_REQUIRED_SCOPE, "read:jira-work"],
         }
+
+    def test_refresh_keeps_the_account_id_from_disk_when_config_lacks_it(self, monkeypatch, tmp_path):
+        saved: dict[str, Any] = {}
+        monkeypatch.setattr(
+            assets_module, "load_token_file",
+            lambda path: {"refresh_token": "rotated", "account_id": "acct-disk"},
+        )
+        monkeypatch.setattr(assets_module, "save_token_file", lambda path, rec: saved.update(rec))
+        monkeypatch.setattr(assets_module, "atlassian_refresh", lambda cid, cs, rt: {"access_token": "n"})
+        client = make_client(token_file=str(tmp_path / "t.json"), account_id="")
+
+        assert client._try_refresh() is True
+        assert saved["account_id"] == "acct-disk"
 
     def test_refresh_uses_refresh_token_rotated_by_another_client(self, monkeypatch, tmp_path):
         used = []
