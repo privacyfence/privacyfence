@@ -1207,7 +1207,7 @@ async def gated_call(
                 # A scoped token is deny-only (ADR 0164): never a card, never
                 # a pending approval -- the same point, for the same reason,
                 # as the unattended denial below.
-                _deny_scoped(audit, connector, tool, scope=scope, pii_categories=pii_forces_confirmation)
+                _deny_scoped(audit, connector, tool, scope=scope, pii_categories=pii_forces_confirmation, ctx=ctx)
             elif is_unattended():
                 # No rule matched, or one did but the PII gate still routed
                 # this to a human (see module docstring) -- either way,
@@ -1644,15 +1644,32 @@ def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[s
     )
 
 
-def _deny_scoped(audit, connector: str, tool: str, *, scope: ScopedToken, pii_categories: list[str]) -> None:
+def _assets_schema_detail(scope: ScopedToken, ctx: ReviewContext) -> str:
+    """For a refused Assets call: the schema ids of the objects it touched and the ones the token's
+    schema rules allow, so a mismatch is visible in the log. ``""`` when nothing applies."""
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    touched = sorted({str(getattr(i, "schema_id", "") or "") for i in items if i is not None})
+    allowed = sorted({
+        str(v) for rule in _rules_in_scope(scope)
+        if rule.predicate in ("approved_schema_ids", "approved_schema_ids_all_results")
+        for v in (rule.value if isinstance(rule.value, list) else [rule.value])
+    })
+    return f"; object schema ids {touched or 'none'}, token's allowed schema ids {allowed or 'none'}"
+
+
+def _deny_scoped(
+    audit, connector: str, tool: str, *, scope: ScopedToken, pii_categories: list[str],
+    ctx: ReviewContext | None = None,
+) -> None:
     """Fail-fast path for a call made with a scoped token (ADR 0164) that none of the token's
     rules auto-accepted (or that the PII gate routed to a human anyway): denied at once, before
     any card or pending approval, like ``_deny_unattended``. Logs the token's id, never its
     secret. Always raises."""
     audit(decision="denied_scoped_token", auto_accept_rule="", pii_detected=bool(pii_categories))
+    detail = _assets_schema_detail(scope, ctx) if connector == "assets" and ctx is not None else ""
     logger.warning(
-        "Scoped token %s: denying %s/%s without prompting -- none of its rules matched%s",
-        scope.id, connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "",
+        "Scoped token %s: denying %s/%s without prompting -- none of its rules matched%s%s",
+        scope.id, connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "", detail,
     )
     raise GateDeniedError(
         "Request denied: this call uses a scoped token, and none of the token's rules covers it."

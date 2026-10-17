@@ -1032,6 +1032,18 @@ class TestExportAutoAccept:
         assert len(popups) == 1
         assert delivered == []
 
+    async def test_scoped_denial_logs_the_schema_ids(self, tmp_path, delivered, caplog):
+        init_audit_logger(str(tmp_path))
+        rule = self._rule()
+        connector, client = make_connector()
+        client.export_objects.return_value = [make_object(schema_id="2"), make_object(id="124", schema_id="3")]
+
+        with scoped_tokens.token_scope(self._scoped_token(rule, allow_personal_data=False)):
+            with pytest.raises(GateDeniedError, match="scoped token"):
+                await connector.call("assets_export_objects", EXPORT_ARGS)
+
+        assert "object schema ids ['2', '3'], token's allowed schema ids ['2']" in caplog.text
+
     async def test_personal_data_needs_a_token_that_allows_it(
         self, tmp_path, delivered, monkeypatch,
     ):
