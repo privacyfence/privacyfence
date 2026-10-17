@@ -517,6 +517,21 @@ class TestAddRule:
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
 
+    def test_a_title_instead_of_an_id_is_a_400_with_the_message_and_adds_no_rule(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = _post_action(
+            client, "add_policy_rule", {"group": "slack.channel", "value": "#general", "verbs": ["read"]}, csrf,
+        )
+
+        assert r.status_code == 400
+        assert r.json()["error"].startswith("'#general' is not a Slack ID.")
+        with principal_scope(ALICE):
+            assert auto_accept.get_policy_v2_rules() == []
+
     def test_org_add_policy_rule_ignores_a_personal_data_field(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
         app, sessions = _app()

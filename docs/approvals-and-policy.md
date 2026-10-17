@@ -304,7 +304,10 @@ one row per Drive folder or Gmail sender domain — as a sentence, with colour-c
 **Unblocks N tools** disclosure listing exactly which tools it covers, how often it has matched
 ("Matched 42x, last 3 days ago", or "Never matched"), **Edit verbs** and **✕ Remove**. You can
 filter by connector, verb family or text. **Add a rule** takes a scope, a value where the scope
-needs one (comma-separated for several), and the verbs to allow; adding verbs to a scope that
+needs one (comma-separated for several), and the verbs to allow; for a Drive folder, Slack
+channel, Jira project and the like the value must be the resource's id (not its name or title; label
+names and file types are the exceptions), and a value that is not shaped like an id is refused with
+a message saying what to enter; adding verbs to a scope that
 already has a rule extends that rule instead of creating a second one. **Edit verbs** switches
 verbs on or off for an existing rule: a verb you add covers all of its tools, a verb you remove
 stops covering its tools, and a verb the rule already had keeps exactly the tools it had. Rules

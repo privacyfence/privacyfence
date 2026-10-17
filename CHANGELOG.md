@@ -53,6 +53,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Export and import your personal settings.** From Settings > Auto-accept you can export your personal settings (always-allow rules and step-up level) to a file and import them on another install, to move from a desktop install to an organization server or back. Import previews every rule, only adds, and asks for your passkey when step-up applies.
 - **Show IDs or names on Auto-accept and Scoped tokens.** A "Show IDs" toggle on both pages switches a rule's folders, projects, channels and so on between their names and their raw IDs. An ID that a live lookup could not find, most likely because it was deleted, is shown in red. Drive items now name their origin: `My Drive: Reports` or `<Shared Drive name>: Reports`.
 
+### Fixed
+
+- **Adding an auto-accept rule checks the value.** A Drive folder, Slack channel, Jira project, calendar, task list, ... given by its name or title, or by something that is not an id, is now refused with a message saying which id to enter, in Settings, in organization Settings and through `privacyfence_propose_policy_change`, instead of being saved as a rule that never matches.
+
 ## [6.3.0] — 2026-10-16
 
 ### Added

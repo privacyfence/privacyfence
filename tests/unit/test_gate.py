@@ -1159,6 +1159,19 @@ class TestProposePolicyChange:
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
 
+    async def test_a_title_instead_of_an_id_is_refused_before_any_popup(self, audit_dir, monkeypatch):
+        shown = []
+        monkeypatch.setattr(
+            gate, "show_rule_confirmation_popup", lambda *a, **k: (shown.append(a) or True),
+        )
+        with pytest.raises(ValueError, match="not a Slack ID"):
+            await gate.propose_policy_change(
+                operation="add", reason="x", group="slack.channel", value="general", verbs=["read"],
+            )
+        assert shown == []
+        cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8"))
+        assert cfg["auto_accept"] == {}
+
     async def test_the_bridge_add_returns_the_row_id(self, audit_dir):
         result = await gate.propose_policy_change(
             operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],

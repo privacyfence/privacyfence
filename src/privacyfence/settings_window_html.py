@@ -1979,6 +1979,9 @@ _JS = r"""
   }
 
   window.__pfRender = render;
+  window.__pfShowError = function (message) {
+    if (pyState) { pyState.error = message; render(pyState); }
+  };
   window.__pfDebugHook = { ui: ui, render: render, TELEGRAM_STEP_COPY: TELEGRAM_STEP_COPY, onClick: null, onKeydown: null };
 
   // -------------------------------------------------------------------- //
