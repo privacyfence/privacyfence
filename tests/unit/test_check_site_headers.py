@@ -43,6 +43,15 @@ def test_matching_headers_pass(capsys):
     assert "Site security headers match." in capsys.readouterr().out
 
 
+def test_proxy_environment_variables_are_ignored(monkeypatch):
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    with _server() as url:
+        assert all(line.startswith("[ ok ]") for line in check(url))
+
+
 def test_a_missing_header_is_reported(capsys):
     def drop(path, headers):
         headers.pop("Referrer-Policy")
