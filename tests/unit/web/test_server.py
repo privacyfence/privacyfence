@@ -2040,6 +2040,18 @@ class TestScopedTokenWiring:
         self._store(tmp_path, monkeypatch)
         assert _status(mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok").count("No such token.") == 1
 
+    def test_a_row_that_compiles_to_no_rule_is_titled_by_its_scope_and_has_no_value_to_toggle(self):
+        from privacyfence.web.server import _scoped_rule_entry
+
+        row = scope_rows.ScopeRow(
+            id="r-empty", scope="drive.folder", value=["f"], verbs=frozenset(), operations=frozenset(),
+        )
+        entry = _scoped_rule_entry(row, "f", [])
+
+        assert entry["title"] == "drive.folder"
+        assert entry["title_parts"] is None
+        assert entry["value_items"] == []
+
     def test_page_data_names_rules_by_their_cached_resource_names(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept
         from privacyfence.policy.engine import PolicyRule
@@ -2062,6 +2074,9 @@ class TestScopedTokenWiring:
             def cached_name(self, rt, resource_id):
                 return "Salesforce mirror" if resource_id == "8CAN8gKdxY7z" else None
 
+            def is_invalid(self, rt, resource_id):
+                return False
+
         monkeypatch.setattr(server_module, "get_resolver", lambda: _Names())
         [entry] = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()["rules"]
 
@@ -2071,6 +2086,11 @@ class TestScopedTokenWiring:
         assert entry["verbs"] == ["read", "update"]
         assert "Salesforce mirror" in entry["sentence"]
         assert "grist_update_csv" in entry["tools"]
+        assert entry["title_parts"] == ["Grist — document ", ""]
+        assert entry["sentence_parts"] == ["Grist - document ", ": allow read, update"]
+        assert entry["value_items"] == [
+            {"id": "8CAN8gKdxY7z", "short_id": "8CAN8gKdxY7z", "name": "Salesforce mirror", "status": "resolved"},
+        ]
 
     def test_page_data_lists_the_tools_that_need_no_rule(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept

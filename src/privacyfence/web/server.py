@@ -106,7 +106,9 @@ from ..policy.registry import TOOL_REGISTRY
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
 from ..resource_names import get_resolver
-from ..settings_controller import SettingsController, cached_row_value, set_main_dispatcher
+from ..settings_controller import (
+    SettingsController, cached_row_value, row_value_items, sentence_parts, set_main_dispatcher,
+)
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from ..web_push import PushNotifier, PushSubscriptionStore
@@ -287,20 +289,33 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     )
 
 
-def _scoped_rule_entry(row: scope_rows.ScopeRow, value_display: str) -> dict[str, Any]:
+def _scoped_rule_entry(
+    row: scope_rows.ScopeRow, value_display: str, value_items: list[dict[str, Any]],
+) -> dict[str, Any]:
     """One row as the scoped token form shows it: ``title`` says which resource it covers,
-    ``verbs`` what it allows there, ``tools`` which tools those verbs govern."""
+    ``verbs`` what it allows there, ``tools`` which tools those verbs govern. ``title_parts`` and
+    ``sentence_parts`` are the same texts split around the value and ``value_items`` the value
+    itself, so the page can show it by id or by name (``row_value_items``)."""
     compiled = scope_rows.compile_row(row)
     connectors = sorted({policy_propose.connector_of_operation(op) for op in row.operations})
     connector = describe.connector_label(connectors[0]) if connectors else ""
     scope_type = describe.scope_type_of(compiled[0]) if compiled else ""
-    if scope_type:
-        subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip()
-    else:
-        subject = compiled[0].predicate if compiled else (row.predicate or row.scope or "")
+
+    def title(display: str) -> str:
+        if scope_type:
+            subject = f"{describe.scope_type_label(scope_type)} {display}".strip()
+        else:
+            subject = compiled[0].predicate if compiled else (row.predicate or row.scope or "")
+        return f"{connector} — {subject}" if connector else subject
+
+    marker = "\x00"
+    before, found, after = title(marker).partition(marker) if scope_type and row.value else ("", "", "")
     return {
         "id": row.id,
-        "title": f"{connector} — {subject}" if connector else subject,
+        "title": title(value_display),
+        "title_parts": [before, after] if found else None,
+        "sentence_parts": sentence_parts(row),
+        "value_items": value_items,
         "verbs": [verb.value for verb in sorted(row.verbs, key=policy_propose.verb_sort_key)],
         "sentence": describe.row_sentence(row, value_display=value_display or None),
         "tools": sorted({tool for rule in compiled for tool in describe.covered_tools(rule)}),
@@ -323,7 +338,10 @@ def _token_rule_entry(
 ) -> dict[str, Any]:
     if rule_id not in rules:
         return {"id": rule_id, "missing": True}
-    entry = {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
+    entry = {
+        "id": rule_id, "title": rules[rule_id]["title"],
+        **{key: rules[rule_id][key] for key in ("sentence", "sentence_parts", "value_items")},
+    }
     limit = token.rule_limits.get(rule_id)
     # A token's limit is narrower than the row when some of the row's pairs are not in it.
     if limit is not None and scope_rows.pairs_of(rows.values(), rule_id) - limit:
@@ -349,7 +367,10 @@ def scoped_token_page_data(
     with principal_scope(principal):
         resolver = get_resolver()
         rows = {row.id: row for row in auto_accept.get_policy_rows()}
-        rules = {row.id: _scoped_rule_entry(row, cached_row_value(row, resolver)) for row in rows.values()}
+        rules = {
+            row.id: _scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver))
+            for row in rows.values()
+        }
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
         connector = name.split("_", 1)[0]

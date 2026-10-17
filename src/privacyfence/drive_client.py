@@ -2442,6 +2442,14 @@ class DriveClient:
         logger.info("add_comment: file_id=%s comment_id=%s", file_id, result.get("id"))
         return {"file_id": file_id, "comment_id": result.get("id", ""), "content": comment}
 
+    def get_shared_drive_name(self, drive_id: str) -> str:
+        """The name of one Shared Drive; raises ``DriveClientError`` when it cannot be read."""
+        service = self._get_service()
+        try:
+            return service.drives().get(driveId=drive_id, fields="name").execute().get("name", "")
+        except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+            raise DriveClientError(f"get_shared_drive_name({drive_id}) failed: {exc}") from exc
+
     def list_shared_drives(self, max_results: int = 50) -> list[dict]:
         """Return a list of Shared Drives the authorized user can access."""
         max_results = self._clamp_max_results(max_results)

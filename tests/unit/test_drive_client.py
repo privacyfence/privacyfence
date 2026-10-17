@@ -916,6 +916,18 @@ class TestListPaging:
             page["nextPageToken"] = token
         return page
 
+    def test_get_shared_drive_name(self):
+        service = MagicMock()
+        service.drives.return_value.get.return_value.execute.return_value = {"name": "Finance"}
+        assert make_client(service).get_shared_drive_name("D1") == "Finance"
+        assert service.drives.return_value.get.call_args.kwargs == {"driveId": "D1", "fields": "name"}
+
+    def test_get_shared_drive_name_failure_is_a_drive_client_error(self):
+        service = MagicMock()
+        service.drives.return_value.get.return_value.execute.side_effect = RuntimeError("404")
+        with pytest.raises(drive_client_module.DriveClientError):
+            make_client(service).get_shared_drive_name("D1")
+
     def test_shared_drives_two_pages_combined(self):
         service = MagicMock()
         service.drives.return_value.list.return_value.execute.side_effect = [

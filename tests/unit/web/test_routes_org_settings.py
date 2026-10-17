@@ -413,7 +413,7 @@ class TestRuleValueNames:
         client = _client(app)
         _signed_in(client, sessions, ALICE)
         body = client.get("/settings").text
-        assert '"value": "Q3 Reports"' in body
+        assert '"value": "My Drive: Q3 Reports"' in body
         assert drive.calls == [self.FOLDER_ID]
 
     def test_a_cached_name_is_not_looked_up_again(self, tmp_path, monkeypatch):
@@ -423,7 +423,7 @@ class TestRuleValueNames:
         client = _client(app)
         _signed_in(client, sessions, ALICE)
         client.get("/settings")
-        assert '"value": "Q3 Reports"' in client.get("/settings").text
+        assert '"value": "My Drive: Q3 Reports"' in client.get("/settings").text
         assert drive.calls == [self.FOLDER_ID]
 
     def test_names_resolve_only_through_the_viewing_principals_own_connectors(self, tmp_path, monkeypatch):
@@ -448,7 +448,7 @@ class TestRuleValueNames:
             client, "add_policy_rule", {"group": "drive.folder", "value": self.FOLDER_ID, "verbs": ["update"]}, csrf,
         )
         assert r.status_code == 200
-        assert [row["value"] for row in r.json()["auto_accept"]["rules"]] == ["Q3 Reports"]
+        assert [row["value"] for row in r.json()["auto_accept"]["rules"]] == ["My Drive: Q3 Reports"]
 
     def test_a_slow_lookup_renders_short_ids_then_names_on_the_next_load(self, tmp_path, monkeypatch):
         self._seed_folder_rule(tmp_path, monkeypatch, "alice")
@@ -475,10 +475,10 @@ class TestRuleValueNames:
                 break
             time.sleep(0.01)
         for _ in range(200):
-            if '"value": "Q3 Reports"' in client.get("/settings").text:
+            if '"value": "My Drive: Q3 Reports"' in client.get("/settings").text:
                 break
             time.sleep(0.01)
-        assert '"value": "Q3 Reports"' in client.get("/settings").text
+        assert '"value": "My Drive: Q3 Reports"' in client.get("/settings").text
         assert drive.calls == [self.FOLDER_ID]
 
     def test_without_a_registry_an_uncached_id_is_shortened(self, tmp_path, monkeypatch):

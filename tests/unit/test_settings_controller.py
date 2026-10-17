@@ -2516,11 +2516,42 @@ class TestScopeRowState:
             "r-unrelated": {"count": 9, "last_matched": "2026-07-09T12:00:00+00:00"},
         }
         rows = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
-        state = sc._auto_accept_state_from_rows(rows, usage, resolve_value=lambda row: "v")
+        state = sc._auto_accept_state_from_rows(
+            rows, usage, resolve_value=lambda row: "v", resolver=sc.get_resolver(),
+        )
         (row,) = state["rules"]
         assert row["match_count"] == 5
         assert row["never_matched"] is False
         assert row["last_matched"] == sc._relative_time("2026-07-08T12:00:00+00:00")
+
+    def test_row_carries_its_values_and_the_sentence_around_them(self, controller):
+        (row,) = controller._auto_accept_state(self._v2_cfg())["rules"]
+        assert row["value_items"] == [
+            {"id": i, "short_id": sc._short_id(i), "name": None, "status": "pending"} for i in row["value_ids"]
+        ]
+        before, after = row["sentence_parts"]
+        assert before + ", ".join(row["value_ids"]) + after != ""
+        assert before + row["value"] + after == row["sentence"]
+
+    def test_an_id_a_live_lookup_could_not_find_is_invalid(self, controller):
+        (scope_row,) = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
+        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
+        resolver = sc.get_resolver()
+        gone = scope_row.value[0]
+        resolver.resolve(rt, gone, type("C", (), {"get_file_metadata": lambda self, i: (_ for _ in ()).throw(KeyError(i))})())
+        (item, *_) = sc.row_value_items(scope_row, resolver)
+        assert item["id"] == gone and item["status"] == "invalid"
+
+    def test_a_row_that_compiles_to_nothing_lists_its_values_as_plain(self):
+        row = sc.policy_scope_rows.ScopeRow(
+            id="r-empty", scope="drive.folder", value=["a", "b"], verbs=frozenset(), operations=frozenset(),
+        )
+        assert [(i["id"], i["status"]) for i in sc.row_value_items(row, sc.get_resolver())] == [
+            ("a", "plain"), ("b", "plain"),
+        ]
+        assert sc.sentence_parts(sc.policy_scope_rows.ScopeRow(
+            id="r-none", scope="drive.folder", value=None, verbs=frozenset(), operations=frozenset(),
+        )) is None
 
 
 class TestResolvedRuleValue:

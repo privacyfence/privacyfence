@@ -41,10 +41,21 @@ def _find_by(items: Any, attr: str, target: str) -> str | None:
 
 
 def _resolve_drive_file(client: Any, resource_id: str) -> str | None:
+    """``My Drive: name`` or ``<Shared Drive name>: name`` -- a file or folder's origin comes first,
+    as the same name can exist in several drives. A Shared Drive's own root shows just the drive's
+    name."""
     try:
-        return client.get_file_metadata(resource_id).name or None
+        meta = client.get_file_metadata(resource_id)
     except Exception:
         return None
+    name = meta.name
+    if not name:
+        return None
+    drive_id = getattr(meta, "drive_id", "")
+    if not drive_id:
+        return f"My Drive: {name}"
+    drive_name = _try_lookup(lambda: client.get_shared_drive_name(drive_id)) or "Shared Drive"
+    return drive_name if resource_id == drive_id else f"{drive_name}: {name}"
 
 
 def _resolve_task_list(client: Any, resource_id: str) -> str | None:

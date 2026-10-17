@@ -482,7 +482,10 @@ def _rule_usage_map() -> dict[str, Any]:
     return AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
 
 
-def _rule_row(row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolved_value: str) -> dict[str, Any]:
+def _rule_row(
+    row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolved_value: str,
+    value_items: list[dict[str, Any]],
+) -> dict[str, Any]:
     """One stored scope row as the Auto-accept page's row. ``usage`` maps ids to rule usage; the
     row's count is summed over its own id and every ``former_ids`` entry (the v2 rules merged into
     it), and ``last_matched`` is the latest of them."""
@@ -497,6 +500,10 @@ def _rule_row(row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolve
     return {
         "id": row.id,
         "sentence": policy_describe.row_sentence(row, value_display=resolved_value),
+        # The sentence around the value and the value itself, so the page can show the value by id or
+        # by name and color an invalid one; "sentence" above stays the by-name rendering.
+        "sentence_parts": sentence_parts(row),
+        "value_items": value_items,
         "connector": connector,
         "connector_label": policy_describe.connector_label(connector) if connector else "",
         "scope": row.scope,
@@ -524,7 +531,7 @@ def _rule_row(row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolve
 
 def _auto_accept_state_from_rows(
     rows: list[policy_scope_rows.ScopeRow], usage_by_rule_id: dict[str, Any], *,
-    resolve_value: Callable[[policy_scope_rows.ScopeRow], str],
+    resolve_value: Callable[[policy_scope_rows.ScopeRow], str], resolver: ResourceNameResolver,
 ) -> dict[str, Any]:
     """The Auto-accept page's state, factored out of ``SettingsController.
     _auto_accept_state`` (ADR 0032) so web/routes_settings.py's own org-mode
@@ -534,7 +541,10 @@ def _auto_accept_state_from_rows(
     with a snapshot push, org's ``web/routes_settings.py`` ``_await_rule_names`` before the
     render, since org mode has no live push."""
     catalogue = _policy_scope_catalogue()
-    rule_rows = [_rule_row(row, usage_by_rule_id, resolved_value=resolve_value(row)) for row in rows]
+    rule_rows = [
+        _rule_row(row, usage_by_rule_id, resolved_value=resolve_value(row), value_items=row_value_items(row, resolver))
+        for row in rows
+    ]
     rule_rows.sort(key=lambda row: row["sentence"])
     connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
                          | {entry["connector"] for entry in catalogue})
@@ -559,6 +569,43 @@ def cached_rule_value(rule: PolicyRule, resolver: ResourceNameResolver) -> str:
     if rt is None:
         return ", ".join(str_values)
     return ", ".join(resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
+
+
+def row_value_items(row: policy_scope_rows.ScopeRow, resolver: ResourceNameResolver) -> list[dict[str, Any]]:
+    """A row's values as the pages' ID/name toggle needs them: one ``{id, short_id, name, status}``
+    per value. ``status`` is ``plain`` for a value that is not an opaque resource id (shown
+    as-is), ``resolved`` with a ``name``, ``invalid`` when a live lookup found no such resource (the
+    last-known ``name``, if any, is kept), or ``pending`` while no lookup has finished. Reads the
+    cache only -- no network call."""
+    compiled = policy_scope_rows.compile_row(row)
+    if compiled:
+        rt, str_values = rule_resource_ids(compiled[0])
+    else:
+        rt = None
+        values = row.value if isinstance(row.value, list) else ([row.value] if row.value else [])
+        str_values = [str(v) for v in values]
+    items = []
+    for value in str_values:
+        name = resolver.cached_name(rt, value) if rt is not None else None
+        if rt is None:
+            status = "plain"
+        elif resolver.is_invalid(rt, value):
+            status = "invalid"
+        else:
+            status = "resolved" if name else "pending"
+        items.append({"id": value, "short_id": _short_id(value) if rt is not None else value,
+                      "name": name, "status": status})
+    return items
+
+
+def sentence_parts(row: policy_scope_rows.ScopeRow) -> list[str] | None:
+    """The row's sentence split around its value, ``[before, after]``, so a page can put the value
+    -- by id or by name, colored by its status -- in between. ``None`` when the row has no value."""
+    if not row.value:
+        return None
+    marker = "\x00"
+    before, found, after = policy_describe.row_sentence(row, value_display=marker).partition(marker)
+    return [before, after] if found else None
 
 
 def cached_row_value(row: policy_scope_rows.ScopeRow, resolver: ResourceNameResolver) -> str:
@@ -1875,12 +1922,14 @@ class SettingsController:
         resource_names.py's TTL."""
         if client is None:
             return
-        missing = [rid for rid in resource_ids if rid and self._resolver.cached_name(rt, rid) is None]
+        missing = [rid for rid in resource_ids if rid and self._resolver.needs_resolve(rt, rid)]
         if not missing:
             return
 
         def work() -> bool:
-            return any(self._resolver.resolve(rt, resource_id, client) for resource_id in missing)
+            for resource_id in missing:
+                self._resolver.resolve(rt, resource_id, client)
+            return True  # a not-found outcome changes what the page shows too
 
         def done(ok: bool, resolved_something: Any) -> None:
             if ok and resolved_something:
@@ -2139,7 +2188,9 @@ class SettingsController:
         decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
         different principal's logger by the time this renders (org mode)."""
         rows = policy_scope_rows.rows_from_config(cfg)
-        return _auto_accept_state_from_rows(rows, _rule_usage_map(), resolve_value=self._resolved_rule_value)
+        return _auto_accept_state_from_rows(
+            rows, _rule_usage_map(), resolve_value=self._resolved_rule_value, resolver=self._resolver,
+        )
 
     def _resolved_rule_value(self, row: policy_scope_rows.ScopeRow) -> str:
         """A row's own value, as a comma-separated display string, resolving each id through the
