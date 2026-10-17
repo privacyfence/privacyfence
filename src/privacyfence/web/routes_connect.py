@@ -63,7 +63,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
+from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
 from ..calendar_client import SCOPES as _CALENDAR_SCOPES
@@ -172,6 +172,8 @@ def _is_connected(principal: Principal, service: str, org_config: dict[str, Any]
 
 
 def _is_configured(org_config: dict[str, Any], service: str) -> bool:
+    if not org_mode.connector_enabled_by_org(org_config, service):
+        return False
     if service == "telegram":
         return telegram_app_credentials() is not None
     if service == "peek":
@@ -556,7 +558,9 @@ def build_routes(
 
         creds = telegram_app_credentials()
         phone = str(form.get("phone", "")).strip()
-        if creds is None:
+        if not org_mode.connector_enabled_by_org(org_config, "telegram"):
+            telegram_states.set(principal.id, _TelegramState(error="Telegram is not set up by your organization."))
+        elif creds is None:
             telegram_states.set(principal.id, _TelegramState(step="phone", error="Telegram isn't available on this install."))
         elif not phone:
             telegram_states.set(principal.id, _TelegramState(step="phone", error="Enter a phone number."))
@@ -974,11 +978,19 @@ def _render_connect_page(
     flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
     peek_state: _PeekState | None = None,
 ) -> str:
-    google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"))
-    other_rows = "".join(_service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence"))
-    telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf)
-    peek_row = _peek_box_html(principal, org_config, peek_state or _PeekState(), csrf)
-    grist_row = _grist_box_html(principal, org_config, csrf, grist_error)
+    def offered(service: str) -> bool:  # ADR 0196: a service the org config doesn't enable is not listed
+        return org_mode.connector_enabled_by_org(org_config, service)
+
+    google_rows = "".join(
+        _service_row_html(principal, org_config, s)
+        for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script") if offered(s)
+    )
+    other_rows = "".join(
+        _service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence") if offered(s)
+    )
+    telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf) if offered("telegram") else ""
+    peek_row = _peek_box_html(principal, org_config, peek_state or _PeekState(), csrf) if offered("peek") else ""
+    grist_row = _grist_box_html(principal, org_config, csrf, grist_error) if offered("grist") else ""
     who = principal.email or principal.display_name or principal.id
 
     body = (

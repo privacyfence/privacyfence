@@ -1614,6 +1614,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     # still per-user.
     if enabled("telegram"):
         try:
+            if not org_mode.connector_enabled_by_org(org_config, "telegram"):
+                raise TelegramClientError("Telegram organization config not installed")
             creds = telegram_app_credentials()
             if not creds:
                 raise TelegramClientError("Telegram app credentials not available in this build")
@@ -1646,6 +1648,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     # server it was issued for (ADR 0152).
     if enabled("peek"):
         try:
+            if not org_mode.connector_enabled_by_org(org_config, "peek"):
+                raise PeekClientError("Peek organization config not installed")
             pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=download_mode == "org")
             record = load_peek_token(_resolve_path(TOKEN_FILES["peek"]))
             client = PeekClient(peek_resolve_server(pinned, record), record["token"])
@@ -1659,6 +1663,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     # Grist
     if enabled("grist"):
         try:
+            if not org_mode.connector_enabled_by_org(org_config, "grist"):
+                raise GristClientError("Grist organization config not installed")
             grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=download_mode == "org")
             token_path = _resolve_path(TOKEN_FILES["grist"])
             server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)

@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Connectors are enabled by the organization config, all of them.** Telegram, Peek and Grist now need a section in the organization config too (`build_org_bundle.py --enable-telegram`, `--enable-peek`, `--enable-grist`; `--peek-base-url` and `--grist-server-url` imply theirs). Settings > Connectors and the organization sign-in page list only the connectors it enables and hide the rest. An install without a bundle lists none until an administrator adds the sections ([ADR 0196](docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
+
 ### Added
 
 - **Export and import your personal settings.** From Settings > Auto-accept you can export your personal settings (always-allow rules and step-up level) to a file and import them on another install, to move from a desktop install to an organization server or back. Import previews every rule, only adds, and asks for your passkey when step-up applies.

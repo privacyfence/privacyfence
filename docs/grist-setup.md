@@ -70,7 +70,10 @@ python3 scripts/build_org_bundle.py \
 ```
 
 `--merge` adds Grist to an existing `org_config.json`. A bundle with only `--grist-server-url`
-pins the server for API keys; organization mode needs at least that. See
+pins the server for API keys; organization mode needs at least that. Without a `grist` section, in
+either mode, Grist is not listed at all; `--enable-grist` writes the bare switch for local mode when
+you do not want to pin a server
+([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). See
 [org-mode-setup-guide.md](org-mode-setup-guide.md) for signing and the server flags, and
 [connecting-a-service.md](connecting-a-service.md) for the shared connect flow.
 

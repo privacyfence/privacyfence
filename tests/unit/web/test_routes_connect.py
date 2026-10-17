@@ -33,6 +33,7 @@ _ORG_CONFIG = {
     "slack": {"client_id": "scid", "client_secret": "scsecret"},
     "salesforce": {"consumer_key": "sfkey", "consumer_secret": "sfsecret"},
     "atlassian": {"client_id": "acid", "client_secret": "acsecret"},
+    "telegram": {"enabled": True},
 }
 
 
@@ -89,8 +90,16 @@ class TestConnectPage:
             assert label in r.text
         assert "Connect" in r.text  # nothing authorized yet
 
-    def test_unconfigured_service_shows_not_set_up_badge(self):
-        app, sessions, _registry = _app(org_config={})
+    def test_service_without_a_section_is_not_listed(self):
+        app, sessions, _registry = _app(org_config={"slack": _ORG_CONFIG["slack"]})
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id})
+        assert 'class="pf-service-chip">Slack<' in r.text
+        for label in ("Gmail", "Jira", "Telegram", "Peek", "Grist"):
+            assert f'class="pf-service-chip">{label}<' not in r.text
+
+    def test_enabled_service_that_cannot_be_offered_shows_not_set_up_badge(self):
+        app, sessions, _registry = _app(org_config={"telegram": {"enabled": True}})
         session_id, _principal = _signed_in(sessions)
         r = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id})
         assert "Not set up by your organization" in r.text
@@ -159,14 +168,14 @@ class TestConnectPageLook:
         assert '<span class="pf-service-chip">Gmail</span><span class="badge">Not connected</span>' in html
         assert 'class="button primary" href="/oauth/start/gmail">Connect<' in html
         assert 'class="button secondary" href="/oauth/start/slack">Reconnect<' in html
-        unconfigured = self._page(org_config={})
+        unconfigured = self._page(org_config={"telegram": {"enabled": True}})
         assert '<span class="badge badge-dashed">Not set up by your organization</span>' in unconfigured
 
     def test_rows_are_cards_and_nothing_is_styled_inline(self):
         html = self._page()
-        # Ten OAuth services, Telegram (no app credentials on this install), Peek (no bundle section)
-        # and Grist.
-        assert html.count('<li class="service card cluster">') == 13
+        # Ten OAuth services and Telegram (enabled, but no app credentials on this install); Peek and
+        # Grist have no section in this config, so they are not listed.
+        assert html.count('<li class="service card cluster">') == 11
         body = html.split('<div class="pf-connect stack">', 1)[1]
         assert "style=" not in body
 
@@ -535,6 +544,22 @@ class TestOAuthCallback:
 # Telegram: /connect/telegram/*
 # ---------------------------------------------------------------------------- #
 
+class TestTelegramNotEnabled:
+    def test_start_is_refused_without_the_org_section(self, monkeypatch):
+        monkeypatch.setattr(rc, "telegram_app_credentials", lambda: (123, "apihash"))
+        sent = []
+        monkeypatch.setattr(rc.telegram_auth, "send_code", lambda *a: sent.append(a))
+        app, sessions, _registry = _app(org_config={"slack": _ORG_CONFIG["slack"]})
+        session_id, _principal = _signed_in(sessions)
+        client = _client(app)
+        r = client.post(
+            "/connect/telegram/start", data={"csrf": session_id, "phone": "+15550100"},
+            cookies={org_session.SESSION_COOKIE: session_id},
+        )
+        assert r.status_code == 303
+        assert sent == []
+
+
 class TestTelegramFlow:
     @pytest.mark.parametrize("step", ["start", "code", "2fa", "cancel"])
     def test_a_post_after_the_session_ended_lands_on_the_signed_out_page(self, step):
@@ -660,10 +685,10 @@ class TestPeekBox:
     def _peek_row(self, html: str) -> str:
         return html.split('<li class="service peek card stack">', 1)[1].split("</li>", 1)[0]
 
-    def test_no_section_is_a_not_set_up_row(self):
+    def test_no_section_is_not_listed(self):
         principal = Principal(id="alice", email="alice@example.com")
         html = self._page(principal, _ORG_CONFIG)
-        assert '<span class="pf-service-chip">Peek</span><span class="badge badge-dashed">' in html
+        assert 'class="pf-service-chip">Peek<' not in html
         assert "service peek" not in html
 
     def test_section_without_a_token_is_not_connected(self):
@@ -747,7 +772,7 @@ class TestPeekFlow:
         client = _client(app)
         self._post(client, session_id, "start")
         assert called == []
-        assert "Not set up by your organization" in self._page(client, session_id)
+        assert 'class="pf-service-chip">Peek<' not in self._page(client, session_id)
 
     def test_start_shows_the_code_and_the_open_link(self, monkeypatch):
         app, sessions, _registry = _app(org_config=_PEEK_ORG)
@@ -879,8 +904,12 @@ def _grist_box(html):
 
 
 class TestGristBox:
-    def test_without_a_section_it_is_not_set_up(self):
-        box = _grist_box(_grist_page(None))
+    def test_without_a_section_it_is_not_listed(self):
+        page = _grist_page(None)
+        assert 'class="pf-service-chip">Grist<' not in page
+
+    def test_a_section_the_bundle_cannot_use_is_a_not_set_up_row(self):
+        box = _grist_box(_grist_page({"client_id": "x"}))
         assert "Not set up by your organization" in box
         assert "/oauth/start/grist" not in box
 
@@ -1041,7 +1070,8 @@ class TestGristApiKey:
         monkeypatch.setattr(rc.GristClient, "check_connection", lambda self: pytest.fail("must not be called"))
         r = self._post(client, session_id, api_key=self._KEY)
         assert r.status_code == 303 and r.headers["location"] == "/connect"
-        assert "Grist is not set up by your organization." in self._page(client, session_id)
+        if section:  # the row is listed, so the error shows under it; without a section Grist isn't listed
+            assert "Grist is not set up by your organization." in self._page(client, session_id)
         assert not self._token_file(principal).exists()
 
     def test_an_oauth_app_in_the_bundle_refuses_the_key(self, monkeypatch):

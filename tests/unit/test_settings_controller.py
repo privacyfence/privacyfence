@@ -58,12 +58,21 @@ def _drain_run_async(recorded) -> None:
         func(*args, **kwargs)
 
 
+# A connector is listed and usable only when the org config carries its section (ADR 0196); the
+# default fixture enables them all so tests of one connector don't each have to say so.
+ORG_CONFIG_ENABLING_EVERY_CONNECTOR = {
+    "google": {"client_id": "g"}, "slack": {"client_id": "s"}, "salesforce": {"consumer_key": "k"},
+    "atlassian": {"client_id": "a"}, "telegram": {"enabled": True}, "grist": {"enabled": True},
+    "peek": {"enabled": True},
+}
+
+
 @pytest.fixture
 def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "resource_name_cache.json")
     monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
     monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
-    monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+    monkeypatch.setattr(daemon_main, "load_org_config", lambda: dict(ORG_CONFIG_ENABLING_EVERY_CONNECTOR))
 
     org_dir_path = tmp_path / "org"
     org_dir_path.mkdir()
@@ -2734,12 +2743,43 @@ class TestSnapshotStructure:
         assert row["has_org"] is True
         assert row["auth_label"] == "Authenticate…"
 
-    def test_peek_row_needs_no_bundle_in_local_mode(self, controller, monkeypatch):
-        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+    def test_peek_row_needs_only_the_bare_section_in_local_mode(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"peek": {"enabled": True}})
         row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "peek")
         assert row["label"] == "Peek"
         assert row["has_org"] is True
         assert row["authed"] is False
+
+    def test_only_connectors_the_org_config_enables_are_listed(self, controller, monkeypatch):
+        monkeypatch.setattr(
+            controller, "_org_config_or_empty",
+            lambda: {"slack": {"client_id": "s"}, "telegram": {"enabled": True}, "atlassian": {}},
+        )
+        assert [c["key"] for c in controller.snapshot()["connectors"]] == ["slack", "telegram"]
+
+    def test_no_org_config_lists_no_connectors(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        assert controller.snapshot()["connectors"] == []
+
+    def test_status_still_reports_connectors_the_org_config_does_not_enable(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        controller._connector_failures = {"telegram": "no_org_config"}
+        rows = {r["name"]: r for r in controller.status_connectors()}
+        assert set(rows) == set(sc.ALL_CONNECTORS)
+        assert rows["telegram"]["blocked_by"] == "no_org_config"
+
+    @pytest.mark.parametrize("name", ["telegram", "peek", "grist", "gmail", "slack"])
+    def test_a_connector_the_org_config_does_not_enable_cannot_be_signed_in(self, controller, monkeypatch, name):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda *a: calls.append(a))
+        monkeypatch.setattr(sc, "telegram_app_credentials", lambda: ("1", "h"))
+        controller.authenticate_connector(name)
+        controller.telegram_start_auth("+15550100")
+        controller.peek_start_login("https://peek.example.com")
+        controller.grist_connect("key", "https://docs.getgrist.com")
+        assert calls == []
+        assert "isn't enabled in your organization config" in controller.error
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()

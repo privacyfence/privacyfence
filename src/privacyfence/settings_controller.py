@@ -121,18 +121,11 @@ _CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script", "ass
 def connector_label(cname: str) -> str:
     return _CONNECTOR_LABEL_OVERRIDES.get(cname, cname.capitalize())
 
-# Which section of the organization config bundle each connector depends on.
-# Jira and Confluence share one Atlassian OAuth grant. Telegram is not part
-# of the org bundle -- its app credentials are baked into the build (see
-# app_credentials.py) and checked separately.
-ORG_CONFIG_SERVICE: dict[str, str] = {
-    "gmail": "google", "drive": "google", "contacts": "google",
-    "calendar": "google", "tasks": "google", "apps_script": "google",
-    "slack": "slack",
-    "jira": "atlassian", "confluence": "atlassian", "assets": "atlassian",
-    "salesforce": "salesforce",
-}
-ORG_BUNDLE_SERVICES: list[str] = ["google", "slack", "salesforce", "atlassian"]
+# Which section of the organization config bundle each connector depends on (ADR 0196). Jira and
+# Confluence share one Atlassian OAuth grant. A connector whose section is absent is neither shown
+# nor usable.
+ORG_CONFIG_SERVICE: dict[str, str] = org_mode.CONNECTOR_ORG_SECTION
+ORG_BUNDLE_SERVICES: list[str] = ["google", "slack", "salesforce", "atlassian", "telegram", "grist", "peek"]
 
 # Categories individually toggleable under the PII Detection Gate, on top of
 # its own master enabled switch. Keys match pii_detector._OPTIONAL_CATEGORIES
@@ -1281,6 +1274,8 @@ class SettingsController:
         called with connector == "telegram" from production JS. A stray
         call is a harmless no-op rather than an error."""
         org_config = self._org_config_or_empty()
+        if not self._org_allows(connector, org_config):
+            return self.snapshot()
         if connector in GOOGLE_CONNECTORS:
             self._authenticate_google(connector, org_config)
         elif connector == "slack":
@@ -1292,6 +1287,15 @@ class SettingsController:
         elif connector == "grist":
             self._authenticate_grist(org_config)
         return self.snapshot()
+
+    def _org_allows(self, connector: str, org_config: dict[str, Any] | None = None) -> bool:
+        """False, with ``self.error`` set, when the organization config does not enable ``connector``."""
+        if org_config is None:
+            org_config = self._org_config_or_empty()
+        if connector in ORG_CONFIG_SERVICE and org_mode.connector_enabled_by_org(org_config, connector):
+            return True
+        self.error = f"{connector_label(connector)} isn't enabled in your organization config."
+        return False
 
     def _authenticate_google(self, cname: str, org_config: dict[str, Any]) -> None:
         client_config = _google_client_config(org_config)
@@ -1475,6 +1479,8 @@ class SettingsController:
         return {"step": self._telegram_auth.get("step"), "error": self._telegram_auth.get("error", "")}
 
     def telegram_start_auth(self, phone: str) -> dict[str, Any]:
+        if not self._org_allows("telegram"):
+            return self.snapshot()
         creds = telegram_app_credentials()
         if not creds:
             self.error = "Telegram app credentials are missing from this build."
@@ -1613,6 +1619,8 @@ class SettingsController:
         }
 
     def peek_start_login(self, base_url: str = "") -> dict[str, Any]:
+        if not self._org_allows("peek"):
+            return self.snapshot()
         pinned, pinned_error = self._peek_pinned()
         if pinned_error:
             self._peek_auth = {"step": None, "error": pinned_error}
@@ -1728,6 +1736,8 @@ class SettingsController:
         }
 
     def grist_connect(self, api_key: str, server_url: str = "") -> dict[str, Any]:
+        if not self._org_allows("grist"):
+            return self.snapshot()
         if "grist" in self._busy_connectors:
             return self.snapshot()
         bundle, bundle_error = self._grist_bundle()
@@ -2047,7 +2057,7 @@ class SettingsController:
         return {
             "error": self.error,
             "general": self._general_state(cfg),
-            "connectors": self._connectors_state(cfg, org_config),
+            "connectors": self._connectors_state(cfg, org_config, visible_only=True),
             "telegram_auth": self._telegram_auth_state(),
             "peek_auth": self._peek_auth_state(),
             **self._grist_snapshot_state(org_config),
@@ -2120,7 +2130,12 @@ class SettingsController:
             **step_up_scope_fields(self._step_up, LOCAL_PRINCIPAL),
         }
 
-    def _connectors_state(self, cfg: dict[str, Any], org_config: dict[str, Any]) -> list[dict[str, Any]]:
+    def _connectors_state(
+        self, cfg: dict[str, Any], org_config: dict[str, Any], *, visible_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """One row per connector. ``visible_only`` drops those the organization config does not
+        enable -- what the Connectors page lists; ``privacyfence_status`` keeps them, with
+        ``blocked_by`` saying why."""
         connectors_cfg: dict[str, dict] = cfg.get("connectors", {}) or {}
         rows = []
         for cname in ALL_CONNECTORS:
@@ -2128,12 +2143,11 @@ class SettingsController:
             conn_cfg = connectors_cfg.get(cname, {})
             enabled = assets_enabled(cfg, org_config) if cname == "assets" else conn_cfg.get("enabled", True)
             busy = cname in self._busy_connectors
-            if cname == "telegram":
+            has_org = org_mode.connector_enabled_by_org(org_config, cname)
+            if visible_only and not has_org:
+                continue
+            if cname == "telegram" and has_org:
                 has_org = telegram_app_credentials() is not None
-            elif cname in ("grist", "peek"):
-                has_org = True  # an API key or token needs no bundle in local mode
-            else:
-                has_org = bool(org_config.get(ORG_CONFIG_SERVICE[cname]))
 
             rows.append({
                 "key": cname,

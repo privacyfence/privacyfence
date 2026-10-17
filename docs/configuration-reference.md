@@ -281,6 +281,9 @@ How the daemon treats the file:
 | `--atlassian-assets` | off | `atlassian.assets` | Request the Jira Assets scopes at Atlassian sign-in; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--atlassian-assets-workspace-id ID` | none | `atlassian.assets_workspace_id` | The site's Assets workspace id, the `workspaceId` at `https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace`; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--peek-base-url URL` | none | `peek.base_url` | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
+| `--enable-telegram` | off | `telegram.enabled` | Offer Telegram. Its app credentials ship in the build, so the section is only a switch. Without it Telegram is neither listed nor usable ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). |
+| `--enable-peek` | off | `peek.enabled` | Offer Peek without pinning a server (local mode). `--peek-base-url` implies it. |
+| `--enable-grist` | off | `grist.enabled` | Offer Grist with an API key and no pinned server (local mode). `--grist-server-url` implies it. |
 | `--grist-server-url URL` | none | `grist.server_url` | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |

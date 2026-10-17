@@ -506,10 +506,31 @@ class WebPushConfig:
         return WebPushConfig(enabled=enabled)
 
 
+# Which org_config.json section switches each connector on (ADR 0196). A connector with no
+# non-empty section is not offered at all, whatever else is in place: Google's six share one
+# section, Jira, Confluence and Jira Assets share Atlassian's. Telegram, Peek and Grist carry
+# no secret an administrator must supply, so their section can be the bare marker
+# ``{"enabled": true}``; Peek and Grist may add the server they are pinned to.
+CONNECTOR_ORG_SECTION: dict[str, str] = {
+    "gmail": "google", "drive": "google", "contacts": "google",
+    "calendar": "google", "tasks": "google", "apps_script": "google",
+    "slack": "slack",
+    "jira": "atlassian", "confluence": "atlassian", "assets": "atlassian",
+    "salesforce": "salesforce",
+    "telegram": "telegram", "grist": "grist", "peek": "peek",
+}
+
+
+def connector_enabled_by_org(org_config: dict[str, Any], connector: str) -> bool:
+    """True when ``org_config`` carries a non-empty section for ``connector``."""
+    return bool(org_config.get(CONNECTOR_ORG_SECTION[connector]))
+
+
 __all__ = [
     "AuditForwardingConfig",
     "AuditForwardingKind",
     "AuthzPolicyConfig",
+    "CONNECTOR_ORG_SECTION",
     "ConfigurationError",
     "DEFAULT_AUDIT_FORWARDING_KIND",
     "DEFAULT_INLINE_MAX_BYTES",
@@ -519,6 +540,7 @@ __all__ = [
     "DEFAULT_SYSLOG_PROTOCOL",
     "DownloadDeliveryConfig",
     "Mode",
+    "connector_enabled_by_org",
     "ServerConfig",
     "SyslogProtocol",
     "WebPushConfig",

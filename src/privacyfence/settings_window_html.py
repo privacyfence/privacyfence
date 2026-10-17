@@ -743,8 +743,8 @@ _JS = r"""
     html += '<div class="pf-row-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
       'real accounts (Gmail, Drive, Slack, and similar) -- it governs access to them, it does not provide them ' +
       'itself. Nothing is governed until at least one connector below is authenticated. If your IT team gave ' +
-      'you an organization config bundle, install it first from the General page; otherwise authenticate a ' +
-      'connector directly below, then go back to Claude.</div></div>';
+      'you an organization config bundle, install it first from the General page; only the connectors it ' +
+      'enables are listed. Authenticate one below, then go back to Claude.</div></div>';
     html += '<div class="pf-banner-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
       'data-dismiss-welcome="1">✕</div>';
     html += '</div></div>';
@@ -757,6 +757,11 @@ _JS = r"""
     html += '<div class="pf-page-subtitle">Authenticate a connector to let Claude access it, subject to approval and policy. ' +
       'Signing in opens a browser window on the machine running PrivacyFence -- not necessarily this device.</div>';
     html += renderWelcomeBanner(state);
+    if (!state.connectors.length) {
+      html += '<div class="card"><div class="pf-row-title">No connectors are enabled</div>' +
+        '<div class="pf-row-desc">Connectors appear here once your organization config enables them. ' +
+        'Install it from the General page.</div></div>';
+    }
     html += '<div class="pf-connector-list">';
     var gristSignin = state.grist_signin || 'unavailable';
     var gristAuth = state.grist_auth || { error: '' };
