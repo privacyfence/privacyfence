@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.4.0] — 2026-10-17
+
 ### Changed
 
 - **The Jira "if I'm the reporter / assignee" and Confluence "if I'm the author" rules match your Atlassian account id.** They no longer compare your email inside a display name, so nobody can make issues auto-readable by naming themselves after you, and the Confluence rule now works. Installs with Jira pick the id up on their next start; installs with only Confluence need to sign in to Atlassian once more. ([ADR 0199](docs/adr/0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md))
@@ -3363,7 +3365,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.4.0...HEAD
+[6.4.0]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...v6.3.0
 [6.2.0]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...v6.2.0
 [6.1.1]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...v6.1.1
