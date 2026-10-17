@@ -324,6 +324,7 @@ How the daemon treats the file:
 | `--audit-forwarding-http-bearer-token-env VAR` | none | `audit_forwarding.http.bearer_token_env` | Name of an environment variable the daemon reads a bearer token from when sending. The token itself is never in the bundle. |
 | `--generate-signing-key PATH` | | | Write a new Ed25519 private key to `PATH` (mode `0600`), print its public key, and exit without building a bundle. Keep the key; losing it means installs that pinned it cannot accept a new bundle until the pin is deleted by hand. |
 | `--sign-key PATH` | none | `signing_public_key`, `signature` | Sign the bundle. Required with `--mode org`; recommended otherwise. |
+| `--serial N` | current Unix time | `serial` | Serial signed into the bundle; needs `--sign-key`. Installs refuse a bundle whose serial is lower than the highest they have accepted. |
 
 The organization-only options (`--server-*`, `--idp-*`, `--authz-*`, `--step-up-*`,
 `--downloads-*`, `--agent-links`, `--web-push`, `--audit-forwarding-*`) are refused unless the bundle is in

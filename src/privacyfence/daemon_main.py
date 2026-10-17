@@ -465,6 +465,16 @@ def load_org_config() -> dict[str, Any]:
 
     trust = org_bundle_signing.verify_and_maybe_pin(data, org_dir())
     if not trust.ok:
+        if trust.remedy == "serial":
+            raise org_mode.ConfigurationError(
+                f"Organization config at {path} was refused ({trust.detail}) -- refusing to start. "
+                f"To deliberately go back to an older bundle, an administrator must delete "
+                f"{org_bundle_signing.pinned_serial_path(org_dir())} first."
+            )
+        if trust.remedy == "none":
+            raise org_mode.ConfigurationError(
+                f"Organization config at {path} was refused ({trust.detail}) -- refusing to start."
+            )
         raise org_mode.ConfigurationError(
             f"Organization config at {path} failed signing-key verification ({trust.detail}) -- "
             f"refusing to start. If a legitimate signing-key rotation is expected, an "
@@ -483,6 +493,7 @@ def load_org_config() -> dict[str, Any]:
             "requires a signed bundle (build one with scripts/build_org_bundle.py --sign-key ...; "
             "generate a signing key first with --generate-signing-key if you haven't yet)."
         )
+    org_bundle_signing.record_accepted_serial(trust, org_dir())
     return data
 
 
