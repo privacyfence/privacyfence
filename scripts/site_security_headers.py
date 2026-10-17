@@ -40,7 +40,7 @@ def _csp(script_src: str, style_src: str) -> str:
 
 
 CSP_SITE = _csp(_SCRIPT_SRC_SITE, _STYLE_SRC_SITE)
-# The docs generator's inline bootstrap scripts and table-alignment styles (docs/adr/0196).
+# The docs generator's inline bootstrap scripts and table-alignment styles (docs/adr/0201).
 CSP_DOCS = _csp(f"script-src 'self' 'unsafe-inline' {_GTM}", "style-src 'self' 'unsafe-inline'")
 
 
