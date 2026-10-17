@@ -331,6 +331,9 @@ class JiraConnector(Connector):
         return "jira"
 
     def tool_specs(self) -> list[ToolSpec]:
+        return export_files.visible_specs(self._all_tool_specs(), self.download_mode, self.download_config)
+
+    def _all_tool_specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(
                 name="jira_list_projects",
@@ -614,6 +617,7 @@ class JiraConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
+        export_files.refuse_if_exports_off(tool, self.download_mode, self.download_config)
         if tool == "jira_list_projects":
             return await self._list_projects(**args)
         if tool == "jira_search_issues":
