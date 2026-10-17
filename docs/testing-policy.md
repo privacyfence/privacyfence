@@ -33,7 +33,7 @@ every module in layer 6, `test_org_ubuntu_release_smoke.py` included; `browser` 
 drives Chromium (`test_browser_smoke.py`, `test_settings_grist_modal_browser.py`,
 `test_settings_edit_verbs_browser.py`, `test_settings_scoped_token_form_browser.py`,
 `test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_releases_page.py`,
-`test_website_layout.py`, `test_website_consent.py`); `live` on nothing, since layer 5 is a
+`test_website_layout.py`, `test_website_consent.py`, `test_website_csp.py`); `live` on nothing, since layer 5 is a
 script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
 `tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit
 logs) under `test-results/`, which CI uploads as an artifact of the failed job.
@@ -57,7 +57,7 @@ and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout
 | Job | Runs |
 |---|---|
 | `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; `npm ci --prefix tests/integration/ai_clients` (the pinned AI-client CLIs); the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
-| `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest` |
+| `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest`; the Windows job then runs `check_coverage_floor.py --platform windows`, which holds the Windows-only modules at `WINDOWS_MODULE_FLOORS` |
 | `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
 | `sync` (Python 3.11, 3.13) | `privacyfence-sync` alone: `pip install -e "./sync[test]"`, `pytest sync/tests` at 100 % branch coverage, `mypy sync/src`, `bandit -r sync/src`; one `Sync client (Python 3.x)` check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
@@ -84,7 +84,7 @@ probes for this and exports it.
 security-critical list (`MODULE_FLOORS`), drops below its recorded floor. Raise a floor in the PR
 that raises its coverage; lowering one is a regression, not a config edit. A module more than 1.0
 point above its floor, or overall coverage more than 0.5 above, prints a `stale coverage floor`
-warning (never a failure) as a prompt to raise it.
+warning (never a failure) as a prompt to raise it. The Windows job has its own, separate floors for the code the Linux run cannot execute (`WINDOWS_MODULE_FLOORS`, checked with `check_coverage_floor.py --platform windows`); the overall floor and `MODULE_FLOORS` stay the `test` job's.
 
 **Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
 reviewed list: `test`, `platform-windows`, `platform-macos`, the three `Test (Python 3.x, core
@@ -169,7 +169,7 @@ variable removed: these tests need no vendor account or credential, and must kee
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
   `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
-  `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0200](adr/0200-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
   sites and the layout screenshots.
 
 ### The shared design system

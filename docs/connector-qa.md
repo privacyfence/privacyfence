@@ -718,7 +718,8 @@ For each representative read, list, search, create, update, send or upload tool:
 
 - **Approved project.** With the `approved_project_keys` rule, `jira_get_issue` on a `PFQA` issue
   reads without a card; an issue in another project prompts.
-- **Own issues.** An issue you created reads without a card through `i_am_reporter` or
+- **Own issues.** An issue whose reporter or assignee is your Atlassian account (matched by
+  account id, never by a name or email) reads without a card through `i_am_reporter` or
   `i_am_assignee`, independently of the project rule.
 - `jira_transition_issue` with a transition name that is not available fails with an error listing
   the available transitions.
@@ -730,7 +731,7 @@ For each representative read, list, search, create, update, send or upload tool:
 
 - **Approved space.** With the `approved_space_keys` rule, `confluence_get_page` on a `PFQA` page
   reads without a card; a page in another space prompts.
-- **Own pages.** A page you created reads without a card through `i_am_author`, independently of
+- **Own pages.** A page whose author is your Atlassian account (matched by account id) reads without a card through `i_am_author`, independently of
   the space rule.
 - `confluence_download_attachment` prompts for review and saves a file whose size matches
   `confluence_list_attachments`.
