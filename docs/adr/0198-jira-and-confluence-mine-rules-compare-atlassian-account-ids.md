@@ -52,8 +52,8 @@ record with `ctx.my_account_id`, as an exact, case-sensitive string comparison. 
 
 - `tests/unit/policy/test_scopes.py` exercises the three matchers, including empty ids and near-miss names.
 - `tests/unit/policy/_v1_reference.py` records the deliberate divergence from the v1 matchers.
-- `tests/unit/test_atlassian_users.py`, `tests/unit/test_confluence_client.py`,
-  `tests/unit/test_assets_client.py`, `tests/unit/connectors/test_jira_connector.py`,
+- `tests/unit/test_atlassian_oauth.py`, `tests/unit/test_jira_client.py`,
+  `tests/unit/test_confluence_client.py`, `tests/unit/test_assets_client.py`, `tests/unit/connectors/test_jira_connector.py`,
   `tests/unit/connectors/test_confluence_connector.py`, `tests/unit/test_gate_real_evaluator.py` and
   `tests/unit/test_daemon_main.py` cover fetching, carrying, backfilling and passing the id.
 
