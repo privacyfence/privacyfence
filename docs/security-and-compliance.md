@@ -239,6 +239,10 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   outranks an organization pin for that call
   ([ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).
   Renaming a token changes the name on later entries only; earlier entries keep the name it had.
+- **Deleting a rule.** A token's rules cannot be edited, with one exception: removing a rule in
+  Settings, or through `privacyfence_propose_policy_change`, also removes it from every scoped token
+  that carried it. The token's secret, other rules and tools stay, and adding the same rule again
+  does not restore it ([ADR 0198](adr/0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md)).
 - **Local mode** copies the secret to the clipboard through the companion once. **Organization
   mode** shows it once in the browser, and only after the administrator turns scoped tokens on
   (`scoped_tokens.enabled`) and sets the longest lifetime (`scoped_tokens.max_days`).

@@ -43,7 +43,7 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from privacyfence import approval_ui, auto_accept, gate, scoped_tokens
+from privacyfence import approval_ui, auto_accept, gate, paths, scoped_tokens, secure_files
 from privacyfence.auto_accept import ReviewContext
 from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
@@ -1141,9 +1141,31 @@ class TestProposePolicyChange:
         auto_accept.init_config_path(str(self._config_path))
         auto_accept.set_policy_v2_store_rules([])
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
+        # Deleting a rule also edits the principal's scoped-token file (ADR 0198).
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
     def teardown_method(self):
         auto_accept.set_policy_v2_store_rules([])
+
+    @staticmethod
+    def _seed_token(rule_ids):
+        token = ScopedToken(
+            id="st-0123456789ab", label="sales-sync", digest="d", principal_id="local", principal_email="",
+            principal_display_name="", created_at=0.0, expires_at=1e12,
+            rule_ids=frozenset(rule_ids), tools=frozenset({"gmail_get_message"}),
+        )
+        path = paths.authority_dir(current_principal()) / scoped_tokens.STORE_FILE_NAME
+        secure_files.atomic_write_json(path, {"version": 1, "tokens": [scoped_tokens._to_json(token)]})
+        store = scoped_tokens.ScopedTokenStore(lambda: [current_principal()])
+        store.load()
+        scoped_tokens.set_store(store)
+        return token
+
+    @staticmethod
+    def _carried(token):
+        reread = scoped_tokens.get_store().get(token.principal_id, token.id)
+        assert reread is not None
+        return reread.rule_ids
 
     async def test_confirmed_add_persists_to_the_auto_accept_section(self, audit_dir):
         result = await gate.propose_policy_change(
@@ -1274,6 +1296,46 @@ class TestProposePolicyChange:
         assert update_result["confirmed"] is True
         rules = auto_accept.get_policy_v2_rules()
         assert [r.value for r in rules] == [["folder2"]]
+
+    async def test_update_to_another_folder_drops_the_old_id_from_a_token(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        old_id = add_result["rule_ids"][0]
+        token = self._seed_token([old_id, "r-other"])
+
+        await gate.propose_policy_change(
+            operation="update", reason="Narrowing to a different folder.", rule_id=old_id,
+            group="drive.folder", value=["folder2"], verbs=["read"],
+        )
+
+        assert self._carried(token) == {"r-other"}
+
+    async def test_update_of_only_the_verbs_keeps_the_id_in_a_token(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        old_id = add_result["rule_ids"][0]
+        token = self._seed_token([old_id])
+
+        update_result = await gate.propose_policy_change(
+            operation="update", reason="Also download.", rule_id=old_id,
+            group="drive.folder", value=["folder1"], verbs=["read", "download"],
+        )
+
+        assert update_result["rule_ids"] == [old_id]
+        assert self._carried(token) == {old_id}
+
+    async def test_remove_drops_the_id_from_a_token(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        rule_id = add_result["rule_ids"][0]
+        token = self._seed_token([rule_id, "r-other"])
+
+        await gate.propose_policy_change(operation="remove", reason="Cleaning up.", rule_id=rule_id)
+
+        assert self._carried(token) == {"r-other"}
 
     async def test_update_with_an_unknown_rule_id_raises_before_any_popup(self, monkeypatch):
         popup_calls = []

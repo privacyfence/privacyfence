@@ -540,3 +540,158 @@ class TestMigrateTokenFile:
             assert scoped_tokens.migrate_tokens(LOCAL_PRINCIPAL, migration) == ["via-store"]
         finally:
             scoped_tokens.set_store(None)
+
+
+def _add_limit(tmp_path, label, rule_id, pairs):
+    data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+    for entry in data["tokens"]:
+        if entry["label"] == label:
+            entry.setdefault("rule_limits", {})[rule_id] = pairs
+    _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+
+
+def _stamp(tmp_path):
+    st = _file(tmp_path).stat()
+    return st.st_mtime_ns, st.st_ino
+
+
+class TestForgetRules:
+    def test_drops_the_id_and_its_limit_and_keeps_the_rest(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1", "r-2")
+        store_ = _store()
+        _, secret = _create(
+            store_, label="job", rule_ids=["r-1", "r-2"], tools=[TOOL, "gmail_get_message"],
+            allow_personal_data=True,
+        )
+        _add_limit(tmp_path, "job", "r-1", [["approved_folder", "drive.download_file"]])
+        _add_limit(tmp_path, "job", "r-2", [["approved_folder", "drive.write_file"]])
+        store_.load()
+
+        labels = store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"])
+
+        assert labels == ["job"]
+        token = store_.find(secret, NOW)
+        assert token is not None
+        assert token.rule_ids == {"r-2"}
+        assert token.rule_limits == {"r-2": frozenset({("approved_folder", "drive.write_file")})}
+        assert token.tools == {TOOL, "gmail_get_message"}
+        assert token.allow_personal_data is True
+        assert _tokens(tmp_path)["job"]["rule_ids"] == ["r-2"]
+
+    def test_returns_only_the_labels_that_changed_in_file_order(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1", "r-2")
+        store_ = _store()
+        _create(store_, label="b", rule_ids=["r-1"])
+        _create(store_, label="plain", rule_ids=["r-2"])
+        _create(store_, label="a", rule_ids=["r-1", "r-2"])
+
+        assert store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["b", "a"]
+
+    def test_no_write_when_nothing_matches(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1")
+        store_ = _store()
+        _create(store_, label="job", rule_ids=["r-1"])
+        before = _stamp(tmp_path)
+
+        assert store_.forget_rules(LOCAL_PRINCIPAL, ["r-unknown"]) == []
+        assert _stamp(tmp_path) == before
+
+    def test_a_token_left_with_nothing_stays(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1")
+        store_ = _store()
+        token, secret = _create(store_, label="job", rule_ids=["r-1"], tools=[])
+
+        assert store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["job"]
+        kept = store_.find(secret, NOW)
+        assert kept is not None and kept.id == token.id
+        assert kept.rule_ids == frozenset() and kept.tools == frozenset()
+
+    def test_the_change_survives_a_fresh_load(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1", "r-2")
+        store_ = _store()
+        _create(store_, label="job", rule_ids=["r-1", "r-2"])
+        store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"])
+
+        fresh = _store()
+        fresh.load()
+        (token,) = fresh.tokens_for(LOCAL_PRINCIPAL)
+        assert token.rule_ids == {"r-2"}
+
+    def test_refreshes_before_changing(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1")
+        one, two = _store(), _store()
+        _create(one, label="t1", rule_ids=["r-1"])
+        _create(two, label="t2", rule_ids=["r-1"])  # a write one has not seen yet
+
+        assert one.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["t1", "t2"]
+
+    def test_file_variant_keeps_an_unreadable_entry_and_changes_the_rest(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1")
+        _create(_store(), label="job", rule_ids=["r-1"])
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        data["tokens"].append({"id": "broken"})
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+
+        assert scoped_tokens.forget_rules_in_file(_file(tmp_path), ["r-1"]) == ["job"]
+
+        written = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]
+        assert written[0]["rule_ids"] == []
+        assert written[1] == {"id": "broken"}
+
+    def test_file_variant_writes_nothing_when_nothing_matches(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1")
+        _create(_store(), label="job", rule_ids=["r-1"])
+        before = _stamp(tmp_path)
+
+        assert scoped_tokens.forget_rules_in_file(_file(tmp_path), ["r-other"]) == []
+        assert _stamp(tmp_path) == before
+
+    def test_file_variant_leaves_a_missing_or_unreadable_file_alone(self, tmp_path):
+        missing = tmp_path / "nowhere" / STORE_FILE_NAME
+        assert scoped_tokens.forget_rules_in_file(missing, ["r-1"]) == []
+        assert not missing.exists()
+        broken = tmp_path / STORE_FILE_NAME
+        broken.write_text("{not json", encoding="utf-8")
+        assert scoped_tokens.forget_rules_in_file(broken, ["r-1"]) == []
+        assert broken.read_text(encoding="utf-8") == "{not json"
+
+    def test_module_function_uses_the_file_when_no_store_is_set(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1")
+        _create(_store(), label="job", rule_ids=["r-1"])
+        scoped_tokens.set_store(None)
+
+        def _boom(*_a, **_k):
+            raise AssertionError("the store must not be used")
+
+        monkeypatch.setattr(ScopedTokenStore, "forget_rules", _boom)
+
+        assert scoped_tokens.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["job"]
+        assert _tokens(tmp_path)["job"]["rule_ids"] == []
+
+    def test_module_function_uses_the_live_store_when_set(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-1")
+        live = _store()
+        _create(live, label="job", rule_ids=["r-1"])
+
+        def _boom(*_a, **_k):
+            raise AssertionError("the file must not be edited behind the store")
+
+        monkeypatch.setattr(scoped_tokens, "forget_rules_in_file", _boom)
+        scoped_tokens.set_store(live)
+        try:
+            assert scoped_tokens.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["job"]
+        finally:
+            scoped_tokens.set_store(None)
+        assert _tokens(tmp_path)["job"]["rule_ids"] == []
+
+    def test_module_function_with_no_ids_touches_nothing(self, monkeypatch):
+        def _boom(*_a, **_k):
+            raise AssertionError("nothing to do")
+
+        monkeypatch.setattr(ScopedTokenStore, "forget_rules", _boom)
+        monkeypatch.setattr(scoped_tokens, "forget_rules_in_file", _boom)
+        scoped_tokens.set_store(_store())
+        try:
+            assert scoped_tokens.forget_rules(LOCAL_PRINCIPAL, []) == []
+        finally:
+            scoped_tokens.set_store(None)
