@@ -3,7 +3,7 @@
 ## Goal
 
 Fix four findings the whole-repository review at `3766d50` (review document:
-[`docs/repo-2026-10-14-review.md` at `0506f23`](https://github.com/privacyfence/privacyfence/blob/0506f2311a3d04af12e8d298f253965be02eaf4d/docs/repo-2026-10-14-review.md))
+the review document of 2026-10-14, on its `review/` branch)
 decided to fix. They are independent of each other; one feature branch and one PR carry all four.
 
 | Finding | Issue | What changes for the user |
