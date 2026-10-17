@@ -257,6 +257,10 @@ class ConfluenceClient:
         self._users = user_directory or AtlassianUserDirectory(cloud_id=cloud_id)
         self._jira_api_denied_at: datetime | None = None
 
+    @property
+    def account_id(self) -> str:
+        return str(self._config.get("account_id", "") or "")
+
     # ------------------------------------------------------------------ #
     # Token refresh
     # ------------------------------------------------------------------ #
@@ -266,12 +270,15 @@ class ConfluenceClient:
         client_id = self._config.get("client_id", "")
         client_secret = self._config.get("client_secret", "")
         refresh_token = self._config.get("refresh_token", "")
+        stored_account_id = ""
         if self._token_file:
             # The token file is shared with JiraClient; if it already
             # refreshed (and Atlassian rotated the refresh token), pick up
             # its latest value instead of retrying a spent one.
             try:
-                refresh_token = load_token_file(self._token_file).get("refresh_token") or refresh_token
+                stored = load_token_file(self._token_file)
+                refresh_token = stored.get("refresh_token") or refresh_token
+                stored_account_id = stored.get("account_id") or ""
             except AtlassianOAuthError:
                 pass
         if not client_id or not client_secret or not refresh_token:
@@ -294,6 +301,7 @@ class ConfluenceClient:
                 "cloud_id": self._config.get("cloud_id", ""),
                 "site_url": self._config.get("site_url", ""),
                 "account_email": self._config.get("account_email", ""),
+                "account_id": self._config.get("account_id", "") or stored_account_id,
                 "scopes": self._config.get("scopes", []),
             })
         logger.info("Confluence access token refreshed")

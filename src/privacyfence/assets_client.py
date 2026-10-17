@@ -307,11 +307,14 @@ class AssetsClient:
         client_id = self._config.get("client_id", "")
         client_secret = self._config.get("client_secret", "")
         refresh_token = self._config.get("refresh_token", "")
+        stored_account_id = ""
         if self._token_file:
             # The token file is shared with the Jira and Confluence clients; if one of them
             # already refreshed (and Atlassian rotated the refresh token), use its latest value.
             try:
-                refresh_token = load_token_file(self._token_file).get("refresh_token") or refresh_token
+                stored = load_token_file(self._token_file)
+                refresh_token = stored.get("refresh_token") or refresh_token
+                stored_account_id = stored.get("account_id") or ""
             except AtlassianOAuthError:
                 # An unreadable token file is not fatal: refresh with the token already in config.
                 pass
@@ -335,6 +338,7 @@ class AssetsClient:
                 "cloud_id": self._config.get("cloud_id", ""),
                 "site_url": self._config.get("site_url", ""),
                 "account_email": self._config.get("account_email", ""),
+                "account_id": self._config.get("account_id", "") or stored_account_id,
                 "scopes": self._config.get("scopes", []),
             })
         logger.info("Assets access token refreshed")

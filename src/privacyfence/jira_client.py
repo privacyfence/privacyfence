@@ -165,6 +165,10 @@ class JiraIssue:
         # Not a dataclass field either: the requested extra fields, {key: simplified value}, set only by a
         # search or get_issue that asked for them (keys from JiraClient.extra_field_keys). None otherwise.
         self.extra_fields: dict[str, Any] | None = None
+        # Not dataclass fields either, like display_description: the reporter's and assignee's
+        # Atlassian account ids, for the i_am_reporter / i_am_assignee rules. The agent never receives them.
+        self.reporter_account_id: str = ""
+        self.assignee_account_id: str = ""
 
     def short_summary(self) -> str:
         snippet = self.summary[:60] + "…" if len(self.summary) > 60 else self.summary
@@ -252,12 +256,15 @@ class JiraClient:
         client_id = self._config.get("client_id", "")
         client_secret = self._config.get("client_secret", "")
         refresh_token = self._config.get("refresh_token", "")
+        stored_account_id = ""
         if self._token_file:
             # The token file is shared with ConfluenceClient; if it already
             # refreshed (and Atlassian rotated the refresh token), pick up
             # its latest value instead of retrying a spent one.
             try:
-                refresh_token = load_token_file(self._token_file).get("refresh_token") or refresh_token
+                stored = load_token_file(self._token_file)
+                refresh_token = stored.get("refresh_token") or refresh_token
+                stored_account_id = stored.get("account_id") or ""
             except AtlassianOAuthError:
                 pass
         if not client_id or not client_secret or not refresh_token:
@@ -280,6 +287,7 @@ class JiraClient:
                 "cloud_id": self._config.get("cloud_id", ""),
                 "site_url": self._config.get("site_url", ""),
                 "account_email": self._config.get("account_email", ""),
+                "account_id": self._config.get("account_id", "") or stored_account_id,
                 "scopes": self._config.get("scopes", []),
             })
         logger.info("Jira access token refreshed")
@@ -298,12 +306,35 @@ class JiraClient:
     # Connection
     # ------------------------------------------------------------------ #
 
+    @property
+    def account_id(self) -> str:
+        return str(self._config.get("account_id", "") or "")
+
+    def _record_account_id(self, account_id: str) -> None:
+        """Remember the signed-in account id and persist it to the shared token file.
+
+        Read-modify-write, so a stale in-memory token is never written back. A failed
+        save is logged and ignored: it must not disable the connector.
+        """
+        if not account_id or account_id == self._config.get("account_id"):
+            return
+        self._config["account_id"] = account_id
+        if not self._token_file:
+            return
+        try:
+            record = dict(load_token_file(self._token_file))
+            record["account_id"] = account_id
+            save_token_file(self._token_file, record)
+        except (AtlassianOAuthError, OSError) as exc:
+            logger.warning("Could not save the Atlassian account id: %s", exc)
+
     def check_connection(self) -> str:
         """Verify credentials. Returns the site URL on success."""
         try:
             myself = self._request(self._client.myself)
             display = myself.get("displayName", "unknown user")
             logger.info("Connected to Jira at %s as %r", self._base_url, display)
+            self._record_account_id(myself.get("accountId", ""))
             return f"{display} @ {self._base_url}"
         except Exception as exc:
             raise JiraClientError(f"Jira connection check failed: {exc}") from exc
@@ -769,6 +800,8 @@ class JiraClient:
             url=f"{self._base_url}/browse/{key}" if key else "",
         )
         issue.display_description = display_desc
+        issue.reporter_account_id = (f.get("reporter") or {}).get("accountId", "")
+        issue.assignee_account_id = (f.get("assignee") or {}).get("accountId", "")
         return issue
 
     @staticmethod
