@@ -1,34 +1,40 @@
 {
   "_links": {
-    "base": "https://example.com/qa-placeholder",
-    "editui": "https://example.com/qa-placeholder",
-    "edituiv2": "https://example.com/qa-placeholder",
-    "tinyui": "https://example.com/qa-placeholder",
-    "webui": "https://example.com/qa-placeholder"
+    "base": "https://example.com/qa-placeholder"
   },
-  "authorId": "qa-placeholder-account-id",
-  "body": {
-    "storage": {
-      "representation": "storage",
-      "value": "&lt;p&gt;Synthetic PrivacyFence QA test page. No real information. Safe to read, comment on, or edit by any automated test.&lt;/p&gt;"
+  "results": [
+    {
+      "_links": {
+        "editui": "https://example.com/qa-placeholder",
+        "edituiv2": "https://example.com/qa-placeholder",
+        "tinyui": "https://example.com/qa-placeholder",
+        "webui": "https://example.com/qa-placeholder"
+      },
+      "authorId": "qa-placeholder-account-id",
+      "body": {
+        "storage": {
+          "representation": "storage",
+          "value": "<p local-id=\"aabb11ecb5a8\"><code>Synthetic PrivacyFence QA test page. No real information. Safe to read, comment on, or edit by any automated test.</code></p>"
+        }
+      },
+      "createdAt": "2026-09-11T11:57:27.370Z",
+      "id": "qa-placeholder-id-2",
+      "lastOwnerId": null,
+      "ownerId": "qa-placeholder-account-id",
+      "parentId": "qa-placeholder-id-1",
+      "parentType": "page",
+      "position": 2432,
+      "spaceId": "qa-placeholder-id-3",
+      "status": "current",
+      "title": "PrivacyFence QA seed page [QATEST]",
+      "version": {
+        "authorId": "qa-placeholder-account-id",
+        "createdAt": "2026-09-11T11:57:43.501Z",
+        "message": "",
+        "minorEdit": false,
+        "ncsStepVersion": "4",
+        "number": 1
+      }
     }
-  },
-  "createdAt": "2026-07-16T10:07:55.313Z",
-  "id": "qa-placeholder-id-3",
-  "lastOwnerId": null,
-  "ownerId": "qa-placeholder-account-id",
-  "parentId": "qa-placeholder-id-1",
-  "parentType": "page",
-  "position": 1454,
-  "spaceId": "qa-placeholder-id-2",
-  "status": "current",
-  "title": "PrivacyFence QA seed page [QATEST]",
-  "version": {
-    "authorId": "qa-placeholder-account-id",
-    "createdAt": "2026-07-16T10:07:55.313Z",
-    "message": "",
-    "minorEdit": false,
-    "ncsStepVersion": "1",
-    "number": 1
-  }
+  ]
 }
