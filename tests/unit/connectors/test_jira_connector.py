@@ -2,10 +2,9 @@
 
 Same approach as the other connector tests: JiraClient is mocked and
 gate.gated_call is stubbed to capture what's sent into the gate.
-JiraIssue keeps reporter/assignee/description as flat top-level fields
-(unlike SalesforceRecord's nested "fields" dict), so asdict(issue)
-already matches what auto_accept's _rule_i_am_reporter/_rule_i_am_assignee
-expect -- no equivalent bug here.
+The i_am_reporter / i_am_assignee rules compare account ids, which JiraIssue
+holds as plain attributes that asdict(issue) drops, so jira_get_issue hands
+the gate a raw_data that adds them back (see TestGetIssue).
 """
 from __future__ import annotations
 
@@ -442,6 +441,32 @@ class TestRefreshUserCache:
 
 
 class TestGetIssue:
+    async def test_gated_calls_pass_the_account_id(self, gated_call_spy):
+        connector, client = make_connector()
+        connector.my_account_id = "acc-me"
+        client.get_issue.return_value = make_issue()
+        client.get_issue_comments.return_value = []
+
+        await connector.call("jira_get_issue", {"issue_key": "ENG-42"})
+
+        assert gated_call_spy[0]["my_account_id"] == connector.my_account_id == "acc-me"
+
+    async def test_get_issue_raw_data_carries_the_reporter_and_assignee_account_ids(self, gated_call_spy):
+        connector, client = make_connector()
+        issue = make_issue()
+        issue.reporter_account_id = "acc-alice"
+        issue.assignee_account_id = "acc-bob"
+        client.get_issue.return_value = issue
+        client.get_issue_comments.return_value = []
+
+        await connector.call("jira_get_issue", {"issue_key": "ENG-42"})
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["raw_data"]["reporter_account_id"] == "acc-alice"
+        assert kwargs["raw_data"]["assignee_account_id"] == "acc-bob"
+        assert "reporter_account_id" not in kwargs["filtered_data"]
+        assert "assignee_account_id" not in kwargs["filtered_data"]
+
     async def test_mentions_show_names_in_preview_but_result_keeps_markup(self, gated_call_spy):
         connector, client = make_connector()
         markup = "@[Jane Doe](acc-jane-0001)"
@@ -614,7 +639,10 @@ class TestGetIssue:
                                         "created": "2026-07-01", "updated": ""}]
         assert result["key"] == "ENG-42"
         kwargs = gated_call_spy[0]
-        assert kwargs["raw_data"] is kwargs["filtered_data"]
+        # raw_data is the filtered result plus the two account ids the rules compare.
+        assert kwargs["raw_data"] == {
+            **kwargs["filtered_data"], "reporter_account_id": "", "assignee_account_id": "",
+        }
 
     async def test_pii_scan_text_is_description_and_comments_only(self, gated_call_spy):
         # reporter/assignee/comment author default to email addresses,

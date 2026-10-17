@@ -59,6 +59,7 @@ def fake_client_class(*, result=None, connection_error: Exception | None = None,
         instantiated = False
         authorize_called = False
         directories_refreshed = False
+        account_id = ""
 
         def __init__(self, **kwargs):
             type(self).instantiated = True
@@ -1087,6 +1088,21 @@ class TestBuildConnectorsAtlassian:
         assert connectors == []
         assert jira_fake.instantiated is False
         assert confluence_fake.instantiated is False
+
+    def test_jira_and_confluence_connectors_get_the_clients_account_id(self, monkeypatch):
+        self._patch_token(monkeypatch, token={"access_token": "at", "account_email": "me@x.com"})
+        jira_fake = fake_client_class(result="jira info")
+        jira_fake.account_id = "acc-me"
+        confluence_fake = fake_client_class(result="https://x.atlassian.net/wiki")
+        confluence_fake.account_id = "acc-me"
+        monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
+        monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
+
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
+
+        assert {c.name: c.my_account_id for c in connectors} == {"jira": "acc-me", "confluence": "acc-me"}
+        # The id Jira learned reaches the clients built after it.
+        assert confluence_fake.captured_kwargs["config"]["account_id"] == "acc-me"
 
     def test_jira_disabled_does_not_affect_confluence(self, monkeypatch):
         self._patch_token(monkeypatch, token={"access_token": "at", "account_email": "me@x.com"})

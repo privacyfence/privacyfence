@@ -1549,9 +1549,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 user_directory=atlassian_users,
             )
             info = jira_client.check_connection()
+            if jira_client.account_id:
+                atlassian_config["account_id"] = jira_client.account_id
             logger.info("Jira connector ready: %s", info)
             jira_connector = JiraConnector(jira_client)
             jira_connector.my_email = atlassian_token.get("account_email", "")
+            jira_connector.my_account_id = jira_client.account_id
             jira_connector.download_mode = download_mode
             jira_connector.download_config = download_config
             jira_connector.download_base_url = download_base_url
@@ -1575,6 +1578,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Confluence connector ready: %s", url)
             confluence_connector = ConfluenceConnector(confluence_client)
             confluence_connector.my_email = atlassian_token.get("account_email", "")
+            confluence_connector.my_account_id = confluence_client.account_id
             confluence_connector.download_mode = download_mode
             confluence_connector.download_config = download_config
             confluence_connector.download_base_url = download_base_url
