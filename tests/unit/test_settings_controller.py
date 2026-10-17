@@ -2036,6 +2036,23 @@ class TestAddPolicyRule:
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
 
+    def test_a_title_instead_of_an_id_is_refused_with_the_message_in_the_snapshot(self, controller):
+        before = controller._load_config()
+
+        state = controller.add_policy_rule("slack.channel", "#general", ["read"])
+
+        assert state["error"].startswith("'#general' is not a Slack ID.")
+        assert state["auto_accept"]["rules"] == []
+        assert controller._load_config() == before
+
+    def test_a_valid_add_after_a_refused_one_clears_the_error(self, controller):
+        controller.add_policy_rule("slack.channel", "#general", ["read"])
+
+        state = controller.add_policy_rule("slack.channel", "C0123456789", ["read"])
+
+        assert state["error"] == ""
+        assert len(state["auto_accept"]["rules"]) == 1
+
     @pytest.mark.parametrize("method", ["add", "remove", "set_verbs", "update"])
     def test_rules_changed_listeners_see_the_new_rule(self, controller, method):
         """The rule cache is reloaded before the listeners fire, so a listener that re-checks a

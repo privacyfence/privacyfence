@@ -14,6 +14,7 @@ import pytest
 
 from privacyfence.policy import catalogue, propose, store
 from privacyfence.policy.registry import Verb
+from privacyfence.policy.value_format import RuleValueError
 
 
 class TestScopeCatalogue:
@@ -55,6 +56,22 @@ class TestParseVerbs:
 
 
 class TestRulesForCatalogueEntry:
+    def test_a_title_instead_of_an_id_raises(self):
+        with pytest.raises(RuleValueError, match="not a Slack ID"):
+            catalogue.rules_for_catalogue_entry("slack.channel", ["#general"], [Verb.READ])
+
+    def test_the_value_is_checked_before_the_verb(self):
+        with pytest.raises(RuleValueError):
+            catalogue.rules_for_catalogue_entry("slack.channel", "general", [Verb.RESTRUCTURE])
+
+    def test_an_extra_scope_value_is_checked_too(self):
+        with pytest.raises(RuleValueError, match="Peek page slug"):
+            catalogue.rules_for_catalogue_entry("peek.page", "Team Dashboard", [Verb.READ])
+
+    def test_a_valid_id_still_compiles(self):
+        assert catalogue.rules_for_catalogue_entry("slack.channel", ["C0123456789"], [Verb.READ])
+        assert catalogue.rules_for_catalogue_entry("peek.page", "team-dashboard", [Verb.READ])
+
     def test_unknown_group_yields_no_rules(self):
         assert catalogue.rules_for_catalogue_entry("not.a.real.group", None, [Verb.READ]) == []
 

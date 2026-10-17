@@ -56,6 +56,7 @@ from .policy import registry as policy_registry
 from .policy import scope_rows as policy_scope_rows
 from .policy import store as policy_store
 from .policy.engine import PolicyRule
+from .policy.value_format import RuleValueError
 from .principal import LOCAL_PRINCIPAL, current_principal
 from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
@@ -1806,7 +1807,11 @@ class SettingsController:
         verb_enums = _parse_verbs(verbs)
         if not verb_enums:
             return self.snapshot()
-        new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value), verb_enums)
+        try:
+            new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value), verb_enums)
+        except RuleValueError as exc:
+            self.error = str(exc)
+            return self.snapshot()
         if not new_rules:
             return self.snapshot()
         loaded = self._load_rows()
@@ -1816,6 +1821,7 @@ class SettingsController:
         rows, _ = policy_scope_rows.add_rules(existing, new_rules)
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(rows)
         self._save_and_reload_policy_v2(cfg)
+        self.error = ""
         return self.snapshot()
 
     def policy_rows(self) -> "list[policy_scope_rows.ScopeRow]":

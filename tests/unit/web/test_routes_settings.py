@@ -1798,6 +1798,11 @@ class TestScopedTokenRoutes:
         assert "if (scopedRoutes[action][1] && !window.confirm(scopedRoutes[action][1])) { return; }" in page
         assert "if (res.ok && scopedAction) { window.location.reload(); }" in page
         assert page.index("window.location.reload()") < page.index("window.__pfRender(res.state)")
+        assert (
+            "else if (!res.ok && res.state && typeof res.state.error === 'string' && window.__pfShowError) "
+            "{ window.__pfShowError(res.state.error); }"
+        ) in page
+        assert page.index("window.__pfShowError(res.state.error)") < page.index("console.error('PrivacyFence action failed:'")
 
 
 class TestAuditLogDownload:
