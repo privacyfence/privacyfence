@@ -417,7 +417,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
-A Grist document rule, an approved-report rule and a Jira project search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) for the same document, report or project; the PII gate still applies to them unless the call is made with a scoped token that allows personal data (below).
+A Grist document rule, an approved-report rule, a Jira project search rule and a Jira Assets schema search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`) for the same document, report, project or schema; the PII gate still applies to them unless the call is made with a scoped token that allows personal data (below).
 
 **Peek page.** A Peek page rule names page slugs and is set only in Settings; the card offers no "Always allow" button for Peek. *Read* covers `peek_get_comments` and `peek_get_stats` for those pages, and *add* covers `peek_upload_page` with one of those slugs, which publishes a new version. It never covers a new page, a visibility change, a rename or a delete.
 
@@ -427,7 +427,7 @@ The [PII check](#the-pii-check) keeps personal data out of the AI system's conte
 
 | Scope | The token then lets through |
 |---|---|
-| Grist document, Salesforce report, Jira project | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` |
+| Grist document, Salesforce report, Jira project, Jira Assets schema | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects` |
 | Peek page | `peek_upload_page` with the page's slug |
 | Drive folder | `drive_download_file`, when the file is saved or handed over through a one-time link |
 
