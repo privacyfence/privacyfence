@@ -2,7 +2,7 @@
 
 `privacyfence-sync` runs a data-sync recipe against PrivacyFence with no AI model involved, so a
 regular refresh costs no model tokens. A recipe reads from your connected services (Salesforce
-reports, Jira searches, Grist tables, Drive files), runs your own scripts on the files, writes the
+reports, Jira searches, Jira Assets queries, Grist tables, Drive files), runs your own scripts on the files, writes the
 result back to Grist, and can publish an HTML dashboard on Peek.
 
 ## Who it is for
@@ -47,7 +47,7 @@ step.
 
 Every step needs an auto-accept rule, because a scheduled run gets no cards. Create them in
 **Settings → Auto-accept → Add a rule** (each asks for your passkey): the report, Jira project,
-Drive folder, Grist document and Peek page the recipe touches, with the verbs its steps use. The
+Jira Assets schema, Drive folder, Grist document and Peek page the recipe touches, with the verbs its steps use. The
 export tools and a Peek page upload also need **Let exports, downloads and page uploads carry
 personal data** ticked on the recipe's scoped token if the data holds personal data
 ([Letting personal data through](approvals-and-policy.md#letting-personal-data-through)).

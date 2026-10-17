@@ -14,6 +14,7 @@ from privacyfence.policy import catalogue, propose, scope_rows, store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import Verb
 from privacyfence.policy.scope_rows import ScopeRow
+from privacyfence.policy.value_format import VALUE_FORMATS
 
 FOLDER = "FOLDER1"
 FLAGGED_ID = "r-flagged0001"
@@ -62,11 +63,19 @@ def _needs_value(group):
     return propose.scope_needs_value(propose.SCOPES_BY_GROUP[group][0])
 
 
+def _example_value(group):
+    if group in catalogue.EXTRA_SCOPES:
+        predicate = catalogue.EXTRA_SCOPES[group].predicate
+    else:
+        predicate = propose.SCOPES_BY_GROUP[group][0].predicate
+    return VALUE_FORMATS[predicate].example if predicate in VALUE_FORMATS else "V1"
+
+
 # ── Migration ──────────
 
 @pytest.mark.parametrize("group", _all_groups())
 def test_each_catalogue_group_round_trips_through_migration(group):
-    value = [FOLDER, "FOLDER2"] if _needs_value(group) else None
+    value = [_example_value(group)] if _needs_value(group) else None
     verbs = scope_rows.scope_verbs(group)
     v2 = _v2(group, value, list(verbs))
     assert v2

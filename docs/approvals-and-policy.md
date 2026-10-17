@@ -304,7 +304,10 @@ one row per Drive folder or Gmail sender domain — as a sentence, with colour-c
 **Unblocks N tools** disclosure listing exactly which tools it covers, how often it has matched
 ("Matched 42x, last 3 days ago", or "Never matched"), **Edit verbs** and **✕ Remove**. You can
 filter by connector, verb family or text. **Add a rule** takes a scope, a value where the scope
-needs one (comma-separated for several), and the verbs to allow; adding verbs to a scope that
+needs one (comma-separated for several), and the verbs to allow; for a Drive folder, Slack
+channel, Jira project and the like the value must be the resource's id (not its name or title; label
+names and file types are the exceptions), and a value that is not shaped like an id is refused with
+a message saying what to enter; adding verbs to a scope that
 already has a rule extends that rule instead of creating a second one. **Edit verbs** switches
 verbs on or off for an existing rule: a verb you add covers all of its tools, a verb you remove
 stops covering its tools, and a verb the rule already had keeps exactly the tools it had. Rules
@@ -402,7 +405,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Calendar events I organize | attribute | — | `i_am_organizer` | you are the event's organizer |
 | Tasks list | identity | task list ids | `approved_task_list` | the list is one of these; for a move, both lists are |
 | Jira project | identity | project keys | `approved_project_keys`, `approved_project_keys_all_results` | the project (or the issue key's project) is one of these; for a search, every result is in one of them |
-| Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | your Atlassian account is the reporter; your Atlassian account is the assignee (compared by account id, never by a name or email; [ADR 0198](adr/0198-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md)) |
+| Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | your Atlassian account is the reporter; your Atlassian account is the assignee (compared by account id, never by a name or email; [ADR 0199](adr/0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md)) |
 | Confluence space | identity | space keys | `approved_space_keys` | the page's space is one of these |
 | Confluence pages I wrote | attribute | — | `i_am_author` | your Atlassian account is the page's author (compared by account id) |
 | Salesforce object type | attribute | object names | `approved_object_types` | every requested or written object type is one of these |
@@ -414,7 +417,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
-A Grist document rule, an approved-report rule and a Jira project search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) for the same document, report or project; the PII gate still applies to them unless the call is made with a scoped token that allows personal data (below).
+A Grist document rule, an approved-report rule, a Jira project search rule and a Jira Assets schema search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`) for the same document, report, project or schema; the PII gate still applies to them unless the call is made with a scoped token that allows personal data (below).
 
 **Peek page.** A Peek page rule names page slugs and is set only in Settings; the card offers no "Always allow" button for Peek. *Read* covers `peek_get_comments` and `peek_get_stats` for those pages, and *add* covers `peek_upload_page` with one of those slugs, which publishes a new version. It never covers a new page, a visibility change, a rename or a delete.
 
@@ -424,7 +427,7 @@ The [PII check](#the-pii-check) keeps personal data out of the AI system's conte
 
 | Scope | The token then lets through |
 |---|---|
-| Grist document, Salesforce report, Jira project | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` |
+| Grist document, Salesforce report, Jira project, Jira Assets schema | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects` |
 | Peek page | `peek_upload_page` with the page's slug |
 | Drive folder | `drive_download_file`, when the file is saved or handed over through a one-time link |
 

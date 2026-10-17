@@ -1,4 +1,4 @@
-# ADR 0199: An organization bundle carries a signed serial, and an older one is refused
+# ADR 0200: An organization bundle carries a signed serial, and an older one is refused
 
 ## Status
 

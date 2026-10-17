@@ -169,7 +169,7 @@ variable removed: these tests need no vendor account or credential, and must kee
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
   `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
-  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0200](adr/0200-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
   sites and the layout screenshots.
 
 ### The shared design system

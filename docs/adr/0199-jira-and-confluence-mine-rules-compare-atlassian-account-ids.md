@@ -1,4 +1,4 @@
-# ADR 0198: Jira and Confluence "mine" rules compare Atlassian account ids, never names or emails
+# ADR 0199: Jira and Confluence "mine" rules compare Atlassian account ids, never names or emails
 
 ## Status
 

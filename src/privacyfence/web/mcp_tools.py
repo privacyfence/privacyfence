@@ -184,14 +184,12 @@ PROPOSE_POLICY_CHANGE_TOOL = types.Tool(
         "rule_id must be listed, not guessed; a verb not in that group's scope_groups entry is "
         "rejected before any popup.\n\n"
         "operation='add'/'update' need group (a scope_groups id, e.g. 'drive.folder'), value "
-        "(resource ids/names the scope matches, e.g. a Drive folder id; omit if the group's "
-        "needs_value is false) and verbs (a non-empty subset of the group's verbs, e.g. ['read', "
-        "'update']). Verbs: read, download, search, add, update, restructure, move, send, delete "
-        "(older names are mapped). 'update' also takes rule_id (replaces that rule). 'remove' "
+        "(the resource's id -- folder id, channel ID, project key -- not its name or title, except "
+        "label names and file types; a non-id is refused; omit if needs_value is false) and verbs (non-empty subset of the group's verbs, e.g. ['read']). Verbs: read, download, search, add, update, restructure, move, send, delete "
+        "(older names map). 'update' also takes rule_id (replaces that rule). 'remove' "
         "needs only rule_id.\n\n"
-        "Returns {confirmed, changed, description, rule_ids}: changed is false if nothing "
-        "differed; rule_ids names the rules affected.\n\n"
-        "reason: one sentence on why you're proposing this (logged, unverified)."
+        "Returns {confirmed, changed, description, rule_ids}; changed is false if nothing differed.\n\n"
+        "reason: one sentence on why you're proposing this (logged)."
     ),
     input_schema={
         "type": "object",

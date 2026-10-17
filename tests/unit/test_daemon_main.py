@@ -2504,6 +2504,7 @@ class TestScopeRowsUpgrade:
         from privacyfence.policy import catalogue, propose
         from privacyfence.policy.engine import evaluate
         from privacyfence.policy.registry import Verb
+        from privacyfence.policy.value_format import VALUE_FORMATS
         from privacyfence.principal import LOCAL_PRINCIPAL
 
         v2: list[PolicyRule] = []
@@ -2512,7 +2513,9 @@ class TestScopeRowsUpgrade:
             needs_value = extra.needs_value if extra else propose.scope_needs_value(propose.SCOPES_BY_GROUP[group][0])
             from privacyfence.policy import scope_rows
             verbs = list(scope_rows.scope_verbs(group))
-            v2.extend(catalogue.rules_for_catalogue_entry(group, ["V1"] if needs_value else None, verbs))
+            predicate = extra.predicate if extra else propose.SCOPES_BY_GROUP[group][0].predicate
+            value = ([VALUE_FORMATS[predicate].example if predicate in VALUE_FORMATS else "V1"]) if needs_value else None
+            v2.extend(catalogue.rules_for_catalogue_entry(group, value, verbs))
         # the custom cases the scope_rows round-trip test covers
         v2 += [
             PolicyRule(id="r-d76028ec0b", predicate="always_allow", value=None,

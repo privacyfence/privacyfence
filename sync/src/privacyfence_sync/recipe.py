@@ -11,7 +11,10 @@ import yaml
 
 from privacyfence_sync.refs import FILE_PLACEHOLDER, VALUE_REF
 
-EXPORT_TOOLS = frozenset({"grist_export_records", "grist_export_sql", "salesforce_export_report", "jira_export_issues"})
+EXPORT_TOOLS = frozenset({
+    "grist_export_records", "grist_export_sql", "salesforce_export_report",
+    "jira_export_issues", "assets_export_objects",
+})
 DOWNLOAD_TOOLS = frozenset({"drive_download_file"})
 UPLOAD_TOOLS = frozenset({"grist_import_csv", "grist_update_csv", "peek_upload_page"})
 STOP_EXIT_CODE = 10

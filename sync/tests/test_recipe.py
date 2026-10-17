@@ -47,6 +47,7 @@ def bad(write_recipe: Any, steps: list[dict[str, Any]], message: str, **top: Any
 def test_constants() -> None:
     assert STOP_EXIT_CODE == 10
     assert "jira_export_issues" in EXPORT_TOOLS
+    assert "assets_export_objects" in EXPORT_TOOLS
     assert DOWNLOAD_TOOLS == {"drive_download_file"}
     assert "peek_upload_page" in UPLOAD_TOOLS
 

@@ -140,6 +140,15 @@ async def test_export_via_link_downloads_into_work_dir(write_recipe: RecipeWrite
     assert client.args_of("grist_export_records")["destination_dir"] == str(tmp_path / "work")
 
 
+async def test_assets_export_via_link_downloads_into_work_dir(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    link = {"delivery": "link", "download_url": "https://pf.example/mcp-files/fetch/abc", "sha256": "ff"}
+    client = FakeClient({"assets_export_objects": link})
+    step = {"id": "obj", "tool": "assets_export_objects", "args": {"aql": "objectType = X", "file_name": "obj.csv"}}
+    await run(write_recipe([step]), client)
+    assert client.downloads == [("https://pf.example/mcp-files/fetch/abc", tmp_path / "work" / "obj.csv", "ff")]
+    assert client.args_of("assets_export_objects")["destination_dir"] == str(tmp_path / "work")
+
+
 async def test_a_download_path_outside_the_work_folder_is_refused(write_recipe: RecipeWriter, tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("secret")
@@ -226,6 +235,20 @@ async def test_empty_jira_export_writes_an_empty_list_for_json(write_recipe: Rec
     step = {"id": "iss", "tool": "jira_export_issues", "args": {"jql": "x", "file_name": "iss.json"}}
     await run(write_recipe([step]), client)
     assert (tmp_path / "work" / "iss.json").read_text() == "[]"
+
+
+async def test_empty_assets_export_writes_a_header_only_csv(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    client = FakeClient({"assets_export_objects": {"delivery": "none", "columns": ["id", "key", "label", "type"]}})
+    step = {"id": "obj", "tool": "assets_export_objects", "args": {"aql": "objectType = X", "file_name": "obj.csv"}}
+    await run(write_recipe([step]), client)
+    assert (tmp_path / "work" / "obj.csv").read_text().strip() == "id,key,label,type"
+
+
+async def test_empty_assets_export_writes_an_empty_list_for_json(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    client = FakeClient({"assets_export_objects": {"delivery": "none", "columns": ["id", "key", "label", "type"]}})
+    step = {"id": "obj", "tool": "assets_export_objects", "args": {"aql": "objectType = X", "file_name": "obj.json"}}
+    await run(write_recipe([step]), client)
+    assert (tmp_path / "work" / "obj.json").read_text() == "[]"
 
 
 async def test_unexpected_delivery_fails(write_recipe: RecipeWriter) -> None:

@@ -226,7 +226,7 @@ Each signed bundle also carries a `serial` (see [Build the bundle](#build-the-bu
 pins the highest serial it has accepted in `org/org_config_serial.txt` and refuses a bundle with a
 lower one, so an old bundle cannot be put back by accident. Bundles built before this field existed
 are accepted until a serial has been pinned; from then on a bundle without one is refused. The
-reasoning is in [ADR 0199](adr/0199-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md).
+reasoning is in [ADR 0200](adr/0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md).
 
 ### Generate the signing key
 

@@ -149,6 +149,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
 from ..policy import scope_rows
 from ..policy import store as policy_store
+from ..policy.value_format import RuleValueError
 from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
@@ -643,6 +644,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "    } else if (res.ok && scopedAction) { window.location.reload(); } "
         "else if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
         "else if (!res.ok && (tokenAction || scopedAction) && res.state && res.state.error) { window.alert(res.state.error); } "
+        "else if (!res.ok && res.state && typeof res.state.error === 'string' && window.__pfShowError) { window.__pfShowError(res.state.error); } "
         "else if (!res.ok) { console.error('PrivacyFence action failed:', action, res.state); } });"
         "}};"
         "})();</script>"
@@ -2048,7 +2050,10 @@ def build_org_routes(
             if not verb_enums:
                 return None
             value = _parse_value_list(str(body.get("value") or ""))
-            new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            try:
+                new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            except RuleValueError as exc:
+                raise org_install_policy.PolicyChangeRejected(str(exc)) from exc
             if not new_rules:
                 return None
             row_ids = auto_accept.policy_row_ids_for(new_rules)

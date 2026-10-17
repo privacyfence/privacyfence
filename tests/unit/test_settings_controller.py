@@ -31,7 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from privacyfence import auto_accept, daemon_main, org_mode, resource_names, scoped_tokens, settings_controller as sc, update_checker
+from privacyfence import auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, update_checker
 from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
 from privacyfence import peek_client, policy_upgrade
@@ -41,6 +41,7 @@ from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.registry import Verb
+from privacyfence.principal import current_principal
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -80,6 +81,8 @@ def controller(tmp_path, monkeypatch):
     data_dir_path = tmp_path / "data"
     data_dir_path.mkdir()
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
+    # Deleting a rule also edits the principal's scoped-token file (ADR 0198).
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("connectors: {}\n", encoding="utf-8")
@@ -2079,6 +2082,23 @@ class TestAddPolicyRule:
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
 
+    def test_a_title_instead_of_an_id_is_refused_with_the_message_in_the_snapshot(self, controller):
+        before = controller._load_config()
+
+        state = controller.add_policy_rule("slack.channel", "#general", ["read"])
+
+        assert state["error"].startswith("'#general' is not a Slack ID.")
+        assert state["auto_accept"]["rules"] == []
+        assert controller._load_config() == before
+
+    def test_a_valid_add_after_a_refused_one_clears_the_error(self, controller):
+        controller.add_policy_rule("slack.channel", "#general", ["read"])
+
+        state = controller.add_policy_rule("slack.channel", "C0123456789", ["read"])
+
+        assert state["error"] == ""
+        assert len(state["auto_accept"]["rules"]) == 1
+
     @pytest.mark.parametrize("method", ["add", "remove", "set_verbs", "update"])
     def test_rules_changed_listeners_see_the_new_rule(self, controller, method):
         """The rule cache is reloaded before the listeners fire, so a listener that re-checks a
@@ -2244,6 +2264,51 @@ class TestPolicyRuleRows:
         controller.remove_policy_rule(drop)
 
         assert [r.id for r in scope_rows.rows_from_config(controller._load_config())] == [keep]
+
+    @staticmethod
+    def _seed_token(rule_ids):
+        token = scoped_tokens.ScopedToken(
+            id="st-000000000000", label="sync", digest="d", principal_id="local", principal_email="",
+            principal_display_name="", created_at=0.0, expires_at=1e12,
+            rule_ids=frozenset(rule_ids), tools=frozenset({"drive_download_file"}),
+        )
+        principal = current_principal()
+        path = paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
+        secure_files.atomic_write_json(path, {"version": 1, "tokens": [scoped_tokens._to_json(token)]})
+        store = scoped_tokens.ScopedTokenStore(lambda: [principal])
+        store.load()
+        scoped_tokens.set_store(store)
+        return token
+
+    @staticmethod
+    def _reread(token):
+        reread = scoped_tokens.get_store().get(token.principal_id, token.id)
+        assert reread is not None
+        return reread
+
+    def test_remove_drops_the_id_from_a_token_that_carried_it(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER2", ["read"])
+        keep = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        drop = scope_rows.row_id_for("drive.folder", ["FOLDER2"])
+        token = self._seed_token([keep, drop])
+
+        controller.remove_policy_rule(drop)
+
+        assert self._reread(token).rule_ids == {keep}
+
+    def test_adding_the_same_scope_again_does_not_restore_the_token_access(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        rule_id = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        token = self._seed_token([rule_id])
+
+        controller.remove_policy_rule(rule_id)
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+
+        assert scope_rows.row_id_for("drive.folder", ["FOLDER1"]) == rule_id
+        reread = self._reread(token)
+        assert reread.rule_ids == frozenset()
+        assert gate_module._rules_in_scope(reread) == []
 
     def test_update_fills_missing_on_row(self, controller):
         controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])

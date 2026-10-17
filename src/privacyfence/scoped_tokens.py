@@ -231,6 +231,47 @@ def migrate_token_file(path: Path, migration: "V2Migration") -> list[str]:
     return labels
 
 
+def _without_rules(token: ScopedToken, rule_ids: frozenset[str]) -> ScopedToken:
+    """``token`` minus ``rule_ids`` and their limits; ``token`` itself when it carries none of them.
+    A token left with no rules and no tools stays: it is not revoked."""
+    if not (token.rule_ids & rule_ids) and not any(k in rule_ids for k in token.rule_limits):
+        return token
+    return replace(
+        token,
+        rule_ids=token.rule_ids - rule_ids,
+        rule_limits={k: v for k, v in token.rule_limits.items() if k not in rule_ids},
+    )
+
+
+def forget_rules_in_file(path: Path, rule_ids: Iterable[str]) -> list[str]:
+    """Drop ``rule_ids`` from every token in ``path``; return the labels of the tokens that changed.
+    A missing or unreadable file is left alone, and entries that cannot be read are kept as they
+    are. Raises ``OSError`` if the write fails."""
+    gone = frozenset(rule_ids)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entries = list(data["tokens"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    labels: list[str] = []
+    out: list[Any] = []
+    for raw in entries:
+        try:
+            token = _from_json("", raw)
+        except (KeyError, TypeError, ValueError):
+            out.append(raw)
+            continue
+        new = _without_rules(token, gone)
+        if new is token:
+            out.append(raw)
+            continue
+        out.append(_to_json(new))
+        labels.append(new.label)
+    if labels:
+        secure_files.atomic_write_json(path, {"version": 1, "tokens": out})
+    return labels
+
+
 # (st_mtime_ns, st_ino) of a principal's file; the atomic replace gives a new inode, so a
 # same-second edit on a filesystem with coarse timestamps is still seen.
 _Stamp = tuple[int, int] | None
@@ -432,6 +473,23 @@ class ScopedTokenStore:
                 self._write(principal)
             return labels
 
+    def forget_rules(self, principal: Principal, rule_ids: Iterable[str]) -> list[str]:
+        """``forget_rules_in_file`` for a live store: under the lock, on the freshly read tokens."""
+        gone = frozenset(rule_ids)
+        with self._lock:
+            self._refresh(principal)
+            labels: list[str] = []
+            tokens: list[ScopedToken] = []
+            for token in self._tokens[principal.id]:
+                new = _without_rules(token, gone)
+                if new is not token:
+                    labels.append(new.label)
+                tokens.append(new)
+            if labels:
+                self._tokens[principal.id] = tokens
+                self._write(principal)
+            return labels
+
     def find(self, secret: str, now: float | None = None) -> ScopedToken | None:
         if not secret.startswith(TOKEN_PREFIX):
             return None
@@ -481,6 +539,18 @@ def migrate_tokens(principal: Principal, migration: "V2Migration") -> list[str]:
     if store is not None:
         return store.apply_migration(principal, migration)
     return migrate_token_file(paths.authority_dir(principal) / STORE_FILE_NAME, migration)
+
+
+def forget_rules(principal: Principal, rule_ids: Iterable[str]) -> list[str]:
+    """Drop deleted rules from ``principal``'s tokens through the live store when one is set, else
+    straight in the file. Returns the labels of the tokens that changed."""
+    gone = frozenset(rule_ids)
+    if not gone:
+        return []
+    store = current_store()
+    if store is not None:
+        return store.forget_rules(principal, gone)
+    return forget_rules_in_file(paths.authority_dir(principal) / STORE_FILE_NAME, gone)
 
 
 def set_store(store: ScopedTokenStore | None) -> None:

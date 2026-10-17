@@ -67,7 +67,7 @@ Go through the existing skill step by step and turn each part into a recipe step
 A scheduled run gets no approval cards, so every step needs an auto-accept rule. After you write
 a recipe, give the user the exact list of rules to create in Settings:
 
-- the scope (for example Salesforce report, Jira project, Drive folder, Grist document, Peek page),
+- the scope (for example Salesforce report, Jira project, Jira Assets schema, Drive folder, Grist document, Peek page),
 - the value (the report id, project key, folder id, document id or slug),
 - the verbs to tick,
 - whether to tick the personal-data box for that scope.

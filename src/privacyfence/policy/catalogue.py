@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from . import describe, propose, registry, store
+from . import describe, propose, registry, store, value_format
 from .engine import PolicyRule
 from .registry import Verb
 
@@ -181,7 +181,7 @@ def parse_verbs(verbs: Any) -> list[Verb]:
 
 
 def rules_for_catalogue_entry(
-    group: str, value: list[str] | None, verbs: list[Verb],
+    group: str, value: Any, verbs: list[Verb],
 ) -> list[PolicyRule]:
     """The ``PolicyRule``s an "add a rule" submission (``group``/``value``/``verbs``) compiles to,
     or ``[]`` for an unrecognized group, a group none of the requested verbs govern, or (for the one
@@ -202,8 +202,15 @@ def rules_for_catalogue_entry(
     return _compile_catalogue_rules(group, value, verbs)
 
 
-def _compile_catalogue_rules(group: str, value: list[str] | None, verbs: list[Verb]) -> list[PolicyRule]:
+def _compile_catalogue_rules(group: str, value: Any, verbs: list[Verb]) -> list[PolicyRule]:
     extra = EXTRA_SCOPES.get(group)
+    if extra is None and group not in propose.SCOPES_BY_GROUP:
+        return []
+    predicates = (
+        {extra.predicate} if extra is not None
+        else {scope.predicate for scope in propose.SCOPES_BY_GROUP[group]}
+    )
+    value = value_format.normalise_rule_value(predicates, value)
     if extra is not None:
         allowed_verbs = [v for v in verbs if v in extra.verbs]
         if not allowed_verbs or (extra.needs_value and not value):
@@ -216,8 +223,6 @@ def _compile_catalogue_rules(group: str, value: list[str] | None, verbs: list[Ve
         return store.merge_rules([
             PolicyRule(id=extra.predicate, predicate=extra.predicate, value=value, operations=operations),
         ])
-    if group not in propose.SCOPES_BY_GROUP:
-        return []
     return propose.rules_for_scope_group(group, value, verbs)
 
 
