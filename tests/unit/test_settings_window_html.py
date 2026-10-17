@@ -751,7 +751,7 @@ class TestScopedTokensSection:
 
     def test_rules_show_their_resource_with_the_verbs_as_a_detail(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
-        assert "esc(r.title) +" in html
+        assert "withValuesHtml(r.title_parts, r.value_items, r.title)" in html
         assert "'allows ' + r.verbs.join(', ')" in html
         assert "Pick the tools below as well: a tool that needs approval works only where a selected rule covers it." in html
 
@@ -770,7 +770,14 @@ class TestScopedTokensSection:
     def test_a_missing_rule_is_shown_as_no_longer_existing(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "a rule that no longer exists" in html
-        assert "r.missing ? 'a rule that no longer exists' : esc(r.sentence)" in html
+        assert "r.missing ? 'a rule that no longer exists' : withValuesHtml(r.sentence_parts" in html
+
+    def test_resource_values_toggle_between_ids_and_names_on_both_pages(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-show-ids-toggle="1"' in html
+        assert "withValuesHtml(r.sentence_parts, r.value_items, r.sentence)" in html
+        assert "pf-val-invalid" in html
+        assert "Shown in red: not found, it may have been deleted." in html
 
     def test_a_token_can_be_duplicated_and_the_form_cleared(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
