@@ -55,6 +55,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Deleting an auto-accept rule removes it from scoped tokens.** A scoped token no longer keeps the id of a deleted rule, so adding the same rule again does not give it back its old access. The token's other rules and tools are unchanged ([ADR 0198](docs/adr/0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md)).
 - **Adding an auto-accept rule checks the value.** A Drive folder, Slack channel, Jira project, calendar, task list, ... given by its name or title, or by something that is not an id, is now refused with a message saying which id to enter, in Settings, in organization Settings and through `privacyfence_propose_policy_change`, instead of being saved as a rule that never matches.
 
 ## [6.3.0] — 2026-10-16

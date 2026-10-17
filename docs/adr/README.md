@@ -255,7 +255,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted |
 | [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
-| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173 |
+| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198 |
 | [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072 |
 | [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148; amended by 0174 |
 | [0167](0167-a-card-number-must-have-a-length-its-first-digit-allows.md) | A card number must have a length its first digit allows | Accepted |
@@ -263,7 +263,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0169](0169-a-stable-branch-follows-the-latest-stable-release-for-the-plugin-marketplace.md) | A `stable` branch follows the latest stable release for the plugin marketplace | Accepted |
 | [0170](0170-a-drive-copy-is-its-own-verb-governed-by-the-move-folder-scope.md) | A Drive copy is its own verb, governed by the move folder scope | Accepted; amended by 0171 |
 | [0171](0171-auto-accept-rules-use-nine-verbs.md) | Auto-accept rules use nine verbs | Accepted; amends 0170 |
-| [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074 |
+| [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074; amended by 0198 |
 | [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164 |
 | [0174](0174-a-rules-verbs-are-edited-in-place.md) | A rule's verbs are edited in place | Accepted; amends 0166 |
 | [0175](0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md) | An approval is bound to the whole request and to what its card showed | Accepted; amends 0073 |
@@ -289,3 +289,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0195](0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md) | Importing personal settings is merge-only, previewed, and step-up gated on the file hash | Accepted |
 | [0196](0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md) | Every connector is offered only when the organization config has its section; Telegram, Peek and Grist take a bare `enabled` switch | Accepted |
 | [0197](0197-an-organization-can-turn-the-export-tools-off.md) | An organization can turn the export tools off | Accepted |
+| [0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md) | Deleting an auto-accept rule removes it from scoped tokens | Accepted; amends 0164, 0172 |

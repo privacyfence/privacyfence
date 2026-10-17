@@ -55,7 +55,7 @@ import yaml
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import auto_accept, paths, personal_settings, privacy_filter, scoped_tokens, step_up_config
+from privacyfence import auto_accept, paths, personal_settings, privacy_filter, scoped_tokens, secure_files, step_up_config
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
@@ -923,6 +923,35 @@ class TestRemoveRule:
 
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == []
+
+    def test_drops_the_rule_from_that_principals_tokens_only(self, tmp_path, monkeypatch):
+        rules = _catalogue_rules("gmail.sender", "read")
+        _seed(tmp_path, monkeypatch, "alice", rules=rules)
+        _seed(tmp_path, monkeypatch, "bob", rules=rules)
+        files = {}
+        for principal in (ALICE, BOB):
+            token = scoped_tokens.ScopedToken(
+                id="st-000000000000", label="sync", digest="d", principal_id=principal.id,
+                principal_email=principal.email, principal_display_name=principal.display_name,
+                created_at=0.0, expires_at=1e12, rule_ids=frozenset({rules[0].id, "r-other"}),
+                tools=frozenset({"gmail_get_message"}),
+            )
+            files[principal.id] = paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
+            secure_files.atomic_write_json(
+                files[principal.id], {"version": 1, "tokens": [scoped_tokens._to_json(token)]},
+            )
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = _post_action(client, "remove_policy_rule", {"rule_id": rules[0].id}, csrf)
+        assert r.status_code == 200
+
+        carried = {
+            pid: json.loads(path.read_text(encoding="utf-8"))["tokens"][0]["rule_ids"]
+            for pid, path in files.items()
+        }
+        assert carried == {"alice": ["r-other"], "bob": sorted([rules[0].id, "r-other"])}
 
     def test_removes_exactly_that_rule_and_nothing_else(self, tmp_path, monkeypatch):
         sender_rule = _catalogue_rules("gmail.sender", "read")[0]
