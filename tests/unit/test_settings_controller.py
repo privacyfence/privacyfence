@@ -2604,6 +2604,18 @@ class TestAutoAcceptRuleUsage:
         assert row["never_matched"] is True
 
 
+class _DriveFailing:
+    """A Drive client whose every metadata lookup fails with the given HTTP status."""
+
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def get_file_metadata(self, file_id: str):
+        error = RuntimeError(f"HTTP {self.status}")
+        error.resp = SimpleNamespace(status=self.status)
+        raise error
+
+
 class TestScopeRowState:
     """The Auto-accept page reads scope rows (ADR 0172), not one entry per stored predicate."""
 
@@ -2655,9 +2667,17 @@ class TestScopeRowState:
         rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
         resolver = sc.get_resolver()
         gone = scope_row.value[0]
-        resolver.resolve(rt, gone, type("C", (), {"get_file_metadata": lambda self, i: (_ for _ in ()).throw(KeyError(i))})())
+        resolver.resolve(rt, gone, _DriveFailing(status=404))
         (item, *_) = sc.row_value_items(scope_row, resolver)
         assert item["id"] == gone and item["status"] == "invalid"
+
+    def test_an_id_whose_lookup_failed_is_not_invalid(self, controller):
+        (scope_row,) = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
+        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
+        resolver = sc.get_resolver()
+        resolver.resolve(rt, scope_row.value[0], _DriveFailing(status=429))
+        (item, *_) = sc.row_value_items(scope_row, resolver)
+        assert item["status"] == "pending"
 
     def test_a_row_that_compiles_to_nothing_lists_its_values_as_plain(self):
         row = sc.policy_scope_rows.ScopeRow(

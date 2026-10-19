@@ -1,18 +1,23 @@
 """Account-id -> display-name directory shared by the Jira and Confluence clients.
 
 Names are looked up lazily, only for the ids that actually appear in a read, through Jira's user
-API (ADR 0117), and remembered in a small cache that can be persisted to disk. This module also
+API (ADR 0117), and remembered in a small cache that can be persisted to disk. The accounts in
+that cache are reported to Atlassian's personal data reporting API once per cycle, and an entry
+Atlassian answers "closed" or "updated" for, or one neither retrieved nor reported within a cycle
+and a day, is erased (ADR 0202). This module also
 holds the ``@[Name](accountId)`` mention markup helpers used on reads and writes, and the
 storage-format helpers Confluence needs.
 """
 from __future__ import annotations
 
 import html as html_lib
+import contextlib
 import json
 import logging
 import os
 import re
 import threading
+from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import quote, quote_plus
 from collections.abc import Callable, Iterable, Mapping
@@ -37,12 +42,38 @@ ACCOUNT_ID_RE = re.compile(r"[A-Za-z0-9:_-]{10,128}")  # always used with .fullm
 MENTION_MARKUP_RE = re.compile(r"@\[([^\]\n]{1,200})\]\(([A-Za-z0-9:_-]{10,128})\)")
 UNKNOWN_USER_LABEL = "unknown user"
 CUSTOMER_ACCOUNT_LABEL = "Customer account"
+REPORT_ACCOUNTS_URL = "https://api.atlassian.com/app/report-accounts/"
+REPORT_BATCH_SIZE = 90
+DEFAULT_REPORT_CYCLE = timedelta(days=7)
+_MIN_REPORT_CYCLE = timedelta(hours=1)
+_MAX_REPORT_CYCLE = timedelta(days=30)
+# How long past its cycle an unreported entry is kept before it is erased instead.
+REPORT_GRACE = timedelta(days=1)
+_REPORT_RETRY = timedelta(hours=1)
+CACHE_FILENAME = "atlassian_user_cache.json"
+# The account id shape the reporting API accepts; anything else (Atlassian's placeholder "unknown"
+# included) is never reported and simply expires.
+_REPORTABLE_ID_RE = re.compile(r"[A-Za-z0-9:-]{1,128}")
 # Deliberately loose: a false positive only relabels a name, a false negative leaks an address.
 _EMAIL_RE = re.compile(r"[\w.+%'-]+@[\w-]+(?:\.[\w-]+)+")
 
 
 class AtlassianUsersError(Exception):
     """Raised when a user lookup against Atlassian cannot complete."""
+
+
+class AtlassianReportDeferred(AtlassianUsersError):
+    """The reporting API answered 429; try again after ``retry_after``."""
+
+    def __init__(self, retry_after: timedelta) -> None:
+        super().__init__(f"personal data report rate limited; retry in {retry_after}")
+        self.retry_after = retry_after
+
+
+@dataclass
+class ReportOutcome:
+    statuses: dict[str, str]  # account id -> "closed" or "updated"; absent means no action
+    cycle: timedelta | None  # the Cycle-Period header, when Atlassian sent one
 
 
 @dataclass
@@ -112,6 +143,44 @@ def search_users(
     )
     response.raise_for_status()
     return [u for u in (parse_user(v) for v in response.json()) if u is not None]
+
+
+def _parse_seconds(value: str | None) -> timedelta | None:
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return timedelta(seconds=seconds) if seconds > 0 else None
+
+
+def _clamp_cycle(cycle: timedelta) -> timedelta:
+    return max(_MIN_REPORT_CYCLE, min(cycle, _MAX_REPORT_CYCLE))
+
+
+def _rfc3339(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def report_accounts(
+    session: requests.Session, accounts: list[tuple[str, datetime]]
+) -> ReportOutcome:
+    """POST one batch (at most ``REPORT_BATCH_SIZE``) of account ids, each with the time its data
+    was retrieved, to Atlassian's personal data reporting API for OAuth 2.0 (3LO) apps."""
+    body = {"accounts": [{"accountId": i, "updatedAt": _rfc3339(t)} for i, t in accounts]}
+    response = session.post(REPORT_ACCOUNTS_URL, json=body, timeout=_HTTP_TIMEOUT_SECONDS)
+    cycle = _parse_seconds(response.headers.get("Cycle-Period"))
+    if response.status_code == 429:
+        raise AtlassianReportDeferred(
+            _parse_seconds(response.headers.get("Retry-After")) or _REPORT_RETRY
+        )
+    if response.status_code == 204:
+        return ReportOutcome({}, cycle)
+    response.raise_for_status()
+    statuses: dict[str, str] = {}
+    for item in (response.json() or {}).get("accounts") or []:
+        if isinstance(item, dict) and item.get("status") in ("closed", "updated"):
+            statuses[str(item.get("accountId") or "")] = item["status"]
+    return ReportOutcome(statuses, cycle)
 
 
 def redact_query(exc: Exception, query: str) -> str:
@@ -263,25 +332,94 @@ def markup_to_storage(text: str) -> str:
 
 
 FetchFn = Callable[[list[str]], list[AtlassianUser]]
+ReportFn = Callable[[list[tuple[str, datetime]]], ReportOutcome]
+
+
+def _overdue(reference: datetime, cycle: timedelta, now: datetime) -> bool:
+    return now - reference > cycle + REPORT_GRACE
+
+
+def erase_overdue_cache_file(path: str | os.PathLike[str], now: datetime | None = None) -> int:
+    """Drop every entry of one cache file neither retrieved nor reported within its cycle and a day;
+    return how many were erased. Deletes the file when nothing is left, or when it cannot be read,
+    since an unreadable file cannot be reported either. Never raises."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        users = data.get("users")
+        if not isinstance(users, dict):
+            raise TypeError("'users' is not an object")
+    except FileNotFoundError:
+        return 0
+    except Exception as exc:
+        logger.warning("Erasing unreadable Atlassian user cache %s: %s", path, exc)
+        with contextlib.suppress(OSError):
+            os.remove(path)
+        return 0
+    cycle = _clamp_cycle(_parse_seconds(data.get("report_cycle_seconds")) or DEFAULT_REPORT_CYCLE)
+    kept = {}
+    for account_id, raw in users.items():
+        try:
+            stamps = [datetime.fromisoformat(raw["fetched_at"])]
+            if raw.get("reported_at"):
+                stamps.append(datetime.fromisoformat(raw["reported_at"]))
+            reference = max(t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in stamps)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if not _overdue(reference, cycle, now):
+            kept[account_id] = raw
+    erased = len(users) - len(kept)
+    if not erased:
+        return 0
+    try:
+        if kept:
+            atomic_write_json(str(path), {**data, "users": kept})
+        else:
+            os.remove(path)
+    except OSError as exc:
+        logger.warning("Could not erase overdue Atlassian user cache entries in %s: %s", path, exc)
+        return 0
+    logger.info("Erased %d unreported Atlassian account(s) from %s", erased, path)
+    return erased
+
+
+def erase_overdue_caches(root: str | os.PathLike[str]) -> int:
+    """``erase_overdue_cache_file`` for the cache under ``root`` and every principal's under
+    ``root/users/*``, including ones whose connectors are not running."""
+    base = Path(root)
+    candidates = [base / CACHE_FILENAME, *sorted((base / "users").glob(f"*/{CACHE_FILENAME}"))]
+    return sum(erase_overdue_cache_file(p) for p in candidates)
 
 
 class AtlassianUserDirectory:
-    def __init__(self, cache_file: str = "", cloud_id: str = "") -> None:
+    """Account id -> name cache.
+
+    With ``background_reports`` on, ``report_soon`` reports the cached accounts that are due on a
+    background thread; without it (the default, and every test that builds a directory) it does
+    nothing, so no report is ever sent that the caller did not ask for."""
+
+    def __init__(self, cache_file: str = "", cloud_id: str = "", background_reports: bool = False) -> None:
         self._cache_file = cache_file
         self._cloud_id = cloud_id
+        self._background_reports = background_reports
         self._users: dict[str, AtlassianUser] = {}
         self._fetched_at: dict[str, datetime] = {}
+        self._reported_at: dict[str, datetime] = {}
+        self._report_cycle = DEFAULT_REPORT_CYCLE
+        self._next_report_attempt: datetime | None = None
         self._negative: dict[str, datetime] = {}
         self._last_failure: datetime | None = None
         self._loaded = False
         self._lock = threading.Lock()
         self._refresh_lock = threading.Lock()
+        self._report_lock = threading.Lock()
 
     def resolve(self, account_ids: Iterable[str], fetch: FetchFn) -> dict[str, str]:
         """Map account ids to display names; never raises."""
         now = datetime.now(timezone.utc)
         with self._lock:
-            self._load_locked()
+            self._prepare_locked(now)
             wanted = list(dict.fromkeys(i for i in account_ids if ACCOUNT_ID_RE.fullmatch(i)))
             to_fetch = [i for i in wanted if self._needs_fetch(i, now)]
             cooling_down = (
@@ -326,8 +464,8 @@ class AtlassianUserDirectory:
 
     def remember(self, users: Iterable[AtlassianUser]) -> None:
         with self._lock:
-            self._load_locked()
             now = datetime.now(timezone.utc)
+            self._prepare_locked(now)
             for user in users:
                 if not user.display_name.strip():
                     continue
@@ -342,7 +480,7 @@ class AtlassianUserDirectory:
             raise AtlassianUsersError("refresh already in progress")
         try:
             with self._lock:
-                self._load_locked()
+                self._prepare_locked(datetime.now(timezone.utc))
                 ids = list(self._users)
             if not ids:
                 return 0
@@ -357,6 +495,9 @@ class AtlassianUserDirectory:
                 fresh = [u for u in fresh if u.display_name.strip()]
                 self._users = {u.account_id: u for u in fresh}
                 self._fetched_at = {u.account_id: now for u in fresh}
+                self._reported_at = {
+                    i: t for i, t in self._reported_at.items() if i in self._users
+                }
                 for account_id in ids:
                     if account_id not in self._users:
                         self._negative[account_id] = now
@@ -365,6 +506,114 @@ class AtlassianUserDirectory:
                 return len(self._users)
         finally:
             self._refresh_lock.release()
+
+    def report_soon(self, report: ReportFn) -> None:
+        """Start ``report_due`` on a background thread if accounts are due and no attempt is
+        waiting out a retry delay. Does nothing unless the directory was built with
+        ``background_reports``; never raises."""
+        if not self._background_reports:
+            return
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            self._prepare_locked(now)
+            if self._next_report_attempt is not None and now < self._next_report_attempt:
+                return
+            if not any(self._report_due_locked(i, now) for i in self._users):
+                return
+            # Claimed before the thread starts, so a burst of lookups starts one thread.
+            self._next_report_attempt = now + _REPORT_RETRY
+        threading.Thread(
+            target=self._report_quietly, args=(report,), name="atlassian-personal-data-report",
+            daemon=True,
+        ).start()
+
+    def _report_quietly(self, report: ReportFn) -> None:
+        try:
+            erased = self.report_due(report)
+        except AtlassianUsersError as exc:
+            logger.warning("Atlassian personal data report not sent (will retry): %s", exc)
+            return
+        if erased:
+            logger.info("Erased %d Atlassian account(s) Atlassian reported closed or updated", erased)
+
+    def report_due(self, report: ReportFn) -> int:
+        """Report every cached account not reported within the current cycle, in batches of
+        ``REPORT_BATCH_SIZE``, and erase each one Atlassian answers "closed" or "updated" for.
+
+        Returns how many accounts were erased. Each batch's outcome is saved before the next is
+        sent, so an interrupted run resumes where it stopped. Raises ``AtlassianUsersError`` when a
+        batch fails (``AtlassianReportDeferred`` on a 429), after which no report is attempted
+        until the retry delay has passed."""
+        if not self._report_lock.acquire(blocking=False):
+            return 0
+        try:
+            with self._lock:
+                now = datetime.now(timezone.utc)
+                self._prepare_locked(now)
+                due = [
+                    (i, self._fetched_at[i]) for i in self._users if self._report_due_locked(i, now)
+                ]
+            erased = 0
+            for start in range(0, len(due), REPORT_BATCH_SIZE):
+                batch = due[start:start + REPORT_BATCH_SIZE]
+                try:
+                    outcome = report(batch)
+                except AtlassianReportDeferred as exc:
+                    self._defer_reports(exc.retry_after)
+                    raise
+                except Exception as exc:
+                    self._defer_reports(_REPORT_RETRY)
+                    raise AtlassianUsersError(f"personal data report failed: {exc}") from exc
+                with self._lock:
+                    stamp = datetime.now(timezone.utc)
+                    if outcome.cycle is not None:
+                        self._report_cycle = _clamp_cycle(outcome.cycle)
+                    for account_id, _ in batch:
+                        if outcome.statuses.get(account_id):
+                            self._erase_locked(account_id)
+                            self._negative[account_id] = stamp
+                            erased += 1
+                        elif account_id in self._users:
+                            self._reported_at[account_id] = stamp
+                    self._save_locked()
+            self._defer_reports(_REPORT_RETRY)
+            return erased
+        finally:
+            self._report_lock.release()
+
+    def _defer_reports(self, delay: timedelta) -> None:
+        with self._lock:
+            self._next_report_attempt = datetime.now(timezone.utc) + delay
+
+    def _report_due_locked(self, account_id: str, now: datetime) -> bool:
+        if account_id == "unknown" or not _REPORTABLE_ID_RE.fullmatch(account_id):
+            return False
+        reported_at = self._reported_at.get(account_id)
+        return reported_at is None or now - reported_at >= self._report_cycle
+
+    def _last_seen_locked(self, account_id: str) -> datetime:
+        """When this entry was last retrieved from or reported to Atlassian."""
+        fetched_at = self._fetched_at[account_id]
+        reported_at = self._reported_at.get(account_id)
+        return max(fetched_at, reported_at) if reported_at is not None else fetched_at
+
+    def _erase_locked(self, account_id: str) -> None:
+        self._users.pop(account_id, None)
+        self._fetched_at.pop(account_id, None)
+        self._reported_at.pop(account_id, None)
+
+    def _prepare_locked(self, now: datetime) -> None:
+        """Load the cache file once, then erase every entry neither retrieved nor reported within
+        the cycle and a day."""
+        self._load_locked()
+        overdue = [
+            i for i in self._users
+            if _overdue(self._last_seen_locked(i), self._report_cycle, now)
+        ]
+        for account_id in overdue:
+            self._erase_locked(account_id)
+        if overdue:
+            self._save_locked()
 
     def _needs_fetch(self, account_id: str, now: datetime) -> bool:
         fetched_at = self._fetched_at.get(account_id)
@@ -384,6 +633,9 @@ class AtlassianUserDirectory:
                 data = json.load(fh)
             if data.get("cloud_id") != self._cloud_id:
                 return
+            cycle = _parse_seconds(data.get("report_cycle_seconds"))
+            if cycle is not None:
+                self._report_cycle = _clamp_cycle(cycle)
             raw_users = data.get("users") or {}
             if not isinstance(raw_users, dict):
                 raise TypeError("'users' is not an object")
@@ -405,8 +657,15 @@ class AtlassianUserDirectory:
                 )
                 if not user.display_name.strip():
                     continue
+                reported_at = None
+                if raw.get("reported_at"):
+                    reported_at = datetime.fromisoformat(raw["reported_at"])
+                    if reported_at.tzinfo is None:
+                        reported_at = reported_at.replace(tzinfo=timezone.utc)
                 self._users.setdefault(account_id, user)
                 self._fetched_at.setdefault(account_id, fetched_at)
+                if reported_at is not None:
+                    self._reported_at.setdefault(account_id, reported_at)
             except (KeyError, TypeError, ValueError, AttributeError):
                 continue
 
@@ -415,6 +674,7 @@ class AtlassianUserDirectory:
             return
         payload = {
             "cloud_id": self._cloud_id,
+            "report_cycle_seconds": int(self._report_cycle.total_seconds()),
             "users": {
                 account_id: {
                     "account_id": u.account_id,
@@ -422,6 +682,10 @@ class AtlassianUserDirectory:
                     "active": u.active,
                     "account_type": u.account_type,
                     "fetched_at": self._fetched_at[account_id].isoformat(),
+                    **(
+                        {"reported_at": self._reported_at[account_id].isoformat()}
+                        if account_id in self._reported_at else {}
+                    ),
                 }
                 for account_id, u in self._users.items()
             },
