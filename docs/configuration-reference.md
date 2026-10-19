@@ -298,8 +298,8 @@ How the daemon treats the file:
 | `--server-trusted-proxy IP` | none | `server.trusted_proxies` | Repeatable. `X-Forwarded-For`/`X-Forwarded-Proto` are honoured only from these addresses. |
 | `--idp-issuer URL` | none | `idp.issuer` | OIDC issuer; `<issuer>/.well-known/openid-configuration` must be reachable. |
 | `--idp-client-id ID`, `--idp-client-secret SECRET` | none | `idp.client_id`, `idp.client_secret` | PrivacyFence's client registration at the identity provider. |
-| `--idp-admin-group-claim CLAIM` | none (nobody is admin) | `idp.admin_group_claim` | ID-token claim that marks administrators. |
-| `--idp-admin-group-value VALUE` | none | `idp.admin_group_values` | Repeatable. A value of that claim that makes someone an administrator. |
+| `--idp-admin-group-claim CLAIM` | none (nobody is admin) | `idp.admin_group_claim` | ID-token claim that marks administrators, for example `email`, `groups` or `roles`. It must be in the ID token; which one works depends on the identity provider, see [Who is an admin](org-mode-setup-guide.md#who-is-an-admin). |
+| `--idp-admin-group-value VALUE` | none | `idp.admin_group_values` | Repeatable. A value of that claim that makes someone an administrator. Matched exactly and case-sensitively. |
 | `--idp-step-up-acr-value ACR` | none | `idp.step_up_acr_values` | Repeatable. `acr_values` to request when step-up falls back to signing in again at the identity provider; without it, plain re-authentication. |
 | `--authz-allowed-domain DOMAIN` | none (any domain) | `authz.allowed_domains` | Repeatable. Admit only people whose email is at one of these domains. |
 | `--authz-groups-claim CLAIM` | none | `authz.groups_claim` | ID-token claim checked against `--authz-required-group`. |
