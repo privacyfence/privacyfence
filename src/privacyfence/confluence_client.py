@@ -52,6 +52,7 @@ from .atlassian_users import (
     AtlassianUser,
     AtlassianUserDirectory,
     AtlassianUsersError,
+    ReportOutcome,
     storage_mention_ids,
 )
 
@@ -330,9 +331,10 @@ class ConfluenceClient:
         try:
             self._request(self._client.get, _V2_SPACES_PATH, params={"limit": 1})
             logger.info("Connected to Confluence at %s", self._base_url)
-            return self._base_url
         except Exception as exc:
             raise ConfluenceClientError(f"Confluence connection check failed: {exc}") from exc
+        self._users.report_soon(self._report_accounts)
+        return self._base_url
 
     # ------------------------------------------------------------------ #
     # Users
@@ -371,9 +373,14 @@ class ConfluenceClient:
             account_ids,
         )
 
+    def _report_accounts(self, accounts: list[tuple[str, datetime]]) -> ReportOutcome:
+        return self._request(atlassian_users.report_accounts, self._session, accounts)
+
     def resolve_user_names(self, account_ids: list[str]) -> dict[str, str]:
         """Map account ids to display names; never raises."""
-        return self._users.resolve(account_ids, self._fetch_users_bulk)
+        names = self._users.resolve(account_ids, self._fetch_users_bulk)
+        self._users.report_soon(self._report_accounts)
+        return names
 
     def find_users(self, query: str, max_results: int = 10) -> list[AtlassianUser]:
         if not query or not query.strip():
@@ -392,6 +399,7 @@ class ConfluenceClient:
                 f"find_users failed: {atlassian_users.redact_query(exc, query)}"
             ) from exc
         self._users.remember(users)
+        self._users.report_soon(self._report_accounts)
         logger.info("find_users returned %d user(s)", len(users))
         return users
 
@@ -414,6 +422,22 @@ class ConfluenceClient:
         spaces = [self._parse_space(s) for s in results]
         logger.info("list_spaces returned %d space(s)", len(spaces))
         return spaces
+
+    def get_space(self, space_key: str) -> ConfluenceSpace | None:
+        """One space by key, or ``None`` when no space has that key. The v2 endpoint answers an
+        unmatched ``keys`` filter with a 404 or an empty list (see ``_resolve_space_id``); any other
+        failure raises."""
+        try:
+            raw = self._request(
+                self._client.get, _V2_SPACES_PATH,
+                params={"keys": space_key, "limit": 1, "description-format": "plain"},
+            )
+        except Exception as exc:
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                return None
+            raise ConfluenceClientError(f"get_space failed: {exc}") from exc
+        results = (raw or {}).get("results") or []
+        return self._parse_space(results[0]) if results else None
 
     def _collect_pages(
         self, path: str, max_results: int, page_max: int, label: str, params: dict[str, Any],

@@ -144,10 +144,33 @@ Admins see the **General**, **Privacy Filter** and **AI systems** pages in Setti
 admin unless you name a claim and its values with `--idp-admin-group-claim` and
 `--idp-admin-group-value` ([section 6](#6-signing-key-and-bundle)). A person is an admin when the
 claim contains any of the values. A claim that is a single string is matched like a one-item list.
+The match is exact and case-sensitive.
 
-**If Google is your identity provider, use `email` as the admin claim.** Google ID tokens carry no
-group membership and no Workspace admin role, so `groups` never matches anyone. List each admin's
-exact address:
+The daemon reads the claim from the **ID token** only, and it always requests the scopes
+`openid email profile`. It cannot ask for an extra scope such as `groups`. A claim that your
+provider adds only when another scope is requested, or puts only in the access token, never
+reaches the daemon, and nobody becomes an admin.
+
+Two kinds of claim work:
+
+- **`email`** works with every provider that puts the address in the ID token, with no setup at
+  the provider. List each admin's address exactly as the provider spells it. Use it for a few
+  admins, and always with Google.
+- **A group or role claim** (`groups`, `roles` or a custom claim) works only when you configure
+  the provider to put it in the ID token. Use it to manage admins in the provider instead of in
+  the bundle.
+
+| Identity provider | Use | What to set up at the provider | Value to pass |
+|---|---|---|---|
+| Google | `email` | Nothing. Google ID tokens carry no groups and no Workspace admin role, so `groups` never matches. | Each admin's address. |
+| Microsoft Entra ID | `roles` (recommended) | Under **App roles**, create a role, for example `PrivacyFence.Admin`, then assign people or groups to it in **Enterprise applications**. Assigned roles are put in the ID token. | The role's **Value**, for example `PrivacyFence.Admin`. |
+| Microsoft Entra ID | `groups` | Under **Token configuration**, add a groups claim and include it in the ID token. | The group's **Object ID** (a GUID), not its name. A person in more than 200 groups gets no `groups` claim; choose **Groups assigned to the application** to avoid that. |
+| Okta | `groups` | Add a claim named `groups` of type *Groups* with a filter, for example *Equals* `privacyfence-admins`. On the org authorization server set it under the app's **Sign On** > **OpenID Connect ID Token**. On a custom authorization server add it under **Claims**, with **Include in token type** *ID Token*, *Always*. *Always* matters: with *Any scope* or the `groups` scope it is left out. | The group name. |
+| Keycloak | `groups` | On the client's dedicated scope add a **Group Membership** mapper with **Token Claim Name** `groups`, **Add to ID token** on and **Full group path** off. With the full path on, the value is `/privacyfence-admins`, with a leading slash. | The group name. |
+| authentik | `groups` | Nothing. The default `profile` scope mapping includes `groups`. | The group name. |
+| Auth0 | a custom claim | Auth0 adds no groups or roles to the ID token. Add a post-login Action that sets a namespaced claim, for example `api.idToken.setCustomClaim("https://acme.example.com/roles", event.authorization.roles)`. | `--idp-admin-group-claim https://acme.example.com/roles` and the role name. |
+
+With Google:
 
 ```bash
   --idp-admin-group-claim email \
@@ -157,6 +180,18 @@ exact address:
 
 Do not use `hd` (the Workspace domain): every account in the domain has the same value, so every
 account would be an admin.
+
+With a group, for example on Okta, Keycloak or authentik:
+
+```bash
+  --idp-admin-group-claim groups \
+  --idp-admin-group-value privacyfence-admins \
+```
+
+Before you build the bundle, sign in to the provider as an admin and look at a real ID token, for
+example with the provider's token preview (Okta's **Token Preview**, Keycloak's **Client scopes** >
+**Evaluate** > **Generated ID token**) or by decoding one. Check that the claim is there and that
+its value is exactly what you pass. The daemon does not log the claims.
 
 Admin status is decided at sign-in and kept for the browser session. To add or remove an admin
 later, see [Changing a bundle later](#changing-a-bundle-later). After you change the admin list and
@@ -169,7 +204,10 @@ either or both of these to the bundle:
 
 - `--authz-allowed-domain acme.example.com` (repeatable): only email addresses at these domains.
 - `--authz-groups-claim groups --authz-required-group privacyfence-users` (value repeatable): only
-  people whose claim contains one of the values. This is independent of the admin claim.
+  people whose claim contains one of the values. This is independent of the admin claim, but it
+  is matched the same way: the claim must be in the ID token, as set up in the table under
+  [Who is an admin](#who-is-an-admin). With Google there is no such claim; use
+  `--authz-allowed-domain`.
 
 A person who fails either check is refused, and no session is created.
 
@@ -690,8 +728,9 @@ person allows it; the choice is remembered per person, client and redirect addre
 holds its own tokens; there is nothing to copy or paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
 which the person signs in again.
 
-claude.ai also needs this host on its **Settings → Capabilities → Domain allowlist** to move
-files larger than about 75 KB, in either direction; see
+claude.ai also needs this host on its domain allowlist to move files larger than about 75 KB,
+in either direction. On Team and Enterprise plans that list is set by a claude.ai Owner or admin
+under **Admin settings → Capabilities**, not by each person; see
 [File delivery](#13-file-delivery).
 
 Each AI client has its own page with the exact steps, what it asks before PrivacyFence's card, and
@@ -930,9 +969,10 @@ Which link a staged file gets:
 
 **The AI client has to be able to reach this host.** A client opens an agent link, and sends an
 upload, from wherever it runs its own code, which is not necessarily where it runs the MCP
-connection. claude.ai does both from its sandbox, which reaches only the domains on
-**Settings → Capabilities → Domain allowlist**. Put this deployment's host there, or every file
-over the inline limit, and every upload, fails from claude.ai after it has been approved. A
+connection. claude.ai does both from its sandbox, which reaches only the domains on its
+domain allowlist. Have a claude.ai Owner or admin put this deployment's host there (**Admin
+settings → Capabilities**, with **Code execution and file creation** on), or every file over the
+inline limit, and every upload, fails from claude.ai after it has been approved. A
 failure there never reaches PrivacyFence; see
 [Connect claude.ai](connect-claude-ai.md#files) and
 [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md). To read a
@@ -1226,9 +1266,13 @@ does not list that service's exact redirect URI. Each Google service has its own
 **A service is missing from `/connect`.** Its section is not in the bundle. Rebuild with its flags
 and `--merge`, install and restart.
 
-**Admins do not see Privacy Filter or AI systems.** The admin claim does not match. With Google as
-the identity provider, use `email` ([section 4](#who-is-an-admin)). After changing it, restart and
-sign out and back in.
+**Admins do not see Privacy Filter or AI systems.** The admin claim does not match. Look at an
+admin's ID token: either the claim is missing, because the provider does not put it in the ID
+token (with Google it never does; use `email`), or its value differs from
+`--idp-admin-group-value`, for example a Keycloak group path with a leading `/`, an Entra group's
+Object ID instead of its name, or different capitalization. See the table in
+[section 4](#who-is-an-admin). After changing the bundle or the provider, restart and sign out and
+back in.
 
 **Sign-in fails with an authorization error for some people.** They are outside
 `--authz-allowed-domain` or `--authz-required-group`.

@@ -43,6 +43,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Org mode's Connect page lists Jira Assets.** Assets uses the Jira and Confluence sign-in, so it had no row there and nothing said whether it was working. When the bundle switches Assets on, a **Jira Assets** row now says whether your Atlassian sign-in has the Assets permissions, and offers **Reconnect** when it was made before Assets was on.
+
+### Changed
+
+- **PrivacyFence reports the Atlassian accounts it caches to Atlassian's personal data reporting API, and erases the ones Atlassian says are closed or changed.** The Jira and Confluence name cache is reported once per cycle (7 days unless Atlassian asks otherwise) with the user's own sign-in, and an entry that has been neither fetched nor reported for a cycle and a day is erased, so a cached name never outlives its report. The Atlassian setup guide now also covers sharing the app (Distribution), without which only the app's creator can sign in.
+
+- **The organization setup guide says which admin claim works with which identity provider.** `email` works everywhere with no setup; `groups` or `roles` work only once the provider puts them in the ID token. The guide now gives the setup and the value to pass for Google, Microsoft Entra ID, Okta, Keycloak, authentik and Auth0, and how to check a real ID token first.
+
+### Fixed
+
+- **Auto-accept no longer marks existing resources as deleted.** Only a lookup that worked and found no such resource now shows a value as deleted. A lookup that failed (a rate limit, a timeout, a connector error) shows the value as not looked up yet and tries again a minute later. Jira projects and Confluence spaces are now looked up by key, so a project or space past the first 50 is no longer shown as deleted. A Slack channel, Telegram chat or Salesforce report missing from a list that was cut off is no longer shown as deleted either.
+
 ## [6.4.0] — 2026-10-17
 
 ### Changed

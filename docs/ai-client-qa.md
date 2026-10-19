@@ -97,8 +97,9 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
    - **Download:** ask it to download a Drive file larger than the inline limit (organization mode:
      `--downloads-inline-max-bytes`, a 100,000-byte tool result by default, so any file over about
      75 KB). The tool result carries a one-time link, and the file reaches you through it. On
-     claude.ai, check that the host is on **Settings → Capabilities → Domain allowlist** first
-     ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)); without
+     claude.ai, check that the host is on its domain allowlist first
+     ([who sets it](connect-claude-ai.md#files),
+     [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)); without
      it the fetch fails from claude.ai's sandbox, so the access log shows no
      `/mcp-files/fetch/` request.
 
