@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -557,6 +558,23 @@ class TestListProjects:
         client._client.projects.side_effect = RuntimeError("boom")
         with pytest.raises(JiraClientError, match="list_projects failed"):
             client.list_projects()
+
+
+class TestGetProject:
+    def test_reads_one_project_by_key(self):
+        client = make_client()
+        client._client.project.return_value = {"key": "VWHCM", "name": "VWHCM"}
+        assert client.get_project("VWHCM").name == "VWHCM"
+        client._client.project.assert_called_once_with("VWHCM")
+
+    def test_a_404_stays_the_errors_cause(self):
+        client = make_client()
+        error = RuntimeError("404 Not Found")
+        error.response = SimpleNamespace(status_code=404)
+        client._client.project.side_effect = error
+        with pytest.raises(JiraClientError, match="get_project failed") as info:
+            client.get_project("GONE")
+        assert info.value.__cause__ is error
 
 
 STORY_POINTS = {

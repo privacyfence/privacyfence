@@ -394,6 +394,15 @@ class JiraClient:
         logger.info("list_projects returned %d project(s)", len(projects))
         return projects
 
+    def get_project(self, key: str) -> JiraProject:
+        """One project by key. A key that does not exist (or that this user cannot browse) fails
+        with Jira's 404, kept as the ``JiraClientError``'s cause."""
+        try:
+            raw = self._request(self._client.project, key)
+        except Exception as exc:
+            raise JiraClientError(f"get_project failed: {exc}") from exc
+        return self._parse_project(raw or {})
+
     # ------------------------------------------------------------------ #
     # Issues
     # ------------------------------------------------------------------ #

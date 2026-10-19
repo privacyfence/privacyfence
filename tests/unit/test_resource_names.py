@@ -222,6 +222,23 @@ class TestInvalid:
         assert resolver.cached_name(rt, "F1") == "My Drive: Back"
 
 
+class TestFailedLookup:
+    def test_a_lookup_that_raises_is_not_invalid_and_waits_before_retrying(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
+        resolver = rn.ResourceNameResolver()
+        rt = _folder_type()
+        resolver.resolve(rt, "F1", _FakeClient({"F1": "Q3"}))
+        monkeypatch.setattr(rn, "CACHE_TTL_SECONDS", 0)
+
+        assert resolver.resolve(rt, "F1", _FailingClient()) == "My Drive: Q3"
+        assert not resolver.is_invalid(rt, "F1")
+        assert not resolver.needs_resolve(rt, "F1")
+
+        monkeypatch.setattr(rn, "RETRY_AFTER_FAILURE_SECONDS", 0)
+        assert resolver.needs_resolve(rt, "F1")
+        assert resolver.resolve(rt, "F1", _FakeClient({"F1": "Q4"})) == "My Drive: Q4"
+
+
 class TestInvalidSkipsTheClient:
     def test_a_fresh_not_found_answers_from_the_cache_without_asking_again(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rn, "_cache_file", lambda: tmp_path / "cache.json")
