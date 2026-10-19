@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.5.0] — 2026-10-19
+
 ### Added
 
 - **Org mode's Connect page lists Jira Assets.** Assets uses the Jira and Confluence sign-in, so it had no row there and nothing said whether it was working. When the bundle switches Assets on, a **Jira Assets** row now says whether your Atlassian sign-in has the Assets permissions, and offers **Reconnect** when it was made before Assets was on.
@@ -3379,7 +3381,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.4.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.5.0...HEAD
+[6.5.0]: https://github.com/privacyfence/privacyfence/compare/v6.4.0...v6.5.0
 [6.4.0]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...v6.3.0
 [6.2.0]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...v6.2.0
