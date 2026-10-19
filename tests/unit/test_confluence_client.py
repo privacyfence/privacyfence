@@ -1377,3 +1377,61 @@ class TestLiveFixtureParsing:
         spaces = [client._parse_space(s) for s in raw.get("results", [])]
         assert spaces, "recorded list_spaces.json has no results"
         assert all(s.key and s.name for s in spaces)
+
+
+class TestPersonalDataReporting:
+    """Confluence lookups and the connection check give the shared directory its chance to report
+    the cached accounts to Atlassian (ADR 0202)."""
+
+    def _spy(self, client: ConfluenceClient) -> MagicMock:
+        spy = MagicMock()
+        client._users.report_soon = spy
+        return spy
+
+    def test_check_connection_reports(self):
+        client = make_client()
+        client._client.get.return_value = {"results": []}
+        spy = self._spy(client)
+        client.check_connection()
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_failed_connection_check_does_not_report(self):
+        client = make_client()
+        client._client.get.side_effect = RuntimeError("down")
+        spy = self._spy(client)
+        with pytest.raises(ConfluenceClientError):
+            client.check_connection()
+        spy.assert_not_called()
+
+    def test_resolve_user_names_reports(self, monkeypatch):
+        patch_bulk(monkeypatch, {AUTHOR: "Ada"})
+        client = make_client()
+        spy = self._spy(client)
+        assert client.resolve_user_names([AUTHOR]) == {AUTHOR: "Ada"}
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_find_users_reports(self, monkeypatch):
+        monkeypatch.setattr(
+            atlassian_users, "search_users",
+            lambda *a: [atlassian_users.AtlassianUser(AUTHOR, "Ada")],
+        )
+        client = make_client()
+        spy = self._spy(client)
+        client.find_users("ada")
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_report_refreshes_an_expired_token_once(self, monkeypatch):
+        outcome = atlassian_users.ReportOutcome({}, None)
+        calls = []
+
+        def report(session, accounts):
+            calls.append(session)
+            if len(calls) == 1:
+                raise unauthorized_error()
+            return outcome
+
+        monkeypatch.setattr(atlassian_users, "report_accounts", report)
+        client = make_client()
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+        assert client._report_accounts([]) is outcome
+        assert calls == [client._session, client._session]
