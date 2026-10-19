@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The organization setup guide says which admin claim works with which identity provider.** `email` works everywhere with no setup; `groups` or `roles` work only once the provider puts them in the ID token. The guide now gives the setup and the value to pass for Google, Microsoft Entra ID, Okta, Keycloak, authentik and Auth0, and how to check a real ID token first.
+
 ## [6.4.0] — 2026-10-17
 
 ### Changed
