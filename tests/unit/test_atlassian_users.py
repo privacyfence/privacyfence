@@ -662,3 +662,415 @@ class TestDirectoryRememberAndRefresh:
         assert directory.resolve([ID_A], fetch) == {ID_A: "A"}
         fetch.assert_not_called()
         assert directory.refresh(lambda ids: [_user(ID_A, "A")]) == 1
+
+
+# ---------------------------------------------------------------------------- #
+# Personal data reporting (ADR 0202)
+# ---------------------------------------------------------------------------- #
+
+def _post_response(status: int, payload=None, headers=None):
+    resp = MagicMock()
+    resp.status_code = status
+    resp.headers = headers or {}
+    resp.json.return_value = payload
+    if status >= 400:
+        resp.raise_for_status.side_effect = au.requests.HTTPError(f"{status} Error")
+    return resp
+
+
+def _post_session(*responses):
+    session = MagicMock()
+    session.post.side_effect = list(responses)
+    return session
+
+
+class TestReportAccounts:
+    def test_posts_ids_with_rfc3339_retrieval_times(self):
+        from datetime import datetime, timezone
+
+        session = _post_session(_post_response(204))
+        fetched = datetime(2026, 1, 2, 3, 4, 5, 678000, tzinfo=timezone.utc)
+        au.report_accounts(session, [(ID_A, fetched)])
+        url = session.post.call_args.args[0]
+        assert url == "https://api.atlassian.com/app/report-accounts/"
+        assert session.post.call_args.kwargs["json"] == {
+            "accounts": [{"accountId": ID_A, "updatedAt": "2026-01-02T03:04:05.678Z"}]
+        }
+
+    def test_204_means_no_action(self):
+        outcome = au.report_accounts(_post_session(_post_response(204)), [])
+        assert outcome.statuses == {} and outcome.cycle is None
+
+    def test_200_returns_closed_and_updated_only(self):
+        payload = {"accounts": [
+            {"accountId": ID_A, "status": "closed"},
+            {"accountId": ID_B, "status": "updated"},
+            {"accountId": "other-account", "status": "something-new"},
+            "not-a-dict",
+        ]}
+        outcome = au.report_accounts(_post_session(_post_response(200, payload)), [])
+        assert outcome.statuses == {ID_A: "closed", ID_B: "updated"}
+
+    def test_cycle_period_header_is_read_in_seconds(self):
+        outcome = au.report_accounts(
+            _post_session(_post_response(204, headers={"Cycle-Period": "86400"})), [])
+        assert outcome.cycle == timedelta(days=1)
+
+    @pytest.mark.parametrize("value", ["soon", "0", "-5", None])
+    def test_unusable_cycle_period_is_ignored(self, value):
+        headers = {} if value is None else {"Cycle-Period": value}
+        outcome = au.report_accounts(_post_session(_post_response(204, headers=headers)), [])
+        assert outcome.cycle is None
+
+    def test_429_defers_for_retry_after(self):
+        session = _post_session(_post_response(429, headers={"Retry-After": "120"}))
+        with pytest.raises(au.AtlassianReportDeferred) as err:
+            au.report_accounts(session, [])
+        assert err.value.retry_after == timedelta(seconds=120)
+
+    def test_429_without_retry_after_defers_an_hour(self):
+        with pytest.raises(au.AtlassianReportDeferred) as err:
+            au.report_accounts(_post_session(_post_response(429)), [])
+        assert err.value.retry_after == timedelta(hours=1)
+
+    def test_error_status_raises(self):
+        with pytest.raises(au.requests.HTTPError):
+            au.report_accounts(_post_session(_post_response(500)), [])
+
+
+def _outcome(statuses=None, cycle=None):
+    return au.ReportOutcome(statuses or {}, cycle)
+
+
+class TestDirectoryReporting:
+    """Every cached account is reported once per cycle, with the time its data was retrieved, and
+    an account Atlassian answers closed or updated for is erased from memory and disk."""
+
+    def test_reports_each_cached_account_with_its_retrieval_time(self):
+        directory = AtlassianUserDirectory()
+        with freeze_time("2026-01-01 00:00:00"):
+            directory.remember([_user(ID_A), _user(ID_B)])
+        report = MagicMock(return_value=_outcome())
+        with freeze_time("2026-01-01 01:00:00"):
+            assert directory.report_due(report) == 0
+        (batch,), _ = report.call_args
+        assert [i for i, _ in batch] == [ID_A, ID_B]
+        assert {t.isoformat() for _, t in batch} == {"2026-01-01T00:00:00+00:00"}
+
+    def test_reported_account_is_not_reported_again_within_the_cycle(self):
+        directory = AtlassianUserDirectory()
+        report = MagicMock(return_value=_outcome())
+        with freeze_time("2026-01-01 00:00:00"):
+            directory.remember([_user(ID_A)])
+            directory.report_due(report)
+        with freeze_time("2026-01-07 23:00:00"):
+            directory.report_due(report)
+        assert report.call_count == 1
+        with freeze_time("2026-01-08 00:00:00"):
+            directory.report_due(report)
+        assert report.call_count == 2
+
+    def test_nothing_cached_sends_nothing(self):
+        report = MagicMock()
+        assert AtlassianUserDirectory().report_due(report) == 0
+        report.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["closed", "updated"])
+    def test_closed_or_updated_account_is_erased_everywhere(self, tmp_path: Path, status):
+        path = tmp_path / "users.json"
+        directory = AtlassianUserDirectory(str(path), CLOUD)
+        directory.remember([_user(ID_A, "Jane"), _user(ID_B, "Bob")])
+        erased = directory.report_due(MagicMock(return_value=_outcome({ID_A: status})))
+        assert erased == 1
+        assert set(json.loads(path.read_text())["users"]) == {ID_B}
+        fetch = MagicMock(return_value=[])
+        assert directory.resolve([ID_A, ID_B], fetch) == {ID_B: "Bob"}
+
+    def test_erased_account_is_not_refetched_at_once(self):
+        directory = AtlassianUserDirectory()
+        directory.remember([_user(ID_A)])
+        directory.report_due(MagicMock(return_value=_outcome({ID_A: "closed"})))
+        fetch = MagicMock()
+        assert directory.resolve([ID_A], fetch) == {}
+        fetch.assert_not_called()
+
+    def test_reported_at_is_persisted_and_reloaded(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        with freeze_time("2026-01-01 00:00:00"):
+            directory = AtlassianUserDirectory(str(path), CLOUD)
+            directory.remember([_user(ID_A)])
+            directory.report_due(MagicMock(return_value=_outcome()))
+        assert json.loads(path.read_text())["users"][ID_A]["reported_at"] == \
+            "2026-01-01T00:00:00+00:00"
+        report = MagicMock(return_value=_outcome())
+        with freeze_time("2026-01-03 00:00:00"):
+            AtlassianUserDirectory(str(path), CLOUD).report_due(report)
+        report.assert_not_called()
+
+    def test_naive_reported_at_on_disk_is_read_as_utc(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        path.write_text(json.dumps({"cloud_id": CLOUD, "users": {ID_A: {
+            "account_id": ID_A, "display_name": "Jane", "fetched_at": "2026-01-01T00:00:00",
+            "reported_at": "2026-01-01T00:00:00"}}}))
+        report = MagicMock(return_value=_outcome())
+        with freeze_time("2026-01-02 00:00:00"):
+            AtlassianUserDirectory(str(path), CLOUD).report_due(report)
+        report.assert_not_called()
+
+    def test_batches_hold_at_most_90_accounts(self):
+        directory = AtlassianUserDirectory()
+        directory.remember([_user(i) for i in _ids(200)])
+        report = MagicMock(return_value=_outcome())
+        directory.report_due(report)
+        assert [len(c.args[0]) for c in report.call_args_list] == [90, 90, 20]
+
+    def test_interrupted_run_resumes_with_the_unreported_batch(self):
+        directory = AtlassianUserDirectory()
+        ids = _ids(100)
+        directory.remember([_user(i) for i in ids])
+        report = MagicMock(side_effect=[_outcome(), RuntimeError("503")])
+        with pytest.raises(AtlassianUsersError, match="personal data report failed: 503"):
+            directory.report_due(report)
+        retry = MagicMock(return_value=_outcome())
+        directory.report_due(retry)
+        assert [i for i, _ in retry.call_args.args[0]] == ids[90:]
+
+    def test_cycle_period_from_atlassian_is_followed_and_saved(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        report = MagicMock(return_value=_outcome(cycle=timedelta(days=2)))
+        with freeze_time("2026-01-01 00:00:00"):
+            directory = AtlassianUserDirectory(str(path), CLOUD)
+            directory.remember([_user(ID_A)])
+            directory.report_due(report)
+        assert json.loads(path.read_text())["report_cycle_seconds"] == 2 * 86400
+        with freeze_time("2026-01-03 00:00:00"):
+            AtlassianUserDirectory(str(path), CLOUD).report_due(report)
+        assert report.call_count == 2
+
+    @pytest.mark.parametrize("cycle,expected", [
+        (timedelta(seconds=5), timedelta(hours=1)),
+        (timedelta(days=365), timedelta(days=30)),
+    ])
+    def test_cycle_period_is_clamped(self, tmp_path: Path, cycle, expected):
+        path = tmp_path / "users.json"
+        directory = AtlassianUserDirectory(str(path), CLOUD)
+        directory.remember([_user(ID_A)])
+        directory.report_due(MagicMock(return_value=_outcome(cycle=cycle)))
+        assert json.loads(path.read_text())["report_cycle_seconds"] == expected.total_seconds()
+
+    def test_concurrent_run_is_skipped(self):
+        directory = AtlassianUserDirectory()
+        directory.remember([_user(ID_A)])
+        report = MagicMock()
+        with directory._report_lock:
+            assert directory.report_due(report) == 0
+        report.assert_not_called()
+
+    def test_refresh_keeps_reported_at_only_for_accounts_still_cached(self):
+        directory = AtlassianUserDirectory()
+        directory.remember([_user(ID_A), _user(ID_B)])
+        directory.report_due(MagicMock(return_value=_outcome()))
+        directory.refresh(MagicMock(return_value=[_user(ID_A)]))
+        assert set(directory._reported_at) == {ID_A}
+
+
+class TestReportSoon:
+    def _directory(self, **kwargs) -> AtlassianUserDirectory:
+        directory = AtlassianUserDirectory(**kwargs)
+        directory.remember([_user(ID_A)])
+        return directory
+
+    def test_does_nothing_without_background_reports(self, monkeypatch):
+        started = MagicMock()
+        monkeypatch.setattr(au.threading, "Thread", started)
+        self._directory().report_soon(MagicMock())
+        started.assert_not_called()
+
+    def test_reports_on_a_background_thread(self):
+        done = threading.Event()
+
+        def report(batch):
+            done.set()
+            return _outcome()
+
+        self._directory(background_reports=True).report_soon(report)
+        assert done.wait(5)
+
+    def test_one_thread_per_retry_window(self, monkeypatch):
+        started = MagicMock()
+        monkeypatch.setattr(au.threading, "Thread", started)
+        directory = self._directory(background_reports=True)
+        with freeze_time("2026-01-01 00:00:00"):
+            directory.report_soon(MagicMock())
+            directory.report_soon(MagicMock())
+        assert started.call_count == 1
+        with freeze_time("2026-01-01 01:00:01"):
+            directory.report_soon(MagicMock())
+        assert started.call_count == 2
+
+    def test_nothing_due_starts_nothing(self, monkeypatch):
+        directory = self._directory(background_reports=True)
+        directory.report_due(MagicMock(return_value=_outcome()))
+        directory._next_report_attempt = None
+        started = MagicMock()
+        monkeypatch.setattr(au.threading, "Thread", started)
+        directory.report_soon(MagicMock())
+        started.assert_not_called()
+
+    def test_429_waits_out_retry_after(self, monkeypatch):
+        directory = self._directory(background_reports=True)
+        with freeze_time("2026-01-01 00:00:00"):
+            directory._report_quietly(
+                MagicMock(side_effect=au.AtlassianReportDeferred(timedelta(hours=3))))
+        started = MagicMock()
+        monkeypatch.setattr(au.threading, "Thread", started)
+        with freeze_time("2026-01-01 02:59:00"):
+            directory.report_soon(MagicMock())
+        started.assert_not_called()
+        with freeze_time("2026-01-01 03:00:01"):
+            directory.report_soon(MagicMock())
+        started.assert_called_once()
+
+    def test_background_failure_is_logged_not_raised(self, caplog):
+        directory = self._directory()
+        with caplog.at_level(logging.WARNING):
+            directory._report_quietly(MagicMock(side_effect=RuntimeError("403 Forbidden")))
+        assert "personal data report not sent" in caplog.text
+
+    def test_background_erasure_is_logged(self, caplog):
+        directory = self._directory()
+        with caplog.at_level(logging.INFO):
+            directory._report_quietly(MagicMock(return_value=_outcome({ID_A: "closed"})))
+        assert "Erased 1 Atlassian account" in caplog.text
+
+
+class TestOverdueErasure:
+    """An entry neither retrieved nor reported for a cycle and a day is erased, so a cache whose
+    reports fail, or whose user stopped using PrivacyFence, does not keep personal data."""
+
+    def test_unreported_entry_is_erased_after_a_cycle_and_a_day(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        with freeze_time("2026-01-01 00:00:00"):
+            AtlassianUserDirectory(str(path), CLOUD).remember([_user(ID_A, "Jane")])
+        fetch = MagicMock(return_value=[])
+        with freeze_time("2026-01-08 23:59:00"):
+            assert AtlassianUserDirectory(str(path), CLOUD).resolve([ID_A], fetch) == \
+                {ID_A: "Jane"}
+        with freeze_time("2026-01-09 00:01:00"):
+            assert AtlassianUserDirectory(str(path), CLOUD).resolve([ID_A], fetch) == {}
+        assert json.loads(path.read_text())["users"] == {}
+
+    def test_a_report_keeps_the_entry(self):
+        directory = AtlassianUserDirectory()
+        with freeze_time("2026-01-01 00:00:00"):
+            directory.remember([_user(ID_A, "Jane")])
+        with freeze_time("2026-01-08 00:00:00"):
+            directory.report_due(MagicMock(return_value=_outcome()))
+        with freeze_time("2026-01-15 00:00:00"):
+            assert directory.resolve([ID_A], MagicMock(return_value=[])) == {ID_A: "Jane"}
+
+
+def _cache_file(path: Path, users: dict, cycle_seconds: int | None = None) -> None:
+    data: dict = {"cloud_id": CLOUD, "users": users}
+    if cycle_seconds is not None:
+        data["report_cycle_seconds"] = cycle_seconds
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+
+
+def _entry(account_id: str, fetched_at: str, reported_at: str | None = None) -> dict:
+    entry = {"account_id": account_id, "display_name": "Jane", "fetched_at": fetched_at}
+    if reported_at:
+        entry["reported_at"] = reported_at
+    return entry
+
+
+class TestEraseOverdueCacheFile:
+    def test_drops_overdue_entries_and_keeps_the_rest(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        _cache_file(path, {
+            ID_A: _entry(ID_A, "2026-01-01T00:00:00+00:00"),
+            ID_B: _entry(ID_B, "2026-01-01T00:00:00+00:00", "2026-01-08T00:00:00+00:00"),
+            "bad": {"account_id": "bad"},
+        })
+        with freeze_time("2026-01-10 00:00:00"):
+            assert au.erase_overdue_cache_file(path) == 2
+        data = json.loads(path.read_text())
+        assert set(data["users"]) == {ID_B} and data["cloud_id"] == CLOUD
+
+    def test_naive_timestamps_are_read_as_utc(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        _cache_file(path, {ID_A: _entry(ID_A, "2026-01-01T00:00:00")})
+        with freeze_time("2026-01-02 00:00:00"):
+            assert au.erase_overdue_cache_file(path) == 0
+
+    def test_nothing_overdue_leaves_the_file_untouched(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        _cache_file(path, {ID_A: _entry(ID_A, "2026-01-01T00:00:00+00:00")})
+        before = path.read_text()
+        with freeze_time("2026-01-02 00:00:00"):
+            assert au.erase_overdue_cache_file(path) == 0
+        assert path.read_text() == before
+
+    def test_file_is_deleted_when_nothing_is_left(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        _cache_file(path, {ID_A: _entry(ID_A, "2026-01-01T00:00:00+00:00")})
+        with freeze_time("2026-02-01 00:00:00"):
+            assert au.erase_overdue_cache_file(path) == 1
+        assert not path.exists()
+
+    def test_follows_the_files_own_cycle(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        _cache_file(path, {ID_A: _entry(ID_A, "2026-01-01T00:00:00+00:00")}, cycle_seconds=3600)
+        with freeze_time("2026-01-02 01:01:00"):
+            assert au.erase_overdue_cache_file(path) == 1
+
+    @pytest.mark.parametrize("content", ["{not json", json.dumps({"users": []})])
+    def test_unreadable_file_is_deleted(self, tmp_path: Path, content: str, caplog):
+        path = tmp_path / "users.json"
+        path.write_text(content)
+        with caplog.at_level(logging.WARNING):
+            assert au.erase_overdue_cache_file(path) == 0
+        assert not path.exists()
+        assert "Erasing unreadable" in caplog.text
+
+    def test_missing_file_is_fine(self, tmp_path: Path):
+        assert au.erase_overdue_cache_file(tmp_path / "absent.json") == 0
+
+    def test_write_error_is_logged_not_raised(self, tmp_path: Path, monkeypatch, caplog):
+        path = tmp_path / "users.json"
+        _cache_file(path, {
+            ID_A: _entry(ID_A, "2026-01-01T00:00:00+00:00"),
+            ID_B: _entry(ID_B, "2026-01-09T00:00:00+00:00"),
+        })
+
+        def boom(*args, **kwargs):
+            raise OSError("read-only")
+
+        monkeypatch.setattr(au, "atomic_write_json", boom)
+        with freeze_time("2026-01-10 00:00:00"), caplog.at_level(logging.WARNING):
+            assert au.erase_overdue_cache_file(path) == 0
+        assert "Could not erase" in caplog.text
+
+
+class TestEraseOverdueCaches:
+    def test_covers_the_local_cache_and_every_principals(self, tmp_path: Path):
+        old = {ID_A: _entry(ID_A, "2026-01-01T00:00:00+00:00")}
+        _cache_file(tmp_path / au.CACHE_FILENAME, old)
+        _cache_file(tmp_path / "users" / "alice" / au.CACHE_FILENAME, old)
+        _cache_file(tmp_path / "users" / "bob" / au.CACHE_FILENAME, old)
+        with freeze_time("2026-02-01 00:00:00"):
+            assert au.erase_overdue_caches(tmp_path) == 3
+        assert list(tmp_path.rglob(au.CACHE_FILENAME)) == []
+
+    def test_empty_root(self, tmp_path: Path):
+        assert au.erase_overdue_caches(tmp_path) == 0
+
+
+class TestUnreportableIds:
+    def test_ids_the_api_rejects_are_not_reported(self):
+        directory = AtlassianUserDirectory()
+        directory.remember([_user("unknown"), _user("has_underscore_id"), _user(ID_A)])
+        report = MagicMock(return_value=_outcome())
+        directory.report_due(report)
+        assert [i for i, _ in report.call_args.args[0]] == [ID_A]

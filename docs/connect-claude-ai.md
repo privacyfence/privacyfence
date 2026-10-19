@@ -25,9 +25,9 @@ Your administrator gives you the deployment's URL, for example `https://pf.examp
 1. In claude.ai's connector settings, add a custom connector with the URL
    `https://pf.example.com/mcp`. Leave the optional OAuth client ID and secret empty: claude.ai
    registers itself.
-2. Add the deployment's host, `pf.example.com`, to **Settings → Capabilities → Domain
-   allowlist**. Without it, every file larger than about 75 KB and every upload fails after you
-   approve it; see [Files](#files).
+2. Make sure the deployment's host, `pf.example.com`, is on claude.ai's domain allowlist.
+   Without it, every file larger than about 75 KB and every upload fails after you approve it;
+   see [Files](#files) for where the list is and who can change it.
 3. Click **Connect** on the connector and sign in with your organization account.
 4. Connect your services at `https://pf.example.com/connect`.
 
@@ -52,9 +52,20 @@ extension. Files travel through one-time links instead
 
 **Both need the host on claude.ai's domain allowlist.** claude.ai opens a link and sends an upload
 from its own sandbox, not through the connector. That sandbox reaches only the domains on
-**Settings → Capabilities → Domain allowlist**. If the deployment's host is not on the list, the
-approval goes through and claude.ai then reports that it cannot reach the site. PrivacyFence never
-sees the attempt ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)).
+claude.ai's domain allowlist. If the deployment's host is not on the list, the approval goes
+through and claude.ai then reports that it cannot reach the site. PrivacyFence never sees the
+attempt ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)).
+
+The allowlist is a claude.ai setting, not a PrivacyFence one, and it belongs to the claude.ai
+account, not to the connector:
+
+- **Team and Enterprise plans:** a claude.ai Owner or admin sets it once for the whole
+  organization, under **Admin settings → Capabilities**: turn on **Code execution and file
+  creation**, allow network egress to additional domains, and add the host. Members cannot add a
+  domain from their own settings, so ask your claude.ai admin.
+- **Pro and Max plans:** you set it yourself under **Settings → Capabilities**, the same way.
+
+The list appears only once **Code execution and file creation** is on.
 
 **To read a document, no download is needed.** `drive_get_file_content` returns a PDF, Word,
 PowerPoint or Excel file's text, so claude.ai can read it whatever its network settings. A scanned

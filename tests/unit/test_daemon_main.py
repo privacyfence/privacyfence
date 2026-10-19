@@ -1038,6 +1038,7 @@ class TestBuildConnectorsAtlassian:
         directory = jira_fake.captured_kwargs["user_directory"]
         assert directory is confluence_fake.captured_kwargs["user_directory"]
         assert directory._cache_file == str(data_dir() / "atlassian_user_cache.json")
+        assert directory._background_reports is True
         assert directory._cloud_id == "cloud-1"
 
     def test_config_passed_to_clients_merges_org_registration_and_token(self, monkeypatch):
@@ -3138,6 +3139,7 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: (connectors, {}))
         monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
         monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
+        monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
 
         _FakeWebServer.instances = []
         self._web_server_calls: list[dict[str, Any]] = []
@@ -3205,6 +3207,17 @@ class TestRunApp:
         assert wait_until(lambda: timer_calls)
         from privacyfence.settings_controller import SettingsController
         assert isinstance(timer_calls[0], SettingsController)
+
+    def test_personal_data_sweep_thread_started(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        sweeps = []
+        monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: sweeps.append(1))
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert wait_until(lambda: sweeps)
 
     def test_background_cache_warm_kicked_off_with_connectors_and_web_loop(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -4318,3 +4331,32 @@ class TestLoadOrgConfigSerial:
         with pytest.raises(org_mode.ConfigurationError) as excinfo:
             daemon_main.load_org_config()
         assert str(excinfo.value).endswith("(serial is not a positive integer) -- refusing to start.")
+
+
+class TestPersonalDataSweep:
+    """The sweep erases Atlassian user-cache entries that missed their report (ADR 0202) for every
+    principal under data_dir(), at startup and then on each interval, until shutdown."""
+
+    def test_sweeps_data_dir_until_shutdown(self, monkeypatch):
+        roots = []
+
+        def sweep(root):
+            roots.append(root)
+            if len(roots) == 2:
+                daemon_main._shutdown_event.set()
+            return 0
+
+        monkeypatch.setattr(daemon_main, "erase_overdue_caches", sweep)
+        monkeypatch.setattr(daemon_main, "PERSONAL_DATA_SWEEP_INTERVAL_SECONDS", 0)
+        daemon_main._run_personal_data_sweep()
+        assert roots == [data_dir(), data_dir()]
+
+    def test_failure_is_logged_and_retried(self, monkeypatch, caplog):
+        def sweep(root):
+            daemon_main._shutdown_event.set()
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(daemon_main, "erase_overdue_caches", sweep)
+        with caplog.at_level(logging.WARNING):
+            daemon_main._run_personal_data_sweep()
+        assert "personal data sweep failed" in caplog.text

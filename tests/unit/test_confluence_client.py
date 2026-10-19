@@ -627,6 +627,31 @@ class TestListPagesInSpace:
             client.list_pages_in_space("ENG")
 
 
+class TestGetSpace:
+    def test_reads_one_space_by_key(self):
+        client = make_client()
+        client._client.get.return_value = {"results": [{"key": "ENG", "name": "Engineering"}]}
+        assert client.get_space("ENG").name == "Engineering"
+        assert client._client.get.call_args.kwargs["params"]["keys"] == "ENG"
+
+    @pytest.mark.parametrize("answer", [{"results": []}, "404"])
+    def test_an_unknown_key_is_none(self, answer):
+        client = make_client()
+        if answer == "404":
+            exc = Exception("404 Client Error")
+            exc.response = MagicMock(status_code=404)
+            client._client.get.side_effect = exc
+        else:
+            client._client.get.return_value = answer
+        assert client.get_space("GONE") is None
+
+    def test_any_other_error_raises(self):
+        client = make_client()
+        client._client.get.side_effect = RuntimeError("boom")
+        with pytest.raises(ConfluenceClientError, match="get_space failed"):
+            client.get_space("ENG")
+
+
 BAD_PAGE_IDS = ["../spaces", "../../../rest/api/content?cql=type=page", "1?body-format=view", "1/../2", "abc"]
 
 
@@ -1352,3 +1377,61 @@ class TestLiveFixtureParsing:
         spaces = [client._parse_space(s) for s in raw.get("results", [])]
         assert spaces, "recorded list_spaces.json has no results"
         assert all(s.key and s.name for s in spaces)
+
+
+class TestPersonalDataReporting:
+    """Confluence lookups and the connection check give the shared directory its chance to report
+    the cached accounts to Atlassian (ADR 0202)."""
+
+    def _spy(self, client: ConfluenceClient) -> MagicMock:
+        spy = MagicMock()
+        client._users.report_soon = spy
+        return spy
+
+    def test_check_connection_reports(self):
+        client = make_client()
+        client._client.get.return_value = {"results": []}
+        spy = self._spy(client)
+        client.check_connection()
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_failed_connection_check_does_not_report(self):
+        client = make_client()
+        client._client.get.side_effect = RuntimeError("down")
+        spy = self._spy(client)
+        with pytest.raises(ConfluenceClientError):
+            client.check_connection()
+        spy.assert_not_called()
+
+    def test_resolve_user_names_reports(self, monkeypatch):
+        patch_bulk(monkeypatch, {AUTHOR: "Ada"})
+        client = make_client()
+        spy = self._spy(client)
+        assert client.resolve_user_names([AUTHOR]) == {AUTHOR: "Ada"}
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_find_users_reports(self, monkeypatch):
+        monkeypatch.setattr(
+            atlassian_users, "search_users",
+            lambda *a: [atlassian_users.AtlassianUser(AUTHOR, "Ada")],
+        )
+        client = make_client()
+        spy = self._spy(client)
+        client.find_users("ada")
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_report_refreshes_an_expired_token_once(self, monkeypatch):
+        outcome = atlassian_users.ReportOutcome({}, None)
+        calls = []
+
+        def report(session, accounts):
+            calls.append(session)
+            if len(calls) == 1:
+                raise unauthorized_error()
+            return outcome
+
+        monkeypatch.setattr(atlassian_users, "report_accounts", report)
+        client = make_client()
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+        assert client._report_accounts([]) is outcome
+        assert calls == [client._session, client._session]

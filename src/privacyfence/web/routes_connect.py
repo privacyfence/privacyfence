@@ -65,6 +65,7 @@ from starlette.routing import Route
 
 from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
+from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
 from ..calendar_client import SCOPES as _CALENDAR_SCOPES
 from ..connector_registry import ConnectorRegistry
@@ -804,6 +805,7 @@ li.service{--cluster-gap:var(--space-xs) var(--space-s);justify-content:space-be
 li.telegram{--stack-gap:var(--space-s)}
 .pf-telegram-form{--stack-gap:var(--space-xs)}
 li.peek{--stack-gap:var(--space-s)}
+li.assets{--stack-gap:var(--space-xs)}
 .pf-peek-form{--stack-gap:var(--space-xs)}
 .pf-peek-code{font-family:var(--font-mono);font-size:var(--step-h3);letter-spacing:.12em}
 """
@@ -843,6 +845,42 @@ def _service_row_html(principal: Principal, org_config: dict[str, Any], service:
         f'<li class="service card cluster"><span class="pf-service-head cluster">'
         f'<span class="pf-service-chip">{_esc(label)}</span>{badge}</span>{action}</li>'
     )
+
+
+def _assets_row_html(principal: Principal, org_config: dict[str, Any]) -> str:
+    """Jira Assets has no sign-in of its own: it rides on the Atlassian grant Jira and Confluence
+    share, which asks for the Assets scopes only when the bundle switches Assets on (ADR 0188). So
+    this row has no Connect of its own; it says whether that grant carries the Assets scopes, and
+    sends the user back through the Atlassian sign-in when it does not."""
+    if not _is_configured(org_config, "jira"):
+        badge = '<span class="badge badge-dashed">Not set up by your organization</span>'
+        help_text, action = "", ""
+    elif not _is_connected(principal, "jira"):
+        badge = '<span class="badge">Not connected</span>'
+        help_text = "Uses your Jira and Confluence sign-in. Connect either one to turn it on."
+        action = ""
+    elif ASSETS_REQUIRED_SCOPE in _atlassian_granted_scopes(principal):
+        badge, help_text = _CONNECTED_BADGE, "Uses your Jira and Confluence sign-in."
+        action = ""
+    else:
+        badge = '<span class="badge">Needs reconnect</span>'
+        help_text = "Your Atlassian sign-in was made before Assets was switched on. Reconnect to grant it."
+        action = '<div class="cluster"><a class="button primary" href="/oauth/start/jira">Reconnect</a></div>'
+    help_html = f'<div class="field-help">{help_text}</div>' if help_text else ""
+    return (
+        f'<li class="service assets card stack"><div class="pf-service-head cluster">'
+        f'<span class="pf-service-chip">Jira Assets</span>{badge}</div>{help_html}{action}</li>'
+    )
+
+
+def _atlassian_granted_scopes(principal: Principal) -> list[str]:
+    """The scopes the saved Atlassian token records; empty when it cannot be read."""
+    try:
+        record = atlassian_oauth.load_token_file(_token_file_path(principal, "jira"))
+    except (atlassian_oauth.AtlassianOAuthError, OSError, ValueError):
+        return []
+    scopes = record.get("scopes") if isinstance(record, dict) else None
+    return list(scopes) if isinstance(scopes, list) else []
 
 
 def _telegram_box_html(principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState, csrf: str) -> str:
@@ -988,6 +1026,8 @@ def _render_connect_page(
     other_rows = "".join(
         _service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence") if offered(s)
     )
+    if offered("assets") and atlassian_oauth.assets_enabled({}, org_config):
+        other_rows += _assets_row_html(principal, org_config)
     telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf) if offered("telegram") else ""
     peek_row = _peek_box_html(principal, org_config, peek_state or _PeekState(), csrf) if offered("peek") else ""
     grist_row = _grist_box_html(principal, org_config, csrf, grist_error) if offered("grist") else ""
