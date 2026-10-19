@@ -202,6 +202,14 @@ class TestConnectPageLook:
             assert '<span class="pf-service-chip">Jira Assets</span><span class="badge">Needs reconnect</span>' in html
             assert 'class="button primary" href="/oauth/start/jira">Reconnect<' in html
 
+    def test_assets_row_asks_for_a_reconnect_when_the_saved_token_cannot_be_read(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        token_file = paths.user_dir(principal) / "credentials" / "atlassian_token.json"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        for content in ("{not json", "[]"):
+            token_file.write_text(content)
+            assert '<span class="badge">Needs reconnect</span>' in self._assets_page()
+
     def test_assets_row_without_an_atlassian_app_is_not_set_up(self):
         html = self._assets_page(atlassian={"site": "x"})
         assert (
