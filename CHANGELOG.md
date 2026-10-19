@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Org mode's Connect page lists Jira Assets.** Assets uses the Jira and Confluence sign-in, so it had no row there and nothing said whether it was working. When the bundle switches Assets on, a **Jira Assets** row now says whether your Atlassian sign-in has the Assets permissions, and offers **Reconnect** when it was made before Assets was on.
+
 ### Changed
 
 - **The organization setup guide says which admin claim works with which identity provider.** `email` works everywhere with no setup; `groups` or `roles` work only once the provider puts them in the ID token. The guide now gives the setup and the value to pass for Google, Microsoft Entra ID, Okta, Keycloak, authentik and Auth0, and how to check a real ID token first.

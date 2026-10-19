@@ -171,6 +171,44 @@ class TestConnectPageLook:
         unconfigured = self._page(org_config={"telegram": {"enabled": True}})
         assert '<span class="badge badge-dashed">Not set up by your organization</span>' in unconfigured
 
+    def _assets_page(self, *, assets: bool = True, scopes=None, atlassian=None) -> str:
+        principal = Principal(id="alice", email="alice@example.com")
+        if scopes is not None:
+            token_file = paths.user_dir(principal) / "credentials" / "atlassian_token.json"
+            token_file.parent.mkdir(parents=True, exist_ok=True)
+            token_file.write_text(json.dumps({"access_token": "a", "scopes": scopes}))
+        section = _ORG_CONFIG["atlassian"] if atlassian is None else atlassian
+        return self._page(org_config={**_ORG_CONFIG, "atlassian": {**section, "assets": assets}})
+
+    def test_assets_row_is_listed_only_when_the_bundle_switches_assets_on(self):
+        assert '<span class="pf-service-chip">Jira Assets</span>' in self._assets_page(assets=True)
+        assert "Jira Assets" not in self._assets_page(assets=False)
+        assert "Jira Assets" not in self._page(org_config={"slack": _ORG_CONFIG["slack"]})
+
+    def test_assets_row_without_an_atlassian_sign_in_points_at_jira_and_confluence(self):
+        html = self._assets_page()
+        assert '<span class="pf-service-chip">Jira Assets</span><span class="badge">Not connected</span>' in html
+        assert "Connect either one to turn it on." in html
+        assert 'href="/oauth/start/assets"' not in html
+
+    def test_assets_row_is_connected_when_the_sign_in_carries_the_assets_scopes(self):
+        html = self._assets_page(scopes=["read:jira-work", "read:cmdb-object:jira"])
+        assert '<span class="pf-service-chip">Jira Assets</span>' + rc._CONNECTED_BADGE in html
+        assert "Needs reconnect" not in html
+
+    def test_assets_row_asks_for_a_reconnect_when_the_sign_in_predates_assets(self):
+        for scopes in (["read:jira-work"], "not-a-list"):
+            html = self._assets_page(scopes=scopes)
+            assert '<span class="pf-service-chip">Jira Assets</span><span class="badge">Needs reconnect</span>' in html
+            assert 'class="button primary" href="/oauth/start/jira">Reconnect<' in html
+
+    def test_assets_row_without_an_atlassian_app_is_not_set_up(self):
+        html = self._assets_page(atlassian={"site": "x"})
+        assert (
+            '<span class="pf-service-chip">Jira Assets</span>'
+            '<span class="badge badge-dashed">Not set up by your organization</span>'
+        ) in html
+
     def test_rows_are_cards_and_nothing_is_styled_inline(self):
         html = self._page()
         # Ten OAuth services and Telegram (enabled, but no app credentials on this install); Peek and
