@@ -18,13 +18,13 @@
         }
       },
       "createdAt": "2026-09-11T11:57:27.370Z",
-      "id": "qa-placeholder-id-2",
+      "id": "qa-placeholder-id-3",
       "lastOwnerId": null,
       "ownerId": "qa-placeholder-account-id",
       "parentId": "qa-placeholder-id-1",
       "parentType": "page",
       "position": 2432,
-      "spaceId": "qa-placeholder-id-3",
+      "spaceId": "qa-placeholder-id-2",
       "status": "current",
       "title": "PrivacyFence QA seed page [QATEST]",
       "version": {
