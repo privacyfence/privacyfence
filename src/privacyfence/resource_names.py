@@ -39,6 +39,9 @@ from .secure_files import atomic_write_json
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_SECONDS = 15 * 60
+# How long a lookup that failed (the connector errored, rather than finding no such resource) waits
+# before it is tried again -- long enough that a page render does not retry it on every rebuild.
+RETRY_AFTER_FAILURE_SECONDS = 60
 
 
 def _cache_file() -> Path:
@@ -61,10 +64,13 @@ class ResourceNameResolver:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._memory: dict[str, tuple[str, float]] = {}
-        # key -> when a live lookup with an authenticated client last found nothing. In memory only:
-        # a resource that cannot be found right now (deleted, or the connector hiccuped) is retried
-        # after the TTL, and never overwrites the last-known name on disk.
+        # key -> when a live lookup with an authenticated client last found no such resource (the
+        # resolver returned None). In memory only: retried after the TTL, and never overwrites the
+        # last-known name on disk.
         self._invalid: dict[str, float] = {}
+        # key -> when a live lookup last failed (the resolver raised). Not a sign the resource is
+        # gone, so never shown as invalid; it only holds off the retry for a minute.
+        self._failed: dict[str, float] = {}
         self._disk: dict[str, str] = self._load_disk_cache()
 
     def _load_disk_cache(self) -> dict[str, str]:
@@ -106,14 +112,21 @@ class ResourceNameResolver:
         """True when ``resolve`` would hit the connector: no live outcome (name or not-found) is
         fresh yet. A name read from disk alone still counts -- it is only the last known one."""
         key = _cache_key(rt, resource_id)
-        now = time.monotonic()
         with self._lock:
-            hit = self._memory.get(key)
-            checked = self._invalid.get(key)
-            return not (
-                (hit is not None and now - hit[1] < CACHE_TTL_SECONDS)
-                or (checked is not None and now - checked < CACHE_TTL_SECONDS)
-            )
+            return not self._recently_checked(key)
+
+    def _recently_checked(self, key: str) -> bool:
+        """A live outcome for ``key`` is fresh: a name or a not-found within the TTL, or a failure
+        within ``RETRY_AFTER_FAILURE_SECONDS``. Caller holds the lock."""
+        now = time.monotonic()
+        hit = self._memory.get(key)
+        checked = self._invalid.get(key)
+        failed = self._failed.get(key)
+        return (
+            (hit is not None and now - hit[1] < CACHE_TTL_SECONDS)
+            or (checked is not None and now - checked < CACHE_TTL_SECONDS)
+            or (failed is not None and now - failed < RETRY_AFTER_FAILURE_SECONDS)
+        )
 
     def resolve(self, rt: GrantResourceType, resource_id: str, client: Any | None) -> str | None:
         """Resolve now, live if possible. Safe to call from a background
@@ -121,15 +134,18 @@ class ResourceNameResolver:
 
         Returns the freshly resolved name, or the last-known cached name if
         resolution isn't possible right now (no client) or fails, or None
-        if there's no name available from any source.
+        if there's no name available from any source. Only a resolver that
+        answers ``None`` marks the id invalid; one that raises is logged and
+        retried after ``RETRY_AFTER_FAILURE_SECONDS``.
         """
         key = _cache_key(rt, resource_id)
         with self._lock:
             hit = self._memory.get(key)
             fresh = hit is not None and (time.monotonic() - hit[1]) < CACHE_TTL_SECONDS
+            recently_checked = self._recently_checked(key)
         if fresh and hit is not None:
             return hit[0]
-        if self.is_invalid(rt, resource_id):
+        if recently_checked:
             return self.cached_name(rt, resource_id)
 
         if client is not None:
@@ -139,16 +155,20 @@ class ResourceNameResolver:
                 logger.warning(
                     "Name resolution failed for %s %r: %s", rt.config_key, resource_id, exc
                 )
-                name = None
+                with self._lock:
+                    self._failed[key] = time.monotonic()
+                return self.cached_name(rt, resource_id)
             if name:
                 with self._lock:
                     self._memory[key] = (name, time.monotonic())
                     self._invalid.pop(key, None)
+                    self._failed.pop(key, None)
                     self._disk[key] = name
                 self._save_disk_cache()
                 return name
             with self._lock:
                 self._memory.pop(key, None)
+                self._failed.pop(key, None)
                 self._invalid[key] = time.monotonic()
 
         # Live resolution unavailable or failed — fall back to whatever we

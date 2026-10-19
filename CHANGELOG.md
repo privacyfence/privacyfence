@@ -49,6 +49,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The organization setup guide says which admin claim works with which identity provider.** `email` works everywhere with no setup; `groups` or `roles` work only once the provider puts them in the ID token. The guide now gives the setup and the value to pass for Google, Microsoft Entra ID, Okta, Keycloak, authentik and Auth0, and how to check a real ID token first.
 
+### Fixed
+
+- **Auto-accept no longer marks existing resources as deleted.** Only a lookup that worked and found no such resource now shows a value as deleted. A lookup that failed (a rate limit, a timeout, a connector error) shows the value as not looked up yet and tries again a minute later. Jira projects and Confluence spaces are now looked up by key, so a project or space past the first 50 is no longer shown as deleted. A Slack channel, Telegram chat or Salesforce report missing from a list that was cut off is no longer shown as deleted either.
+
 ## [6.4.0] — 2026-10-17
 
 ### Changed

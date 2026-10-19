@@ -627,6 +627,31 @@ class TestListPagesInSpace:
             client.list_pages_in_space("ENG")
 
 
+class TestGetSpace:
+    def test_reads_one_space_by_key(self):
+        client = make_client()
+        client._client.get.return_value = {"results": [{"key": "ENG", "name": "Engineering"}]}
+        assert client.get_space("ENG").name == "Engineering"
+        assert client._client.get.call_args.kwargs["params"]["keys"] == "ENG"
+
+    @pytest.mark.parametrize("answer", [{"results": []}, "404"])
+    def test_an_unknown_key_is_none(self, answer):
+        client = make_client()
+        if answer == "404":
+            exc = Exception("404 Client Error")
+            exc.response = MagicMock(status_code=404)
+            client._client.get.side_effect = exc
+        else:
+            client._client.get.return_value = answer
+        assert client.get_space("GONE") is None
+
+    def test_any_other_error_raises(self):
+        client = make_client()
+        client._client.get.side_effect = RuntimeError("boom")
+        with pytest.raises(ConfluenceClientError, match="get_space failed"):
+            client.get_space("ENG")
+
+
 BAD_PAGE_IDS = ["../spaces", "../../../rest/api/content?cql=type=page", "1?body-format=view", "1/../2", "abc"]
 
 
