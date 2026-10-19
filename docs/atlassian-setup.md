@@ -37,6 +37,19 @@ Center or Server.
    `offline_access` (which lets PrivacyFence refresh the token without a new sign-in) is not in the
    Permissions picker; PrivacyFence adds it to the sign-in request itself.
 4. **Settings:** copy the **Client ID** and **Secret**.
+5. **Distribution → Edit:** set **Distribution status** to **Sharing**. A new app is in
+   development, and Atlassian lets only the account that created it sign in; everyone else gets
+   *"You don't have access to this app"*. Sharing is required, even for an app used only inside
+   your organization; it publishes nothing, and nobody can sign in without the client ID from your
+   bundle. Atlassian asks for:
+   - **Vendor name, privacy policy and support contact:** your organization's own. Your
+     organization runs the app and is responsible for the data it handles; PrivacyFence's privacy
+     policy covers only its website and download service, not the software.
+   - **Personal data declaration:** answer that the app stores personal data. PrivacyFence keeps
+     the Atlassian account ids and display names it shows (see [Names and mentions](#names-and-mentions)).
+
+   Sharing takes effect at once and changes neither the client ID nor the secret, so a bundle built
+   before it keeps working. If you run both kinds of deployment, share both apps.
 
 Changing an app's scopes later does not change existing tokens: each user must **Reconnect…** Jira
 or Confluence to get a token with the new scopes.
@@ -147,6 +160,10 @@ button connects both products. The shared flow is described in
 deployment it is used for: exactly `http://127.0.0.1:53684/callback` for desktop installs, or
 `https://<server>/oauth/callback/atlassian` for an organization server. An app holds only one, so
 check that the bundle contains the right app's credentials.
+
+**"You don't have access to this app. This application is in development"** on Atlassian's page —
+the app is not shared, so only its creator can sign in. Set its **Distribution status** to
+**Sharing** (step 5 of [Register the app](#register-the-app)), then sign in again.
 
 **401 right after connecting** — check the Callback URL (above) and that both the Jira API and the
 Confluence API, with their scopes, are on the app.
