@@ -45,6 +45,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **PrivacyFence reports the Atlassian accounts it caches to Atlassian's personal data reporting API, and erases the ones Atlassian says are closed or changed.** The Jira and Confluence name cache is reported once per cycle (7 days unless Atlassian asks otherwise) with the user's own sign-in, and an entry that has been neither fetched nor reported for a cycle and a day is erased, so a cached name never outlives its report. The Atlassian setup guide now also covers sharing the app (Distribution), without which only the app's creator can sign in.
+
 - **The organization setup guide says which admin claim works with which identity provider.** `email` works everywhere with no setup; `groups` or `roles` work only once the provider puts them in the ID token. The guide now gives the setup and the value to pass for Google, Microsoft Entra ID, Okta, Keycloak, authentik and Auth0, and how to check a real ID token first.
 
 ## [6.4.0] — 2026-10-17
