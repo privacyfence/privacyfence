@@ -690,8 +690,9 @@ person allows it; the choice is remembered per person, client and redirect addre
 holds its own tokens; there is nothing to copy or paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
 which the person signs in again.
 
-claude.ai also needs this host on its **Settings → Capabilities → Domain allowlist** to move
-files larger than about 75 KB, in either direction; see
+claude.ai also needs this host on its domain allowlist to move files larger than about 75 KB,
+in either direction. On Team and Enterprise plans that list is set by a claude.ai Owner or admin
+under **Admin settings → Capabilities**, not by each person; see
 [File delivery](#13-file-delivery).
 
 Each AI client has its own page with the exact steps, what it asks before PrivacyFence's card, and
@@ -930,9 +931,10 @@ Which link a staged file gets:
 
 **The AI client has to be able to reach this host.** A client opens an agent link, and sends an
 upload, from wherever it runs its own code, which is not necessarily where it runs the MCP
-connection. claude.ai does both from its sandbox, which reaches only the domains on
-**Settings → Capabilities → Domain allowlist**. Put this deployment's host there, or every file
-over the inline limit, and every upload, fails from claude.ai after it has been approved. A
+connection. claude.ai does both from its sandbox, which reaches only the domains on its
+domain allowlist. Have a claude.ai Owner or admin put this deployment's host there (**Admin
+settings → Capabilities**, with **Code execution and file creation** on), or every file over the
+inline limit, and every upload, fails from claude.ai after it has been approved. A
 failure there never reaches PrivacyFence; see
 [Connect claude.ai](connect-claude-ai.md#files) and
 [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md). To read a
