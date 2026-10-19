@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Org mode's Connect page lists Jira Assets.** Assets uses the Jira and Confluence sign-in, so it had no row there and nothing said whether it was working. When the bundle switches Assets on, a **Jira Assets** row now says whether your Atlassian sign-in has the Assets permissions, and offers **Reconnect** when it was made before Assets was on.
+
 ### Changed
 
 - **PrivacyFence reports the Atlassian accounts it caches to Atlassian's personal data reporting API, and erases the ones Atlassian says are closed or changed.** The Jira and Confluence name cache is reported once per cycle (7 days unless Atlassian asks otherwise) with the user's own sign-in, and an entry that has been neither fetched nor reported for a cycle and a day is erased, so a cached name never outlives its report. The Atlassian setup guide now also covers sharing the app (Distribution), without which only the app's creator can sign in.

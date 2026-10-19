@@ -163,6 +163,9 @@ for anything new.
    bundle flag.
 4. Authenticate again (**Authenticate…** on Jira Assets, or **Reconnect…**) so Atlassian shows the
    extra consent. Tokens made before Assets was on do not have the permissions.
+   In org mode, Assets has no sign-in of its own: it uses the Jira and Confluence sign-in on
+   `/connect`, where a **Jira Assets** row says whether that sign-in has the Assets permissions and
+   offers **Reconnect** when it does not.
 
 ## Users connect
 
