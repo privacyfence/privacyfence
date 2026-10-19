@@ -183,6 +183,12 @@ class TestResolvers:
         with pytest.raises(RuntimeError):
             _resolver_for("salesforce", "reports")(client, "R1")
 
+    def test_a_salesforce_report_missing_from_a_cut_off_list_is_inconclusive(self):
+        reports = [SimpleNamespace(id=f"00O00000000{i:04d}", name=f"r{i}") for i in range(rg._SALESFORCE_REPORT_LIMIT)]
+        client = SimpleNamespace(get_report_name=_raise(RuntimeError("boom")), list_reports=lambda: reports)
+        with pytest.raises(rg.InconclusiveLookup):
+            _resolver_for("salesforce", "reports")(client, "00O999999999999")
+
     def test_a_salesforce_report_nobody_finds_resolves_to_none(self):
         client = SimpleNamespace(get_report_name=lambda rid: None, list_reports=lambda: [])
         assert _resolver_for("salesforce", "reports")(client, "00O000000000001") is None
