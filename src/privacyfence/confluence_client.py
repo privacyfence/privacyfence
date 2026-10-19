@@ -415,6 +415,22 @@ class ConfluenceClient:
         logger.info("list_spaces returned %d space(s)", len(spaces))
         return spaces
 
+    def get_space(self, space_key: str) -> ConfluenceSpace | None:
+        """One space by key, or ``None`` when no space has that key. The v2 endpoint answers an
+        unmatched ``keys`` filter with a 404 or an empty list (see ``_resolve_space_id``); any other
+        failure raises."""
+        try:
+            raw = self._request(
+                self._client.get, _V2_SPACES_PATH,
+                params={"keys": space_key, "limit": 1, "description-format": "plain"},
+            )
+        except Exception as exc:
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                return None
+            raise ConfluenceClientError(f"get_space failed: {exc}") from exc
+        results = (raw or {}).get("results") or []
+        return self._parse_space(results[0]) if results else None
+
     def _collect_pages(
         self, path: str, max_results: int, page_max: int, label: str, params: dict[str, Any],
     ) -> list[dict[str, Any]]:
