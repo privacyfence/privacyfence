@@ -17,9 +17,11 @@ bundle; users then approve the app in their browser from PrivacyFence.
    Name it (for example `PrivacyFence`), pick your workspace and click **Create App**.
 2. **OAuth & Permissions → Scopes → User Token Scopes** (not Bot Token Scopes): add every scope
    in the [values table](#values). Add no bot scopes.
-3. **OAuth & Permissions → Redirect URLs:** add the local redirect, and for an organization server
-   the org redirect too, then **Save URLs**. One app can carry both, and the same client ID and
-   secret serve both kinds of deployment.
+3. **OAuth & Permissions → Redirect URLs:** add the redirect for each kind of deployment you run
+   (see [Values](#values)): the local redirect for desktop installs, the org redirect for an
+   organization server. Click **Add**, then **Save URLs**; a URL that was added but not saved is
+   not registered. One app can carry both, and the same client ID and secret serve both kinds of
+   deployment.
 4. **Basic Information → App Credentials:** copy the **Client ID** and **Client Secret**.
 
 **Never activate public distribution** (**Manage Distribution → Activate Public Distribution**),
@@ -38,7 +40,7 @@ sign-in on Slack's side. That is a Slack workspace setting, not a PrivacyFence o
 | Item | Value |
 |---|---|
 | Local redirect (desktop installs) | `http://127.0.0.1:53682/callback` — exactly this; Slack requires an exact match |
-| Org redirect (organization server) | `https://<server>/oauth/callback/slack`, with `<server>` your server's `--server-issuer-url` |
+| Org redirect (organization server) | `<server-issuer-url>/oauth/callback/slack`, with `<server-issuer-url>` the bundle's `--server-issuer-url` (for example `https://pf.acme.example.com/oauth/callback/slack`) |
 | User token scopes | `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `users:read.email`, `search:read`, `chat:write`, `im:write`, `channels:write`, `groups:write`, `mpim:write` |
 | Bundle flags | `--slack-client-id <Client ID>` and `--slack-client-secret <Client Secret>` (both required together); optional `--slack-scopes <scope> …` |
 
@@ -47,9 +49,9 @@ What the less obvious scopes are for: `users:read.email` resolves authors' email
 `im:write`, `channels:write`, `groups:write` and `mpim:write` mark a conversation unread (the
 `mark_unread` option of `slack_send_message`), depending on the conversation type.
 
-`--slack-scopes` replaces the requested scope list with your own. It applies to desktop installs
-only — an organization server always requests the list above — and a scope you leave out breaks
-the tools that need it. Leave it unset unless you have a reason.
+`--slack-scopes` replaces the requested scope list with your own, for desktop installs and an
+organization server alike. A scope you leave out breaks the tools that need it, so leave it unset
+unless you have a reason.
 
 ## Build and distribute the bundle
 
@@ -85,10 +87,13 @@ Join the channel in Slack first.
 **`invalid_auth` or `token_revoked`** — the token was revoked (the user removed the app, or an
 admin uninstalled it). **Reconnect…**.
 
-**Slack shows an error about the redirect URL, or the browser does not come back** — the Redirect
-URL on the app must be exactly `http://127.0.0.1:53682/callback` for desktop installs, or
-`https://<server>/oauth/callback/slack` for an organization server. `localhost` in place of
-`127.0.0.1` does not match.
+**Slack says `redirect_uri did not match any configured URIs`, or the browser does not come
+back** — the URL Slack names after `Passed URI:` is missing from the app's **Redirect URLs**. Add
+exactly that URL and click **Save URLs**, then connect again; no bundle rebuild or restart is
+needed. It must be exactly `http://127.0.0.1:53682/callback` for desktop installs, or
+`<server-issuer-url>/oauth/callback/slack` for an organization server; `localhost` in place of
+`127.0.0.1` does not match. If the URL is already listed, check that the app you edited is the one
+whose Client ID is in the bundle (`--slack-client-id`).
 
 **Reads became slow, or channel history stops at 15 messages** — check **Manage Distribution**.
 If public distribution was ever activated, Slack may treat the app as distributed outside the

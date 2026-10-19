@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-30. Implemented: `src/privacyfence/atlassian_users.py`,
 `src/privacyfence/jira_client.py`, `src/privacyfence/confluence_client.py`.
+Amended by [ADR 0202](0202-cached-atlassian-accounts-are-reported-each-cycle-and-erased-when-they-cannot-be.md):
+the cache is reported to Atlassian each cycle and its entries are erased.
 
 ## Context
 

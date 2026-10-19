@@ -37,6 +37,20 @@ Center or Server.
    `offline_access` (which lets PrivacyFence refresh the token without a new sign-in) is not in the
    Permissions picker; PrivacyFence adds it to the sign-in request itself.
 4. **Settings:** copy the **Client ID** and **Secret**.
+5. **Distribution → Edit:** set **Distribution status** to **Sharing**. A new app is in
+   development, and Atlassian lets only the account that created it sign in; everyone else gets
+   *"You don't have access to this app"*. Sharing is required, even for an app used only inside
+   your organization; it publishes nothing, and nobody can sign in without the client ID from your
+   bundle. Atlassian asks for:
+   - **Vendor name, privacy policy and support contact:** your organization's own. Your
+     organization runs the app and is responsible for the data it handles; PrivacyFence's privacy
+     policy covers only its website and download service, not the software.
+   - **Personal data declaration:** answer that the app stores personal data, and confirm that
+     it uses the Personal Data Reporting API. PrivacyFence caches the account ids and display
+     names it shows, and reports them (see [Personal data reporting](#personal-data-reporting)).
+
+   Sharing takes effect at once and changes neither the client ID nor the secret, so a bundle built
+   before it keeps working. If you run both kinds of deployment, share both apps.
 
 Changing an app's scopes later does not change existing tokens: each user must **Reconnect…** Jira
 or Confluence to get a token with the new scopes.
@@ -62,7 +76,8 @@ can delete Jira or Confluence content.
 
 Jira's user API (`read:jira-user`) resolves account ids to names for both products, so no extra
 scope is needed. PrivacyFence looks each person up once and keeps the name per user in
-`atlassian_user_cache.json` for 7 days. `jira_refresh_user_cache` and
+`atlassian_user_cache.json`, fetching it again after 7 days; how long it is kept is under
+[Personal data reporting](#personal-data-reporting). `jira_refresh_user_cache` and
 `confluence_refresh_user_cache` fetch the cached names again.
 
 Jira and Confluence then show @mentioned people, and Confluence page authors, by name. The agent
@@ -72,6 +87,27 @@ Atlassian's own name.
 
 A Confluence-only site (no Jira product) cannot look names up: page authors show as raw account ids, mentions
 as "unknown user", and it cannot use mention markup.
+
+## Personal data reporting
+
+The names cache is Atlassian personal data, so PrivacyFence reports it to Atlassian's
+[personal data reporting API](https://developer.atlassian.com/cloud/jira/platform/user-privacy-developer-guide/)
+([ADR 0202](adr/0202-cached-atlassian-accounts-are-reported-each-cycle-and-erased-when-they-cannot-be.md)):
+
+- Each install, or each user of an organization server, reports the account ids in its own cache
+  with its own sign-in, once per cycle: 7 days, unless Atlassian answers with a different
+  `Cycle-Period`. No extra scope or reconnect is needed. Reports start in the background after
+  Jira or Confluence connects, or after a lookup, at most once an hour.
+- An account Atlassian reports as closed or changed is erased from the cache at once. A changed
+  account's name is fetched again the next time it is needed.
+- An entry that has been neither fetched nor reported for a cycle and a day is erased. A sweep at
+  startup and every six hours does this for every user's cache, including organization-server
+  users who are not signed in, so a name never stays on disk unreported.
+
+A failed report is logged as *"Atlassian personal data report not sent (will retry)"* and tried
+again an hour later; until a report succeeds, the cached names expire as above. The audit log is not
+part of this: it records names and account ids from approved requests and is kept under your own
+retention policy, because rewriting it would break its integrity chain.
 
 ## Fields
 
@@ -150,6 +186,15 @@ button connects both products. The shared flow is described in
 deployment it is used for: exactly `http://127.0.0.1:53684/callback` for desktop installs, or
 `https://<server>/oauth/callback/atlassian` for an organization server. An app holds only one, so
 check that the bundle contains the right app's credentials.
+
+**"You don't have access to this app. This application is in development"** on Atlassian's page —
+the app is not shared, so only its creator can sign in. Set its **Distribution status** to
+**Sharing** (step 5 of [Register the app](#register-the-app)), then sign in again.
+
+**The log shows "Atlassian personal data report not sent (will retry)"** — Atlassian refused or
+could not take the report. Check the error after it; a 401 that a reconnect does not fix means
+Atlassian did not accept the user's token for reporting. Cached names still expire a cycle and a
+day after they were last fetched, so nothing is kept unreported.
 
 **401 right after connecting** — check the Callback URL (above) and that both the Jira API and the
 Confluence API, with their scopes, are on the app.
