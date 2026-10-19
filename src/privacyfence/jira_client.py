@@ -26,6 +26,7 @@ import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -46,6 +47,7 @@ from .atlassian_users import (
     AtlassianUser,
     AtlassianUserDirectory,
     AtlassianUsersError,
+    ReportOutcome,
     mask_emails,
     mention_markup,
 )
@@ -335,9 +337,10 @@ class JiraClient:
             display = myself.get("displayName", "unknown user")
             logger.info("Connected to Jira at %s as %r", self._base_url, display)
             self._record_account_id(myself.get("accountId", ""))
-            return f"{display} @ {self._base_url}"
         except Exception as exc:
             raise JiraClientError(f"Jira connection check failed: {exc}") from exc
+        self._users.report_soon(self._report_accounts)
+        return f"{display} @ {self._base_url}"
 
     # ------------------------------------------------------------------ #
     # Users
@@ -351,9 +354,14 @@ class JiraClient:
             account_ids,
         )
 
+    def _report_accounts(self, accounts: list[tuple[str, datetime]]) -> ReportOutcome:
+        return self._request(atlassian_users.report_accounts, self._session, accounts)
+
     def resolve_user_names(self, account_ids: list[str]) -> dict[str, str]:
         """Map account ids to display names; ids that cannot be resolved are omitted."""
-        return self._users.resolve(account_ids, self._fetch_users_bulk)
+        names = self._users.resolve(account_ids, self._fetch_users_bulk)
+        self._users.report_soon(self._report_accounts)
+        return names
 
     def find_users(self, query: str, max_results: int = 10) -> list[AtlassianUser]:
         if not query or not query.strip():
@@ -372,6 +380,7 @@ class JiraClient:
                 f"find_users failed: {atlassian_users.redact_query(exc, query)}"
             ) from exc
         self._users.remember(users)
+        self._users.report_soon(self._report_accounts)
         return users
 
     def refresh_user_cache(self) -> int:

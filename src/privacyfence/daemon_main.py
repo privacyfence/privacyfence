@@ -32,6 +32,9 @@ Threading model:
     web server's event loop is known, refreshing Slack/Telegram directory
     caches if they've gone stale -- see _warm_connector_caches(). Kept off
     the main thread so a large workspace/account doesn't delay startup.
+  - Personal data sweep: a background thread erasing Atlassian user-cache
+    entries that missed their personal data report, at startup and every
+    few hours -- see _run_personal_data_sweep().
 
 Configuration is split into two files (see paths.py):
   - ``org/org_config.json``    — organization-level app registrations (Google
@@ -146,7 +149,7 @@ from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
 from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override, scopes_for
-from .atlassian_users import AtlassianUserDirectory
+from .atlassian_users import AtlassianUserDirectory, erase_overdue_caches
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
 from .calendar_client import CalendarClient, CalendarClientError
@@ -292,6 +295,23 @@ def _run_update_check_timer(controller: Any) -> None:
     while True:
         controller.on_update_check_timer()
         if _shutdown_event.wait(UPDATE_CHECK_TIMER_INTERVAL_SECONDS):
+            return
+
+
+PERSONAL_DATA_SWEEP_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+def _run_personal_data_sweep() -> None:
+    """Erase the Atlassian user-cache entries that missed their personal data report (ADR 0202)
+    once at startup, then every PERSONAL_DATA_SWEEP_INTERVAL_SECONDS until shutdown. It reads the
+    cache files themselves, so it also covers organization-server users whose connectors are not
+    built and who therefore report nothing."""
+    while True:
+        try:
+            erase_overdue_caches(data_dir())
+        except Exception as exc:
+            logger.warning("Atlassian personal data sweep failed (will retry): %s", exc)
+        if _shutdown_event.wait(PERSONAL_DATA_SWEEP_INTERVAL_SECONDS):
             return
 
 
@@ -1546,6 +1566,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     atlassian_users = AtlassianUserDirectory(
         cache_file=str(user_dir() / "atlassian_user_cache.json"),
         cloud_id=atlassian_config.get("cloud_id", ""),
+        background_reports=True,
     )
 
     if enabled("jira"):
@@ -2129,6 +2150,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     threading.Thread(
         target=_run_update_check_timer, args=(settings_controller,),
         name="update-check-timer", daemon=True,
+    ).start()
+    threading.Thread(
+        target=_run_personal_data_sweep, name="atlassian-personal-data-sweep", daemon=True,
     ).start()
 
     try:

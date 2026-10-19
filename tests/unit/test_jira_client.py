@@ -1435,3 +1435,61 @@ class TestResolveFields:
         assert JiraClient.extra_field_keys([sprint1, sprint2, points]) == [
             "Sprint (customfield_1)", "Sprint (customfield_2)", "Story Points",
         ]
+
+
+class TestPersonalDataReporting:
+    """Jira lookups and the connection check give the shared directory its chance to report the
+    cached accounts to Atlassian (ADR 0202)."""
+
+    def _spy(self, client: JiraClient) -> MagicMock:
+        spy = MagicMock()
+        client._users.report_soon = spy
+        return spy
+
+    def test_check_connection_reports(self):
+        client = make_client()
+        client._client.myself.return_value = {"displayName": "Jane Doe"}
+        spy = self._spy(client)
+        client.check_connection()
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_failed_connection_check_does_not_report(self):
+        client = make_client()
+        client._client.myself.side_effect = RuntimeError("down")
+        spy = self._spy(client)
+        with pytest.raises(JiraClientError):
+            client.check_connection()
+        spy.assert_not_called()
+
+    def test_resolve_user_names_reports(self, monkeypatch):
+        fake_bulk(monkeypatch, {JANE_ID: "Jane Doe"})
+        client = make_client()
+        spy = self._spy(client)
+        assert client.resolve_user_names([JANE_ID]) == {JANE_ID: "Jane Doe"}
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_find_users_reports(self, monkeypatch):
+        monkeypatch.setattr(
+            "privacyfence.atlassian_users.search_users",
+            lambda *a: [AtlassianUser(JANE_ID, "Jane Doe")],
+        )
+        client = make_client()
+        spy = self._spy(client)
+        client.find_users("jane")
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_report_refreshes_an_expired_token_once(self, monkeypatch):
+        outcome = jira_client_module.ReportOutcome({}, None)
+        calls = []
+
+        def report(session, accounts):
+            calls.append((session, accounts))
+            if len(calls) == 1:
+                raise unauthorized_error()
+            return outcome
+
+        monkeypatch.setattr("privacyfence.atlassian_users.report_accounts", report)
+        client = make_client()
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+        assert client._report_accounts([(JANE_ID, None)]) is outcome
+        assert len(calls) == 2 and calls[0][0] is client._session

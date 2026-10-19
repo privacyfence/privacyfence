@@ -226,7 +226,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md) | The Glama listing runs a credential-free tool catalog, not a hosted PrivacyFence | Accepted |
 | [0115](0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md) | Tool definitions carry their parameter, return and routing guidance in prose, and a test enforces it | Accepted |
 | [0116](0116-list-tools-page-inside-the-client-and-keep-their-return-shape.md) | List and search tools page inside the client up to `max_results` and keep their bare-list return shape | Accepted |
-| [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted |
+| [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted; amended by 0202 |
 | [0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
 | [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |
 | [0132](0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) | Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project | Accepted |
@@ -293,3 +293,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0199](0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md) | Jira and Confluence "mine" rules compare Atlassian account ids, never names or emails | Accepted |
 | [0200](0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md) | An organization bundle carries a signed serial, and an older one is refused | Accepted; amends 0016 |
 | [0201](0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md) | The website's security headers are set by Cloudflare and checked from the repository | Accepted; amends 0053 |
+| [0202](0202-cached-atlassian-accounts-are-reported-each-cycle-and-erased-when-they-cannot-be.md) | Cached Atlassian accounts are reported each cycle, and erased when they cannot be | Accepted; amends 0117 |
