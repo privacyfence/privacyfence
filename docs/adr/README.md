@@ -294,3 +294,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0200](0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md) | An organization bundle carries a signed serial, and an older one is refused | Accepted; amends 0016 |
 | [0201](0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md) | The website's security headers are set by Cloudflare and checked from the repository | Accepted; amends 0053 |
 | [0202](0202-cached-atlassian-accounts-are-reported-each-cycle-and-erased-when-they-cannot-be.md) | Cached Atlassian accounts are reported each cycle, and erased when they cannot be | Accepted; amends 0117 |
+| [0203](0203-the-deb-is-built-on-a-pinned-ubuntu-runner.md) | The `.deb` is built on a pinned Ubuntu runner | Accepted; acts on 0039 |

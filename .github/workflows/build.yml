@@ -582,9 +582,11 @@ jobs:
   build-deb:
     needs: dedupe
     if: needs.dedupe.outputs.duplicate != 'true'
-    runs-on: ubuntu-latest   # amd64 -- the only architecture debian/control declares (ADR 0044).
+    runs-on: ubuntu-24.04    # amd64 -- the only architecture debian/control declares (ADR 0044).
                               # arm64 needs its own leg here (PyInstaller doesn't cross-compile)
                               # plus the matching debian/control and support-matrix change.
+                              # Pinned, not `ubuntu-latest`: the bundle links the build host's glibc,
+                              # which is the .deb's floor (ADR 0203).
     permissions:
       contents: read
 
@@ -668,7 +670,7 @@ jobs:
       # Real `dpkg -i`, `desktop-file-validate` on the installed .desktop entries, the real
       # installed daemon started and driven through a daemon/MCP/approval/audit round trip, real
       # `dpkg -r` (data kept, reinstall picks it up) and `dpkg -P` (nothing left), and a real version-upgrade
-      # install-over-install. Needs root for dpkg -- `ubuntu-latest`'s default `runner` user has
+      # install-over-install. Needs root for dpkg -- `ubuntu-24.04`'s default `runner` user has
       # passwordless sudo (see that test module's own `_can_install_packages` skip condition). A
       # failure here fails this job before the .deb reaches R2/GitHub Releases below.
       - name: Run packaged .deb lifecycle test
