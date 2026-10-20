@@ -377,7 +377,10 @@ def scoped_token_page_data(
         if connector in connector_names:
             by_connector.setdefault(connector, []).append(name)
     tokens = []
-    for token in scoped_tokens.get_store().tokens_for(principal):
+    store = scoped_tokens.get_store()
+    activity = store.activity_for(principal)
+    for token in store.tokens_for(principal):
+        seen = activity.get(token.id, scoped_tokens.TokenActivity())
         expired = token.expired(now)
         days_left = token.days_left(now)
         tokens.append({
@@ -387,6 +390,8 @@ def scoped_token_page_data(
             "rules": [_token_rule_entry(token, rule_id, rows, rules) for rule_id in sorted(token.rule_ids)],
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
+            "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
+            "last_denied_tool": seen.last_denied_tool,
         })
     return {
         "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),

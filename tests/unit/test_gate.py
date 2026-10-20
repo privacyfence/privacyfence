@@ -4025,6 +4025,55 @@ class TestScopedTokenGate:
         [entry] = read_audit_entries(audit_dir)
         assert (entry["decision"], entry["rule_id"]) == ("auto_accepted", "r-in")
 
+    class _RecordingStore:
+        def __init__(self, *, fail: bool = False) -> None:
+            self.fail = fail
+            self.denials: list[tuple[ScopedToken, str]] = []
+
+        def note_denial(self, token, tool, now=None):
+            if self.fail:
+                raise OSError("disk full")
+            self.denials.append((token, tool))
+
+    async def test_a_denied_scoped_call_notes_the_tool_on_the_token(self, monkeypatch, audit_dir):
+        recorder = self._RecordingStore()
+        scoped_tokens.set_store(recorder)
+        self._popups(monkeypatch)
+        token = _scoped_token()
+
+        with scoped_tokens.token_scope(token):
+            with pytest.raises(gate.GateDeniedError):
+                await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert recorder.denials == [(token, "gmail_get_message")]
+
+    async def test_a_refusal_before_the_gate_notes_the_tool_on_the_token(self, audit_dir):
+        recorder = self._RecordingStore()
+        scoped_tokens.set_store(recorder)
+        token = _scoped_token()
+
+        gate.audit_scoped_refusal("gmail", "gmail_send_message", token, "Tool not in scoped token")
+
+        assert recorder.denials == [(token, "gmail_send_message")]
+
+    async def test_a_store_that_cannot_record_leaves_the_denial_unchanged(self, monkeypatch, audit_dir):
+        scoped_tokens.set_store(self._RecordingStore(fail=True))
+        self._popups(monkeypatch)
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            with pytest.raises(gate.GateDeniedError) as err:
+                await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert str(err.value) == "Request denied: this call uses a scoped token, and none of the token's rules covers it."
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_a_revoked_scope_or_a_missing_store_notes_nothing(self, audit_dir):
+        gate.audit_scoped_refusal("gmail", "gmail_get_message", _scoped_token(), "no store")
+        recorder = self._RecordingStore()
+        scoped_tokens.set_store(recorder)
+        gate.audit_scoped_refusal("gmail", "gmail_get_message", scoped_tokens.REVOKED_SCOPE, "revoked")
+        assert recorder.denials == []
+
     async def test_a_matching_rule_outside_the_scope_is_denied(self, monkeypatch, audit_dir):
         auto_accept.set_policy_v2_store_rules([_gmail_read_rule("r-out")])
         shown = self._popups(monkeypatch)

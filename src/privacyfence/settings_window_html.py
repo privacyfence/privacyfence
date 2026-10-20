@@ -1349,6 +1349,12 @@ _JS = r"""
     if (t.allow_personal_data) {
       chips += '<span class="pf-chip pf-st-chip">personal data allowed</span>';
     }
+    function stamp(x) { return new Date(x * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'; }
+    var activity = t.last_used_at ? 'Last used ' + stamp(t.last_used_at) : 'Never used';
+    if (t.last_denied_at) {
+      activity += ' \u00b7 Last denied ' + stamp(t.last_denied_at) + ' (' + t.last_denied_tool + ')';
+    }
+    var activityHtml = '<div class="pf-hint pf-st-activity">' + esc(activity) + '</div>';
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
@@ -1364,7 +1370,7 @@ _JS = r"""
       esc(t.id) + '">Duplicate</div><div class="button" role="button" tabindex="0" aria-label="Rename ' + esc(t.label) +
       '" data-st-rename="' + esc(t.id) + '">Rename</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
       dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div>';
-    return rowHtml(t.label, esc(scopedExpiryText(t)) + detail, control, 'pf-st-row');
+    return rowHtml(t.label, esc(scopedExpiryText(t)) + activityHtml + detail, control, 'pf-st-row');
   }
 
   // "Daily sync" -> "Daily sync 2", "Daily sync 2" -> "Daily sync 3"; skips

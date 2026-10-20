@@ -2228,3 +2228,39 @@ def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
     assert "drive_download_file" not in entries["before"]["limited_to"]
     assert entries["before"]["limited_to"]
     assert "limited_to" not in entries["after"]
+
+
+def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+    idle, _ = store.create(alice, label="idle", days=30, rule_ids=[], tools=["drive_list_files"], policy=policy)
+    busy, _ = store.create(alice, label="busy", days=30, rule_ids=[], tools=["drive_list_files"], policy=policy)
+
+    def page():
+        with principal_scope(alice):
+            data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
+        return {t["label"]: t for t in data["tokens"]}
+
+    before = page()["idle"]
+    assert (before["last_used_at"], before["last_denied_at"], before["last_denied_tool"]) == (None, None, "")
+
+    store.note_use(busy, now=1000.0)
+    store.note_denial(busy, "drive_download_file", now=2000.0)
+    tokens = page()
+    assert (tokens["busy"]["last_used_at"], tokens["busy"]["last_denied_at"], tokens["busy"]["last_denied_tool"]) == (
+        1000.0, 2000.0, "drive_download_file",
+    )
+    assert (tokens["idle"]["last_used_at"], tokens["idle"]["last_denied_at"], tokens["idle"]["last_denied_tool"]) == (
+        None, None, "",
+    )

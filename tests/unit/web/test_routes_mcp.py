@@ -602,7 +602,10 @@ class _ScopedVerifier(TokenVerifier):
 
 class TestScopedTokens:
     @pytest.fixture(autouse=True)
-    def _audit(self, tmp_path):
+    def _audit(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        # Scoped calls note their activity under authority_dir; keep it out of the checkout.
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         init_audit_logger(str(tmp_path))
         self._audit_dir = tmp_path
 
@@ -641,6 +644,40 @@ class TestScopedTokens:
         assert entry["summary"] == "Tool not in scoped token 'sales-sync'"
         assert entry["claude_reason"] == "loud"
         assert (entry["agent_id"], entry["agent_source"]) == ("scoped-token:st-0123456789ab", "override")
+
+    async def test_an_allowed_scoped_call_records_the_tokens_last_use(self):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, store):
+            before = time.time()
+            await session.call_tool("echo_say", {"message": "hi"})
+        activity = store._activity[LOCAL_PRINCIPAL.id][store.token.id]
+        assert activity.last_used_at is not None and activity.last_used_at >= before
+        assert activity.last_denied_at is None
+
+    async def test_a_refused_scoped_call_is_a_denial_not_a_use(self):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, store):
+            await session.call_tool("echo_shout", {"reason": "loud"})
+        activity = store._activity[LOCAL_PRINCIPAL.id][store.token.id]
+        assert activity.last_used_at is None
+        assert activity.last_denied_tool == "echo_shout"
+
+    async def test_a_scoped_call_without_a_store_still_runs(self, monkeypatch):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, store):
+            # The store is swapped out after the scope was resolved: current_store() is None.
+            monkeypatch.setattr(rm, "scope_from_access_token", lambda token: store.token)
+            scoped_tokens.set_store(None)
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.is_error is False
+        assert store._activity == {}
+
+    async def test_a_revoked_scope_records_nothing(self):
+        dispatcher = _dispatcher({"echo": TwoToolConnector()})
+        async with self._scoped_session(dispatcher) as (session, store):
+            store.revoked = True
+            await session.call_tool("echo_say", {"message": "hi"})
+        assert store._activity == {}
 
     async def test_status_reports_the_token_and_its_expiry(self):
         dispatcher = _dispatcher({"echo": TwoToolConnector()})
