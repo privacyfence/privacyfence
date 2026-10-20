@@ -360,8 +360,11 @@ class McpDispatcher:
                 "gate": gate, "verdict": verdict, "matched_rule": matched_rule or None,
                 "matched_rule_id": matched_rule_id or None,
                 "reason": reason, "pii_gate_may_apply": gate == "review",
+                # A grace-window match covers only this file for a while; a standing rule is still owed.
                 "suggested_rules": (
-                    [] if verdict == "auto_accept" else suggested_rules(tool, agent_args, my_email)
+                    []
+                    if verdict == "auto_accept" and matched_rule != "session_temp_accept"
+                    else suggested_rules(tool, agent_args, my_email)
                 ),
             }
 

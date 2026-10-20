@@ -29,6 +29,7 @@ from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.scoped_tokens import ScopedToken
+from privacyfence.web import mcp_dispatch
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
 from ...helpers import policy_rules
@@ -530,6 +531,16 @@ class TestCheckPolicy:
         assert result["verdict"] == "requires_review"
         assert result["suggested_rules"]
         assert result["suggested_rules"][0]["value_known"] is True
+        assert result["suggested_rules"][0]["value"] == ["00O1"]
+
+    def test_grace_window_match_still_names_the_rule_it_would_take(self, monkeypatch):
+        monkeypatch.setattr(
+            mcp_dispatch, "preflight_auto_accept",
+            lambda *_a, **_k: ("auto_accept", "session_temp_accept", "", "grace window"),
+        )
+        dispatcher = _dispatcher({"salesforce": FakeConnector("salesforce")})
+        result = dispatcher.check_policy("salesforce", "salesforce_export_report", {"report_id": "00O1"})
+        assert result["matched_rule"] == "session_temp_accept"
         assert result["suggested_rules"][0]["value"] == ["00O1"]
 
     def test_never_calls_the_connector(self):
