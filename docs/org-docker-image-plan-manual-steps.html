@@ -1,0 +1,152 @@
+<title>Org Docker Image Checks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one reading column; each manual item is a section with a numbered checklist of steps. */
+:root {
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --ink: #14212b;
+  --ink-soft: #43535f;
+  --line: #dbe3e9;
+  --accent: #167a70;
+  --accent-soft: #e1f2ef;
+  --code-bg: #eef3f8;
+  --done: #60707d;
+  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f171d; --surface: #16222b; --ink: #e4ecf1; --ink-soft: #a9b8c2; --line: #2a3a45;
+    --accent: #4fc2b4; --accent-soft: #163a36; --code-bg: #1d2c36; --done: #7d8f9b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f171d; --surface: #16222b; --ink: #e4ecf1; --ink-soft: #a9b8c2; --line: #2a3a45;
+  --accent: #4fc2b4; --accent-soft: #163a36; --code-bg: #1d2c36; --done: #7d8f9b; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+main { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; letter-spacing: -.02em; }
+h1 { font-size: clamp(28px, 4vw, 38px); line-height: 1.1; }
+h2 { font-size: 22px; padding-top: 12px; border-top: 1px solid var(--line); }
+h3 { font-size: 18px; }
+p { margin: 0; }
+.lede { color: var(--ink-soft); max-width: 65ch; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 650; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 14px; color: var(--ink-soft); }
+.pill { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 1px 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: step; }
+ol.steps li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; counter-increment: step; }
+ol.steps li > div { min-width: 0; }
+ol.steps li > div::before { content: counter(step) ". "; font-weight: 650; color: var(--accent); }
+ol.steps input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--accent); }
+ol.steps li.checked > div { color: var(--done); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { font-size: 14px; color: var(--ink-soft); }
+code { font-family: var(--font-mono); font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
+pre { font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 6px 0 0; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.box { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); border-radius: 0 8px 8px 0; font-size: 15px; }
+</style>
+
+<main>
+  <header style="display:flex;flex-direction:column;gap:10px">
+    <span class="eyebrow">Plan · org-docker-image</span>
+    <h1>Manual checks for the organization Docker image</h1>
+    <p class="lede">These are the only steps in this plan that need you: one settings check before implementation starts, and two checks after the work is done. Every phase builds and tests the image itself. Your ticks are saved in this browser only.</p>
+  </header>
+
+  <h2>Before implementation</h2>
+
+  <section class="item" id="mb1">
+    <span class="eyebrow">mb1-allow-attest-action</span>
+    <h3>Allow the provenance action, if Actions use an allowlist</h3>
+    <div class="meta"><span class="pill">about 3 min</span><span>Needs the repository admin role</span></div>
+    <ol class="steps" data-key="mb1">
+      <li><input type="checkbox" aria-label="Step done"><div>Open the repository's <a href="https://github.com/privacyfence/privacyfence/settings/actions">Actions settings</a> (Settings, Actions, General).</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Under <b>Actions permissions</b>, look at which option is selected. If it's <b>Allow all actions and reusable workflows</b>, you're done: skip to the last step.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>If it's <b>Allow privacyfence, and select non-privacyfence, actions and reusable workflows</b>, check whether <b>Allow actions created by GitHub</b> is ticked. If not, add <code>actions/attest-build-provenance@*</code> on its own line in the <b>Allow specified actions and reusable workflows</b> box. Click <b>Save</b>.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Done when the page shows all actions allowed, actions created by GitHub allowed, or <code>actions/attest-build-provenance@*</code> in the list. Tell the <code>/implement</code> session it's done.</div></li>
+    </ol>
+    <p class="box">Why: a workflow that uses an action outside the allowlist fails at startup with no jobs and no logs. The new publish workflow can't run before a stable tag, so nothing earlier would show the failure.</p>
+  </section>
+
+  <h2>After implementation</h2>
+
+  <section class="item" id="ma1">
+    <span class="eyebrow">ma1-real-server-compose</span>
+    <h3>Run the pre-flight image on a real server</h3>
+    <div class="meta"><span class="pill">about 45 min</span><span>Needs an amd64 Linux server with Docker Engine 24+ and Compose 2.24+, a public hostname with DNS, ports 80 and 443 open, and a test client in your identity provider</span></div>
+    <ol class="steps" data-key="ma1">
+      <li><input type="checkbox" aria-label="Step done"><div>Open the <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml?query=branch%3Afeature%2Forg-docker-image">Build &amp; Release runs for feature/org-docker-image</a> and pick the newest green run (the PR description links it). You should see the jobs <code>build-org-image (amd64)</code> and <code>build-org-image (arm64)</code> with green ticks.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>At the bottom of the run summary, under <b>Artifacts</b>, download <code>org-image-amd64</code>. It's a zip of about 150 MB. Copy it to the server, for example with <code>scp</code>.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>On the server, load the image and give it the name the Compose file expects:
+        <pre>unzip org-image-amd64.zip
+gunzip -c privacyfence-org-amd64.tar.gz | docker load
+docker tag privacyfence-org:ci-amd64 ghcr.io/privacyfence/privacyfence-org:preflight</pre>
+        You should see <code>Loaded image: privacyfence-org:ci-amd64</code>.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Make the deploy directory and fetch the two deploy files from the feature branch:
+        <pre>sudo mkdir -p /opt/privacyfence-org &amp;&amp; cd /opt/privacyfence-org
+sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/feature/org-docker-image/deploy/docker/compose.yaml
+sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/feature/org-docker-image/deploy/docker/Caddyfile</pre></div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Create <code>/opt/privacyfence-org/.env</code> with two lines: <code>PF_HOSTNAME=</code> followed by your test hostname, and <code>PRIVACYFENCE_IMAGE_TAG=preflight</code>.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Register the three redirect URIs for your hostname with the test identity provider, as the guide's <a href="https://github.com/privacyfence/privacyfence/blob/feature/org-docker-image/docs/org-mode-setup-guide.md#4-identity-provider">Identity provider</a> section describes. Then build and sign a bundle as <a href="https://github.com/privacyfence/privacyfence/blob/feature/org-docker-image/docs/org-mode-docker.md#build-the-bundle">Build the bundle</a> describes, with <code>--server-bind-host 0.0.0.0 --server-trusted-proxy 172.30.87.2</code>. The client secret goes into the bundle on your own machine. Never paste it into the PR or a chat.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Install the bundle into the data volume, from <code>/opt/privacyfence-org</code>:
+        <pre>docker compose run --rm -T --entrypoint sh privacyfence -c 'umask 077 &amp;&amp; cat &gt; /var/lib/privacyfence-org/.privacyfence/org/org_config.json' &lt; org_config.json</pre></div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Start it with <code>docker compose up -d</code>, then run <code>docker compose logs privacyfence | grep "Org mode active"</code>. You should see one line naming <code>https://&lt;your hostname&gt;/mcp</code>.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>In a browser, open <code>https://&lt;your hostname&gt;/login</code> and sign in. You should land on the approvals page, served with a valid certificate (Caddy obtained it).</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>On <code>/connect</code>, connect one service the bundle offers. Its row should show it as connected.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Add the server to an AI client, for example <code>claude mcp add --transport http pf https://&lt;your hostname&gt;/mcp</code> in Claude Code. Ask it to read something from that service, and approve the request in the browser. The client should get the result.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Run <code>docker compose restart privacyfence</code>, sign in again, and open <code>/settings</code>. The audit entry for that approval should still be listed, and the service should still be connected.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Clean up with <code>docker compose down -v</code>. This deletes the test data volume as well.</div></li>
+    </ol>
+    <p class="box">Report back as a comment on the PR, then tick its box: <code>ma1 real-server compose: PASS</code> or <code>ma1 real-server compose: FAIL, step N: what you saw</code>.</p>
+  </section>
+
+  <section class="item" id="ma2">
+    <span class="eyebrow">ma2-first-release-ghcr</span>
+    <h3>At the first stable release after merge: make the package public and verify it</h3>
+    <div class="meta"><span class="pill">about 10 min</span><span>Needs the organization owner role on GitHub, and the <code>gh</code> CLI on any machine</span></div>
+    <ol class="steps" data-key="ma2">
+      <li><input type="checkbox" aria-label="Step done"><div>Before you cut the release, open the <a href="https://github.com/organizations/privacyfence/settings/packages">organization's package settings</a>. Under <b>Package creation</b>, make sure <b>Public</b> is allowed.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Cut the stable release as usual (<code>/cut-release</code>). Then open the <a href="https://github.com/privacyfence/privacyfence/actions/workflows/publish-org-image.yml">Publish org Docker image runs</a>. The run for the tag should be green, with a summary naming the tags and digest.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Open the <a href="https://github.com/orgs/privacyfence/packages/container/package/privacyfence-org">privacyfence-org package</a>, then <b>Package settings</b>. Under <b>Danger Zone</b>, choose <b>Change visibility</b>, then <b>Public</b>, and type the package name to confirm. On the same page, check that <b>Manage Actions access</b> lists the <code>privacyfence</code> repository.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>On a machine that isn't logged in to ghcr.io, run <code>docker logout ghcr.io; docker pull ghcr.io/privacyfence/privacyfence-org:X.Y.Z</code>, with the version you released. The pull should succeed without credentials.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Run <code>gh attestation verify oci://ghcr.io/privacyfence/privacyfence-org:X.Y.Z --owner privacyfence</code>. It should end with <code>Verification succeeded!</code>.</div></li>
+      <li><input type="checkbox" aria-label="Step done"><div>Run <code>docker buildx imagetools inspect ghcr.io/privacyfence/privacyfence-org:latest</code>. It should list both <code>linux/amd64</code> and <code>linux/arm64</code>.</div></li>
+    </ol>
+    <p class="box">Report back as a comment on the merged PR (or the release): <code>ma2 GHCR first release X.Y.Z: PASS</code>, or the step that failed and its output.</p>
+  </section>
+
+  <p class="see">The plan document is <a href="https://github.com/privacyfence/privacyfence/blob/plan/org-docker-image/docs/org-docker-image-plan.md">docs/org-docker-image-plan.md on plan/org-docker-image</a>.</p>
+</main>
+
+<script>
+(function () {
+  function load(key) { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch (e) { return []; } }
+  function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {} }
+  document.querySelectorAll("ol.steps").forEach(function (list) {
+    var key = "pf-org-docker-" + list.dataset.key;
+    var done = load(key);
+    list.querySelectorAll("li").forEach(function (li, i) {
+      var box = li.querySelector("input");
+      box.id = key + "-" + i;
+      box.checked = done.indexOf(i) !== -1;
+      li.classList.toggle("checked", box.checked);
+      box.addEventListener("change", function () {
+        li.classList.toggle("checked", box.checked);
+        var now = [];
+        list.querySelectorAll("input").forEach(function (b, j) { if (b.checked) now.push(j); });
+        save(key, now);
+      });
+    });
+  });
+})();
+</script>
