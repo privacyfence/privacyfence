@@ -716,6 +716,126 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/privacyfence_*.deb
 
+  # Organization-mode Docker image (docs/org-mode-docker.md, ADRs 0205 and 0207). A matrix of two
+  # legs on native runners -- `ubuntu-24.04` for linux/amd64, `ubuntu-24.04-arm` for linux/arm64 --
+  # rather than QEMU emulation: each leg builds and tests the image on the architecture it ships
+  # for, and the wheel plus the hash-pinned runtime lock install on both without per-arch packaging
+  # work. Independent of the other jobs, so it runs in parallel with them.
+  #
+  # The image is tested here and saved as a workflow artifact, never pushed: a registry outage
+  # inside this workflow would hold PyPI back (publish-pypi.yml waits for the whole run), so the
+  # push, the tag combination and the attestation live in publish-org-image.yml, which downloads
+  # exactly the bytes tested below. `finalize-release` does need this job, though, so a tag whose
+  # image fails its test gets no GitHub Release either. The artifact names (`org-image-<arch>`)
+  # deliberately do not match `finalize-release`'s `PrivacyFence-*` download pattern: the image is
+  # not a GitHub Release asset.
+  build-org-image:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
+    name: build-org-image (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned runtime dependencies
+        # Same reasoning as the `build` (macOS) job's identically-named step: the wheel is built
+        # against, and the image test runs with, the hash-verified lockfile rather than a fresh resolve.
+        run: pip install --require-hashes -r requirements/runtime.lock.txt
+
+      - name: Install Python dependencies
+        # [test] tooling comes with the dev lock: the image test needs pytest, pytest-timeout and the
+        # org bundle signing helpers. The runtime dependencies were installed by the step above.
+        run: |
+          pip install --require-hashes -r requirements/dev.lock.txt
+          pip install --no-deps --no-build-isolation -e .
+
+      # Same version/channel resolution as the `build-deb` job above, independently -- see the
+      # `build` job's identically-named step for why the channel lookup is skipped (rather than
+      # failing the run) off a tag.
+      - name: Determine version and release channel
+        id: release
+        run: |
+          VERSION="$(python -c 'from privacyfence import __version__; print(__version__)')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
+            CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
+          else
+            CHANNEL="n/a (not a tag push)"
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$VERSION channel=$CHANNEL"
+
+      # The image carries the same Telegram app credentials as every other distribution (ADR 0040).
+      - name: Write Telegram app credentials
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: python3 scripts/telegram_credentials.py write
+
+      - name: Build wheel
+        run: python -m build --wheel --no-isolation
+
+      # Same check as publish-pypi.yml's: a stable tag fails here, any other build only warns.
+      - name: Check Telegram app credentials are packaged
+        run: |
+          REQUIRE=()
+          if [[ "${{ steps.release.outputs.channel }}" == "stable" ]]; then REQUIRE=(--require); fi
+          python3 scripts/telegram_credentials.py check-dist "${REQUIRE[@]}" dist/*.whl
+
+      - name: Build org image
+        run: |
+          bash scripts/build_org_image.sh --platform linux/${{ matrix.arch }} \
+            --tag privacyfence-org:ci-${{ matrix.arch }} \
+            --version "${{ steps.release.outputs.version }}"
+
+      - name: Run org image test
+        env:
+          PRIVACYFENCE_ORG_IMAGE: privacyfence-org:ci-${{ matrix.arch }}
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
+        run: pytest tests/integration/test_org_docker_image.py -v
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-org-image-${{ matrix.arch }}-failure-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Save org image
+        run: |
+          mkdir -p org-image
+          docker save privacyfence-org:ci-${{ matrix.arch }} | gzip > org-image/privacyfence-org-${{ matrix.arch }}.tar.gz
+
+      # No `if:` (so only an image whose test passed is uploaded) and not tag-gated, so a
+      # pre-flight's image can be tried by hand. 30 days is also how long a rerun of
+      # publish-org-image.yml can still find it.
+      - name: Upload org image as artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: org-image-${{ matrix.arch }}
+          path: org-image/
+          retention-days: 30
+
   # One CycloneDX SBOM per ecosystem this repo ships code from. Independent of the `build`,
   # `build-windows`, and `build-deb` jobs above -- doesn't need the macOS
   # runner, code signing, or notarization, just the same tagged source tree
@@ -847,8 +967,13 @@ jobs:
   # workflow that `needs:` cannot reach across, and they are not installers, so they are not in
   # the manifest or attached to the GitHub Release -- which means this job has no reason to wait
   # for them.
+  #
+  # `build-org-image` (the Docker image's two native-arch legs) is in `needs` too: it produces no
+  # GitHub Release asset, but a tag whose org image failed its test has not fully shipped, so it
+  # gets no release either -- the same all-or-nothing rule as the artifacts above. Only the
+  # registry *push* is kept out of this workflow (publish-org-image.yml; ADR 0205).
   finalize-release:
-    needs: [build, build-windows, build-deb, sbom]
+    needs: [build, build-windows, build-deb, sbom, build-org-image]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     # Needs `contents: write` because it's the one place that calls action-gh-release, to attach

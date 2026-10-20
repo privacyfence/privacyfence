@@ -405,6 +405,56 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  # The per-PR leg of build.yml's `build-org-image` (amd64 only): builds the organization-mode
+  # Docker image from this checkout's wheel and runs tests/integration/test_org_docker_image.py
+  # against it, so a break in the Dockerfile, entrypoint or health check surfaces on the PR
+  # rather than on a release tag. Deliberately not in scripts/update_branch_protection.py's
+  # REQUIRED_STATUS_CHECKS: it needs a Docker daemon and a multi-minute image build, so it
+  # reports on every PR without blocking merges.
+  org-docker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned runtime dependencies
+        run: pip install --require-hashes -r requirements/runtime.lock.txt
+
+      - name: Install Python dependencies
+        run: |
+          pip install --require-hashes -r requirements/dev.lock.txt
+          pip install --no-deps --no-build-isolation -e .
+
+      # No Telegram credentials step: PR builds have no secrets, and the check is only a warning
+      # off a stable tag anyway.
+      - name: Build wheel
+        run: python -m build --wheel --no-isolation
+
+      - name: Build org image
+        run: bash scripts/build_org_image.sh --platform linux/amd64 --tag privacyfence-org:ci-amd64
+
+      - name: Run org image test
+        env:
+          PRIVACYFENCE_ORG_IMAGE: privacyfence-org:ci-amd64
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
+        run: pytest tests/integration/test_org_docker_image.py -v
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: org-docker-image-failure-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
   # A separate job (not a step tacked onto `test` above) so a lint failure is reported
   # on its own line in the checks list, and so it doesn't need the Node/npm
   # setup or shim build the `test` job carries for pytest's sake.
