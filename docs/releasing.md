@@ -61,7 +61,7 @@ regression only a packaged test catches would otherwise first surface on a real 
 
 Before dispatching `release.yml` — dry run or real — dispatch `build.yml` itself
 (`workflow_dispatch`, no inputs) against the exact commit you intend to tag, and confirm `build`,
-`build-windows`, `build-deb`, and `sbom` all succeed. This is safe to run against an untagged
+`build-windows`, `build-deb`, `build-org-image` (both architectures), and `sbom` all succeed. This is safe to run against an untagged
 commit: every upload/publish/release step in `build.yml` is gated
 `if: startsWith(github.ref, 'refs/tags/')`, so the run builds and tests every artifact but uploads
 nothing to R2, GitHub Releases, or PyPI — see that job's "Determine version and release channel"
@@ -102,6 +102,26 @@ a re-run (`workflow_dispatch` from the tag) is safe. It is a workflow of its own
 outage can never hold back `build.yml` or PyPI. A release whose GitHub Release has no `.mcpb`
 (everything before this landed) cannot be listed: GitHub Releases here are immutable. See
 [ADR 0112](adr/0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md).
+
+**The organization Docker image is published for every stable release.**
+`.github/workflows/publish-org-image.yml` triggers on the same tag push, waits for `build.yml` to
+succeed on that commit (the same `wait_for_build` gate as PyPI), downloads the two images
+`build.yml`'s `build-org-image` jobs built and tested (`org-image-amd64`, `org-image-arm64`),
+pushes them to `ghcr.io/privacyfence/privacyfence-org`, combines them into one multi-architecture
+manifest, applies the tags `scripts/org_image_tags.py` chooses (the version always; `X.Y`, `X` and
+`latest` only when no higher stable release is already tagged in that scope) and attaches a GitHub
+build-provenance attestation. It authenticates with the workflow's own `GITHUB_TOKEN`, so there is
+no secret to set up; pre-release tags are skipped. It rebuilds nothing, so what ships is what the
+image test ran against. A failed publish is rerun with `workflow_dispatch` from the tag, within 30
+days (how long the tested images are kept as workflow artifacts). It is a workflow of its own so a
+GHCR outage can never hold back PyPI, whereas `build-org-image` inside `build.yml` does gate PyPI,
+the MCP registry and the GitHub Release on every tag (see "Packaged-artifact release gating"
+below). See ADRs 0205, 0206 and 0211.
+
+**First release only:** a new GHCR package starts private. After the first stable release pushes
+it, switch `privacyfence-org` to public once (the organization's Packages settings may first need
+public packages allowed), then pull it signed out and run
+`gh attestation verify oci://ghcr.io/privacyfence/privacyfence-org:X.Y.Z --owner privacyfence`.
 
 That tag push is what `.github/workflows/build.yml` **and** `.github/workflows/publish-pypi.yml`
 both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
@@ -147,7 +167,7 @@ A stable tag's GitHub Release body is `CHANGELOG.md`'s section for that version,
 "generate release notes" button. `build.yml`'s `finalize-release` job — the same job that attaches
 every build's artifacts to the release, see "Packaged-artifact release gating" below — runs
 `scripts/changelog_section.py <version>` once, after `needs:` has already proven `build`,
-`build-windows`, `build-deb`, and `sbom` all succeeded, and hands the result to
+`build-windows`, `build-deb`, `build-org-image`, and `sbom` all succeeded, and hands the result to
 `softprops/action-gh-release` as `body_path:` in that same single call that attaches the files.
 
 That makes the notes a pull-request deliverable rather than a tag-day one, and it puts one
@@ -197,7 +217,7 @@ process guarantees are:
   `pytest.mark.packaged` test as an ordinary step, right after building its artifact and before its
   own R2 and workflow-artifact uploads. A failed step stops the job there; no `needs:` involved.
 - **The GitHub Release is all-or-nothing:** the build jobs and `sbom` only upload workflow
-  artifacts. `finalize-release` (`needs: [build, build-windows, build-deb, sbom]`, the same job that
+  artifacts. `finalize-release` (`needs: [build, build-windows, build-deb, sbom, build-org-image]`, the same job that
   promotes R2's `latest.json`) downloads them all and makes the one `softprops/action-gh-release`
   call, so a release gets the complete file set or is not touched at all.
 - **One run per tag push:** GitHub occasionally starts a workflow twice for one push, and two
