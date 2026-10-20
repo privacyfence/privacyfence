@@ -295,3 +295,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0201](0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md) | The website's security headers are set by Cloudflare and checked from the repository | Accepted; amends 0053 |
 | [0202](0202-cached-atlassian-accounts-are-reported-each-cycle-and-erased-when-they-cannot-be.md) | Cached Atlassian accounts are reported each cycle, and erased when they cannot be | Accepted; amends 0117 |
 | [0203](0203-the-deb-is-built-on-a-pinned-ubuntu-runner.md) | The `.deb` is built on a pinned Ubuntu runner | Accepted; acts on 0039 |
+| [0204](0204-check-policy-names-the-rules-that-would-cover-an-uncovered-call.md) | `privacyfence_check_policy` names the rules that would cover an uncovered call | Accepted |
+| [0205](0205-privacyfence-sync-reports-a-runs-outcome-in-an-opt-in-result-file.md) | `privacyfence-sync` reports a run's outcome in an opt-in result file | Accepted |
+| [0206](0206-scoped-token-activity-is-kept-in-its-own-file.md) | A scoped token's last use and last denial are kept in their own file | Accepted; relates to 0164 |
