@@ -49,6 +49,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `privacyfence_check_policy` returns `suggested_rules`: the scope, value and verb of the rules that would cover a call that would not auto-accept, derived from the call's own arguments, for scoped tokens too.
 - Settings shows each scoped token's last use and last denial (with the tool that was denied).
 
+### Fixed
+
+- **Calendar invitations are now emailed to guests.** `calendar_create_event` created the event without asking Google to notify the attendees, so it appeared on their calendars but nobody got a mail. Creating an event with attendees now sends the invitation to all of them. Rescheduling already emailed everyone and is unchanged.
+
 ## [6.5.0] — 2026-10-20
 
 ### Added
