@@ -414,3 +414,35 @@ def test_unexpected_error_propagates_and_writes_no_result_file(
     with pytest.raises(RuntimeError):
         cli.main(["run", simple(write_recipe), "--result-file", str(result)])
     assert not result.exists()
+
+
+def test_permissions_exits_0_when_rules_are_needed(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.tool_names = frozenset(_META | {"drive_list_files"})
+    daemon.session.results["privacyfence_check_policy"] = {"verdict": "requires_review", "suggested_rules": []}
+    assert cli.main(["permissions", simple(write_recipe), "--json"]) == 0
+    assert '"status": "needs_rule"' in capsys.readouterr().out
+    assert "privacyfence_begin_unattended_session" not in daemon.session.calls
+
+
+def test_permissions_denied_status_exits_4(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.results["privacyfence_status"] = ToolDenied("no")
+    assert cli.main(["permissions", simple(write_recipe)]) == 4
+    assert "revoked or has expired" in capsys.readouterr().err
+
+
+def test_permissions_unwraps_task_group_errors(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    group = ExceptionGroup("unhandled errors in a TaskGroup", [SignInError("expired")])
+    daemon.session.results["privacyfence_status"] = group
+    assert cli.main(["permissions", simple(write_recipe)]) == 4
+
+
+def test_permissions_bad_recipe_exits_1(write_recipe: RecipeWriter, capsys: pytest.CaptureFixture[str]) -> None:
+    recipe = write_recipe([{"id": "one", "tool": "drive_list_files", "bogus": 1}])
+    assert cli.main(["permissions", str(recipe)]) == 1
+    assert "unknown key bogus" in capsys.readouterr().err

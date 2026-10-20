@@ -1,4 +1,4 @@
-"""Command line entry point: ``privacyfence-sync run|login|check|preflight``."""
+"""Command line entry point: ``privacyfence-sync run|login|check|preflight|permissions``."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from .client import (
     connect_oauth,
     connect_token,
 )
+from .permissions import list_permissions
 from .preflight import preflight_recipe
 from .recipe import Recipe, RecipeError, load_recipe
 from .result import write_result
@@ -62,6 +63,13 @@ def _parser() -> argparse.ArgumentParser:
         "--attended", action="store_true", help="check for a run that waits for approvals, not an unattended one"
     )
     preflight.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="environment variable holding the token")
+    permissions = sub.add_parser(
+        "permissions", help="list the auto-accept rules a recipe needs, without running it", allow_abbrev=False
+    )
+    permissions.add_argument("recipe", type=Path)
+    permissions.add_argument("--server", help="the PrivacyFence MCP URL")
+    permissions.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="environment variable holding the token")
+    permissions.add_argument("--json", action="store_true", help="print one JSON object instead of text")
     return parser
 
 
@@ -101,6 +109,16 @@ async def _preflight(recipe_path: Path, server_flag: str | None, attended: bool,
     try:
         async with client:
             return await preflight_recipe(recipe, client, attended=attended, out=sys.stdout)
+    except BaseExceptionGroup as group:
+        raise _first_leaf(group) from None
+
+
+async def _permissions(recipe_path: Path, server_flag: str | None, token_env: str, as_json: bool) -> None:
+    recipe = load_recipe(recipe_path)
+    client = _connect(_resolve_server(server_flag, recipe.server), token_env)
+    try:
+        async with client:
+            await list_permissions(recipe, client, out=sys.stdout, as_json=as_json)
     except BaseExceptionGroup as group:
         raise _first_leaf(group) from None
 
@@ -184,6 +202,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "login":
             asyncio.run(_login(args.server, args.callback_port))
+            return 0
+        if args.command == "permissions":
+            asyncio.run(_permissions(args.recipe, args.server, args.token_env, args.json))
             return 0
         ok = asyncio.run(_preflight(args.recipe, args.server, args.attended, args.token_env))
         return 0 if ok else 3
