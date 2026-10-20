@@ -65,8 +65,9 @@ dependencies = [
     # Floor at 2.8: urllib3 1.26.20, which the lowest-direct resolution otherwise picks, has 12
     # advisories (e.g. PYSEC-2026-1999); a direct dependency so the floor does not depend on requests.
     "urllib3>=2.8",
-    # Floor at 2024.7.4: earlier releases still trust the GLOBALTRUST root (PYSEC-2024-230).
-    "certifi>=2024.7.4",
+    # Floor at 2026.10.19: earlier releases carry GHSA-6q48-6c7w-9gw2, and 2024.7.4 was the lowest
+    # version a fresh resolve could pick (it also still trusted the GLOBALTRUST root, PYSEC-2024-230).
+    "certifi>=2026.10.19",
     "openpyxl>=3.1",
     # Floor at 6.19: every pypdf release below it has at least one of 85 advisories pip-audit
     # reports against the lowest-direct resolution (dependency-audit.yml's floor-audit job).
