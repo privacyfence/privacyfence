@@ -716,7 +716,7 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/privacyfence_*.deb
 
-  # Organization-mode Docker image (docs/org-mode-docker.md, ADRs 0205 and 0207). A matrix of two
+  # Organization-mode Docker image (docs/org-mode-docker.md, ADRs 0209 and 0211). A matrix of two
   # legs on native runners -- `ubuntu-24.04` for linux/amd64, `ubuntu-24.04-arm` for linux/arm64 --
   # rather than QEMU emulation: each leg builds and tests the image on the architecture it ships
   # for, and the wheel plus the hash-pinned runtime lock install on both without per-arch packaging
@@ -971,7 +971,7 @@ jobs:
   # `build-org-image` (the Docker image's two native-arch legs) is in `needs` too: it produces no
   # GitHub Release asset, but a tag whose org image failed its test has not fully shipped, so it
   # gets no release either -- the same all-or-nothing rule as the artifacts above. Only the
-  # registry *push* is kept out of this workflow (publish-org-image.yml; ADR 0205).
+  # registry *push* is kept out of this workflow (publish-org-image.yml; ADR 0209).
   finalize-release:
     needs: [build, build-windows, build-deb, sbom, build-org-image]
     if: startsWith(github.ref, 'refs/tags/')

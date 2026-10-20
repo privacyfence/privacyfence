@@ -3,7 +3,7 @@
 build.yml's ``build-org-image`` matrix and ``finalize-release`` gating, and tests.yml's
 ``org-docker-image`` job. These are the properties a workflow edit can break without any other
 test noticing: the runners, the permissions, the artifact name, the strictness switch and the rule
-that nothing in build.yml touches a registry (ADR 0205).
+that nothing in build.yml touches a registry (ADR 0209).
 
 It also covers publish-org-image.yml, the only workflow that pushes the image: its job chain, its
 permissions, that it pushes the images build.yml tested instead of building, and that a

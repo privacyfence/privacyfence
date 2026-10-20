@@ -6,15 +6,15 @@ name: Publish org Docker image
 # tags, and attaches a GitHub build-provenance attestation -- see docs/org-mode-docker.md and
 # docs/releasing.md.
 #
-# Deliberately a workflow of its own rather than a job in build.yml (ADR 0205): publish-pypi.yml
+# Deliberately a workflow of its own rather than a job in build.yml (ADR 0209): publish-pypi.yml
 # waits for build.yml to *succeed*, so a GHCR outage there would hold PyPI back. It downloads the
 # images build.yml built and tested (`docker save` -> artifact -> `docker load`) instead of
 # building again, so the bytes pushed are the bytes a test ran against.
 #
-# Stable releases only (ADR 0204): a pre-release tag ends green with nothing pushed. The version
+# Stable releases only (ADR 0208): a pre-release tag ends green with nothing pushed. The version
 # tag always moves; X.Y, X and latest move only when no already-tagged stable release is higher in
-# that scope, decided by scripts/org_image_tags.py (ADR 0206). The attestation is GitHub's own
-# build provenance, not a cosign signature (ADR 0211); `gh attestation verify` checks it.
+# that scope, decided by scripts/org_image_tags.py (ADR 0210). The attestation is GitHub's own
+# build provenance, not a cosign signature (ADR 0215); `gh attestation verify` checks it.
 #
 # The GHCR package starts private. Make it public once, after the first stable release pushes it
 # (docs/releasing.md); nothing here can do that.
