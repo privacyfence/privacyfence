@@ -21,6 +21,7 @@ import ipaddress
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -93,31 +94,40 @@ def test_the_data_volume_is_the_images_data_directory() -> None:
     assert DATA_VOLUME_PATH in volume_line
 
 
-def _docker_compose(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["docker", "compose", "-f", str(COMPOSE), *args],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+def _run_docker(cmd: list[str], *, env: dict[str, str] | None, timeout: int) -> tuple[int, str]:
+    """Run ``cmd`` and return (exit code, stderr), writing to files rather than pipes.
+
+    ``docker compose`` is a CLI plugin that Docker starts as a grandchild. On the Windows runner
+    that grandchild can outlive the timeout and keep a pipe open, so ``subprocess.run`` kills the
+    ``docker`` process and then blocks forever draining the pipe (the hang that pytest's own
+    timeout reported). With files there is nothing to drain once the direct child is gone.
+    """
+    with tempfile.TemporaryFile("w+", encoding="utf-8") as out, tempfile.TemporaryFile("w+", encoding="utf-8") as err:
+        completed = subprocess.run(  # noqa: S603  # nosec B603  # fixed argv, no shell
+            cmd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=timeout, check=False
+        )
+        err.seek(0)
+        return completed.returncode, err.read()
+
+
+def _docker_compose(*args: str, env: dict[str, str]) -> tuple[int, str]:
+    return _run_docker(["docker", "compose", "-f", str(COMPOSE), *args], env=env, timeout=60)
 
 
 def test_docker_compose_accepts_the_file() -> None:
     try:
-        probe = subprocess.run(
-            ["docker", "compose", "version"], capture_output=True, text=True, timeout=30, check=False
-        )
+        probe_code, _ = _run_docker(["docker", "compose", "version"], env=None, timeout=30)
     except FileNotFoundError:
-        probe = None
-    if probe is None or probe.returncode != 0:
+        pytest.skip("docker compose not on PATH")
+    except subprocess.TimeoutExpired:
+        pytest.skip("docker compose did not answer `version`")
+    if probe_code != 0:
         pytest.skip("docker compose not on PATH")
     base = {k: v for k, v in os.environ.items() if k != "PF_HOSTNAME"}
 
-    accepted = _docker_compose("config", "--quiet", env={**base, "PF_HOSTNAME": "pf.example.com"})
-    assert accepted.returncode == 0, accepted.stderr
+    accepted_code, accepted_err = _docker_compose("config", "--quiet", env={**base, "PF_HOSTNAME": "pf.example.com"})
+    assert accepted_code == 0, accepted_err
 
-    refused = _docker_compose("config", "--quiet", env=base)
-    assert refused.returncode != 0
-    assert "set PF_HOSTNAME in .env" in refused.stderr
+    refused_code, refused_err = _docker_compose("config", "--quiet", env=base)
+    assert refused_code != 0
+    assert "set PF_HOSTNAME in .env" in refused_err
