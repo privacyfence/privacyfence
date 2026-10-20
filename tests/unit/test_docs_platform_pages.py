@@ -67,9 +67,10 @@ def test_the_matrix_has_a_guide_column_and_rows():
 def test_each_matrix_row_links_its_platforms_one_install_page(row):
     links = _LINK.findall(row["Guide"])
     if _is_org_mode(row):
-        # Organization mode is a server deployment, not a desktop install: its guide is the one
-        # deployment guide, never an install page.
-        assert links == ["org-mode-setup-guide.md"], row["Guide"]
+        # Organization mode is a server deployment, not a desktop install: its guide is a deployment
+        # guide (the Docker row has its own page), never an install page.
+        expected = "org-mode-docker.md" if "Docker" in row["Platform"] else "org-mode-setup-guide.md"
+        assert links == [expected], row["Guide"]
         return
     platform = _platform_of(row["Platform"])
     install_pages = [link for link in links if link.startswith("install-")]

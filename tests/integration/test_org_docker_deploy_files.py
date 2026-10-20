@@ -1,0 +1,123 @@
+"""The Docker deployment files are the ones the operator page shows, and keep what the daemon needs.
+
+``docs/org-mode-docker.md`` embeds ``deploy/docker/compose.yaml`` and ``deploy/docker/Caddyfile``
+verbatim, and tells operators to build the bundle with the trusted-proxy address the Compose file
+fixes. Nothing else in the suite reads these files; ``test_org_docker_image.py`` runs the image on
+its own, without Compose or Caddy. Both files are compared with the page by heading name, so the
+page stays readable and a renumbered or moved section does not break the lookup.
+
+Two kinds of check:
+
+- Static assertions in plain Python on the lines the daemon depends on: no published daemon port,
+  the hardening settings, Caddy's fixed address inside the subnet and named as the trusted proxy,
+  the proxied port, and the data volume path the image declares. These run everywhere.
+- ``docker compose config``, which catches a syntax or schema error and the required-variable guard.
+  It skips when the Compose plugin is absent.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import os
+import re
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from privacyfence.web.server import DEFAULT_PORT
+from tests.integration.guide_sections import fenced_block
+
+pytestmark = pytest.mark.integration
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEPLOY = REPO_ROOT / "deploy" / "docker"
+COMPOSE = DEPLOY / "compose.yaml"
+CADDYFILE = DEPLOY / "Caddyfile"
+DOCKERFILE = DEPLOY / "Dockerfile"
+DOC = REPO_ROOT / "docs" / "org-mode-docker.md"
+
+DATA_VOLUME_PATH = "/var/lib/privacyfence-org/.privacyfence"
+CADDY_ADDRESS = "172.30.87.2"
+
+
+def _compose() -> dict[str, Any]:
+    loaded: dict[str, Any] = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    return loaded
+
+
+def _daemon() -> dict[str, Any]:
+    service: dict[str, Any] = _compose()["services"]["privacyfence"]
+    return service
+
+
+def test_compose_file_matches_the_doc() -> None:
+    assert fenced_block(DOC, "Compose file", "yaml") == COMPOSE.read_text(encoding="utf-8")
+
+
+def test_caddyfile_matches_the_doc() -> None:
+    assert fenced_block(DOC, "Caddyfile", "") == CADDYFILE.read_text(encoding="utf-8")
+
+
+def test_the_daemon_publishes_no_port() -> None:
+    assert "ports" not in _daemon()
+
+
+def test_the_daemon_runs_hardened() -> None:
+    daemon = _daemon()
+    assert daemon["read_only"] is True
+    assert daemon["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in daemon["security_opt"]
+    assert "/tmp" in daemon["tmpfs"]
+
+
+def test_caddy_is_the_documented_trusted_proxy() -> None:
+    compose = _compose()
+    address = compose["services"]["caddy"]["networks"]["pf"]["ipv4_address"]
+    subnet = compose["networks"]["pf"]["ipam"]["config"][0]["subnet"]
+    assert address == CADDY_ADDRESS
+    assert ipaddress.ip_address(address) in ipaddress.ip_network(subnet)
+    assert f"--server-trusted-proxy {CADDY_ADDRESS}" in DOC.read_text(encoding="utf-8")
+
+
+def test_caddy_proxies_to_the_daemon_port() -> None:
+    assert f"reverse_proxy privacyfence:{DEFAULT_PORT}" in CADDYFILE.read_text(encoding="utf-8")
+    assert DEFAULT_PORT == 8765
+
+
+def test_the_data_volume_is_the_images_data_directory() -> None:
+    assert f"pf-data:{DATA_VOLUME_PATH}" in _daemon()["volumes"]
+    (volume_line,) = re.findall(r"^VOLUME .*$", DOCKERFILE.read_text(encoding="utf-8"), flags=re.MULTILINE)
+    assert DATA_VOLUME_PATH in volume_line
+
+
+def _docker_compose(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["docker", "compose", "-f", str(COMPOSE), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_docker_compose_accepts_the_file() -> None:
+    try:
+        probe = subprocess.run(
+            ["docker", "compose", "version"], capture_output=True, text=True, timeout=30, check=False
+        )
+    except FileNotFoundError:
+        probe = None
+    if probe is None or probe.returncode != 0:
+        pytest.skip("docker compose not on PATH")
+    base = {k: v for k, v in os.environ.items() if k != "PF_HOSTNAME"}
+
+    accepted = _docker_compose("config", "--quiet", env={**base, "PF_HOSTNAME": "pf.example.com"})
+    assert accepted.returncode == 0, accepted.stderr
+
+    refused = _docker_compose("config", "--quiet", env=base)
+    assert refused.returncode != 0
+    assert "set PF_HOSTNAME in .env" in refused.stderr
