@@ -14,6 +14,15 @@ it holds none of your service credentials, cannot approve anything and cannot ch
 declares an unattended session (see [Unattended sessions](how-it-works.md#unattended-sessions)),
 so a step that no rule covers fails at once instead of waiting for a card nobody will answer.
 
+## Starting Claude when something changes
+
+A recipe can watch for a change without a model and start Claude only when there is work. A script
+step finds the new file (and stops the run when there is none), then a `trigger` step starts a
+Claude Code cloud scheduled task through its API trigger and passes it the file's ID. Watching costs
+no tokens, and no Claude session waits for hours. See
+[Trigger steps](https://github.com/privacyfence/privacyfence/blob/main/sync/README.md#trigger-steps)
+and [ADR 0207](adr/0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md).
+
 ## Install
 
 Python 3.11 or newer, in its own virtual environment, together with anything your scripts import:

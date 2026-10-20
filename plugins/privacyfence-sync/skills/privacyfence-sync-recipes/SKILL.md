@@ -1,6 +1,6 @@
 ---
 name: privacyfence-sync-recipes
-description: Write and maintain privacyfence-sync recipes, the YAML files that run a data sync through PrivacyFence on a schedule with no AI model involved. Use when the user wants to schedule or automate a sync between Salesforce, Jira, Google Drive, Grist and Peek, refresh a dashboard without Claude, turn an existing data-sync skill or a manual Claude routine into a recipe, add a source or step to a recipe, or find out why a scheduled run was denied or failed.
+description: Write and maintain privacyfence-sync recipes, the YAML files that run a data sync through PrivacyFence on a schedule with no AI model involved. Use when the user wants to schedule or automate a sync between Salesforce, Jira, Google Drive, Grist and Peek, refresh a dashboard without Claude, turn an existing data-sync skill or a manual Claude routine into a recipe, add a source or step to a recipe, start a Claude Code scheduled task when a file appears in a Drive folder, or find out why a scheduled run was denied or failed.
 ---
 
 # privacyfence-sync recipes
@@ -28,7 +28,8 @@ Some work is design work. You do it with the user, interactively, once:
 A recipe only repeats things: it reads from a source, runs scripts on the files, and writes into
 Grist tables and Peek pages that already exist. A recipe cannot branch, loop, retry or call a tool
 once per row. If the user asks for any of those, say so, and put the logic in a script that can
-stop the run.
+stop the run. When a change needs judgement rather than a fixed transform, the recipe only detects
+it and ends with a `trigger` step that starts a Claude Code scheduled task to do the work.
 
 ## 3. Designing the sync
 

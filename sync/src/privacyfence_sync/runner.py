@@ -8,6 +8,7 @@ import contextlib
 import csv
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any, TextIO
@@ -16,10 +17,21 @@ from urllib.parse import urlparse
 import httpx2
 
 from . import refs
-from .client import RecipeRuntimeError, SyncClient, SyncError, ToolDenied, ToolFailed
-from .recipe import DOWNLOAD_TOOLS, EXPORT_TOOLS, Recipe, RunStep, TemplateStep, ToolStep, produced_files
+from .client import RecipeRuntimeError, SignInError, SyncClient, SyncError, ToolDenied, ToolFailed
+from .recipe import (
+    DOWNLOAD_TOOLS,
+    EXPORT_TOOLS,
+    MAX_TRIGGER_TEXT,
+    Recipe,
+    RunStep,
+    TemplateStep,
+    ToolStep,
+    TriggerStep,
+    produced_files,
+)
 from .template import render_template
 from .transform import StopRun, run_script
+from .trigger import fire
 
 _FETCH_PATH = "/mcp-files/fetch/"
 _APPROVAL_POLLS = 8
@@ -32,6 +44,14 @@ _UNATTENDED_DISABLED = (
 
 async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out: TextIO) -> str | None:
     """The id of the step that stopped the run (a script exited 10), or None when every step ran."""
+    tokens: dict[str, str] = {}
+    for step in recipe.steps:
+        if isinstance(step, TriggerStep):
+            tokens[step.id] = os.environ.get(step.token_env, "")
+            if not tokens[step.id]:
+                raise SignInError(
+                    f"step {step.id}: ${step.token_env} is empty; store the scheduled task's API token in it"
+                )
     work_dir = recipe.work_dir
     work_dir.mkdir(parents=True, exist_ok=True)
     session_reason = f"privacyfence-sync {recipe.name}"
@@ -41,14 +61,16 @@ async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out:
         except ToolFailed:
             raise SyncError(_UNATTENDED_DISABLED) from None
     try:
-        return await _run_steps(recipe, client, attended, out)
+        return await _run_steps(recipe, client, attended, out, tokens)
     finally:
         if not attended:
             with contextlib.suppress(Exception):
                 await client.call("privacyfence_end_unattended_session", {"reason": f"{session_reason}: run finished"})
 
 
-async def _run_steps(recipe: Recipe, client: SyncClient, attended: bool, out: TextIO) -> str | None:
+async def _run_steps(
+    recipe: Recipe, client: SyncClient, attended: bool, out: TextIO, tokens: dict[str, str]
+) -> str | None:
     work_dir = recipe.work_dir
     files: dict[str, Path] = {}
 
@@ -65,6 +87,8 @@ async def _run_steps(recipe: Recipe, client: SyncClient, attended: bool, out: Te
                 await _tool_step(recipe, step, client, files, read_json, attended, out)
             elif isinstance(step, RunStep):
                 await _run_step(recipe, step, files, read_json, out)
+            elif isinstance(step, TriggerStep):
+                await _trigger_step(step, tokens[step.id], read_json, out)
             else:
                 _template_step(recipe, step, files, read_json)
         except StopRun:
@@ -92,6 +116,20 @@ async def _run_step(recipe: Recipe, step: RunStep, files: dict[str, Path], read_
         for arg in step.args
     ]
     await asyncio.to_thread(run_script, step, argv, work_dir)
+
+
+async def _trigger_step(step: TriggerStep, token: str, read_json: Any, out: TextIO) -> None:
+    text = step.text
+    if text is not None:
+        filled = refs.substitute_value_refs(text, read_json)
+        text = filled if isinstance(filled, str) else json.dumps(filled, ensure_ascii=False)
+        if len(text) > MAX_TRIGGER_TEXT:
+            raise RecipeRuntimeError(
+                f"step {step.id}: text is longer than 65,536 characters once its references are filled in"
+            )
+    url = await fire(step.id, step.trigger, step.token_env, token, text)
+    suffix = f": {url}" if url else ""
+    out.write(f"[{step.id}] started scheduled task {step.trigger}{suffix}\n")
 
 
 def _template_step(recipe: Recipe, step: TemplateStep, files: dict[str, Path], read_json: Any) -> None:
