@@ -4,6 +4,10 @@ build.yml's ``build-org-image`` matrix and ``finalize-release`` gating, and test
 ``org-docker-image`` job. These are the properties a workflow edit can break without any other
 test noticing: the runners, the permissions, the artifact name, the strictness switch and the rule
 that nothing in build.yml touches a registry (ADR 0205).
+
+It also covers publish-org-image.yml, the only workflow that pushes the image: its job chain, its
+permissions, that it pushes the images build.yml tested instead of building, and that a
+pre-release tag publishes nothing.
 """
 
 from __future__ import annotations
@@ -99,6 +103,85 @@ def test_tests_yml_has_the_per_pr_image_job(tests_yml: dict[str, Any]) -> None:
 @pytest.mark.parametrize("workflow", ["build.yml", "tests.yml"])
 def test_every_action_is_pinned_to_a_commit_sha(workflow: str) -> None:
     for job_name, job in _load(workflow)["jobs"].items():
+        for step in job.get("steps", []):
+            if "uses" in step:
+                assert re.search(r"@[0-9a-f]{40}$", step["uses"]), (job_name, step["uses"])
+
+
+PUBLISH_STABLE = "steps.release.outputs.channel == 'stable'"
+
+
+@pytest.fixture(scope="module")
+def publish() -> dict[str, Any]:
+    return _load("publish-org-image.yml")
+
+
+def _push_step(publish: dict[str, Any]) -> dict[str, Any]:
+    return next(s for s in _steps(publish["jobs"]["publish"]) if s.get("id") == "push")
+
+
+def test_publish_triggers_are_the_tag_push_and_a_manual_rerun(publish: dict[str, Any]) -> None:
+    triggers = publish.get("on", publish.get(True))
+    assert triggers == {"push": {"tags": ["v*"]}, "workflow_dispatch": None}
+
+
+def test_publish_jobs_chain_dedupe_wait_for_build_publish(publish: dict[str, Any]) -> None:
+    jobs = publish["jobs"]
+    assert set(jobs) == {"dedupe", "wait_for_build", "publish"}
+    assert jobs["wait_for_build"]["needs"] == "dedupe"
+    assert jobs["publish"]["needs"] == "wait_for_build"
+    assert jobs["wait_for_build"]["outputs"] == {"run_id": "${{ steps.wait.outputs.run_id }}"}
+
+
+def test_only_the_publish_job_can_write_packages_and_attest(publish: dict[str, Any]) -> None:
+    assert publish["permissions"] == {"contents": "read"}
+    powerful = {"packages", "id-token", "attestations"}
+    for name, job in publish["jobs"].items():
+        granted = {k for k, v in (job.get("permissions") or {}).items() if v == "write"}
+        assert (granted & powerful) == (powerful if name == "publish" else set()), name
+
+
+def test_publish_downloads_the_images_of_the_run_it_waited_for(publish: dict[str, Any]) -> None:
+    downloads = [
+        s["with"]
+        for s in _steps(publish["jobs"]["publish"])
+        if str(s.get("uses", "")).startswith("actions/download-artifact@")
+    ]
+    assert len(downloads) == 1
+    assert downloads[0]["run-id"] == "${{ needs.wait_for_build.outputs.run_id }}"
+    assert downloads[0]["pattern"] == "org-image-*"
+
+
+def test_publish_steps_after_the_channel_check_run_for_stable_releases_only(publish: dict[str, Any]) -> None:
+    steps = _steps(publish["jobs"]["publish"])
+    names = [s.get("name") for s in steps]
+    after = steps[names.index("Determine version and release channel") + 1 :]
+    summary = [s for s in after if s.get("if") == "steps.release.outputs.channel != 'stable'"]
+    assert len(summary) == 1
+    assert "no org image is published" in summary[0]["run"]
+    for step in after:
+        if step is not summary[0]:
+            assert step.get("if") == PUBLISH_STABLE, step.get("name")
+
+
+def test_publish_pushes_the_tested_images_and_never_builds(publish: dict[str, Any]) -> None:
+    run = _push_step(publish)["run"]
+    assert "scripts/org_image_tags.py" in run
+    assert "docker load" in run
+    assert not re.search(r"\bdocker\s+(buildx\s+)?build\b", run)
+    assert "buildx build" not in run
+
+
+def test_publish_attests_the_pushed_digest(publish: dict[str, Any]) -> None:
+    step = next(
+        s for s in _steps(publish["jobs"]["publish"]) if str(s.get("uses", "")).startswith("actions/attest-build-provenance@")
+    )
+    assert step["with"]["subject-digest"] == "${{ steps.push.outputs.digest }}"
+    assert step["with"]["push-to-registry"] is True
+
+
+def test_publish_actions_are_pinned_to_a_commit_sha(publish: dict[str, Any]) -> None:
+    for job_name, job in publish["jobs"].items():
         for step in job.get("steps", []):
             if "uses" in step:
                 assert re.search(r"@[0-9a-f]{40}$", step["uses"]), (job_name, step["uses"])
