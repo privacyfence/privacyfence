@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-10-11. Implemented.
+Amended by [ADR 0207](0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md).
 
 ## Context
 

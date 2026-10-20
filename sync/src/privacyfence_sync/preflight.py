@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from dataclasses import dataclass
 from typing import Any, TextIO
 
 from . import refs
 from .client import SignInError, SyncClient, SyncError, ToolDenied, ToolFailed
-from .recipe import Recipe, ToolStep
+from .recipe import Recipe, ToolStep, TriggerStep
 from .runner import _UNATTENDED_DISABLED, json_text_args
 
 META = frozenset(
@@ -119,6 +120,16 @@ async def preflight_recipe(recipe: Recipe, client: SyncClient, *, attended: bool
     checked = 0
     try:
         for step in recipe.steps:
+            if isinstance(step, TriggerStep):
+                if os.environ.get(step.token_env):
+                    out.write(
+                        f"[{step.id}] trigger {step.trigger}: ok: ${step.token_env} is set "
+                        "(only a run checks the token itself)\n"
+                    )
+                else:
+                    out.write(f"[{step.id}] trigger {step.trigger}: PROBLEM: ${step.token_env} is empty\n")
+                    problems += 1
+                continue
             if not isinstance(step, ToolStep):
                 continue
             checked += 1

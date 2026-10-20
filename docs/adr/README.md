@@ -252,7 +252,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0158](0158-peek-rules-name-pages-and-cover-only-new-versions.md) | Peek rules name pages and cover only new versions | Accepted |
 | [0159](0159-jira-export-issues-is-covered-by-the-project-search-rule.md) | `jira_export_issues` is covered by the project search rule | Accepted |
 | [0160](0160-org-mode-exports-are-delivered-by-a-one-time-link.md) | Org-mode exports are delivered by a one-time link | Accepted; amends 0155 |
-| [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted |
+| [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted; amended by 0207 |
 | [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
 | [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198 |
@@ -298,3 +298,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0204](0204-check-policy-names-the-rules-that-would-cover-an-uncovered-call.md) | `privacyfence_check_policy` names the rules that would cover an uncovered call | Accepted |
 | [0205](0205-privacyfence-sync-reports-a-runs-outcome-in-an-opt-in-result-file.md) | `privacyfence-sync` reports a run's outcome in an opt-in result file | Accepted |
 | [0206](0206-scoped-token-activity-is-kept-in-its-own-file.md) | A scoped token's last use and last denial are kept in their own file | Accepted; relates to 0164 |
+| [0207](0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md) | `privacyfence-sync` can start a Claude Code scheduled task, and nothing else | Accepted; amends 0161 |

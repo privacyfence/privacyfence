@@ -221,3 +221,13 @@ async def test_scoped_token_seeing_no_tools(write_recipe: RecipeWriter) -> None:
 async def test_unscoped_token_has_no_token_line(write_recipe: RecipeWriter) -> None:
     out = await run(write_recipe, [step()], checked({"gate": "auto"}, status={"ok": True}))
     assert not out.startswith("token")
+
+
+async def test_trigger_steps_are_not_listed(write_recipe: RecipeWriter) -> None:
+    trigger = {"id": "go", "trigger": "trig_abc", "token_env": "PRIVACYFENCE_TRIGGER_X"}
+    result = {"gate": "auto", "verdict": "auto_accept"}
+    text = await run(write_recipe, [step(), trigger], checked(result))
+    assert "[one] drive_list_files:" in text and "go" not in text.replace("Tools", "")
+    doc = json.loads(await run(write_recipe, [step(), trigger], checked(result), as_json=True))
+    assert [s["id"] for s in doc["steps"]] == ["one"]
+    assert doc["tools"] == ["drive_list_files"]

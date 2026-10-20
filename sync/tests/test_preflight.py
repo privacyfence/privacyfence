@@ -265,3 +265,33 @@ async def test_needs_approval_without_a_usable_suggestion_is_unchanged(
     ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)))
     assert not ok
     assert "; add:" not in out and "a run would wait for a card\n" in out
+
+
+TRIGGER = {"id": "go", "trigger": "trig_abc", "token_env": "PRIVACYFENCE_TRIGGER_X"}
+
+
+async def test_trigger_with_a_token_is_ok_and_not_policy_checked(
+    write_recipe: RecipeWriter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "tok")
+    client = FakeClient(names("drive_list_files"), policy())
+    ok, out = await run(write_recipe, [step(), TRIGGER], client)
+    assert ok
+    assert out.endswith(
+        "[one] drive_list_files: ok: never asks for approval\n"
+        "[go] trigger trig_abc: ok: $PRIVACYFENCE_TRIGGER_X is set (only a run checks the token itself)\n"
+        "preflight: 1 step(s) checked, 0 problem(s)\n"
+    )
+    assert [c[0] for c in client.calls].count("privacyfence_check_policy") == 1
+
+
+async def test_trigger_with_an_empty_token_is_a_problem(
+    write_recipe: RecipeWriter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "")
+    client = FakeClient(names("drive_list_files"))
+    ok, out = await run(write_recipe, [TRIGGER], client)
+    assert not ok
+    assert "[go] trigger trig_abc: PROBLEM: $PRIVACYFENCE_TRIGGER_X is empty\n" in out
+    assert out.endswith("preflight: 0 step(s) checked, 1 problem(s)\n")
+    assert "privacyfence_check_policy" not in [c[0] for c in client.calls]

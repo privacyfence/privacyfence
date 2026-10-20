@@ -446,3 +446,31 @@ def test_permissions_bad_recipe_exits_1(write_recipe: RecipeWriter, capsys: pyte
     recipe = write_recipe([{"id": "one", "tool": "drive_list_files", "bogus": 1}])
     assert cli.main(["permissions", str(recipe)]) == 1
     assert "unknown key bogus" in capsys.readouterr().err
+
+
+def trigger_recipe(write_recipe: RecipeWriter) -> str:
+    step = {"id": "go", "trigger": "trig_abc", "token_env": "PRIVACYFENCE_TRIGGER_X"}
+    return str(write_recipe([{"id": "one", "tool": "drive_list_files"}, step]))
+
+
+def test_result_file_for_a_missing_trigger_token(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PRIVACYFENCE_TRIGGER_X", raising=False)
+    result = tmp_path / "result.json"
+    assert cli.main(["run", trigger_recipe(write_recipe), "--result-file", str(result)]) == 4
+    assert read_result(result)["outcome"] == "not_signed_in"
+    assert daemon.session.calls == []
+
+
+def test_result_file_for_a_failed_trigger(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing(*_: object) -> str | None:
+        raise SyncError("step go: Claude answered HTTP 500 when starting scheduled task trig_abc")
+
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "tok")
+    monkeypatch.setattr("privacyfence_sync.runner.fire", failing)
+    result = tmp_path / "result.json"
+    assert cli.main(["run", trigger_recipe(write_recipe), "--result-file", str(result)]) == 2
+    assert read_result(result)["outcome"] == "failed"

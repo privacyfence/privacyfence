@@ -169,7 +169,7 @@ steps:                              # required, 1 to 50 steps, run in order
 ```
 
 Every step has an `id` (lowercase letters, digits, `-` and `_`, up to 40 characters, unique in
-the recipe) and exactly one of `tool`, `run` or `template`. A step may only refer to steps above
+the recipe) and exactly one of `tool`, `run`, `template` or `trigger`. A step may only refer to steps above
 it. Any unknown key is an error, so a typo fails `check` instead of being ignored.
 
 **The work folder** (`work_dir`) is where every file of a run lands. It is created if needed.
@@ -197,6 +197,7 @@ Steps pass files to each other by name. These steps produce files:
 | Any other tool step with `save_result` | the tool's result, as JSON | `<step id>` |
 | A script step | each entry of `outputs`, and `stdout` if given | `<step id>.<output name>` |
 | A template step | `output` | `<step id>` |
+| A trigger step | none | not referred to |
 
 Two kinds of reference use them:
 
@@ -352,6 +353,41 @@ Runs your Python script. See [Script steps](#script-steps) below.
 ```
 
 Puts a JSON file into an HTML template. See [Dashboard templates](#dashboard-templates).
+
+### Trigger steps
+
+```yaml
+- id: start
+  trigger: trig_01AbCdEfGhIjKlMnOpQrStUv     # the scheduled task's ID, from its API trigger
+  token_env: PRIVACYFENCE_TRIGGER_NOTES      # environment variable holding that task's token
+  text: "New notes PDF in Drive: file_id=${pick.stdout:file_id} name=${pick.stdout:name}"   # optional
+```
+
+Starts a Claude Code cloud scheduled task, so a cheap recipe can watch for a change and Claude runs
+only when there is work. The step makes one `POST` to
+`https://api.anthropic.com/v1/claude_code/routines/<trigger>/fire`, with the token from the
+variable `token_env`, and prints `[<id>] started scheduled task <trigger>: <session link>`. That is
+the only address a recipe can send anything to, apart from your PrivacyFence.
+
+- `trigger` is the task's ID (it starts with `trig_`), shown with the task's API trigger.
+- `token_env` names the environment variable that holds the task's token. It must start with
+  `PRIVACYFENCE_`, because `run` removes every such variable from a script's environment, so no
+  script sees the token. It must not be `PRIVACYFENCE_TOKEN` or `PRIVACYFENCE_MCP_URL`, and it must
+  be a different variable from the one `--token-env` names, because `run` removes that one from the
+  environment before any step runs. A run with an empty variable exits 4 before it calls
+  PrivacyFence.
+- `text` is optional, at most 65,536 characters once its `${...}` references are filled in. The
+  task receives it as untrusted data, not as instructions, so put IDs and names in it, not
+  content: the task reads the content itself through PrivacyFence.
+- **No retry.** Claude's endpoint has no idempotency key, so a retry could start the task twice
+  for the same file. Put the step that records the work as done after the trigger step: if the
+  start fails, that step never runs, and the next scheduled run tries again.
+- Claude accepts 30 starts per task per hour. A refused token (HTTP 401 or 403) exits 4; every
+  other failure exits 2.
+- Only Claude Code cloud scheduled tasks can be started this way. Cowork scheduled tasks have no
+  trigger that can be called from outside. The endpoint is marked experimental by Anthropic and
+  may change.
+- `--attended` changes nothing for this step, and `preflight` never starts the task.
 
 ## Script steps
 
@@ -572,6 +608,76 @@ privacyfence-sync run recipe.yaml --attended   # approve, and add any missing ru
 privacyfence-sync run recipe.yaml              # unattended: no card should appear
 ```
 
+### Starting Claude when a file lands in a Drive folder
+
+```yaml
+version: 1
+name: notes-inbox
+steps:
+  - id: listing
+    tool: drive_list_folder
+    args: {folder_id: 1AbCdEfGhIjKlMnOpQrStUvWxYz, max_results: 1000}
+    save_result: listing.json
+
+  - id: pick
+    run: scripts/inbox.py
+    args: [pick, --listing, "{file:listing}", --state, /Users/me/notes-inbox-state/seen.txt]
+    stdout: pick.json
+
+  - id: start
+    trigger: trig_01AbCdEfGhIjKlMnOpQrStUv
+    token_env: PRIVACYFENCE_TRIGGER_NOTES
+    text: "New handwritten notes in Drive: file_id=${pick.stdout:file_id} name=${pick.stdout:name}"
+
+  - id: commit
+    run: scripts/inbox.py
+    args: [commit, --state, /Users/me/notes-inbox-state/seen.txt, --file-id, "${pick.stdout:file_id}"]
+```
+
+`scripts/inbox.py`:
+
+```python
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ap = argparse.ArgumentParser()
+ap.add_argument("mode", choices=["pick", "commit"])
+ap.add_argument("--state", required=True)
+ap.add_argument("--listing")
+ap.add_argument("--file-id")
+args = ap.parse_args()
+state = Path(args.state)
+
+if args.mode == "commit":
+    state.parent.mkdir(parents=True, exist_ok=True)
+    with state.open("a", encoding="utf-8") as handle:
+        handle.write(args.file_id + "\n")
+    sys.exit(0)
+
+listing = json.loads(Path(args.listing).read_text(encoding="utf-8"))
+files = listing["result"] if isinstance(listing, dict) else listing
+seen = set(state.read_text(encoding="utf-8").split()) if state.exists() else set()
+new = [f for f in files if f.get("mime_type") == "application/pdf" and f.get("id") not in seen]
+if not new:
+    sys.exit(10)
+oldest = min(new, key=lambda f: f.get("created_time", ""))
+print(json.dumps({"file_id": oldest["id"], "name": oldest.get("name", "")}))
+```
+
+It starts one Claude session per new file, so a backlog drains one file per scheduled run.
+
+`drive_list_folder` returns at most 1,000 children, in no set order, so keep the watched folder
+small: move processed files out of it.
+
+`commit` runs only after the start succeeded, so a failed start is retried by the next run.
+
+`drive_list_folder` is always auto-approved, so the watch needs no rule. The Claude task needs its
+own rules for what it does.
+
+With `run --result-file`, `ok` means Claude was started and `no_change` means no new file arrived.
+
 ## Commands
 
 ```
@@ -605,7 +711,8 @@ privacyfence-sync permissions RECIPE [--server URL] [--token-env NAME] [--json]
   predict the personal-data scan: a run is also denied when the data it reads holds personal data
   the token does not allow. Use it after creating a scoped token or rules and before scheduling.
   When a step would need approval, the line ends with `; add: <rule>`, the first rule PrivacyFence
-  suggests for it.
+  suggests for it. A trigger step is reported by whether its token variable is set; preflight
+  never starts the task.
 - **`permissions`** lists the auto-accept rules and the tools a recipe needs, from your PrivacyFence
   itself, so a scheduler does not have to keep its own table of them. See
   [Listing the rules a recipe needs](#listing-the-rules-a-recipe-needs).
@@ -621,7 +728,7 @@ Exit codes:
 | 1 | The recipe, a command-line argument, a reference or a template is wrong |
 | 2 | A tool call, a file transfer or a script failed, or the server refused the connection |
 | 3 | PrivacyFence denied a step (in an unattended run: no rule covers it); for `preflight`, a step is outside the token or would need approval |
-| 4 | Not signed in, the sign-in expired, or no token |
+| 4 | Not signed in, the sign-in expired, or no token; or a trigger step's token is empty or refused |
 
 Every error prints one line starting with `privacyfence-sync:` to the error output; when a script
 failed, the script's own error output is shown just above it. No message ever contains a token.
@@ -653,7 +760,7 @@ missing file as a failure.
 | `recipe_error` | 1 | The recipe, an argument, a reference or a template is wrong; `recipe` is `null` when the recipe could not be loaded |
 | `failed` | 2 | A tool call, a file transfer or a script failed, or the server refused the connection |
 | `denied` | 3 | PrivacyFence denied a step |
-| `not_signed_in` | 4 | Not signed in, the sign-in expired, or no token |
+| `not_signed_in` | 4 | Not signed in, the sign-in expired, or no token; or a trigger step's token is empty or refused |
 
 - `recipe` is the recipe's `name`. `stopped_at_step` is `null` unless the outcome is `no_change`.
   Times are UTC, to the second.
@@ -701,6 +808,8 @@ The summary lists each distinct rule once, with the verbs of every step merged, 
 scoped token needs: create the token with exactly these. Create each rule in **Settings →
 Auto-accept → Add a rule**, and tick the personal-data box on the token if the data holds personal
 data (see the notes above).
+
+Trigger steps need no PrivacyFence rule and are not listed.
 
 `--json` prints one object instead:
 
@@ -809,6 +918,20 @@ if (( ${#failed} )); then
 fi
 ```
 
+A recipe with a trigger step stores the task's token as a second Keychain item, under the same
+recipe folder name:
+
+```sh
+security add-generic-password -U -s privacyfence-sync-trigger -a 10-notes-inbox -T /usr/bin/security -w
+```
+
+The wrapper's run line then becomes the following, with the variable name the recipe's `token_env`
+gives:
+
+```zsh
+PRIVACYFENCE_TOKEN="$token" PRIVACYFENCE_TRIGGER_NOTES="$(/usr/bin/security find-generic-password -s privacyfence-sync-trigger -a "$name" -w 2>/dev/null)" "$S" run "$recipe"
+```
+
 The agent, `~/Library/LaunchAgents/local.pf-sync.daily.plist`, runs it every day at 06:10. launchd
 does not expand `~` or `$HOME`, so write your home folder out, and create the log folder first:
 
@@ -881,7 +1004,8 @@ choose, and it can only be denied, never prompted.
    `privacyfence-sync permissions RECIPE` lists both. Create each rule first, then the token that
    uses them.
 3. **Store the token in the scheduler's secret store**, never in the recipe, and hand it to the
-   process as `PRIVACYFENCE_TOKEN` (or the variable named with `--token-env`).
+   process as `PRIVACYFENCE_TOKEN` (or the variable named with `--token-env`). A trigger step's
+   token goes into the same secret store, handed to the process under its `token_env` name.
 4. **Run `preflight`, then schedule `run --result-file`.** `preflight` confirms every step is in
    the token's scope and covered; the result file tells the scheduler `ok` from `no_change` and a
    failure (see [The result file](#the-result-file)).
@@ -920,6 +1044,8 @@ after the writes, not before.
 - The token (or the stored sign-in) is the key to everything your rules allow without a card.
   Treat it like a password: environment variables or a file only you can read, never a recipe,
   a crontab line or a shared folder.
+- A trigger step makes one outbound call, to `api.anthropic.com` only, with the token from its
+  `PRIVACYFENCE_*` variable, which scripts never see.
 - Files are written to the work folder in plain text. They hold whatever the source holds,
   personal data included when your rule allows it.
 - Scripts and templates run with your user's rights. Review them like any code; a recipe folder in

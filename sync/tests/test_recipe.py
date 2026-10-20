@@ -18,6 +18,7 @@ from privacyfence_sync.recipe import (
     RunStep,
     TemplateStep,
     ToolStep,
+    TriggerStep,
     load_recipe,
     produced_files,
 )
@@ -67,10 +68,10 @@ def test_package_version_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_readme_has_examples() -> None:
-    assert len(readme_examples()) == 3
+    assert len(readme_examples()) == 4
 
 
-@pytest.mark.parametrize("index", [0, 1, 2])
+@pytest.mark.parametrize("index", [0, 1, 2, 3])
 def test_loads_each_readme_example(index: int, tmp_path: Path) -> None:
     text = readme_examples()[index]
     for step in yaml.safe_load(text)["steps"]:
@@ -517,3 +518,72 @@ def test_duplicate_produced_path(write_recipe: Any) -> None:
     bad(write_recipe, [run_a, run_b], "x/o.csv is produced by more than one step")
     clash = {"id": "c", "run": "a.py", "stdout": "same.json", "outputs": {"o": "same.json"}}
     bad(write_recipe, [clash], "same.json is produced by more than one step")
+
+
+TRIGGER = {"id": "go", "trigger": "trig_01AbC-d_E", "token_env": "PRIVACYFENCE_TRIGGER_NOTES", "text": "id=${r.o:x}"}
+
+
+def test_valid_trigger_step(write_recipe: Any) -> None:
+    source = {"id": "r", "run": "a.py", "outputs": {"o": "o.json"}}
+    step = load_recipe(write_recipe([source, TRIGGER])).steps[1]
+    assert step == TriggerStep("go", "trig_01AbC-d_E", "PRIVACYFENCE_TRIGGER_NOTES", "id=${r.o:x}")
+    assert produced_files(step) == {}
+
+
+def test_trigger_text_is_optional(write_recipe: Any) -> None:
+    step = load_recipe(write_recipe([{k: v for k, v in TRIGGER.items() if k != "text"}])).steps[0]
+    assert isinstance(step, TriggerStep) and step.text is None
+
+
+@pytest.mark.parametrize("trigger", [5, "", "trig_", "abc", "trig_a b", "trig_" + "a" * 101])
+def test_bad_trigger_id(write_recipe: Any, trigger: Any) -> None:
+    bad(write_recipe, [{**TRIGGER, "trigger": trigger, "text": None}], "step go: trigger must be a scheduled task ID starting with trig_")
+
+
+@pytest.mark.parametrize("token_env", [None, 5, "NOTES", "PRIVACYFENCE_", "PRIVACYFENCE_lower", "PRIVACYFENCE_" + "A" * 61])
+def test_bad_token_env(write_recipe: Any, token_env: Any) -> None:
+    bad(
+        write_recipe,
+        [{**TRIGGER, "token_env": token_env, "text": None}],
+        "step go: token_env must name an environment variable starting with PRIVACYFENCE_, so scripts never see it",
+    )
+
+
+@pytest.mark.parametrize("token_env", ["PRIVACYFENCE_TOKEN", "PRIVACYFENCE_MCP_URL"])
+def test_reserved_token_env(write_recipe: Any, token_env: str) -> None:
+    bad(
+        write_recipe,
+        [{**TRIGGER, "token_env": token_env, "text": None}],
+        "step go: token_env must not be PRIVACYFENCE_TOKEN or PRIVACYFENCE_MCP_URL",
+    )
+
+
+def test_trigger_text_must_be_a_string(write_recipe: Any) -> None:
+    bad(write_recipe, [{**TRIGGER, "text": 5}], "step go: text must be a string")
+
+
+def test_trigger_text_limit(write_recipe: Any) -> None:
+    load_recipe(write_recipe([{**TRIGGER, "text": "a" * 65_536}]))
+    bad(write_recipe, [{**TRIGGER, "text": "a" * 65_537}], "step go: text must be at most 65,536 characters")
+
+
+def test_trigger_unknown_key(write_recipe: Any) -> None:
+    bad(write_recipe, [{**TRIGGER, "text": None, "args": []}], "step go: unknown key args")
+
+
+def test_trigger_text_reference_to_a_missing_step(write_recipe: Any) -> None:
+    bad(write_recipe, [TRIGGER], "step go: r.o is not produced by an earlier step")
+
+
+def test_trigger_text_reference_to_a_non_json_file(write_recipe: Any) -> None:
+    source = {"id": "r", "run": "a.py", "outputs": {"o": "o.csv"}}
+    bad(write_recipe, [source, TRIGGER], "step go: r.o is not a JSON file")
+
+
+def test_trigger_text_bad_reference_path(write_recipe: Any) -> None:
+    source = {"id": "r", "run": "a.py", "outputs": {"o": "o.json"}}
+    bad(write_recipe, [source, {**TRIGGER, "text": "${r.o:a..b}"}], "step go: bad path in")
+
+
+def test_missing_kind_message_lists_trigger(write_recipe: Any) -> None:
+    bad(write_recipe, [{"id": "s"}], "needs exactly one of tool, run, template, trigger")

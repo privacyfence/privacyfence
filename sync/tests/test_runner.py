@@ -12,7 +12,8 @@ from typing import Any
 import httpx2
 import pytest
 
-from privacyfence_sync.client import RecipeRuntimeError, SyncError, ToolDenied, ToolFailed
+from privacyfence_sync import runner as runner_mod
+from privacyfence_sync.client import RecipeRuntimeError, SignInError, SyncError, ToolDenied, ToolFailed
 from privacyfence_sync.recipe import load_recipe
 from privacyfence_sync.runner import run_recipe
 
@@ -534,3 +535,89 @@ async def test_readme_salesforce_example_runs_end_to_end(tmp_path: Path) -> None
     assert json.loads((work / "flag_out_result.json").read_text()) == {"skipped": True}
     assert json.loads((work / "upsert_result.json").read_text()) == {"updated": 1}
     assert client.args_of("salesforce_export_report")["file_name"] == "opps.csv"
+
+
+class Fire:
+    """Stands in for trigger.fire: records its calls and answers with a scripted URL."""
+
+    def __init__(self, url: str | None = "https://claude.ai/code/session_1") -> None:
+        self.url = url
+        self.calls: list[tuple[str, str, str, str, str | None]] = []
+
+    async def __call__(self, step_id: str, trigger: str, token_env: str, token: str, text: str | None) -> str | None:
+        self.calls.append((step_id, trigger, token_env, token, text))
+        return self.url
+
+
+def trigger_step(**kw: Any) -> dict[str, Any]:
+    return {"id": "go", "trigger": "trig_abc", "token_env": "PRIVACYFENCE_TRIGGER_X", **kw}
+
+
+@pytest.fixture
+def fire(monkeypatch: pytest.MonkeyPatch) -> Fire:
+    fake = Fire()
+    monkeypatch.setattr(runner_mod, "fire", fake)
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "tok")
+    return fake
+
+
+async def test_a_missing_trigger_token_fails_before_any_call(
+    write_recipe: RecipeWriter, fire: Fire, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "")
+    client = FakeClient()
+    with pytest.raises(SignInError) as info:
+        await run(write_recipe([{"id": "one", "tool": "drive_list_files"}, trigger_step()]), client)
+    assert str(info.value) == (
+        "step go: $PRIVACYFENCE_TRIGGER_X is empty; store the scheduled task's API token in it"
+    )
+    assert client.calls == [] and fire.calls == []
+
+
+async def test_a_trigger_without_text_sends_none(write_recipe: RecipeWriter, fire: Fire) -> None:
+    done, output = await run(write_recipe([trigger_step()]), FakeClient())
+    assert done is None
+    assert fire.calls == [("go", "trig_abc", "PRIVACYFENCE_TRIGGER_X", "tok", None)]
+    assert output == "[go] ...\n[go] started scheduled task trig_abc: https://claude.ai/code/session_1\n"
+
+
+async def test_trigger_text_is_filled_from_an_earlier_result(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"file_id": "f1", "name": "Notes é"})
+    step = trigger_step(text="file_id=${pick.out:file_id} name=${pick.out:name}")
+    await run(write_recipe([pick, step]), FakeClient())
+    assert fire.calls[0][4] == "file_id=f1 name=Notes é"
+
+
+async def test_a_whole_string_number_becomes_its_json_text(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"n": 5, "d": {"a": "é"}})
+    await run(write_recipe([pick, trigger_step(text="${pick.out:n}")]), FakeClient())
+    await run(write_recipe([pick, trigger_step(text="${pick.out:d}")]), FakeClient())
+    assert [call[4] for call in fire.calls] == ["5", '{"a": "é"}']
+
+
+async def test_trigger_text_that_grows_too_long_is_refused(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"big": "a" * 65_537})
+    with pytest.raises(RecipeRuntimeError, match="step go: text is longer than 65,536 characters once"):
+        await run(write_recipe([pick, trigger_step(text="${pick.out:big}")]), FakeClient())
+    assert fire.calls == []
+
+
+async def test_a_trigger_without_a_session_url_says_so(write_recipe: RecipeWriter, fire: Fire) -> None:
+    fire.url = None
+    _, output = await run(write_recipe([trigger_step()]), FakeClient())
+    assert output.endswith("[go] started scheduled task trig_abc\n")
+
+
+async def test_a_bad_reference_in_trigger_text_names_the_step(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"n": 5})
+    with pytest.raises(RecipeRuntimeError, match="step go: nope not found"):
+        await run(write_recipe([pick, trigger_step(text="${pick.out:nope}")]), FakeClient())
+    assert fire.calls == []
