@@ -865,6 +865,20 @@ class TestCreateEvent:
         body = service.events.return_value.insert.call_args.kwargs["body"]
         assert body["attendees"] == [{"email": "a@x.com"}, {"email": "b@x.com"}]
 
+    def test_attendees_are_emailed_on_insert(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event("primary", "M", "t1", "t2", attendees=["a@x.com"])
+        assert service.events.return_value.insert.call_args.kwargs["sendUpdates"] == "all"
+
+    def test_no_attendees_does_not_set_send_updates(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event("primary", "M", "t1", "t2", room_emails=["room@x.com"])
+        assert "sendUpdates" not in service.events.return_value.insert.call_args.kwargs
+
     def test_room_emails_marked_as_resources(self):
         service = MagicMock()
         service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
