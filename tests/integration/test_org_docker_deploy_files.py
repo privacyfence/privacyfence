@@ -43,6 +43,9 @@ DOC = REPO_ROOT / "docs" / "org-mode-docker.md"
 DATA_VOLUME_PATH = "/var/lib/privacyfence-org/.privacyfence"
 CADDY_ADDRESS = "172.30.87.2"
 
+PROBE_TIMEOUT_S = 20
+COMPOSE_TIMEOUT_S = 60
+
 
 def _compose() -> dict[str, Any]:
     loaded: dict[str, Any] = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
@@ -111,12 +114,13 @@ def _run_docker(cmd: list[str], *, env: dict[str, str] | None, timeout: int) -> 
 
 
 def _docker_compose(*args: str, env: dict[str, str]) -> tuple[int, str]:
-    return _run_docker(["docker", "compose", "-f", str(COMPOSE), *args], env=env, timeout=60)
+    return _run_docker(["docker", "compose", "-f", str(COMPOSE), *args], env=env, timeout=COMPOSE_TIMEOUT_S)
 
 
+@pytest.mark.timeout(PROBE_TIMEOUT_S + 2 * COMPOSE_TIMEOUT_S + 30)  # the suite-wide 30 s would cut the probe short
 def test_docker_compose_accepts_the_file() -> None:
     try:
-        probe_code, _ = _run_docker(["docker", "compose", "version"], env=None, timeout=30)
+        probe_code, _ = _run_docker(["docker", "compose", "version"], env=None, timeout=PROBE_TIMEOUT_S)
     except FileNotFoundError:
         pytest.skip("docker compose not on PATH")
     except subprocess.TimeoutExpired:
