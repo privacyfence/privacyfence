@@ -85,7 +85,7 @@ def writer_script(tmp_path: Path, name: str, files: dict[str, str]) -> None:
     )
 
 
-async def run(recipe_path: Path, client: FakeClient, *, attended: bool = False) -> tuple[bool, str]:
+async def run(recipe_path: Path, client: FakeClient, *, attended: bool = False) -> tuple[str | None, str]:
     out = io.StringIO()
     done = await run_recipe(load_recipe(recipe_path), client, attended=attended, out=out)  # type: ignore[arg-type]
     return done, out.getvalue()
@@ -99,7 +99,7 @@ async def test_begins_and_ends_an_unattended_session(write_recipe: RecipeWriter)
     client = FakeClient()
     recipe = write_recipe([{"id": "one", "tool": "drive_list_files"}])
     done, out = await run(recipe, client)
-    assert done is True
+    assert done is None
     assert client.tools() == [BEGIN, "drive_list_files", END]
     assert client.args_of(BEGIN) == {"reason": "privacyfence-sync demo: scheduled run"}
     assert client.args_of(END)["reason"].startswith("privacyfence-sync demo")
@@ -109,7 +109,7 @@ async def test_begins_and_ends_an_unattended_session(write_recipe: RecipeWriter)
 async def test_end_errors_are_ignored(write_recipe: RecipeWriter) -> None:
     client = FakeClient({END: ToolFailed("gone")})
     done, _ = await run(write_recipe([{"id": "one", "tool": "drive_list_files"}]), client)
-    assert done is True
+    assert done is None
 
 
 async def test_json_text_in_a_script_argument_passes_unchanged(write_recipe: RecipeWriter, tmp_path: Path) -> None:
@@ -425,7 +425,7 @@ async def test_script_exit_10_stops_the_run_and_ends_the_session(write_recipe: R
     ]
     client = FakeClient()
     done, out = await run(write_recipe(steps), client)
-    assert done is False
+    assert done == "stop"
     assert "[stop] nothing to do, run stopped" in out
     assert client.tools() == [BEGIN, END]
 
@@ -525,7 +525,7 @@ async def test_readme_salesforce_example_runs_end_to_end(tmp_path: Path) -> None
         }
     )
     done, out = await run(tmp_path / "recipe.yaml", client)
-    assert done is True
+    assert done is None
     assert client.tools()[0] == BEGIN and client.tools()[-1] == END
     assert [u[0].name for u in client.uploads] == ["upsert.csv", "sync_log.csv"]
     assert "[flag_out] skipped: flag_out.csv has no rows" in out

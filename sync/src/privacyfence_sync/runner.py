@@ -30,8 +30,8 @@ _UNATTENDED_DISABLED = (
 )
 
 
-async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out: TextIO) -> bool:
-    """True when every step ran, False when a script step stopped the run (exit 10)."""
+async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out: TextIO) -> str | None:
+    """The id of the step that stopped the run (a script exited 10), or None when every step ran."""
     work_dir = recipe.work_dir
     work_dir.mkdir(parents=True, exist_ok=True)
     session_reason = f"privacyfence-sync {recipe.name}"
@@ -48,7 +48,7 @@ async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out:
                 await client.call("privacyfence_end_unattended_session", {"reason": f"{session_reason}: run finished"})
 
 
-async def _run_steps(recipe: Recipe, client: SyncClient, attended: bool, out: TextIO) -> bool:
+async def _run_steps(recipe: Recipe, client: SyncClient, attended: bool, out: TextIO) -> str | None:
     work_dir = recipe.work_dir
     files: dict[str, Path] = {}
 
@@ -69,12 +69,12 @@ async def _run_steps(recipe: Recipe, client: SyncClient, attended: bool, out: Te
                 _template_step(recipe, step, files, read_json)
         except StopRun:
             out.write(f"[{step.id}] nothing to do, run stopped\n")
-            return False
+            return step.id
         except refs.RefError as exc:
             raise RecipeRuntimeError(f"step {step.id}: {exc}") from None
         for ref, relative in produced_files(step).items():
             files[ref] = (work_dir / relative).absolute()
-    return True
+    return None
 
 
 async def _run_step(recipe: Recipe, step: RunStep, files: dict[str, Path], read_json: Any, out: TextIO) -> None:
