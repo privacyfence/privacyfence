@@ -825,9 +825,9 @@ s3transfer==0.19.3 \
     --hash=sha256:24eb7535804306355e31c952a90022bf5b2f9d760f9a11062c7493a217c08553 \
     --hash=sha256:8326acc3d056d7f7b8a37110c7d2aea41f67e83f6ae79cd3b5fbcca34c726406
     # via boto3
-setuptools==84.2.0 \
-    --hash=sha256:6f445ca2ce864605f81e223f262b4c94ffcb9a4a63473bae0ed7be5aab0291da \
-    --hash=sha256:8cc107ac7a403105dc8d6477664171f36135fab26adf8b5e0edaebc313f39b21
+setuptools==84.2.1 \
+    --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc \
+    --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
     # via
     #   -r requirements/release.in
     #   setuptools-scm
