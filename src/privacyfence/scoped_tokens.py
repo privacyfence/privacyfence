@@ -41,6 +41,9 @@ WARN_DAYS = 14
 MAX_TOKENS_PER_PRINCIPAL = 50
 LABEL_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}\Z")
 STORE_FILE_NAME = "scoped_tokens.json"
+ACTIVITY_FILE_NAME = "scoped_token_activity.json"
+# A runner looping on calls writes the activity file at most this often per person.
+USE_WRITE_INTERVAL_SECONDS = 60.0
 _LABEL_MESSAGE = (
     "A token name is 1 to 60 letters, digits, spaces, dots, dashes or underscores, "
     "starting with a letter or digit."
@@ -71,6 +74,48 @@ class ScopedToken:
 
     def expired(self, now: float) -> bool:
         return now >= self.expires_at
+
+
+@dataclass(frozen=True)
+class TokenActivity:
+    """When a token last made an allowed call and when it was last refused (epoch seconds)."""
+
+    last_used_at: float | None = None
+    last_denied_at: float | None = None
+    last_denied_tool: str = ""
+
+
+def _activity_to_json(activity: TokenActivity) -> dict[str, Any]:
+    return {
+        "last_used_at": activity.last_used_at,
+        "last_denied_at": activity.last_denied_at,
+        "last_denied_tool": activity.last_denied_tool,
+    }
+
+
+def _activity_from_json(raw: Any) -> TokenActivity:
+    used, denied, tool = raw["last_used_at"], raw["last_denied_at"], raw["last_denied_tool"]
+    for stamp in (used, denied):
+        if stamp is not None and (isinstance(stamp, bool) or not isinstance(stamp, (int, float))):
+            raise ValueError("not a timestamp")
+    if not isinstance(tool, str):
+        raise ValueError("not a tool name")
+    return TokenActivity(
+        last_used_at=None if used is None else float(used),
+        last_denied_at=None if denied is None else float(denied),
+        last_denied_tool=tool,
+    )
+
+
+def _merge_activity(a: TokenActivity, b: TokenActivity) -> TokenActivity:
+    """The newer ``last_used_at`` of the two; ``last_denied_at`` and its tool from the same side."""
+    used = [t for t in (a.last_used_at, b.last_used_at) if t is not None]
+    denied_side = b if (b.last_denied_at or 0.0) > (a.last_denied_at or 0.0) else a
+    return TokenActivity(
+        last_used_at=max(used) if used else None,
+        last_denied_at=denied_side.last_denied_at,
+        last_denied_tool=denied_side.last_denied_tool,
+    )
 
 
 # A token whose record is gone (revoked between verification and use): it allows nothing,
@@ -285,6 +330,11 @@ class ScopedTokenStore:
         self._tokens: dict[str, list[ScopedToken]] = {}
         self._stamps: dict[str, _Stamp] = {}
         self._index: dict[str, tuple[str, str]] = {}  # digest -> (principal_id, token_id)
+        # Last use and last denial (ADR 0206): kept apart from the token file, which create, rename
+        # and revoke rewrite, and written at most once per USE_WRITE_INTERVAL_SECONDS per principal.
+        self._activity: dict[str, dict[str, TokenActivity]] = {}
+        self._activity_written: dict[str, float] = {}
+        self._activity_loaded: set[str] = set()
 
     def _path(self, principal: Principal) -> Path:
         return paths.authority_dir(principal) / STORE_FILE_NAME
@@ -507,6 +557,68 @@ class ScopedTokenStore:
             if token is None or token.expired(current):
                 return None
             return token
+
+    def _activity_path(self, principal: Principal) -> Path:
+        return paths.authority_dir(principal) / ACTIVITY_FILE_NAME
+
+    def _load_activity(self, principal: Principal) -> None:
+        """Merge a principal's activity file into memory, once since start-up. The lock is held."""
+        if principal.id in self._activity_loaded:
+            return
+        self._activity_loaded.add(principal.id)
+        memory = self._activity.setdefault(principal.id, {})
+        path = self._activity_path(principal)
+        if not path.exists():
+            return
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))["tokens"]
+            stored = {str(token_id): _activity_from_json(raw) for token_id, raw in entries.items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            logger.warning("Skipping an unreadable scoped token activity file for %s", principal.id)
+            return
+        for token_id, activity in stored.items():
+            known = memory.get(token_id)
+            memory[token_id] = activity if known is None else _merge_activity(activity, known)
+
+    def _record_activity(
+        self, token: ScopedToken, update: Callable[[TokenActivity], TokenActivity], now: float,
+    ) -> None:
+        if token is REVOKED_SCOPE:
+            return
+        with self._lock:
+            try:
+                principal = self._principals.get(token.principal_id) or Principal(id=token.principal_id)
+                self._load_activity(principal)
+                memory = self._activity.setdefault(principal.id, {})
+                memory[token.id] = update(memory.get(token.id, TokenActivity()))
+                written = self._activity_written.get(principal.id)
+                if written is not None and now - written <= USE_WRITE_INTERVAL_SECONDS:
+                    return
+                self._activity_written[principal.id] = now
+                secure_files.atomic_write_json(
+                    self._activity_path(principal),
+                    {"version": 1, "tokens": {tid: _activity_to_json(a) for tid, a in memory.items()}},
+                )
+            except Exception:  # a failure to record activity must never break a call
+                logger.warning("Could not record scoped token activity for %s", token.id, exc_info=True)
+
+    def note_use(self, token: ScopedToken, now: float | None = None) -> None:
+        """Record an allowed call by ``token``. In memory; the file follows at most once a minute."""
+        stamp = time.time() if now is None else now
+        self._record_activity(token, lambda a: replace(a, last_used_at=stamp), stamp)
+
+    def note_denial(self, token: ScopedToken, tool: str, now: float | None = None) -> None:
+        """Record a refused call by ``token``: the time and the tool travel together."""
+        stamp = time.time() if now is None else now
+        self._record_activity(token, lambda a: replace(a, last_denied_at=stamp, last_denied_tool=tool), stamp)
+
+    def activity_for(self, principal: Principal) -> dict[str, TokenActivity]:
+        """The activity of ``principal``'s current tokens (revoked tokens' entries are left out)."""
+        with self._lock:
+            self._refresh(principal)
+            self._load_activity(principal)
+            memory = self._activity.get(principal.id, {})
+            return {t.id: memory[t.id] for t in self._tokens[principal.id] if t.id in memory}
 
     def get(self, principal_id: str, token_id: str) -> ScopedToken | None:
         with self._lock:

@@ -724,6 +724,14 @@ class TestScopedTokensSection:
         assert "field.value = '';" in html
         assert "innerHTML = secret" not in html
 
+    def test_each_token_shows_its_last_use_and_last_denial(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "pf-st-activity" in html
+        assert "'Never used'" in html
+        assert "'Last used ' + stamp(t.last_used_at)" in html
+        assert "Last denied" in html
+        assert "esc(scopedExpiryText(t)) + activityHtml + detail" in html
+
     def test_expiring_and_expired_tokens_are_flagged(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "Expires in ' + esc(t.days_left)" in html
