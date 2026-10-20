@@ -113,7 +113,7 @@ no Custom Domain.
 itself; only `finalize` moves `latest.json`, and only after verification passes. A release
 missing any mandatory installer fails `finalize` with `latest.json` untouched, so an incomplete
 release can sit in the bucket without becoming the one the Worker serves. `finalize-release`
-`needs: [build, build-windows, build-deb, sbom]`, so a failure in any of those leaves the previous
+`needs: [build, build-windows, build-deb, sbom, build-org-image]`, so a failure in any of those leaves the previous
 release as `latest`.
 
 Properties to know before changing any of it:
