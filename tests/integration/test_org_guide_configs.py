@@ -31,6 +31,7 @@ import pytest
 
 from privacyfence.local_files import DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES
 from privacyfence.web.server import DEFAULT_PORT
+from tests.integration.guide_sections import fenced_block, section
 
 pytestmark = pytest.mark.integration
 
@@ -43,37 +44,16 @@ GUIDE_CERT = "/etc/letsencrypt/live/pf.acme.example.com/fullchain.pem"
 GUIDE_KEY = "/etc/letsencrypt/live/pf.acme.example.com/privkey.pem"
 DATA_HOME = "/var/lib/privacyfence-org"
 
-_HEADING = re.compile(r"^(#{1,6}) +(?:\d+\. +)?(.+?)\s*$")
 _NGINX_SIZE = re.compile(r"^(\d+)([kKmMgG]?)$")
 _NGINX_UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
 
 
 def _section(title: str) -> str:
-    """The body of the guide section headed ``title``, up to the next heading at its level or above."""
-    lines = GUIDE.read_text(encoding="utf-8").splitlines()
-    start: int | None = None
-    level = 0
-    in_fence = False
-    for index, line in enumerate(lines):
-        if line.startswith("```"):
-            in_fence = not in_fence
-        # A "# comment" inside a fenced config is not a heading.
-        match = None if in_fence else _HEADING.match(line)
-        if match is None:
-            continue
-        if start is None:
-            if match.group(2) == title:
-                start, level = index + 1, len(match.group(1))
-        elif len(match.group(1)) <= level:
-            return "\n".join(lines[start:index])
-    assert start is not None, f"no section headed {title!r} in {GUIDE.name}"
-    return "\n".join(lines[start:])
+    return section(GUIDE, title)
 
 
 def _fenced_block(title: str, language: str) -> str:
-    blocks: list[str] = re.findall(rf"^```{language}\n(.*?)^```$", _section(title), flags=re.MULTILINE | re.DOTALL)
-    assert len(blocks) == 1, f"section {title!r} has {len(blocks)} ```{language} blocks, expected one"
-    return blocks[0]
+    return fenced_block(GUIDE, title, language)
 
 
 def _unit() -> str:
