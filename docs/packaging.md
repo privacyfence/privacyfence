@@ -13,6 +13,7 @@ privilege separation protects, see
 | macOS (arm64) | `scripts/build_dmg.sh` | `dist/PrivacyFence-<version>.dmg` | `PrivacyFence.pkg` and `PrivacyFence.mcpb`, nothing else |
 | Windows (x64) | `scripts/build_installer.ps1` → `installer/privacyfence.iss` | `dist/PrivacyFence-<version>-setup.exe` | PyInstaller onedir, the `.mcpb`, the separation script and its task template |
 | Debian/Ubuntu (amd64) | `scripts/build_deb.sh` | `dist/privacyfence_<debversion>_amd64.deb` | PyInstaller onedir under `/opt/privacyfence`, wrappers, separation tool and templates |
+| Linux org mode (amd64, arm64) | `scripts/build_org_image.sh` → `deploy/docker/Dockerfile` | `ghcr.io/privacyfence/privacyfence-org:<version>` | the release wheel and `requirements/runtime.lock.txt` in a venv on `python:3.12-slim` |
 | Any (Python) | `publish-pypi.yml` | sdist + wheel | the `privacyfence` package |
 
 Every build reads its version from the installed package metadata
@@ -326,6 +327,24 @@ a release.
 shows either missing, switch the build steps to
 `apt-get update && apt-get install -y --no-install-recommends python3 python3-venv`,
 `python3 -m venv /opt/privacyfence` and `/opt/privacyfence/bin/pip install privacyfence`.
+
+## Organization Docker image
+
+`scripts/build_org_image.sh --platform linux/amd64|linux/arm64 --tag NAME:TAG` builds the
+organization-mode image ([`org-mode-docker.md`](org-mode-docker.md)). It requires exactly one
+`dist/privacyfence-*.whl`, stages it with `deploy/docker/Dockerfile`, the entrypoint, the health check
+and `requirements/runtime.lock.txt` into `build/org-image/`, and runs `docker buildx build` on that
+directory. The image installs the hash-pinned lock, then the wheel with `--no-deps`.
+
+- `build.yml`'s `build-org-image` job builds and tests the image on a native runner per architecture
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`) and saves it as the `org-image-<arch>` workflow artifact; it
+  never pushes. `publish-org-image.yml` pushes those tested bytes on a stable tag.
+  `tests.yml`'s `org-docker-image` is the per-PR amd64 leg.
+- The stop signal is `SIGINT`: the daemon installs no SIGTERM handler, so as PID 1 it would ignore the
+  default and `docker stop` would wait out its timeout.
+- The entrypoint refuses to start (exit 78) when no organization bundle is installed, rather than
+  starting local mode on the container's unreachable loopback.
+- The base image is pinned by digest; Dependabot's `docker` entry bumps the digest within Python 3.12.
 
 ## CI
 
