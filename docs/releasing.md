@@ -116,7 +116,7 @@ image test ran against. A failed publish is rerun with `workflow_dispatch` from 
 days (how long the tested images are kept as workflow artifacts). It is a workflow of its own so a
 GHCR outage can never hold back PyPI, whereas `build-org-image` inside `build.yml` does gate PyPI,
 the MCP registry and the GitHub Release on every tag (see "Packaged-artifact release gating"
-below). See ADRs 0205, 0206 and 0211.
+below). See ADRs 0209, 0210 and 0215.
 
 **First release only:** a new GHCR package starts private. After the first stable release pushes
 it, switch `privacyfence-org` to public once (the organization's Packages settings may first need

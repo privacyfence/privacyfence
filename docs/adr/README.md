@@ -299,3 +299,11 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0205](0205-privacyfence-sync-reports-a-runs-outcome-in-an-opt-in-result-file.md) | `privacyfence-sync` reports a run's outcome in an opt-in result file | Accepted |
 | [0206](0206-scoped-token-activity-is-kept-in-its-own-file.md) | A scoped token's last use and last denial are kept in their own file | Accepted; relates to 0164 |
 | [0207](0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md) | `privacyfence-sync` can start a Claude Code scheduled task, and nothing else | Accepted; amends 0161 |
+| [0208](0208-the-organization-image-is-published-to-ghcr-for-stable-releases-only.md) | The organization image is published to GHCR for stable releases only | Accepted |
+| [0209](0209-the-organization-image-is-tested-in-build-yml-and-pushed-by-a-workflow-of-its-own.md) | The organization image is tested in build.yml and pushed by a workflow of its own | Accepted |
+| [0210](0210-the-organization-image-s-floating-tags-only-move-forward.md) | The organization image's floating tags only move forward | Accepted |
+| [0211](0211-the-organization-image-is-built-for-amd64-and-arm64-on-native-runners.md) | The organization image is built for amd64 and arm64 on native runners | Accepted |
+| [0212](0212-the-organization-image-installs-the-release-wheel-from-the-hash-lock-as-an-unprivileged-user.md) | The organization image installs the release wheel from the hash lock as an unprivileged user | Accepted |
+| [0213](0213-the-organization-image-runs-organization-mode-only.md) | The organization image runs organization mode only | Accepted |
+| [0214](0214-the-organization-image-stops-with-sigint.md) | The organization image stops with SIGINT | Accepted |
+| [0215](0215-the-organization-image-is-attested-with-github-build-provenance-not-cosign.md) | The organization image is attested with GitHub build provenance, not cosign | Accepted |

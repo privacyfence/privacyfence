@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Organization mode ships as a Docker image.** Each stable release now publishes `ghcr.io/privacyfence/privacyfence-org` for amd64 and arm64, with a Compose file that puts Caddy in front of it. See [Organization deployment with Docker](docs/org-mode-docker.md).
 - **privacyfence-sync can start a Claude Code scheduled task.** A new `trigger` step starts a cloud scheduled task through its API trigger and passes it a short text, so a cheap scheduled recipe can watch a Drive folder and start Claude only when a new file arrives. The task's token comes from a `PRIVACYFENCE_*` environment variable that scripts never see.
 - `privacyfence-sync permissions RECIPE` lists the auto-accept rules and the tools a recipe needs, `preflight` names the rule a step is missing, and `run --result-file PATH` writes a JSON file saying how the run ended (`ok`, `no_change`, `denied`, ...) so a scheduler can tell a quiet day from a full run; exit codes are unchanged. See [On a server, against organization mode](sync/README.md#on-a-server-against-organization-mode).
 - `privacyfence_check_policy` returns `suggested_rules`: the scope, value and verb of the rules that would cover a call that would not auto-accept, derived from the call's own arguments, for scoped tokens too.
