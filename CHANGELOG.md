@@ -43,7 +43,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [6.5.0] — 2026-10-19
+## [6.5.0] — 2026-10-20
 
 ### Added
 
