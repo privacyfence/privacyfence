@@ -132,16 +132,16 @@ CHECK_POLICY_TOOL = types.Tool(
     description=(
         "Before calling a gated tool, ask whether that exact call would auto-accept or need a human. "
         "Pass the connector, tool and args you're about to call. Returns {gate, verdict, "
-        "matched_rule, matched_rule_id, reason, pii_gate_may_apply}. verdict is 'auto_accept' (the "
-        "real call will pass through identically), 'requires_review' (no configured rule can match "
-        "these args), or 'unknown' (it depends on fetched content this can't see in advance). "
-        "matched_rule_id is set only for 'auto_accept': the privacyfence_list_policy rule id that "
-        "lets this call through, usable as privacyfence_propose_policy_change's rule_id. For "
-        "'review'-gated (read) tools pii_gate_may_apply is always true: the PII gate scans real "
-        "content and can force a popup even when a rule matches, which can't be predicted. No "
-        "external API call, no popup, no side effects -- call it freely while planning, especially "
-        "before and during an unattended run. reason: one sentence on why you're checking now "
-        "(logged, self-reported, unverified)."
+        "matched_rule, matched_rule_id, reason, pii_gate_may_apply, suggested_rules}. verdict is "
+        "'auto_accept' (the real call will pass through identically), 'requires_review' (no "
+        "configured rule can match these args), or 'unknown' (it depends on fetched content this "
+        "can't see in advance). matched_rule_id is set only for 'auto_accept', usable as "
+        "privacyfence_propose_policy_change's rule_id. suggested_rules lists the rules that would "
+        "cover an uncovered call: {group, label, value, value_known, verb, operation}; value is "
+        "null when it is what the call reaches at run time. For read tools pii_gate_may_apply is "
+        "true: the PII gate scans real content and can still force a popup. No side effects -- "
+        "call it freely, especially before an unattended run. reason: one sentence on why you're "
+        "checking now (logged, unverified)."
     ),
     input_schema={
         "type": "object",

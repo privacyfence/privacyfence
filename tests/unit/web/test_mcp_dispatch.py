@@ -510,8 +510,27 @@ class TestCheckPolicy:
         assert result == {
             "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
             "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
-            "pii_gate_may_apply": False,
+            "pii_gate_may_apply": False, "suggested_rules": [],
         }
+
+    def test_covered_call_has_no_suggested_rules(self):
+        from privacyfence import auto_accept
+
+        auto_accept.set_policy_v2_store_rules(
+            policy_rules({"salesforce.run_report": [{"predicate": "approved_report_ids", "value": ["00O1"]}]})
+        )
+        dispatcher = _dispatcher({"salesforce": FakeConnector("salesforce")})
+        result = dispatcher.check_policy("salesforce", "salesforce_export_report", {"report_id": "00O1"})
+        assert result["verdict"] == "auto_accept"
+        assert result["suggested_rules"] == []
+
+    def test_uncovered_call_names_the_rule_that_would_cover_it(self):
+        dispatcher = _dispatcher({"salesforce": FakeConnector("salesforce")})
+        result = dispatcher.check_policy("salesforce", "salesforce_export_report", {"report_id": "00O1"})
+        assert result["verdict"] == "requires_review"
+        assert result["suggested_rules"]
+        assert result["suggested_rules"][0]["value_known"] is True
+        assert result["suggested_rules"][0]["value"] == ["00O1"]
 
     def test_never_calls_the_connector(self):
         connector = FakeConnector("gmail")
