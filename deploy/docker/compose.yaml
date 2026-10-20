@@ -1,0 +1,53 @@
+# PrivacyFence organization mode with Caddy in front. docs/org-mode-docker.md explains every line.
+name: privacyfence-org
+
+services:
+  privacyfence:
+    image: ghcr.io/privacyfence/privacyfence-org:${PRIVACYFENCE_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    env_file:
+      - path: privacyfence.env
+        required: false
+    volumes:
+      - pf-data:/var/lib/privacyfence-org/.privacyfence
+    networks:
+      pf:
+        ipv4_address: 172.30.87.10
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - privacyfence
+    environment:
+      PF_HOSTNAME: ${PF_HOSTNAME:?set PF_HOSTNAME in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      pf:
+        ipv4_address: 172.30.87.2
+
+networks:
+  pf:
+    ipam:
+      config:
+        - subnet: 172.30.87.0/24
+
+volumes:
+  pf-data:
+  caddy-data:
+  caddy-config:

@@ -55,6 +55,10 @@ which claude.ai's servers cannot reach. Claude Desktop, Claude Code and other MC
 can use either kind of install. [Section 9](#9-first-sign-in-and-validation) shows how to add each
 client.
 
+To run the daemon and the reverse proxy as containers, follow
+[Organization deployment with Docker](org-mode-docker.md) instead of sections 3, 7 and 8; every
+other section applies unchanged.
+
 ## 2. Prerequisites
 
 - **A Linux server.** Ubuntu 24.04 is the reference: it ships Python 3.12, and you add
@@ -78,6 +82,9 @@ client.
   needs only the Python standard library, plus the `cryptography` package for signing.
 
 ## 3. Service account and install
+
+With the Docker image, skip this section and sections 7 and 8; see
+[Organization deployment with Docker](org-mode-docker.md).
 
 Create a dedicated system account. Its home directory holds all PrivacyFence data:
 
