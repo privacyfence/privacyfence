@@ -55,6 +55,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Calendar invitations are now emailed to guests.** `calendar_create_event` created the event without asking Google to notify the attendees, so it appeared on their calendars but nobody got a mail. Creating an event with attendees now sends the invitation to all of them. Rescheduling already emailed everyone and is unchanged.
 
+### Security
+
+- The `certifi` floor was raised to 2026.10.19, covering GHSA-6q48-6c7w-9gw2, which affects every earlier release. The floor matters for `pip install privacyfence`, which resolves fresh from `pyproject.toml` and could previously land on 2024.7.4.
+
 ## [6.5.0] — 2026-10-20
 
 ### Added
