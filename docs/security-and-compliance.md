@@ -284,7 +284,7 @@ Layout under the system root (POSIX modes; Windows expresses the same with NTFS 
 | --- | --- | --- | --- |
 | *(root)* | Everything below | service account, `0711`: anyone may traverse, nobody else may list | Owner `Administrators`; inheritance removed; service account, `SYSTEM`, `Administrators` full; `Users` traverse only |
 | `privilege-separation.json` | The marker: platform, account names, recorded owner | `0644` | Adds `Users` read |
-| `authority/` | `config/settings.yaml` (policy, rules, PII settings); `webauthn_credentials.json`; `webauthn_recovery_code.json`; `step_up_state.json`; `mcp_token`; `scoped_tokens.json` (hashes of scoped tokens); `logs/audit/` (audit log and its `.audit_chain.key`) | service account, `0700` | Service account, `SYSTEM`, `Administrators` only |
+| `authority/` | `config/settings.yaml` (policy, rules, PII settings); `webauthn_credentials.json`; `webauthn_recovery_code.json`; `step_up_state.json`; `mcp_token`; `scoped_tokens.json` (hashes of scoped tokens); `scoped_token_activity.json` (per token id, the time of its last use and last denial and the denied tool's name; no secrets); `logs/audit/` (audit log and its `.audit_chain.key`) | service account, `0700` | Service account, `SYSTEM`, `Administrators` only |
 | `credentials/` | Connector OAuth tokens and the Telegram session | service account, `0700` | As root |
 | `org/`, `logs/`, `downloads/`, `uploads/`, caches | Organization config, daemon logs, staged files | service account, `0700` | As root |
 | `users/os-<id>/` | Another OS account's own data, with its own `authority/` ([ADR 0008](adr/0008-one-principal-per-os-user.md)) | service account, `0700` | As root |

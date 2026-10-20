@@ -1011,6 +1011,23 @@ person who created it. Once a tool call has read it, the slot is kept until the 
 it, for up to 20 minutes, so an approval that waits for you does not lose the file. `drive_upload_file` also accepts the file inline as `content_base64`. Gmail
 attachments are limited to 18,000,000 bytes in total per message.
 
+### Scheduled recipes
+
+`privacyfence-sync` runs recipes on a schedule against this server, with no AI model involved. For
+a scheduler on a server, the administrator needs to do one thing and leave one thing alone:
+
+- **Enable scoped tokens** with `--enable-scoped-tokens` (see the table in
+  [Build the bundle](#build-the-bundle)). Each person then creates, in Settings, a named token
+  limited to the rules and tools one recipe needs. A scoped token does not need
+  `--enable-unattended-sessions`.
+- **Leave `download_delivery.agent_links` on.** It is on by default, and `privacyfence-sync` needs
+  it to receive a file; with `--no-agent-links`, steps that receive a file fail.
+
+Recipe scripts run on the scheduler's machine, never on this server
+([ADR 0161](adr/0161-privacyfence-sync-is-a-separate-plain-mcp-client.md)). For the person's side
+(listing the rules and tools a recipe needs, storing the token, and reading the result file), see
+[On a server, against organization mode](https://github.com/privacyfence/privacyfence/blob/main/sync/README.md#on-a-server-against-organization-mode).
+
 ## 14. Operations
 
 ### Backup
