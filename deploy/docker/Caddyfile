@@ -1,0 +1,3 @@
+{$PF_HOSTNAME} {
+    reverse_proxy privacyfence:8765
+}

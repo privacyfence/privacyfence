@@ -536,7 +536,7 @@ runtime or in review, so work through them deliberately.
 When changing PyInstaller specs, installers, Debian metadata, startup registration, MCPB contents,
 or release workflows, run the corresponding package/build checks and update
 [`platform-support.md`](platform-support.md) if user-visible behavior changes. The packaged-artifact
-smoke tests (`pytest.mark.packaged`) run only inside `build.yml` and the three graphical-session
+smoke tests (`pytest.mark.packaged`) run only inside `build.yml`, `tests.yml`'s `org-docker-image` and the three graphical-session
 workflows (`linux-`, `windows-` and `macos-graphical-session.yml`); dispatch them against the branch
 to exercise them before merging.
 

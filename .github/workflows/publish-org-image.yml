@@ -1,0 +1,216 @@
+name: Publish org Docker image
+
+# Publishes the organization-mode image, ghcr.io/privacyfence/privacyfence-org, for each stable
+# release: pushes the two per-architecture images build.yml's `build-org-image` jobs already
+# tested, combines them into one multi-architecture manifest, applies the version and floating
+# tags, and attaches a GitHub build-provenance attestation -- see docs/org-mode-docker.md and
+# docs/releasing.md.
+#
+# Deliberately a workflow of its own rather than a job in build.yml (ADR 0209): publish-pypi.yml
+# waits for build.yml to *succeed*, so a GHCR outage there would hold PyPI back. It downloads the
+# images build.yml built and tested (`docker save` -> artifact -> `docker load`) instead of
+# building again, so the bytes pushed are the bytes a test ran against.
+#
+# Stable releases only (ADR 0208): a pre-release tag ends green with nothing pushed. The version
+# tag always moves; X.Y, X and latest move only when no already-tagged stable release is higher in
+# that scope, decided by scripts/org_image_tags.py (ADR 0210). The attestation is GitHub's own
+# build provenance, not a cosign signature (ADR 0215); `gh attestation verify` checks it.
+#
+# The GHCR package starts private. Make it public once, after the first stable release pushes it
+# (docs/releasing.md); nothing here can do that.
+#
+# Same trigger and `wait_for_build` gate as publish-mcp-registry.yml, whose jobs `dedupe` and
+# `wait_for_build` are copied below.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # rerun by hand after a failed publish -- run it from the release's *tag*
+                        # ("Use workflow from" -> Tags; from a branch both jobs are skipped). The
+                        # tested images are workflow artifacts, kept 30 days.
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/privacyfence/privacyfence-org
+
+jobs:
+  # The same duplicate-run guard as build.yml and publish-pypi.yml (ADR 0111): GitHub occasionally
+  # starts a workflow twice for one tag push, and two runs would race to push the same tags. Every
+  # other job waits on this one; a duplicate cancels its own run. Fails open if the API can't be
+  # read.
+  dedupe:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write   # only to cancel this run when it is the duplicate
+    outputs:
+      duplicate: ${{ steps.check.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cancel this run if another run is already handling the same push
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-org-image.yml/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=30")"; then
+            DUPLICATE="$(python3 scripts/release_run_guard.py --run-id "$GITHUB_RUN_ID" \
+              --event "$GITHUB_EVENT_NAME" --ref-name "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" <<<"$RUNS")"
+          else
+            echo "::warning::Could not list this workflow's runs; not checking for a duplicate run."
+            DUPLICATE=false
+          fi
+          echo "duplicate=$DUPLICATE" >> "$GITHUB_OUTPUT"
+          if [[ "$DUPLICATE" == "true" ]]; then
+            echo "::warning::Another run of publish-org-image.yml is already handling ${GITHUB_REF_NAME} at ${GITHUB_SHA}; cancelling this duplicate run."
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  # A copy of publish-mcp-registry.yml's `wait_for_build` (itself a copy of publish-pypi.yml's --
+  # see that job's own comment for why it polls with the `gh` CLI keyed on commit SHA, rather than
+  # `needs:` or `actions/github-script`). It also exports the run's id, so `publish` downloads the
+  # images from exactly the build.yml run it waited for.
+  wait_for_build:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      run_id: ${{ steps.wait.outputs.run_id }}
+    steps:
+      - name: Wait for build.yml's run on this commit to succeed
+        id: wait
+        run: |
+          set -euo pipefail
+          workflow_id="build.yml"
+          poll_interval_s=30
+          max_wait_s=$((60 * 60))
+          start=$(date +%s)
+
+          echo "Waiting for ${workflow_id}'s own run against commit ${GITHUB_SHA}..."
+
+          while true; do
+            runs_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=10")"
+            # A cancelled run is left out: a duplicate build.yml run cancels itself (ADR 0111).
+            run="$(jq -c '[.workflow_runs[] | select(.conclusion != "cancelled")] | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
+
+            if [[ -n "$run" ]]; then
+              status="$(jq -r '.status' <<<"$run")"
+              conclusion="$(jq -r '.conclusion' <<<"$run")"
+              html_url="$(jq -r '.html_url' <<<"$run")"
+              echo "Found ${html_url} (status=${status}, conclusion=${conclusion})"
+
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "build.yml succeeded for this commit -- proceeding to publish."
+                  echo "run_id=$(jq -r '.id' <<<"$run")" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "::error::build.yml's own run for this commit did not succeed" \
+                  "(conclusion=${conclusion}): ${html_url}. Fix and re-run" \
+                  "\"Build & Release\" for this tag, then re-run \"Publish org Docker image\"."
+                exit 1
+              fi
+            fi
+
+            now=$(date +%s)
+            if (( now - start > max_wait_s )); then
+              echo "::error::Timed out after $((max_wait_s / 60)) minutes waiting for" \
+                "${workflow_id}'s run against ${GITHUB_SHA} to complete."
+              exit 1
+            fi
+            sleep "$poll_interval_s"
+          done
+
+  publish:
+    needs: wait_for_build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read         # download the images from the build.yml run
+      packages: write       # push to GHCR with the workflow's own token
+      id-token: write       # the build-provenance attestation's Sigstore identity
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm and org_image_tags.py need them
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # Same resolution publish-mcp-registry.yml uses. A pre-release tag stops here, green.
+      - name: Determine version and release channel
+        id: release
+        run: |
+          pip install --quiet --require-hashes -r requirements/release.lock.txt
+          VERSION="$(python3 -m setuptools_scm)"
+          python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
+          CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          if [[ "$CHANNEL" != "stable" ]]; then
+            echo "::notice::$VERSION is a $CHANNEL release; only stable releases get an org image."
+          fi
+
+      - name: Note that a pre-release publishes no image
+        if: steps.release.outputs.channel != 'stable'
+        run: |
+          echo "Pre-release ${{ steps.release.outputs.version }}: no org image is published." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download the tested images
+        if: steps.release.outputs.channel == 'stable'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: org-image-*
+          path: org-image
+          merge-multiple: true
+          run-id: ${{ needs.wait_for_build.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Log in to GHCR
+        if: steps.release.outputs.channel == 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      # Pushes the bytes build-org-image tested; nothing is built here. The multi-architecture
+      # tags are created only after both per-architecture pushes succeeded.
+      - name: Push and tag
+        id: push
+        if: steps.release.outputs.channel == 'stable'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            gunzip -c "org-image/privacyfence-org-${arch}.tar.gz" | docker load
+            docker tag "privacyfence-org:ci-${arch}" "${IMAGE}:${VERSION}-${arch}"
+            docker push "${IMAGE}:${VERSION}-${arch}"
+          done
+          mapfile -t TAGS < <(python3 scripts/org_image_tags.py "$VERSION")
+          ARGS=()
+          for tag in "${TAGS[@]}"; do ARGS+=(-t "${IMAGE}:${tag}"); done
+          docker buildx imagetools create "${ARGS[@]}" "${IMAGE}:${VERSION}-amd64" "${IMAGE}:${VERSION}-arm64"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          { echo "## ${IMAGE}:${VERSION}"; echo "Tags: ${TAGS[*]}"; echo "Digest: \`$DIGEST\`"; } >> "$GITHUB_STEP_SUMMARY"
+
+      # Needs actions/attest-build-provenance on the repository's Actions allowlist, if it has one.
+      - name: Attest build provenance
+        if: steps.release.outputs.channel == 'stable'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

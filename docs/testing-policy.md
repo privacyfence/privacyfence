@@ -23,7 +23,7 @@ below; a new test module carries the marker for its layer.
 | 3 | Cross-platform system | OS path/process/locking/daemon behavior; the full daemon → MCP → approval → audit scenario | `system`, `platform` | `tests.yml`, every PR, on Linux, Windows and macOS |
 | 4 | Browser system | JS, CSP and rendering in real Chromium | `browser` | `tests.yml`, every PR; `qa_web_smoke.py` by hand |
 | 5 | Live connector | Provider API drift | `live` | `connector-live-check.yml`, self-hosted runner, weekly |
-| 6 | Packaged artifact | Installer/package correctness, autostart, upgrade, uninstall | `packaged` | `build.yml` and the graphical-session workflows |
+| 6 | Packaged artifact | Installer/package correctness, autostart, upgrade, uninstall | `packaged` | `build.yml`, `tests.yml`'s `org-docker-image` and the graphical-session workflows |
 | 7 | Manual | Subjective judgment, first-time consent, OS-native presentation | — | [`release-testing.md`](release-testing.md) |
 
 Markers are applied to new modules, not backfilled across old ones. `--strict-markers` makes an unregistered marker a collection
@@ -61,6 +61,7 @@ and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout
 | `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
 | `sync` (Python 3.11, 3.13) | `privacyfence-sync` alone: `pip install -e "./sync[test]"`, `pytest sync/tests` at 100 % branch coverage, `mypy sync/src`, `bandit -r sync/src`; one `Sync client (Python 3.x)` check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
+| `org-docker-image` | Builds the organization-mode Docker image (amd64) from the checkout's wheel and runs `test_org_docker_image.py` against it; the per-PR leg of `build.yml`'s `build-org-image`, deliberately not a required check |
 | `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, whole-tree `mypy src/privacyfence`, `scripts/mypy_strict_modules.py` (all blocking); `ruff format` is not run (ADR 0150) |
 
 `pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
@@ -69,8 +70,8 @@ expects it to run, so three switches turn a skip into a failure (two in `tests/c
 `PRIVACYFENCE_REQUIRE_BROWSER=1` (the `test` job's pytest step and `website-build.yml`'s test step) fails
 a `browser` test that skips because Chromium or Playwright is missing, and a module whose Playwright
 import skips it — a browser test that skips for another reason, such as a docs site that was not
-built, stays a skip; `PRIVACYFENCE_REQUIRE_PACKAGED=1` (the five packaged steps in `build.yml` and the
-pytest steps of the three graphical-session workflows) fails a `packaged` test that skips for a
+built, stays a skip; `PRIVACYFENCE_REQUIRE_PACKAGED=1` (the six packaged steps in `build.yml`, the
+`org-docker-image` step in `tests.yml`, and the pytest steps of the three graphical-session workflows) fails a `packaged` test that skips for a
 missing-artifact or missing-environment reason, and any module collection skip (each of those steps
 runs one module), while the skips a dispatched, unsigned build legitimately takes stay skips;
 `PRIVACYFENCE_REQUIRE_NODE=1` (the `test` job) fails the real-shim system test instead of skipping it
@@ -263,12 +264,14 @@ email, name or account id means the redaction needs fixing before the commit.
 | `test_macos_pkg_smoke.py` | `build.yml`, `build` | `.pkg` structure, postinstall, OS/arch refusal, signature — no install |
 | `test_windows_packaged_smoke.py` | `build.yml`, `build-windows` | Silent install separates, upgrade over a running install, uninstall keeps data, purge, refusal of a user-writable install dir |
 | `test_deb_packaged_lifecycle.py` | `build.yml`, `build-deb` | Install, remove, reinstall, purge, upgrade, unattended install, a failing machine half failing the install |
+| `test_org_docker_image.py` | `build.yml`, `build-org-image`; also `tests.yml`, `org-docker-image` | The organization-mode Docker image: unprivileged user, private data volume, image metadata, refusal to start without or with an unsigned bundle, a running container behind the Host check, health check, clean `docker stop`, state surviving a new container |
 | `test_linux_graphical_session_autostart.py` | `linux-graphical-session.yml` | XDG autostart under a real `systemd --user` session; the OAuth loopback opening a browser under Xvfb |
 | `test_windows_graphical_session_autostart.py` | `windows-graphical-session.yml` | Task Scheduler's stored companion task against `tests/windows_task_contract.py`; the companion started as the signed-in user; SCM restart of a killed service |
 | `test_macos_graphical_session_autostart.py`, `test_macos_pkg_install.py` | `macos-graphical-session.yml` | `enable` and a real `installer -pkg` bringing up the LaunchDaemon as `_privacyfence` and the companion LaunchAgent |
 
 `build.yml` runs on a `v*` tag push and on dispatch. Each packaged test runs right after its job
-builds the artifact and before any upload; `build-deb` also runs `test_org_ubuntu_release_smoke.py`.
+builds the artifact and before any upload; `build-deb` also runs `test_org_ubuntu_release_smoke.py`, and
+`build-org-image` (one leg per architecture, on native runners) runs `test_org_docker_image.py`.
 Every upload and publish step is gated on a tag ref, so a dispatched run builds and tests everything
 and publishes nothing — which is the pre-flight in [`release-testing.md`](release-testing.md).
 `publish-pypi.yml`'s `wait_for_build` job blocks every publish until `build.yml`'s run for the same

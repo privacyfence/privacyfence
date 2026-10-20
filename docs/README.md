@@ -35,6 +35,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 
 - [`org-mode-setup-guide.md`](org-mode-setup-guide.md) — deploy PrivacyFence centrally for an
   organization, including claude.ai as a client.
+- [`org-mode-docker.md`](org-mode-docker.md) — run the organization deployment as containers: the
+  published image, a tested Compose file with Caddy, upgrades, backups and verifying the image.
 - [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up
   authentication, privilege separation, audit integrity, and what PrivacyFence does not claim.
 
