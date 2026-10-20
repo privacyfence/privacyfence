@@ -86,19 +86,26 @@ off `download_delivery.agent_links`, steps that receive a file fail with a messa
 
 ### Unattended sessions must be allowed
 
-Both modes need `unattended_sessions.enabled` in PrivacyFence's organization config bundle (built
-with `build_org_bundle.py --enable-unattended-sessions`). Without it, a run stops before the first
-step with:
+A plain sign-in (the stored `login`, or your own AI client token) needs `unattended_sessions.enabled`
+in PrivacyFence's organization config bundle (built with `build_org_bundle.py
+--enable-unattended-sessions`). Without it, a run stops before the first step with:
 
 ```
 privacyfence-sync: This PrivacyFence does not allow unattended sessions (unattended_sessions.enabled in org_config.json). Ask your administrator, or run with --attended.
 ```
+
+A scoped token does not need it: the token is already limited to the rules and tools it was created
+with, and it can only be denied, never prompted. It needs `scoped_tokens.enabled` instead (built
+with `--enable-scoped-tokens`); see [On a server, against organization mode](#on-a-server-against-organization-mode).
 
 ## The rules a recipe needs
 
 A scheduled run gets no approval cards, so every step needs an auto-accept rule, unless the tool is
 one PrivacyFence never asks about (listing tools such as `drive_list_files`). Create rules in
 PrivacyFence's **Settings → Auto-accept → Add a rule**. Each one asks for your passkey.
+
+`privacyfence-sync permissions RECIPE` asks your PrivacyFence which rules and tools a given recipe
+needs, so the table below is background, no longer the way to work them out.
 
 | Recipe step | Scope in Settings | Verbs to tick |
 |---|---|---|
@@ -568,10 +575,11 @@ privacyfence-sync run recipe.yaml              # unattended: no card should appe
 ## Commands
 
 ```
-privacyfence-sync run RECIPE [--server URL] [--attended] [--token-env NAME]
+privacyfence-sync run RECIPE [--server URL] [--attended] [--token-env NAME] [--result-file PATH]
 privacyfence-sync login --server URL [--callback-port N]
 privacyfence-sync check RECIPE
 privacyfence-sync preflight RECIPE [--server URL] [--attended] [--token-env NAME]
+privacyfence-sync permissions RECIPE [--server URL] [--token-env NAME] [--json]
 ```
 
 - **`run`** runs every step in order and stops at the first failure. Each step prints a line
@@ -581,6 +589,8 @@ privacyfence-sync preflight RECIPE [--server URL] [--attended] [--token-env NAME
     the call once you approve. Use it for a first run and to find missing rules.
   - `--token-env NAME` reads the token from the variable `NAME` instead of `PRIVACYFENCE_TOKEN`.
   - Without a token in the environment, `run` uses the stored sign-in from `login`.
+  - `--result-file PATH` writes a small JSON file saying how the run ended; see
+    [The result file](#the-result-file).
 - **`login`** signs in to an organization server, then checks the connection.
 - **`check`** validates the recipe, its references and its paths, and prints
   `<name>: <n> step(s), OK`. It makes no network call and runs no script.
@@ -594,6 +604,11 @@ privacyfence-sync preflight RECIPE [--server URL] [--attended] [--token-env NAME
   on content PrivacyFence only sees at run time is reported as `unknown`. In particular it cannot
   predict the personal-data scan: a run is also denied when the data it reads holds personal data
   the token does not allow. Use it after creating a scoped token or rules and before scheduling.
+  When a step would need approval, the line ends with `; add: <rule>`, the first rule PrivacyFence
+  suggests for it.
+- **`permissions`** lists the auto-accept rules and the tools a recipe needs, from your PrivacyFence
+  itself, so a scheduler does not have to keep its own table of them. See
+  [Listing the rules a recipe needs](#listing-the-rules-a-recipe-needs).
 
 The server address is, in order: `--server`, the recipe's `server`, the variable
 `PRIVACYFENCE_MCP_URL`, then `http://127.0.0.1:8765/mcp`.
@@ -610,6 +625,106 @@ Exit codes:
 
 Every error prints one line starting with `privacyfence-sync:` to the error output; when a script
 failed, the script's own error output is shown just above it. No message ever contains a token.
+
+### The result file
+
+A scheduler cannot tell "nothing to do" from a full run by the exit code: both are 0. With
+`run --result-file PATH`, the command writes one JSON file for every outcome that has an exit code
+(0 to 4). A usage error from the command line, a crash or an interrupt writes no file, so treat a
+missing file as a failure.
+
+```json
+{
+ "version": 1,
+ "recipe": "pipeline-overview",
+ "outcome": "no_change",
+ "exit_code": 0,
+ "stopped_at_step": "build",
+ "started_at": "2026-10-20T06:15:00Z",
+ "finished_at": "2026-10-20T06:15:42Z",
+ "privacyfence_sync_version": "6.6.0"
+}
+```
+
+| `outcome` | Exit code | Meaning |
+|---|---|---|
+| `ok` | 0 | Every step ran |
+| `no_change` | 0 | A script step exited 10, so the run stopped there on purpose; `stopped_at_step` is that step's id |
+| `recipe_error` | 1 | The recipe, an argument, a reference or a template is wrong; `recipe` is `null` when the recipe could not be loaded |
+| `failed` | 2 | A tool call, a file transfer or a script failed, or the server refused the connection |
+| `denied` | 3 | PrivacyFence denied a step |
+| `not_signed_in` | 4 | Not signed in, the sign-in expired, or no token |
+
+- `recipe` is the recipe's `name`. `stopped_at_step` is `null` unless the outcome is `no_change`.
+  Times are UTC, to the second.
+- The file holds no error text: a script's error output can contain data. The log has the text.
+- The exit code does not change, and `no_change` still exits 0, so an existing wrapper keeps
+  working. The file is written to a temporary file next to `PATH` and then renamed, so a reader
+  never sees half of it.
+- If the file cannot be written, the command prints
+  `privacyfence-sync: could not write the result file: <reason>` to the error output and keeps the
+  run's own exit code.
+
+### Listing the rules a recipe needs
+
+`permissions RECIPE` connects like `preflight`, asks PrivacyFence what each tool step would need,
+and prints it. It moves no data, runs no script, and does not declare an unattended session, so it
+works with a token that is not allowed to. A scoped token works too. It asks for `--server` and
+`--token-env` like `run`.
+
+```
+$ privacyfence-sync permissions recipe.yaml
+token "nightly": 3 rule(s), 4 tool(s), expires in 80 day(s)
+[export] salesforce_export_report: NEEDS A RULE: Salesforce — report = 00O1 (read)
+[files] drive_list_files: never asks for approval
+[fetch] drive_download_file: covered by rule rule-8f2c
+[load] grist_update_csv: NEEDS A RULE: Grist — document = docA (update)
+Rules this recipe needs:
+  Grist — document = docA (update)
+  Salesforce — report = 00O1 (read)
+Tools a scoped token for this recipe needs: drive_download_file, drive_list_files, grist_update_csv, salesforce_export_report
+```
+
+Each step shows one of these:
+
+| Line | Meaning |
+|---|---|
+| `never asks for approval` | PrivacyFence never asks about this tool |
+| `covered by rule <id>` | An existing rule matches |
+| `NEEDS A RULE: <scope> = <values> (<verb>)` | No rule matches; this is the rule that would. One line per suggestion |
+| `NEEDS A RULE: <scope>, naming what it reaches at run time (<verb>)` | The rule names something only known at run time, such as the folder a downloaded file is in |
+| `depends on what it reaches at run time` | The step has `${...}` arguments that were left out of the check; any suggested rules follow |
+| `NOT CHECKED: <error>` | The policy check itself failed |
+| `NOT AVAILABLE ...` | The server (or the token) does not offer the tool |
+
+The summary lists each distinct rule once, with the verbs of every step merged, and then the tools a
+scoped token needs: create the token with exactly these. Create each rule in **Settings →
+Auto-accept → Add a rule**, and tick the personal-data box on the token if the data holds personal
+data (see the notes above).
+
+`--json` prints one object instead:
+
+```json
+{
+  "version": 1,
+  "recipe": "pipeline-overview",
+  "steps": [
+    {"id": "export", "tool": "salesforce_export_report", "status": "needs_rule", "matched_rule": null,
+     "dropped": [],
+     "suggested_rules": [{"group": "salesforce.report", "label": "Salesforce — report", "value": ["00O1"],
+                          "value_known": true, "verb": "read", "operation": "salesforce_export_report"}]}
+  ],
+  "needed": [{"group": "salesforce.report", "label": "Salesforce — report", "value": ["00O1"], "verbs": ["read"]}],
+  "tools": ["salesforce_export_report"]
+}
+```
+
+`status` is `auto`, `covered`, `needs_rule`, `unknown`, `not_checked` or `not_available`.
+`matched_rule` is set only for `covered`. `suggested_rules` is `null` when the server is too old to
+send suggestions. `value` is `null` where the rule names what the step reaches at run time.
+
+The command exits 0 when it could list, whether or not rules are needed. Otherwise it exits 1 for a
+bad recipe, 2 for a failure and 4 when the token is rejected or sees no tools.
 
 ## Scheduling
 
@@ -750,6 +865,31 @@ exit $status
 The exit code tells your scheduler or monitoring what happened (see [Commands](#commands)). A run
 that exits 3 means a rule is missing, or a step's data changed so that a rule no longer covers it,
 for example a new project appearing in a Jira export or a file moved to another Drive folder.
+
+### On a server, against organization mode
+
+A scheduler on a server (a container, a CI runner, a cron host with no browser) cannot use the
+stored sign-in: `login` needs a browser on the same machine, and the sign-in lasts only 30 days. Use
+a scoped token instead. It is a named, expiring credential limited to the rules and tools you
+choose, and it can only be denied, never prompted.
+
+1. **The administrator enables scoped tokens** in the organization config bundle
+   (`build_org_bundle.py --enable-scoped-tokens`). A scoped token needs no
+   `unattended_sessions.enabled` ([ADR 0164](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md));
+   a plain sign-in does.
+2. **Create a scoped token** in **Settings** with the recipe's rules and tools.
+   `privacyfence-sync permissions RECIPE` lists both. Create each rule first, then the token that
+   uses them.
+3. **Store the token in the scheduler's secret store**, never in the recipe, and hand it to the
+   process as `PRIVACYFENCE_TOKEN` (or the variable named with `--token-env`).
+4. **Run `preflight`, then schedule `run --result-file`.** `preflight` confirms every step is in
+   the token's scope and covered; the result file tells the scheduler `ok` from `no_change` and a
+   failure (see [The result file](#the-result-file)).
+5. **Renew the token before it expires.** Settings shows each token's expiry, when it was last
+   used and when it was last denied, and for which tool. A token that was denied but never used
+   usually has a rule missing; one that is no longer used may be pointing at a recipe nobody runs.
+
+The recipe's scripts run on the scheduler's machine, never on the PrivacyFence server.
 
 ## Limits
 
