@@ -712,7 +712,7 @@ data (see the notes above).
     {"id": "export", "tool": "salesforce_export_report", "status": "needs_rule", "matched_rule": null,
      "dropped": [],
      "suggested_rules": [{"group": "salesforce.report", "label": "Salesforce — report", "value": ["00O1"],
-                          "value_known": true, "verb": "read", "operation": "salesforce_export_report"}]}
+                          "value_known": true, "verb": "read", "operation": "salesforce.run_report"}]}
   ],
   "needed": [{"group": "salesforce.report", "label": "Salesforce — report", "value": ["00O1"], "verbs": ["read"]}],
   "tools": ["salesforce_export_report"]
@@ -886,8 +886,9 @@ choose, and it can only be denied, never prompted.
    the token's scope and covered; the result file tells the scheduler `ok` from `no_change` and a
    failure (see [The result file](#the-result-file)).
 5. **Renew the token before it expires.** Settings shows each token's expiry, when it was last
-   used and when it was last denied, and for which tool. A token that was denied but never used
-   usually has a rule missing; one that is no longer used may be pointing at a recipe nobody runs.
+   used and when it was last denied, and for which tool. A denial just after a use usually means a
+   rule is missing; a denial with no use means the tool is outside the token's scope. A token that
+   is no longer used may be pointing at a recipe nobody runs.
 
 The recipe's scripts run on the scheduler's machine, never on the PrivacyFence server.
 
