@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `privacyfence-sync permissions RECIPE` lists the auto-accept rules and the tools a recipe needs, `preflight` names the rule a step is missing, and `run --result-file PATH` writes a JSON file saying how the run ended (`ok`, `no_change`, `denied`, ...) so a scheduler can tell a quiet day from a full run; exit codes are unchanged. See [On a server, against organization mode](sync/README.md#on-a-server-against-organization-mode).
+- `privacyfence_check_policy` returns `suggested_rules`: the scope, value and verb of the rules that would cover a call that would not auto-accept, derived from the call's own arguments, for scoped tokens too.
+- Settings shows each scoped token's last use and last denial (with the tool that was denied).
+
 ### Fixed
 
 - **Calendar invitations are now emailed to guests.** `calendar_create_event` created the event without asking Google to notify the attendees, so it appeared on their calendars but nobody got a mail. Creating an event with attendees now sends the invitation to all of them. Rescheduling already emailed everyone and is unchanged.

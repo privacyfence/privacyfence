@@ -236,3 +236,32 @@ def test_check_args_keeps_file_placeholders(write_recipe: RecipeWriter, tmp_path
     tool_step = recipe.steps[0]
     assert isinstance(tool_step, ToolStep)
     assert _check_args(tool_step) == ({"path": "{work_dir}/x", "n": 1}, [])
+
+
+async def test_needs_approval_names_the_first_suggested_rule(write_recipe: RecipeWriter) -> None:
+    suggestions = [
+        {"label": "Drive folder", "value": ["f1", "f2"], "value_known": True, "verb": "read"},
+        {"label": "Other", "value": ["x"], "value_known": True, "verb": "write"},
+    ]
+    client = FakeClient(names("drive_list_files"), policy(result={**REVIEW, "suggested_rules": suggestions}))
+    ok, out = await run(write_recipe, [step()], client, attended=False)
+    assert not ok
+    assert "an unattended run would be denied; add: Drive folder = f1, f2 (read)\n" in out
+
+
+async def test_needs_approval_suggestion_known_only_at_run_time(write_recipe: RecipeWriter) -> None:
+    suggestion = {"label": "Drive folder", "value": None, "value_known": False, "verb": "read"}
+    temp = {"verdict": "auto_accept", "matched_rule": "session_temp_accept", "suggested_rules": [suggestion]}
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=temp)))
+    assert not ok
+    assert "wait for a card; add: Drive folder, naming what it reaches at run time (read)\n" in out
+
+
+@pytest.mark.parametrize("suggested", [None, [], ["junk"]])
+async def test_needs_approval_without_a_usable_suggestion_is_unchanged(
+    write_recipe: RecipeWriter, suggested: Any
+) -> None:
+    result = {**REVIEW, **({} if suggested is None else {"suggested_rules": suggested})}
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)))
+    assert not ok
+    assert "; add:" not in out and "a run would wait for a card\n" in out

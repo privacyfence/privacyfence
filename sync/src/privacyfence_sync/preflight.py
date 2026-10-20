@@ -43,6 +43,29 @@ def _connector_of(tool: str) -> str:
     return "apps_script" if tool.startswith("apps_script_") else tool.split("_", 1)[0]
 
 
+def _not_available_text(tool: str, scoped: bool) -> str:
+    if scoped:
+        return f"NOT AVAILABLE TO THIS TOKEN: {tool} is outside its scope, or its connector is not set up"
+    return f"NOT AVAILABLE: this server does not offer {tool} (its connector is not set up)"
+
+
+def _suggestion_text(suggestion: dict[str, Any]) -> str:
+    """One suggested rule as ``label = values (verb)``, or without values when only known at run time."""
+    label, verb = suggestion.get("label"), suggestion.get("verb")
+    value = suggestion.get("value")
+    if suggestion.get("value_known") is False or not isinstance(value, list):
+        return f"{label}, naming what it reaches at run time ({verb})"
+    return f"{label} = {', '.join(str(item) for item in value)} ({verb})"
+
+
+def _add_hint(result: Any) -> str:
+    """The "; add: ..." suffix for the first suggested rule, when the server sent one."""
+    suggestions = result.get("suggested_rules") if isinstance(result, dict) else None
+    if isinstance(suggestions, list) and suggestions and isinstance(suggestions[0], dict):
+        return f"; add: {_suggestion_text(suggestions[0])}"
+    return ""
+
+
 def _has_value_ref(value: Any) -> bool:
     if isinstance(value, str):
         return refs.VALUE_REF.search(value) is not None
@@ -119,11 +142,7 @@ async def _check_step(
     recipe: Recipe, step: ToolStep, client: SyncClient, names: frozenset[str], scoped: bool, attended: bool
 ) -> tuple[Finding, bool]:
     if step.tool not in names:
-        if scoped:
-            text = f"NOT AVAILABLE TO THIS TOKEN: {step.tool} is outside its scope, or its connector is not set up"
-        else:
-            text = f"NOT AVAILABLE: this server does not offer {step.tool} (its connector is not set up)"
-        return Finding(step.id, step.tool, False, text), False
+        return Finding(step.id, step.tool, False, _not_available_text(step.tool, scoped)), False
     args, dropped = _check_args(step)
     try:
         result = await client.call(
@@ -141,8 +160,10 @@ async def _check_step(
     verdict = result.get("verdict") if isinstance(result, dict) else None
     matched = result.get("matched_rule") if isinstance(result, dict) else None
     may_scan = isinstance(result, dict) and result.get("pii_gate_may_apply") is True
-    needs_approval = _NEEDS_APPROVAL + (
-        "a run would wait for a card" if attended else "an unattended run would be denied"
+    needs_approval = (
+        _NEEDS_APPROVAL
+        + ("a run would wait for a card" if attended else "an unattended run would be denied")
+        + _add_hint(result)
     )
     if isinstance(result, dict) and result.get("gate") == "auto":
         finding = Finding(step.id, step.tool, True, "ok: never asks for approval")

@@ -178,7 +178,7 @@ from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
 from .policy import scope_rows as policy_scope_rows
-from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_token_scope
+from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_store, current_token_scope
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -1662,6 +1662,17 @@ def _assets_schema_detail(scope: ScopedToken, ctx: ReviewContext) -> str:
     return f"; object schema ids {touched or 'none'}, token's allowed schema ids {allowed or 'none'}"
 
 
+def _note_scoped_denial(scope: ScopedToken, tool: str) -> None:
+    """Record a refusal for the token's last-denied line on Settings (ADR 0206). Never raises."""
+    store = current_store()
+    if store is None or scope is REVOKED_SCOPE:
+        return
+    try:
+        store.note_denial(scope, tool)
+    except Exception:  # the refusal itself must go out unchanged
+        logger.warning("Could not record a scoped token denial for %s", scope.id, exc_info=True)
+
+
 def _deny_scoped(
     audit, connector: str, tool: str, *, scope: ScopedToken, pii_categories: list[str],
     ctx: ReviewContext | None = None,
@@ -1671,6 +1682,7 @@ def _deny_scoped(
     any card or pending approval, like ``_deny_unattended``. Logs the token's id, never its
     secret. Always raises."""
     audit(decision="denied_scoped_token", auto_accept_rule="", pii_detected=bool(pii_categories))
+    _note_scoped_denial(scope, tool)
     detail = _assets_schema_detail(scope, ctx) if connector == "assets" and ctx is not None else ""
     logger.warning(
         "Scoped token %s: denying %s/%s without prompting -- none of its rules matched%s%s",
@@ -1686,6 +1698,7 @@ def audit_scoped_refusal(connector: str, tool: str, scope: ScopedToken, summary:
     the token's tools, or a revoked token -- web/routes_mcp.py). The agent fields, filled from
     ``current_agent()``, name the token (ADR 0164); ``scope`` is logged by id, never a secret."""
     logger.warning("Scoped token %s: refused %s/%s -- %s", scope.id, connector, tool, summary)
+    _note_scoped_denial(scope, tool)
     _audit(
         created_at=time.time(), request_id=uuid.uuid4().hex[:12], connector=connector, tool=tool,
         tool_name="", summary=summary, sender="", decision="denied_scoped_token",

@@ -31,6 +31,7 @@ from ..policy import describe as policy_describe
 from ..policy import propose as policy_propose
 from ..policy import scope_rows
 from ..policy import registry as policy_registry
+from ..policy.suggest import suggested_rules
 from ..principal import current_principal
 from ..scoped_tokens import current_token_scope
 
@@ -337,10 +338,10 @@ class McpDispatcher:
             raise ValueError(f"Unknown tool: {tool!r}")
 
         if gate == "auto":
-            result = {
+            result: dict[str, Any] = {
                 "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
                 "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
-                "pii_gate_may_apply": False,
+                "pii_gate_may_apply": False, "suggested_rules": [],
             }
         else:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
@@ -359,6 +360,12 @@ class McpDispatcher:
                 "gate": gate, "verdict": verdict, "matched_rule": matched_rule or None,
                 "matched_rule_id": matched_rule_id or None,
                 "reason": reason, "pii_gate_may_apply": gate == "review",
+                # A grace-window match covers only this file for a while; a standing rule is still owed.
+                "suggested_rules": (
+                    []
+                    if verdict == "auto_accept" and matched_rule != "session_temp_accept"
+                    else suggested_rules(tool, agent_args, my_email)
+                ),
             }
 
         self._audit_policy_check(connector_name, tool, result, claude_reason)

@@ -1,4 +1,4 @@
-"""Command line entry point: ``privacyfence-sync run|login|check|preflight``."""
+"""Command line entry point: ``privacyfence-sync run|login|check|preflight|permissions``."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx2
@@ -21,8 +22,10 @@ from .client import (
     connect_oauth,
     connect_token,
 )
+from .permissions import list_permissions
 from .preflight import preflight_recipe
-from .recipe import RecipeError, load_recipe
+from .recipe import Recipe, RecipeError, load_recipe
+from .result import write_result
 from .runner import run_recipe
 from .template import TemplateError
 from .transform import ScriptError
@@ -41,6 +44,9 @@ def _parser() -> argparse.ArgumentParser:
         "--attended", action="store_true", help="wait for approvals instead of declaring the run unattended"
     )
     run.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="environment variable holding the token")
+    run.add_argument(
+        "--result-file", type=Path, default=None, help="write a JSON file saying how the run ended, for a scheduler"
+    )
     login = sub.add_parser("login", help="sign in to an organization server", allow_abbrev=False)
     login.add_argument("--server", required=True, help="the PrivacyFence MCP URL")
     login.add_argument(
@@ -57,6 +63,13 @@ def _parser() -> argparse.ArgumentParser:
         "--attended", action="store_true", help="check for a run that waits for approvals, not an unattended one"
     )
     preflight.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="environment variable holding the token")
+    permissions = sub.add_parser(
+        "permissions", help="list the auto-accept rules a recipe needs, without running it", allow_abbrev=False
+    )
+    permissions.add_argument("recipe", type=Path)
+    permissions.add_argument("--server", help="the PrivacyFence MCP URL")
+    permissions.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="environment variable holding the token")
+    permissions.add_argument("--json", action="store_true", help="print one JSON object instead of text")
     return parser
 
 
@@ -80,12 +93,11 @@ def _connect(server: str, token_env: str) -> SyncClient:
     return connect_oauth(server, storage)
 
 
-async def _run(recipe_path: Path, server_flag: str | None, attended: bool, token_env: str) -> None:
-    recipe = load_recipe(recipe_path)
+async def _run(recipe: Recipe, server_flag: str | None, attended: bool, token_env: str) -> str | None:
     client = _connect(_resolve_server(server_flag, recipe.server), token_env)
     try:
         async with client:
-            await run_recipe(recipe, client, attended=attended, out=sys.stdout)
+            return await run_recipe(recipe, client, attended=attended, out=sys.stdout)
     except BaseExceptionGroup as group:
         # The MCP transport runs in an anyio task group, which wraps the step's own error.
         raise _first_leaf(group) from None
@@ -97,6 +109,16 @@ async def _preflight(recipe_path: Path, server_flag: str | None, attended: bool,
     try:
         async with client:
             return await preflight_recipe(recipe, client, attended=attended, out=sys.stdout)
+    except BaseExceptionGroup as group:
+        raise _first_leaf(group) from None
+
+
+async def _permissions(recipe_path: Path, server_flag: str | None, token_env: str, as_json: bool) -> None:
+    recipe = load_recipe(recipe_path)
+    client = _connect(_resolve_server(server_flag, recipe.server), token_env)
+    try:
+        async with client:
+            await list_permissions(recipe, client, out=sys.stdout, as_json=as_json)
     except BaseExceptionGroup as group:
         raise _first_leaf(group) from None
 
@@ -118,11 +140,61 @@ def _first_leaf(group: BaseExceptionGroup[BaseException]) -> BaseException:
     return _first_leaf(first) if isinstance(first, BaseExceptionGroup) else first
 
 
+def _run_command(args: argparse.Namespace) -> tuple[int, str | None, str | None]:
+    """Run a recipe; return (exit code, id of the step that stopped it, recipe name)."""
+    recipe_name: str | None = None
+    try:
+        recipe = load_recipe(args.recipe)
+        recipe_name = recipe.name
+        stopped_at = asyncio.run(_run(recipe, args.server, args.attended, args.token_env))
+        return 0, stopped_at, recipe_name
+    except Exception as exc:
+        return _exit_code(exc), None, recipe_name
+
+
+def _exit_code(exc: Exception) -> int:
+    if isinstance(exc, (RecipeError, TemplateError, RecipeRuntimeError)):
+        return _fail(str(exc), 1)
+    if isinstance(exc, ToolDenied):
+        return _fail(str(exc), 3)
+    if isinstance(exc, SignInError):
+        return _fail(str(exc), 4)
+    if isinstance(exc, (SyncError, ScriptError)):
+        return _fail(str(exc), 2)
+    if isinstance(exc, httpx2.HTTPError):
+        return _fail(f"cannot reach the server: {exc}", 2)
+    if isinstance(exc, MCPError):
+        # The MCP client turns an HTTP error on the handshake (a bad or revoked token, a wrong URL,
+        # a server error) into this generic error, so name the usual causes.
+        return _fail(
+            f"the server refused the connection ({exc.message}); check that the token in "
+            "$PRIVACYFENCE_TOKEN (or --token-env) is valid and that the server URL is right",
+            2,
+        )
+    raise exc
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as exc:
         return 1 if exc.code else 0
+    if args.command == "run":
+        started_at = datetime.now(timezone.utc)
+        code, stopped_at, recipe_name = _run_command(args)
+        if args.result_file is not None:
+            try:
+                write_result(
+                    args.result_file,
+                    recipe=recipe_name,
+                    exit_code=code,
+                    stopped_at=stopped_at,
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                )
+            except OSError as exc:
+                print(f"privacyfence-sync: could not write the result file: {exc}", file=sys.stderr)
+        return code
     try:
         if args.command == "check":
             recipe = load_recipe(args.recipe)
@@ -131,29 +203,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "login":
             asyncio.run(_login(args.server, args.callback_port))
             return 0
-        if args.command == "preflight":
-            ok = asyncio.run(_preflight(args.recipe, args.server, args.attended, args.token_env))
-            return 0 if ok else 3
-        asyncio.run(_run(args.recipe, args.server, args.attended, args.token_env))
-        return 0
-    except (RecipeError, TemplateError, RecipeRuntimeError) as exc:
-        return _fail(str(exc), 1)
-    except ToolDenied as exc:
-        return _fail(str(exc), 3)
-    except SignInError as exc:
-        return _fail(str(exc), 4)
-    except (SyncError, ScriptError) as exc:
-        return _fail(str(exc), 2)
-    except httpx2.HTTPError as exc:
-        return _fail(f"cannot reach the server: {exc}", 2)
-    except MCPError as exc:
-        # The MCP client turns an HTTP error on the handshake (a bad or revoked token, a wrong URL,
-        # a server error) into this generic error, so name the usual causes.
-        return _fail(
-            f"the server refused the connection ({exc.message}); check that the token in "
-            "$PRIVACYFENCE_TOKEN (or --token-env) is valid and that the server URL is right",
-            2,
-        )
+        if args.command == "permissions":
+            asyncio.run(_permissions(args.recipe, args.server, args.token_env, args.json))
+            return 0
+        ok = asyncio.run(_preflight(args.recipe, args.server, args.attended, args.token_env))
+        return 0 if ok else 3
+    except Exception as exc:
+        return _exit_code(exc)
 
 
 if __name__ == "__main__":

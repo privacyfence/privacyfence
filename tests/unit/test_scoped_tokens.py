@@ -13,6 +13,7 @@ from privacyfence.policy import scope_rows, store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.scoped_tokens import (
+    ACTIVITY_FILE_NAME,
     MAX_TOKENS_PER_PRINCIPAL,
     REVOKED_SCOPE,
     STORE_FILE_NAME,
@@ -20,6 +21,7 @@ from privacyfence.scoped_tokens import (
     ScopedTokenError,
     ScopedTokenPolicy,
     ScopedTokenStore,
+    TokenActivity,
 )
 
 RULES = [
@@ -695,3 +697,138 @@ class TestForgetRules:
             assert scoped_tokens.forget_rules(LOCAL_PRINCIPAL, []) == []
         finally:
             scoped_tokens.set_store(None)
+
+
+def _activity_file(tmp_path):
+    return tmp_path / "authority" / ACTIVITY_FILE_NAME
+
+
+def _stored_activity(tmp_path):
+    return json.loads(_activity_file(tmp_path).read_text())
+
+
+class TestTokenActivity:
+    def test_first_note_use_writes_the_file(self, tmp_path):
+        store = _store()
+        token, _ = _create(store)
+        store.note_use(token, now=NOW)
+        assert _stored_activity(tmp_path) == {
+            "version": 1,
+            "tokens": {token.id: {"last_used_at": NOW, "last_denied_at": None, "last_denied_tool": ""}},
+        }
+
+    def test_second_use_within_a_minute_does_not_rewrite(self, tmp_path):
+        store = _store()
+        token, _ = _create(store)
+        store.note_use(token, now=NOW)
+        store.note_use(token, now=NOW + 30)
+        assert _stored_activity(tmp_path)["tokens"][token.id]["last_used_at"] == NOW
+        assert store.activity_for(LOCAL_PRINCIPAL)[token.id].last_used_at == NOW + 30
+
+    def test_use_after_a_minute_rewrites(self, tmp_path):
+        store = _store()
+        token, _ = _create(store)
+        store.note_use(token, now=NOW)
+        store.note_use(token, now=NOW + 61)
+        assert _stored_activity(tmp_path)["tokens"][token.id]["last_used_at"] == NOW + 61
+
+    def test_denial_within_a_minute_stays_in_memory(self, tmp_path):
+        store = _store()
+        token, _ = _create(store)
+        store.note_use(token, now=NOW)
+        store.note_denial(token, "drive_list_files", now=NOW + 5)
+        assert _stored_activity(tmp_path)["tokens"][token.id]["last_denied_at"] is None
+        assert store.activity_for(LOCAL_PRINCIPAL)[token.id] == TokenActivity(NOW, NOW + 5, "drive_list_files")
+
+    def test_denied_tool_travels_with_the_denial_time(self):
+        store = _store()
+        token, _ = _create(store)
+        store.note_denial(token, "drive_list_files", now=NOW)
+        store.note_denial(token, "gmail_send", now=NOW + 1)
+        assert store.activity_for(LOCAL_PRINCIPAL)[token.id] == TokenActivity(None, NOW + 1, "gmail_send")
+
+    def test_first_write_after_a_restart_keeps_other_tokens_stored_values(self, tmp_path):
+        first = _store()
+        token_a, _ = _create(first, label="a")
+        token_b, _ = _create(first, label="b")
+        first.note_denial(token_b, "drive_list_files", now=NOW)
+        restarted = _store()
+        restarted.note_use(token_a, now=NOW + 500)
+        stored = _stored_activity(tmp_path)["tokens"]
+        assert stored[token_b.id] == {
+            "last_used_at": None, "last_denied_at": NOW, "last_denied_tool": "drive_list_files",
+        }
+        assert stored[token_a.id]["last_used_at"] == NOW + 500
+
+    def test_loading_keeps_the_newer_value_of_file_and_memory(self, tmp_path):
+        first = _store()
+        token, _ = _create(first)
+        first.note_denial(token, "stored_tool", now=NOW + 90)
+        first.note_use(token, now=NOW + 100)
+        other = _store()
+        memory = {token.id: TokenActivity(NOW + 200, NOW + 10, "memory_tool")}
+        other._activity[LOCAL_PRINCIPAL.id] = memory
+        other._load_activity(LOCAL_PRINCIPAL)
+        assert memory[token.id] == TokenActivity(NOW + 200, NOW + 90, "stored_tool")
+
+    def test_loading_keeps_a_newer_denial_held_in_memory(self, tmp_path):
+        first = _store()
+        token, _ = _create(first)
+        first.note_denial(token, "stored_tool", now=NOW + 10)
+        other = _store()
+        memory = {token.id: TokenActivity(None, NOW + 90, "memory_tool")}
+        other._activity[LOCAL_PRINCIPAL.id] = memory
+        other._load_activity(LOCAL_PRINCIPAL)
+        assert memory[token.id] == TokenActivity(None, NOW + 90, "memory_tool")
+
+    def test_activity_for_omits_tokens_that_are_gone(self):
+        store = _store()
+        token, _ = _create(store)
+        kept, _ = _create(store, label="kept")
+        store.note_use(token, now=NOW)
+        store.note_use(kept, now=NOW)
+        store.revoke(LOCAL_PRINCIPAL, token.id)
+        assert set(store.activity_for(LOCAL_PRINCIPAL)) == {kept.id}
+
+    def test_revoked_scope_is_never_recorded(self, tmp_path):
+        store = _store()
+        store.note_use(REVOKED_SCOPE, now=NOW)
+        store.note_denial(REVOKED_SCOPE, "gmail_send", now=NOW)
+        assert not _activity_file(tmp_path).exists()
+
+    def test_a_write_failure_is_logged_not_raised(self, monkeypatch, caplog):
+        store = _store()
+        token, _ = _create(store)
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(scoped_tokens.secure_files, "atomic_write_json", boom)
+        store.note_use(token, now=NOW)
+        assert f"Could not record scoped token activity for {token.id}" in caplog.text
+        assert store.activity_for(LOCAL_PRINCIPAL)[token.id].last_used_at == NOW
+
+    def test_a_corrupt_file_reads_as_empty(self, tmp_path, caplog):
+        store = _store()
+        token, _ = _create(store)
+        _activity_file(tmp_path).write_text("{not json")
+        assert store.activity_for(LOCAL_PRINCIPAL) == {}
+        store.note_use(token, now=NOW)
+        assert "Skipping an unreadable scoped token activity file" in caplog.text
+        assert store.activity_for(LOCAL_PRINCIPAL)[token.id] == TokenActivity(NOW)
+
+    @pytest.mark.parametrize("entry", [
+        {"last_used_at": "yesterday", "last_denied_at": None, "last_denied_tool": ""},
+        {"last_used_at": None, "last_denied_at": None, "last_denied_tool": 5},
+    ])
+    def test_an_entry_of_the_wrong_type_reads_as_empty(self, tmp_path, entry):
+        store = _store()
+        token, _ = _create(store)
+        _activity_file(tmp_path).write_text(json.dumps({"version": 1, "tokens": {token.id: entry}}))
+        assert store.activity_for(LOCAL_PRINCIPAL) == {}
+
+    def test_a_principal_that_cannot_name_a_directory_is_logged_not_raised(self, caplog):
+        store = _store()
+        token = scoped_tokens.replace(_create(store)[0], principal_id="../x")
+        store.note_use(token, now=NOW)
+        assert f"Could not record scoped token activity for {token.id}" in caplog.text

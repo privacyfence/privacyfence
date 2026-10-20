@@ -498,6 +498,12 @@ def build_mcp_server(
             if scope is not None and not _scoped_token_allows(scope, name, is_meta_tool=is_meta_tool):
                 with reason_scope(str(arguments.get("reason", ""))):
                     return _refuse_scoped_call(dispatcher, scope, name, is_meta_tool=is_meta_tool)
+            if scope is not None:
+                # The person's view of what the token does (ADR 0206): in memory, with a throttled
+                # file write, so off the event loop. Never created here: no store, nothing to note.
+                store = scoped_tokens.current_store()
+                if store is not None:
+                    await asyncio.to_thread(store.note_use, scope)
             try:
                 if is_meta_tool:
                     result = await _dispatch_meta_tool(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import runpy
 import sys
@@ -352,3 +353,96 @@ def test_preflight_unwraps_task_group_errors(
 def test_preflight_help_mentions_attended(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["preflight", "--help"]) == 0
     assert "--attended" in capsys.readouterr().out
+
+
+def read_result(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def test_result_file_ok(write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path) -> None:
+    result = tmp_path / "out" / "result.json"
+    result.parent.mkdir()
+    assert cli.main(["run", simple(write_recipe), "--result-file", str(result)]) == 0
+    document = read_result(result)
+    assert document["outcome"] == "ok" and document["recipe"] == "demo"
+    assert document["exit_code"] == 0 and document["stopped_at_step"] is None
+
+
+def test_result_file_no_change(write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path) -> None:
+    recipe = write_recipe([{"id": "s", "run": "scripts/stop.py"}, {"id": "after", "tool": "drive_list_files"}])
+    (tmp_path / "scripts" / "stop.py").write_text("import sys\nsys.exit(10)\n")
+    result = tmp_path / "result.json"
+    assert cli.main(["run", str(recipe), "--result-file", str(result)]) == 0
+    document = read_result(result)
+    assert document["outcome"] == "no_change" and document["stopped_at_step"] == "s"
+    assert document["exit_code"] == 0
+
+
+def test_result_file_denied(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session = FakeSession({"drive_list_files": ToolDenied("Request denied: no rule")})
+    result = tmp_path / "result.json"
+    assert cli.main(["run", simple(write_recipe), "--result-file", str(result)]) == 3
+    document = read_result(result)
+    assert document["outcome"] == "denied" and document["exit_code"] == 3
+    assert "Request denied" not in result.read_text(encoding="utf-8")
+    assert capsys.readouterr().err == "privacyfence-sync: Request denied: no rule\n"
+
+
+def test_result_file_for_a_bad_recipe(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    recipe = write_recipe([{"id": "one", "tool": "drive_list_files", "bogus": 1}])
+    result = tmp_path / "result.json"
+    assert cli.main(["run", str(recipe), "--result-file", str(result)]) == 1
+    document = read_result(result)
+    assert document["outcome"] == "recipe_error" and document["recipe"] is None
+
+
+def test_unwritable_result_file_keeps_the_exit_code(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = tmp_path / "missing-folder" / "result.json"
+    assert cli.main(["run", simple(write_recipe), "--result-file", str(result)]) == 0
+    assert capsys.readouterr().err.startswith("privacyfence-sync: could not write the result file: ")
+
+
+def test_unexpected_error_propagates_and_writes_no_result_file(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path
+) -> None:
+    daemon.session = FakeSession({"drive_list_files": RuntimeError("bug")})
+    result = tmp_path / "result.json"
+    with pytest.raises(RuntimeError):
+        cli.main(["run", simple(write_recipe), "--result-file", str(result)])
+    assert not result.exists()
+
+
+def test_permissions_exits_0_when_rules_are_needed(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.tool_names = frozenset(_META | {"drive_list_files"})
+    daemon.session.results["privacyfence_check_policy"] = {"verdict": "requires_review", "suggested_rules": []}
+    assert cli.main(["permissions", simple(write_recipe), "--json"]) == 0
+    assert '"status": "needs_rule"' in capsys.readouterr().out
+    assert "privacyfence_begin_unattended_session" not in daemon.session.calls
+
+
+def test_permissions_denied_status_exits_4(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.results["privacyfence_status"] = ToolDenied("no")
+    assert cli.main(["permissions", simple(write_recipe)]) == 4
+    assert "revoked or has expired" in capsys.readouterr().err
+
+
+def test_permissions_unwraps_task_group_errors(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    group = ExceptionGroup("unhandled errors in a TaskGroup", [SignInError("expired")])
+    daemon.session.results["privacyfence_status"] = group
+    assert cli.main(["permissions", simple(write_recipe)]) == 4
+
+
+def test_permissions_bad_recipe_exits_1(write_recipe: RecipeWriter, capsys: pytest.CaptureFixture[str]) -> None:
+    recipe = write_recipe([{"id": "one", "tool": "drive_list_files", "bogus": 1}])
+    assert cli.main(["permissions", str(recipe)]) == 1
+    assert "unknown key bogus" in capsys.readouterr().err

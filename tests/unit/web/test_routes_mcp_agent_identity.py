@@ -24,7 +24,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
-from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity, scoped_tokens
+from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity, paths, scoped_tokens
 from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, current_agent
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -469,8 +469,10 @@ class _ScopedVerifier(TokenVerifier):
 
 
 class TestScopedTokenIdentity:
-    async def test_a_scoped_call_is_attested_as_the_token(self, monkeypatch, audit_dir):
-        scoped_tokens.set_store(_OneTokenStore(_SCOPED))
+    async def test_a_scoped_call_is_attested_as_the_token(self, monkeypatch, audit_dir, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        store = _OneTokenStore(_SCOPED)
+        scoped_tokens.set_store(store)
         _install_rule(monkeypatch)
 
         # The token outranks whatever the client claims, and an org admin's pin too.
@@ -486,3 +488,4 @@ class TestScopedTokenIdentity:
         assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
             f"scoped-token:{_SCOPED.id}", "sales-sync", "", "override",
         )
+        assert store._activity["local"][_SCOPED.id].last_used_at is not None
