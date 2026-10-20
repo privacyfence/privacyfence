@@ -138,7 +138,7 @@ def _wait_ready(port: int, name: str, timeout: float = 90) -> None:
             if _get(port, "/.well-known/oauth-authorization-server").status_code == 200:
                 return
         except requests.RequestException:
-            pass
+            pass  # not listening yet; retry until the deadline, then fail with the container logs
         time.sleep(0.5)
     logs = _docker("logs", name, check=False)
     raise AssertionError(f"{name} never served on port {port} within {timeout}s -- logs:\n{logs.stdout}\n{logs.stderr}")
