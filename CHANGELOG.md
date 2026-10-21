@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.6.1] — 2026-10-21
+
+### Fixed
+
+- A call refused because the personal-data scan found something, in an unattended session or with a scoped token, no longer says that no rule covers it. The message now names the categories found and says that a token's "carry personal data" allowance applies only to exports, downloads and page uploads, so a covered `salesforce_run_report` or `grist_get_records` is denied for that reason, not for a missing rule.
+
 ## [6.6.0] — 2026-10-20
 
 ### Added
@@ -3399,7 +3405,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.6.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.6.1...HEAD
+[6.6.1]: https://github.com/privacyfence/privacyfence/compare/v6.6.0...v6.6.1
 [6.6.0]: https://github.com/privacyfence/privacyfence/compare/v6.5.0...v6.6.0
 [6.5.0]: https://github.com/privacyfence/privacyfence/compare/v6.4.0...v6.5.0
 [6.4.0]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...v6.4.0
