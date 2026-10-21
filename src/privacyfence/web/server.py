@@ -95,7 +95,7 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import __version__, auto_accept, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
+from .. import __version__, auto_accept, latency, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
@@ -1152,6 +1152,8 @@ def build_app(
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
+        # Only a real dispatcher-backed server carries gated calls worth watching -- see latency.py.
+        lifespans.append(latency.loop_health_lifespan())
         # ADR 0007: the local file bridge's own upload/download endpoints,
         # authenticated exactly like /mcp (same bearer-token verifier) --
         # see routes_file_bridge.py's own module docstring for why this
@@ -1303,6 +1305,8 @@ def _build_org_app(
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
+        # Only a real dispatcher-backed server carries gated calls worth watching -- see latency.py.
+        lifespans.append(latency.loop_health_lifespan())
         # ADR 0028: org mode's own privacyfence_create_upload_slot and
         # DownloadDeliveryConfig.agent_links need the same two
         # unauthenticated capability routes local mode mounts above --

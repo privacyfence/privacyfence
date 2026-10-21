@@ -172,6 +172,7 @@ from .auto_accept import (
     remove_policy_v2_rule,
     temp_accept_key,
 )
+from . import latency
 from .deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
@@ -399,7 +400,9 @@ async def _run_in_popup_executor(func, *args, **kwargs) -> Any:
     on another principal's behalf, the call blocks on it forever.
     """
     loop = asyncio.get_running_loop()
-    call = functools.partial(func, *args, **kwargs)
+    call = functools.partial(
+        latency.timed_call(func, time.monotonic(), getattr(func, "__name__", "dialog")), *args, **kwargs,
+    )
     ctx = contextvars.copy_context()
     return await loop.run_in_executor(_popup_executor, ctx.run, call)
 
@@ -999,6 +1002,7 @@ async def gated_call(
 ) -> Any:
     created_at = time.time()
     request_id = uuid.uuid4().hex[:12]
+    timer = latency.StageTimer(request_id, connector, tool)
     operation_key = TOOL_TO_OPERATION.get(tool, f"{connector}.{tool}")
     # Set by web/mcp_dispatch.py's McpDispatcher.call() via reason_scope(),
     # from the mandatory "reason" param every gated ToolSpec now declares --
@@ -1036,7 +1040,7 @@ async def gated_call(
     # single event loop for that whole duration.
     if gate == "review":
         pii_scan_source = details if pii_scan_text is None else pii_scan_text
-        pii_categories = await asyncio.to_thread(detect_pii_categories, pii_scan_source)
+        pii_categories = await latency.to_thread(timer, "pii_scan", detect_pii_categories, pii_scan_source)
     else:
         pii_categories = []
     # A separate, deliberately weaker signal for the popup (write) gate:
@@ -1052,7 +1056,9 @@ async def gated_call(
     # pii_categories's machinery.
     if gate == "popup":
         write_scan_source = details if write_content_scan_text is None else write_content_scan_text
-        write_content_flags = await asyncio.to_thread(detect_pii_categories, write_scan_source)
+        write_content_flags = await latency.to_thread(
+            timer, "write_scan", detect_pii_categories, write_scan_source,
+        )
     else:
         write_content_flags = []
     # The one deliberate exception to the comment above: drive_upload_file's
@@ -1061,7 +1067,9 @@ async def gated_call(
     # real scan pii_categories does -- folded into pii_detected below and
     # routed through _confirm_pii_or_deny, unlike write_content_flags.
     if gate == "popup" and upload_pii_scan_text:
-        upload_pii_categories = await asyncio.to_thread(detect_pii_categories, upload_pii_scan_text)
+        upload_pii_categories = await latency.to_thread(
+            timer, "upload_pii_scan", detect_pii_categories, upload_pii_scan_text,
+        )
     else:
         upload_pii_categories = []
     # PII-refinement trial capture (opt-in, off by default -- see
@@ -1072,12 +1080,14 @@ async def gated_call(
     # install never runs this extra scan at all.
     pii_audit_matches: list[PIIAuditMatch]
     if gate == "review" and is_pii_audit_match_details_enabled():
-        pii_audit_matches = await asyncio.to_thread(scan_pii_for_audit, pii_scan_source)
+        pii_audit_matches = await latency.to_thread(timer, "pii_audit_scan", scan_pii_for_audit, pii_scan_source)
     else:
         pii_audit_matches = []
     upload_pii_audit_matches: list[PIIAuditMatch]
     if gate == "popup" and upload_pii_scan_text and is_pii_audit_match_details_enabled():
-        upload_pii_audit_matches = await asyncio.to_thread(scan_pii_for_audit, upload_pii_scan_text)
+        upload_pii_audit_matches = await latency.to_thread(
+            timer, "upload_pii_audit_scan", scan_pii_for_audit, upload_pii_scan_text,
+        )
     else:
         upload_pii_audit_matches = []
     # The value everything below actually branches on for "does PII force a
@@ -1103,7 +1113,8 @@ async def gated_call(
     # cheap singleton lookup, called synchronously first so only the actual
     # file scan runs on the thread.
     audit_logger = get_audit_logger()
-    seen_count = await asyncio.to_thread(audit_logger.recent_matches, connector, tool, summary)
+    seen_count = await latency.to_thread(timer, "seen_count", audit_logger.recent_matches, connector, tool, summary)
+    timer.log_if_slow()
 
     # The deferred-protocol registry, if the active ApprovalUI has one (see
     # this module's own docstring) -- None for a registry-less ApprovalUI.

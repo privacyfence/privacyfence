@@ -3137,17 +3137,12 @@ class TestManyPendingApprovalsAreAllReviewable:
             # 300s is simply longer than this test can take; production's own
             # default is 15 minutes.
             #
-            # hold_window is the other half. Every registered call parks a
-            # thread of asyncio.to_thread's *default* pool for the whole
-            # window inside registry.wait_async() -- and that is the same
-            # pool the calls that haven't registered yet need for their own
-            # PII/audit hops. At 5.0 with fewer default workers than n
-            # (min(32, cpu_count + 4): 7 on a 3-core macOS runner), the
-            # already-registered calls starve the rest into exactly the
-            # stagger above. Collapsing it to ~0 removes that self-inflicted
-            # serialization: every call returns its "approval_pending" result
-            # promptly and the approval stays live for _drive_interaction to
-            # render. Nothing here is testing the hold window.
+            # hold_window is the other half: every call returns its
+            # "approval_pending" result promptly and the approval stays live
+            # for _drive_interaction to render. Nothing here is testing the
+            # hold window. (It once also starved the default to_thread pool
+            # -- wait_async() parked a worker per held call -- see
+            # test_gate_latency.py for the guard against that coming back.)
             hold_window=0.05, pending_ttl=300.0, ledger_ttl=300.0,
             max_pending=n, max_pending_per_principal=n,
         )

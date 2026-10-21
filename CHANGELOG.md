@@ -46,6 +46,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - `privacyfence-sync preflight` warns, per step, when a run can still be denied by the personal-data scan, and `privacyfence_check_policy` returns `pii_gate` and `pii_gate_detail` saying whether the scan applies and whether the token's allowance lifts it.
+- The daemon log now says where a slow approval spent its time: a request whose preparation (personal-data scan, history lookup) took a second or more gets one line with each step's time, including how long it waited for a free worker; a dialog whose worker started late, a card page served before it was ready, a blocked event loop and a full worker pool are each logged too.
+
+### Fixed
+
+- **In organization mode, a new card no longer waits for other people's pending approvals.** Each request waiting on a person held one of the daemon's shared worker threads for up to 30 seconds. Once more people had an approval waiting than the daemon had threads (about 12 on an 8-core machine), the next request's card did not appear until one of those waits ended, often half a minute later.
 
 ## [6.6.1] — 2026-10-21
 
