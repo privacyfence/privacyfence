@@ -391,6 +391,10 @@ PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
     "drive_download_file",
 })
 
+# Popup-gate tools whose payload is scanned too (the gate's upload scan): drive_upload_file's can be
+# external content the model never read, peek_upload_page's is the page body.
+UPLOAD_PII_SCAN_TOOLS: frozenset[str] = frozenset({"drive_upload_file", "peek_upload_page"})
+
 @dataclass
 class ReviewContext:
     connector: str
@@ -781,6 +785,7 @@ def notify_rules_changed() -> None:
 
 __all__ = [
     "PERSONAL_DATA_RULE_TOOLS",
+    "UPLOAD_PII_SCAN_TOOLS",
     "ReviewContext",
     "TEMP_ACCEPT_ELIGIBLE_OPERATIONS",
     "TEMP_ACCEPT_TTL_SECONDS",

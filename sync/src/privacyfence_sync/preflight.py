@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, TextIO
 
 from . import refs
@@ -27,8 +27,8 @@ _UNKNOWN = (
     "run once with --attended to be sure"
 )
 _PII_NOTE = (
-    "note: reads are also scanned for personal data at run time; an unattended run is denied when some is "
-    "found, unless the token allows it for exports, downloads and page uploads"
+    "note: a WARNING step is denied only when what it returns holds personal data; a scoped token can allow "
+    "that for exports, downloads and page uploads (see the README)"
 )
 
 
@@ -38,6 +38,7 @@ class Finding:
     tool: str
     ok: bool
     text: str
+    warned: bool = False
 
 
 def _connector_of(tool: str) -> str:
@@ -116,7 +117,7 @@ async def preflight_recipe(recipe: Recipe, client: SyncClient, *, attended: bool
             await client.call("privacyfence_begin_unattended_session", {"reason": f"{session_reason}: preflight"})
         except ToolFailed:
             raise SyncError(_UNATTENDED_DISABLED) from None
-    pii = False
+    warned = False
     checked = 0
     try:
         for step in recipe.steps:
@@ -133,8 +134,8 @@ async def preflight_recipe(recipe: Recipe, client: SyncClient, *, attended: bool
             if not isinstance(step, ToolStep):
                 continue
             checked += 1
-            finding, may_scan = await _check_step(recipe, step, client, names, scoped, attended)
-            pii = pii or may_scan
+            finding = await _check_step(recipe, step, client, names, scoped, attended)
+            warned = warned or finding.warned
             problems += not finding.ok
             out.write(f"[{finding.step_id}] {finding.tool}: {finding.text}\n")
     finally:
@@ -143,7 +144,7 @@ async def preflight_recipe(recipe: Recipe, client: SyncClient, *, attended: bool
                 await client.call(
                     "privacyfence_end_unattended_session", {"reason": f"{session_reason}: preflight done"}
                 )
-    if pii:
+    if warned:
         out.write(_PII_NOTE + "\n")
     out.write(f"preflight: {checked} step(s) checked, {problems} problem(s)\n")
     return problems == 0
@@ -151,9 +152,9 @@ async def preflight_recipe(recipe: Recipe, client: SyncClient, *, attended: bool
 
 async def _check_step(
     recipe: Recipe, step: ToolStep, client: SyncClient, names: frozenset[str], scoped: bool, attended: bool
-) -> tuple[Finding, bool]:
+) -> Finding:
     if step.tool not in names:
-        return Finding(step.id, step.tool, False, _not_available_text(step.tool, scoped)), False
+        return Finding(step.id, step.tool, False, _not_available_text(step.tool, scoped))
     args, dropped = _check_args(step)
     try:
         result = await client.call(
@@ -167,10 +168,9 @@ async def _check_step(
         )
     except ToolFailed as exc:
         text = f"NOT CHECKED: {str(exc).split(chr(10), 1)[0]}"
-        return Finding(step.id, step.tool, False, text), False
+        return Finding(step.id, step.tool, False, text)
     verdict = result.get("verdict") if isinstance(result, dict) else None
     matched = result.get("matched_rule") if isinstance(result, dict) else None
-    may_scan = isinstance(result, dict) and result.get("pii_gate_may_apply") is True
     needs_approval = (
         _NEEDS_APPROVAL
         + ("a run would wait for a card" if attended else "an unattended run would be denied")
@@ -190,4 +190,17 @@ async def _check_step(
         finding = Finding(step.id, step.tool, False, needs_approval)
     else:
         finding = Finding(step.id, step.tool, True, _UNKNOWN)
-    return finding, may_scan
+    if (
+        (scoped or not attended)
+        and finding.ok
+        and verdict == "auto_accept"
+        and matched != "session_temp_accept"
+        and isinstance(result, dict)
+        and result.get("pii_gate") == "applies"
+    ):
+        detail = result.get("pii_gate_detail")
+        if not isinstance(detail, str) or not detail:
+            detail = "the personal-data scan applies"
+        text = f"{finding.text}; WARNING: {detail}: a run is denied if the result holds personal data"
+        finding = replace(finding, text=text, warned=True)
+    return finding

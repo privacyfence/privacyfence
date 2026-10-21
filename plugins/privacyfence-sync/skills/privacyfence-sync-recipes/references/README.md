@@ -137,6 +137,9 @@ Notes:
   always stops for review when personal data is found. Only you can tick it, in Settings, behind
   your passkey; an AI client cannot propose it. `salesforce_run_report`, `grist_get_records` and
   the other reads that return data in the tool result are always scanned.
+  [`preflight`](#commands) flags the steps the scan can still deny, one WARNING per step. If a run
+  is denied this way, use the covered export tool instead, narrow the step's `columns` or
+  `filters` so the result holds no personal data, or run it attended.
 - **A Jira project rule** covers an export only when every exported issue belongs to an approved
   project. A JQL query that reaches into another project needs that project in the rule too.
 - **A Jira Assets schema rule** covers an export only when every exported object belongs to an
@@ -707,9 +710,11 @@ privacyfence-sync permissions RECIPE [--server URL] [--token-env NAME] [--json]
   `--attended`, declares and ends an unattended session, which the PrivacyFence UI may show
   briefly. It takes the same `--server`, `--attended` and `--token-env` options as `run`. A step
   whose arguments are filled in at run time (`${...}`) is checked without them, and what depends
-  on content PrivacyFence only sees at run time is reported as `unknown`. In particular it cannot
-  predict the personal-data scan: a run is also denied when the data it reads holds personal data
-  the token does not allow. Use it after creating a scoped token or rules and before scheduling.
+  on content PrivacyFence only sees at run time is reported as `unknown`. For a step a rule
+  covers but the personal-data scan can still deny, unattended or attended with a scoped token, the
+  line ends with `; WARNING: <why>: a run is denied if the result holds personal data`, and a note
+  follows the steps. The warning changes neither the problem count nor the exit code, and the run
+  is denied only when the result really holds personal data. Use it after creating a scoped token or rules and before scheduling.
   When a step would need approval, the line ends with `; add: <rule>`, the first rule PrivacyFence
   suggests for it. A trigger step is reported by whether its token variable is set; preflight
   never starts the task.

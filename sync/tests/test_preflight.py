@@ -218,11 +218,68 @@ async def test_attended_skips_unattended_calls(write_recipe: RecipeWriter) -> No
     assert not [t for t, _ in client.calls if "unattended" in t]
 
 
-async def test_pii_note_printed_once(write_recipe: RecipeWriter) -> None:
+APPLIES = {**COVERED, "pii_gate": "applies", "pii_gate_detail": "the personal-data scan applies to x"}
+WARNING = "; WARNING: the personal-data scan applies to x: a run is denied if the result holds personal data"
+NOTE = "note: a WARNING step is denied only when what it returns holds personal data"
+
+
+async def test_unattended_covered_applies_step_warns(write_recipe: RecipeWriter) -> None:
+    result = {**COVERED, "pii_gate": "applies", "pii_gate_detail": "the token's allowance does not cover it"}
+    client = FakeClient(names("drive_list_files"), policy(result=result))
+    ok, out = await run(write_recipe, [step()], client, attended=False)
+    assert ok
+    assert (
+        "[one] drive_list_files: ok: covered by rule r1; WARNING: the token's allowance does not cover it: "
+        "a run is denied if the result holds personal data\n"
+    ) in out
+    assert "0 problem(s)" in out
+    assert NOTE in out
+
+
+@pytest.mark.parametrize("gate", ["allowed_by_token", "allowed_unless_inline", "none"])
+async def test_no_warning_when_the_scan_is_lifted_or_absent(write_recipe: RecipeWriter, gate: str) -> None:
+    result = {**COVERED, "pii_gate": gate, "pii_gate_detail": ""}
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)), False)
+    assert ok and "WARNING" not in out and "note:" not in out
+
+
+async def test_attended_unscoped_does_not_warn(write_recipe: RecipeWriter) -> None:
+    client = FakeClient(names("drive_list_files"), policy(result=APPLIES), status={})
+    ok, out = await run(write_recipe, [step()], client, attended=True)
+    assert ok and "WARNING" not in out and "note:" not in out
+
+
+async def test_attended_scoped_warns(write_recipe: RecipeWriter) -> None:
+    client = FakeClient(names("drive_list_files"), policy(result=APPLIES), status={"token": TOKEN})
+    ok, out = await run(write_recipe, [step()], client, attended=True)
+    assert ok and WARNING in out
+
+
+async def test_no_warning_from_an_older_server(write_recipe: RecipeWriter) -> None:
     result = {**COVERED, "pii_gate_may_apply": True}
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)), False)
+    assert ok and "WARNING" not in out and "note:" not in out
+
+
+@pytest.mark.parametrize("detail", [None, ""])
+async def test_warning_falls_back_without_detail(write_recipe: RecipeWriter, detail: str | None) -> None:
+    result = {**COVERED, "pii_gate": "applies"}
+    if detail is not None:
+        result["pii_gate_detail"] = detail
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)), False)
+    assert ok and "WARNING: the personal-data scan applies: a run is denied" in out
+
+
+async def test_no_warning_on_a_step_that_needs_approval(write_recipe: RecipeWriter) -> None:
+    result = {**REVIEW, "pii_gate": "applies", "pii_gate_detail": "x"}
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)), False)
+    assert not ok and "WARNING: x" not in out and "note:" not in out
+
+
+async def test_note_printed_once_for_two_warned_steps(write_recipe: RecipeWriter) -> None:
     steps = [step(), step(id="two")]
-    ok, out = await run(write_recipe, steps, FakeClient(names("drive_list_files"), policy(result=result)))
-    assert ok and out.count("note: reads are also scanned") == 1
+    ok, out = await run(write_recipe, steps, FakeClient(names("drive_list_files"), policy(result=APPLIES)), False)
+    assert ok and out.count(WARNING) == 2 and out.count(NOTE) == 1
     assert out.index("note:") < out.index("preflight:")
 
 

@@ -511,8 +511,83 @@ class TestCheckPolicy:
         assert result == {
             "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
             "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
-            "pii_gate_may_apply": False, "suggested_rules": [],
+            "pii_gate_may_apply": False, "pii_gate": "none", "pii_gate_detail": "", "suggested_rules": [],
         }
+
+    @staticmethod
+    def _token(*, allow_personal_data: bool) -> ScopedToken:
+        return ScopedToken(
+            id="st-0123456789ab", label="sync", digest="", principal_id="local", principal_email="",
+            principal_display_name="", created_at=time.time(), expires_at=time.time() + 86400,
+            rule_ids=frozenset(), tools=frozenset(), allow_personal_data=allow_personal_data,
+        )
+
+    def _pii(self, connector: str, tool: str, token: ScopedToken | None = None) -> dict:
+        dispatcher = _dispatcher({connector: FakeConnector(connector)})
+        if token is None:
+            return dispatcher.check_policy(connector, tool, {})
+        with scoped_tokens.token_scope(token):
+            return dispatcher.check_policy(connector, tool, {})
+
+    def test_pii_gate_none_for_popup_tool_outside_the_upload_scan(self):
+        result = self._pii("grist", "grist_update_csv")
+        assert result["gate"] == "popup"
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("none", "")
+        assert result["pii_gate_may_apply"] is False
+
+    def test_pii_gate_applies_unscoped(self):
+        result = self._pii("salesforce", "salesforce_run_report")
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "this call is not made with a scoped token, so the personal-data scan always applies"
+        )
+        assert result["pii_gate_may_apply"] is True
+
+    def test_pii_gate_applies_when_allowance_does_not_cover_the_tool(self):
+        result = self._pii("salesforce", "salesforce_run_report", self._token(allow_personal_data=True))
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "the token's personal-data allowance does not cover salesforce_run_report, "
+            "so the personal-data scan applies"
+        )
+
+    def test_pii_gate_allowed_by_token(self):
+        result = self._pii("salesforce", "salesforce_export_report", self._token(allow_personal_data=True))
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("allowed_by_token", "")
+
+    def test_pii_gate_applies_when_token_lacks_the_flag(self):
+        result = self._pii("salesforce", "salesforce_export_report", self._token(allow_personal_data=False))
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "the token does not allow personal data, so the personal-data scan applies to salesforce_export_report"
+        )
+
+    def test_pii_gate_applies_for_revoked_scope(self):
+        result = self._pii("salesforce", "salesforce_export_report", scoped_tokens.REVOKED_SCOPE)
+        assert result["pii_gate"] == "applies"
+        assert "not made with a scoped token" in result["pii_gate_detail"]
+
+    def test_pii_gate_allowed_unless_inline_for_drive_download(self):
+        result = self._pii("drive", "drive_download_file", self._token(allow_personal_data=True))
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("allowed_unless_inline", "")
+
+    def test_pii_gate_popup_upload_tools(self):
+        token = self._token(allow_personal_data=True)
+        peek = self._pii("peek", "peek_upload_page", token)
+        assert peek["gate"] == "popup"
+        assert (peek["pii_gate"], peek["pii_gate_detail"]) == ("allowed_by_token", "")
+        assert peek["pii_gate_may_apply"] is False
+        upload = self._pii("drive", "drive_upload_file", token)
+        assert upload["pii_gate"] == "applies"
+        assert "does not cover drive_upload_file" in upload["pii_gate_detail"]
+
+    def test_pii_scan_tool_sets_stay_in_step_with_the_gate_table(self):
+        from privacyfence.auto_accept import PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, UPLOAD_PII_SCAN_TOOLS
+
+        for tool in PERSONAL_DATA_RULE_TOOLS | UPLOAD_PII_SCAN_TOOLS:
+            assert TOOL_TO_GATE[tool] in ("review", "popup"), tool
+        for tool in UPLOAD_PII_SCAN_TOOLS:
+            assert TOOL_TO_GATE[tool] == "popup", tool
 
     def test_covered_call_has_no_suggested_rules(self):
         from privacyfence import auto_accept
