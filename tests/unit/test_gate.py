@@ -2298,11 +2298,27 @@ class TestPersonalDataRules:
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
         with scoped_tokens.token_scope(self._token(rule, "grist_get_records")):
-            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+            with pytest.raises(gate.GateDeniedError, match="scoped token") as err:
                 await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
 
         assert popups == []
         assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+        # A rule covers the call; the personal-data scan is what stopped it, and the text says so.
+        assert "personal data (IBAN (bank account number))" in str(err.value)
+        assert "none of the token's rules" not in str(err.value)
+
+    async def test_unattended_denial_for_personal_data_names_the_scan_not_a_missing_rule(
+        self, monkeypatch, audit_dir,
+    ):
+        self._install(monkeypatch)
+
+        with gate.unattended_scope(True):
+            with pytest.raises(gate.GateDeniedError) as err:
+                await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
+
+        assert "personal data (IBAN (bank account number))" in str(err.value)
+        assert "no auto-accept rule" not in str(err.value)
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_unattended"]
 
     async def test_flag_applies_to_jira_export_issues(self, monkeypatch, audit_dir):
         rule = self._install(
