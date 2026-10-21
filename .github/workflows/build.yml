@@ -394,9 +394,14 @@ jobs:
         #
         # The runtime dependencies were already installed, pinned and hash-verified, by the step
         # above; this only layers the hash-locked dev/test tooling on top -- see that step's comment.
+        #
+        # `python -m pip`, not `pip`: the dev lock pins pip itself, and on Windows a running
+        # pip.exe cannot replace itself ("To modify pip, please run python -m pip ..."). The bare
+        # form aborts after setuptools was already swapped, which then fails the editable install
+        # with "Cannot import 'setuptools.build_meta'".
         run: |
-          pip install --require-hashes -r requirements/dev.lock.txt
-          pip install --no-deps --no-build-isolation -e .
+          python -m pip install --require-hashes -r requirements/dev.lock.txt
+          python -m pip install --no-deps --no-build-isolation -e .
 
       # Same version/channel resolution as the `build` job's identically-
       # named step -- see its comments for why the channel lookup is
