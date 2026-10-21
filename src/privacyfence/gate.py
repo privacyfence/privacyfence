@@ -1643,9 +1643,23 @@ def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[s
         "Unattended session: denying %s/%s without prompting -- no auto-accept rule matched%s",
         connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "",
     )
+    if pii_categories:
+        raise GateDeniedError(_pii_denial_text("this connection is in an unattended session", pii_categories))
     raise GateDeniedError(
         "Request denied: this connection is in an unattended session and no auto-accept rule "
         "matches this call, so it can't be approved without a human present."
+    )
+
+
+def _pii_denial_text(who: str, pii_categories: list[str]) -> str:
+    """The refusal text when the PII scan, not a missing rule, stopped a call that cannot get a
+    human's confirmation. Names the categories found (never the matched text), so a rule that does
+    cover the call is not blamed, and says which tools a scoped token's personal-data allowance
+    can lift this for (ADR 0157, 0173)."""
+    return (
+        f"Request denied: {who} and the result holds personal data ({', '.join(sorted(set(pii_categories)))}), "
+        "which needs a person's confirmation even when a rule covers the call. A scoped token's "
+        "personal-data allowance lifts this only for exports, downloads and page uploads."
     )
 
 
@@ -1688,6 +1702,8 @@ def _deny_scoped(
         "Scoped token %s: denying %s/%s without prompting -- none of its rules matched%s%s",
         scope.id, connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "", detail,
     )
+    if pii_categories:
+        raise GateDeniedError(_pii_denial_text("this call uses a scoped token", pii_categories))
     raise GateDeniedError(
         "Request denied: this call uses a scoped token, and none of the token's rules covers it."
     )

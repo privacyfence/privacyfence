@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A call refused because the personal-data scan found something, in an unattended session or with a scoped token, no longer says that no rule covers it. The message now names the categories found and says that a token's "carry personal data" allowance applies only to exports, downloads and page uploads, so a covered `salesforce_run_report` or `grist_get_records` is denied for that reason, not for a missing rule.
+
 ## [6.6.0] — 2026-10-20
 
 ### Added
