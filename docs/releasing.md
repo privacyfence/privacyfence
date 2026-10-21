@@ -118,6 +118,11 @@ GHCR outage can never hold back PyPI, whereas `build-org-image` inside `build.ym
 the MCP registry and the GitHub Release on every tag (see "Packaged-artifact release gating"
 below). See ADRs 0209, 0210 and 0215.
 
+If the repository restricts allowed Actions, `publish-org-image.yml` needs both
+`actions/attest-build-provenance@*` and `actions/attest@*` on the allowlist (the former calls the
+latter). Without `actions/attest` the job fails at setup, before pushing anything; add it and
+re-run the workflow from the release's tag.
+
 **First release only:** a new GHCR package starts private. After the first stable release pushes
 it, switch `privacyfence-org` to public once (the organization's Packages settings may first need
 public packages allowed), then pull it signed out and run
