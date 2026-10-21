@@ -206,7 +206,9 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           { echo "## ${IMAGE}:${VERSION}"; echo "Tags: ${TAGS[*]}"; echo "Digest: \`$DIGEST\`"; } >> "$GITHUB_STEP_SUMMARY"
 
-      # Needs actions/attest-build-provenance on the repository's Actions allowlist, if it has one.
+      # Needs actions/attest-build-provenance AND actions/attest on the repository's Actions
+      # allowlist, if it has one: the former calls the latter, and GitHub rejects the whole job at
+      # setup (before any step runs, so nothing is pushed) when the latter is not allowed.
       - name: Attest build provenance
         if: steps.release.outputs.channel == 'stable'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

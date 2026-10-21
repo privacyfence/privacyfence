@@ -19,5 +19,7 @@ The publish job attaches GitHub artifact attestations (`actions/attest-build-pro
 ## Consequences
 
 - No signing key or extra tool exists to manage.
-- If the repository restricts allowed Actions, `actions/attest-build-provenance` must be allowed.
+- If the repository restricts allowed Actions, both `actions/attest-build-provenance` and
+  `actions/attest` must be allowed: the former calls the latter, and without the latter the publish
+  job fails at setup, before it pushes anything.
 - Verification needs the `gh` CLI rather than `cosign`.
