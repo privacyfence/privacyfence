@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.6.0] — 2026-10-20
+
 ### Added
 
 - **Organization mode ships as a Docker image.** Each stable release now publishes `ghcr.io/privacyfence/privacyfence-org` for amd64 and arm64, with a Compose file that puts Caddy in front of it. See [Organization deployment with Docker](docs/org-mode-docker.md).
@@ -3397,7 +3399,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.5.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.6.0...HEAD
+[6.6.0]: https://github.com/privacyfence/privacyfence/compare/v6.5.0...v6.6.0
 [6.5.0]: https://github.com/privacyfence/privacyfence/compare/v6.4.0...v6.5.0
 [6.4.0]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...v6.3.0
