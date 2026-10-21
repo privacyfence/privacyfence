@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `privacyfence-sync preflight` warns, per step, when a run can still be denied by the personal-data scan, and `privacyfence_check_policy` returns `pii_gate` and `pii_gate_detail` saying whether the scan applies and whether the token's allowance lifts it.
+
 ## [6.6.1] — 2026-10-21
 
 ### Fixed

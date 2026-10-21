@@ -132,16 +132,16 @@ CHECK_POLICY_TOOL = types.Tool(
     description=(
         "Before calling a gated tool, ask whether that exact call would auto-accept or need a human. "
         "Pass the connector, tool and args you're about to call. Returns {gate, verdict, "
-        "matched_rule, matched_rule_id, reason, pii_gate_may_apply, suggested_rules}. verdict is "
-        "'auto_accept' (the real call will pass through identically), 'requires_review' (no "
-        "configured rule can match these args), or 'unknown' (it depends on fetched content this "
-        "can't see in advance). matched_rule_id is set only for 'auto_accept', usable as "
+        "matched_rule, matched_rule_id, reason, pii_gate_may_apply, pii_gate, pii_gate_detail, "
+        "suggested_rules}. verdict is 'auto_accept' (the real call will pass through identically), "
+        "'requires_review' (no rule can match these args), or 'unknown' (depends on fetched content). "
+        "matched_rule_id is set only for 'auto_accept', usable as "
         "privacyfence_propose_policy_change's rule_id. suggested_rules lists the rules that would "
-        "cover an uncovered call: {group, label, value, value_known, verb, operation}; value is "
-        "null when it is what the call reaches at run time. For read tools pii_gate_may_apply is "
-        "true: the PII gate scans real content and can still force a popup. No side effects -- "
-        "call it freely, especially before an unattended run. reason: one sentence on why you're "
-        "checking now (logged, unverified)."
+        "cover an uncovered call: {group, label, value, value_known, verb, operation}; value is null "
+        "when it is what the call reaches at run time. pii_gate: whether the PII scan of real content "
+        "can still force a popup or, unattended or with a scoped token, a denial -- 'none', "
+        "'allowed_by_token', 'allowed_unless_inline' or 'applies' (pii_gate_detail says why). No side "
+        "effects. reason: one sentence on why you're checking (logged, unverified)."
     ),
     input_schema={
         "type": "object",

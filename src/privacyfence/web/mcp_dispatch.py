@@ -20,7 +20,9 @@ from typing import Any, Callable, Hashable
 
 from ..approvals import ApprovalPending, PendingApprovalRegistry
 from ..audit_log import AuditEntry, current_week, get_audit_logger, released_request_scope
-from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_rows
+from ..auto_accept import (
+    PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
+)
 from .. import local_files
 from ..connector import Connector
 from ..agent_identity import current_agent
@@ -33,7 +35,7 @@ from ..policy import scope_rows
 from ..policy import registry as policy_registry
 from ..policy.suggest import suggested_rules
 from ..principal import current_principal
-from ..scoped_tokens import current_token_scope
+from ..scoped_tokens import REVOKED_SCOPE, current_token_scope
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,23 @@ def _policy_rule_row(row) -> dict:
         "conditions": [[name, value] for name, value in row.conditions],
         "covered_tools": sorted({tool for rule in compiled for tool in policy_describe.covered_tools(rule)}),
     }
+
+
+def _pii_gate(gate: str, tool: str) -> tuple[str, str]:
+    """Whether the personal-data scan can still stop a call to ``tool``, and whether the caller's
+    scoped token lifts it (ADR 0216). Returns ``(pii_gate, pii_gate_detail)``."""
+    if gate == "auto" or (gate == "popup" and tool not in UPLOAD_PII_SCAN_TOOLS):
+        return "none", ""
+    scope = current_token_scope()
+    if scope is None or scope is REVOKED_SCOPE:
+        return "applies", "this call is not made with a scoped token, so the personal-data scan always applies"
+    if not scope.allow_personal_data:
+        return "applies", f"the token does not allow personal data, so the personal-data scan applies to {tool}"
+    if tool not in PERSONAL_DATA_RULE_TOOLS:
+        return "applies", f"the token's personal-data allowance does not cover {tool}, so the personal-data scan applies"
+    if tool == "drive_download_file":
+        return "allowed_unless_inline", ""
+    return "allowed_by_token", ""
 
 
 class McpDispatcher:
@@ -341,7 +360,8 @@ class McpDispatcher:
             result: dict[str, Any] = {
                 "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
                 "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
-                "pii_gate_may_apply": False, "suggested_rules": [],
+                "pii_gate_may_apply": False, "pii_gate": "none", "pii_gate_detail": "",
+                "suggested_rules": [],
             }
         else:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
@@ -367,6 +387,9 @@ class McpDispatcher:
                     else suggested_rules(tool, agent_args, my_email)
                 ),
             }
+
+        if gate != "auto":
+            result["pii_gate"], result["pii_gate_detail"] = _pii_gate(gate, tool)
 
         self._audit_policy_check(connector_name, tool, result, claude_reason)
         return result
