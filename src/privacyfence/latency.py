@@ -18,7 +18,7 @@ Three signals, all log-only (nothing here changes a decision):
   and logs a WARNING when either crosses ``SLOW_STAGE_SECONDS``.
 
 Only stage names, durations, connector/tool names and request ids are ever
-logged -- never arguments, summaries or content (coding guidelines §1.8).
+logged -- never arguments, summaries or content.
 """
 from __future__ import annotations
 
