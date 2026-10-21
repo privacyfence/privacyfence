@@ -180,7 +180,8 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-st-chip { cursor: default; }
 /* Rule picker: one rule per line; a rule with long verbs wraps and grows taller instead of overflowing. */
 .pf-st-rules { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
-.pf-st-rules .pf-chip {
+/* Tool picker: the status text can list many rule titles, so the chip wraps instead of running off the page. */
+.pf-st-rules .pf-chip, .pf-chip.pf-st-tool {
   max-width: 100%; box-sizing: border-box; white-space: normal; justify-content: flex-start; text-align: left;
   padding: var(--space-2xs) 14px; line-height: 1.4; overflow-wrap: anywhere; border-radius: var(--radius-s);
 }
@@ -1421,7 +1422,7 @@ _JS = r"""
   function scopedToolChip(name, coverage) {
     var on = !!ui.stTools[name];
     var status = scopedToolStatus(name, coverage);
-    return '<div class="pf-chip' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
+    return '<div class="pf-chip pf-st-tool' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
       (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
       esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
   }
