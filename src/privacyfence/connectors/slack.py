@@ -545,6 +545,7 @@ class SlackConnector(Connector):
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
+        is_one_to_one_dm = await self._fetch(self._slack.resolve_is_one_to_one_dm, channel_id)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
         # Channel is known via slack_list_channels; Messages (count) is
         # only learned once approved. No literal excerpt here (no "First
@@ -588,7 +589,12 @@ class SlackConnector(Connector):
             preview_tables=[table] if filtered else [],
             table_only=True,
             my_email=self.my_email,
-            args={"channel_id": channel_id, "is_group_dm": is_group_dm, "is_self_dm": is_self_dm},
+            args={
+                "channel_id": channel_id,
+                "is_group_dm": is_group_dm,
+                "is_self_dm": is_self_dm,
+                "is_one_to_one_dm": is_one_to_one_dm,
+            },
         )
 
     async def _get_thread_replies(
@@ -601,6 +607,7 @@ class SlackConnector(Connector):
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
+        is_one_to_one_dm = await self._fetch(self._slack.resolve_is_one_to_one_dm, channel_id)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "thread_content")
         # Channel is known via slack_list_channels; Replies (count) is only
         # learned once approved. No literal excerpt here (no "Thread
@@ -649,6 +656,8 @@ class SlackConnector(Connector):
                 "thread_ts": thread_ts,
                 "is_group_dm": is_group_dm,
                 "is_self_dm": is_self_dm,
+                "is_one_to_one_dm": is_one_to_one_dm,
+                "own_user_id": await self._fetch(self._slack.own_user_id),
             },
         )
 
@@ -718,7 +727,12 @@ class SlackConnector(Connector):
             preview_tables=[table] if filtered else [],
             table_only=True,
             my_email=self.my_email,
-            args={"query": query, "participant": participant, "days": days},
+            args={
+                "query": query,
+                "participant": participant,
+                "days": days,
+                "own_user_id": await self._fetch(self._slack.own_user_id),
+            },
         )
 
     # ------------------------------------------------------------------ #

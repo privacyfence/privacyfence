@@ -67,15 +67,25 @@ def scope_type_of(rule: PolicyRule) -> str:
 
 
 def _catalogue_verbs(predicate: str) -> frozenset[Verb]:
-    """Every verb ``predicate`` can govern, per ``propose.PROPOSABLE_SCOPES``. Empty for a predicate
-    no surface proposes (a hand-written rule, or a scope that is not proposable) -- callers then
-    fall back to crediting the rule with whatever verbs its operation keys carry, which is the best
-    that can be said about it."""
-    return frozenset(
+    """Every verb ``predicate`` can govern, per ``propose.PROPOSABLE_SCOPES``, or failing that per
+    the ``catalogue.EXTRA_SCOPES`` entries that use it. Empty for a predicate no surface offers (a
+    hand-written rule) -- callers then fall back to crediting the rule with whatever verbs its
+    operation keys carry, which is the best that can be said about it."""
+    from . import catalogue  # catalogue imports this module
+
+    proposed = frozenset(
         verb
         for entry in propose.PROPOSABLE_SCOPES
         if entry.predicate == predicate
         for verb in entry.verbs
+    )
+    if proposed:
+        return proposed
+    return frozenset(
+        verb
+        for extra in catalogue.EXTRA_SCOPES.values()
+        if extra.predicate == predicate
+        for verb in extra.verbs
     )
 
 

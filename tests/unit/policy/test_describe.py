@@ -95,6 +95,22 @@ class TestRuleVerbsAndCoverage:
         assert [describe.covered_tools(rule) for rule in rules] == [("drive_sheets_write_range",)]
 
 
+class TestExtraScopeVerbs:
+    def test_direct_messages_rule_reads_allow_read_and_lists_no_search_tool(self):
+        rule = PolicyRule(id="r", predicate="slack.direct_messages_to_me", value=None,
+                          operations=frozenset({"slack.read_messages"}))
+        assert describe.rule_verbs(rule) == (Verb.READ,)
+        assert "slack_search_messages" not in describe.covered_tools(rule)
+        assert "slack_get_channel_history" in describe.covered_tools(rule)
+
+    def test_mentions_rule_lists_read_and_search(self):
+        rule = PolicyRule(id="r", predicate="slack.mentions_of_me", value=None,
+                          operations=frozenset({"slack.read_messages"}))
+        assert set(describe.rule_verbs(rule)) == {Verb.READ, Verb.SEARCH}
+        assert "slack_search_messages" in describe.covered_tools(rule)
+        assert "slack_get_thread_replies" in describe.covered_tools(rule)
+
+
 class TestSentences:
 
     def test_an_identity_rule_names_its_connector_scope_and_verbs(self):

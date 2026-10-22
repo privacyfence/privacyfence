@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # Args the Slack connector computes itself (from Slack's own answer) before gated_call. An agent
 # asking check_policy could otherwise supply them and be told a call would auto-accept when the
 # real call, which recomputes them, would not.
-_CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm"})
+_CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm", "is_one_to_one_dm", "own_user_id"})
 
 
 def _policy_rule_row(row) -> dict:
