@@ -139,8 +139,8 @@ All decisions are made here. The phase briefs point to these subsections.
   `privacyfence_begin_unattended_session`. A routine's rules, tools, expiry and revocation are the
   token's (ADR 0164); the audit log records `scoped-token:<id>` and the token's name on every call;
   a call outside the token is denied as `denied_scoped_token` even when an install-wide rule
-  exists. How the scheduled task presents the token is the connection's `Authorization: Bearer
-  pfst_…` header (a manual step proves it first).
+  exists. The routine presents the token through a Claude Code cloud environment: a network secret
+  for the PrivacyFence host and `claude mcp add` in the setup script (Risk 1, verified).
 - **New flag.** `ScopedToken.allow_personal_data_reads: bool = False`, stored as
   `allow_personal_data_reads: true` only when set, read with `is True` (an old file loads as false).
   It is independent of `allow_personal_data`: that flag keeps covering exports, downloads and page
@@ -326,17 +326,19 @@ release containing the pull request is installed; the pull request lists it unch
 The step-by-step page, https://claude.ai/artifact/8Euv1y7YBbp7wZpvFcsDeo (source
 `docs/inbox-triage-scopes-plan-manual-steps.html`), also has a recommended first part that is not in
 the manifest because no phase depends on it: turn scoped tokens on and prove with a throwaway token
-that the scheduled task can present a bearer token (Risk 1). Do it before `/implement`; it costs
-nothing and tells you early whether request 2 helps your setup.
+that the scheduled task can present a bearer token (Risk 1, now verified). The page records the
+environment setup that worked.
 
 - `ma1-rollout-and-first-run`: edit the rules, create the `inbox-triage` token, run the routine
   once and read the audit log.
 
 ## 6. Risks and open questions
 
-1. **Cowork may not be able to present a bearer token.** Nothing in the repository decides it. The
-   server work is still correct; only the runner changes (a Claude Code scheduled task or
-   `privacyfence-sync`). The recommended first part of the manual-steps page finds out early.
+1. **How the routine presents the token (resolved).** A Claude Code cloud routine reaches PrivacyFence
+   with the token when the environment allows the host, holds the token as a network secret for
+   `<host>/mcp`, and registers the server with `claude mcp add` in its setup script, and the routine
+   does not also carry the claude.ai connector, which always signs in as the person. Verified with a
+   throwaway token on 22 October 2026. A Cowork routine through the claude.ai connector cannot do it.
 2. **`check_policy` is not the oracle the request pictured.** Rules that depend on the fetched
    message give `unknown`. A worker that finds a test or doc expecting `auto_accept` for such a rule
    must stop with `status=blocked`.
