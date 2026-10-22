@@ -17,7 +17,9 @@ beyond its own outputs. After this plan:
    unattended, and is named in the audit log. What is missing is the personal-data allowance for
    body reads: a new token flag lets `gmail_get_message`, `gmail_get_thread`,
    `slack_get_channel_history`, `slack_get_thread_replies` and `slack_search_messages` return
-   content with personal data when one of the token's rules covers the call.
+   content with personal data when one of the token's rules covers the call. The same phase fixes
+   the New token form so that a token with no rule can be created from the tools that need none
+   (Design D2, "Form fix").
 3. **Slack scopes.** "Slack, mentions of me" (read, search, no value) and "Slack, direct messages to
    me" (read, no value).
 4. **Gmail query scope.** "Gmail, query" (read, download) whose value is one Gmail search
@@ -158,6 +160,14 @@ All decisions are made here. The phase briefs point to these subsections.
   `allow_personal_data_reads` (boolean, default false; a non-boolean is a malformed body, as for the
   existing flag) and it is part of the step-up fingerprint. The audit summary of a created token
   appends `, personal data in reads allowed`.
+- **Form fix.** The New token form hides the tools that need no rule (`auto_tools`, for example
+  `gmail_list_labels`) in a collapsed disclosure titled `Tools that need no rule, from other
+  connectors (N)` and, while no rule is ticked, the hint says `Select a rule to see the tools it
+  covers.` A person who wants a token with no rule (a connectivity test, a read-only listing job)
+  finds no tool to pick. While no rule is ticked, the disclosure is open and titled `Tools that need
+  no rule (N)`, and the hint reads `Select a rule to see the tools it covers, or pick a tool that
+  needs no rule.` Once a rule is ticked, the form behaves as before (covered tools per connector, the
+  rest in the collapsed `from other connectors` disclosure).
 - **Rejected.** Extending `PERSONAL_DATA_RULE_TOOLS` and the existing flag to reads (silently
   widens every token that already carries the flag; the flag's contract is "the result holds no
   row"). A per-rule flag (ADR 0173 moved the flag off rules). Lifting the scan for the whole token
@@ -494,7 +504,7 @@ phases:
       - "python3 -m pytest tests/unit -q passes"
 
   - id: p3-token-read-pii-ui
-    title: The New token form and routes carry the reads flag
+    title: The New token form carries the reads flag and lists the tools that need no rule
     depends_on: [p2-token-read-pii-core]
     complexity: M
     touches:
@@ -538,6 +548,9 @@ phases:
          - tests/unit/test_settings_window_html.py `TestScopedTokensSection`:
            `test_reads_checkbox_label_and_help_are_rendered`, `test_reads_badge_is_rendered`,
            `test_create_payload_carries_the_reads_flag`.
+         - tests/unit/test_settings_window_html.py `TestScopedTokensSection`:
+           `test_no_rule_selected_opens_the_tools_that_need_no_rule`,
+           `test_rule_selected_keeps_the_other_connectors_disclosure_closed`.
          - tests/unit/web/test_server.py: extend the scoped-token wiring test so the closure
            stores the flag (`test_local_wiring_stores_the_reads_flag`).
          - tests/integration/test_settings_scoped_token_form_browser.py: if it ticks the existing
@@ -545,11 +558,22 @@ phases:
            (`test_reads_checkbox_is_sent_with_the_create_request`); run it with
            PRIVACYFENCE_TEST_CHROMIUM as the session hook sets it, and report a SKIPPED result as
            skipped, not as passed.
-      5. No docs or changelog (p6).
+      5. Form fix (Design D2, "Form fix"), in settings_window_html.py around the `Tools` block of the
+         New token form (the code that builds `data-st-no-rule-hint` and `data-st-other-tools`):
+         when `anyRule` is false, add the attribute ` open` to the `<details data-st-other-tools="1">`
+         element and use the summary text `'Tools that need no rule (' + otherTools.length + ')'`; when
+         `anyRule` is true, keep the current closed element and summary. Change the no-rule hint text
+         to `Select a rule to see the tools it covers, or pick a tool that needs no rule.` Update the
+         existing assertions that name the old summary or the closed state for the no-rule case
+         (tests/unit/test_settings_window_html.py near the `data-st-other-tools` assertions, and
+         tests/integration/test_settings_scoped_token_form_browser.py near lines 119-142), and keep
+         their assertions for the rule-selected case.
+      6. No docs or changelog (p6).
       Stop with status=blocked if the organization and local create routes do not both go through
       `_scoped_create_fingerprint_body`.
     acceptance:
       - "python3 -m pytest tests/unit/web/test_routes_settings.py::TestScopedTokenRoutes tests/unit/web/test_routes_org_settings.py::TestScopedTokenRoutes tests/unit/test_settings_window_html.py::TestScopedTokensSection tests/unit/web/test_server.py -q passes"
+      - "grep -n 'Select a rule to see the tools it covers, or pick a tool that needs no rule' src/privacyfence/settings_window_html.py matches one line"
       - "grep -l allow_personal_data_reads src/privacyfence/web/server.py src/privacyfence/web/routes_settings.py src/privacyfence/settings_window_html.py lists all three files"
       - "python3 -m pytest tests/integration/test_settings_scoped_token_form_browser.py -q passes, or every test in it reports skipped with the session hook's Chromium warning stated in the report"
       - "ruff check . reports no problems and python3 -m pytest tests/unit -q passes"
@@ -873,7 +897,9 @@ phases:
       5. CHANGELOG.md under `## [Unreleased]` (add `### Added`): four entries, bold lead sentence in
          the style of 6.7.0's: a Gmail label rule can allow archiving; scoped tokens can let email and
          Slack reads return personal data; Slack rules for mentions of you and one-to-one DMs; a Gmail
-         query rule. Do not open a version heading.
+         query rule. Add a `### Fixed` entry: the New token form shows the tools that need no rule
+         when no rule is selected, so a token without rules can be created. Do not open a version
+         heading.
       6. Delete docs/inbox-triage-scopes-plan.md and docs/inbox-triage-scopes-plan-manual-steps.html
          with `git rm`, and check nothing links to either (`grep -rn inbox-triage-scopes .` returns
          nothing).
