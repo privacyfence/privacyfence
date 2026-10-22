@@ -121,6 +121,16 @@ _SEARCH_BY_PARTICIPANT_CONVERSATION_CAP = 10
 # non-Marketplace apps get 1 call/min, so the cap is kept small.
 _SEARCH_HISTORY_PAGE_CAP = 2
 
+# Longest window `minutes` accepts on search_messages (7 days). Longer windows are what `days` is for.
+_MAX_WINDOW_MINUTES = 7 * 24 * 60
+
+# search.messages' `after:` modifier takes a date only, is exclusive (after:D starts at D+1), and
+# Slack reads it in the searching user's own time zone, where the cutoff's date can be a day
+# before its UTC date. after:<UTC date - 2 days> therefore always includes the cutoff's own day.
+# The exact cutoff is applied to each match's ts afterwards, so the margin only costs matches that
+# get dropped.
+_SEARCH_RECENT_DATE_MARGIN = timedelta(days=2)
+
 # Defensive cap on how many pages _conversation_ids_for_user walks. No real
 # Slack account is a member of tens of thousands of conversations, so this
 # never binds in practice -- it exists so a malformed or misbehaving
@@ -422,6 +432,7 @@ class SlackClient:
         self._user_cache: dict[str, SlackUser] = {}
         self._channel_name_cache: dict[str, str] = {}
         self._channel_is_mpim_cache: dict[str, bool] = {}
+        self._im_channel_cache: dict[str, bool] = {}
         # IM channel id -> the other participant's user id ("" for a conversation that is not an
         # IM). An IM's participants never change, so this needs no expiry.
         self._im_counterpart_cache: dict[str, str] = {}
@@ -801,7 +812,7 @@ class SlackClient:
         return self._parse_message(raw_messages[0], channel_id, channel_name)
 
     def search_messages(
-        self, query: str = "", count: int = 20, participant: str = "", days: int = 90
+        self, query: str = "", count: int = 20, participant: str = "", days: int = 90, minutes: int = 0
     ) -> list[SlackMessage]:
         """Search messages via ``search.messages`` (requires ``search:read``), or,
         when ``participant`` is given, read the matching DM/group-DM
@@ -821,13 +832,25 @@ class SlackClient:
         search index nor a channel's most-recent-``count`` messages are
         otherwise biased toward *relevant* results, just whatever last
         matched, however old. Pass ``days=0`` for no cutoff.
+
+        ``minutes`` (0 = unused, 1-10080) overrides ``days`` and makes ``query``
+        and ``participant`` optional. The participant path applies it exactly
+        through ``oldest``; the search path sorts by timestamp and filters each
+        match's ``ts``. Slack's search index can lag behind a just-posted
+        message.
         """
-        if not query and not participant:
-            raise SlackClientError("search_messages requires a query, a participant, or both")
+        minutes = self._clamp(minutes, default=0, hi=_MAX_WINDOW_MINUTES, lo=0)
+        if not query and not participant and not minutes:
+            raise SlackClientError("search_messages requires a query, a participant, or minutes")
         count = self._clamp(count, default=20, hi=100)
         days = self._clamp(days, default=90, hi=3650, lo=0)
+        window_cutoff = (
+            datetime.now(timezone.utc) - timedelta(minutes=minutes) if minutes else None
+        )
         if participant:
-            return self._search_by_participant(participant, query, count, days)
+            return self._search_by_participant(participant, query, count, days, window_cutoff)
+        if window_cutoff is not None:
+            return self._search_recent(query, count, window_cutoff)
 
         search_query = query
         if days > 0:
@@ -842,19 +865,57 @@ class SlackClient:
             ) from exc
 
         matches = (response.get("messages") or {}).get("matches", [])
-        messages: list[SlackMessage] = []
-        for raw in matches:
-            channel = raw.get("channel") or {}
-            channel_id = channel.get("id", "")
-            channel_name = channel.get("name", "") or self.resolve_channel_name(
-                channel_id
-            )
-            messages.append(self._parse_message(raw, channel_id, channel_name))
+        messages = [self._parse_search_match(raw) for raw in matches]
         logger.info("search_messages query=%r returned %d match(es)", query, len(messages))
         return messages
 
+    def _parse_search_match(self, raw: dict[str, Any]) -> SlackMessage:
+        channel = raw.get("channel") or {}
+        channel_id = channel.get("id", "")
+        channel_name = channel.get("name", "") or self.resolve_channel_name(channel_id)
+        return self._parse_message(raw, channel_id, channel_name)
+
+    def _search_recent(self, query: str, count: int, cutoff: datetime) -> list[SlackMessage]:
+        """Newest-first matches, at most ``count``, none older than ``cutoff``.
+
+        One request is enough: ``search.messages`` sorted by timestamp
+        descending returns the newest matches first, so its first page holds
+        the newest ``count`` of them (``count`` is at most 100, Slack's page
+        maximum; ADR 0116's ``min(remaining, api_page_max)``). The ``after:``
+        modifier only narrows by date (see ``_SEARCH_RECENT_DATE_MARGIN``), so
+        the exact cutoff is applied to each ``ts`` here. The final sort is
+        defensive, in case Slack ever ignores ``sort``.
+        """
+        after_date = (cutoff - _SEARCH_RECENT_DATE_MARGIN).strftime("%Y-%m-%d")
+        search_query = f"{query} after:{after_date}".strip()
+        try:
+            response = self._client.search_messages(
+                query=search_query, count=count, sort="timestamp", sort_dir="desc"
+            )
+        except SlackApiError as exc:
+            raise SlackClientError(
+                f"search_messages failed: {self._describe_error(exc)}"
+            ) from exc
+
+        matches = (response.get("messages") or {}).get("matches", [])
+        messages = [
+            m
+            for m in (self._parse_search_match(raw) for raw in matches)
+            if m.timestamp is not None and m.timestamp >= cutoff
+        ]
+        messages.sort(key=lambda m: m.timestamp or cutoff, reverse=True)
+        logger.info(
+            "search_messages recent window query=%r returned %d match(es)", query, len(messages)
+        )
+        return messages
+
     def _search_by_participant(
-        self, participant: str, query: str, count: int, days: int = 90
+        self,
+        participant: str,
+        query: str,
+        count: int,
+        days: int = 90,
+        cutoff: datetime | None = None,
     ) -> list[SlackMessage]:
         """Most-recent-first messages from the DM/group-DM conversation(s)
         matching ``participant``, optionally narrowed to those whose text
@@ -863,7 +924,8 @@ class SlackClient:
         group chat -- a 1:1 DM only ever matches a single, unsegmented
         participant since it has exactly one other party. ``days`` (0 = no
         cutoff) bounds each conversation's history fetch via ``oldest``, same
-        reasoning as ``search_messages``'s own ``days`` param.
+        reasoning as ``search_messages``'s own ``days`` param. ``cutoff``, when
+        given, replaces ``days`` as the exact ``oldest`` bound.
 
         ``list_dms``/``list_group_chats`` are asked for up to 1000 matching
         conversations each -- generous on purpose, since ``participant``'s
@@ -897,7 +959,9 @@ class SlackClient:
             )
 
         oldest = None
-        if days > 0:
+        if cutoff is not None:
+            oldest = str(cutoff.timestamp())
+        elif days > 0:
             oldest = str((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
 
         needle = query.lower()
@@ -1495,6 +1559,25 @@ class SlackClient:
             is_mpim = False
         self._channel_is_mpim_cache[channel_id] = is_mpim
         return is_mpim
+
+    def resolve_is_one_to_one_dm(self, channel_id: str) -> bool:
+        """Whether `channel_id` is a one-to-one DM (Slack's "im" conversation, including the DM with
+        yourself). The `D` id prefix alone is not enough -- it is only a hint that avoids an API
+        call for ids that cannot be a DM -- so `conversations_info` has the final say. Reads False
+        when unsure (an unknown channel or any API error); only a successful lookup is cached.
+        """
+        if not channel_id.startswith("D"):
+            return False
+        if channel_id in self._im_channel_cache:
+            return self._im_channel_cache[channel_id]
+        try:
+            response = self._client.conversations_info(channel=channel_id)
+            is_im = bool((response.get("channel") or {}).get("is_im", False))
+        except SlackApiError as exc:
+            logger.debug("Could not resolve one-to-one DM status for %s: %s", channel_id, exc)
+            return False
+        self._im_channel_cache[channel_id] = is_im
+        return is_im
 
     def own_user_id(self) -> str:
         """The authenticated user's own Slack id, from auth.test. Best-effort (never raises): a

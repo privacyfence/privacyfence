@@ -107,3 +107,25 @@ class TestFailClosed:
         selector = dataclasses.replace(scopes.SCOPE_SELECTORS["approved_report_ids"], matches=lambda v, c: False)
         monkeypatch.setitem(scopes.SCOPE_SELECTORS, "approved_report_ids", selector)
         assert suggested_rules("salesforce_export_report", {"report_id": "00O1"}) == []
+
+
+class TestGmailArchiveSuggestion:
+    def test_archive_suggests_a_label_rule_with_value_known_at_run_time(self):
+        suggestions = suggested_rules("gmail_archive_message", {"message_id": "m1"})
+        [suggestion] = [s for s in suggestions if s["group"] == "gmail.label"]
+        assert suggestion["verb"] == "move"
+        assert suggestion["value"] is None
+        assert suggestion["value_known"] is False
+
+
+class TestGmailQuerySuggestion:
+    def test_an_uncovered_gmail_read_suggests_the_query_scope_with_no_known_value(self):
+        suggestions = suggested_rules("gmail_get_message", {"message_id": "m1"})
+        [suggestion] = [s for s in suggestions if s["group"] == "gmail.query"]
+        assert suggestion["verb"] == "read"
+        assert suggestion["value"] is None
+        assert suggestion["value_known"] is False
+
+    def test_a_gmail_read_no_longer_raises_for_the_query_scope(self):
+        for tool in ("gmail_get_message", "gmail_get_thread", "gmail_download_attachment"):
+            assert any(s["group"] == "gmail.query" for s in suggested_rules(tool, {}))

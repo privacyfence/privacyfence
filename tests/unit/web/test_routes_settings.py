@@ -1510,8 +1510,8 @@ def _scoped_wiring(
 
     secret = "pfst_" + "A" * 43
 
-    def _create(label, days, rule_ids, tools, allow_personal_data):
-        calls.append(("create", label, days, rule_ids, tools, allow_personal_data))
+    def _create(label, days, rule_ids, tools, allow_personal_data, allow_personal_data_reads):
+        calls.append(("create", label, days, rule_ids, tools, allow_personal_data, allow_personal_data_reads))
         if create_error:
             raise ScopedTokenError(create_error)
         return _scoped_token(label=label), secret
@@ -1580,7 +1580,7 @@ class TestScopedTokenRoutes:
         assert r.json() == {"created": {"id": "st-0123456789ab", "label": "sales-sync", "expires_at": 2.0}}
         assert self.SECRET not in r.text
         assert calls == [
-            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"], False),
+            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"], False, False),
             ("send", self.SECRET),
         ]
 
@@ -1589,7 +1589,30 @@ class TestScopedTokenRoutes:
         csrf = _authed(client, sessions)
         r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "allow_personal_data": True}})
         assert r.status_code == 200
-        assert calls[0][-1] is True
+        assert calls[0][-2:] == (True, False)
+
+    def test_create_passes_the_reads_flag_to_the_store(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "allow_personal_data_reads": True}})
+        assert r.status_code == 200
+        assert calls[0][-2:] == (False, True)
+
+    def test_non_bool_reads_flag_is_rejected(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        for value in ("true", 1, None, []):
+            r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "allow_personal_data_reads": value}})
+            assert r.status_code == 400
+        assert calls == []
+
+    def test_fingerprint_covers_the_reads_flag(self):
+        base = {"label": "a", "days": 1, "rule_ids": ["r"], "tools": ["t"]}
+        off = rs._scoped_create_fingerprint_body(base)
+        on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data_reads": True})
+        assert off["allow_personal_data_reads"] is False and on["allow_personal_data_reads"] is True
+        assert off != on
+        assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data_reads": "yes"}) is None
 
     @pytest.mark.parametrize("value", ["true", 1, None, []])
     def test_a_non_bool_personal_data_flag_is_a_400(self, controller, sessions, value):

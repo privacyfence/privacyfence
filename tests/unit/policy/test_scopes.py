@@ -500,6 +500,68 @@ class TestNewScopeSelectors:
         assert selector.matches([], ctx) is False
 
 
+def _slack_msg(text: str) -> SimpleNamespace:
+    return SimpleNamespace(text=text)
+
+
+def _mentions_ctx(tool: str, messages, own="U_ME"):
+    return make_ctx(
+        connector="slack", tool=tool, args={"own_user_id": own}, raw_data=messages,
+    )
+
+
+class TestSlackMentionsOfMe:
+    selector = NEW_SCOPE_SELECTORS["slack.mentions_of_me"]
+
+    def test_search_needs_every_result_to_mention_me(self):
+        both = [_slack_msg("hi <@U_ME>"), _slack_msg("<@U_ME> ping")]
+        mixed = [_slack_msg("hi <@U_ME>"), _slack_msg("no mention")]
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", both)) is True
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", mixed)) is False
+
+    def test_thread_replies_need_one_mention(self):
+        thread = [_slack_msg("starter"), _slack_msg("reply <@U_ME>")]
+        none = [_slack_msg("starter"), _slack_msg("reply")]
+        assert self.selector.matches(None, _mentions_ctx("slack_get_thread_replies", thread)) is True
+        assert self.selector.matches(None, _mentions_ctx("slack_get_thread_replies", none)) is False
+
+    def test_channel_history_never_matches(self):
+        msgs = [_slack_msg("<@U_ME>")]
+        assert self.selector.matches(None, _mentions_ctx("slack_get_channel_history", msgs)) is False
+
+    def test_no_own_user_id_never_matches(self):
+        msgs = [_slack_msg("<@U_ME>")]
+        for own in ("", None, 5):
+            assert self.selector.matches(None, _mentions_ctx("slack_search_messages", msgs, own)) is False
+        ctx = make_ctx(connector="slack", tool="slack_search_messages", raw_data=msgs)
+        assert self.selector.matches(None, ctx) is False
+
+    def test_empty_results_never_match(self):
+        for data in ([], None, [None]):
+            assert self.selector.matches(None, _mentions_ctx("slack_search_messages", data)) is False
+
+    def test_mention_with_name_suffix_matches(self):
+        msgs = [_slack_msg("hey <@U_ME|alice>")]
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", msgs)) is True
+
+    def test_another_users_mention_does_not_match(self):
+        msgs = [_slack_msg("hey <@U_ME2> and U_ME and <@U_MEX|me>")]
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", msgs)) is False
+
+
+class TestSlackDirectMessagesToMe:
+    selector = NEW_SCOPE_SELECTORS["slack.direct_messages_to_me"]
+
+    def test_matches_only_when_the_connector_says_so(self):
+        assert self.selector.matches(None, make_ctx(args={"is_one_to_one_dm": True})) is True
+        assert self.selector.matches(None, make_ctx(args={"is_one_to_one_dm": False})) is False
+        assert self.selector.matches(None, make_ctx(args={})) is False
+
+    def test_a_truthy_non_bool_does_not_match(self):
+        for value in ("true", 1, ["x"]):
+            assert self.selector.matches(None, make_ctx(args={"is_one_to_one_dm": value})) is False
+
+
 def _matches(predicate: str, ctx) -> bool:
     return SCOPE_SELECTORS[predicate].matches(None, ctx)
 
@@ -537,3 +599,26 @@ def test_i_am_author_matches_only_my_account_id():
     assert not _matches("i_am_author", make_ctx(my_account_id="acc-me", raw_data={"author": "acc-x"}))
     assert not _matches("i_am_author", make_ctx(my_email="me@example.com", my_account_id="", raw_data={"author": "me@example.com"}))
     assert not _matches("i_am_author", make_ctx(my_account_id="", raw_data={"author": ""}))
+
+
+class TestGmailQuery:
+    selector = NEW_SCOPE_SELECTORS["gmail.query"]
+
+    def test_matches_when_the_rule_value_was_evaluated_as_matching(self):
+        ctx = make_ctx(args={"matching_queries": ["in:inbox"]})
+        assert self.selector.matches(["in:inbox"], ctx) is True
+        assert self.selector.matches(["in:sent"], ctx) is False
+
+    def test_no_computed_argument_never_matches(self):
+        assert self.selector.matches(["in:inbox"], make_ctx(args={})) is False
+        assert self.selector.matches(["in:inbox"], make_ctx(args={"matching_queries": "in:inbox"})) is False
+        assert self.selector.matches(["in:inbox"], make_ctx(args={"matching_queries": []})) is False
+
+    def test_any_of_several_rule_values_matches(self):
+        ctx = make_ctx(args={"matching_queries": ["label:b"]})
+        assert self.selector.matches(["label:a", "label:b"], ctx) is True
+
+    def test_a_blank_value_never_matches(self):
+        ctx = make_ctx(args={"matching_queries": ["in:inbox"]})
+        assert self.selector.matches(None, ctx) is False
+        assert self.selector.matches([], ctx) is False

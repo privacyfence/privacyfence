@@ -7,6 +7,8 @@ handling of an unrecognised predicate, and the temp-accept delegation.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from privacyfence.policy.engine import PolicyRule, evaluate, find_matching_rule, preflight
 
 from ...helpers import make_ctx
@@ -176,3 +178,29 @@ class TestPreflightVerdicts:
         )
         verdict, matched, _ = preflight([rule], "op", {"to": "someone@example.com"})
         assert (verdict, matched) == ("unknown", "")
+
+
+class TestSlackScopes:
+    def test_preflight_is_unknown_for_a_mentions_rule(self):
+        rule = PolicyRule(
+            id="r1", predicate="slack.mentions_of_me", value=None,
+            operations=frozenset({"slack.read_messages"}),
+        )
+        verdict, matched, _ = preflight([rule], "slack.read_messages", {})
+        assert (verdict, matched) == ("unknown", "")
+
+    def test_a_search_rule_auto_accepts_through_evaluate(self):
+        rule = PolicyRule(
+            id="r1", predicate="slack.mentions_of_me", value=None,
+            operations=frozenset({"slack.read_messages"}),
+        )
+        ctx = make_ctx(
+            connector="slack", tool="slack_search_messages", args={"own_user_id": "U_ME"},
+            raw_data=[SimpleNamespace(text="<@U_ME> hello")],
+        )
+        assert evaluate([rule], "slack.read_messages", ctx) == (True, "r1")
+        other = make_ctx(
+            connector="slack", tool="slack_search_messages", args={"own_user_id": "U_ME"},
+            raw_data=[SimpleNamespace(text="no mention")],
+        )
+        assert evaluate([rule], "slack.read_messages", other)[0] is False

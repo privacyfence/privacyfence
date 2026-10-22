@@ -12,7 +12,8 @@ bridge writer call.
 ``EXTRA_SCOPES`` covers the operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
 tools, which had no predicate at all, Grist's seven operation keys (scoped by document), Peek's page tools, and Gmail's two filter tools and
-Slack's group-chat tool, which have no resource identity to scope to. The Settings page and the bridge tool configure them
+Slack's group-chat tool, which have no resource identity to scope to, and Slack's two read scopes for
+mentions of the signed-in user and one-to-one DMs. The Settings page and the bridge tool configure them
 the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing
 -- rather than reactively, off one gated call's own popup.
 """
@@ -73,7 +74,26 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         label="Slack — group chats (unconditional)", needs_value=False, value_hint="",
         excludes=frozenset({"slack.send_message"}),
     ),
+    "slack.mentions_of_me": PolicyExtraScope(
+        predicate="slack.mentions_of_me", connector="slack",
+        verbs=(Verb.READ, Verb.SEARCH),
+        label="Slack — mentions of me", needs_value=False, value_hint="",
+    ),
+    "slack.direct_messages_to_me": PolicyExtraScope(
+        predicate="slack.direct_messages_to_me", connector="slack",
+        verbs=(Verb.READ,),
+        label="Slack — direct messages to me", needs_value=False, value_hint="",
+    ),
+    "gmail.query": PolicyExtraScope(
+        predicate="gmail.query", connector="gmail",
+        verbs=(Verb.READ, Verb.DOWNLOAD),
+        label="Gmail — query", needs_value=True,
+        value_hint='in:inbox -category:promotions -label:"Proposed SPAM"',
+    ),
 }
+
+# Groups whose value is one expression, not a comma-separated list: commas belong to the value.
+SINGLE_VALUE_GROUPS: frozenset[str] = frozenset({"gmail.query"})
 
 # Ids retired when the nine verbs landed. `rules_for_catalogue_entry` resolves one before anything
 # else, so older bridge calls keep working.
@@ -230,6 +250,7 @@ __all__ = [
     "EXTRA_SCOPES",
     "GROUP_ALIASES",
     "VALUE_HINTS",
+    "SINGLE_VALUE_GROUPS",
     "PolicyExtraScope",
     "extra_operations_for",
     "parse_verbs",

@@ -949,3 +949,112 @@ class TestJiraSearchAllResults:
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "approved"
         assert entries[0]["auto_accept_rule"] == ""
+
+
+class TestGmailQueryRule:
+    """A ``gmail.query`` rule, with ``args`` shaped as the Gmail connector builds them."""
+
+    RULES = {"gmail.read_thread": [{"predicate": "gmail.query", "value": ["in:inbox"]}]}
+
+    @staticmethod
+    def _kwargs(**args):
+        return make_kwargs(tool="gmail_get_thread", args={"thread_id": "t1", **args})
+
+    async def test_thread_read_auto_accepts_when_the_query_matched(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        fail_if_popup_shown(monkeypatch)
+
+        result = await gate.gated_call(**self._kwargs(matching_queries=["in:inbox"]))
+
+        assert result is FILTERED
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+    async def test_thread_read_needs_review_when_it_did_not(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**self._kwargs())
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+    async def test_a_query_rule_does_not_cover_other_operations(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**make_kwargs(
+            tool="gmail_get_message", args={"message_id": "m1", "matching_queries": ["in:inbox"]},
+        ))
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+    def test_preflight_is_unknown_for_a_query_rule(self):
+        install_rules(self.RULES)
+
+        verdict, _rule, _rule_id, _reason = gate.preflight_auto_accept("gmail.read_thread", {"thread_id": "t1"})
+
+        assert verdict == "unknown"
+
+
+class TestArchiveByLabel:
+    """A ``gmail.label`` row with the ``move`` verb compiles to ``label_match`` on
+    ``gmail.archive_message``, which compares the live label names the connector hands the gate."""
+
+    RULES = {"gmail.archive_message": [{"predicate": "label_match", "value": "Proposed Archive"}]}
+
+    @staticmethod
+    def _kwargs(labels):
+        return make_kwargs(
+            tool="gmail_archive_message", gate="popup", args={"message_id": "m1"},
+            raw_data=SimpleNamespace(sender="a@b.com", labels=labels),
+        )
+
+    async def test_auto_accepts_when_the_message_carries_the_label(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        fail_if_popup_shown(monkeypatch)
+
+        result = await gate.gated_call(**self._kwargs(["Proposed Archive"]))
+
+        assert result is FILTERED
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["auto_accept_rule"] == rule_id("label_match", "Proposed Archive")
+
+    async def test_needs_review_when_the_message_lacks_the_label(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**self._kwargs(["Other"]))
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+    async def test_label_rule_with_only_update_does_not_cover_archive(self, monkeypatch, audit_dir):
+        install_rules({"gmail.add_label": [{"predicate": "label_name_allowlist", "value": "Proposed Archive"}]})
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**self._kwargs(["Proposed Archive"]))
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+    async def test_label_match_is_case_insensitive(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        fail_if_popup_shown(monkeypatch)
+
+        await gate.gated_call(**self._kwargs(["proposed archive"]))
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+    async def test_a_system_label_value_never_allows_an_archive(self, monkeypatch, audit_dir):
+        # The connector drops system labels from the names it passes, so INBOX is never there to match.
+        install_rules({"gmail.archive_message": [{"predicate": "label_match", "value": "INBOX"}]})
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**self._kwargs([]))
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+    def test_preflight_is_unknown_for_a_label_rule(self):
+        install_rules(self.RULES)
+
+        verdict, _rule, _rule_id, _reason = gate.preflight_auto_accept("gmail.archive_message", {"message_id": "m1"})
+
+        assert verdict == "unknown"

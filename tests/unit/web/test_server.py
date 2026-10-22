@@ -2117,12 +2117,31 @@ class TestScopedTokenWiring:
         )
         wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
 
-        flagged, _ = wiring.store_create("flagged", 30, [rule.id], ["gmail_list_messages"], True)
-        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], False)
+        flagged, _ = wiring.store_create("flagged", 30, [rule.id], ["gmail_list_messages"], True, False)
+        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], False, False)
 
         assert (flagged.allow_personal_data, plain.allow_personal_data) == (True, False)
         tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
         assert (tokens["flagged"]["allow_personal_data"], tokens["plain"]["allow_personal_data"]) == (True, False)
+
+    def test_local_wiring_stores_the_reads_flag(self, tmp_path, monkeypatch):
+        from privacyfence import scoped_tokens
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        monkeypatch.setattr(
+            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
+        )
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
+
+        reads, _ = wiring.store_create("reads", 30, [rule.id], ["gmail_list_messages"], False, True)
+        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], True, False)
+
+        assert (reads.allow_personal_data_reads, plain.allow_personal_data_reads) == (True, False)
+        assert (reads.allow_personal_data, plain.allow_personal_data) == (False, True)
+        tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
+        assert (tokens["reads"]["allow_personal_data_reads"], tokens["plain"]["allow_personal_data_reads"]) == (True, False)
 
     def test_the_wiring_renames_in_the_store(self, tmp_path, monkeypatch):
         import dataclasses
@@ -2136,7 +2155,7 @@ class TestScopedTokenWiring:
             scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
         )
         wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
-        token, _ = wiring.store_create("old", 30, [rule.id], ["gmail_list_messages"], False)
+        token, _ = wiring.store_create("old", 30, [rule.id], ["gmail_list_messages"], False, False)
 
         old_label, renamed = wiring.store_rename(token.id, "new")
 

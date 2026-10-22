@@ -43,6 +43,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A Gmail label rule can allow archiving.** A rule on a label can carry the verb `move`, and `gmail_archive_message` is then auto-accepted only when the message already carries that label, checked by name against its live labels. Create a new scoped token after editing the rule; existing tokens keep the operations they were created with.
+- **A scoped token can let email and Slack reads return personal data.** The New token form has a second checkbox, **Let reads return personal data**, for Gmail message and thread reads and Slack channel, thread and search reads that one of the token's rules covers. The scan still runs and the audit log records what it found.
+- **Slack rules for mentions of you and for one-to-one DMs.** "Slack, mentions of me" covers a search whose every result @-mentions you and a thread in which at least one message does; "Slack, direct messages to me" covers one-to-one DMs.
+- **A Gmail query rule.** "Gmail, query" takes one Gmail search expression, evaluated by Gmail against the message when it is read; a thread is covered only when every message matches.
+- Slack search and channel history take a `minutes` window: an agent can ask for everything from the last hour across channels, DMs, group DMs and threads, newest first.
+
+### Fixed
+
+- The New token form shows the tools that need no rule while no rule is selected, so a token without rules can be created.
+
 ## [6.7.0] — 2026-10-22
 
 ### Added

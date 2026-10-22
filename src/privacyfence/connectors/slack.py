@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..audit_log import AuditEntry, current_week, get_audit_logger
@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 # run one unbounded refresh past the calling MCP client's own tool-call
 # timeout instead completes over a few bounded, resumable calls.
 _CHANNEL_CACHE_REFRESH_PAGE_BUDGET = 20
+
+# Longest `minutes` window the Slack tools accept (7 days); matches
+# slack_client._MAX_WINDOW_MINUTES.
+_MAX_WINDOW_MINUTES = 7 * 24 * 60
+
+
+def _window_minutes(minutes: Any) -> int:
+    """`minutes` clamped to 0.._MAX_WINDOW_MINUTES; anything that is not an int reads as 0."""
+    try:
+        value = int(minutes)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(value, _MAX_WINDOW_MINUTES))
+
+
+def _since_minutes(minutes: int) -> str:
+    return f"last {minutes} minute{'s' if minutes != 1 else ''}"
 
 
 def _message_to_dict(m: Any) -> dict[str, Any]:
@@ -255,7 +272,9 @@ class SlackConnector(Connector):
                     "to limit messages (default 50, capped at 1000); text and names may be "
                     "redacted by the user's privacy settings. Use slack_get_thread_replies "
                     "for a thread's replies, or slack_search_messages to find messages by "
-                    "text or person. Requires user approval."
+                    "text or person. Requires user approval. Pass minutes to read only the "
+                    "last N minutes of this conversation; it reads the conversation itself, "
+                    "so nothing is lost to search-index delay."
                 ),
                 params=[
                     ToolParam("channel_id", "str", description="Id of the channel or conversation, from the id field of slack_list_channels, slack_list_dms or slack_list_group_chats, or from slack_resolve_permalink. A name is not accepted."),
@@ -264,6 +283,13 @@ class SlackConnector(Connector):
                         description="Maximum messages to fetch, newest first. Default 50, capped at 1000.",
                     ),
                     ToolParam("cursor", "str", required=False, default="", description=_CURSOR_DESCRIPTION),
+                    ToolParam(
+                        "minutes", "int", required=False, default=0,
+                        description=(
+                            "Only fetch messages from the last N minutes (1-10080, up to 7 days). "
+                            "0 (the default) means no cutoff."
+                        ),
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -300,30 +326,27 @@ class SlackConnector(Connector):
             ToolSpec(
                 name="slack_search_messages",
                 description=(
-                    "Search Slack messages matching a query, a participant, or both. "
-                    "Prefer participant (a user id, handle, or display name) over a "
-                    "text-only query when looking for messages from or with someone "
-                    "-- e.g. 'Bob wrote me' is participant='Bob'; 'Bob in a chat with "
-                    "Jane' is participant='Bob,Jane' -- it reads the matching DM/group-"
-                    "chat conversation(s) directly instead of Slack's search index, "
-                    "which is more reliable. Combine with query to also filter their "
-                    "text. Defaults to the last 90 days so old matches do not dominate; "
-                    "widen or disable via days. Returns a list of {ts, "
-                    "channel_id, channel_name, user_id, user_name, text, thread_ts, "
-                    "reply_count}, up to count (default 20, capped at 100); a participant "
-                    "search reads at most 10 conversations (the first 10 Slack lists) and "
-                    "2 history pages each, so it can return fewer than count. Text "
-                    "and names may be redacted by the user's privacy settings. Use "
-                    "slack_get_channel_history to read a known channel in order. Requires "
-                    "user approval."
+                    "Search Slack messages by query, participant, recent time window, or a combination. "
+                    "Prefer participant over a text-only query for messages from or with someone -- e.g. "
+                    "'Bob wrote me' is participant='Bob'; 'Bob in a chat with Jane' is participant='Bob,Jane' "
+                    "-- it reads the matching DM/group-chat conversation(s) directly, which is more reliable "
+                    "than Slack's search index. Combine with query to filter their text. Defaults to "
+                    "90 days; widen or disable via days. For the last N minutes across every channel, DM, "
+                    "group DM and thread, pass minutes (query may then be empty): newest first, none older, "
+                    "but search-index delay can miss the last minute or two. Returns a list of "
+                    "{ts, channel_id, channel_name, user_id, user_name, text, thread_ts, reply_count}, up to "
+                    "count (default 20, capped at 100); a participant search reads at most 10 conversations "
+                    "and 2 history pages each, so it can return fewer. Text and names may be redacted by "
+                    "privacy settings. Use slack_get_channel_history for one known channel. "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam(
                         "query", "str", required=False, default="",
                         description=(
                             "Text to search for, in Slack search syntax. With participant it is "
-                            "a case-insensitive substring filter instead. At least one of query "
-                            "and participant is required; empty means no text filter."
+                            "a case-insensitive substring filter instead. At least one of query, "
+                            "participant and minutes is required; empty means no text filter."
                         ),
                     ),
                     ToolParam(
@@ -343,6 +366,14 @@ class SlackConnector(Connector):
                         description=(
                             "Only include messages from the last N days (default 90, "
                             "~3 months); set to 0 to search all history with no cutoff"
+                        ),
+                    ),
+                    ToolParam(
+                        "minutes", "int", required=False, default=0,
+                        description=(
+                            "Only include messages from the last N minutes (1-10080, up to 7 days); "
+                            "overrides days, and makes query and participant optional. 0 (the default) "
+                            "means no minute window"
                         ),
                     ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -536,15 +567,22 @@ class SlackConnector(Connector):
     # ------------------------------------------------------------------ #
 
     async def _get_channel_history(
-        self, channel_id: str, limit: int = 50, cursor: str = ""
+        self, channel_id: str, limit: int = 50, cursor: str = "", minutes: int = 0
     ) -> Any:
+        minutes = _window_minutes(minutes)
+        oldest = (
+            str((datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp())
+            if minutes
+            else None
+        )
         messages, has_more, next_cursor = await self._fetch(
-            self._slack.get_channel_history, channel_id, limit, cursor=cursor
+            self._slack.get_channel_history, channel_id, limit, cursor=cursor, oldest=oldest
         )
         n = len(messages)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
+        is_one_to_one_dm = await self._fetch(self._slack.resolve_is_one_to_one_dm, channel_id)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
         # Channel is known via slack_list_channels; Messages (count) is
         # only learned once approved. No literal excerpt here (no "First
@@ -553,6 +591,8 @@ class SlackConnector(Connector):
         # the actual text is in the right-pane table, so a separate literal
         # excerpt would just duplicate one of those two.
         preview = {"Channel": channel_display}
+        if minutes:
+            preview["Since"] = _since_minutes(minutes)
         new_info = {"Messages": str(n)}
         if has_more:
             new_info["Note"] = "More messages exist -- {agent} will see this too"
@@ -588,7 +628,13 @@ class SlackConnector(Connector):
             preview_tables=[table] if filtered else [],
             table_only=True,
             my_email=self.my_email,
-            args={"channel_id": channel_id, "is_group_dm": is_group_dm, "is_self_dm": is_self_dm},
+            args={
+                "channel_id": channel_id,
+                "is_group_dm": is_group_dm,
+                "is_self_dm": is_self_dm,
+                "is_one_to_one_dm": is_one_to_one_dm,
+                "minutes": minutes,
+            },
         )
 
     async def _get_thread_replies(
@@ -601,6 +647,7 @@ class SlackConnector(Connector):
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
+        is_one_to_one_dm = await self._fetch(self._slack.resolve_is_one_to_one_dm, channel_id)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "thread_content")
         # Channel is known via slack_list_channels; Replies (count) is only
         # learned once approved. No literal excerpt here (no "Thread
@@ -649,19 +696,25 @@ class SlackConnector(Connector):
                 "thread_ts": thread_ts,
                 "is_group_dm": is_group_dm,
                 "is_self_dm": is_self_dm,
+                "is_one_to_one_dm": is_one_to_one_dm,
+                "own_user_id": await self._fetch(self._slack.own_user_id),
             },
         )
 
     async def _search_messages(
-        self, query: str = "", count: int = 20, participant: str = "", days: int = 90
+        self, query: str = "", count: int = 20, participant: str = "", days: int = 90,
+        minutes: int = 0,
     ) -> Any:
         # Validate before gating, not after -- same reasoning as
         # calendar_set_event_visibility's/slack_create_group_chat's own
         # early checks: a doomed call shouldn't cost the user an
         # unnecessary approval decision.
-        if not query and not participant:
-            raise ValueError("slack_search_messages requires a query, a participant, or both")
-        messages = await self._fetch(self._slack.search_messages, query, count, participant, days)
+        minutes = _window_minutes(minutes)
+        if not query and not participant and not minutes:
+            raise ValueError("slack_search_messages requires a query, a participant, or minutes")
+        messages = await self._fetch(
+            self._slack.search_messages, query, count, participant, days, minutes
+        )
         n = len(messages)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
         # Query/participant are Claude's own input (kept in the preview as
@@ -672,7 +725,10 @@ class SlackConnector(Connector):
             preview["Query"] = query
         if participant:
             preview["Participant"] = participant
-        preview["Since"] = f"last {days} day{'s' if days != 1 else ''}" if days else "all time"
+        if minutes:
+            preview["Since"] = _since_minutes(minutes)
+        else:
+            preview["Since"] = f"last {days} day{'s' if days != 1 else ''}" if days else "all time"
         new_info = {"Results": str(n)}
         lines = [
             f"[{d['channel_name']}] {d['user_name'] or d['user_id'] or 'unknown'}: {d['text']}"
@@ -696,6 +752,8 @@ class SlackConnector(Connector):
             target_desc = f"\"{query}\" with {participant}"
         elif participant:
             target_desc = f"messages with {participant}"
+        elif not query:
+            target_desc = f"messages from the {_since_minutes(minutes)}"
         else:
             target_desc = f"\"{query}\""
         return await gated_call(
@@ -718,7 +776,13 @@ class SlackConnector(Connector):
             preview_tables=[table] if filtered else [],
             table_only=True,
             my_email=self.my_email,
-            args={"query": query, "participant": participant, "days": days},
+            args={
+                "query": query,
+                "participant": participant,
+                "days": days,
+                "minutes": minutes,
+                "own_user_id": await self._fetch(self._slack.own_user_id),
+            },
         )
 
     # ------------------------------------------------------------------ #

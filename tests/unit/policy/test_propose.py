@@ -538,3 +538,29 @@ class TestNineVerbExcludes:
         operations = propose.operations_for(scope, Verb.SEND)
         assert "slack.create_group_chat" not in operations
         assert operations == frozenset({"slack.send_message"})
+
+
+class TestGmailLabelMove:
+    def _label_scopes(self):
+        return [e for e in propose.PROPOSABLE_SCOPES if e.scope_type == "gmail.label"]
+
+    def test_gmail_label_group_offers_update_and_move(self):
+        scopes_ = self._label_scopes()
+        assert {e.id for e in scopes_} == {"label_name_allowlist", "label_match"}
+        assert {v for e in scopes_ for v in e.verbs} == {Verb.UPDATE, Verb.MOVE}
+
+    def test_move_operations_are_archive_only(self):
+        entry = next(e for e in self._label_scopes() if e.id == "label_match")
+        assert propose.operations_for(entry, Verb.MOVE) == frozenset({"gmail.archive_message"})
+        assert propose.operations_for(entry, Verb.UPDATE) == frozenset()
+
+    def test_label_match_is_never_proposed_from_a_popup(self):
+        ctx = make_ctx(
+            tool="gmail_archive_message", my_email="me@corp.com", args={"message_id": "m1"},
+            raw_data=SimpleNamespace(sender="Alice <alice@acme.com>", labels=["Proposed Archive"], attachments=[]),
+        )
+        proposals = propose.proposals_for("gmail_archive_message", ctx)
+        assert all(p.scope.scope_type != "gmail.label" for p in proposals)
+        # Not only the verb filter: the proposer itself must decline.
+        entry = next(e for e in self._label_scopes() if e.id == "label_match")
+        assert entry.value_of(ctx) is propose.NO_VALUE

@@ -220,7 +220,10 @@ async def test_attended_skips_unattended_calls(write_recipe: RecipeWriter) -> No
 
 APPLIES = {**COVERED, "pii_gate": "applies", "pii_gate_detail": "the personal-data scan applies to x"}
 WARNING = "; WARNING: the personal-data scan applies to x: a run is denied if the result holds personal data"
-NOTE = "note: a WARNING step is denied only when what it returns holds personal data"
+NOTE = (
+    "note: a WARNING step is denied only when what it returns holds personal data; a scoped token can allow "
+    "that for exports, downloads and page uploads, and for Gmail and Slack reads (see the README)"
+)
 
 
 async def test_unattended_covered_applies_step_warns(write_recipe: RecipeWriter) -> None:

@@ -223,6 +223,8 @@ def main() -> int:
          lambda c: c.search_messages(participant="User 7", count=20)),
         ("slack_search_messages(query=…)",
          lambda c: c.search_messages(query="budget", count=20)),
+        ("slack_search_messages(minutes=…)",
+         lambda c: c.search_messages(minutes=60, count=20)),
         ("slack_list_channels(participant=…)",
          lambda c: c.list_channels(participant="User 7", max_results=100)),
         ("slack_list_dms()",

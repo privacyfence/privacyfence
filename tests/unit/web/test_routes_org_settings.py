@@ -554,6 +554,20 @@ class TestAddRule:
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
 
+    def test_add_policy_rule_keeps_a_gmail_query_whole(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        query = "in:inbox subject:(a, b)"
+
+        r = _post_action(client, "add_policy_rule", {"group": "gmail.query", "value": query, "verbs": ["read"]}, csrf)
+        assert r.status_code == 200
+
+        with principal_scope(ALICE):
+            values = [rule.value for rule in auto_accept.get_policy_v2_rules() if rule.predicate == "gmail.query"]
+        assert values == [[query]]
+
     def test_a_title_instead_of_an_id_is_a_400_with_the_message_and_adds_no_rule(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
         app, sessions = _app()
@@ -1581,6 +1595,32 @@ class TestScopedTokenRoutes:
 
             summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
         assert any(f"({token.id})" in text and ", personal data allowed (principal=alice)" in text for text in summaries)
+
+    def test_org_create_stores_the_reads_flag(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data_reads": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.allow_personal_data_reads is True
+        assert token.allow_personal_data is False
+
+    def test_org_audit_summary_names_the_reads_flag(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data_reads": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        assert any(
+            f"({token.id})" in text and ", personal data in reads allowed (principal=alice)" in text
+            for text in summaries
+        )
 
     def test_a_token_without_the_flag_does_not_allow_personal_data(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)

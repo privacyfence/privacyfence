@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import copy
 import datetime
 import json
@@ -317,13 +318,48 @@ _REDACTED_MESSAGE_ID = "<qa-placeholder-message-id@example.com>"
 _SENSITIVE_GMAIL_HEADERS = {"from", "to", "cc", "bcc", "reply-to", "sender", "delivered-to", "return-path"}
 
 
+_EMAIL_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+# Gmail's quote attribution ("On <date> <Display Name> <addr> wrote:") carries the sender's display
+# name, which the email-address redaction does not reach.
+_QUOTE_ATTRIBUTION = re.compile(r"\bOn [^\n]{0,200}? wrote:")
+_REDACTED_ATTRIBUTION = "On QA Placeholder wrote:"
+
+
+def _redact_text(text: str) -> str:
+    return _QUOTE_ATTRIBUTION.sub(_REDACTED_ATTRIBUTION, _EMAIL_IN_TEXT.sub(_REDACTED_EMAIL, text))
+
+
+def _redact_part_bodies(part: dict[str, Any]) -> None:
+    """Replace email addresses quoted inside a reply's body parts (``body.data`` is base64url)."""
+    body = part.get("body")
+    if isinstance(body, dict) and isinstance(body.get("data"), str):
+        padded = body["data"] + "=" * (-len(body["data"]) % 4)
+        try:
+            text = base64.urlsafe_b64decode(padded).decode("utf-8")
+        except ValueError:
+            text = None
+        if text is not None:
+            redacted = _redact_text(text).encode("utf-8")
+            body["data"] = base64.urlsafe_b64encode(redacted).decode("ascii").rstrip("=")
+            body["size"] = len(redacted)
+    for sub_part in part.get("parts") or []:
+        if isinstance(sub_part, dict):
+            _redact_part_bodies(sub_part)
+
+
 def redact_gmail_message(raw: dict[str, Any]) -> dict[str, Any]:
     raw = copy.deepcopy(raw)
+    if isinstance(raw.get("snippet"), str):
+        raw["snippet"] = _redact_text(raw["snippet"])
+    if isinstance(raw.get("payload"), dict):
+        _redact_part_bodies(raw["payload"])
     headers = ((raw.get("payload") or {}).get("headers")) or []
     for header in headers:
         if isinstance(header, dict) and str(header.get("name", "")).lower() in _SENSITIVE_GMAIL_HEADERS:
             header["value"] = _REDACTED_EMAIL
-        elif isinstance(header, dict) and str(header.get("name", "")).lower() == "message-id":
+        elif isinstance(header, dict) and str(header.get("name", "")).lower() in ("message-id", "references", "in-reply-to"):
             header["value"] = _REDACTED_MESSAGE_ID
     return raw
 
@@ -1647,6 +1683,26 @@ def _build_gmail_client() -> GmailClient:
     return GmailClient(client_config=client_config, token_file=token_path)
 
 
+def _check_gmail_messages_matching(client: GmailClient, seed_message_id: str, rfc822_id: str) -> CheckResult:
+    """Check-only (no fixture file): Gmail's own search finds the seed message by its Message-ID
+    for ``in:anywhere`` and not for a label that does not exist, which is what a Gmail query rule
+    relies on."""
+    if not rfc822_id:
+        return CheckResult("gmail", "messages_matching", seed_message_id, False, "seed message has no Message-ID header")
+    pairs = [(seed_message_id, rfc822_id)]
+    try:
+        found = client.messages_matching("in:anywhere", pairs)
+        missed = client.messages_matching("label:privacyfence-qa-no-such-label", pairs)
+    except GmailClientError as exc:
+        return CheckResult("gmail", "messages_matching", seed_message_id, False, str(exc))
+    ok = found == {seed_message_id} and not missed
+    note = (
+        "in:anywhere found the seed message, a missing label did not" if ok
+        else "Gmail search did not return the seed message for in:anywhere, or returned it for a missing label"
+    )
+    return CheckResult("gmail", "messages_matching", seed_message_id, ok, note)
+
+
 def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("gmail") or {}
     seed_message_id = cfg.get("seed_message_id", "")
@@ -1683,6 +1739,8 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         if record and ok and isinstance(cap.captured, dict):
             raw = deidentify_structural_fields(redact(redact_gmail_message(cap.captured)))
         results.append(CheckResult("gmail", "get_message", seed_message_id, ok, note, raw, "get_message.json"))
+        if tagged:
+            results.append(_check_gmail_messages_matching(client, seed_message_id, message.rfc822_id))
     except GmailClientError as exc:
         results.append(CheckResult("gmail", "get_message", seed_message_id, False, str(exc)))
 

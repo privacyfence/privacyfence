@@ -118,12 +118,31 @@ VALUE_FORMATS: dict[str, ValueFormat] = {
     "peek.page": _fmt(
         _PEEK_SLUG_RE, "a Peek page slug", "the page's slug, not its title", "team-dashboard",
     ),
+    "gmail.query": _fmt(
+        r"[^\x00-\x1f\x7f]{1,500}", "a Gmail search query",
+        "a Gmail search expression as you would type it into Gmail's search box, up to 500 characters",
+        "in:inbox -category:promotions",
+    ),
     "trusted_sender_domain": _DOMAIN,
     "approved_recipient_domain": _DOMAIN,
 }
 
 # Value-taking predicates whose values are names by nature.
-UNVALIDATED_VALUE_PREDICATES: frozenset[str] = frozenset({"label_name_allowlist", "file_type_allowlist"})
+UNVALIDATED_VALUE_PREDICATES: frozenset[str] = frozenset({"label_name_allowlist", "label_match", "file_type_allowlist"})
+
+
+def _balanced(text: str) -> bool:
+    """Parentheses pair up and double quotes come in twos: the query is wrapped in parentheses
+    when Gmail evaluates it, so ``in:inbox) OR (in:anywhere`` would widen the rule."""
+    depth = 0
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and text.count('"') % 2 == 0
 
 
 def _shown(item: str) -> str:
@@ -155,6 +174,8 @@ def normalise_rule_value(predicates: Iterable[str], value: Any) -> list[str] | N
                 raise RuleValueError(
                     f"{_shown(item)!r} is not {fmt.what}. Use {fmt.how}, for example {fmt.example}."
                 )
+        if "gmail.query" in predicates and not _balanced(item):
+            raise RuleValueError("The Gmail query has unbalanced parentheses or quotes.")
     return list(dict.fromkeys(items))
 
 
