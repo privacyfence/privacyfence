@@ -2225,6 +2225,103 @@ class TestGoogleUnavailableErrors:
         assert public_message(excinfo.value) == GENERIC_PUBLIC_MESSAGE
 
 
+class TestGmailQueryArgs:
+    @pytest.fixture
+    def query_rules(self, monkeypatch):
+        """Make the connector see these ``gmail.query`` values as the call's rules."""
+        seen = []
+
+        def set_rules(values):
+            def fake(predicate, operation_key):
+                seen.append((predicate, operation_key))
+                return list(values)
+            monkeypatch.setattr(gmail_module, "rule_values", fake)
+
+        set_rules.seen = seen
+        return set_rules
+
+    async def test_get_message_args_carry_matching_queries(self, gated_call_spy, query_rules):
+        query_rules(["in:inbox", "label:x"])
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="s", sender="a@b.com", rfc822_id="a@b.c")
+        client.messages_matching.side_effect = lambda query, pairs: {"m1"} if query == "in:inbox" else set()
+
+        await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        assert gated_call_spy[0]["args"] == {"message_id": "m1", "matching_queries": ["in:inbox"]}
+        assert ("gmail.query", "gmail.read_message") in query_rules.seen
+        client.messages_matching.assert_any_call("in:inbox", [("m1", "a@b.c")])
+
+    async def test_get_thread_needs_every_message_to_match(self, gated_call_spy, query_rules):
+        query_rules(["in:inbox"])
+        connector, client = make_connector()
+        m1 = GmailMessage(id="m1", thread_id="t1", subject="s", sender="a@b.com", rfc822_id="1@x.y")
+        m2 = GmailMessage(id="m2", thread_id="t1", subject="s", sender="a@b.com", rfc822_id="2@x.y")
+        client.get_thread.return_value = GmailThread(id="t1", subject="s", messages=[m1, m2])
+        client.messages_matching.return_value = {"m1"}
+
+        await connector.call("gmail_get_thread", {"thread_id": "t1"})
+        assert gated_call_spy[0]["args"] == {"thread_id": "t1"}
+
+        client.messages_matching.return_value = {"m1", "m2"}
+        await connector.call("gmail_get_thread", {"thread_id": "t1"})
+        assert gated_call_spy[1]["args"] == {"thread_id": "t1", "matching_queries": ["in:inbox"]}
+        client.messages_matching.assert_called_with("in:inbox", [("m1", "1@x.y"), ("m2", "2@x.y")])
+
+    async def test_download_attachment_args_carry_matching_queries(self, gated_call_spy, query_rules, tmp_path):
+        query_rules(["in:inbox"])
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(
+            id="m1", thread_id="t1", subject="s", sender="a@b.com", rfc822_id="a@b.c",
+            attachments=[Attachment(name="r.pdf", mime_type="application/pdf", size=10, attachment_id="att-1")],
+        )
+        client.messages_matching.return_value = {"m1"}
+        client.download_attachment.return_value = {"path": "/tmp/r.pdf", "name": "r.pdf", "size_bytes": 10}
+
+        await connector.call(
+            "gmail_download_attachment",
+            {"message_id": "m1", "attachment_name": "r.pdf", "destination_dir": str(tmp_path)},
+        )
+
+        assert gated_call_spy[0]["args"]["matching_queries"] == ["in:inbox"]
+        assert ("gmail.query", "gmail.download_attachment") in query_rules.seen
+
+    async def test_no_query_rules_makes_no_search_call(self, gated_call_spy, query_rules):
+        query_rules([])
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="s", sender="a@b.com")
+
+        await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        client.messages_matching.assert_not_called()
+        assert gated_call_spy[0]["args"] == {"message_id": "m1"}
+
+    async def test_a_search_failure_is_a_non_match_and_the_call_goes_on(self, gated_call_spy, query_rules, caplog):
+        query_rules(["secret-query"])
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="s", sender="a@b.com", rfc822_id="a@b.c")
+        client.messages_matching.side_effect = GmailClientError("messages_matching failed (HTTP 500)")
+
+        with caplog.at_level("WARNING"):
+            await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        assert gated_call_spy[0]["args"] == {"message_id": "m1"}
+        assert "secret-query" not in caplog.text
+        assert "messages_matching failed" not in caplog.text
+        assert "gmail_get_message" in caplog.text
+
+    async def test_at_most_ten_query_rules_are_evaluated(self, gated_call_spy, query_rules):
+        query_rules([f"label:l{i}" for i in range(12)])
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="s", sender="a@b.com", rfc822_id="a@b.c")
+        client.messages_matching.return_value = {"m1"}
+
+        await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        assert client.messages_matching.call_count == gmail_module.MAX_QUERY_RULES_PER_CALL == 10
+        assert gated_call_spy[0]["args"]["matching_queries"] == [f"label:l{i}" for i in range(10)]
+
+
 class TestArchiveByLabel:
     async def test_archive_gate_receives_label_names_not_ids(self, gated_call_spy):
         connector, client = make_connector()

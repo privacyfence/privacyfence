@@ -545,6 +545,18 @@ class TestCheckPolicy:
         )
         assert seen["args"] == {"channel_id": "D1"}
 
+    def test_matching_queries_is_not_passed_to_preflight(self, monkeypatch):
+        seen = {}
+
+        def fake_preflight(operation_key, args, my_email):
+            seen["args"] = args
+            return "unknown", "", "", "x"
+
+        monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
+        dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
+        dispatcher.check_policy("gmail", "gmail_get_message", {"message_id": "m1", "matching_queries": ["in:inbox"]})
+        assert seen["args"] == {"message_id": "m1"}
+
     def test_pii_gate_none_for_popup_tool_outside_the_upload_scan(self):
         result = self._pii("grist", "grist_update_csv")
         assert result["gate"] == "popup"
