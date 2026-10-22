@@ -84,8 +84,8 @@ def _catalogue_verbs(predicate: str) -> frozenset[Verb]:
     return frozenset(
         verb
         for extra in catalogue.EXTRA_SCOPES.values()
-        if extra.predicate == predicate
         for verb in extra.verbs
+        if catalogue.extra_predicate_for(extra, verb) == predicate
     )
 
 

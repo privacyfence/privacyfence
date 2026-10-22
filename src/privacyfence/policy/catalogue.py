@@ -45,6 +45,21 @@ class PolicyExtraScope:
     # Operation keys the registry derivation over-reaches for this scope, removed by
     # ``extra_operations_for``.
     excludes: frozenset[str] = frozenset()
+    # Per verb, the predicate a rule for that verb uses when it is not ``predicate``. Read and
+    # search share the ``slack.read_messages`` operation key and the engine matches on operation
+    # keys, so the predicate is the only place a rule can say which of the two it allows.
+    verb_predicates: tuple[tuple[Verb, str], ...] = ()
+
+
+def extra_predicate_for(extra: PolicyExtraScope, verb: Verb) -> str:
+    """The predicate a rule for ``verb`` uses on ``extra``: its ``verb_predicates`` entry, or
+    ``extra.predicate``."""
+    return dict(extra.verb_predicates).get(verb, extra.predicate)
+
+
+def extra_predicates(extra: PolicyExtraScope) -> frozenset[str]:
+    """``extra.predicate`` and every predicate in ``extra.verb_predicates``."""
+    return frozenset({extra.predicate, *(p for _, p in extra.verb_predicates)})
 
 
 EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
@@ -78,6 +93,7 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         predicate="slack.mentions_of_me", connector="slack",
         verbs=(Verb.READ, Verb.SEARCH),
         label="Slack — mentions of me", needs_value=False, value_hint="",
+        verb_predicates=((Verb.SEARCH, "slack.mentions_of_me_all_results"),),
     ),
     "slack.direct_messages_to_me": PolicyExtraScope(
         predicate="slack.direct_messages_to_me", connector="slack",
@@ -235,14 +251,18 @@ def _compile_catalogue_rules(group: str, value: Any, verbs: list[Verb]) -> list[
         allowed_verbs = [v for v in verbs if v in extra.verbs]
         if not allowed_verbs or (extra.needs_value and not value):
             return []
-        operations: frozenset[str] = frozenset().union(
-            *(extra_operations_for(extra, v) for v in allowed_verbs)
-        )
-        if not operations:
-            return []
-        return store.merge_rules([
-            PolicyRule(id=extra.predicate, predicate=extra.predicate, value=value, operations=operations),
-        ])
+        by_predicate: dict[str, list[Verb]] = {}
+        for verb in extra.verbs:
+            if verb in allowed_verbs:
+                by_predicate.setdefault(extra_predicate_for(extra, verb), []).append(verb)
+        built: list[PolicyRule] = []
+        for predicate, predicate_verbs in by_predicate.items():
+            operations: frozenset[str] = frozenset().union(
+                *(extra_operations_for(extra, v) for v in predicate_verbs)
+            )
+            if operations:
+                built.append(PolicyRule(id=predicate, predicate=predicate, value=value, operations=operations))
+        return store.merge_rules(built) if built else []
     return propose.rules_for_scope_group(group, value, verbs)
 
 
@@ -253,6 +273,8 @@ __all__ = [
     "SINGLE_VALUE_GROUPS",
     "PolicyExtraScope",
     "extra_operations_for",
+    "extra_predicate_for",
+    "extra_predicates",
     "parse_verbs",
     "rules_for_catalogue_entry",
     "scope_catalogue",

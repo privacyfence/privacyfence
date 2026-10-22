@@ -1,6 +1,7 @@
 """Tests for scoped_tokens.py: the store, the policy and the request scope (ADR 0164)."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
@@ -11,6 +12,7 @@ import pytest
 from privacyfence import auto_accept, paths, scoped_tokens
 from privacyfence.policy import scope_rows, store
 from privacyfence.policy.engine import PolicyRule
+from privacyfence.policy.registry import Verb
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.scoped_tokens import (
     ACTIVITY_FILE_NAME,
@@ -428,6 +430,66 @@ class TestRuleLimits:
         restarted.load()
         assert restarted.get("local", token.id) is None
         assert restarted.find(secret, now=NOW) is None
+
+
+MENTIONS_PAIR = ["slack.mentions_of_me", "slack.read_messages"]
+MENTIONS_SUCCESSOR = ("slack.mentions_of_me_all_results", "slack.read_messages")
+
+
+def _rewrite_limits(tmp_path, token_id, limits, split_verbs):
+    data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+    (entry,) = [t for t in data["tokens"] if t["id"] == token_id]
+    entry["rule_limits"] = limits
+    entry.pop("limits_split_verbs", None)
+    if split_verbs:
+        entry["limits_split_verbs"] = True
+    _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+    restarted = _store()
+    restarted.load()
+    return restarted.get("local", token_id)
+
+
+class TestLimitSuccessors:
+    def test_an_old_token_limit_gets_the_limit_successor(self, tmp_path):
+        token, _ = _create(_store())
+        reread = _rewrite_limits(tmp_path, token.id, {"rule-a": [MENTIONS_PAIR]}, split_verbs=False)
+        assert reread.rule_limits["rule-a"] == {tuple(MENTIONS_PAIR), MENTIONS_SUCCESSOR}
+
+    def test_a_split_verbs_token_limit_is_read_unchanged(self, tmp_path):
+        token, _ = _create(_store())
+        reread = _rewrite_limits(tmp_path, token.id, {"rule-a": [MENTIONS_PAIR]}, split_verbs=True)
+        assert reread.rule_limits["rule-a"] == {tuple(MENTIONS_PAIR)}
+
+    def test_a_limit_without_the_pair_is_unchanged(self, tmp_path):
+        token, _ = _create(_store())
+        reread = _rewrite_limits(tmp_path, token.id, {"rule-a": [["pred-a", "op.read"]]}, split_verbs=False)
+        assert reread.rule_limits["rule-a"] == {("pred-a", "op.read")}
+
+    def test_a_created_token_round_trips_with_limits_split_verbs(self, tmp_path):
+        token, _ = _create(_store())
+        assert token.limits_split_verbs is True
+        raw = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"][0]
+        assert raw["limits_split_verbs"] is True
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).limits_split_verbs is True
+
+    def test_a_new_read_only_token_does_not_gain_search_later(self, monkeypatch):
+        from privacyfence import gate
+        from privacyfence.policy import catalogue
+
+        row = scope_rows.ScopeRow(
+            id="m1", scope="slack.mentions_of_me", value=None, verbs=frozenset({Verb.READ}),
+            operations=frozenset({"slack.read_messages"}),
+        )
+        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: scope_rows.compile_row(row))
+        token, _ = _create(_store(), rule_ids=["m1"])
+        widened = dataclasses.replace(row, verbs=frozenset({Verb.READ, Verb.SEARCH}))
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: scope_rows.compile_row(widened))
+        assert {r.predicate for r in scope_rows.compile_row(widened)} == catalogue.extra_predicates(
+            catalogue.EXTRA_SCOPES["slack.mentions_of_me"])
+        predicates = {r.predicate for r in gate._rules_in_scope(token)}
+        assert predicates == {"slack.mentions_of_me"}
 
 
 def _raw(rule_id, predicate, operations, flagged=False):
