@@ -15,6 +15,7 @@ already draws between itself and test_bridge_daemon_contract.py.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import time
 
@@ -581,9 +582,36 @@ class TestCheckPolicy:
         assert upload["pii_gate"] == "applies"
         assert "does not cover drive_upload_file" in upload["pii_gate_detail"]
 
-    def test_pii_scan_tool_sets_stay_in_step_with_the_gate_table(self):
-        from privacyfence.auto_accept import PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, UPLOAD_PII_SCAN_TOOLS
+    @staticmethod
+    def _reads_token(*, reads: bool, exports: bool = False) -> ScopedToken:
+        return dataclasses.replace(
+            TestCheckPolicy._token(allow_personal_data=exports), allow_personal_data_reads=reads,
+        )
 
+    def test_pii_gate_is_allowed_by_token_for_a_read_with_the_reads_flag(self):
+        result = self._pii("gmail", "gmail_get_message", self._reads_token(reads=True))
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("allowed_by_token", "")
+
+    def test_pii_gate_applies_for_a_read_without_the_reads_flag(self):
+        result = self._pii("slack", "slack_search_messages", self._reads_token(reads=False))
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "the token does not allow personal data in reads, "
+            "so the personal-data scan applies to slack_search_messages"
+        )
+
+    def test_pii_gate_for_a_read_ignores_the_exports_flag(self):
+        result = self._pii("gmail", "gmail_get_thread", self._reads_token(reads=False, exports=True))
+        assert result["pii_gate"] == "applies"
+        assert "in reads" in result["pii_gate_detail"]
+
+    def test_pii_scan_tool_sets_stay_in_step_with_the_gate_table(self):
+        from privacyfence.auto_accept import (
+            PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, UPLOAD_PII_SCAN_TOOLS,
+        )
+
+        for tool in PERSONAL_DATA_READ_TOOLS:
+            assert TOOL_TO_GATE[tool] == "review", tool
         for tool in PERSONAL_DATA_RULE_TOOLS | UPLOAD_PII_SCAN_TOOLS:
             assert TOOL_TO_GATE[tool] in ("review", "popup"), tool
         for tool in UPLOAD_PII_SCAN_TOOLS:

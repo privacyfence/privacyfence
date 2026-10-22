@@ -2195,6 +2195,140 @@ class TestPIIGate:
         assert entries[0]["pii_detected"] is False
 
 
+class TestPersonalDataReads:
+    """A scoped token with ``allow_personal_data_reads`` lets the tools in ``PERSONAL_DATA_READ_TOOLS``
+    auto-accept despite a PII finding, through one of its own rules, and nothing else."""
+
+    PII_TEXT = "Please wire the deposit to DE89370400440532013000, thanks."
+
+    @staticmethod
+    def _install(monkeypatch, *, predicate="trusted_sender_domain", value=("example.com",),
+                 operation="gmail.read_thread") -> PolicyRule:
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate=predicate, value=list(value), operations=frozenset({operation}),
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return rule
+
+    @staticmethod
+    def _token(rule: PolicyRule, tool: str, *, reads: bool = True, exports: bool = False) -> ScopedToken:
+        return dataclasses.replace(
+            _scoped_token(rule_ids=(rule.id,), tools=(tool,)),
+            allow_personal_data_reads=reads, allow_personal_data=exports,
+        )
+
+    @staticmethod
+    def _thread(**overrides):
+        return gate.gated_call(**base_kwargs(
+            tool="gmail_get_thread", raw_data=SimpleNamespace(sender="alice@example.com"),
+            args={"thread_id": "t1"}, pii_scan_text=TestPersonalDataReads.PII_TEXT, **overrides,
+        ))
+
+    @staticmethod
+    def _search(**overrides):
+        return gate.gated_call(**base_kwargs(
+            connector="slack", tool="slack_search_messages",
+            raw_data=[SimpleNamespace(channel_id="C1")], args={"query": "x"},
+            pii_scan_text=TestPersonalDataReads.PII_TEXT, **overrides,
+        ))
+
+    async def test_flagged_token_lets_personal_data_through_a_gmail_thread_read(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread")):
+            result = await self._thread()
+
+        assert result is FILTERED
+        assert popups == []
+
+    async def test_flagged_token_lets_personal_data_through_a_slack_search(self, monkeypatch, audit_dir):
+        rule = self._install(
+            monkeypatch, predicate="approved_channel_all_results", value=("C1",), operation="slack.read_messages",
+        )
+
+        with scoped_tokens.token_scope(self._token(rule, "slack_search_messages")):
+            result = await self._search()
+
+        assert result is FILTERED
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+    async def test_token_without_the_flag_is_denied(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread", reads=False)):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._thread()
+
+        assert popups == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_unscoped_call_keeps_the_scan(self, monkeypatch, audit_dir):
+        self._install(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._thread()
+
+        assert len(popups) == 1
+
+    async def test_revoked_scope_keeps_the_scan(self, monkeypatch, audit_dir):
+        self._install(monkeypatch)
+        revoked = dataclasses.replace(scoped_tokens.REVOKED_SCOPE, allow_personal_data_reads=True)
+        ctx = ReviewContext(connector="gmail", tool="gmail_get_thread", args={}, raw_data=None)
+
+        with scoped_tokens.token_scope(revoked):
+            assert gate._personal_data_rule("gmail_get_thread", "gmail.read_thread", ctx) is None
+
+    async def test_exports_flag_does_not_lift_reads(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread", reads=False, exports=True)):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._thread()
+
+    async def test_reads_flag_does_not_lift_exports(self, monkeypatch, audit_dir):
+        rule = TestPersonalDataRules._install(monkeypatch)
+        token = dataclasses.replace(
+            _scoped_token(rule_ids=(rule.id,), tools=("grist_export_records",)),
+            allow_personal_data_reads=True,
+        )
+
+        with scoped_tokens.token_scope(token):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await gate.gated_call(**base_kwargs(
+                    connector="grist", tool="grist_export_records", args={"doc_id": "doc1"},
+                    pii_scan_text=self.PII_TEXT,
+                ))
+
+    async def test_flagged_token_still_needs_a_matching_rule(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        other = dataclasses.replace(self._token(rule, "gmail_get_thread"), rule_ids=frozenset({"r-other"}))
+
+        with scoped_tokens.token_scope(other):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._thread()
+
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_audit_entry_records_pii_detected_and_the_rule(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread")):
+            await self._thread()
+
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+        assert entry["pii_categories"] == ["IBAN (bank account number)"]
+
+
 class TestPersonalDataRules:
     """A scoped token with ``allow_personal_data`` lets the tools in ``PERSONAL_DATA_RULE_TOOLS``
     auto-accept despite a PII finding, through one of its own rules (ADR 0173), and nothing else.

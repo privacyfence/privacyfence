@@ -391,6 +391,16 @@ PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
     "drive_download_file",
 })
 
+# Reads whose content reaches the AI system by design, which a token's allow_personal_data_reads flag
+# may let through when one of the token's rules covers the call.
+PERSONAL_DATA_READ_TOOLS: frozenset[str] = frozenset({
+    "gmail_get_message",
+    "gmail_get_thread",
+    "slack_get_channel_history",
+    "slack_get_thread_replies",
+    "slack_search_messages",
+})
+
 # Popup-gate tools whose payload is scanned too (the gate's upload scan): drive_upload_file's can be
 # external content the model never read, peek_upload_page's is the page body.
 UPLOAD_PII_SCAN_TOOLS: frozenset[str] = frozenset({"drive_upload_file", "peek_upload_page"})
@@ -784,6 +794,7 @@ def notify_rules_changed() -> None:
 
 
 __all__ = [
+    "PERSONAL_DATA_READ_TOOLS",
     "PERSONAL_DATA_RULE_TOOLS",
     "UPLOAD_PII_SCAN_TOOLS",
     "ReviewContext",
