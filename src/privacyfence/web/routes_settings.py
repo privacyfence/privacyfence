@@ -713,7 +713,7 @@ def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
     special-casing the other's default."""
     return (
         step_up is not None and step_up.enabled and step_up.require_passkey
-        and (action in _SENSITIVE_ACTIONS)
+        and action in _SENSITIVE_ACTIONS
     )
 
 

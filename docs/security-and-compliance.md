@@ -378,7 +378,7 @@ fields are still recorded
 The only verified identity is a redirect-URI attestation: the authorization code can only be
 delivered to a redirect URI the client registered, so a registration whose every redirect URI is
 one vendor's own callback got its tokens through that vendor. It needs no administrator step, and
-it applies to one OAuth registration only. Claude Code, Claude Desktop and any client with a
+it applies to one OAuth registration only. Claude Code and any client with a
 loopback redirect stay Not verified, because any local program can register one. A member, or a
 program using their signed-in browser session, can still register under a vendor's redirect URI and
 have their own calls shown as that vendor; it never reaches another member's calls

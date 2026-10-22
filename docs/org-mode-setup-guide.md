@@ -864,8 +864,8 @@ are one vendor's own callback, its tokens were obtained by that vendor, and its 
 - ChatGPT: `https://chatgpt.com/connector/oauth/<connector id>`
 - Gemini Enterprise: `https://vertexaisearch.cloud.google.com/oauth-redirect`
 
-A registration with any other redirect URI alongside them stays Not verified. Claude Code, Claude
-Desktop through the extension, and anything else with a loopback redirect (`http://localhost:...`)
+A registration with any other redirect URI alongside them stays Not verified. Claude Code and
+anything else with a loopback redirect (`http://localhost:...`)
 stay Not verified, because any local program can register one. Claude Desktop's custom connector
 most likely registers through claude.ai and is then shown as Claude. A person, or a program using
 their signed-in browser session, can register a client under a vendor's redirect URI and so have

@@ -40,8 +40,7 @@ attested tier, and the card shows it as verified with the AI system's icon. No a
 2. **All or nothing.** One redirect URI that matches no entry, or two URIs that match different
    entries, leaves the whole registration claimed: a single foreign URI is enough to send a code
    somewhere other than the vendor.
-3. **Everything else stays claimed.** A loopback redirect (Claude Code, Gemini CLI, Claude Desktop
-   through its extension) is a URI any local program can register, so those registrations keep the
+3. **Everything else stays claimed.** A loopback redirect (Claude Code, Gemini CLI) is a URI any local program can register, so those registrations keep the
    `client_info` tier and the card says the client *says* it is that system and is Not verified.
    Claude Desktop's custom connector most likely registers through claude.ai with the same redirect
    URI ([ADR 0094](0094-claude-clients-are-matched-by-their-observed-names.md)) and is then shown

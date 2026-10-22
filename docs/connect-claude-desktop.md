@@ -103,10 +103,9 @@ log still records the name Claude Desktop sent: through the extension that is
 In organization mode, Claude Desktop sends its own name when it registers and in the MCP handshake.
 Its custom connector most likely registers through your claude.ai account exactly as claude.ai does,
 as `Claude`, but that has not been verified. That name is a **claim**: the card says the caller *says* it is Claude Desktop and marks it **Not verified**,
-because any program can send the same name, and the extension's redirect URI is a loopback address
-that any local program can register. There is nothing an administrator can do about it. If the
-custom connector registers through claude.ai with claude.ai's own callback, it is shown as Claude,
-verified. See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking) and
+because any program can send the same name. There is nothing an administrator can do about it.
+If the custom connector registers through claude.ai with claude.ai's own callback, it is shown as
+Claude, verified; otherwise its name stays a claim. See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking) and
 [AI systems](org-mode-setup-guide.md#11-ai-systems).
 
 ## Troubleshooting
