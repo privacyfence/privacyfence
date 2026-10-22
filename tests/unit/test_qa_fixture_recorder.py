@@ -25,6 +25,7 @@ to be pointed at a real, already-authenticated account.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -1718,6 +1719,20 @@ class TestCheckGmail:
         results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
         result = next(r for r in results if r.method == "messages_matching")
         assert not result.ok and result.note == "messages_matching failed (HTTP 500)"
+
+    def test_addresses_quoted_in_a_reply_body_and_snippet_are_redacted(self):
+        quoted = base64.urlsafe_b64encode(b"On Fri, Dummy <test@privacyfence.eu> wrote:").decode().rstrip("=")
+        raw = {
+            "snippet": "Dummy &lt;test@privacyfence.eu&gt; wrote",
+            "payload": {"parts": [{"body": {"data": quoted, "size": 1}}, {"body": {"size": 0}}]},
+        }
+        redacted = recorder.redact_gmail_message(raw)
+        assert "privacyfence.eu" not in redacted["snippet"]
+        data = redacted["payload"]["parts"][0]["body"]["data"]
+        assert base64.urlsafe_b64decode(data + "==") == f"On Fri, Dummy <{recorder._REDACTED_EMAIL}> wrote:".encode()
+        assert redacted["payload"]["parts"][0]["body"]["size"] == len(base64.urlsafe_b64decode(data + "=="))
+        # An undecodable body is left alone rather than raising.
+        recorder.redact_gmail_message({"payload": {"body": {"data": "!!!"}}})
 
     def test_reply_threading_headers_are_redacted(self):
         raw = {"payload": {"headers": [

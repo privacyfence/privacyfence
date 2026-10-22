@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import copy
 import datetime
 import json
@@ -317,8 +318,33 @@ _REDACTED_MESSAGE_ID = "<qa-placeholder-message-id@example.com>"
 _SENSITIVE_GMAIL_HEADERS = {"from", "to", "cc", "bcc", "reply-to", "sender", "delivered-to", "return-path"}
 
 
+_EMAIL_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _redact_part_bodies(part: dict[str, Any]) -> None:
+    """Replace email addresses quoted inside a reply's body parts (``body.data`` is base64url)."""
+    body = part.get("body")
+    if isinstance(body, dict) and isinstance(body.get("data"), str):
+        padded = body["data"] + "=" * (-len(body["data"]) % 4)
+        try:
+            text = base64.urlsafe_b64decode(padded).decode("utf-8")
+        except ValueError:
+            text = None
+        if text is not None:
+            redacted = _EMAIL_IN_TEXT.sub(_REDACTED_EMAIL, text).encode("utf-8")
+            body["data"] = base64.urlsafe_b64encode(redacted).decode("ascii").rstrip("=")
+            body["size"] = len(redacted)
+    for sub_part in part.get("parts") or []:
+        if isinstance(sub_part, dict):
+            _redact_part_bodies(sub_part)
+
+
 def redact_gmail_message(raw: dict[str, Any]) -> dict[str, Any]:
     raw = copy.deepcopy(raw)
+    if isinstance(raw.get("snippet"), str):
+        raw["snippet"] = _EMAIL_IN_TEXT.sub(_REDACTED_EMAIL, raw["snippet"])
+    if isinstance(raw.get("payload"), dict):
+        _redact_part_bodies(raw["payload"])
     headers = ((raw.get("payload") or {}).get("headers")) or []
     for header in headers:
         if isinstance(header, dict) and str(header.get("name", "")).lower() in _SENSITIVE_GMAIL_HEADERS:
