@@ -1559,7 +1559,7 @@ class TestGetMessage:
 class TestSearchMessages:
     def test_requires_query_or_participant(self):
         client = make_client(MagicMock())
-        with pytest.raises(SlackClientError, match="requires a query, a participant, or both"):
+        with pytest.raises(SlackClientError, match="requires a query, a participant, or minutes"):
             client.search_messages("")
 
     def test_uses_channel_name_from_match_when_present(self):
@@ -1607,6 +1607,91 @@ class TestSearchMessages:
         client.search_messages("budget", days=0)
 
         assert web_client.search_messages.call_args.kwargs["query"] == "budget"
+
+    @staticmethod
+    def _match(text, seconds_ago):
+        return {
+            "text": text,
+            "ts": f"{time.time() - seconds_ago:.6f}",
+            "channel": {"id": "C1", "name": "general"},
+        }
+
+    @staticmethod
+    def _web_client(*matches):
+        web_client = MagicMock()
+        web_client.search_messages.return_value = {"messages": {"matches": list(matches)}}
+        return web_client
+
+    def test_minutes_alone_is_enough(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("", minutes=60)
+        web_client.search_messages.assert_called_once()
+
+    def test_minutes_search_sorts_by_timestamp(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("", count=7, minutes=60)
+        d = (datetime.now(timezone.utc) - timedelta(minutes=60, days=2)).strftime("%Y-%m-%d")
+        assert web_client.search_messages.call_args.kwargs == {
+            "query": f"after:{d}", "count": 7, "sort": "timestamp", "sort_dir": "desc",
+        }
+
+    def test_minutes_search_with_query_prefixes_it(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("budget", minutes=60)
+        assert web_client.search_messages.call_args.kwargs["query"].startswith("budget after:")
+
+    def test_minutes_drops_matches_older_than_the_cutoff(self):
+        web_client = self._web_client(self._match("new", 300), self._match("old", 7200))
+        results = make_client(web_client).search_messages("", minutes=60)
+        assert [m.text for m in results] == ["new"]
+
+    def test_minutes_result_is_newest_first(self):
+        web_client = self._web_client(
+            self._match("a", 600), self._match("b", 60), self._match("c", 300)
+        )
+        results = make_client(web_client).search_messages("", minutes=60)
+        assert [m.text for m in results] == ["b", "c", "a"]
+
+    def test_minutes_api_error_becomes_slack_client_error(self):
+        web_client = MagicMock()
+        web_client.search_messages.side_effect = slack_error()
+        with pytest.raises(SlackClientError, match="search_messages failed"):
+            make_client(web_client).search_messages("", minutes=60)
+
+    def test_minutes_with_participant_reads_history_from_the_cutoff(self):
+        web_client = MagicMock()
+        web_client.conversations_list.side_effect = [
+            {"channels": [{"id": "D1", "user": "U1"}], "response_metadata": {}},  # list_dms
+            {"channels": [], "response_metadata": {}},  # list_group_chats
+        ]
+        web_client.users_info.return_value = {"user": {"id": "U1", "name": "bob", "real_name": "Bob Smith"}}
+        web_client.conversations_info.return_value = {"channel": {"name": "bob-dm"}}
+        web_client.conversations_history.return_value = {
+            "messages": [{"user": "U1", "text": "hi there", "ts": "1"}]
+        }
+        make_client(web_client).search_messages(participant="bob", minutes=60)
+        oldest = web_client.conversations_history.call_args.kwargs["oldest"]
+        assert isinstance(oldest, str)
+        assert abs(float(oldest) - (time.time() - 3600)) < 5
+        web_client.search_messages.assert_not_called()
+
+    def test_minutes_is_clamped_to_seven_days(self):
+        huge, capped = self._web_client(), self._web_client()
+        make_client(huge).search_messages("", minutes=10**6)
+        make_client(capped).search_messages("", minutes=10080)
+        assert (
+            huge.search_messages.call_args.kwargs == capped.search_messages.call_args.kwargs
+        )
+
+    def test_negative_minutes_with_nothing_else_raises(self):
+        with pytest.raises(SlackClientError, match="requires a query, a participant, or minutes"):
+            make_client(MagicMock()).search_messages("", minutes=-5)
+
+    def test_days_search_sends_no_sort(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("budget")
+        web_client.search_messages.assert_called_once()
+        assert "sort" not in web_client.search_messages.call_args.kwargs
 
     def test_participant_given_skips_slack_search_api_entirely(self):
         web_client = MagicMock()
