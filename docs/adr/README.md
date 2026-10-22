@@ -312,6 +312,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0218](0218-a-gmail-label-rule-can-allow-archiving-a-message-that-carries-the-label.md) | A Gmail label rule can allow archiving a message that carries the label | Accepted; relates to 0172, 0204 |
 | [0219](0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md) | A scoped token can let email and Slack reads return personal data | Accepted; amends 0173 |
 | [0220](0220-a-routines-rule-profile-is-a-scoped-token.md) | A routine's rule profile is a scoped token | Accepted; relates to 0164, 0015 |
-| [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md) | Slack rules cover mentions of the signed-in user | Accepted; relates to 0172 |
+| [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md) | Slack rules cover mentions of the signed-in user | Accepted; relates to 0172; amended by 0227 |
 | [0222](0222-a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time.md) | A Gmail query rule is evaluated by Gmail against the message at call time | Accepted; relates to 0172, 0204 |
 | [0223](0223-recent-slack-activity-is-read-through-time-sorted-search.md) | Recent Slack activity is read through a time-sorted search | Accepted |
+| [0225](0225-a-slack-rule-can-cover-the-conversations-the-user-is-a-member-of.md) | A Slack rule can cover the conversations the signed-in user is a member of, checked live on each call | Accepted; relates to 0172, 0221 |
+| [0226](0226-member-only-slack-search-drops-other-conversations-before-the-gate.md) | Member-only Slack search drops results from other conversations before the gate, on the agent's request | Accepted; relates to 0221, 0223 |
+| [0227](0227-an-extra-scope-can-give-each-verb-its-own-predicate.md) | An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with | Accepted; amends 0221 |

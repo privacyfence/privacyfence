@@ -399,8 +399,9 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Gmail / Calendar — anything | attribute | — | `always_allow` | always (unconditional) |
 | Gmail — anything | attribute | — | `gmail.anything` | always (used for Gmail filters) |
 | Slack channel | identity | channel or user ids | `approved_channel`, `approved_channel_all_results`, `approved_recipient`, `send_to_myself` | the channel is one of these; for a search, every result is in one of them; `send_to_myself` takes no ids and holds only for your DM with yourself |
-| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is your DM with yourself (a DM with anyone else, or one PrivacyFence could not confirm as yours, never matches); a group DM; every result is from a public channel |
-| Slack mentions of me | attribute | — | `slack.mentions_of_me` | a search whose every result @-mentions you, or a thread read in which at least one message does |
+| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is your DM with yourself (a DM with anyone else, or one PrivacyFence could not confirm as yours, never matches); every group DM; every result is from a public channel |
+| Slack mentions of me | attribute | — | `slack.mentions_of_me`, `slack.mentions_of_me_all_results` | search: every result @-mentions you; read: a thread in which at least one message does |
+| Slack conversations I'm a member of | attribute | channel ids to exclude (optional) | `slack.my_conversations`, `slack.my_conversations_all_results` | you are a member of the conversation now (checked with Slack on each call) and it is not excluded; for a search made with `member_only`, every result is from such a conversation |
 | Slack direct messages to me | attribute | — | `slack.direct_messages_to_me` | the channel is a one-to-one DM |
 | Slack — anything | attribute | — | `slack.anything` | always (used for creating group chats) |
 | Telegram chat | identity | chat ids | `approved_chats`, `approved_chats_all_results` | the chat is one of these; for a search, every result is in one of them |
