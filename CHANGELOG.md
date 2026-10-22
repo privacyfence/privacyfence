@@ -43,6 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **claude.ai, ChatGPT and Gemini Enterprise are verified without an admin step.** In organization mode, a client that registered only with its vendor's own redirect URI is shown as verified. Claude Code and other clients with a local redirect stay Not verified.
+
+### Removed
+
+- The **AI systems** settings page and its per-registration pins. Pins are no longer read; an organization deployment can delete `org/agent_pins.json`.
+
 ## [6.8.0] — 2026-10-22
 
 ### Added

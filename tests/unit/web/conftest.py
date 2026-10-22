@@ -36,11 +36,10 @@ def org_idp() -> oi.IdpConfig:
 
 
 def isolate_org_oauth_stores(tmp_path, monkeypatch) -> None:
-    """Points the DCR client store, the refresh-token store and the AI-systems pin store at
+    """Points the DCR client store and the refresh-token store at
     ``tmp_path``, so a provider built afterwards touches nothing outside the test."""
     monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
     monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
-    monkeypatch.setattr("privacyfence.web.oauth_provider.pins_file_path", lambda: tmp_path / "agent_pins.json")
     # Remembered consents live under the person's data directory.
     monkeypatch.setattr("privacyfence.paths.data_dir", lambda: tmp_path)
 

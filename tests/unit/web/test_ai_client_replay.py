@@ -4,10 +4,10 @@ body, ``/authorize`` with the IdP leg faked, ``/token``, ``initialize`` with the
 ``clientInfo``, ``tools/list`` and one read ``tools/call``.
 
 It catches a server-side change that breaks a client CI cannot run itself (claude.ai, for one), and
-pins what the call is attributed to (ADR 0035): unpinned, from the client's own claims, where the
-DCR ``client_name`` wins over ``clientInfo`` and the source is ``client_info``; and pinned by an
-admin on Settings -> AI systems, the one attested source, ``oauth_client``. Each fixture's
-``README.md`` names both expected ``agent_id`` values, so a fixture carries its own expectation.
+pins what the call is attributed to: the AI system its redirect URIs attest (ADR 0224),
+``oauth_client``, or else the client's own claims, where the DCR ``client_name`` wins over
+``clientInfo`` and the source is ``client_info``. Each fixture's ``README.md`` names the expected
+``agent_id`` and ``agent_source``, so a fixture carries its own expectation.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import pytest
 from mcp import types
 from starlette.applications import Starlette
 
-from privacyfence.agent_identity import AgentSource, current_agent
+from privacyfence.agent_identity import current_agent
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
@@ -37,8 +37,7 @@ from tests.unit.web.conftest import (
 )
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "ai_clients"
-EXPECTED_RE = re.compile(r"^- Expected agent_id, (unpinned|pinned): `([^`]+)`$", re.MULTILINE)
-ADMIN = "admin@example.com"
+EXPECTED_RE = re.compile(r"^- Expected (agent_id|agent_source): `([^`]+)`$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -46,8 +45,8 @@ class RecordedClient:
     slug: str
     register_body: dict
     initialize_params: dict
-    expected_unpinned: str
-    expected_pinned: str
+    expected_agent_id: str
+    expected_agent_source: str
 
     @property
     def redirect_uri(self) -> str:
@@ -61,14 +60,14 @@ class RecordedClient:
 
 def _load(directory: Path) -> RecordedClient:
     expected = dict(EXPECTED_RE.findall((directory / "README.md").read_text(encoding="utf-8")))
-    assert set(expected) == {"unpinned", "pinned"}, (
-        f"{directory.name}/README.md must name both expected agent_ids (see ai_clients/README.md)"
+    assert set(expected) == {"agent_id", "agent_source"}, (
+        f"{directory.name}/README.md must name the expected agent_id and agent_source (see ai_clients/README.md)"
     )
     return RecordedClient(
         slug=directory.name,
         register_body=json.loads((directory / "register.json").read_text(encoding="utf-8")),
         initialize_params=json.loads((directory / "initialize.json").read_text(encoding="utf-8")),
-        expected_unpinned=expected["unpinned"], expected_pinned=expected["pinned"],
+        expected_agent_id=expected["agent_id"], expected_agent_source=expected["agent_source"],
     )
 
 
@@ -91,20 +90,20 @@ class AgentEchoConnector(Connector):
 
 
 def _build_app(tmp_path, monkeypatch):
-    """The org-mode ``/mcp`` and OAuth routes, wired to the provider's DCR names and admin pins the
-    way server.py's org app wires them."""
+    """The org-mode ``/mcp`` and OAuth routes, wired to the provider's DCR names and redirect-URI
+    attestation the way server.py's org app wires them."""
     isolate_org_oauth_stores(tmp_path, monkeypatch)
     provider = OrgOAuthProvider(org_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
     dispatcher = McpDispatcher(lambda: {"echo": AgentEchoConnector()})
     mcp_route, session_manager = mount_mcp(
         dispatcher, verifier=provider,
-        client_names=provider.client_name, pinned_agents=provider.pinned_agent_id,
+        client_names=provider.client_name, attested_agents=provider.attested_agent_id,
     )
     app = Starlette(routes=[mcp_route, *mount_org_oauth(provider, issuer_url=ISSUER)])
     return app, provider, session_manager
 
 
-async def _replay(recorded: RecordedClient, tmp_path, monkeypatch, *, pin: bool) -> dict:
+async def _replay(recorded: RecordedClient, tmp_path, monkeypatch) -> dict:
     """Runs the recorded handshake end to end and returns the read call's structured result."""
     app, provider, session_manager = _build_app(tmp_path, monkeypatch)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
@@ -126,9 +125,6 @@ async def _replay(recorded: RecordedClient, tmp_path, monkeypatch, *, pin: bool)
             client_secret=client_secret,
         )
 
-    if pin:
-        provider.agent_pins.pin(client_id, recorded.expected_pinned, pinned_by=ADMIN)
-
     async with mcp_lifespan(session_manager):
         async with mcp_session(app, access_token=tokens["access_token"], client_info=recorded.client_info) as session:
             listed = await session.list_tools()
@@ -145,16 +141,8 @@ def test_every_fixture_directory_is_complete():
 
 
 @pytest.mark.parametrize("client_dir", CLIENT_DIRS, ids=lambda p: p.name)
-async def test_unpinned_handshake_succeeds_and_is_attributed_to_the_clients_claim(client_dir, tmp_path, monkeypatch):
+async def test_handshake_succeeds_and_is_attributed(client_dir, tmp_path, monkeypatch):
     recorded = _load(client_dir)
-    assert await _replay(recorded, tmp_path, monkeypatch, pin=False) == {
-        "agent_id": recorded.expected_unpinned, "agent_source": AgentSource.CLIENT_INFO.value,
-    }
-
-
-@pytest.mark.parametrize("client_dir", CLIENT_DIRS, ids=lambda p: p.name)
-async def test_pinned_handshake_is_attributed_to_the_admins_pin(client_dir, tmp_path, monkeypatch):
-    recorded = _load(client_dir)
-    assert await _replay(recorded, tmp_path, monkeypatch, pin=True) == {
-        "agent_id": recorded.expected_pinned, "agent_source": AgentSource.OAUTH_CLIENT.value,
+    assert await _replay(recorded, tmp_path, monkeypatch) == {
+        "agent_id": recorded.expected_agent_id, "agent_source": recorded.expected_agent_source,
     }

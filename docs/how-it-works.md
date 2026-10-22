@@ -231,13 +231,14 @@ you decide.
 
 Several AI systems can share one PrivacyFence. Each card and each audit-log entry names the AI
 system that made the request, and says how far that name can be trusted
-([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)).
+([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md),
+[ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md)).
 The audit log records four fields: `agent_id`, `agent_name`, `agent_version` and `agent_source`.
 
 | `agent_source` | Trust | Recorded when |
 |---|---|---|
-| `oauth_client` | attested | Organization mode only: an administrator has pinned the AI system's OAuth client to a known AI system on the **AI systems** settings page. This is the only attested source. |
-| `client_info` | claimed | The name the client itself sent: the MCP handshake's `clientInfo.name`, an unpinned OAuth client's registered name, or a local `agent_overrides` relabel. |
+| `oauth_client` | attested | Organization mode only: the OAuth client registered only with a vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), so its tokens were obtained by that vendor. No administrator step; see [AI systems](org-mode-setup-guide.md#11-ai-systems). This is the only attested source. |
+| `client_info` | claimed | The name the client itself sent: the MCP handshake's `clientInfo.name`, an OAuth client's registered name, or a local `agent_overrides` relabel. |
 | `""` (empty) | unknown | No usable name. Recorded as unknown, never guessed. |
 
 A call made with a [scoped token](security-and-compliance.md#scoped-tokens) is recorded as the
