@@ -27,7 +27,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.connection import Connection
 
-from privacyfence import scoped_tokens
+from privacyfence import local_files, scoped_tokens
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
@@ -456,6 +456,64 @@ class TestCallConnectorTool:
             await session.call_tool("echo_say", {"message": "hi"})
             await session.call_tool("echo_say", {"message": "hi"})
         assert len(connector.calls) == 1
+
+
+class TestFileBridgeOverTheWire:
+    """ADR 0007 SS1.1's wire protocol, driven in process. The Node shim contract test
+    (tests/integration/test_shim_mcp_contract.py) covers it end to end, but it skips
+    itself when the shim cannot be built, and this module is under a 100% floor -- so
+    the Python half must not depend on it."""
+
+    async def test_a_connector_needing_local_files_gets_a_need_uploads_result(self):
+        class NeedsFilesConnector(EchoConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                raise local_files.LocalFilesNeeded(["~/a.pdf", "~/b.pdf"], max_bytes=1000)
+
+        dispatcher = _dispatcher({"echo": NeedsFilesConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.is_error is False
+        assert "~/a.pdf, ~/b.pdf" in result.content[0].text
+        bridge = result.meta[local_files.META_KEY]
+        assert bridge["v"] == 1
+        assert bridge["op"] == "need_uploads"
+        assert [f["path"] for f in bridge["files"]] == ["~/a.pdf", "~/b.pdf"]
+        assert all(f["upload_path"] == f"/mcp-files/uploads/{f['slot']}" for f in bridge["files"])
+
+    async def test_a_staged_delivery_rides_back_in_the_result_meta(self):
+        delivery = {"dest_dir": "~/Downloads", "name": "report.pdf", "download_path": "/mcp-files/downloads/x"}
+
+        class DeliversConnector(EchoConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                local_files._current_state().pending_deliveries.append(delivery)
+                return {"ok": True}
+
+        dispatcher = _dispatcher({"echo": DeliversConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.structured_content == {"ok": True}
+        assert result.meta[local_files.META_KEY] == {"v": 1, "op": "deliver", "files": [delivery]}
+
+    async def test_the_second_round_uploads_map_reaches_the_connector(self):
+        seen: list[dict[str, str]] = []
+
+        class ReadsUploadsConnector(EchoConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                seen.append(dict(local_files._current_state().uploads))
+                return {}
+
+        dispatcher = _dispatcher({"echo": ReadsUploadsConnector()})
+        async with _connected_session(dispatcher) as session:
+            await session.call_tool(
+                "echo_say", {"message": "one"}, meta={local_files.META_KEY: {"uploads": {"~/a.pdf": "slot-a"}}},
+            )
+            # Malformed bridge metadata is ignored, never an error: a first-round call, or
+            # a client that does not do the handshake at all, behaves as if it were absent.
+            await session.call_tool("echo_say", {"message": "two"}, meta={local_files.META_KEY: "junk"})
+            await session.call_tool(
+                "echo_say", {"message": "three"}, meta={local_files.META_KEY: {"uploads": ["not", "a", "map"]}},
+            )
+        assert seen == [{"~/a.pdf": "slot-a"}, {}, {}]
 
 
 # --------------------------------------------------------------------------- #
