@@ -159,8 +159,15 @@ class TestSlackExtras:
         ):
             rules = catalogue.rules_for_catalogue_entry(group, None, verbs)
             assert rules
-            assert {r.predicate for r in rules} == {group}
+            expected = (
+                {group, "slack.mentions_of_me_all_results"} if group == "slack.mentions_of_me" else {group}
+            )
+            assert {r.predicate for r in rules} == expected
             assert all(r.operations == frozenset({"slack.read_messages"}) for r in rules)
+
+    def test_mentions_search_only_compiles_the_all_results_predicate(self):
+        rules = catalogue.rules_for_catalogue_entry("slack.mentions_of_me", None, [Verb.SEARCH])
+        assert [r.predicate for r in rules] == ["slack.mentions_of_me_all_results"]
 
     def test_neither_scope_takes_a_value(self):
         for group in ("slack.mentions_of_me", "slack.direct_messages_to_me"):

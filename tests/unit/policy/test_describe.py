@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from privacyfence.policy import describe, propose
+from privacyfence.policy import describe, propose, scope_rows
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import Verb
 
@@ -104,11 +104,21 @@ class TestExtraScopeVerbs:
         assert "slack_get_channel_history" in describe.covered_tools(rule)
 
     def test_mentions_rule_lists_read_and_search(self):
-        rule = PolicyRule(id="r", predicate="slack.mentions_of_me", value=None,
-                          operations=frozenset({"slack.read_messages"}))
-        assert set(describe.rule_verbs(rule)) == {Verb.READ, Verb.SEARCH}
-        assert "slack_search_messages" in describe.covered_tools(rule)
-        assert "slack_get_thread_replies" in describe.covered_tools(rule)
+        row = scope_rows.ScopeRow(
+            id="r", scope="slack.mentions_of_me", value=None,
+            verbs=frozenset({Verb.READ, Verb.SEARCH}), operations=frozenset({"slack.read_messages"}),
+        )
+        rules = scope_rows.compile_row(row)
+        covered = {tool for rule in rules for tool in describe.covered_tools(rule)}
+        assert "slack_search_messages" in covered
+        assert "slack_get_thread_replies" in covered
+
+    def test_each_mentions_predicate_credits_only_its_own_verb(self):
+        ops = frozenset({"slack.read_messages"})
+        search = PolicyRule(id="r", predicate="slack.mentions_of_me_all_results", value=None, operations=ops)
+        thread = PolicyRule(id="r", predicate="slack.mentions_of_me", value=None, operations=ops)
+        assert describe.rule_verbs(search) == (Verb.SEARCH,)
+        assert describe.rule_verbs(thread) == (Verb.READ,)
 
 
 class TestSentences:

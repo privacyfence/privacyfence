@@ -513,12 +513,6 @@ def _mentions_ctx(tool: str, messages, own="U_ME"):
 class TestSlackMentionsOfMe:
     selector = NEW_SCOPE_SELECTORS["slack.mentions_of_me"]
 
-    def test_search_needs_every_result_to_mention_me(self):
-        both = [_slack_msg("hi <@U_ME>"), _slack_msg("<@U_ME> ping")]
-        mixed = [_slack_msg("hi <@U_ME>"), _slack_msg("no mention")]
-        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", both)) is True
-        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", mixed)) is False
-
     def test_thread_replies_need_one_mention(self):
         thread = [_slack_msg("starter"), _slack_msg("reply <@U_ME>")]
         none = [_slack_msg("starter"), _slack_msg("reply")]
@@ -527,6 +521,34 @@ class TestSlackMentionsOfMe:
 
     def test_channel_history_never_matches(self):
         msgs = [_slack_msg("<@U_ME>")]
+        assert self.selector.matches(None, _mentions_ctx("slack_get_channel_history", msgs)) is False
+
+    def test_thread_selector_never_matches_a_search(self):
+        msgs = [_slack_msg("<@U_ME>")]
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", msgs)) is False
+
+    def test_no_own_user_id_never_matches(self):
+        msgs = [_slack_msg("<@U_ME>")]
+        for own in ("", None, 5):
+            assert self.selector.matches(None, _mentions_ctx("slack_get_thread_replies", msgs, own)) is False
+
+    def test_empty_results_never_match(self):
+        for data in ([], None, [None]):
+            assert self.selector.matches(None, _mentions_ctx("slack_get_thread_replies", data)) is False
+
+
+class TestSlackMentionsOfMeAllResults:
+    selector = NEW_SCOPE_SELECTORS["slack.mentions_of_me_all_results"]
+
+    def test_search_needs_every_result_to_mention_me(self):
+        both = [_slack_msg("hi <@U_ME>"), _slack_msg("<@U_ME> ping")]
+        mixed = [_slack_msg("hi <@U_ME>"), _slack_msg("no mention")]
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", both)) is True
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", mixed)) is False
+
+    def test_search_selector_never_matches_a_thread(self):
+        msgs = [_slack_msg("<@U_ME>")]
+        assert self.selector.matches(None, _mentions_ctx("slack_get_thread_replies", msgs)) is False
         assert self.selector.matches(None, _mentions_ctx("slack_get_channel_history", msgs)) is False
 
     def test_no_own_user_id_never_matches(self):

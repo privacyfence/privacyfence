@@ -35,7 +35,8 @@ named one specific file by id rather than a folder), `apps_script.project` (Apps
 no scope at all), `grist.document` (Grist's seven operation keys name one document by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
 make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
 Auto-accept Settings page; see their own comment below for why they are not simply more
-`always_allow` rules. `slack.mentions_of_me` and `slack.direct_messages_to_me` read arguments the Slack
+`always_allow` rules. `slack.mentions_of_me` (thread replies), `slack.mentions_of_me_all_results` (searches) and
+`slack.direct_messages_to_me` read arguments the Slack
 connector computes (`own_user_id`, `is_one_to_one_dm`) and so resolve from the fetched item.
 
 ``policy.engine.evaluate``/``preflight`` are what consume this module in production.
@@ -621,20 +622,31 @@ def _one_to_one_dm_matches(_value: Any, ctx: ReviewContext) -> bool:
     return ctx.args.get("is_one_to_one_dm") is True
 
 
-def _mentions_of_me_matches(_value: Any, ctx: ReviewContext) -> bool:
+def _mention_flags(ctx: ReviewContext) -> list[bool] | None:
+    """One flag per fetched message: whether it mentions the signed-in user. ``None`` when the
+    user id is unknown or the fetched item is missing or holds a ``None``."""
     own = ctx.args.get("own_user_id")
     if not isinstance(own, str) or not own:
-        return False
+        return None
     messages = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
     if not messages or any(m is None for m in messages):
-        return False
+        return None
     pattern = re.compile(r"<@" + re.escape(own) + r"(?:\|[^>]*)?>")
-    mentions = [bool(pattern.search(getattr(m, "text", "") or "")) for m in messages]
-    if ctx.tool == "slack_search_messages":
-        return all(mentions)
-    if ctx.tool == "slack_get_thread_replies":
-        return any(mentions)
-    return False
+    return [bool(pattern.search(getattr(m, "text", "") or "")) for m in messages]
+
+
+def _mentions_of_me_matches(_value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool != "slack_get_thread_replies":
+        return False
+    flags = _mention_flags(ctx)
+    return flags is not None and any(flags)
+
+
+def _mentions_of_me_all_results_matches(_value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool != "slack_search_messages":
+        return False
+    flags = _mention_flags(ctx)
+    return flags is not None and all(flags)
 
 
 def _gmail_query_matches(value: Any, ctx: ReviewContext) -> bool:
@@ -680,6 +692,11 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         predicate="slack.mentions_of_me", scope_type="slack.mentions_of_me",
         kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
         matches=_mentions_of_me_matches,
+    ),
+    "slack.mentions_of_me_all_results": ScopeSelector(
+        predicate="slack.mentions_of_me_all_results", scope_type="slack.mentions_of_me",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_mentions_of_me_all_results_matches,
     ),
     # The connector evaluates the query with Gmail itself and passes the matching rule values.
     "gmail.query": ScopeSelector(

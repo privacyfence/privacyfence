@@ -43,6 +43,13 @@ class TestMissingOperations:
         stale = _without(full, "sheets.read_values")
         assert outdated.missing_operations(stale) == {"sheets.read_values"}
 
+    def test_a_per_verb_predicate_rule_reports_no_missing_operations(self):
+        rule = PolicyRule(
+            id="r", predicate="slack.mentions_of_me_all_results", value=None,
+            operations=frozenset({"slack.read_messages"}),
+        )
+        assert outdated.missing_operations(rule) == frozenset()
+
     def test_an_extra_scope_rule_is_supported(self):
         full = _rule("apps_script.project", ["SCRIPT1"], [Verb.READ, Verb.UPDATE])
         stale = _without(full, "apps_script.read_execution_log")

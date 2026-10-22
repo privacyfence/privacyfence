@@ -51,6 +51,14 @@ _LABEL_MESSAGE = (
 
 _SECONDS_PER_DAY = 86400
 
+# A token's limit records (predicate, operation) pairs as they compiled when the token was made.
+# A token made before a scope split one predicate per verb (ADR 0227) recorded the old pair for
+# both verbs, so for such a token -- and only such a token -- the old pair stands for both.
+_LIMIT_PAIR_SUCCESSORS: dict[tuple[str, str], tuple[str, str]] = {
+    ("slack.mentions_of_me", "slack.read_messages"):
+        ("slack.mentions_of_me_all_results", "slack.read_messages"),
+}
+
 
 @dataclass(frozen=True)
 class ScopedToken:
@@ -69,6 +77,9 @@ class ScopedToken:
     # Per rule id the token carries: the (predicate, operation) pairs that may auto-accept under it
     # for this token. A rule id with no entry is used whole (a token never upgraded).
     rule_limits: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict, hash=False)
+    # True for a token whose limits were recorded after scopes gave each verb its own predicate
+    # (ADR 0227); only a token without it gets ``_LIMIT_PAIR_SUCCESSORS`` applied on read.
+    limits_split_verbs: bool = False
 
     def days_left(self, now: float) -> int:
         return max(0, math.ceil((self.expires_at - now) / _SECONDS_PER_DAY))
@@ -185,7 +196,18 @@ def _to_json(token: ScopedToken) -> dict[str, Any]:
         data["allow_personal_data_reads"] = True
     if token.rule_limits:
         data["rule_limits"] = {rid: sorted([p, o] for p, o in pairs) for rid, pairs in sorted(token.rule_limits.items())}
+    if token.limits_split_verbs:
+        data["limits_split_verbs"] = True
     return data
+
+
+def _with_limit_successors(
+    limits: dict[str, frozenset[tuple[str, str]]],
+) -> dict[str, frozenset[tuple[str, str]]]:
+    return {
+        rid: pairs | {succ for pair, succ in _LIMIT_PAIR_SUCCESSORS.items() if pair in pairs}
+        for rid, pairs in limits.items()
+    }
 
 
 def _limits_from_json(raw: Any) -> dict[str, frozenset[tuple[str, str]]]:
@@ -206,6 +228,8 @@ def _limits_from_json(raw: Any) -> dict[str, frozenset[tuple[str, str]]]:
 
 
 def _from_json(principal_id: str, raw: Any) -> ScopedToken:
+    split_verbs = raw.get("limits_split_verbs", False) is True
+    limits = _limits_from_json(raw.get("rule_limits", {}))
     return ScopedToken(
         id=str(raw["id"]),
         label=str(raw["label"]),
@@ -219,7 +243,8 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         tools=frozenset(str(t) for t in raw["tools"]),
         allow_personal_data=raw.get("allow_personal_data", False) is True,
         allow_personal_data_reads=raw.get("allow_personal_data_reads", False) is True,
-        rule_limits=_limits_from_json(raw.get("rule_limits", {})),
+        rule_limits=limits if split_verbs else _with_limit_successors(limits),
+        limits_split_verbs=split_verbs,
     )
 
 
@@ -456,6 +481,7 @@ class ScopedTokenStore:
                 allow_personal_data=allow_personal_data,
                 allow_personal_data_reads=allow_personal_data_reads,
                 rule_limits=limits,
+                limits_split_verbs=True,
             )
             self._tokens[principal.id] = [*existing, token]
             self._write(principal)
