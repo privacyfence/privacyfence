@@ -75,9 +75,9 @@ request handlers) *and* from plain OS threads (WebApprovalUI's blocking
 calls run on gate.py's ``_popup_executor``; a rules-changed broadcast can
 fire from any thread that called ``auto_accept.reload_rules()``, e.g. the
 AppKit main thread). ``threading.Event`` is safe to set/wait from any of
-them; ``wait_async()`` bridges back into the event loop via
-``asyncio.to_thread`` for the one caller (gate.py) that needs a non-blocking
-await.
+them; ``wait_async()`` polls the event from the event loop itself for the
+one caller (gate.py) that needs a non-blocking await -- see its docstring
+for why it no longer parks a thread on it.
 """
 from __future__ import annotations
 
@@ -132,6 +132,10 @@ DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 # Claude can move on to the next independently-ready call. See
 # PendingApprovalRegistry.has_other_live() and gate.py's own docstring.
 DEFAULT_ADAPTIVE_HOLD = True
+
+# How often wait_async() re-checks a finalize_event: the most a decision made
+# inside the hold window can wait before the held call notices it.
+_WAIT_POLL_SECONDS = 0.05
 
 # Every UI-step decision a card/confirmation can resolve to -- the same
 # vocabulary approval_window_html.py's own JS uses. "auto_accepted" is never produced by a UI step (no
@@ -864,10 +868,24 @@ class PendingApprovalRegistry:
 
     async def wait_async(self, approval: PendingApproval, timeout: float) -> bool:
         """True if ``approval`` was finalized within ``timeout`` seconds,
-        else False (still pending -- see gate.py's own use of this)."""
+        else False (still pending -- see gate.py's own use of this).
+
+        Polls on the event loop rather than blocking a worker in
+        ``asyncio.to_thread``'s default pool on ``finalize_event.wait``: that
+        pool is the one every connector fetch and PII scan needs, and with
+        more hold windows open than it has workers (org mode -- one held call
+        per person) the next person's card queued behind them for the whole
+        hold window (tests/unit/test_gate_latency.py)."""
         import asyncio
 
-        return await asyncio.to_thread(approval.finalize_event.wait, timeout)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not approval.finalize_event.is_set():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(_WAIT_POLL_SECONDS, remaining))
+        return True
 
     def mark_collected(self, approval: PendingApproval) -> None:
         """Record that ``approval``'s outcome reached a caller directly: the

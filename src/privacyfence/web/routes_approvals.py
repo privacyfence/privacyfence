@@ -95,6 +95,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -581,6 +582,10 @@ def _build_route_list(
             # executor's worker count, that's routine, not exceptional --
             # _inject_shim below assumes a real document, so serve a
             # placeholder instead of letting that raise into a 500.
+            logger.info(
+                "Approval %s (%s) not rendered yet, %.1fs after it was registered -- served the placeholder",
+                card.id, card.kind, time.time() - card.created_at,
+            )
             return HTMLResponse(
                 web_shell.plain_page(
                     "<h1>Preparing this request</h1>"
