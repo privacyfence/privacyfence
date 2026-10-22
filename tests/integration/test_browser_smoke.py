@@ -2660,7 +2660,7 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "AI systems", "About"]
+        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "AI systems", "Stats", "About"]
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "org-settings-admin")
 
@@ -2844,7 +2844,7 @@ def phone_page(browser, request):
     ctx.close()
 
 
-_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "about")
+_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "stats", "about")
 _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 

@@ -274,6 +274,14 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-agents-name { font-size: var(--step-body); font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
 .pf-agents-meta { font-size: 13px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .pf-agents-controls { display: flex; flex-wrap: wrap; gap: var(--space-2xs); align-items: center; margin-top: 6px; font-size: var(--step-small); color: var(--ink-soft); }
+/* The admin's Stats page (ADR 0217). */
+.pf-stats-tiles { --min: 160px; --grid-gap: var(--space-xs); }
+.pf-stat-value { font-size: var(--step-h3); font-weight: 750; color: var(--ink); font-variant-numeric: tabular-nums; }
+.pf-stat-label { font-size: var(--step-small); color: var(--ink-soft); margin-top: 2px; }
+.pf-stats-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px var(--space-xs); padding: 12px var(--space-s); }
+.pf-stats-row + .pf-stats-row { border-top: 1px solid var(--line); }
+.pf-stats-name { font-size: var(--step-body); font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.pf-stats-count { font-size: var(--step-small); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
 /* ---- About ---- */
 .pf-about-page { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding-block: var(--space-l); }
@@ -321,7 +329,7 @@ _JS = r"""
   // (ADR 0032).
   var CAPS = window.__pfCapabilities || {
     mode: 'local', is_admin: false,
-    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
+    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, stats: false, about: true },
     not_applicable_actions: [],
     personalTransfer: false,
   };
@@ -471,7 +479,7 @@ _JS = r"""
 
   var NAV_ITEMS = [
     ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['scoped_tokens', 'Scoped tokens'], ['auto_accept', 'Auto-accept'],
-    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
+    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['stats', 'Stats'], ['about', 'About'],
   ];
 
   // A tabstrip (app.css) above the content when the page is narrow, a
@@ -1273,6 +1281,61 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
+  // Stats (org mode, admin only -- ADR 0217)
+  // -------------------------------------------------------------------- //
+
+  function plural(n, one, many) {
+    return n + ' ' + (n === 1 ? one : many);
+  }
+
+  function renderStats(state) {
+    var stats = state.stats || {
+      users: { total: 0, with_connectors: 0, with_rules: 0 }, connectors: [], rules: { total: 0, by_connector: [] },
+    };
+    var html = '<div class="pf-page">';
+    html += '<h1 class="pf-page-title">Stats</h1>';
+    html += '<div class="pf-page-subtitle">How this server is used, counted from every user who has signed in. Counts only: no user, rule value or credential is shown here.</div>';
+
+    html += '<h2 class="pf-group-title">Users</h2>';
+    html += '<div class="grid-auto pf-stats-tiles">';
+    [
+      [stats.users.total, 'signed in'],
+      [stats.users.with_connectors, 'connected a service'],
+      [stats.users.with_rules, 'keep an auto-accept rule'],
+    ].forEach(function (tile) {
+      html += '<div class="card pf-stat" data-stat-tile><div class="pf-stat-value">' + esc(String(tile[0])) +
+        '</div><div class="pf-stat-label">' + esc(tile[1]) + '</div></div>';
+    });
+    html += '</div>';
+
+    html += '<h2 class="pf-group-title">Connectors</h2>';
+    html += '<div class="card pf-list pf-stats-list">';
+    if (stats.connectors.length === 0) {
+      html += '<div class="pf-stats-row"><div class="pf-stats-count">This organization offers no connectors yet.</div></div>';
+    }
+    stats.connectors.forEach(function (c) {
+      html += '<div class="pf-stats-row" data-stat-connector="' + esc(c.service) + '">';
+      html += '<div class="pf-stats-name">' + esc(c.label) + (c.configured ? '' : ' <span class="badge">no longer offered</span>') + '</div>';
+      html += '<div class="pf-stats-count">' + esc(plural(c.users, 'user', 'users')) + ' connected</div></div>';
+    });
+    html += '</div>';
+
+    html += '<h2 class="pf-group-title">Auto-accept rules</h2>';
+    html += '<div class="card pf-list pf-stats-list">';
+    html += '<div class="pf-stats-row" data-stat-rules-total><div class="pf-stats-name">All connectors</div>' +
+      '<div class="pf-stats-count">' + esc(plural(stats.rules.total, 'rule', 'rules')) + '</div></div>';
+    stats.rules.by_connector.forEach(function (r) {
+      html += '<div class="pf-stats-row" data-stat-rules="' + esc(r.connector) + '">';
+      html += '<div class="pf-stats-name">' + esc(r.label) + '</div>';
+      html += '<div class="pf-stats-count">' + esc(plural(r.rules, 'rule', 'rules')) + ' from ' +
+        esc(plural(r.users, 'user', 'users')) + '</div></div>';
+    });
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // -------------------------------------------------------------------- //
   // Connect an AI client (ADR 0104)
   // -------------------------------------------------------------------- //
 
@@ -1751,6 +1814,7 @@ _JS = r"""
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
       case 'agents': return renderAgents(state);
+      case 'stats': return renderStats(state);
       case 'about': return renderAbout(state);
       default: return renderGeneral(state);
     }
@@ -2339,7 +2403,9 @@ _JS = r"""
 """
 
 
-_ALL_SECTIONS = ("general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "agents", "about")
+_ALL_SECTIONS = (
+    "general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "agents", "stats", "about",
+)
 
 # The four actions web/routes_settings.py's own bridge shim intercepts
 # client-side rather than forwarding to the generic dispatcher (that
@@ -2384,8 +2450,8 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     hidden rather than rendered empty; Audit Log is shown to every
     principal as a read-only list of their own recent decisions, its
     local-only export and log-level controls suppressed through
-    ``not_applicable_actions``; AI systems (ADR 0035 decision 3) is org-admin-only and
-    never shown in local mode; General and Privacy
+    ``not_applicable_actions``; AI systems (ADR 0035 decision 3) and Stats (ADR 0217) are
+    org-admin-only and never shown in local mode; General and Privacy
     Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
     split (every action either page
     can post is itself ``admin_only`` in ``ACTION_SCOPES``, so a non-admin
@@ -2397,7 +2463,8 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
             "mode": LOCAL_MODE, "is_admin": False,
             # The AI-system pin page is org-only -- local mode has no DCR
             # registrations to pin (settings.yaml's agent_overrides: only relabels, ADR 0037).
-            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False},
+            # Stats counts an org server's principals; local mode has one user.
+            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False, "stats": False},
             "not_applicable_actions": [],
         }
     return {
@@ -2406,7 +2473,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
             # Org mode's clients connect with OAuth 2.1, not a local token
             # (ADR 0011), so the local "Connect an AI client" page is never shown.
             "general": True, "connectors": False, "ai_client": False, "scoped_tokens": False, "auto_accept": True,
-            "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
+            "privacy": is_admin, "audit": True, "agents": is_admin, "stats": is_admin, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
     }

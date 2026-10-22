@@ -64,6 +64,7 @@ from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session
+from privacyfence.web import org_stats
 from privacyfence.web import routes_settings as ros
 
 
@@ -111,7 +112,7 @@ def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
 def _app(
     *, install_wide_settings=None, sessions=None, install_wide_settings_path="",
     step_up: StepUpConfig | None = None, connector_registry=None,
-    scoped_token_policy=None, scoped_token_store=None, scoped_token_page_data=None,
+    scoped_token_policy=None, scoped_token_store=None, scoped_token_page_data=None, org_config=None,
 ):
     sessions = sessions or org_session.OrgSessionStore()
     routes = ros.build_org_routes(
@@ -120,7 +121,7 @@ def _app(
         step_up=step_up or StepUpConfig(), step_up_origin=BASE_URL,
         connector_registry=connector_registry,
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_token_store,
-        scoped_token_page_data=scoped_token_page_data,
+        scoped_token_page_data=scoped_token_page_data, org_config=org_config,
     )
     return Starlette(routes=routes), sessions
 
@@ -212,6 +213,42 @@ class TestPrivacyPageAdminGating:
         assert '"grist_signin": "unavailable"' in body
         assert '"grist_server_url_pinned": ""' in body
         assert '"grist_auth": {"error": ""}' in body
+
+
+def _initial_state(body: str) -> dict:
+    match = re.search(r"window\.__pfInitialState = (\{.*?\});</script>", body, re.DOTALL)
+    assert match, "window.__pfInitialState assignment not found in the settings page"
+    return json.loads(match.group(1))
+
+
+class TestStatsSection:
+    """The admin's Stats page (ADR 0217): install-wide counts for an admin, nothing for anyone
+    else -- not even the counts, since those describe other people's use."""
+
+    def test_admin_state_counts_every_principal(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "carol")
+        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("drive.folder", "read", ["folder-a"]))
+        (tmp_path / "users" / "alice" / "credentials").mkdir()
+        (tmp_path / "users" / "alice" / "credentials" / "slack_token.json").write_text("{}", encoding="utf-8")
+        app, sessions = _app(org_config={"slack": {"client_id": "scid"}})
+        client = _client(app)
+        _signed_in(client, sessions, ADMIN)
+        body = client.get("/settings").text
+        assert _capabilities(body)["sections"]["stats"] is True
+        stats = _initial_state(body)["stats"]
+        assert stats["users"] == {"total": 2, "with_connectors": 1, "with_rules": 1}
+        assert {"service": "slack", "label": "Slack", "configured": True, "users": 1} in stats["connectors"]
+        assert stats["rules"]["by_connector"] == [{"connector": "drive", "label": "Drive", "rules": 1, "users": 1}]
+
+    def test_non_admin_gets_no_counts_and_no_section(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "bob")
+        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("drive.folder", "read", ["folder-a"]))
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, BOB)
+        body = client.get("/settings").text
+        assert _capabilities(body)["sections"]["stats"] is False
+        assert _initial_state(body)["stats"] == org_stats.empty()
 
 
 class TestPrivacyStateFromConfig:

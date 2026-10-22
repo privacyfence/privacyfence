@@ -1409,6 +1409,8 @@ def _build_org_app(
         # needs /mcp, so without a dispatcher the page offers none.
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
         scoped_token_page_data=org_scoped_token_page_data,
+        # The admin's Stats page (ADR 0217) lists the connectors this bundle offers.
+        org_config=org.org_config,
     ))
 
     lifespan = None

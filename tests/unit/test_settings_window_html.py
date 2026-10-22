@@ -831,9 +831,10 @@ class TestOrgCapabilities:
         # Connect an AI client needs an /mcp URL the caller did not pass;
         # every other section stays.
         assert caps["sections"]["agents"] is False
+        assert caps["sections"]["stats"] is False
         assert caps["sections"]["ai_client"] is False
         assert caps["sections"]["scoped_tokens"] is False
-        assert all(v for k, v in caps["sections"].items() if k not in ("agents", "ai_client", "scoped_tokens"))
+        assert all(v for k, v in caps["sections"].items() if k not in ("agents", "stats", "ai_client", "scoped_tokens"))
         assert caps["not_applicable_actions"] == []
 
     def test_local_state_is_unaffected_by_capabilities(self):
@@ -877,6 +878,10 @@ class TestOrgCapabilities:
     def test_ai_systems_page_is_org_admin_only(self):
         assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["agents"] is True
         assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["agents"] is False
+
+    def test_stats_page_is_org_admin_only(self):
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["stats"] is True
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["stats"] is False
 
     def test_not_applicable_actions_match_org_settings_scope(self):
         from privacyfence.web.org_settings_scope import NOT_APPLICABLE_ACTIONS

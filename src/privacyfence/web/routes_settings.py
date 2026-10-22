@@ -164,7 +164,7 @@ from ..settings_controller import (
 )
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
-from . import org_install_policy, org_session, step_up_decide
+from . import org_install_policy, org_session, org_stats, step_up_decide
 from .personal_settings_shim import personal_transfer_shim
 from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks, build_personal_routes
 from .approval_step_up import _verify_or_challenge
@@ -1464,6 +1464,7 @@ def build_org_routes(
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
+    org_config: dict[str, Any] | None = None,
 ) -> list[BaseRoute]:
     """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
     ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
@@ -1530,6 +1531,10 @@ def build_org_routes(
     mounted and answer 403 until it is enabled. ``scoped_token_store`` is the process-wide
     store unless a test passes its own; ``scoped_token_page_data`` builds the Settings
     section's data for the signed-in principal (``None``: the section is not drawn).
+
+    ``org_config`` is the installed org config bundle; the admin-only Stats page (ADR 0217,
+    web/org_stats.py) reads it to tell which connectors the org offers. ``None`` counts every
+    connector as not offered, so only those someone has connected are listed.
     """
     challenges = StepUpChallengeStore()
     token_policy = scoped_token_policy or ScopedTokenPolicy(enabled=False, max_days=DEFAULT_DAYS)
@@ -1596,7 +1601,8 @@ def build_org_routes(
         unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
         Auto-accept reads this principal's own on-disk rules; Audit Log
         this principal's own recent decisions; AI systems (admin only,
-        ADR 0035 decision 3) the OAuth provider's registrations and pins. Sections
+        ADR 0035 decision 3) the OAuth provider's registrations and pins; Stats (admin only,
+        ADR 0217) install-wide counts from every principal's files on disk. Sections
         this mode never shows at all (Connectors) get an inert
         placeholder -- settings_window_html._capabilities_for is what
         actually keeps them from ever rendering, not the shape of a
@@ -1657,6 +1663,7 @@ def build_org_routes(
             "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
             "agents": _agents_state() if principal.is_admin else {"clients": [], "stale_pins": [], "registry": []},
+            "stats": org_stats.collect(org_config or {}) if principal.is_admin else org_stats.empty(),
             "about": about,
         }
 
