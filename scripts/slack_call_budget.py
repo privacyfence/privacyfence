@@ -22,6 +22,7 @@ import argparse
 import collections
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
@@ -42,7 +43,7 @@ TIER_PER_MINUTE = {
     "users.info": 100,
     "users.list": 20,
     "search.messages": 20,
-    "users.conversations": 100,  # matches conversations.members' tier
+    "users.conversations": 50,  # Tier 3
 }
 # Round trip to slack.com. The sync WebClient builds a fresh urllib opener
 # per call (no connection pooling), so each of these also pays a TLS
@@ -101,11 +102,16 @@ def make_fake_web_client(users, channels, ims, mpims, history_cap):
                     ids += [c["id"] for c in mpims if user in _channel_members(c["id"], len(users))]
                 elif t == "im":
                     ids += [d["id"] for d in ims if d["user"] == user]
-            return _page(ids, "channels", cursor, limit)
+            # Slack returns channel objects, not bare ids.
+            return _page([{"id": i} for i in ids], "channels", cursor, limit)
+
+        def auth_test(self, **k):
+            # Not counted: auth.test has no tier entry and own_user_id caches it after one call.
+            return Resp({"user_id": "U0007"})
 
         def conversations_info(self, channel=None, **k):
             calls["conversations.info"] += 1
-            return Resp({"channel": {"name": "somechan", "is_mpim": False}})
+            return Resp({"channel": {"name": "somechan", "is_mpim": False, "is_member": True}})
 
         def conversations_history(self, channel=None, limit=50, **k):
             calls["conversations.history"] += 1
@@ -128,11 +134,14 @@ def make_fake_web_client(users, channels, ims, mpims, history_cap):
             calls["users.list"] += 1
             return _page(users, "members", cursor, limit)
 
-        def search_messages(self, query=None, count=20, **k):
+        def search_messages(self, query=None, count=20, page=1, **k):
             calls["search.messages"] += 1
             return Resp({"messages": {"matches": [
-                {"ts": f"170000000{i}.0001", "user": f"U{i:04d}", "text": "hit",
-                 "channel": {"id": f"C{i:04d}", "name": ""}} for i in range(count)]}})
+                {"ts": str(time.time() - i), "user": f"U{i:04d}", "text": "hit",
+                 "channel": {
+                     "id": f"C{((page - 1) * count + i) % len(channels):04d}", "name": ""}}
+                for i in range(count)],
+                "paging": {"page": page, "pages": 3}}})
 
     return FakeWebClient
 
@@ -225,6 +234,10 @@ def main() -> int:
          lambda c: c.search_messages(query="budget", count=20)),
         ("slack_search_messages(minutes=…)",
          lambda c: c.search_messages(minutes=60, count=20)),
+        ("slack_search_messages(minutes=…, member_only)",
+         lambda c: c.search_messages(minutes=60, count=20, only_channels=c.my_conversation_ids())),
+        ("resolve_is_member()",
+         lambda c: c.resolve_is_member("C0001")),
         ("slack_list_channels(participant=…)",
          lambda c: c.list_channels(participant="User 7", max_results=100)),
         ("slack_list_dms()",
