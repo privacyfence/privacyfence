@@ -354,7 +354,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
-    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stDuplicateOf: null,
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stPersonalDataReads: false, stDuplicateOf: null,
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -1413,6 +1413,9 @@ _JS = r"""
     if (t.allow_personal_data) {
       chips += '<span class="pf-chip pf-st-chip">personal data allowed</span>';
     }
+    if (t.allow_personal_data_reads) {
+      chips += '<span class="pf-chip pf-st-chip">personal data in reads allowed</span>';
+    }
     function stamp(x) { return new Date(x * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'; }
     var activity = t.last_used_at ? 'Last used ' + stamp(t.last_used_at) : 'Never used';
     if (t.last_denied_at) {
@@ -1465,6 +1468,7 @@ _JS = r"""
     ui.stTools = {};
     t.tools.forEach(function (name) { ui.stTools[name] = true; });
     ui.stPersonalData = !!t.allow_personal_data;
+    ui.stPersonalDataReads = !!t.allow_personal_data_reads;
     render(pyState);
     var form = document.querySelector('.pf-st-form');
     if (form && form.scrollIntoView) { form.scrollIntoView({block: 'start'}); }
@@ -1479,6 +1483,7 @@ _JS = r"""
     ui.stRules = {};
     ui.stTools = {};
     ui.stPersonalData = false;
+    ui.stPersonalDataReads = false;
     render(pyState);
   }
 
@@ -1549,7 +1554,7 @@ _JS = r"""
     html += '<div class="pf-row-title">Tools</div>';
     var autoTools = SCOPED.auto_tools || [];
     var anyRule = SCOPED.rules.some(function (r) { return ui.stRules[r.id]; });
-    if (!anyRule) { html += '<div class="pf-hint" data-st-no-rule-hint="1">Select a rule to see the tools it covers.</div>'; }
+    if (!anyRule) { html += '<div class="pf-hint" data-st-no-rule-hint="1">Select a rule to see the tools it covers, or pick a tool that needs no rule.</div>'; }
     var shownTools = {};
     SCOPED.tools.forEach(function (g) {
       var hasCovered = g.tools.some(function (name) { return !!coverage[name]; });
@@ -1568,7 +1573,8 @@ _JS = r"""
       });
     });
     if (otherTools.length) {
-      html += '<details data-st-other-tools="1"><summary>Tools that need no rule, from other connectors (' + otherTools.length + ')</summary>' +
+      html += '<details data-st-other-tools="1"' + (anyRule ? '' : ' open') + '><summary>' +
+        (anyRule ? 'Tools that need no rule, from other connectors (' : 'Tools that need no rule (') + otherTools.length + ')</summary>' +
         '<div class="pf-chips">';
       otherTools.forEach(function (name) { html += scopedToolChip(name, coverage); });
       html += '</div></details>';
@@ -1587,6 +1593,13 @@ _JS = r"""
       (stPdOn ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(stPdLabel) + '" data-st-personal-data="1">' + esc(stPdLabel) + '</div></div>';
     html += '<div class="pf-hint">Only for calls made with this token, and only for Drive downloads delivered as a file, Grist, ' +
       'Salesforce and Jira exports, and Peek page uploads. Other calls still stop for review when personal data is found.</div>';
+    var stPdrOn = !!ui.stPersonalDataReads;
+    var stPdrLabel = 'Let reads return personal data';
+    html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdrOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
+      (stPdrOn ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(stPdrLabel) + '" data-st-personal-data-reads="1">' + esc(stPdrLabel) + '</div></div>';
+    html += '<div class="pf-hint">Applies only to calls made with this token, and only to Gmail message and thread reads and Slack ' +
+      'channel, thread and search reads that one of the token\'s rules covers. The personal-data scan still runs and the audit log ' +
+      'records what it found, but the AI system receives the content. Other calls still stop for review when personal data is found.</div>';
     html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Add the tools these rules cover" data-st-add-covered="1">Add the tools these rules cover</div></div>';
     html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';
     html += '</div></div>';
@@ -1756,7 +1769,7 @@ _JS = r"""
   function submitScopedToken() {
     var ids = Object.keys(ui.stRules).filter(function (k) { return ui.stRules[k]; });
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
-    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools, allow_personal_data: !!ui.stPersonalData });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads });
   }
 
   // -------------------------------------------------------------------- //
@@ -2193,6 +2206,7 @@ _JS = r"""
     var stToolEl = e.target.closest('[data-st-tool]');
     if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
     if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
+    if (e.target.closest('[data-st-personal-data-reads]')) { ui.stPersonalDataReads = !ui.stPersonalDataReads; render(pyState); return; }
     var stDupEl = e.target.closest('[data-st-duplicate]');
     if (stDupEl) { duplicateScopedToken(stDupEl.getAttribute('data-st-duplicate')); return; }
     var stRenameEl = e.target.closest('[data-st-rename]');

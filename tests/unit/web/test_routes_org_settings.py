@@ -1582,6 +1582,32 @@ class TestScopedTokenRoutes:
             summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
         assert any(f"({token.id})" in text and ", personal data allowed (principal=alice)" in text for text in summaries)
 
+    def test_org_create_stores_the_reads_flag(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data_reads": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.allow_personal_data_reads is True
+        assert token.allow_personal_data is False
+
+    def test_org_audit_summary_names_the_reads_flag(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data_reads": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        assert any(
+            f"({token.id})" in text and ", personal data in reads allowed (principal=alice)" in text
+            for text in summaries
+        )
+
     def test_a_token_without_the_flag_does_not_allow_personal_data(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
 

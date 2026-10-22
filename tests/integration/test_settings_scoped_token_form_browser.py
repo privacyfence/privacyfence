@@ -124,6 +124,16 @@ def test_tools_follow_the_selected_rules(page):
     assert _shown(page) == ["gmail_get_message", "gmail_list_messages", "gmail_send_message"]
 
 
+def test_no_rule_selected_lists_the_tools_that_need_no_rule_open(page):
+    assert page.inner_text("[data-st-no-rule-hint]") == (
+        "Select a rule to see the tools it covers, or pick a tool that needs no rule.")
+    assert page.inner_text("[data-st-other-tools] summary") == "Tools that need no rule (3)"
+    assert page.get_attribute("[data-st-other-tools]", "open") is not None
+    assert page.is_visible('[data-st-other-tools] [data-st-tool="gmail_list_messages"]')
+    page.click('[data-st-tool="gmail_list_messages"]')
+    assert _ticked(page) == ["gmail_list_messages"]
+
+
 def test_ticked_tool_stays_visible_when_its_rule_is_deselected(page):
     _select_rule(page, "r-gmail")
     page.click('[data-st-tool="gmail_send_message"]')
@@ -140,6 +150,20 @@ def test_other_no_rule_tools_are_collapsed(page):
     assert not page.is_visible("[data-st-other-tools] [data-st-tool]")
     page.click("[data-st-other-tools] summary")
     assert page.is_visible('[data-st-other-tools] [data-st-tool="tasks_list_tasks"]')
+
+
+def test_reads_checkbox_is_sent_with_the_create_request(page):
+    _capture_posts(page)
+    page.fill("[data-st-label]", "triage")
+    assert page.get_attribute("[data-st-personal-data-reads]", "aria-checked") == "false"
+    page.click("[data-st-personal-data-reads]")
+    assert page.get_attribute("[data-st-personal-data-reads]", "aria-checked") == "true"
+    assert page.get_attribute("[data-st-personal-data]", "aria-checked") == "false"
+    page.click("[data-st-create]")
+    [posted] = page.evaluate("window.__posted")
+    assert posted["action"] == "create_scoped_token"
+    assert posted["allow_personal_data_reads"] is True
+    assert posted["allow_personal_data"] is False
 
 
 def test_clear_form_resets(page):
