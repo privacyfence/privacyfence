@@ -168,3 +168,29 @@ def test_every_value_needing_predicate_has_a_format_or_is_listed_as_unvalidated(
 
 def test_validated_and_unvalidated_predicates_are_disjoint():
     assert not set(VALUE_FORMATS) & UNVALIDATED_VALUE_PREDICATES
+
+
+class TestGmailQueryValue:
+    def test_accepts_a_normal_query_with_commas_and_quotes(self):
+        query = 'in:inbox -category:promotions -label:"Proposed SPAM", (from:a OR from:b)'
+        assert normalise_rule_value(["gmail.query"], query) == [query]
+
+    def test_refuses_control_characters(self):
+        with pytest.raises(RuleValueError):
+            normalise_rule_value(["gmail.query"], "in:inbox\x07")
+        with pytest.raises(RuleValueError):
+            normalise_rule_value(["gmail.query"], "in:inbox\nOR in:anywhere")
+
+    def test_refuses_a_query_over_500_characters(self):
+        assert normalise_rule_value(["gmail.query"], "a" * 500)
+        with pytest.raises(RuleValueError):
+            normalise_rule_value(["gmail.query"], "a" * 501)
+
+    @pytest.mark.parametrize("query", ["in:inbox) OR (in:anywhere", "(in:inbox", "in:inbox)", "((a)"])
+    def test_refuses_unbalanced_parentheses(self, query):
+        with pytest.raises(RuleValueError, match="unbalanced parentheses or quotes"):
+            normalise_rule_value(["gmail.query"], query)
+
+    def test_refuses_an_odd_number_of_quotes(self):
+        with pytest.raises(RuleValueError, match="unbalanced parentheses or quotes"):
+            normalise_rule_value(["gmail.query"], 'label:"Proposed SPAM')

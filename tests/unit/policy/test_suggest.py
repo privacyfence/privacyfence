@@ -116,3 +116,16 @@ class TestGmailArchiveSuggestion:
         assert suggestion["verb"] == "move"
         assert suggestion["value"] is None
         assert suggestion["value_known"] is False
+
+
+class TestGmailQuerySuggestion:
+    def test_an_uncovered_gmail_read_suggests_the_query_scope_with_no_known_value(self):
+        suggestions = suggested_rules("gmail_get_message", {"message_id": "m1"})
+        [suggestion] = [s for s in suggestions if s["group"] == "gmail.query"]
+        assert suggestion["verb"] == "read"
+        assert suggestion["value"] is None
+        assert suggestion["value_known"] is False
+
+    def test_a_gmail_read_no_longer_raises_for_the_query_scope(self):
+        for tool in ("gmail_get_message", "gmail_get_thread", "gmail_download_attachment"):
+            assert any(s["group"] == "gmail.query" for s in suggested_rules(tool, {}))

@@ -84,7 +84,16 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         verbs=(Verb.READ,),
         label="Slack — direct messages to me", needs_value=False, value_hint="",
     ),
+    "gmail.query": PolicyExtraScope(
+        predicate="gmail.query", connector="gmail",
+        verbs=(Verb.READ, Verb.DOWNLOAD),
+        label="Gmail — query", needs_value=True,
+        value_hint='in:inbox -category:promotions -label:"Proposed SPAM"',
+    ),
 }
+
+# Groups whose value is one expression, not a comma-separated list: commas belong to the value.
+SINGLE_VALUE_GROUPS: frozenset[str] = frozenset({"gmail.query"})
 
 # Ids retired when the nine verbs landed. `rules_for_catalogue_entry` resolves one before anything
 # else, so older bridge calls keep working.
@@ -241,6 +250,7 @@ __all__ = [
     "EXTRA_SCOPES",
     "GROUP_ALIASES",
     "VALUE_HINTS",
+    "SINGLE_VALUE_GROUPS",
     "PolicyExtraScope",
     "extra_operations_for",
     "parse_verbs",

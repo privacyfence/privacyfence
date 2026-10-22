@@ -85,7 +85,10 @@ def suggested_rules(tool: str, args: dict[str, Any], my_email: str = "") -> list
 
 
 def _extra_value_of(group: str) -> Any:
-    argument = _EXTRA_ARGUMENT[group]
+    argument = _EXTRA_ARGUMENT.get(group)
+    if argument is None:
+        # No call argument names this scope's value (gmail.query): it is known only at run time.
+        return lambda _ctx: propose.NO_VALUE
 
     def value_of(ctx: ReviewContext) -> Any:
         value = ctx.args[argument] if argument in ctx.args else ""

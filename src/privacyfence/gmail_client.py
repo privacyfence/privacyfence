@@ -20,7 +20,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 
 # Page cap for list calls so a runaway nextPageToken chain cannot loop forever.
 MAX_PAGES = 10
+
+# ``messages_matching`` checks at most this many messages per search; more fails closed.
+MAX_QUERY_MATCH_MESSAGES = 25
+# A Message-ID strict enough that a sender-chosen one cannot add Gmail search syntax.
+_RFC822_ID_RE = re.compile(r"\A[A-Za-z0-9._%+=-]{1,200}@[A-Za-z0-9.-]{1,255}\Z")
 
 # gmail.modify: reading and modifying messages/labels, creating drafts, and
 # reading send-as aliases (settings.sendAs.list, for draft signatures).
@@ -382,6 +387,14 @@ class Attachment:
     attachment_id: str = ""  # Gmail API id, used to fetch content on demand
 
 
+def _strip_message_id(value: str) -> str:
+    """A ``Message-ID`` header without surrounding whitespace and one pair of angle brackets."""
+    value = value.strip()
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1]
+    return value.strip()
+
+
 @dataclass
 class GmailMessage:
     """A normalized Gmail message."""
@@ -396,6 +409,7 @@ class GmailMessage:
     body_html: str = ""
     attachments: list[Attachment] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
+    rfc822_id: str = ""
 
     def short_summary(self) -> str:
         """Human-readable one-liner for the review UI / logs."""
@@ -1244,6 +1258,35 @@ class GmailClient:
         names = {label["id"]: label["name"] for label in self.list_labels() if label["type"] == "user"}
         return [names[label_id] for label_id in label_ids if label_id in names]
 
+    def messages_matching(self, query: str, messages: Sequence[tuple[str, str]]) -> set[str]:
+        """The Gmail ids, among ``(gmail_id, rfc822_id)`` pairs, that Gmail's own search finds for ``query``.
+
+        One ``messages.list`` call with ``q = "(<query>) (rfc822msgid:<id> OR ...)"``, so Gmail
+        evaluates the query against exactly these messages. Fails closed (empty set) for a blank
+        query, no messages, more than ``MAX_QUERY_MATCH_MESSAGES``, or a ``Message-ID`` that could
+        add search syntax. A found id that is not one of ours is ignored. An API error raises
+        ``GmailClientError`` with a fixed text: the exception text carries the request URL, which
+        holds the query and the Message-IDs. The query is never logged.
+        """
+        if not query.strip() or not messages or len(messages) > MAX_QUERY_MATCH_MESSAGES:
+            return set()
+        if not all(_RFC822_ID_RE.match(rfc822_id) for _gmail_id, rfc822_id in messages):
+            return set()
+        terms = " OR ".join(f"rfc822msgid:{rfc822_id}" for _gmail_id, rfc822_id in messages)
+        service = self._get_service()
+        try:
+            response = (
+                service.users()
+                .messages()
+                .list(userId="me", q=f"({query}) ({terms})", maxResults=100)
+                .execute()
+            )
+        except HttpError as exc:
+            status = getattr(exc, "status_code", "") or ""
+            raise GmailClientError(f"messages_matching failed (HTTP {status})") from None
+        found = {stub.get("id", "") for stub in response.get("messages", [])}
+        return found & {gmail_id for gmail_id, _rfc822_id in messages}
+
     def create_label(self, label_name: str) -> dict:
         """Create a label, or a nested chain of labels for a "Parent/Child" name.
 
@@ -1608,6 +1651,7 @@ class GmailClient:
             body_html=body.html,
             attachments=attachments,
             labels=raw.get("labelIds", []),
+            rfc822_id=_strip_message_id(headers.get("message-id", "")),
         )
 
     def _walk_parts(
