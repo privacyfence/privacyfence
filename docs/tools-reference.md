@@ -226,7 +226,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `slack_resolve_permalink` | read | `auto` | Parse a Slack message permalink (from a message's "Copy link") into the channel id, timestamp, and (if the link points at a threaded reply) thread root timestamp needed by slack_get_channel_history/slack_get_thread_replies. |
 | `slack_get_channel_history` | read | `review` | Fetch recent messages in a Slack channel. |
 | `slack_get_thread_replies` | read | `review` | Fetch all replies in a Slack thread. |
-| `slack_search_messages` | read | `review` | Search Slack messages matching a query, a participant, or both. |
+| `slack_search_messages` | read | `review` | Search Slack messages by query, participant, recent time window, or a combination. |
 | `slack_create_group_chat` | write | `popup` | Create (or reopen the existing) group-DM conversation with the given participants and return its channel id, ready for slack_send_message. |
 | `slack_send_message` | write | `popup` | Send a message to a Slack channel or DM. |
 
