@@ -951,6 +951,50 @@ class TestJiraSearchAllResults:
         assert entries[0]["auto_accept_rule"] == ""
 
 
+class TestGmailQueryRule:
+    """A ``gmail.query`` rule, with ``args`` shaped as the Gmail connector builds them."""
+
+    RULES = {"gmail.read_thread": [{"predicate": "gmail.query", "value": ["in:inbox"]}]}
+
+    @staticmethod
+    def _kwargs(**args):
+        return make_kwargs(tool="gmail_get_thread", args={"thread_id": "t1", **args})
+
+    async def test_thread_read_auto_accepts_when_the_query_matched(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        fail_if_popup_shown(monkeypatch)
+
+        result = await gate.gated_call(**self._kwargs(matching_queries=["in:inbox"]))
+
+        assert result is FILTERED
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+    async def test_thread_read_needs_review_when_it_did_not(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**self._kwargs())
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+    async def test_a_query_rule_does_not_cover_other_operations(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**make_kwargs(
+            tool="gmail_get_message", args={"message_id": "m1", "matching_queries": ["in:inbox"]},
+        ))
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+    def test_preflight_is_unknown_for_a_query_rule(self):
+        install_rules(self.RULES)
+
+        verdict, _rule, _rule_id, _reason = gate.preflight_auto_accept("gmail.read_thread", {"thread_id": "t1"})
+
+        assert verdict == "unknown"
+
+
 class TestArchiveByLabel:
     """A ``gmail.label`` row with the ``move`` verb compiles to ``label_match`` on
     ``gmail.archive_message``, which compares the live label names the connector hands the gate."""

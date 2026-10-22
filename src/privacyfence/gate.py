@@ -744,6 +744,21 @@ def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]
     return scoped
 
 
+def rule_values(predicate: str, operation_key: str) -> list[str]:
+    """The string values of the current call's rules that use ``predicate`` for ``operation_key``,
+    deduplicated, in rule order. A connector uses it before gating to compute what a rule's selector
+    compares against (for example the Gmail queries Gmail is asked to evaluate). Under a scoped
+    token only the token's own rules are seen (ADR 0164)."""
+    values: list[str] = []
+    for rule in _rules_in_scope(current_token_scope()):
+        if rule.predicate != predicate or operation_key not in rule.operations:
+            continue
+        for item in rule.value if isinstance(rule.value, list) else [rule.value]:
+            if isinstance(item, str) and item and item not in values:
+                values.append(item)
+    return values
+
+
 def _personal_data_rule(
     tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
 ) -> policy_engine.PolicyRule | None:

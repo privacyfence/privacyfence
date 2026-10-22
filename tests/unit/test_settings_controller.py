@@ -2082,6 +2082,22 @@ class TestAddPolicyRule:
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
 
+    def test_gmail_query_value_is_not_split_on_commas(self, controller):
+        query = 'in:inbox (from:a OR from:b) subject:"x, y"'
+
+        state = controller.add_policy_rule("gmail.query", f"  {query}  ", ["read"])
+
+        assert state["error"] == ""
+        [row] = state["auto_accept"]["rules"]
+        assert row["connector"] == "gmail"
+        assert query in row["value"]
+
+    def test_other_scopes_still_split_on_commas(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1, FOLDER2", ["read"])
+
+        [row] = state["auto_accept"]["rules"]
+        assert "FOLDER1" in row["value"] and "FOLDER2" in row["value"]
+
     def test_a_title_instead_of_an_id_is_refused_with_the_message_in_the_snapshot(self, controller):
         before = controller._load_config()
 
