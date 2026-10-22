@@ -2065,6 +2065,21 @@ def _build_slack_client() -> SlackClient:
     return SlackClient(token.get("access_token", ""))
 
 
+def _check_slack_membership(client: SlackClient, method: str, target: str, conversation_id: str) -> CheckResult:
+    try:
+        member = client.resolve_is_member(conversation_id)
+        ids = client.my_conversation_ids()
+    except (SlackClientError, TypeError) as exc:
+        return CheckResult("slack", method, target, False, str(exc))
+    listed = ids is not None and conversation_id in ids
+    ok = member and listed
+    note = (
+        "conversations.info and users.conversations agree" if ok
+        else f"is_member={member}, listed by users.conversations={listed}"
+    )
+    return CheckResult("slack", method, target, ok, note)
+
+
 def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # No new seed artifact needed -- connector-qa.md's "Seed: Slack" already has
     # you create the privacyfence-qa-control channel with a durable,
@@ -2122,6 +2137,14 @@ def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         results.append(CheckResult("slack", "get_thread_replies", target, ok, note, raw, "get_thread_replies.json"))
     except SlackClientError as exc:
         results.append(CheckResult("slack", "get_thread_replies", target, False, str(exc)))
+
+    # After the try/except so a failing thread check does not skip it. Neither check records a
+    # fixture: they prove Slack answers the membership questions the connector relies on.
+    if channel_id:
+        results.append(_check_slack_membership(client, "conversation_membership", target, channel_id))
+    group_dm_id = cfg.get("group_dm_id", "")
+    if group_dm_id:
+        results.append(_check_slack_membership(client, "group_dm_membership", group_dm_id, group_dm_id))
 
     return results
 

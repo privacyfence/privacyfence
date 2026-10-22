@@ -303,7 +303,8 @@ def _scoped_rule_entry(
 
     def title(display: str) -> str:
         if scope_type:
-            subject = f"{describe.scope_type_label(scope_type)} {display}".strip()
+            joiner = " except " if scope_type in describe.EXCLUSION_SCOPE_TYPES and row.value else " "
+            subject = f"{describe.scope_type_label(scope_type)}{joiner}{display}".strip()
         else:
             subject = compiled[0].predicate if compiled else (row.predicate or row.scope or "")
         return f"{connector} — {subject}" if connector else subject

@@ -53,7 +53,7 @@ from privacyfence.calendar_client import CalendarClient  # noqa: E402
 from privacyfence.contacts_client import ContactsClient  # noqa: E402
 from privacyfence.tasks_client import TasksClient  # noqa: E402
 from privacyfence.apps_script_client import AppsScriptClient  # noqa: E402
-from privacyfence.slack_client import SlackClient  # noqa: E402
+from privacyfence.slack_client import SlackClient, SlackClientError  # noqa: E402
 from privacyfence.telegram_client import TelegramPrivacyFenceClient  # noqa: E402
 
 
@@ -2207,6 +2207,97 @@ class TestCheckSlack:
         assert not get_thread.ok
         assert get_thread.raw is None
         assert "[QATEST]" in get_thread.note
+
+    def _membership_client(self, monkeypatch, *, member=True, ids=frozenset({"C1", "G1"}), ids_error=None):
+        client = self._client({
+            "conversations.replies": {
+                "messages": [{"ts": "100.1", "user": "U1", "text": self.SEED_TEXT}],
+            },
+        })
+        monkeypatch.setattr(client, "resolve_is_member", lambda _cid: member)
+
+        def my_conversation_ids():
+            if ids_error is not None:
+                raise ids_error
+            return ids
+
+        monkeypatch.setattr(client, "my_conversation_ids", my_conversation_ids)
+        monkeypatch.setattr(recorder, "_build_slack_client", lambda: client)
+        return client
+
+    def _check(self, **slack_cfg):
+        manifest = {"slack": {"channel_id": "C1", "seed_thread_ts": "100.1", **slack_cfg}}
+        return recorder.check_slack(record=True, manifest=manifest)
+
+    def test_conversation_membership_ok_when_both_calls_agree(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert membership.ok
+        assert membership.note == "conversations.info and users.conversations agree"
+
+    def test_conversation_membership_not_ok_when_info_says_not_a_member(self, monkeypatch):
+        self._membership_client(monkeypatch, member=False)
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+        assert "is_member=False" in membership.note
+
+    def test_conversation_membership_not_ok_when_the_listing_lacks_the_id(self, monkeypatch):
+        self._membership_client(monkeypatch, ids=frozenset({"C9"}))
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+        assert "listed by users.conversations=False" in membership.note
+
+    def test_conversation_membership_not_ok_when_the_listing_fails(self, monkeypatch):
+        self._membership_client(monkeypatch, ids=None)
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+
+    def test_conversation_membership_carries_the_error_text(self, monkeypatch):
+        self._membership_client(monkeypatch, ids_error=SlackClientError("users.conversations failed: ratelimited"))
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+        assert membership.note == "users.conversations failed: ratelimited"
+
+    def test_membership_still_runs_when_get_thread_replies_raises(self, monkeypatch):
+        client = self._membership_client(monkeypatch)
+
+        def boom(*_a, **_k):
+            raise SlackClientError("replies failed")
+
+        monkeypatch.setattr(client, "get_thread_replies", boom)
+
+        results = self._check()
+
+        assert not next(r for r in results if r.method == "get_thread_replies").ok
+        assert next(r for r in results if r.method == "conversation_membership").ok
+
+    def test_group_dm_membership_only_when_group_dm_id_is_set(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        assert not any(r.method == "group_dm_membership" for r in self._check())
+
+        group = next(r for r in self._check(group_dm_id="G1") if r.method == "group_dm_membership")
+        assert group.ok
+        assert group.seed_artifact == "G1"
+
+    def test_membership_checks_record_no_fixture(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        results = self._check(group_dm_id="G1")
+
+        membership = [r for r in results if r.method.endswith("_membership")]
+        assert len(membership) == 2
+        assert all(not r.fixture_relpath and r.raw is None for r in membership)
 
 
 class TestCheckTelegram:

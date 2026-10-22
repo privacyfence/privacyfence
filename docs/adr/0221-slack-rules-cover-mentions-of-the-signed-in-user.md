@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-22. Implemented.
 Relates to ADR 0172.
+Amended by 0228 (a mentions rule's search verb is now its own predicate).
 
 ## Context
 

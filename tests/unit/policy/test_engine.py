@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from privacyfence.policy import catalogue
 from privacyfence.policy.engine import PolicyRule, evaluate, find_matching_rule, preflight
+from privacyfence.policy.registry import Verb
 
 from ...helpers import make_ctx
 
@@ -189,9 +191,16 @@ class TestSlackScopes:
         verdict, matched, _ = preflight([rule], "slack.read_messages", {})
         assert (verdict, matched) == ("unknown", "")
 
+    def test_preflight_is_unknown_for_a_my_conversations_rule(self):
+        for predicate in ("slack.my_conversations", "slack.my_conversations_all_results"):
+            rule = PolicyRule(
+                id="r1", predicate=predicate, value=None, operations=frozenset({"slack.read_messages"}),
+            )
+            assert preflight([rule], "slack.read_messages", {})[:2] == ("unknown", "")
+
     def test_a_search_rule_auto_accepts_through_evaluate(self):
         rule = PolicyRule(
-            id="r1", predicate="slack.mentions_of_me", value=None,
+            id="r1", predicate="slack.mentions_of_me_all_results", value=None,
             operations=frozenset({"slack.read_messages"}),
         )
         ctx = make_ctx(
@@ -204,3 +213,11 @@ class TestSlackScopes:
             raw_data=[SimpleNamespace(text="no mention")],
         )
         assert evaluate([rule], "slack.read_messages", other)[0] is False
+
+    def test_a_read_only_mentions_rule_does_not_auto_accept_a_search(self):
+        rules = catalogue.rules_for_catalogue_entry("slack.mentions_of_me", None, [Verb.READ])
+        ctx = make_ctx(
+            connector="slack", tool="slack_search_messages", args={"own_user_id": "U_ME"},
+            raw_data=[SimpleNamespace(text="<@U_ME> hello")],
+        )
+        assert evaluate(rules, "slack.read_messages", ctx)[0] is False

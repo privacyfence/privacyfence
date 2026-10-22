@@ -319,6 +319,36 @@ def test_a_custom_row_compiles_to_exactly_one_rule():
                    operations=frozenset({"x.read"}), conditions=(("c", None),))]
 
 
+class TestExtraVerbPredicates:
+    def test_read_and_search_compile_to_two_rules_sharing_the_row_id(self):
+        row = _row("slack.mentions_of_me", None, [Verb.READ, Verb.SEARCH])
+
+        rules = scope_rows.compile_row(row)
+
+        assert [r.predicate for r in rules] == ["slack.mentions_of_me", "slack.mentions_of_me_all_results"]
+        assert {r.id for r in rules} == {row.id}
+        assert all(r.operations == {"slack.read_messages"} for r in rules)
+
+    def test_read_only_compiles_to_the_thread_rule_only(self):
+        (rule,) = scope_rows.compile_row(_row("slack.mentions_of_me", None, [Verb.READ]))
+
+        assert rule.predicate == "slack.mentions_of_me"
+
+    def test_search_only_compiles_to_the_all_results_rule_only(self):
+        (rule,) = scope_rows.compile_row(_row("slack.mentions_of_me", None, [Verb.SEARCH]))
+
+        assert rule.predicate == "slack.mentions_of_me_all_results"
+
+    def test_add_rules_maps_a_search_only_rule_to_a_scoped_row(self):
+        (rule,) = catalogue.rules_for_catalogue_entry("slack.mentions_of_me", None, [Verb.SEARCH])
+
+        rows, touched = scope_rows.add_rules([], [rule])
+
+        (row,) = rows
+        assert (row.scope, row.verbs) == ("slack.mentions_of_me", frozenset({Verb.SEARCH}))
+        assert touched == [row.id]
+
+
 # ── Serialization ──────────
 
 def test_row_round_trips_and_sorts_its_lists():

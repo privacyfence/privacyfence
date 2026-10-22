@@ -119,6 +119,8 @@ Items the checks delete go to Drive's trash, which Google purges after 30 days.
 - [ ] Set `slack.channel_name` (default `privacyfence-qa-control`). Optionally set
       `slack.channel_id` (blank to resolve by name) and `slack.seed_thread_ts` (blank to scan the
       channel's last 200 messages for `[QATEST]`).
+- [ ] Optionally set `slack.group_dm_id`: the id of a group DM the QA account is in. It enables the
+      group-DM membership check; without it that check is skipped.
 
 The recorder reads that thread with `get_thread_replies` and checks that the thread starter
 carries `[QATEST]` and has text and a user id.
@@ -353,7 +355,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 |---|---|---|---|
 | `gmail` | **`seed_message_id`** | `get_message.json`, `list_send_as.json` | — |
 | `drive` | `folder_name`, `folder_id` | `get_file_metadata.json` | — |
-| `slack` | `channel_name`, `channel_id`, `seed_thread_ts` | `get_thread_replies.json` | — |
+| `slack` | `channel_name`, `channel_id`, `seed_thread_ts`, `group_dm_id` | `get_thread_replies.json`; checks `conversation_membership` and `group_dm_membership` (no fixture) | — |
 | `calendar` | **`calendar_id`**, `seed_event_title`, `seed_event_id` | `get_event.json` | creates, updates and deletes one event and one two-instance recurring series on `calendar_id` |
 | `contacts` | `seed_contact_display_name`, `seed_contact_resource_name` | `get_contact.json` | — |
 | `tasks` | **`task_list_id`**, **`seed_task_id`** | `get_task.json` | creates, updates and deletes one task in `task_list_id` |
@@ -641,6 +643,9 @@ For each representative read, list, search, create, update, send or upload tool:
   channel, DM, group DM and thread messages posted in that window, newest first, and the card's
   **Since** reads `last N minutes`; `slack_get_channel_history` with `minutes` returns only
   that window.
+- **Member conversations.** With a 'conversations I'm a member of' rule,
+  `slack_get_channel_history` on `privacyfence-qa-control` reads without a card; a `member_only`
+  search of the last 60 minutes reads without a card; the same search without `member_only` prompts.
 - `slack_get_thread_replies` on the seed thread prompts for review; `slack_send_message` to your
   own DM prompts.
 

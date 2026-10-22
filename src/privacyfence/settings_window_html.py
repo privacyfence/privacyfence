@@ -1048,9 +1048,10 @@ _JS = r"""
       html += '<option value="' + esc(g.id) + '"' + (g.id === ui.aaGroup ? ' selected' : '') + '>' + esc(g.label) + '</option>';
     });
     html += '</select></label>';
-    if (group && group.needs_value) {
+    if (group && (group.needs_value || group.value_optional)) {
       html += '<input type="text" class="field pf-input-mono" placeholder="' + esc(group.value_hint) +
-        '" aria-label="Value (comma-separated for more than one)" value="' + esc(ui.aaValue) + '" data-aa-value="1"/>';
+        '" aria-label="' + (group.needs_value ? 'Value (comma-separated for more than one)' : 'Value, optional (comma-separated for more than one)') +
+        '" value="' + esc(ui.aaValue) + '" data-aa-value="1"/>';
     }
     if (group) {
       html += '<div class="pf-chips pf-caps-row">';
