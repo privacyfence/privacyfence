@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Organization admins get a Stats page in Settings.** It shows how many people have signed in, how many have connected each service, and how many auto-accept rules they keep per connector. It shows counts only, never who or which rule.
+
 ## [6.6.2] — 2026-10-22
 
 ### Changed

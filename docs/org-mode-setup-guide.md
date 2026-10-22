@@ -47,7 +47,7 @@ What people see, all at `https://<your-hostname>`:
 | `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence, Grist, Peek and Telegram. |
 | `/approvals` | Pending AI requests to approve or deny. |
 | `/security` | Enroll and remove passkeys. |
-| `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy and the **AI systems** page. |
+| `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy, the **AI systems** page and the **Stats** page. |
 | `/mcp` | The MCP endpoint AI clients connect to. It uses OAuth 2.1 with dynamic client registration. |
 
 **This is the only way claude.ai can use PrivacyFence.** A desktop install listens on `localhost`,
@@ -147,7 +147,7 @@ longer than 200 characters) is stored under a stable hash instead (`idp-<hash>`)
 
 ### Who is an admin
 
-Admins see the **General**, **Privacy Filter** and **AI systems** pages in Settings. Nobody is an
+Admins see the **General**, **Privacy Filter**, **AI systems** and **Stats** pages in Settings. Nobody is an
 admin unless you name a claim and its values with `--idp-admin-group-claim` and
 `--idp-admin-group-value` ([section 6](#6-signing-key-and-bundle)). A person is an admin when the
 claim contains any of the values. A claim that is a single string is matched like a one-item list.
@@ -796,7 +796,8 @@ explicitly so the file documents the intended policy. The categories and their m
 
 **Per-person rules.** Nobody, admins included, can see or change another person's always-allow
 rules from the browser. An administrator who must review or remove someone else's rules edits that
-person's file on the server.
+person's file on the server. The admin's **Stats** page counts rules per connector across everyone,
+but never shows whose they are or what they allow.
 
 Settings pages each person sees:
 
@@ -808,6 +809,7 @@ Settings pages each person sees:
 | General (PII detection) | | yes |
 | Privacy Filter | | yes |
 | AI systems | | yes |
+| Stats (users, connectors and auto-accept rules, counts only) | | yes |
 
 Connector management, update checks, the log level, the Calendar free/busy and Gmail signature
 switches, and notification preferences are desktop-only settings and do not appear here.

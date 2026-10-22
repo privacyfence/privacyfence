@@ -2844,7 +2844,7 @@ def phone_page(browser, request):
     ctx.close()
 
 
-_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "about")
+_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "stats", "about")
 _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 
