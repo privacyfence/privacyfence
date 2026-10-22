@@ -2409,3 +2409,27 @@ class TestLiveFixtureParsing:
         assert alias.email
         if alias.signature_html:
             assert signature_plain_text(alias.signature_html).startswith("\n\n-- \n")
+
+
+class TestLabelNames:
+    @staticmethod
+    def _client(labels):
+        service = MagicMock()
+        service.users.return_value.labels.return_value.list.return_value.execute.return_value = {"labels": labels}
+        return make_client(service)
+
+    def test_maps_ids_to_names_in_order_and_drops_unknown_ids(self):
+        client = self._client([
+            {"id": "Label_1", "name": "Work", "type": "user"},
+            {"id": "Label_2", "name": "Proposed Archive", "type": "user"},
+        ])
+        assert client.label_names(["Label_2", "Gone", "Label_1"]) == ["Proposed Archive", "Work"]
+
+    def test_system_labels_are_dropped(self):
+        client = self._client([
+            {"id": "INBOX", "name": "INBOX", "type": "system"},
+            {"id": "UNREAD", "name": "UNREAD", "type": "system"},
+            {"id": "CATEGORY_PROMOTIONS", "name": "CATEGORY_PROMOTIONS", "type": "system"},
+            {"id": "Label_1", "name": "Work", "type": "user"},
+        ])
+        assert client.label_names(["INBOX", "UNREAD", "CATEGORY_PROMOTIONS", "Label_1"]) == ["Work"]

@@ -107,3 +107,12 @@ class TestFailClosed:
         selector = dataclasses.replace(scopes.SCOPE_SELECTORS["approved_report_ids"], matches=lambda v, c: False)
         monkeypatch.setitem(scopes.SCOPE_SELECTORS, "approved_report_ids", selector)
         assert suggested_rules("salesforce_export_report", {"report_id": "00O1"}) == []
+
+
+class TestGmailArchiveSuggestion:
+    def test_archive_suggests_a_label_rule_with_value_known_at_run_time(self):
+        suggestions = suggested_rules("gmail_archive_message", {"message_id": "m1"})
+        [suggestion] = [s for s in suggestions if s["group"] == "gmail.label"]
+        assert suggestion["verb"] == "move"
+        assert suggestion["value"] is None
+        assert suggestion["value_known"] is False
