@@ -2296,6 +2296,19 @@ class TestGmailQueryArgs:
         client.messages_matching.assert_not_called()
         assert gated_call_spy[0]["args"] == {"message_id": "m1"}
 
+    async def test_a_transport_error_is_a_non_match_and_the_call_goes_on(self, gated_call_spy, query_rules, caplog):
+        query_rules(["secret-query"])
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="s", sender="a@b.com", rfc822_id="a@b.c")
+        client.messages_matching.side_effect = ConnectionResetError("secret-query https://gmail/?q=secret-query")
+
+        with caplog.at_level("WARNING"):
+            await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        assert gated_call_spy[0]["args"] == {"message_id": "m1"}
+        assert "secret-query" not in caplog.text and "ConnectionReset" not in caplog.text
+        assert "gmail_get_message" in caplog.text
+
     async def test_a_search_failure_is_a_non_match_and_the_call_goes_on(self, gated_call_spy, query_rules, caplog):
         query_rules(["secret-query"])
         connector, client = make_connector()

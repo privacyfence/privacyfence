@@ -202,7 +202,7 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | Tool | Always allow buttons |
 |---|---|
 | `gmail_add_label` | this label |
-| `gmail_archive_message` | if I'm sender, this sender domain, this label |
+| `gmail_archive_message` | if I'm sender, this sender domain |
 | `gmail_create_draft` | unconditional |
 | `gmail_create_draft_with_attachments` | unconditional |
 | `gmail_create_filter` |  |

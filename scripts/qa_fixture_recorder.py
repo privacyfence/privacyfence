@@ -321,6 +321,16 @@ _SENSITIVE_GMAIL_HEADERS = {"from", "to", "cc", "bcc", "reply-to", "sender", "de
 _EMAIL_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
+# Gmail's quote attribution ("On <date> <Display Name> <addr> wrote:") carries the sender's display
+# name, which the email-address redaction does not reach.
+_QUOTE_ATTRIBUTION = re.compile(r"\bOn [^\n]{0,200}? wrote:")
+_REDACTED_ATTRIBUTION = "On QA Placeholder wrote:"
+
+
+def _redact_text(text: str) -> str:
+    return _QUOTE_ATTRIBUTION.sub(_REDACTED_ATTRIBUTION, _EMAIL_IN_TEXT.sub(_REDACTED_EMAIL, text))
+
+
 def _redact_part_bodies(part: dict[str, Any]) -> None:
     """Replace email addresses quoted inside a reply's body parts (``body.data`` is base64url)."""
     body = part.get("body")
@@ -331,7 +341,7 @@ def _redact_part_bodies(part: dict[str, Any]) -> None:
         except ValueError:
             text = None
         if text is not None:
-            redacted = _EMAIL_IN_TEXT.sub(_REDACTED_EMAIL, text).encode("utf-8")
+            redacted = _redact_text(text).encode("utf-8")
             body["data"] = base64.urlsafe_b64encode(redacted).decode("ascii").rstrip("=")
             body["size"] = len(redacted)
     for sub_part in part.get("parts") or []:
@@ -342,7 +352,7 @@ def _redact_part_bodies(part: dict[str, Any]) -> None:
 def redact_gmail_message(raw: dict[str, Any]) -> dict[str, Any]:
     raw = copy.deepcopy(raw)
     if isinstance(raw.get("snippet"), str):
-        raw["snippet"] = _EMAIL_IN_TEXT.sub(_REDACTED_EMAIL, raw["snippet"])
+        raw["snippet"] = _redact_text(raw["snippet"])
     if isinstance(raw.get("payload"), dict):
         _redact_part_bodies(raw["payload"])
     headers = ((raw.get("payload") or {}).get("headers")) or []
