@@ -37,7 +37,7 @@ make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurabl
 Auto-accept Settings page; see their own comment below for why they are not simply more
 `always_allow` rules. `slack.mentions_of_me` (thread replies), `slack.mentions_of_me_all_results` (searches) and
 `slack.direct_messages_to_me` read arguments the Slack
-connector computes (`own_user_id`, `is_one_to_one_dm`) and so resolve from the fetched item.
+connector computes (`own_user_id`, `is_one_to_one_dm`, `is_member`, `all_results_in_my_conversations`) and so resolve from the fetched item.
 
 ``policy.engine.evaluate``/``preflight`` are what consume this module in production.
 """
@@ -649,6 +649,28 @@ def _mentions_of_me_all_results_matches(_value: Any, ctx: ReviewContext) -> bool
     return flags is not None and all(flags)
 
 
+_MY_CONVERSATION_READ_TOOLS = frozenset({"slack_get_channel_history", "slack_get_thread_replies"})
+
+
+def _my_conversations_matches(value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool not in _MY_CONVERSATION_READ_TOOLS or ctx.args.get("is_member") is not True:
+        return False
+    channel_id = ctx.args.get("channel_id", "") or ""
+    return bool(channel_id) and channel_id not in set(_values_of(value))
+
+
+def _my_conversations_all_results_matches(value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool != "slack_search_messages":
+        return False
+    if ctx.args.get("member_only") is not True or ctx.args.get("all_results_in_my_conversations") is not True:
+        return False
+    messages = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    if any(m is None for m in messages):
+        return False
+    excluded = set(_values_of(value))
+    return all(getattr(m, "channel_id", "") not in excluded for m in messages)
+
+
 def _gmail_query_matches(value: Any, ctx: ReviewContext) -> bool:
     if not value:
         return False
@@ -697,6 +719,16 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         predicate="slack.mentions_of_me_all_results", scope_type="slack.mentions_of_me",
         kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
         matches=_mentions_of_me_all_results_matches,
+    ),
+    "slack.my_conversations": ScopeSelector(
+        predicate="slack.my_conversations", scope_type="slack.my_conversations",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_my_conversations_matches,
+    ),
+    "slack.my_conversations_all_results": ScopeSelector(
+        predicate="slack.my_conversations_all_results", scope_type="slack.my_conversations",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_my_conversations_all_results_matches,
     ),
     # The connector evaluates the query with Gmail itself and passes the matching rule values.
     "gmail.query": ScopeSelector(

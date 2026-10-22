@@ -545,6 +545,21 @@ class TestCheckPolicy:
         )
         assert seen["args"] == {"channel_id": "D1"}
 
+    def test_member_conversation_args_are_not_passed_to_preflight(self, monkeypatch):
+        seen = {}
+
+        def fake_preflight(operation_key, args, my_email):
+            seen["args"] = args
+            return "unknown", "", "", "x"
+
+        monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        dispatcher.check_policy(
+            "slack", "slack_search_messages",
+            {"member_only": True, "is_member": True, "all_results_in_my_conversations": True},
+        )
+        assert seen["args"] == {"member_only": True}
+
     def test_matching_queries_is_not_passed_to_preflight(self, monkeypatch):
         seen = {}
 

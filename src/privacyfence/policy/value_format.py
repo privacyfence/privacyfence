@@ -76,6 +76,8 @@ VALUE_FORMATS: dict[str, ValueFormat] = {
     "move_within_approved_folders": _DRIVE_FOLDER,
     "approved_channel": _SLACK_ID,
     "approved_channel_all_results": _SLACK_ID,
+    "slack.my_conversations": _SLACK_ID,
+    "slack.my_conversations_all_results": _SLACK_ID,
     "approved_recipient": _SLACK_ID,
     "approved_chats": _TELEGRAM_CHAT,
     "approved_chats_all_results": _TELEGRAM_CHAT,

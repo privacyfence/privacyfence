@@ -28,6 +28,10 @@ if TYPE_CHECKING:
     from .scope_rows import ScopeRow
 
 
+# Scope types whose value lists what the rule never covers, so a sentence says "except".
+EXCLUSION_SCOPE_TYPES: frozenset[str] = frozenset({"slack.my_conversations"})
+
+
 def connector_label(connector: str) -> str:
     """``apps_script`` -> ``Apps Script``. Derived rather than tabulated: every connector name in
     this repo is a lowercase, underscore-separated spelling of its own display name."""
@@ -141,7 +145,8 @@ def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
     if scope_type:
         noun = scope_type_label(scope_type)
         phrase = value_display if value_display else _value_phrase(rule.value)
-        subject = f"{noun} {phrase}" if rule.value else noun
+        joiner = " except " if scope_type in EXCLUSION_SCOPE_TYPES else " "
+        subject = f"{noun}{joiner}{phrase}" if rule.value else noun
     else:
         subject = rule.predicate
     verbs = ", ".join(verb.value for verb in rule_verbs(rule)) or "nothing"
@@ -180,7 +185,8 @@ def row_sentence(row: "ScopeRow", value_display: str | None = None) -> str:
         connector, scope_type = "", ""
     noun = scope_type_label(scope_type) if scope_type else row.scope
     phrase = value_display if value_display else _value_phrase(row.value)
-    subject = f"{noun} {phrase}" if row.value else noun
+    joiner = " except " if scope_type in EXCLUSION_SCOPE_TYPES else " "
+    subject = f"{noun}{joiner}{phrase}" if row.value else noun
     verbs = ", ".join(v.value for v in sorted(row.verbs, key=propose.verb_sort_key)) or "nothing"
     sentence = f"{connector_label(connector)} - {subject}: allow {verbs}" if connector else f"{subject}: allow {verbs}"
     if condition:
@@ -225,6 +231,7 @@ def confirmation_text(proposal: RuleProposal, widenings: Iterable[Widening] = ()
 
 
 __all__ = [
+    "EXCLUSION_SCOPE_TYPES",
     "button_label",
     "confirmation_text",
     "connector_label",

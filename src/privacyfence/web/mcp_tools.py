@@ -185,7 +185,7 @@ PROPOSE_POLICY_CHANGE_TOOL = types.Tool(
         "rejected before any popup.\n\n"
         "operation='add'/'update' need group (a scope_groups id, e.g. 'drive.folder'), value "
         "(the resource's id -- folder id, channel ID, project key -- not its name or title, except "
-        "label names and file types; a non-id is refused; omit if needs_value is false) and verbs (non-empty subset of the group's verbs, e.g. ['read']). Verbs: read, download, search, add, update, restructure, move, send, delete "
+        "label names and file types; a non-id is refused; omit unless needs_value or value_optional) and verbs (non-empty subset of the group's verbs). Verbs: read, download, search, add, update, restructure, move, send, delete "
         "(older names map). 'update' also takes rule_id (replaces that rule). 'remove' "
         "needs only rule_id.\n\n"
         "Returns {confirmed, changed, description, rule_ids}; changed is false if nothing differed.\n\n"

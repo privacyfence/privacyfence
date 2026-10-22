@@ -174,6 +174,37 @@ class TestSlackExtras:
             assert self._entry(group)["needs_value"] is False
 
 
+class TestSlackMyConversations:
+    @staticmethod
+    def _entry(group="slack.my_conversations"):
+        return next(e for e in catalogue.scope_catalogue() if e["id"] == group)
+
+    def test_entry_offers_read_and_search_with_an_optional_value(self):
+        entry = self._entry()
+        assert entry["verbs"] == ["read", "search"]
+        assert entry["needs_value"] is False
+        assert entry["value_optional"] is True
+        assert entry["label"] == "Slack — conversations I'm a member of"
+
+    def test_read_and_search_with_a_value_compile_to_both_predicates(self):
+        rules = catalogue.rules_for_catalogue_entry("slack.my_conversations", ["C1"], [Verb.READ, Verb.SEARCH])
+        assert {r.predicate for r in rules} == {"slack.my_conversations", "slack.my_conversations_all_results"}
+        assert all(list(r.value) == ["C1"] for r in rules)
+
+    def test_read_with_no_value_compiles(self):
+        rules = catalogue.rules_for_catalogue_entry("slack.my_conversations", None, [Verb.READ])
+        assert [r.predicate for r in rules] == ["slack.my_conversations"]
+        assert rules[0].value is None
+
+    def test_a_channel_name_is_refused(self):
+        with pytest.raises(RuleValueError):
+            catalogue.rules_for_catalogue_entry("slack.my_conversations", "#general", [Verb.READ])
+
+    def test_only_the_member_scope_has_an_optional_value(self):
+        for entry in catalogue.scope_catalogue():
+            assert entry["value_optional"] is (entry["id"] == "slack.my_conversations")
+
+
 class TestGmailQueryExtra:
     @staticmethod
     def _entry():
