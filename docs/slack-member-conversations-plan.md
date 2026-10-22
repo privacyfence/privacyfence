@@ -77,7 +77,14 @@ Measured on `main` at `0562af43`.
   (`src/privacyfence/slack_client.py:1539-1625`) each call `conversations.info` on a cache miss,
   each into its own cache. `_conversation_ids_for_user(user_id, types=...)`
   (`slack_client.py:1764-1794`) walks `users.conversations` (200 per page) and returns `None` on any
-  failure.
+  failure. **It has a latent bug.** Slack's `users.conversations` returns channel *objects*
+  (`{"channels": [{"id": "C…", …}]}`), and line 1782 extends the result with those dicts as they
+  are. The participant fast path then calls `set(ids)` on them (`slack_client.py:1814`), which raises
+  `TypeError` on a real workspace. The unit tests and the budget script's fake return bare id
+  strings, which is why nothing has caught it. p2 fixes it.
+- Tool descriptions are capped at 1024 characters by
+  `tests/unit/web/test_tool_schema_portability.py:45`. `slack_search_messages`'s description is
+  1023 characters today and `privacyfence_propose_policy_change`'s is 1019, so neither can grow.
 - `search_messages` (`slack_client.py:804-855`) makes **one** `search.messages` request per call,
   whichever path it takes (days, or minutes through `_search_recent` at `slack_client.py:878-907`).
   The participant path reads conversation history instead.
@@ -94,7 +101,7 @@ Measured on `main` at `0562af43`.
 |---|---|---|
 | `conversations.history`, `conversations.replies` | Tier 3 (50) for an internal or Marketplace app; **1/min and 15 messages** for an app distributed outside the Marketplace (`docs/slack-setup.md`) | channel history, thread replies |
 | `conversations.info` | Tier 3 (50) | channel type and, from p2, membership |
-| `users.conversations` | the budget script uses 100; Slack documents it as Tier 3, see Risks | the user's conversation ids |
+| `users.conversations` | Tier 3 (50); `scripts/slack_call_budget.py` wrongly prices it at 100, and p2 corrects that | the user's conversation ids |
 | `search.messages` | Tier 2 (20), at most 100 matches per page | search |
 | `conversations.list` | Tier 2 (20) | the listings |
 
@@ -131,8 +138,8 @@ def extra_predicates(extra: PolicyExtraScope) -> frozenset[str]:
 Every place that compiles or recognises an extra scope uses them:
 
 1. `catalogue._compile_catalogue_rules`: for an extra, group `allowed_verbs` by
-   `extra_predicate_for(extra, verb)`. For each predicate (in first-seen order of `allowed_verbs`),
-   `operations` = union of `extra_operations_for(extra, v)` over that predicate's verbs; skip a
+   `extra_predicate_for(extra, verb)`. For each predicate, taken in the order its first verb appears
+   in `extra.verbs`, `operations` = union of `extra_operations_for(extra, v)` over that predicate's verbs; skip a
    predicate whose operations are empty; build
    `PolicyRule(id=predicate, predicate=predicate, value=value, operations=operations)`. Return
    `store.merge_rules([...])`, or `[]` when no rule was built.
@@ -169,24 +176,39 @@ The result: a stored mentions row with verbs `{read, search}` compiles to two ru
 it does today. A row with only `{read}` compiles to the thread rule only, so searches need review.
 A row with only `{search}` compiles to the search rule only.
 
-**Tokens made before the fix.** The limit of a token created before p1 holds
-`("slack.mentions_of_me", "slack.read_messages")`, so the new search predicate would be dropped
-from it and the routine's mentions search would stop auto-accepting. To prevent that,
-`scoped_tokens.py` gets:
+**Tokens made before the fix.** A token created before p1 that carries a read+search mentions row
+holds only `("slack.mentions_of_me", "slack.read_messages")` in its limit. After p1 the row also
+compiles a `slack.mentions_of_me_all_results` rule, which that limit would drop, and the routine's
+mentions search would stop auto-accepting. Tokens made from p1 on record both pairs, so only older
+tokens need help. Tokens must only ever narrow (ADR 0172, ADR 0164), so the help is limited to the
+older tokens. `scoped_tokens.py` gets:
 
 ```python
 # A token's limit records (predicate, operation) pairs as they compiled when the token was made.
-# When a scope later splits one predicate per verb (ADR 0227), the old pair stands for both.
+# A token made before a scope split one predicate per verb (ADR 0227) recorded the old pair for
+# both verbs, so for such a token -- and only such a token -- the old pair stands for both.
 _LIMIT_PAIR_SUCCESSORS: dict[tuple[str, str], tuple[str, str]] = {
     ("slack.mentions_of_me", "slack.read_messages"):
         ("slack.mentions_of_me_all_results", "slack.read_messages"),
 }
 ```
 
-`_limits_from_json` adds the successor pair to any limit that holds the key pair. So a token
-created before the fix keeps exactly the reach it had, including search under a read-only row.
-This is accepted: such a token was made with that reach, and a token expires within its day limit.
-New tokens record both pairs, or only the one their row's verbs give.
+- `ScopedToken` gains `limits_split_verbs: bool = False`.
+- `create()` sets it to `True`.
+- `_to_json` adds `"limits_split_verbs": true` when it is set.
+- `_from_json` reads it as `raw.get("limits_split_verbs", False) is True`. Only when that is false
+  does `_from_json` pass `_limits_from_json(...)`'s result through the new
+  `_with_limit_successors(limits)`, which adds the successor pair to any limit that holds the key
+  pair.
+
+Consequences:
+
+- A token from before p1 on a **read+search** mentions row keeps exactly the search it had.
+- One on a **read-only** row loses search: after p1 the row compiles no search rule, so no limit
+  can bring search back. That is the fix applying to it.
+- If the person later adds search to that read-only row, a pre-p1 token gains it back. It held that
+  reach when it was made (through the bug), and it expires within its day limit.
+- A token made from p1 on never gets successors, so adding a verb to its row later never widens it.
 
 ### D2. Membership in the Slack client (phase p2)
 
@@ -224,6 +246,12 @@ def my_conversation_ids(self) -> frozenset[str] | None:
 `ids = self._conversation_ids_for_user(own, types="public_channel,private_channel,mpim,im")`;
 return `None` if `ids is None`, else `frozenset(ids)`.
 
+**Fix `_conversation_ids_for_user`** (see "Current state"). Replace
+`ids.extend(response.get("channels", []) or [])` with a loop that, for each item, appends
+`item["id"]` when the item is a `dict` with a non-empty `str` `"id"`, appends the item when it is a
+non-empty `str` (the shape the existing unit tests use), and skips anything else. This also fixes
+the participant fast path in `list_channels`, `list_group_chats` and `_participant_conversation_ids`.
+
 **Filtered search.** `search_messages` gains two keyword-only parameters:
 
 ```python
@@ -249,8 +277,8 @@ While the filter is active:
 _FILTERED_SEARCH_PAGE_CAP = 3
 
 def _search_filtered(
-    self, search_query: str, count: int, keep: Callable[[SlackMessage], bool],
-    cutoff: datetime | None, sort_kwargs: dict[str, str],
+    self, search_query: str, count: int, only_channels: frozenset[str] | None,
+    exclude_channels: frozenset[str], cutoff: datetime | None, sort_kwargs: dict[str, str],
 ) -> list[SlackMessage]:
 ```
 
@@ -258,12 +286,18 @@ The loop runs for `page` in `1.._FILTERED_SEARCH_PAGE_CAP`:
 
 1. Call `self._client.search_messages(query=search_query, count=100, page=page, **sort_kwargs)`.
    `SlackApiError` → `SlackClientError(f"search_messages failed: {self._describe_error(exc)}")`.
-2. Parse the matches with `_parse_search_match`.
-3. When `cutoff` is set, drop matches with `m.timestamp is None or m.timestamp < cutoff`.
-4. Extend the result with the kept ones.
+2. Filter the **raw** matches first, by `(raw.get("channel") or {}).get("id", "")`, with the same
+   keep rule. Then parse only the kept ones with `_parse_search_match`. Parsing first would cost a
+   `conversations.info` name lookup for a match that is about to be dropped. So the loop does not
+   call `keep` on a `SlackMessage`; the helper takes `only_channels` and `exclude_channels` in place
+   of `keep`. Signature: `_search_filtered(self, search_query: str, count: int,
+   only_channels: frozenset[str] | None, exclude_channels: frozenset[str], cutoff: datetime | None,
+   sort_kwargs: dict[str, str]) -> list[SlackMessage]`.
+3. When `cutoff` is set, drop parsed matches with `m.timestamp is None or m.timestamp < cutoff`.
+4. Extend the result with what is left.
 5. Stop when `len(result) >= count`, or when the page held fewer than 100 matches, or when
-   `page >= (response.get("messages") or {}).get("paging", {}).get("pages", 1)`, or (cutoff set)
-   when any match on the page was older than `cutoff`.
+   `page >= ((response.get("messages") or {}).get("paging") or {}).get("pages", 1)`, or (cutoff
+   set) when any raw match on the page had a `ts` older than `cutoff`.
 
 After the loop:
 
@@ -278,11 +312,19 @@ two query builders so both the filtered and unfiltered branches use them.
 
 `scripts/slack_call_budget.py` gets:
 
-- In the fake: `auth_test` returning `{"user_id": "U0007"}`.
-- `conversations_info` returning `"is_member": True`.
-- `search_messages` honouring `page` and returning
-  `"paging": {"pages": 3}` with `count` matches whose channel ids alternate between the channels
-  `U0007` is in and ones it is not in.
+- `TIER_PER_MINUTE["users.conversations"] = 50` (Tier 3), replacing 100 and its comment.
+- In the fake:
+  - `auth_test` returns `Resp({"user_id": "U0007"})` and does **not** increment `calls`.
+    `auth.test` has no tier entry, so counting it would make `wall_clock` raise `KeyError`, and
+    `own_user_id` caches it after the first call anyway.
+  - `users_conversations` returns channel objects (`{"id": …}`), not bare ids, as Slack does.
+  - `conversations_info` adds `"is_member": True` to its channel object.
+  - `search_messages(query=None, count=20, page=1, **k)` returns `count` matches.
+    - Their channel ids are `f"C{((page - 1) * count + i) % len(channels):04d}"`, so membership
+      comes from the existing `_channel_members` table, which `users_conversations` also reads:
+      most ids are not `U0007`'s and some are.
+    - Their `ts` values are recent: `str(time.time() - i)`.
+    - The response adds `"paging": {"page": page, "pages": 3}`.
 - Two new cases:
   - `("slack_search_messages(minutes=…, member_only)", lambda c: c.search_messages(minutes=60,
     count=20, only_channels=c.my_conversation_ids()))`
@@ -346,11 +388,24 @@ Value format: `VALUE_FORMATS["slack.my_conversations"] = _SLACK_ID` and
 in place of today's `{extra.predicate}`.
 
 Sentence: `describe.py` gets `EXCLUSION_SCOPE_TYPES: frozenset[str] =
-frozenset({"slack.my_conversations"})`. In `rule_sentence` and `row_sentence`, when the scope type
-is in it and there is a value, the subject is `f"{noun} except {phrase}"`. So the rule reads
-`Slack - my conversations except C0123456789: allow read, search`. Without a value it reads
-`Slack - my conversations: allow read, search`. `settings_controller.sentence_parts` needs no change,
-because it splits `row_sentence` around the value.
+frozenset({"slack.my_conversations"})` (exported). In `rule_sentence` and `row_sentence`, when the
+scope type is in it and there is a value, the subject is `f"{noun} except {phrase}"`.
+
+- A stored row, `describe.row_sentence(ScopeRow(id="r", scope="slack.my_conversations",
+  value=["C1"], verbs=frozenset({Verb.READ, Verb.SEARCH}),
+  operations=frozenset({"slack.read_messages"})))`, reads
+  `Slack - my conversations except C1: allow read, search`.
+- With `value=None` it reads `Slack - my conversations: allow read, search`.
+- `rule_sentence` of one compiled rule names only that rule's verb, for example
+  `Slack - my conversations except C1: allow read`.
+
+`settings_controller.sentence_parts` needs no change, because it splits `row_sentence` around the
+value.
+
+Scoped-token page: `web/server.py` `_scoped_rule_entry`'s `title()` (`server.py:304-310`) builds
+`f"{scope_type_label} {display}"`. When `scope_type in describe.EXCLUSION_SCOPE_TYPES` and the row
+has a value, it builds `f"{scope_type_label} except {display}"` instead. Without that, the token form
+would show `Slack — my conversations C1`, which reads as an allow list.
 
 Computed arguments: `web/mcp_dispatch.py`'s `_CONNECTOR_COMPUTED_ARGS` gains `"is_member"` and
 `"all_results_in_my_conversations"`. `member_only` and `exclude_channels` are the agent's own
@@ -360,15 +415,17 @@ Settings page (`settings_window_html.py:1057`): show the value input when
 `group.needs_value || group.value_optional`. Its `aria-label` is `"Value, optional
 (comma-separated for more than one)"` when `!group.needs_value`, and stays as today otherwise.
 
-Bridge tool text (`web/mcp_tools.py:188`): replace `omit if needs_value is false` with `omit if
-needs_value is false, unless value_optional is true and you want to give one`.
+Bridge tool text (`web/mcp_tools.py:188`): replace exactly
+`; omit if needs_value is false) and verbs (non-empty subset of the group's verbs, e.g. ['read'])`
+with `; omit unless needs_value or value_optional) and verbs (non-empty subset of the group's verbs)`.
+That takes the description from 1019 to 1017 characters, under the 1024 cap.
 
 ### D4. Connector wiring (phase p4)
 
 `_get_channel_history` and `_get_thread_replies` (`connectors/slack.py:568`, `:640`): straight after
-`channel_display` is computed, add
-`is_member = await self._fetch(self._slack.resolve_is_member, channel_id)`, **before** the
-`resolve_is_group_dm`/`resolve_is_self_dm`/`resolve_is_one_to_one_dm` calls, so those hit the
+`n = len(messages)` and **before** `channel_display` and the
+`resolve_is_group_dm`/`resolve_is_self_dm`/`resolve_is_one_to_one_dm` calls, add
+`is_member = await self._fetch(self._slack.resolve_is_member, channel_id)`, so those calls hit the
 caches it fills. Add `"is_member": is_member` to `args`.
 
 `slack_search_messages` tool spec gets two params, inserted before `reason`:
@@ -380,7 +437,9 @@ ToolParam(
         "Only return messages from conversations you are a member of right now (channels, DMs "
         "and group DMs); PrivacyFence asks Slack for your conversations on each call. Use it for "
         "a sweep of everything since your last run; a 'conversations I'm a member of' rule can "
-        "then auto-accept the search."
+        "then auto-accept the search. It reads at most 300 search matches, so in a busy window "
+        "it can miss older messages: if it returns exactly count results, search again with a "
+        "smaller minutes."
     ),
 ),
 ToolParam(
@@ -393,8 +452,9 @@ ToolParam(
 ),
 ```
 
-Append to the tool's description, before "Requires user approval.":
-`"With member_only, results come only from conversations you are in, up to 3 search pages."`
+The tool's own description does **not** change. It is 1023 characters, against a 1024 cap
+(`tests/unit/web/test_tool_schema_portability.py`), and the parameter descriptions carry the new
+behaviour.
 
 `_search_messages(self, query="", count=20, participant="", days=90, minutes=0,
 member_only=False, exclude_channels="")`:
@@ -404,42 +464,68 @@ member_only=False, exclude_channels="")`:
    `None`, raise `RuntimeError("Could not read the Slack conversations you are a member of; try
    again in a minute.")`. Otherwise set `member_ids = None`.
 3. `messages = await self._fetch(self._slack.search_messages, query, count, participant, days,
-   minutes, only_channels=member_ids, exclude_channels=excluded)`.
+   minutes, only_channels=member_ids, exclude_channels=excluded)`. The keyword arguments are always
+   passed, so the existing `assert_called_once_with(...)` checks in test_slack_connector.py gain
+   `only_channels=None, exclude_channels=frozenset()`.
 4. Preview: if `member_only`, add `preview["Conversations"] = "only ones you are a member of"`. If
    `excluded`, add `preview["Excluded"] = ", ".join(sorted(excluded))`.
 5. `args` gains `"member_only": member_only`, `"exclude_channels": sorted(excluded)` and
    `"all_results_in_my_conversations": member_ids is not None and all(m.channel_id in member_ids
    for m in messages)`.
 
-`scripts/qa_fixture_recorder.py` `check_slack`: after the thread-replies check, inside the same
-`try`, append a check that records no fixture:
+`scripts/qa_fixture_recorder.py` `check_slack`: after the existing `try`/`except` (so a failing
+thread check does not skip it), add a module-level helper and call it once for the QA channel and,
+when the manifest names one, once for a group DM:
 
 ```python
-member = client.resolve_is_member(channel_id)
-ids = client.my_conversation_ids()
-listed = ids is not None and channel_id in ids
-ok = member and listed
-note = (
-    "conversations.info is_member and users.conversations agree" if ok
-    else f"is_member={member}, listed by users.conversations={listed}"
-)
-results.append(CheckResult("slack", "conversation_membership", target, ok, note))
+def _check_slack_membership(client: SlackClient, method: str, target: str, conversation_id: str) -> CheckResult:
+    try:
+        member = client.resolve_is_member(conversation_id)
+        ids = client.my_conversation_ids()
+    except (SlackClientError, TypeError) as exc:
+        return CheckResult("slack", method, target, False, str(exc))
+    listed = ids is not None and conversation_id in ids
+    ok = member and listed
+    note = (
+        "conversations.info and users.conversations agree" if ok
+        else f"is_member={member}, listed by users.conversations={listed}"
+    )
+    return CheckResult("slack", method, target, ok, note)
 ```
 
-This is the live proof that Slack answers the membership questions the way D2 assumes.
+- Channel: when `channel_id` is resolved (it is empty only if the first `try` failed before
+  resolving it), `results.append(_check_slack_membership(client, "conversation_membership", target,
+  channel_id))`.
+- Group DM: `group_dm_id = cfg.get("group_dm_id", "")`. If it is set,
+  `results.append(_check_slack_membership(client, "group_dm_membership", group_dm_id,
+  group_dm_id))`.
 
-### D5. Gate-level test (phase p4)
+Neither records a fixture. This is the live proof that Slack answers the membership questions the
+way D2 assumes, including `is_member` on a group DM, the one assumption Slack's documentation leaves
+open.
 
-In `tests/unit/connectors/test_slack_connector.py`, add `TestMemberConversationRules`. It drives the
-real `gated_call` with a policy holding one compiled `slack.my_conversations` row (verbs read and
-search, value `["C_EXCLUDED"]`), using the existing fake-gate helpers of that file and
-`docs/coding-and-testing-guidelines.md` §2.4. It checks:
+### D5. Connector-to-rule test (phase p4)
 
-- history in a member channel auto-accepts;
-- history with `resolve_is_member` → False needs review;
-- history on `C_EXCLUDED` needs review;
-- a `member_only=True` search auto-accepts;
-- the same search with `member_only=False` needs review.
+`docs/coding-and-testing-guidelines.md` §2.4 says a connector test stubs `gated_call` and does not
+drive the real gate. So the end-to-end check pairs the captured gate input with the real engine.
+
+In `tests/unit/connectors/test_slack_connector.py`, add `TestMemberConversationRules`:
+
+1. Capture each call's `gated_call` kwargs with the file's `gated_call_spy` (line 70).
+2. Compile the rules with `scope_rows.compile_row(ScopeRow(id="r", scope="slack.my_conversations",
+   value=["C_EXCLUDED"], verbs=frozenset({Verb.READ, Verb.SEARCH}),
+   operations=frozenset({"slack.read_messages"})))`.
+3. Evaluate with `policy.engine.evaluate(rules, "slack.read_messages",
+   ReviewContext(connector="slack", tool=kw["tool"], args=kw["args"], raw_data=kw["raw_data"],
+   my_email=""))`.
+
+It checks:
+
+- history in a member channel → `(True, "r")`;
+- history with `resolve_is_member` returning False → `False`;
+- history on `C_EXCLUDED` → `False`;
+- a `member_only=True` search with every result in `my_conversation_ids()` → `True`;
+- the same search with `member_only=False` → `False`.
 
 ### D6. Exclusions
 
@@ -513,8 +599,11 @@ them first (ADR README rule 6).
   read. An empty page auto-accepts. Records the rate-limit reasoning and rejects per-conversation
   sweeps and listing timestamps. Relates to 0221, 0223.
 - **0227 — An extra scope can give each verb its own predicate, so a rule allows only the verbs it
-  was saved with.** Fixes the read-only mentions rule. Existing token limits keep their reach
-  through `_LIMIT_PAIR_SUCCESSORS`. Amends 0221.
+  was saved with.** Fixes the read-only mentions rule. Amends 0221. Consequences to record:
+  - tokens made before the change keep their reach through `_LIMIT_PAIR_SUCCESSORS`, gated by
+    `limits_split_verbs` (D1);
+  - a v2 `slack.mentions_of_me` rule, if any still exists, migrates to a read-only row;
+  - the `participant` fast path's `users.conversations` id bug is fixed in the same change set (D2).
 
 ## Manual steps
 
@@ -525,8 +614,8 @@ runner through `qa-record-fixture.yml`, in phase p4.
 [Slack member-conversations: manual checks](https://claude.ai/artifact/FXwwTf5ZujCCvihUBwZdMJ)):
 
 - **ma1-live-member-rule**: on the TKCS install, add the new rule with one excluded channel, add it
-  to the inbox-triage token, and check the five verdicts of D5 against real Slack in an unattended
-  session.
+  to a test token, and check the five verdicts of D5, plus one group DM, against real Slack in an
+  unattended session.
 - **ma2-mentions-verbs**: check that a read-only mentions rule no longer covers a search, that a
   read+search one still does, and that the existing inbox-triage token still covers its mentions
   search.
@@ -535,22 +624,31 @@ runner through `qa-record-fixture.yml`, in phase p4.
 
 - **`is_member` on group DMs.** D2 assumes `conversations.info` returns `is_member: true` for a
   group DM the user is in. If it does not, group DMs fail closed: they need review under the new
-  rule but stay covered by `group_dm`. The p4 QA check proves the channel case only. A p2 worker who
-  finds a recorded fixture in `tests/fixtures/live/slack/` contradicting the `is_member` or `is_im`
-  shape stops with `status=blocked`.
-- **Tier of `users.conversations`.** `scripts/slack_call_budget.py` prices it at 100 per minute.
-  Slack's method page should be checked in p5 (D7 docs). Whichever is right, one walk per search is
-  well under the limit.
+  rule but stay covered by `group_dm`. The p4 QA check proves it when the QA manifest names
+  `slack.group_dm_id`. If that id is not set on the runner, the check is skipped and the
+  `manual_after` item ma1 covers group DMs.
+- **Tier of `users.conversations`.** It is Tier 3. `scripts/slack_call_budget.py` prices it at
+  100 per minute, and p2 corrects that. One walk per search is well under the limit either way.
 - **Search reaches public channels.** If Slack ever stopped returning results from public channels
   the user is not in, member-only search would simply drop nothing. That is not a risk to
   correctness.
 - **Existing tests that pin today's mentions behaviour.** `tests/unit/policy/test_scopes.py`
   (`TestSlackMentionsOfMe`), `tests/unit/policy/test_engine.py`
-  (`TestSlackScopes.test_a_search_rule_auto_accepts_through_evaluate`) and
-  `tests/unit/policy/test_catalogue.py` (`test_rules_compile_to_the_read_messages_operation`)
-  assert that one `slack.mentions_of_me` predicate covers search. p1 changes them on purpose, and
+  (`TestSlackScopes.test_a_search_rule_auto_accepts_through_evaluate`),
+  `tests/unit/policy/test_catalogue.py` (`test_rules_compile_to_the_read_messages_operation`) and
+  `tests/unit/policy/test_describe.py` (`test_mentions_rule_lists_read_and_search`, line 106) assert
+  that one `slack.mentions_of_me` predicate covers search. p1 changes them on purpose, and
   says so in its commit message. Any *other* failing test in p1 that is not about mentions means
   the compile change leaked into proposable scopes: stop with `status=blocked`.
+- **Exact-args asserts in the Slack connector tests.** `tests/unit/connectors/test_slack_connector.py`
+  compares `kwargs["args"]` with whole dicts and calls `client.search_messages.assert_called_once_with`
+  (around lines 307, 601, 666, 675, 685, 686, 695, 726, 729, 769, 770, 781). p4 updates them to the
+  new args, as D4 states. `make_connector()` (line 37) needs
+  `client.resolve_is_member.return_value = False` and
+  `client.my_conversation_ids.return_value = frozenset()`, or a `MagicMock` ends up in `args`.
+- **Other consumers of `EXTRA_SCOPES`.** `tests/unit/test_daemon_main.py`
+  (`test_unscoped_decisions_unchanged_by_upgrade`, around line 2511) iterates every extra scope. It
+  should keep passing, and the `python3 -m pytest tests/unit -q` step of p1 and p3 covers it.
 - **`_is_lossless` in `add_rules`.** It must stay true for a single per-verb rule. If
   `TestAddRules` in `tests/unit/policy/test_scope_rows.py` shows a search-only mentions rule
   becoming a custom row, D1 step 2 or 3 is wrong: stop with `status=blocked`.
@@ -618,9 +716,12 @@ phases:
          scopes.py:38 to name both predicates.
       5. catalogue.py: give `EXTRA_SCOPES["slack.mentions_of_me"]`
          `verb_predicates=((Verb.SEARCH, "slack.mentions_of_me_all_results"),)`.
-      6. scoped_tokens.py: add `_LIMIT_PAIR_SUCCESSORS` (exact text in D1) and apply it at the end
-         of `_limits_from_json`. For each rid, `pairs | {succ for pair, succ in
-         _LIMIT_PAIR_SUCCESSORS.items() if pair in pairs}`.
+      6. scoped_tokens.py, per D1 "Tokens made before the fix":
+         - add `_LIMIT_PAIR_SUCCESSORS` (exact text in D1) and the `limits_split_verbs` field;
+         - set the field in `create()`, write it in `_to_json` and read it in `_from_json`;
+         - add `_with_limit_successors(limits)`, which returns, per rid,
+           `pairs | {succ for pair, succ in _LIMIT_PAIR_SUCCESSORS.items() if pair in pairs}`;
+         - call `_with_limit_successors` from `_from_json` only when `limits_split_verbs` is false.
       7. Tests. Write each new one failing first.
          - test_scopes.py `TestSlackMentionsOfMe`: thread cases on "slack.mentions_of_me"; search
            cases move to a new `TestSlackMentionsOfMeAllResults` on
@@ -639,12 +740,24 @@ phases:
            with predicate "slack.mentions_of_me"; `add_rules` of a search-only compiled rule
            yields a scoped row (scope "slack.mentions_of_me", verbs {search}), not a custom row.
          - test_describe.py: `rule_verbs` of a "slack.mentions_of_me_all_results" rule is
-           (Verb.SEARCH,); of a "slack.mentions_of_me" rule is (Verb.READ,).
+           (Verb.SEARCH,); of a "slack.mentions_of_me" rule is (Verb.READ,). Rewrite
+           `test_mentions_rule_lists_read_and_search` (line 106) so it builds the rules from a
+           read+search row with `scope_rows.compile_row` and asserts that the union of their
+           `covered_tools` holds both a thread-read tool and slack_search_messages.
          - test_outdated.py: a "slack.mentions_of_me_all_results" rule on {"slack.read_messages"}
            reports no missing operations.
-         - tests/unit/test_scoped_tokens.py: a token JSON whose rule_limits holds
-           ["slack.mentions_of_me", "slack.read_messages"] reads back with the
-           `_all_results` pair too; a limit without it is unchanged.
+         - tests/unit/test_scoped_tokens.py: add these tests.
+           - `test_an_old_token_limit_gets_the_limit_successor`: a token JSON with no
+             "limits_split_verbs" whose rule_limits holds
+             ["slack.mentions_of_me", "slack.read_messages"] reads back with the `_all_results`
+             pair too.
+           - `test_a_split_verbs_token_limit_is_read_unchanged`: the same JSON with
+             "limits_split_verbs": true reads back unchanged.
+           - A limit without the pair is unchanged.
+           - A token from `create()` round-trips with limits_split_verbs True.
+           - `test_a_new_read_only_token_does_not_gain_search_later`: create a token on a read-only
+             mentions row, add search to the row, and check that `gate._rules_in_scope` under
+             that token holds no "slack.mentions_of_me_all_results" rule.
       8. Run `ruff check .` and `python3 -m pytest tests/unit -q`. Commit with a message that says
          the mentions tests changed on purpose (read-only mentions rules no longer cover search).
       Stop with status=blocked if a test about a proposable scope (not Slack mentions) fails after
@@ -655,6 +768,7 @@ phases:
       - python3 -m pytest tests/unit/policy/test_scope_rows.py::TestExtraVerbPredicates -q passes
       - python3 -m pytest tests/unit/policy tests/unit/test_scoped_tokens.py -q passes
       - grep -n "_LIMIT_PAIR_SUCCESSORS" src/privacyfence/scoped_tokens.py matches at least twice
+      - python3 -m pytest tests/unit/test_scoped_tokens.py -k "limit_successor or split_verbs or does_not_gain_search" -q passes and collects at least 3 tests
       - grep -n "def extra_predicate_for\|def extra_predicates" src/privacyfence/policy/catalogue.py matches twice
       - ruff check . passes
 
@@ -671,14 +785,18 @@ phases:
       "Slack API limits" and "Design D2", before you start. Must-read: CLAUDE.md, CONTRIBUTING.md,
       docs/coding-and-testing-guidelines.md, docs/adr/0116-*, docs/adr/0223-*.
       1. slack_client.py: add `resolve_is_member` after `resolve_is_one_to_one_dm`, with the exact
-         docstring and the seven body steps of D2. Add `my_conversation_ids` after it (D2).
+         docstring and the seven body steps of D2. Add `my_conversation_ids` after it (D2). Fix
+         `_conversation_ids_for_user` to take ids from channel objects (D2 "Fix
+         `_conversation_ids_for_user`").
       2. Add `_FILTERED_SEARCH_PAGE_CAP = 3` with its comment, next to `_MAX_WINDOW_MINUTES`, and
-         `_search_filtered` per D2. Import `Callable` from `typing` if it is not imported.
+         `_search_filtered` per D2. Use the signature with `only_channels`/`exclude_channels`, and
+         filter raw matches before parsing them.
       3. `search_messages`: add the keyword-only `only_channels` and `exclude_channels` parameters
          and route per D2. Unfiltered calls must make exactly today's requests: the existing tests
          in tests/unit/test_slack_client.py for `search_messages` and `_search_recent` pass
          unchanged. Extend the docstring with one paragraph on the filter and the page cap.
-      4. scripts/slack_call_budget.py: the fake and case changes listed at the end of D2.
+      4. scripts/slack_call_budget.py: the tier fix, the fake changes and the two cases listed at
+         the end of D2 (`auth_test` is not counted).
       5. Tests in tests/unit/test_slack_client.py. Write each failing first, and use the fake-WebClient
          style the file already uses.
          - `TestResolveIsMember`: a channel with is_member true → True; is_member false → False;
@@ -686,9 +804,15 @@ phases:
            False; an empty id → False with no API call; two calls → two conversations_info calls
            (not cached); after it, `resolve_is_group_dm`, `resolve_is_one_to_one_dm` and
            `resolve_is_self_dm` for the same id make no further conversations_info call.
-         - `TestMyConversationIds`: returns the users.conversations ids across pages as a
-           frozenset, with types "public_channel,private_channel,mpim,im"; None when auth.test
-           fails; None when users.conversations raises.
+         - `TestMyConversationIds`:
+           - returns the ids across pages as a frozenset when users.conversations returns channel
+             objects ({"id": ...}), with types "public_channel,private_channel,mpim,im";
+           - the same with bare id strings;
+           - None when auth.test fails;
+           - None when users.conversations raises.
+         - `test_participant_fast_path_accepts_channel_objects`: `list_channels(participant=...)`
+           and `list_group_chats(participant=...)`, with users.conversations returning objects,
+           filter to those ids.
          - `TestFilteredSearch`:
            - `test_only_channels_drops_other_conversations`;
            - `test_exclude_channels_drops_listed_ids`;
@@ -701,10 +825,10 @@ phases:
          users.conversations and at most 3 search.messages calls, and the resolve_is_member case
          exactly 1 conversations.info call. Put both lines in the commit message.
       7. Run `ruff check .` and `python3 -m pytest tests/unit -q`.
-      Stop with status=blocked if a recorded fixture under tests/fixtures/live/slack/ contradicts
-      the conversations.info shape D2 relies on (`is_member`, `is_im`, `is_mpim`, `user`).
+      Stop with status=blocked if an existing test of the unfiltered search paths has to change
+      to pass: D2 requires unfiltered calls to make exactly today's requests.
     acceptance:
-      - python3 -m pytest tests/unit/test_slack_client.py -k "ResolveIsMember or MyConversationIds or FilteredSearch" -q passes
+      - python3 -m pytest tests/unit/test_slack_client.py -k "ResolveIsMember or MyConversationIds or FilteredSearch or channel_objects" -q passes
       - python3 -m pytest tests/unit/test_slack_client.py -q passes
       - python3 scripts/slack_call_budget.py exits 0 and its output contains "member_only" and "resolve_is_member()"
       - grep -n "_FILTERED_SEARCH_PAGE_CAP = 3" src/privacyfence/slack_client.py matches
@@ -722,12 +846,14 @@ phases:
       - src/privacyfence/web/mcp_dispatch.py
       - src/privacyfence/web/mcp_tools.py
       - src/privacyfence/settings_window_html.py
+      - src/privacyfence/web/server.py
       - tests/unit/policy/test_catalogue.py
       - tests/unit/policy/test_scopes.py
       - tests/unit/policy/test_value_format.py
       - tests/unit/policy/test_describe.py
       - tests/unit/policy/test_engine.py
       - tests/unit/web/test_mcp_dispatch.py
+      - tests/unit/web/test_server.py
       - tests/unit/test_settings_window_html.py
     brief: |
       Read docs/slack-member-conversations-plan.md "Design D3", "D6" and "D8" first. p1 has added
@@ -745,9 +871,10 @@ phases:
          `all_results_in_my_conversations`.
       3. value_format.py: the two `VALUE_FORMATS` entries (D3).
       4. describe.py: `EXCLUSION_SCOPE_TYPES` and the "except" subject in `rule_sentence` and
-         `row_sentence` (D3).
+         `row_sentence` (D3). web/server.py `_scoped_rule_entry`'s `title()`: the same "except"
+         rule (D3 "Scoped-token page").
       5. web/mcp_dispatch.py: add "is_member" and "all_results_in_my_conversations" to
-         `_CONNECTOR_COMPUTED_ARGS`. web/mcp_tools.py:188: the wording change in D3.
+         `_CONNECTOR_COMPUTED_ARGS`. web/mcp_tools.py:188: the exact replacement in D3.
       6. settings_window_html.py:1057: show the input for `group.needs_value || group.value_optional`,
          with the aria-label from D3.
       7. Tests, each failing first:
@@ -774,9 +901,13 @@ phases:
            - a value "#general" raises RuleValueError;
            - every propose-group entry carries value_optional False.
          - test_value_format.py: "C0123456789" accepted and "#hr" refused for both predicates.
-         - test_describe.py: the sentence with value ["C1"] is
-           "Slack - my conversations except C1: allow read, search", and without a value
+         - test_describe.py: `describe.row_sentence` of the ScopeRow given in D3 is
+           "Slack - my conversations except C1: allow read, search", and with value=None
            "Slack - my conversations: allow read, search".
+         - tests/unit/web/test_server.py: `test_scoped_rule_title_says_except_for_an_exclusion_scope`.
+           `_scoped_rule_entry` for that row has a title containing "my conversations except C1".
+           Build it the way the file's existing `_scoped_rule_entry` / `scoped_token_page_data`
+           tests do.
          - test_engine.py `TestSlackScopes`: `preflight` on a "slack.my_conversations" rule is
            ("unknown", "").
          - tests/unit/web/test_mcp_dispatch.py: an agent's check_policy args carrying is_member=True
@@ -789,7 +920,7 @@ phases:
       above (for example an org-settings snapshot): it means a consumer this plan did not find.
     acceptance:
       - python3 -m pytest tests/unit/policy/test_scopes.py -k "MyConversations" -q passes
-      - python3 -m pytest tests/unit/policy tests/unit/web/test_mcp_dispatch.py tests/unit/test_settings_window_html.py -q passes
+      - python3 -m pytest tests/unit/policy tests/unit/web/test_mcp_dispatch.py tests/unit/web/test_server.py tests/unit/test_settings_window_html.py tests/unit/web/test_tool_schema_portability.py -q passes
       - grep -n "\"slack.my_conversations\": PolicyExtraScope" src/privacyfence/policy/catalogue.py matches
       - grep -n "all_results_in_my_conversations" src/privacyfence/web/mcp_dispatch.py matches
       - python3 -m mypy src/privacyfence passes
@@ -809,12 +940,20 @@ phases:
       Read docs/slack-member-conversations-plan.md "Design D4", "D5" and "D7" first. Pattern
       commits: ae787c42 (computed Slack args) and feea59a8 (adding a search parameter).
       1. connectors/slack.py `_get_channel_history` and `_get_thread_replies`: compute `is_member`
-         before the three channel-type resolvers and add it to `args` (D4).
-      2. The `slack_search_messages` tool spec: the two `ToolParam`s and the description sentence,
-         exact text in D4. `_search_messages`: the new parameters and steps 1–5 of D4.
-      3. scripts/qa_fixture_recorder.py `check_slack`: the "conversation_membership" CheckResult
-         (exact code in D4). It records no fixture file.
-      4. Tests, each failing first:
+         right after `n = len(messages)`, before `_channel_display` and the three channel-type
+         resolvers, and add it to `args` (D4).
+      2. The `slack_search_messages` tool spec: the two `ToolParam`s, exact text in D4. Do not
+         change the tool's own description (it is at the 1024-character cap). `_search_messages`:
+         the new parameters and steps 1–5 of D4.
+      3. scripts/qa_fixture_recorder.py: `_check_slack_membership` and its two calls in
+         `check_slack` (exact code and placement in D4). They record no fixture file.
+      4. Update the existing tests D4 and the plan's Risks name:
+         - `make_connector()` defaults: `resolve_is_member` → False, `my_conversation_ids` →
+           frozenset();
+         - the whole-dict `kwargs["args"]` asserts gain the new keys;
+         - the `client.search_messages.assert_called_once_with(...)` calls gain
+           `only_channels=None, exclude_channels=frozenset()`.
+      5. New tests, each failing first:
          - tests/unit/connectors/test_slack_connector.py `TestComputedScopeArgs`: history and
            replies pass `is_member` from `resolve_is_member`; `resolve_is_member` is called before
            `resolve_is_group_dm`.
@@ -828,23 +967,34 @@ phases:
              gated_call;
            - the preview carries "Conversations" and "Excluded".
          - `TestMemberConversationRules` per D5.
-         - tests/unit/test_qa_fixture_recorder.py `TestCheckSlack`: the membership result is ok
-           when both agree, not ok when either disagrees, and records no fixture.
-      5. Run `ruff check .`, `python3 -m pytest tests/unit -q`, `python3 -m mypy src/privacyfence`
+         - tests/unit/test_qa_fixture_recorder.py: a **new** class `TestCheckSlack` (none exists
+           today). It fakes the client by monkeypatching `recorder._build_slack_client`, and the
+           manifest with `{"slack": {"channel_id": "C1", "seed_thread_ts": "1.0", ...}}`. Tests:
+           - `conversation_membership` is ok when both calls agree;
+           - not ok when `resolve_is_member` is False or the id is missing from
+             `my_conversation_ids()`;
+           - not ok with the exception text when `my_conversation_ids` raises `SlackClientError`;
+           - it still runs when `get_thread_replies` raises;
+           - `group_dm_membership` appears only when `group_dm_id` is set;
+           - neither result carries a `fixture_relpath`.
+      6. Run `ruff check .`, `python3 -m pytest tests/unit -q`, `python3 -m mypy src/privacyfence`
          and `pytest tests/integration -v` (the tool schema changed, so
          test_mcp_daemon_contract.py must pass).
-      6. Push the feature branch's current state. Then dispatch `qa-record-fixture.yml` on `main`
+      7. Push the feature branch's current state. Then dispatch `qa-record-fixture.yml` on `main`
          with inputs connector=slack and branch=<this phase branch>. Wait for it to finish and
-         pull. Its report must show `slack conversation_membership` ok. If it records an updated
+         pull. Its report must show `slack conversation_membership` ok, and
+         `group_dm_membership` ok if the runner's manifest sets `slack.group_dm_id`. Note in the
+         phase report whether it ran. If it records an updated
          get_thread_replies.json, review the diff per docs/connector-qa.md "Reviewing recorded
          fixtures" before keeping it.
-      Stop with status=blocked if the QA run shows conversation_membership not ok: D2's
-      assumption about Slack's answers is wrong and the plan must be revised. Also stop if the
+      Stop with status=blocked if the QA run shows conversation_membership or group_dm_membership
+      not ok: D2's assumption about Slack's answers is wrong and the plan must be revised. Also stop if the
       dispatch cannot be made from this session (the profile's ci.dispatchable notes say how);
       report the run URL or the refusal.
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_slack_connector.py -k "MemberOnlySearch or MemberConversationRules or ComputedScopeArgs" -q passes
       - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -k CheckSlack -q passes
+      - python3 -m pytest tests/unit/web/test_tool_schema_portability.py -q passes
       - pytest tests/integration -q passes
       - grep -n "\"member_only\", \"bool\"" src/privacyfence/connectors/slack.py matches
       - the qa-record-fixture.yml run for connector=slack on this branch reports conversation_membership ok (run URL in the phase report)
@@ -879,7 +1029,8 @@ phases:
            listing timestamps; filtering inside the rule.
          - 0227's: two catalogue groups; telling the engine about verbs. Its Consequences name
            `_LIMIT_PAIR_SUCCESSORS`.
-         Add the three index rows to docs/adr/README.md. Add one line to 0221's Status:
+         Add the three index rows to docs/adr/README.md, and change 0221's index row status
+         to "Accepted; relates to 0172; amended by 0227". Add one line to 0221's Status:
          "Amended by 0227 (a mentions rule's search verb is now its own predicate)."
       3. docs/approvals-and-policy.md, the scope table near line 403:
          - change the "Slack mentions of me" row to name both predicates (search:
@@ -895,15 +1046,22 @@ phases:
          and the routine pattern of D7. Before writing the tiers, fetch each method's page
          (https://api.slack.com/methods/<method>) with WebFetch and use the tier it states. If a
          page cannot be fetched, keep the plan's figure and say so in the phase report.
-      5. docs/tools-reference.md: regenerate or hand-edit the slack_search_messages row the way
-         feea59a8 did. docs/connector-qa.md "Slack checks": add a bullet "**Member conversations.**
+      5. Run `python3 scripts/generate_tools_reference.py`. Expect no diff to
+         docs/tools-reference.md, because the tool's first sentence did not change and the doc is
+         generated (test_docs_tools_reference.py forbids hand edits). docs/connector-qa.md "Slack checks": add a bullet "**Member conversations.**
          With a 'conversations I'm a member of' rule, slack_get_channel_history on
          privacyfence-qa-control reads without a card; a member_only search of the last 60
          minutes reads without a card; the same search without member_only prompts." Add
-         `conversation_membership` to the recorder table row for slack near line 356 (no fixture).
-      6. CHANGELOG.md under "## [Unreleased]", three lines:
+         `conversation_membership` and `group_dm_membership` to the recorder table row for slack
+         near line 356 (no fixture). In "Seed: Slack" (near line 119), add an optional
+         `slack.group_dm_id`: the id of a group DM the QA account is in, which enables the
+         group-DM membership check.
+      6. CHANGELOG.md under "## [Unreleased]", four lines:
          - the new rule;
          - member_only and exclude_channels on slack_search_messages;
+         - "Fixed: Slack participant filters (slack_list_channels, slack_list_group_chats,
+           slack_search_messages with participant) read conversation ids from Slack's channel
+           objects.";
          - "A 'Slack — mentions of me' rule saved with only read no longer auto-accepts searches;
            add search to it if you relied on that."
       7. Delete docs/slack-member-conversations-plan.md and
