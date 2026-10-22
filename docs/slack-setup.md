@@ -35,6 +35,34 @@ truncated.
 If your workspace requires admin approval for app installs, an admin approves each user's first
 sign-in on Slack's side. That is a Slack workspace setting, not a PrivacyFence one.
 
+## Rate limits and routines
+
+Slack limits each method by tier (requests per minute). The methods PrivacyFence's Slack tools call:
+
+| Method | Tier | Used for |
+|---|---|---|
+| `conversations.history`, `conversations.replies` | Tier 3 (50/min); 1/min and 15 messages for an app distributed outside the Marketplace | channel history, thread replies |
+| `conversations.info` | Tier 3 (50/min) | channel type and membership |
+| `users.conversations` | Tier 3 (50/min) | the conversations you are a member of |
+| `search.messages` | Tier 2 (20/min), at most 100 matches per page | search |
+| `conversations.list` | Tier 2 (20/min) | the channel, DM and group chat listings |
+
+A routine that reads Slack by time should not read each conversation one by one: that costs a
+`conversations.history` and a `conversations.info` request per conversation, about 2 minutes for 50
+conversations on an internal app and about 50 minutes on a distributed one. Each run instead:
+
+1. Calls `slack_search_messages` with `minutes` set to the time since the last run, `member_only`
+   true, `exclude_channels` set to the ids the "Slack — conversations I'm a member of" rule excludes,
+   and `count` 100. This costs one `users.conversations` walk (one request per 200 conversations)
+   and 1–3 `search.messages` requests.
+2. Calls `slack_get_thread_replies` for a result whose thread needs context. This costs one
+   `conversations.replies` and one `conversations.info` request.
+3. Uses `slack_get_channel_history` with `minutes` only for a conversation where the search-index
+   delay matters.
+
+On an app distributed outside the Marketplace, step 2 is limited to 1 request per minute. See
+[ADR 0226](adr/0226-member-only-slack-search-drops-other-conversations-before-the-gate.md).
+
 ## Values
 
 | Item | Value |

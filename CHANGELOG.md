@@ -43,6 +43,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A Slack rule for conversations you are a member of.** "Slack — conversations I'm a member of" auto-accepts channel history and thread reads in any conversation you are in right now (checked with Slack on each call), with an optional list of channel ids it never covers, and a `member_only` search whose every result is from such a conversation.
+- `slack_search_messages` takes `member_only` and `exclude_channels`, so a routine can sweep everything since its last run in a few requests instead of one per conversation.
+
+### Fixed
+
+- Slack participant filters (`slack_list_channels`, `slack_list_group_chats`, `slack_search_messages` with `participant`) read conversation ids from Slack's channel objects.
+
+### Changed
+
+- A "Slack — mentions of me" rule saved with only read no longer auto-accepts searches; add search to it if you relied on that.
+
 ## [6.8.0] — 2026-10-22
 
 ### Added
