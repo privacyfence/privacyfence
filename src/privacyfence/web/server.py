@@ -1403,8 +1403,6 @@ def _build_org_app(
         # above already resolves from org.org_config -- see that call and
         # this function's own build_org_routes docstring.
         step_up=step_up, step_up_origin=org.issuer_url,
-        # The admin's "AI systems" pin page (ADR 0035) lists and pins this provider's DCR clients.
-        oauth_provider=org.provider,
         # Auto-accept rule values resolve to names through the viewing principal's own connectors.
         connector_registry=org.connector_registry,
         # ADR 0165: the administrator's opt-in and cap from the org config bundle; the section

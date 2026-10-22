@@ -19,7 +19,7 @@ import pytest
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.settings_controller import SettingsController
 from privacyfence.web.org_settings_scope import ACTION_SCOPES, LOCAL_MODE, ORG_MODE, is_action_permitted
-from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, _ORG_ALLOWED_ACTIONS, _ORG_ONLY_SENSITIVE_ACTIONS
+from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, _ORG_ALLOWED_ACTIONS
 
 _ADMIN = Principal(id="alice", is_admin=True)
 _NON_ADMIN = Principal(id="bob", is_admin=False)
@@ -32,24 +32,20 @@ _LOCAL_ROUTED_ACTIONS = frozenset(a for a, s in ACTION_SCOPES.items() if LOCAL_M
 _ORG_ONLY_ACTIONS = frozenset(ACTION_SCOPES) - _LOCAL_ROUTED_ACTIONS
 
 
-def test_every_action_names_local_mode_or_is_a_classified_org_only_action():
+def test_every_action_has_a_local_mode_route():
     # Local mode's own dispatcher predates this table and was never gated
     # by it -- every action classified here must still be reachable there,
     # so ACTION_SCOPES can be the one place both modes project from rather
-    # than local mode needing a second, separate list. The AI-system pin
-    # actions (ADR 0035 decision 3) are the one exception: they have no local-mode meaning (no DCR
-    # registrations to pin), so each org-only action must be both admin-only
-    # and classified sensitive -- an org-only action can never land quietly.
+    # than local mode needing a second, separate list. The last ORG_MODE-only
+    # actions, the AI-system pins, were removed by ADR 0225; a new one needs its
+    # own sensitive classification in routes_settings.
     for action, scope in ACTION_SCOPES.items():
         assert scope.modes <= {LOCAL_MODE, ORG_MODE}, action
-        if LOCAL_MODE not in scope.modes:
-            assert scope.modes == {ORG_MODE}, action
-            assert scope.admin_only, action
-            assert action in _ORG_ONLY_SENSITIVE_ACTIONS, action
+        assert LOCAL_MODE in scope.modes, action
 
 
-def test_org_only_actions_are_exactly_the_org_only_sensitive_set():
-    assert _ORG_ONLY_ACTIONS == _ORG_ONLY_SENSITIVE_ACTIONS == {"pin_agent_client", "unpin_agent_client"}
+def test_there_are_no_org_only_actions():
+    assert _ORG_ONLY_ACTIONS == frozenset()
 
 
 def test_org_allowed_actions_is_exactly_the_org_routed_projection():
@@ -103,11 +99,6 @@ def test_every_local_action_is_permitted_in_local_mode_for_any_principal(action)
     assert is_action_permitted(action, _NON_ADMIN, mode=LOCAL_MODE) is True
 
 
-@pytest.mark.parametrize("action", sorted(_ORG_ONLY_ACTIONS))
-def test_org_only_actions_are_never_permitted_in_local_mode(action):
-    assert is_action_permitted(action, LOCAL_PRINCIPAL, mode=LOCAL_MODE) is False
-
-
 def test_an_unclassified_action_name_is_never_permitted_in_either_mode():
     for action in ("quit_app", "not_a_real_action"):
         assert is_action_permitted(action, _ADMIN, mode=LOCAL_MODE) is False
@@ -126,8 +117,7 @@ def test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_setting
     # action stays permitted for LOCAL_PRINCIPAL under LOCAL_MODE.
     assert LOCAL_PRINCIPAL.is_admin is False
     assert is_action_permitted(next(iter(_ORG_ROUTED_PER_PRINCIPAL_ACTIONS)), LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
-    # Picked from the admin-only actions that also have a local route --
-    # The org-only AI-system pin actions are admin-only but never local.
+    # Picked from the admin-only actions that also have a local route.
     admin_only_local = min(_ORG_ROUTED_ADMIN_ONLY_ACTIONS & _LOCAL_ROUTED_ACTIONS)
     assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
     # ...but the same admin-only action, asked about ORG_MODE for a

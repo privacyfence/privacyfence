@@ -856,14 +856,12 @@ class TestOrgCapabilities:
         caps = self._extract_capabilities(build_html(_make_state()))
         assert caps["mode"] == "local"
         assert caps["is_admin"] is False
-        # AI systems is org-only (no DCR registrations to pin locally), and
-        # Connect an AI client needs an /mcp URL the caller did not pass;
+        # Stats is org-only, and Connect an AI client needs an /mcp URL the caller did not pass;
         # every other section stays.
-        assert caps["sections"]["agents"] is False
         assert caps["sections"]["stats"] is False
         assert caps["sections"]["ai_client"] is False
         assert caps["sections"]["scoped_tokens"] is False
-        assert all(v for k, v in caps["sections"].items() if k not in ("agents", "stats", "ai_client", "scoped_tokens"))
+        assert all(v for k, v in caps["sections"].items() if k not in ("stats", "ai_client", "scoped_tokens"))
         assert caps["not_applicable_actions"] == []
 
     def test_local_state_is_unaffected_by_capabilities(self):
@@ -904,9 +902,10 @@ class TestOrgCapabilities:
             assert caps["sections"]["audit"] is True
             assert {"export_audit_log", "set_log_level"} <= set(caps["not_applicable_actions"])
 
-    def test_ai_systems_page_is_org_admin_only(self):
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["agents"] is True
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["agents"] is False
+    def test_there_is_no_ai_systems_page(self):
+        assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]
+        assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]
+        assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="local"))["sections"]
 
     def test_stats_page_is_org_admin_only(self):
         assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["stats"] is True
