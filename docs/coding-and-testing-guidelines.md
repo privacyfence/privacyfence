@@ -237,7 +237,7 @@ layout rules — see [`testing-policy.md`](testing-policy.md#the-shared-design-s
   | `connector_host.py` | its consumers' tests: `test_settings_controller.py`, `test_daemon_main.py`, `web/test_routes_settings.py`, `web/test_server.py` |
   | `std_streams.py` | `test_daemon_std_streams.py` |
   | `windows_service.py` | `test_daemon_main.py`, `test_privilege_separation.py` |
-  | `agent_overrides.py`, `web/agent_pins.py` | `web/test_agent_attestation.py` |
+  | `agent_overrides.py` | `web/test_agent_attestation.py` |
   | `web/step_up_decide.py` | `web/test_approval_step_up.py` |
   | `web/routes_org_stepup.py` | `web/test_routes_org_approvals.py` |
 

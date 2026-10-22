@@ -47,7 +47,7 @@ What people see, all at `https://<your-hostname>`:
 | `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence, Grist, Peek and Telegram. |
 | `/approvals` | Pending AI requests to approve or deny. |
 | `/security` | Enroll and remove passkeys. |
-| `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy, the **AI systems** page and the **Stats** page. |
+| `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy and the **Stats** page. |
 | `/mcp` | The MCP endpoint AI clients connect to. It uses OAuth 2.1 with dynamic client registration. |
 
 **This is the only way claude.ai can use PrivacyFence.** A desktop install listens on `localhost`,
@@ -147,7 +147,7 @@ longer than 200 characters) is stored under a stable hash instead (`idp-<hash>`)
 
 ### Who is an admin
 
-Admins see the **General**, **Privacy Filter**, **AI systems** and **Stats** pages in Settings. Nobody is an
+Admins see the **General**, **Privacy Filter** and **Stats** pages in Settings. Nobody is an
 admin unless you name a claim and its values with `--idp-admin-group-claim` and
 `--idp-admin-group-value` ([section 6](#6-signing-key-and-bundle)). A person is an admin when the
 claim contains any of the values. A claim that is a single string is matched like a one-item list.
@@ -747,8 +747,7 @@ how it is identified: [claude.ai](connect-claude-ai.md), [Claude Desktop](connec
 Any other client that supports the Streamable HTTP transport with OAuth 2.1 and dynamic client
 registration works the same way.
 
-Each client registration shows up on the admin's **AI systems** page
-([section 11](#11-ai-systems)).
+[Section 11](#11-ai-systems) says which clients are shown as verified.
 
 #### Gemini Enterprise
 
@@ -808,7 +807,6 @@ Settings pages each person sees:
 | About | yes | |
 | General (PII detection) | | yes |
 | Privacy Filter | | yes |
-| AI systems | | yes |
 | Stats (users, connectors and auto-accept rules, counts only) | | yes |
 
 Connector management, update checks, the log level, the Calendar free/busy and Gmail signature
@@ -854,26 +852,29 @@ can be trusted depends on where it came from:
 
 | Source | Recorded as `agent_source` | Shown as |
 |---|---|---|
-| An admin pinned the client's registration to an AI system | `oauth_client` | Verified, with the AI system's icon |
+| The client registered only with its vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise) | `oauth_client` | Verified, with the AI system's icon |
 | The name the client gave when it registered, or in its MCP handshake | `client_info` | Not verified, with the claimed name |
 | Nothing | empty | Unrecognised AI system |
 
-Any program that can reach `/register` can call itself anything, so only a pin makes a name
-verified. To pin, an admin opens **Settings → AI systems**, which lists every registered client
-with its registered name, client ID and when it was last used, checks that a registration really is
-what it claims (for example by matching the last-used time to their own sign-in from claude.ai),
-and clicks the AI system to pin it to. **Unpin** removes it.
+Every vendor's authorization code can only be delivered to a redirect URI the client registered, and
+PrivacyFence's authorization server refuses any other. So when a registration's only redirect URIs
+are one vendor's own callback, its tokens were obtained by that vendor, and its cards are verified:
 
-- A pin names one registration, never a name. A client that registers again gets a new client ID
-  and starts unverified.
-- A registration unused for 180 days is removed the next time any client registers. Its pin stays
-  listed under **Stale pins**, applies to nothing, and can be removed there.
-- Pinning and unpinning are sensitive settings writes ([section 12](#12-approvals-and-step-up)) and
-  are recorded in the audit log with the admin's identity and the registration's claimed name.
-- Pins are stored in `org/agent_pins.json` in the data directory, not in the bundle, because client
-  IDs are issued at runtime.
+- claude.ai: `https://claude.ai/api/mcp/auth_callback`
+- ChatGPT: `https://chatgpt.com/connector/oauth/<connector id>`
+- Gemini Enterprise: `https://vertexaisearch.cloud.google.com/oauth-redirect`
 
-The reasoning is in [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md),
+A registration with any other redirect URI alongside them stays Not verified. Claude Code, Claude
+Desktop through the extension, and anything else with a loopback redirect (`http://localhost:...`)
+stay Not verified, because any local program can register one. Claude Desktop's custom connector
+most likely registers through claude.ai and is then shown as Claude. A person, or a program using
+their signed-in browser session, can register a client under a vendor's redirect URI and so have
+their own calls shown as that vendor, verified; this never reaches another member's calls
+([ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md) says what that leaves
+open). There is nothing for an administrator to do: which clients are verified follows from how they registered.
+
+The reasoning is in [ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md),
+[ADR 0225](adr/0225-the-admin-ai-system-pin-is-removed.md),
 [ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md) and
 [ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md).
 
@@ -906,8 +907,8 @@ With step-up on:
   `--step-up-require-passkey`: they approve each card on its own, or enroll a passkey first.
   Denying never needs step-up.
 
-**Sensitive settings writes.** Adding or removing an always-allow rule, changing the privacy policy
-or PII detection, and pinning or unpinning an AI system are sensitive: they change what gets gated
+**Sensitive settings writes.** Adding or removing an always-allow rule and changing the privacy policy
+or PII detection are sensitive: they change what gets gated
 in future. When the bundle sets both `--step-up-enabled` and `--step-up-require-passkey`, each of
 these needs a fresh passkey confirmation, exactly as on a desktop install. With either flag off,
 they need only a signed-in session. A fresh identity-provider sign-in is never accepted for them. See
@@ -1051,7 +1052,6 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 | `org/org_config_serial.txt` | The highest bundle serial this install has accepted. |
 | `org/oauth_clients.json` | Registered AI clients. Without it every client has to register again. |
 | `org/oauth_refresh.json` | AI clients' refresh tokens, each sealed under its own token. |
-| `org/agent_pins.json` | AI-system pins. |
 | `org/web_push_vapid_key.pem` | The server's push-notification key. Without it every browser has to subscribe again. |
 | `authority/config/settings.yaml` | Install-wide policy. |
 | `authority/logs/audit/` | The install's own audit log and its chain key. |
@@ -1292,7 +1292,7 @@ does not list that service's exact redirect URI. Each Google service has its own
 **A service is missing from `/connect`.** Its section is not in the bundle. Rebuild with its flags
 and `--merge`, install and restart.
 
-**Admins do not see Privacy Filter or AI systems.** The admin claim does not match. Look at an
+**Admins do not see Privacy Filter or Stats.** The admin claim does not match. Look at an
 admin's ID token: either the claim is missing, because the provider does not put it in the ID
 token (with Google it never does; use `email`), or its value differs from
 `--idp-admin-group-value`, for example a Keycloak group path with a leading `/`, an Entra group's
