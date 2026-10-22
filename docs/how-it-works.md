@@ -102,7 +102,7 @@ organization mode.
 Instead of its own credential, a client can hold a **scoped token** created in Settings: a named
 bearer token with an expiry and a list of the rules and tools it may use. It sees only those tools,
 and a call it makes is auto-accepted only through one of those rules; otherwise it is denied at
-once, with no approval card. Revoking it affects no other client. In organization mode the
+once, with no approval card. A box on the token lets covered Gmail and Slack reads return personal data, which the scan still reports in the audit log. Revoking it affects no other client. In organization mode the
 administrator must turn the feature on. See [Scoped tokens](security-and-compliance.md#scoped-tokens).
 
 ### What the AI system is told
