@@ -176,6 +176,13 @@ class TestStateEmbedding:
             assert _extract_initial_state(html)["general"]["org_installed_date"] == self.HOSTILE
 
 
+class TestOptionalValueField:
+    def test_value_input_is_offered_for_an_optional_value_group(self):
+        html = build_html(_make_state())
+        assert "group.needs_value || group.value_optional" in html
+        assert "Value, optional (comma-separated for more than one)" in html
+
+
 class TestToggleTemplate:
     def test_switches_are_the_toggle_component(self):
         # app.css's toggle: a real checkbox with role=switch inside a <label> tap target, the

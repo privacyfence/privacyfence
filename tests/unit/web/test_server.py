@@ -2052,6 +2052,21 @@ class TestScopedTokenWiring:
         assert entry["title_parts"] is None
         assert entry["value_items"] == []
 
+    def test_scoped_rule_title_says_except_for_an_exclusion_scope(self):
+        from privacyfence.web.server import _scoped_rule_entry
+
+        row = scope_rows.ScopeRow(
+            id="r-mc", scope="slack.my_conversations", value=["C1"],
+            verbs=frozenset({Verb.READ, Verb.SEARCH}), operations=frozenset({"slack.read_messages"}),
+        )
+        assert "my conversations except C1" in _scoped_rule_entry(row, "C1", ["C1"])["title"]
+        no_value = scope_rows.ScopeRow(
+            id="r-mc", scope="slack.my_conversations", value=None,
+            verbs=frozenset({Verb.READ}), operations=frozenset({"slack.read_messages"}),
+        )
+        title = _scoped_rule_entry(no_value, "", [])["title"]
+        assert "my conversations" in title and "except" not in title
+
     def test_page_data_names_rules_by_their_cached_resource_names(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept
         from privacyfence.policy.engine import PolicyRule

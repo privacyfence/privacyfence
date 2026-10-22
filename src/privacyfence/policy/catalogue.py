@@ -13,7 +13,8 @@ bridge writer call.
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
 tools, which had no predicate at all, Grist's seven operation keys (scoped by document), Peek's page tools, and Gmail's two filter tools and
 Slack's group-chat tool, which have no resource identity to scope to, and Slack's two read scopes for
-mentions of the signed-in user and one-to-one DMs. The Settings page and the bridge tool configure them
+mentions of the signed-in user and one-to-one DMs, and the scope for conversations the signed-in user
+is a member of. The Settings page and the bridge tool configure them
 the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing
 -- rather than reactively, off one gated call's own popup.
 """
@@ -49,6 +50,9 @@ class PolicyExtraScope:
     # search share the ``slack.read_messages`` operation key and the engine matches on operation
     # keys, so the predicate is the only place a rule can say which of the two it allows.
     verb_predicates: tuple[tuple[Verb, str], ...] = ()
+    # A value may be given but is not required (``needs_value`` stays False): Settings and the
+    # bridge tool offer the field, a blank one means no value.
+    value_optional: bool = False
 
 
 def extra_predicate_for(extra: PolicyExtraScope, verb: Verb) -> str:
@@ -99,6 +103,14 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         predicate="slack.direct_messages_to_me", connector="slack",
         verbs=(Verb.READ,),
         label="Slack — direct messages to me", needs_value=False, value_hint="",
+    ),
+    "slack.my_conversations": PolicyExtraScope(
+        predicate="slack.my_conversations", connector="slack",
+        verbs=(Verb.READ, Verb.SEARCH),
+        label="Slack — conversations I'm a member of", needs_value=False,
+        value_hint="C0123456789, G0123456789 (optional: never covered)",
+        verb_predicates=((Verb.SEARCH, "slack.my_conversations_all_results"),),
+        value_optional=True,
     ),
     "gmail.query": PolicyExtraScope(
         predicate="gmail.query", connector="gmail",
@@ -182,6 +194,7 @@ def scope_catalogue() -> list[dict[str, Any]]:
             "needs_value": propose.scope_needs_value(first),
             "value_hint": VALUE_HINTS.get(first.predicate, ""),
             "verbs": [v.value for v in verbs],
+            "value_optional": False,
         })
     for group_id, extra in EXTRA_SCOPES.items():
         entries.append({
@@ -191,6 +204,7 @@ def scope_catalogue() -> list[dict[str, Any]]:
             "needs_value": extra.needs_value,
             "value_hint": extra.value_hint,
             "verbs": [v.value for v in extra.verbs],
+            "value_optional": extra.value_optional,
         })
     entries.sort(key=lambda e: (e["connector"], e["label"]))
     return entries
@@ -243,7 +257,7 @@ def _compile_catalogue_rules(group: str, value: Any, verbs: list[Verb]) -> list[
     if extra is None and group not in propose.SCOPES_BY_GROUP:
         return []
     predicates = (
-        {extra.predicate} if extra is not None
+        set(extra_predicates(extra)) if extra is not None
         else {scope.predicate for scope in propose.SCOPES_BY_GROUP[group]}
     )
     value = value_format.normalise_rule_value(predicates, value)

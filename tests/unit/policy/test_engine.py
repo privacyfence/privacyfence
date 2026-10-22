@@ -191,6 +191,13 @@ class TestSlackScopes:
         verdict, matched, _ = preflight([rule], "slack.read_messages", {})
         assert (verdict, matched) == ("unknown", "")
 
+    def test_preflight_is_unknown_for_a_my_conversations_rule(self):
+        for predicate in ("slack.my_conversations", "slack.my_conversations_all_results"):
+            rule = PolicyRule(
+                id="r1", predicate=predicate, value=None, operations=frozenset({"slack.read_messages"}),
+            )
+            assert preflight([rule], "slack.read_messages", {})[:2] == ("unknown", "")
+
     def test_a_search_rule_auto_accepts_through_evaluate(self):
         rule = PolicyRule(
             id="r1", predicate="slack.mentions_of_me_all_results", value=None,
