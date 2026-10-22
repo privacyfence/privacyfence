@@ -65,6 +65,7 @@ class ScopedToken:
     rule_ids: frozenset[str]
     tools: frozenset[str]
     allow_personal_data: bool = False  # ADR 0173: exports, downloads and page uploads may carry personal data
+    allow_personal_data_reads: bool = False  # Gmail message/thread and Slack reads may carry personal data
     # Per rule id the token carries: the (predicate, operation) pairs that may auto-accept under it
     # for this token. A rule id with no entry is used whole (a token never upgraded).
     rule_limits: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict, hash=False)
@@ -180,6 +181,8 @@ def _to_json(token: ScopedToken) -> dict[str, Any]:
     }
     if token.allow_personal_data:
         data["allow_personal_data"] = True
+    if token.allow_personal_data_reads:
+        data["allow_personal_data_reads"] = True
     if token.rule_limits:
         data["rule_limits"] = {rid: sorted([p, o] for p, o in pairs) for rid, pairs in sorted(token.rule_limits.items())}
     return data
@@ -215,6 +218,7 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         rule_ids=frozenset(str(r) for r in raw["rule_ids"]),
         tools=frozenset(str(t) for t in raw["tools"]),
         allow_personal_data=raw.get("allow_personal_data", False) is True,
+        allow_personal_data_reads=raw.get("allow_personal_data_reads", False) is True,
         rule_limits=_limits_from_json(raw.get("rule_limits", {})),
     )
 
@@ -402,6 +406,7 @@ class ScopedTokenStore:
         tools: Iterable[str],
         policy: ScopedTokenPolicy,
         allow_personal_data: bool = False,
+        allow_personal_data_reads: bool = False,
         now: float | None = None,
     ) -> tuple[ScopedToken, str]:
         if not policy.enabled:
@@ -449,6 +454,7 @@ class ScopedTokenStore:
                 rule_ids=rules,
                 tools=tool_set,
                 allow_personal_data=allow_personal_data,
+                allow_personal_data_reads=allow_personal_data_reads,
                 rule_limits=limits,
             )
             self._tokens[principal.id] = [*existing, token]

@@ -158,6 +158,7 @@ from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, binding_key, card_digest
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
+    PERSONAL_DATA_READ_TOOLS,
     PERSONAL_DATA_RULE_TOOLS,
     TOOL_TO_OPERATION,
     ReviewContext,
@@ -746,15 +747,22 @@ def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]
 def _personal_data_rule(
     tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
 ) -> policy_engine.PolicyRule | None:
-    """The token's own rule that covers this call, when the call is made with a scoped token
-    that has ``allow_personal_data`` (ADR 0173), for a tool in ``PERSONAL_DATA_RULE_TOOLS`` only
-    (ADR 0157); ``None`` for an unscoped call, a token without the flag, a revoked token, every
-    other tool, when the result carries the content itself (``content_reaches_result``), or when
-    no rule of the token matches."""
-    if tool not in PERSONAL_DATA_RULE_TOOLS or content_reaches_result:
-        return None
+    """The token's own rule that covers this call, when the call is made with a scoped token that
+    allows personal data for this tool: ``allow_personal_data_reads`` for a tool in
+    ``PERSONAL_DATA_READ_TOOLS``, or ``allow_personal_data`` (ADR 0173) for a tool in
+    ``PERSONAL_DATA_RULE_TOOLS`` (ADR 0157) whose result does not carry the content itself
+    (``content_reaches_result``). ``None`` for an unscoped call, a revoked token, a token without the
+    matching flag, every other tool, or when no rule of the token matches."""
     scope = current_token_scope()
-    if scope is None or scope is REVOKED_SCOPE or not scope.allow_personal_data:
+    if scope is None or scope is REVOKED_SCOPE:
+        return None
+    if tool in PERSONAL_DATA_READ_TOOLS:
+        allowed = scope.allow_personal_data_reads
+    elif tool in PERSONAL_DATA_RULE_TOOLS and not content_reaches_result:
+        allowed = scope.allow_personal_data
+    else:
+        return None
+    if not allowed:
         return None
     rules = _rules_in_scope(scope)
     if not rules:

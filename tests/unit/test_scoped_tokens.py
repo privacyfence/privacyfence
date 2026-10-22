@@ -311,6 +311,54 @@ class TestStore:
         assert scoped_tokens.get_store() is store
 
 
+class TestAllowPersonalDataReads:
+    def test_flag_round_trips_through_the_file(self, tmp_path):
+        store = _store()
+        plain, _ = _create(store, label="plain")
+        flagged, _ = _create(store, label="flagged", allow_personal_data_reads=True)
+        entries = {e["label"]: e for e in json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]}
+        assert "allow_personal_data_reads" not in entries["plain"]
+        assert entries["flagged"]["allow_personal_data_reads"] is True
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", plain.id) == plain
+        assert restarted.get("local", flagged.id) == flagged
+        assert restarted.get("local", flagged.id).allow_personal_data_reads is True
+
+    def test_a_file_without_the_key_loads_false(self, tmp_path):
+        token, _ = _create(_store(), allow_personal_data_reads=True)
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        del data["tokens"][0]["allow_personal_data_reads"]
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).allow_personal_data_reads is False
+
+    def test_create_stores_the_flag(self):
+        store = _store()
+        plain, _ = _create(store, label="plain")
+        flagged, _ = _create(store, label="flagged", allow_personal_data_reads=True)
+        assert plain.allow_personal_data_reads is False
+        assert flagged.allow_personal_data_reads is True
+        assert REVOKED_SCOPE.allow_personal_data_reads is False
+
+    def test_the_two_flags_are_independent(self):
+        store = _store()
+        exports, _ = _create(store, label="exports", allow_personal_data=True)
+        reads, _ = _create(store, label="reads", allow_personal_data_reads=True)
+        assert (exports.allow_personal_data, exports.allow_personal_data_reads) == (True, False)
+        assert (reads.allow_personal_data, reads.allow_personal_data_reads) == (False, True)
+
+    def test_migration_keeps_the_flag(self, tmp_path, monkeypatch):
+        _known(monkeypatch, "r-narrow")
+        _create(_store(), label="reads", rule_ids=["r-narrow"], allow_personal_data_reads=True)
+        migration = scope_rows.migrate_v2([NARROW])
+
+        scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+
+        assert _tokens(tmp_path)["reads"]["allow_personal_data_reads"] is True
+
+
 class TestPolicy:
     def test_policy_local_is_always_enabled_365(self):
         policy = scoped_tokens.policy_from_org_config({"scoped_tokens": {"enabled": False, "max_days": 5}}, org_mode=False)
