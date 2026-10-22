@@ -4,8 +4,8 @@
 in `ai-client-qa.md`, evidence at
 https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865527889.
 
-- Expected agent_id, unpinned: `claude-code`
-- Expected agent_id, pinned: `claude-code`
+- Expected agent_id: `claude-code`
+- Expected agent_source: `client_info`
 
 ## What each file holds
 
@@ -17,7 +17,7 @@ https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865527889.
     fixed string (ADR 0094).
   - `redirect_uris`: a loopback `http://localhost:<port>/callback` with a random port.
 - `initialize.json`: `clientInfo` `claude-code` 2.1.283, observed in the audit log of the same
-  client in local mode (M1.1) and as the pinned version here. `protocolVersion` and
+  client in local mode (M1.1) and as the version here. `protocolVersion` and
   `capabilities` were not captured; the replay uses only `clientInfo`.
 
 ## Request order

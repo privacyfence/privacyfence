@@ -7,8 +7,8 @@ against a PrivacyFence deployment. It stays seeded: Gemini CLI is not a supporte
 no manual run will capture it. It is kept because the registry still recognises Gemini CLI, and
 this replay is what checks that entry.
 
-- Expected agent_id, unpinned: `gemini-cli`
-- Expected agent_id, pinned: `gemini-cli`
+- Expected agent_id: `gemini-cli`
+- Expected agent_source: `client_info`
 
 ## Sources
 

@@ -1303,7 +1303,7 @@ def _build_org_app(
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
-            client_names=org.provider.client_name, pinned_agents=org.provider.pinned_agent_id,
+            client_names=org.provider.client_name, attested_agents=org.provider.attested_agent_id,
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
