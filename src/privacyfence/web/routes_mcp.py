@@ -112,7 +112,7 @@ SCOPED_META_TOOLS = frozenset({
 def _scoped_agent(scope: scoped_tokens.ScopedToken) -> AgentIdentity:
     """The attested agent for every call made with a scoped token, meta-tools included: a
     credential the person created, so ``override`` (ADR 0006, ADR 0037, ADR 0164). It replaces
-    whatever the client claims and any org admin pin."""
+    whatever the client claims and any redirect-URI attestation."""
     return AgentIdentity(id=f"scoped-token:{scope.id}", name=scope.label, version="", source=AgentSource.OVERRIDE)
 
 
@@ -178,10 +178,12 @@ def _connection_of(ctx: ServerRequestContext) -> Connection | None:
 # tool call; local mode has no DCR registrations and passes nothing.
 ClientNameLookup = Callable[[str], str | None]
 
-# Looks up the registry agent_id an org admin pinned an access token's ``client_id`` to, or None
-# (ADR 0035 decision 3). Org mode passes ``OrgOAuthProvider.pinned_agent_id``; the pin is the one
-# signal on this path the caller did not choose, so it is the one that records ``oauth_client``.
-PinnedAgentLookup = Callable[[str], str | None]
+# Looks up the registry agent_id an access token's ``client_id`` is attested as by its registered
+# redirect URIs, or None (ADR 0224). Org mode passes ``OrgOAuthProvider.attested_agent_id``; the
+# redirect URI decides where the code went, which only a client the member authorizes can
+# intercept (ADR 0224 says what that leaves open), so it is the one signal on this path that
+# records ``oauth_client``.
+AttestedAgentLookup = Callable[[str], str | None]
 
 
 def _claimed_client_info(ctx: ServerRequestContext) -> tuple[object, object]:
@@ -199,32 +201,33 @@ def _claimed_client_info(ctx: ServerRequestContext) -> tuple[object, object]:
 
 def _resolve_agent(
     ctx: ServerRequestContext, access_token: AccessToken | None, client_names: ClientNameLookup | None,
-    *, pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
+    *, attested_agents: AttestedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> AgentIdentity:
     """The AI system a gated tool call is attributed to (ADR 0006, ADR 0035), strongest signal
     first -- ADR 0006 decision 2's ranking:
 
-    1. an org admin's pin of the token's ``client_id`` -- ``oauth_client``, the only attested
-       source on this path. The DCR ``client_name`` never overrides a pin, and the pin never
-       follows the name;
+    1. a registration whose redirect URIs are all one registry entry's own callbacks (ADR 0224)
+       or an admin's pin of it (ADR 0035 decision 3) -- ``oauth_client``, the only attested
+       source on this path. The DCR ``client_name`` never overrides it;
     2. a local ``agent_overrides:`` relabel (``agent_overrides.py``) -- ``client_info``: it is
        selected by the name the caller sends, so it is a claim on every install (ADR 0037);
     3. org mode's DCR ``client_name``, then the handshake ``clientInfo`` -- both strings the
-       client chose, so both ``client_info`` (ADR 0035 / gate G1: an unpinned DCR name is
-       claimed). A DCR name the registry does not match yields to a handshake name it does
-       (ADR 0094); when neither matches, the DCR name is recorded, since that is the one an admin
-       sees and pins.
+       client chose, so both ``client_info`` (ADR 0035 / gate G1: a DCR name without an
+       attestation is claimed). A DCR name the registry does not match yields to a handshake name it does
+       (ADR 0094); when neither matches, the DCR name is recorded, since that is the name the
+       client registered with.
 
-    Nothing a caller supplies can reach an attested source here: a pin is keyed by the access
-    token's ``client_id``, which the authorization server issued, and every caller-supplied
+    Nothing a caller supplies can reach an attested source here: the attested signal is keyed by
+    the access token's ``client_id``, which the authorization server issued, and by redirect URIs
+    the SDK enforces at ``/authorize`` and ``/token``, and every caller-supplied
     string -- an override's selector included -- records ``client_info``. ``identify``
     sanitizes every string and gives ``UNKNOWN_AGENT`` when no usable name is left."""
     name, version = _claimed_client_info(ctx)
-    if pinned_agents is not None and access_token is not None:
-        pinned_id = pinned_agents(access_token.client_id)
-        pinned = identify_registry_id(pinned_id, version, AgentSource.OAUTH_CLIENT) if pinned_id else None
-        if pinned is not None:
-            return pinned
+    if attested_agents is not None and access_token is not None:
+        attested_id = attested_agents(access_token.client_id)
+        attested = identify_registry_id(attested_id, version, AgentSource.OAUTH_CLIENT) if attested_id else None
+        if attested is not None:
+            return attested
     override = overrides.resolve(name, version) if overrides is not None else None
     if override is not None:
         return override
@@ -337,7 +340,7 @@ class _PrivacyFenceServer(MCPServer):
 
 def build_mcp_server(
     dispatcher: McpDispatcher, *, client_names: ClientNameLookup | None = None,
-    pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
+    attested_agents: AttestedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> MCPServer:
     """Builds the low-level MCP ``Server``, wired to ``dispatcher`` for both
     tool listing and tool calls. A fresh ``Server`` per daemon process
@@ -484,7 +487,7 @@ def build_mcp_server(
             agent = _scoped_agent(scope)
         else:
             agent = UNKNOWN_AGENT if is_meta_tool else _resolve_agent(
-                ctx, access_token, client_names, pinned_agents=pinned_agents, overrides=overrides,
+                ctx, access_token, client_names, attested_agents=attested_agents, overrides=overrides,
             )
         bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
         uploads = _file_bridge_uploads(params)
@@ -882,7 +885,7 @@ class _RehomeStaleInitialize:
 def build_mcp_asgi_app(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
-    pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
+    attested_agents: AttestedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> tuple[ASGIApp, StreamableHTTPSessionManager]:
     """Builds the ``/mcp`` endpoint app -- bearer-token authenticated,
     audience-separated from the approval surface's session cookie, so a
@@ -904,11 +907,11 @@ def build_mcp_asgi_app(
     mode has no such document to point to, so it stays ``None`` there.
     ``client_names`` (org mode only) is ``OrgOAuthProvider.client_name``,
     which attributes each tool call to its DCR client's claimed name --
-    see ``_resolve_agent``. ``pinned_agents`` (org mode only) is
-    ``OrgOAuthProvider.pinned_agent_id``, the admin's pins; ``overrides`` (local mode only) is
+    see ``_resolve_agent``. ``attested_agents`` (org mode only) is
+    ``OrgOAuthProvider.attested_agent_id``, the redirect-URI attestation (ADR 0224); ``overrides`` (local mode only) is
     ``settings.yaml``'s ``agent_overrides:`` section (``agent_overrides.py``).
     """
-    server = build_mcp_server(dispatcher, client_names=client_names, pinned_agents=pinned_agents, overrides=overrides)
+    server = build_mcp_server(dispatcher, client_names=client_names, attested_agents=attested_agents, overrides=overrides)
     session_manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=False)
 
     if verifier is None:
@@ -929,7 +932,7 @@ def build_mcp_asgi_app(
 def mount_mcp(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
-    pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
+    attested_agents: AttestedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> tuple[Route, StreamableHTTPSessionManager]:
     """The ``/mcp`` route -- an exact-path ``Route`` with no ``methods``
     restriction (matches GET/POST/DELETE alike, exactly like the official
@@ -939,7 +942,7 @@ def mount_mcp(
     """
     app, session_manager = build_mcp_asgi_app(
         dispatcher, token=token, verifier=verifier, resource_metadata_url=resource_metadata_url,
-        client_names=client_names, pinned_agents=pinned_agents, overrides=overrides,
+        client_names=client_names, attested_agents=attested_agents, overrides=overrides,
     )
     return Route(MCP_PATH, endpoint=app), session_manager
 

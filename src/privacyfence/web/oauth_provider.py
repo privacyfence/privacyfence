@@ -87,7 +87,7 @@ from .. import org_identity, scoped_tokens
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..principal import Principal
-from ..agent_identity import sanitize_client_string
+from ..agent_identity import entry_for_redirect_uris, sanitize_client_string
 from ..secure_files import atomic_write_json
 from .agent_pins import AgentPinStore, pins_file_path
 from .oauth_consent import UNNAMED_CLIENT_LABEL, ConsentStore, ConsentView
@@ -384,6 +384,22 @@ class OrgOAuthProvider:
             if client_id not in self._clients:
                 return None
         return self.agent_pins.pinned_agent_id(client_id)
+
+    def attested_agent_id(self, client_id: str) -> str | None:
+        """The registry ``agent_id`` this registration is attested as by its redirect URIs, or
+        None -- read-only, and like ``client_name`` asked once per tool call (ADR 0224). The code
+        for this ``client_id`` can only have gone to a registered redirect URI, so a registration
+        whose every redirect URI is one vendor's own callback got its tokens through that vendor.
+
+        Until the admin pin is removed, an admin's pin of the registration wins."""
+        pinned = self.pinned_agent_id(client_id)
+        if pinned is not None:
+            return pinned
+        with self._lock:
+            stored = self._clients.get(client_id)
+            uris = tuple(stored.info.redirect_uris or ()) if stored is not None else ()
+        entry = entry_for_redirect_uris(uris)
+        return entry.agent_id if entry is not None else None
 
     def list_clients(self) -> list[RegisteredClient]:
         """Every current DCR registration, for the admin's pin page -- read-only, like

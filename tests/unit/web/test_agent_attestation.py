@@ -89,7 +89,7 @@ async def _register(provider: op.OrgOAuthProvider, client_id: str, client_name: 
 
 def _resolve_org(provider: op.OrgOAuthProvider, client_id: str, *, handshake: str | None = "claude-code"):
     return _resolve_agent(
-        _ctx(handshake), _token(client_id), provider.client_name, pinned_agents=provider.pinned_agent_id,
+        _ctx(handshake), _token(client_id), provider.client_name, attested_agents=provider.attested_agent_id,
     )
 
 
@@ -250,8 +250,59 @@ class TestOrgPinCapture:
         assert (tmp_path / "oauth_clients.json").read_text() == before
 
     def test_a_pin_needs_an_access_token(self):
-        agent = _resolve_agent(_ctx("claude-code"), None, None, pinned_agents=lambda _cid: "chatgpt")
+        agent = _resolve_agent(_ctx("claude-code"), None, None, attested_agents=lambda _cid: "chatgpt")
         assert agent.source is AgentSource.CLIENT_INFO
+
+
+class TestRedirectAttestation:
+    async def _register_with(self, provider, client_id, client_name, redirect_uris) -> None:
+        await provider.register_client(OAuthClientInformationFull(
+            client_id=client_id, client_name=client_name, redirect_uris=[AnyUrl(u) for u in redirect_uris],
+            token_endpoint_auth_method="none",
+        ))
+
+    @pytest.mark.parametrize("uri, agent_id", [
+        ("https://claude.ai/api/mcp/auth_callback", "claude"),
+        ("https://chatgpt.com/connector/oauth/abc123", "chatgpt"),
+        ("https://vertexaisearch.cloud.google.com/oauth-redirect", "gemini-enterprise"),
+    ])
+    async def test_a_vendors_own_callback_attests_whatever_the_client_calls_itself(
+        self, tmp_path, monkeypatch, uri, agent_id,
+    ):
+        provider = _provider(tmp_path, monkeypatch)
+        await self._register_with(provider, "c1", "Totally Not Claude", [uri])
+
+        agent = _resolve_org(provider, "c1", handshake="evil")
+
+        assert (agent.id, agent.source) == (agent_id, AgentSource.OAUTH_CLIENT)
+
+    async def test_a_loopback_redirect_stays_claimed(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        await self._register_with(provider, "c1", "Claude Code (privacyfence)", ["http://localhost:50520/callback"])
+
+        agent = _resolve_org(provider, "c1")
+
+        assert (agent.id, agent.source) == ("claude-code", AgentSource.CLIENT_INFO)
+
+    async def test_one_foreign_redirect_uri_keeps_the_registration_claimed(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        await self._register_with(
+            provider, "c1", "Claude", ["https://claude.ai/api/mcp/auth_callback", "http://localhost:1/cb"],
+        )
+
+        assert _resolve_org(provider, "c1").source is AgentSource.CLIENT_INFO
+
+    def test_an_unknown_client_is_not_attested(self, tmp_path, monkeypatch):
+        assert _provider(tmp_path, monkeypatch).attested_agent_id("nobody") is None
+
+    async def test_asking_does_not_count_as_using_the_client(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        await self._register_with(provider, "c1", "Claude", ["https://claude.ai/api/mcp/auth_callback"])
+        before = (tmp_path / "oauth_clients.json").read_text()
+
+        assert provider.attested_agent_id("c1") == "claude"
+
+        assert (tmp_path / "oauth_clients.json").read_text() == before
 
 
 # --------------------------------------------------------------------------- #
@@ -323,12 +374,12 @@ class TestLocalOverrideNeverAttests:
 
     def test_a_pin_outranks_an_override(self):
         overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
-        agent = _resolve_agent(_ctx("x"), _token(), None, pinned_agents=lambda _c: "chatgpt", overrides=overrides)
+        agent = _resolve_agent(_ctx("x"), _token(), None, attested_agents=lambda _c: "chatgpt", overrides=overrides)
         assert (agent.id, agent.source) == ("chatgpt", AgentSource.OAUTH_CLIENT)
 
     def test_a_relabel_outranks_the_dcr_name(self):
         overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
-        agent = _resolve_agent(_ctx("x"), _token(), lambda _c: "ChatGPT", pinned_agents=lambda _c: None, overrides=overrides)
+        agent = _resolve_agent(_ctx("x"), _token(), lambda _c: "ChatGPT", attested_agents=lambda _c: None, overrides=overrides)
         assert (agent.id, agent.source) == ("cursor", AgentSource.CLIENT_INFO)
 
     def test_no_claimed_name_matches_no_override(self):

@@ -4,8 +4,8 @@
 `clientInfo.version` 1.0.0), against PrivacyFence 5.0.0** — M1.3 in `ai-client-qa.md`, evidence
 at https://github.com/privacyfence/privacyfence/issues/391#issuecomment-5871022834.
 
-- Expected agent_id, unpinned: `chatgpt`
-- Expected agent_id, pinned: `chatgpt`
+- Expected agent_id: `chatgpt`
+- Expected agent_source: `oauth_client`
 
 ## What each file holds
 
@@ -19,10 +19,10 @@ at https://github.com/privacyfence/privacyfence/issues/391#issuecomment-58710228
     not the stable `https://chatgpt.com/connector_platform_oauth_redirect` the seeded fixture
     guessed.
   - `client_name` is `ChatGPT`, which the registry's `chatgpt` entry matches.
-- `initialize.json`: **only `clientInfo.version` (`1.0.0`) was observed**, through the pinned
+- `initialize.json`: **only `clientInfo.version` (`1.0.0`) was observed**, through the attested
   audit entry. ChatGPT's `clientInfo.name` could not be seen, because the DCR name decides
   attribution before the handshake name is read, so the file says `not-observed` rather than
-  guessing. It is not `openai-mcp`: before the registry knew `ChatGPT`, the unpinned call was
+  guessing. It is not `openai-mcp`: before the registry knew `ChatGPT`, the call was
   recorded as `unknown:ChatGPT`, and a recognised handshake name would have won over that.
   `openai-mcp/1.0.0` is ChatGPT's HTTP `User-Agent`. `protocolVersion` and `capabilities` were not
   captured; the replay uses only `clientInfo`.

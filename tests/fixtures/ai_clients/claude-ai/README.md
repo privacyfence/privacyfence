@@ -4,8 +4,8 @@
 `clientInfo.version` 1.0.0), against PrivacyFence 5.0.0a2** — M1.3 in `ai-client-qa.md`, evidence
 at https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865753049.
 
-- Expected agent_id, unpinned: `claude`
-- Expected agent_id, pinned: `claude`
+- Expected agent_id: `claude`
+- Expected agent_source: `oauth_client`
 
 ## What each file holds
 
@@ -17,7 +17,7 @@ at https://github.com/privacyfence/privacyfence/issues/46#issuecomment-586575304
     `token_endpoint_auth_method` `client_secret_post`. The seeded fixture this replaced guessed
     `none`; the replay now checks that a secret is issued and presented at `/token`.
   - `client_name` is `Claude`, which the registry's `claude` entry matches (ADR 0094).
-- `initialize.json`: **only `clientInfo.version` (`1.0.0`) was observed**, through the pinned
+- `initialize.json`: **only `clientInfo.version` (`1.0.0`) was observed**, through the attested
   audit entry. claude.ai's `clientInfo.name` could not be seen, because the DCR name decides
   attribution before the handshake name is read, so the file says `not-observed` rather than
   guessing. `protocolVersion` and `capabilities` were not captured; the replay uses only

@@ -93,13 +93,13 @@ def _dispatcher(connector: Connector) -> McpDispatcher:
 
 @contextlib.asynccontextmanager
 async def _session(
-    dispatcher, *, client_name: str | None, verifier=None, client_names=None, overrides=None, pinned_agents=None,
+    dispatcher, *, client_name: str | None, verifier=None, client_names=None, overrides=None, attested_agents=None,
 ):
     """A live, initialized ClientSession whose handshake claims ``client_name`` (None: the SDK's
     own default clientInfo)."""
     app, session_manager = build_mcp_asgi_app(
         dispatcher, token=None if verifier else TOKEN, verifier=verifier, client_names=client_names,
-        overrides=overrides, pinned_agents=pinned_agents,
+        overrides=overrides, attested_agents=attested_agents,
     )
     info = types.Implementation(name=client_name, version="9.9") if client_name is not None else None
     async with mcp_lifespan(session_manager):
@@ -275,12 +275,12 @@ class TestOrgModeCapture:
         )
         assert agent == ["unknown:Some Client", "Some Client", "", "client_info"]
 
-    async def test_a_pin_still_wins_over_a_recognised_handshake_name(self, tmp_path, monkeypatch):
+    async def test_an_attestation_still_wins_over_a_recognised_handshake_name(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
         await provider.register_client(_dcr_client("dcr-1", "Some Client"))
         agent = await _agent_of_call(
             client_name="cursor-vscode", verifier=_OrgVerifier("dcr-1"), client_names=provider.client_name,
-            pinned_agents=lambda client_id: "chatgpt" if client_id == "dcr-1" else None,
+            attested_agents=lambda client_id: "chatgpt" if client_id == "dcr-1" else None,
         )
         assert agent == ["chatgpt", "ChatGPT", "9.9", "oauth_client"]
 
@@ -475,10 +475,10 @@ class TestScopedTokenIdentity:
         scoped_tokens.set_store(store)
         _install_rule(monkeypatch)
 
-        # The token outranks whatever the client claims, and an org admin's pin too.
+        # The token outranks whatever the client claims, and a redirect-URI attestation too.
         async with _session(
             _dispatcher(GatedConnector()), client_name="Claude", verifier=_ScopedVerifier(),
-            pinned_agents=lambda client_id: "claude-code",
+            attested_agents=lambda client_id: "claude-code",
         ) as session:
             result = await session.call_tool("echo_say", {"message": "hi"})
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextvars
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -52,7 +53,8 @@ class AgentSource(str, Enum):
     NONE = ""
 
     def is_attested(self) -> bool:
-        """True only for a signal the caller could not have chosen (ADR 0006 decision 3)."""
+        """True only for a signal the caller could not have chosen (ADR 0006 decision 3), within
+        the limit ADR 0224 records for a redirect-URI attestation."""
         return self in (AgentSource.OVERRIDE, AgentSource.OAUTH_CLIENT)
 
 
@@ -93,6 +95,11 @@ def sanitize_client_string(value: object) -> str:
 # adding PrivacyFence to the client (``claude mcp add <name>``, an extension's manifest name).
 SERVER_PLACEHOLDER = "{server}"
 
+# The one placeholder a registry redirect pattern may carry: a vendor's per-connector callback id,
+# one path segment of letters, digits, "_" and "-" (ADR 0224).
+REDIRECT_ID_PLACEHOLDER = "{id}"
+_REDIRECT_ID_PATTERN = r"[A-Za-z0-9_-]{1,128}"
+
 
 @dataclass(frozen=True)
 class RegistryEntry:
@@ -102,10 +109,15 @@ class RegistryEntry:
     # Names that embed the user's server name, as a fixed prefix and suffix around one
     # ``{server}`` (ADR 0094). Never an arbitrary pattern: the fixed parts are the vendor's.
     name_templates: tuple[str, ...] = ()
+    # Redirect URIs only this vendor's own backend receives a code at (ADR 0224). Exact strings,
+    # or one with a single ``{id}`` placeholder standing for one path segment of the vendor's own
+    # per-connector callback id. A registration all of whose redirect URIs match one entry's
+    # patterns is attested as that entry.
+    redirect_uris: tuple[str, ...] = ()
 
 
 # ADR 0035 decision 2's registry, corrected from real handshakes by ADR 0094 and ADR 0103 and
-# extended by ADR 0109. Matching is exact, case-insensitive equality on the sanitized name -- never
+# extended by ADR 0109 and ADR 0224 (redirect URIs). Matching is exact, case-insensitive equality on the sanitized name -- never
 # prefix, substring or regex, so a name that merely contains "claude" is not Claude -- except for a
 # name template, which matches a whole name made of its fixed prefix, a non-empty server name, and
 # its fixed suffix. An unrecognised name is never promoted to an entry by default.
@@ -113,17 +125,24 @@ REGISTRY: tuple[RegistryEntry, ...] = (
     # DCR client_name "Claude Code (<server>)"; handshake clientInfo "claude-code" (ADR 0094).
     RegistryEntry("claude-code", "Claude Code", ("claude-code",), ("Claude Code ({server})",)),
     # claude.ai's DCR client_name. Its handshake clientInfo name has not been observed (ADR 0094).
-    RegistryEntry("claude", "Claude", ("Claude",)),
+    RegistryEntry(
+        "claude", "Claude", ("Claude",), redirect_uris=("https://claude.ai/api/mcp/auth_callback",),
+    ),
     # Claude Desktop's handshake through the .mcpb extension, "local-agent-mode-<server>".
     RegistryEntry("claude-desktop", "Claude Desktop", (), ("local-agent-mode-{server}",)),
     # ChatGPT's DCR client_name for a Developer Mode connector. Its handshake clientInfo name has
     # not been observed, and it is not the "openai-mcp" ADR 0035 guessed (ADR 0103).
-    RegistryEntry("chatgpt", "ChatGPT", ("ChatGPT",)),
+    RegistryEntry(
+        "chatgpt", "ChatGPT", ("ChatGPT",), redirect_uris=("https://chatgpt.com/connector/oauth/{id}",),
+    ),
     RegistryEntry("gemini-cli", "Gemini CLI", ("gemini-cli-mcp-client",)),
     # Gemini Enterprise cannot register itself; the admin registers it with the DCR client_name
     # "Gemini Enterprise" the setup instructions prescribe. Its handshake clientInfo name has not
     # been observed (ADR 0109).
-    RegistryEntry("gemini-enterprise", "Gemini Enterprise", ("Gemini Enterprise",)),
+    RegistryEntry(
+        "gemini-enterprise", "Gemini Enterprise", ("Gemini Enterprise",),
+        redirect_uris=("https://vertexaisearch.cloud.google.com/oauth-redirect",),
+    ),
     RegistryEntry("cursor", "Cursor", ("cursor-vscode",)),
 )
 
@@ -139,6 +158,18 @@ def _template_regex(template: str) -> re.Pattern[str]:
 
 _BY_TEMPLATE: tuple[tuple[re.Pattern[str], RegistryEntry], ...] = tuple(
     (_template_regex(template), entry) for entry in REGISTRY for template in entry.name_templates
+)
+
+
+def _redirect_regex(pattern: str) -> re.Pattern[str]:
+    prefix, placeholder, suffix = pattern.partition(REDIRECT_ID_PLACEHOLDER)
+    if not placeholder:
+        return re.compile(re.escape(pattern))
+    return re.compile(re.escape(prefix) + _REDIRECT_ID_PATTERN + re.escape(suffix))
+
+
+_BY_REDIRECT: tuple[tuple[re.Pattern[str], RegistryEntry], ...] = tuple(
+    (_redirect_regex(pattern), entry) for entry in REGISTRY for pattern in entry.redirect_uris
 )
 
 
@@ -167,6 +198,23 @@ def entry_for_id(agent_id: object) -> RegistryEntry | None:
     if not isinstance(agent_id, str):
         return None
     return _BY_AGENT_ID.get(agent_id)
+
+
+def entry_for_redirect_uris(redirect_uris: Sequence[object]) -> RegistryEntry | None:
+    """The registry entry every one of ``redirect_uris`` belongs to, or None (ADR 0224).
+
+    None for an empty sequence, for any URI that matches no entry's redirect pattern, and for URIs
+    that match two different entries: one unmatched or foreign redirect URI is enough to send a
+    code somewhere other than the vendor, so the whole registration stays claimed. Each URI is
+    compared as ``str(uri)``."""
+    found: RegistryEntry | None = None
+    for uri in redirect_uris:
+        text = str(uri)
+        entry = next((entry for regex, entry in _BY_REDIRECT if regex.fullmatch(text)), None)
+        if entry is None or (found is not None and entry is not found):
+            return None
+        found = entry
+    return found
 
 
 def identify_registry_id(agent_id: str, version: object, source: AgentSource) -> AgentIdentity | None:
