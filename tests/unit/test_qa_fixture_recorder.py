@@ -1729,10 +1729,18 @@ class TestCheckGmail:
         redacted = recorder.redact_gmail_message(raw)
         assert "privacyfence.eu" not in redacted["snippet"]
         data = redacted["payload"]["parts"][0]["body"]["data"]
-        assert base64.urlsafe_b64decode(data + "==") == f"On Fri, Dummy <{recorder._REDACTED_EMAIL}> wrote:".encode()
+        assert base64.urlsafe_b64decode(data + "==") == recorder._REDACTED_ATTRIBUTION.encode()
         assert redacted["payload"]["parts"][0]["body"]["size"] == len(base64.urlsafe_b64decode(data + "=="))
         # An undecodable body is left alone rather than raising.
         recorder.redact_gmail_message({"payload": {"body": {"data": "!!!"}}})
+
+    def test_display_name_in_the_quote_attribution_line_is_redacted(self):
+        text = "Thanks\n\nOn Fri, Oct 3, 2025 at 10:00 AM Real Person <real@example.org> wrote:\n> hi"
+        data = base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+        raw = {"payload": {"body": {"data": data, "size": 1}}}
+        out = base64.urlsafe_b64decode(recorder.redact_gmail_message(raw)["payload"]["body"]["data"] + "==").decode()
+        assert "Real Person" not in out and "Oct 3" not in out
+        assert out == f"Thanks\n\n{recorder._REDACTED_ATTRIBUTION}\n> hi"
 
     def test_reply_threading_headers_are_redacted(self):
         raw = {"payload": {"headers": [

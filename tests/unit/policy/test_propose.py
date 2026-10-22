@@ -561,3 +561,6 @@ class TestGmailLabelMove:
         )
         proposals = propose.proposals_for("gmail_archive_message", ctx)
         assert all(p.scope.scope_type != "gmail.label" for p in proposals)
+        # Not only the verb filter: the proposer itself must decline.
+        entry = next(e for e in self._label_scopes() if e.id == "label_match")
+        assert entry.value_of(ctx) is propose.NO_VALUE
