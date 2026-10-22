@@ -14,7 +14,12 @@ import pytest
 
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import slack as slack_module
+from privacyfence.auto_accept import ReviewContext
 from privacyfence.connectors.slack import SlackConnector, _message_to_dict
+from privacyfence.policy import engine as policy_engine
+from privacyfence.policy import scope_rows
+from privacyfence.policy.scope_rows import ScopeRow
+from privacyfence.policy.registry import Verb
 from privacyfence.privacy_filter import init_privacy_filter
 from privacyfence.slack_client import (
     SlackChannel,
@@ -46,6 +51,9 @@ def make_connector(my_email="me@example.com"):
     client.resolve_is_self_dm.return_value = False
     # Default to "not a one-to-one DM" and "own id unknown" so args carry plain values.
     client.resolve_is_one_to_one_dm.return_value = False
+    # Default to "not a member" and "no conversations" so args carry plain values.
+    client.resolve_is_member.return_value = False
+    client.my_conversation_ids.return_value = frozenset()
     client.own_user_id.return_value = ""
     # Default to "not resolvable" so tests that don't care about participant-name
     # resolution get a plain str (falling back to the raw user id), not a MagicMock,
@@ -305,8 +313,8 @@ class TestGetChannelHistory:
         assert kwargs["table_only"] is True
         assert kwargs["raw_data"] == [make_message(text="a" * 100)]
         assert kwargs["args"] == {
-            "channel_id": "C123", "is_group_dm": False, "is_self_dm": False, "is_one_to_one_dm": False,
-            "minutes": 0,
+            "channel_id": "C123", "is_member": False, "is_group_dm": False, "is_self_dm": False,
+            "is_one_to_one_dm": False, "minutes": 0,
         }
         client.get_channel_history.assert_called_once_with("C123", 10, cursor="", oldest=None)
         client.resolve_channel_name.assert_not_called()
@@ -599,8 +607,8 @@ class TestGetThreadReplies:
         assert "Thread starter" not in kwargs["new_info"]
         assert kwargs["new_info"]["Replies"] == "2"
         assert kwargs["args"] == {
-            "channel_id": "C123", "thread_ts": "t1", "is_group_dm": False, "is_self_dm": False,
-            "is_one_to_one_dm": False, "own_user_id": "",
+            "channel_id": "C123", "thread_ts": "t1", "is_member": False, "is_group_dm": False,
+            "is_self_dm": False, "is_one_to_one_dm": False, "own_user_id": "",
         }
         assert kwargs["preview_tables"] == [{
             "headers": ["Sender", "Date", "Message"],
@@ -663,7 +671,7 @@ class TestSearchMessages:
         assert kwargs["preview"] == {"Query": "budget", "Since": "last 90 days"}
         assert kwargs["new_info"] == {"Results": "2"}
         assert kwargs["gate"] == "review"
-        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 90, "minutes": 0, "own_user_id": ""}
+        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 90, "minutes": 0, "member_only": False, "exclude_channels": [], "all_results_in_my_conversations": False, "own_user_id": ""}
         assert kwargs["preview_tables"] == [{
             "headers": ["Channel", "Sender", "Date", "Message"],
             "rows": [
@@ -672,7 +680,7 @@ class TestSearchMessages:
             ],
         }]
         assert kwargs["table_only"] is True
-        client.search_messages.assert_called_once_with("budget", 5, "", 90, 0)
+        client.search_messages.assert_called_once_with("budget", 5, "", 90, 0, only_channels=None, exclude_channels=frozenset())
 
     async def test_days_override_threaded_through_and_previewed(self, gated_call_spy):
         connector, client = make_connector()
@@ -682,8 +690,8 @@ class TestSearchMessages:
 
         kwargs = gated_call_spy[0]
         assert kwargs["preview"]["Since"] == "last 7 days"
-        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 7, "minutes": 0, "own_user_id": ""}
-        client.search_messages.assert_called_once_with("budget", 20, "", 7, 0)
+        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 7, "minutes": 0, "member_only": False, "exclude_channels": [], "all_results_in_my_conversations": False, "own_user_id": ""}
+        client.search_messages.assert_called_once_with("budget", 20, "", 7, 0, only_channels=None, exclude_channels=frozenset())
 
     async def test_days_zero_previewed_as_all_time(self, gated_call_spy):
         connector, client = make_connector()
@@ -692,7 +700,7 @@ class TestSearchMessages:
         await connector.call("slack_search_messages", {"query": "budget", "days": 0})
 
         assert gated_call_spy[0]["preview"]["Since"] == "all time"
-        client.search_messages.assert_called_once_with("budget", 20, "", 0, 0)
+        client.search_messages.assert_called_once_with("budget", 20, "", 0, 0, only_channels=None, exclude_channels=frozenset())
 
     async def test_empty_search_results_produce_no_table(self, gated_call_spy):
         connector, client = make_connector()
@@ -724,9 +732,10 @@ class TestSearchMessages:
         assert kwargs["preview"] == {"Since": "last 60 minutes"}
         assert kwargs["summary"] == "1 result for messages from the last 60 minutes"
         assert kwargs["args"] == {
-            "query": "", "participant": "", "days": 90, "minutes": 60, "own_user_id": "",
+            "query": "", "participant": "", "days": 90, "minutes": 60, "member_only": False,
+            "exclude_channels": [], "all_results_in_my_conversations": False, "own_user_id": "",
         }
-        client.search_messages.assert_called_once_with("", 20, "", 90, 60)
+        client.search_messages.assert_called_once_with("", 20, "", 90, 60, only_channels=None, exclude_channels=frozenset())
 
     async def test_minutes_overrides_days_in_the_preview(self, gated_call_spy):
         connector, _client = make_connector()
@@ -766,8 +775,8 @@ class TestSearchMessages:
         kwargs = gated_call_spy[0]
         assert kwargs["preview"] == {"Participant": "Bob", "Since": "last 90 days"}
         assert kwargs["summary"] == "1 result for messages with Bob"
-        assert kwargs["args"] == {"query": "", "participant": "Bob", "days": 90, "minutes": 0, "own_user_id": ""}
-        client.search_messages.assert_called_once_with("", 20, "Bob", 90, 0)
+        assert kwargs["args"] == {"query": "", "participant": "Bob", "days": 90, "minutes": 0, "member_only": False, "exclude_channels": [], "all_results_in_my_conversations": False, "own_user_id": ""}
+        client.search_messages.assert_called_once_with("", 20, "Bob", 90, 0, only_channels=None, exclude_channels=frozenset())
 
     async def test_participant_and_query_combined_preview_and_summary(self, gated_call_spy):
         connector, client = make_connector()
@@ -778,7 +787,7 @@ class TestSearchMessages:
         kwargs = gated_call_spy[0]
         assert kwargs["preview"] == {"Query": "budget", "Participant": "Bob,Jane", "Since": "last 90 days"}
         assert kwargs["summary"] == '2 results for "budget" with Bob,Jane'
-        assert kwargs["args"] == {"query": "budget", "participant": "Bob,Jane", "days": 90, "minutes": 0, "own_user_id": ""}
+        assert kwargs["args"] == {"query": "budget", "participant": "Bob,Jane", "days": 90, "minutes": 0, "member_only": False, "exclude_channels": [], "all_results_in_my_conversations": False, "own_user_id": ""}
 
 
 class TestCreateGroupChat:
@@ -904,6 +913,149 @@ class TestComputedScopeArgs:
         args = gated_call_spy[0]["args"]
         assert args["own_user_id"] == "U_ME"
         assert "is_one_to_one_dm" not in args
+
+    async def test_history_and_replies_pass_is_member_from_the_client(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_channel_history.return_value = ([make_message()], False, "")
+        client.get_thread_replies.return_value = ([make_message()], False, "")
+        client.resolve_is_member.return_value = True
+
+        await connector.call("slack_get_channel_history", {"channel_id": "C123"})
+        await connector.call("slack_get_thread_replies", {"channel_id": "C123", "thread_ts": "t1"})
+
+        client.resolve_is_member.assert_called_with("C123")
+        assert [c["args"]["is_member"] for c in gated_call_spy] == [True, True]
+
+    async def test_is_member_is_resolved_before_the_channel_type_checks(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_channel_history.return_value = ([make_message()], False, "")
+        client.get_thread_replies.return_value = ([make_message()], False, "")
+        order: list[str] = []
+        client.resolve_is_member.side_effect = lambda _c: order.append("member") or True
+        client.resolve_is_group_dm.side_effect = lambda _c: order.append("group_dm") or False
+
+        await connector.call("slack_get_channel_history", {"channel_id": "C123"})
+        await connector.call("slack_get_thread_replies", {"channel_id": "C123", "thread_ts": "t1"})
+
+        assert order == ["member", "group_dm", "member", "group_dm"]
+
+
+class TestMemberOnlySearch:
+    async def test_member_only_passes_the_live_conversation_ids(self, gated_call_spy):
+        connector, client = make_connector()
+        client.my_conversation_ids.return_value = frozenset({"C123", "C9"})
+        client.search_messages.return_value = [make_message()]
+
+        await connector.call("slack_search_messages", {"minutes": 60, "member_only": True})
+
+        client.search_messages.assert_called_once_with(
+            "", 20, "", 90, 60, only_channels=frozenset({"C123", "C9"}), exclude_channels=frozenset(),
+        )
+        assert gated_call_spy[0]["args"]["member_only"] is True
+
+    async def test_exclude_channels_is_split_trimmed_and_recorded(self, gated_call_spy):
+        connector, client = make_connector()
+        client.search_messages.return_value = []
+
+        await connector.call("slack_search_messages", {"query": "x", "exclude_channels": " C1, ,C2 "})
+
+        assert client.search_messages.call_args.kwargs["exclude_channels"] == frozenset({"C1", "C2"})
+        assert gated_call_spy[0]["args"]["exclude_channels"] == ["C1", "C2"]
+
+    async def test_all_results_in_my_conversations_flag(self, gated_call_spy):
+        connector, client = make_connector()
+        client.my_conversation_ids.return_value = frozenset({"C123"})
+
+        client.search_messages.return_value = [make_message(), make_message(id="2")]
+        await connector.call("slack_search_messages", {"minutes": 5, "member_only": True})
+        client.search_messages.return_value = []
+        await connector.call("slack_search_messages", {"minutes": 5, "member_only": True})
+        client.search_messages.return_value = [make_message()]
+        await connector.call("slack_search_messages", {"minutes": 5})
+
+        assert [c["args"]["all_results_in_my_conversations"] for c in gated_call_spy] == [True, True, False]
+
+    async def test_an_unreadable_membership_list_raises_before_the_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        client.my_conversation_ids.return_value = None
+
+        with pytest.raises(RuntimeError, match="Could not read the Slack conversations you are a member of"):
+            await connector.call("slack_search_messages", {"minutes": 5, "member_only": True})
+
+        assert gated_call_spy == []
+        client.search_messages.assert_not_called()
+
+    async def test_preview_names_the_filter_and_the_exclusions(self, gated_call_spy):
+        connector, client = make_connector()
+        client.search_messages.return_value = []
+
+        await connector.call(
+            "slack_search_messages", {"minutes": 5, "member_only": True, "exclude_channels": "C2,C1"}
+        )
+
+        preview = gated_call_spy[0]["preview"]
+        assert preview["Conversations"] == "only ones you are a member of"
+        assert preview["Excluded"] == "C1, C2"
+
+
+class TestMemberConversationRules:
+    """The captured gate input paired with the real engine (the connector tests stub gated_call)."""
+
+    RULES = scope_rows.compile_row(ScopeRow(
+        id="r", scope="slack.my_conversations", value=["C_EXCLUDED"],
+        verbs=frozenset({Verb.READ, Verb.SEARCH}), operations=frozenset({"slack.read_messages"}),
+    ))
+
+    def verdict(self, kw):
+        ctx = ReviewContext(
+            connector="slack", tool=kw["tool"], args=kw["args"], raw_data=kw["raw_data"], my_email="",
+        )
+        return policy_engine.evaluate(self.RULES, "slack.read_messages", ctx)
+
+    async def test_history_in_a_member_channel_auto_accepts(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_channel_history.return_value = ([make_message()], False, "")
+        client.resolve_is_member.return_value = True
+
+        await connector.call("slack_get_channel_history", {"channel_id": "C123"})
+
+        assert self.verdict(gated_call_spy[0]) == (True, "r")
+
+    async def test_history_without_membership_needs_review(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_channel_history.return_value = ([make_message()], False, "")
+        client.resolve_is_member.return_value = False
+
+        await connector.call("slack_get_channel_history", {"channel_id": "C123"})
+
+        assert self.verdict(gated_call_spy[0])[0] is False
+
+    async def test_history_on_an_excluded_channel_needs_review(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_channel_history.return_value = ([make_message(channel_id="C_EXCLUDED")], False, "")
+        client.resolve_is_member.return_value = True
+
+        await connector.call("slack_get_channel_history", {"channel_id": "C_EXCLUDED"})
+
+        assert self.verdict(gated_call_spy[0])[0] is False
+
+    async def test_member_only_search_with_member_results_auto_accepts(self, gated_call_spy):
+        connector, client = make_connector()
+        client.my_conversation_ids.return_value = frozenset({"C123"})
+        client.search_messages.return_value = [make_message()]
+
+        await connector.call("slack_search_messages", {"minutes": 60, "member_only": True})
+
+        assert self.verdict(gated_call_spy[0])[0] is True
+
+    async def test_search_without_member_only_needs_review(self, gated_call_spy):
+        connector, client = make_connector()
+        client.my_conversation_ids.return_value = frozenset({"C123"})
+        client.search_messages.return_value = [make_message()]
+
+        await connector.call("slack_search_messages", {"minutes": 60})
+
+        assert self.verdict(gated_call_spy[0])[0] is False
 
 
 class TestSendMessage:
