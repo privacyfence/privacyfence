@@ -105,6 +105,7 @@ def _scope_candidates(tool: str) -> list[propose.ProposableScope]:
     return [
         scope for scope in propose.PROPOSABLE_SCOPES
         if scope.connector == connector and entry.verb in scope.verbs and entry.operation not in scope.excludes
+        and scope.value_of is not propose._not_proposed  # configured deliberately, never offered on a card
     ]
 
 

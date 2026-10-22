@@ -31,6 +31,12 @@ def test_a_tool_with_no_proposable_scope_renders_an_empty_cell():
     assert gen._candidates_cell("apps_script_get_content") == ""
 
 
+def test_a_scope_the_card_never_proposes_is_not_listed():
+    # label_match is configured deliberately (its proposer is propose._not_proposed), so the
+    # archive card has no "this label" button even though the verb matches.
+    assert "this label" not in gen._candidates_cell("gmail_archive_message")
+
+
 def test_a_tool_with_one_proposable_scope_renders_it():
     assert "this report" in gen._candidates_cell("salesforce_run_report")
 

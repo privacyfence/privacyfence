@@ -895,7 +895,7 @@ class GmailConnector(Connector):
         for query in queries:
             try:
                 found = await asyncio.to_thread(self._gmail.messages_matching, query, pairs)
-            except GmailClientError:
+            except Exception:  # noqa: BLE001 -- HttpError, transport and auth-refresh errors alike: no match
                 logger.warning("%s: a Gmail query rule could not be evaluated; treating it as no match", tool)
                 continue
             if found == wanted:
