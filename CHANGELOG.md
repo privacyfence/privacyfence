@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Slack search and channel history take a `minutes` window: an agent can ask for everything from the last hour across channels, DMs, group DMs and threads, newest first.
+
 ## [6.7.0] — 2026-10-22
 
 ### Added

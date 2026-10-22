@@ -637,6 +637,10 @@ For each representative read, list, search, create, update, send or upload tool:
   on `privacyfence-qa-control` it prompts.
 - **Search.** `slack_search_messages` whose results all come from the approved channel reads
   without a card; one unapproved result gates the whole search.
+- **Recent window.** `slack_search_messages` with `minutes` and no query returns the
+  channel, DM, group DM and thread messages posted in that window, newest first, and the card's
+  **Since** reads `last N minutes`; `slack_get_channel_history` with `minutes` returns only
+  that window.
 - `slack_get_thread_replies` on the seed thread prompts for review; `slack_send_message` to your
   own DM prompts.
 

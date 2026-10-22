@@ -309,3 +309,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0215](0215-the-organization-image-is-attested-with-github-build-provenance-not-cosign.md) | The organization image is attested with GitHub build provenance, not cosign | Accepted |
 | [0216](0216-privacyfence-check-policy-reports-whether-the-personal-data-scan-applies.md) | `privacyfence_check_policy` reports whether the personal-data scan applies | Accepted |
 | [0217](0217-the-org-admin-stats-page-shows-counts-only.md) | The organization admin's Stats page shows counts only | Accepted |
+| [0223](0223-recent-slack-activity-is-read-through-time-sorted-search.md) | Recent Slack activity is read through a time-sorted search | Accepted |
