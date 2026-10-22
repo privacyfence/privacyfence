@@ -250,7 +250,7 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-audit-logfile { font-size: 13px; color: var(--ink-soft); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .pf-list { padding: 0; overflow: hidden; }
 .pf-audit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--space-xs); padding: 12px var(--space-s); }
-.pf-audit-row + .pf-audit-row, .pf-agents-row + .pf-agents-row { border-top: 1px solid var(--line); }
+.pf-audit-row + .pf-audit-row { border-top: 1px solid var(--line); }
 /* Who asked, with its tier -- agent_label.py's wording, the approval list's tiers. On its own
    line when narrow; a fixed column beside the rest from 900 px up. */
 .pf-audit-agent { flex: 1 1 100%; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-soft); min-width: 0; }
@@ -268,12 +268,6 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
   .pf-audit-connector { width: 80px; }
   .pf-audit-time { width: 70px; text-align: right; }
 }
-/* The admin's AI-system pin page (ADR 0035 decision 3). */
-.pf-agents-row { padding: 12px var(--space-s); display: flex; flex-direction: column; gap: 4px; }
-.pf-agents-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px var(--space-xs); }
-.pf-agents-name { font-size: var(--step-body); font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
-.pf-agents-meta { font-size: 13px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
-.pf-agents-controls { display: flex; flex-wrap: wrap; gap: var(--space-2xs); align-items: center; margin-top: 6px; font-size: var(--step-small); color: var(--ink-soft); }
 /* The admin's Stats page (ADR 0217). */
 .pf-stats-tiles { --min: 160px; --grid-gap: var(--space-xs); }
 .pf-stat-value { font-size: var(--step-h3); font-weight: 750; color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -329,7 +323,7 @@ _JS = r"""
   // (ADR 0032).
   var CAPS = window.__pfCapabilities || {
     mode: 'local', is_admin: false,
-    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, stats: false, about: true },
+    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, stats: false, about: true },
     not_applicable_actions: [],
     personalTransfer: false,
   };
@@ -479,7 +473,7 @@ _JS = r"""
 
   var NAV_ITEMS = [
     ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['scoped_tokens', 'Scoped tokens'], ['auto_accept', 'Auto-accept'],
-    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['stats', 'Stats'], ['about', 'About'],
+    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['stats', 'Stats'], ['about', 'About'],
   ];
 
   // A tabstrip (app.css) above the content when the page is narrow, a
@@ -1226,61 +1220,6 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
-  // AI systems (org mode, admin only -- ADR 0035 decision 3)
-  // -------------------------------------------------------------------- //
-
-  function renderAgents(state) {
-    var agents = state.agents || { clients: [], stale_pins: [], registry: [] };
-    var html = '<div class="pf-page">';
-    html += '<h1 class="pf-page-title">AI systems</h1>';
-    html += '<div class="pf-page-subtitle">Every OAuth client registered with this server names itself — anything that can reach the server can register as "ChatGPT". Pin a registration you have checked to the AI system it really is: only a pinned client is shown as verified, and a pin never moves to another registration.</div>';
-
-    html += '<h2 class="pf-group-title">Registered clients</h2>';
-    html += '<div class="card pf-list pf-agents-list">';
-    if (agents.clients.length === 0) {
-      html += '<div class="pf-agents-row"><div class="pf-agents-meta">No OAuth clients are registered yet.</div></div>';
-    }
-    agents.clients.forEach(function (c) {
-      html += '<div class="pf-agents-row" data-agent-client="' + esc(c.client_id) + '">';
-      html += '<div class="pf-agents-head"><div class="pf-agents-name">' +
-        (c.client_name ? 'Registered as \u201c' + esc(c.client_name) + '\u201d' : 'No name registered') + '</div>';
-      html += '<div class="pf-agents-meta">last used ' + esc(c.last_used) + '</div></div>';
-      html += '<div class="pf-agents-meta">' + esc(c.client_id) + '</div>';
-      html += '<div class="pf-agents-controls">';
-      if (c.pinned_agent_id) {
-        html += '<span>Pinned to <strong>' + esc(c.pinned_agent_name) + '</strong></span>';
-        html += '<div class="button secondary" role="button" tabindex="0" aria-label="Unpin" ' +
-          dataAttr('unpin_agent_client', { client_id: c.client_id }) + '>Unpin</div>';
-      } else {
-        html += '<span>Not verified. Pin to:</span>';
-        agents.registry.forEach(function (r) {
-          html += '<div class="button secondary" role="button" tabindex="0" aria-label="Pin to ' + esc(r.name) + '" ' +
-            dataAttr('pin_agent_client', { client_id: c.client_id, agent_id: r.id }) + '>' + esc(r.name) + '</div>';
-        });
-      }
-      html += '</div></div>';
-    });
-    html += '</div>';
-
-    if (agents.stale_pins.length > 0) {
-      html += '<h2 class="pf-group-title">Stale pins</h2>';
-      html += '<div class="pf-page-subtitle">These registrations were removed after going unused. Their pins no longer apply to anything; a client that registers again is a new registration and starts unverified.</div>';
-      html += '<div class="card pf-list pf-agents-list">';
-      agents.stale_pins.forEach(function (p) {
-        html += '<div class="pf-agents-row" data-agent-stale-pin="' + esc(p.client_id) + '">';
-        html += '<div class="pf-agents-head"><div class="pf-agents-name">' + esc(p.agent_name) + '</div></div>';
-        html += '<div class="pf-agents-meta">' + esc(p.client_id) + '</div>';
-        html += '<div class="pf-agents-controls"><div class="button secondary" role="button" tabindex="0" aria-label="Remove pin" ' +
-          dataAttr('unpin_agent_client', { client_id: p.client_id }) + '>Remove pin</div></div>';
-        html += '</div>';
-      });
-      html += '</div>';
-    }
-    html += '</div>';
-    return html;
-  }
-
-  // -------------------------------------------------------------------- //
   // Stats (org mode, admin only -- ADR 0217)
   // -------------------------------------------------------------------- //
 
@@ -1826,7 +1765,6 @@ _JS = r"""
       case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
-      case 'agents': return renderAgents(state);
       case 'stats': return renderStats(state);
       case 'about': return renderAbout(state);
       default: return renderGeneral(state);
@@ -2418,7 +2356,7 @@ _JS = r"""
 
 
 _ALL_SECTIONS = (
-    "general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "agents", "stats", "about",
+    "general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "stats", "about",
 )
 
 # The four actions web/routes_settings.py's own bridge shim intercepts
@@ -2464,7 +2402,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     hidden rather than rendered empty; Audit Log is shown to every
     principal as a read-only list of their own recent decisions, its
     local-only export and log-level controls suppressed through
-    ``not_applicable_actions``; AI systems (ADR 0035 decision 3) and Stats (ADR 0217) are
+    ``not_applicable_actions``; Stats (ADR 0217) is
     org-admin-only and never shown in local mode; General and Privacy
     Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
     split (every action either page
@@ -2475,10 +2413,8 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     if mode != ORG_MODE:
         return {
             "mode": LOCAL_MODE, "is_admin": False,
-            # The AI-system pin page is org-only -- local mode has no DCR
-            # registrations to pin (settings.yaml's agent_overrides: only relabels, ADR 0037).
             # Stats counts an org server's principals; local mode has one user.
-            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False, "stats": False},
+            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "stats": False},
             "not_applicable_actions": [],
         }
     return {
@@ -2487,7 +2423,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
             # Org mode's clients connect with OAuth 2.1, not a local token
             # (ADR 0011), so the local "Connect an AI client" page is never shown.
             "general": True, "connectors": False, "ai_client": False, "scoped_tokens": False, "auto_accept": True,
-            "privacy": is_admin, "audit": True, "agents": is_admin, "stats": is_admin, "about": True,
+            "privacy": is_admin, "audit": True, "stats": is_admin, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
     }

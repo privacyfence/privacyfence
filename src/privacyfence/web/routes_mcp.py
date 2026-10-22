@@ -207,7 +207,7 @@ def _resolve_agent(
     first -- ADR 0006 decision 2's ranking:
 
     1. a registration whose redirect URIs are all one registry entry's own callbacks (ADR 0224)
-       or an admin's pin of it (ADR 0035 decision 3) -- ``oauth_client``, the only attested
+       -- ``oauth_client``, the only attested
        source on this path. The DCR ``client_name`` never overrides it;
     2. a local ``agent_overrides:`` relabel (``agent_overrides.py``) -- ``client_info``: it is
        selected by the name the caller sends, so it is a claim on every install (ADR 0037);

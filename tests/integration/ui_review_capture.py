@@ -200,7 +200,7 @@ def _open_settings_section(page, base_url: str, section: str) -> None:
 
 
 # Every section an org admin sees; Connectors is local mode's alone (below).
-@pytest.mark.parametrize("section", ["general", "auto_accept", "privacy", "audit", "agents", "about"])
+@pytest.mark.parametrize("section", ["general", "auto_accept", "privacy", "audit", "about"])
 def test_settings(shot, org_server, section):
     page, save = shot
     server, sessions = org_server

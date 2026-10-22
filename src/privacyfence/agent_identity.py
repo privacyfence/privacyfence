@@ -193,8 +193,8 @@ def lookup(client_name: str) -> RegistryEntry | None:
 
 
 def entry_for_id(agent_id: object) -> RegistryEntry | None:
-    """The registry entry whose ``agent_id`` is exactly ``agent_id``, or None -- what an org pin
-    or a local override names (ADR 0035 decision 3, ADR 0006 option D)."""
+    """The registry entry whose ``agent_id`` is exactly ``agent_id``, or None -- what a redirect-URI
+    attestation (ADR 0224) or a local override names (ADR 0006 option D)."""
     if not isinstance(agent_id, str):
         return None
     return _BY_AGENT_ID.get(agent_id)
@@ -218,7 +218,7 @@ def entry_for_redirect_uris(redirect_uris: Sequence[object]) -> RegistryEntry | 
 
 
 def identify_registry_id(agent_id: str, version: object, source: AgentSource) -> AgentIdentity | None:
-    """The identity for a registry ``agent_id`` an admin pin or a local override named, recording
+    """The identity for a registry ``agent_id`` a redirect-URI attestation or a local override named, recording
     ``source`` unchanged -- the caller decides whether that signal is attested, exactly as for
     ``identify``. None when ``agent_id`` is not a registry entry, so a stale or mistyped mapping
     falls through to the next signal rather than inventing a name."""
