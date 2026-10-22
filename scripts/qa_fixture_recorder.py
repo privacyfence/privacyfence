@@ -1647,6 +1647,26 @@ def _build_gmail_client() -> GmailClient:
     return GmailClient(client_config=client_config, token_file=token_path)
 
 
+def _check_gmail_messages_matching(client: GmailClient, seed_message_id: str, rfc822_id: str) -> CheckResult:
+    """Check-only (no fixture file): Gmail's own search finds the seed message by its Message-ID
+    for ``in:anywhere`` and not for a label that does not exist, which is what a Gmail query rule
+    relies on."""
+    if not rfc822_id:
+        return CheckResult("gmail", "messages_matching", seed_message_id, False, "seed message has no Message-ID header")
+    pairs = [(seed_message_id, rfc822_id)]
+    try:
+        found = client.messages_matching("in:anywhere", pairs)
+        missed = client.messages_matching("label:privacyfence-qa-no-such-label", pairs)
+    except GmailClientError as exc:
+        return CheckResult("gmail", "messages_matching", seed_message_id, False, str(exc))
+    ok = found == {seed_message_id} and not missed
+    note = (
+        "in:anywhere found the seed message, a missing label did not" if ok
+        else "Gmail search did not return the seed message for in:anywhere, or returned it for a missing label"
+    )
+    return CheckResult("gmail", "messages_matching", seed_message_id, ok, note)
+
+
 def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("gmail") or {}
     seed_message_id = cfg.get("seed_message_id", "")
@@ -1683,6 +1703,8 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         if record and ok and isinstance(cap.captured, dict):
             raw = deidentify_structural_fields(redact(redact_gmail_message(cap.captured)))
         results.append(CheckResult("gmail", "get_message", seed_message_id, ok, note, raw, "get_message.json"))
+        if tagged:
+            results.append(_check_gmail_messages_matching(client, seed_message_id, message.rfc822_id))
     except GmailClientError as exc:
         results.append(CheckResult("gmail", "get_message", seed_message_id, False, str(exc)))
 

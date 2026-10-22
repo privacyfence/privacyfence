@@ -167,6 +167,35 @@ class TestSlackExtras:
             assert self._entry(group)["needs_value"] is False
 
 
+class TestGmailQueryExtra:
+    @staticmethod
+    def _entry():
+        return next(e for e in catalogue.scope_catalogue() if e["id"] == "gmail.query")
+
+    def test_offers_read_and_download(self):
+        entry = self._entry()
+        assert entry["verbs"] == ["read", "download"]
+        assert entry["connector"] == "gmail"
+        assert entry["label"] == "Gmail — query"
+        assert entry["needs_value"] is True
+
+    def test_operations_are_the_three_read_family_keys(self):
+        extra = catalogue.EXTRA_SCOPES["gmail.query"]
+        operations = (
+            catalogue.extra_operations_for(extra, Verb.READ) | catalogue.extra_operations_for(extra, Verb.DOWNLOAD)
+        )
+        assert operations == {"gmail.read_message", "gmail.read_thread", "gmail.download_attachment"}
+
+    def test_value_is_kept_whole_in_the_rule(self):
+        query = 'in:inbox -category:promotions -label:"Proposed SPAM", from:(a OR b)'
+        rules = catalogue.rules_for_catalogue_entry("gmail.query", [query], [Verb.READ])
+        assert rules
+        assert all(r.predicate == "gmail.query" and list(r.value) == [query] for r in rules)
+
+    def test_single_value_groups_names_gmail_query(self):
+        assert catalogue.SINGLE_VALUE_GROUPS == frozenset({"gmail.query"})
+
+
 def test_scope_catalogue_has_no_verb_labels():
     assert all("verb_labels" not in entry for entry in catalogue.scope_catalogue())
 

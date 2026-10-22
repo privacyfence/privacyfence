@@ -1666,6 +1666,59 @@ class TestCheckGmail:
         assert headers["To"] == recorder._REDACTED_EMAIL
         assert headers["Subject"] == "PrivacyFence QA seed message [QATEST]"
 
+    def _matching_client(self, monkeypatch, headers, search):
+        raw = {"id": "m1", "threadId": "t1", "payload": {"headers": headers}}
+        client = GmailClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = self._service(raw)
+        monkeypatch.setattr(recorder, "_build_gmail_client", lambda: client)
+        monkeypatch.setattr(client, "messages_matching", search)
+
+    def test_check_gmail_reports_messages_matching(self, monkeypatch):
+        headers = [
+            {"name": "From", "value": "real@company.com"},
+            {"name": "Subject", "value": "PrivacyFence QA seed message [QATEST]"},
+            {"name": "Date", "value": "Wed, 15 Jul 2026 10:00:00 +0000"},
+            {"name": "Message-ID", "value": "<seed@mail.example.com>"},
+        ]
+        seen = []
+
+        def search(query, pairs):
+            seen.append((query, pairs))
+            return {"m1"} if query == "in:anywhere" else set()
+
+        self._matching_client(monkeypatch, headers, search)
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert result.ok and result.raw is None and result.fixture_relpath == ""
+        assert seen[0] == ("in:anywhere", [("m1", "seed@mail.example.com")])
+
+        # Gmail finding nothing for in:anywhere, or something for a missing label, fails the check.
+        self._matching_client(monkeypatch, headers, lambda query, pairs: set())
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        assert not next(r for r in results if r.method == "messages_matching").ok
+        self._matching_client(monkeypatch, headers, lambda query, pairs: {"m1"})
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        assert not next(r for r in results if r.method == "messages_matching").ok
+
+    def test_messages_matching_fails_without_a_message_id_and_on_client_errors(self, monkeypatch):
+        headers = [
+            {"name": "From", "value": "real@company.com"},
+            {"name": "Subject", "value": "PrivacyFence QA seed message [QATEST]"},
+            {"name": "Date", "value": "x"},
+        ]
+        self._matching_client(monkeypatch, headers, lambda query, pairs: set())
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert not result.ok and result.note == "seed message has no Message-ID header"
+
+        def boom(query, pairs):
+            raise recorder.GmailClientError("messages_matching failed (HTTP 500)")
+
+        self._matching_client(monkeypatch, headers + [{"name": "Message-ID", "value": "<s@x.com>"}], boom)
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert not result.ok and result.note == "messages_matching failed (HTTP 500)"
+
     def test_untagged_message_is_refused(self, monkeypatch):
         raw_message = {
             "id": "m99", "threadId": "t99",

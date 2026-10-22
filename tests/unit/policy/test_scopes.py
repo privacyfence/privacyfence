@@ -599,3 +599,26 @@ def test_i_am_author_matches_only_my_account_id():
     assert not _matches("i_am_author", make_ctx(my_account_id="acc-me", raw_data={"author": "acc-x"}))
     assert not _matches("i_am_author", make_ctx(my_email="me@example.com", my_account_id="", raw_data={"author": "me@example.com"}))
     assert not _matches("i_am_author", make_ctx(my_account_id="", raw_data={"author": ""}))
+
+
+class TestGmailQuery:
+    selector = NEW_SCOPE_SELECTORS["gmail.query"]
+
+    def test_matches_when_the_rule_value_was_evaluated_as_matching(self):
+        ctx = make_ctx(args={"matching_queries": ["in:inbox"]})
+        assert self.selector.matches(["in:inbox"], ctx) is True
+        assert self.selector.matches(["in:sent"], ctx) is False
+
+    def test_no_computed_argument_never_matches(self):
+        assert self.selector.matches(["in:inbox"], make_ctx(args={})) is False
+        assert self.selector.matches(["in:inbox"], make_ctx(args={"matching_queries": "in:inbox"})) is False
+        assert self.selector.matches(["in:inbox"], make_ctx(args={"matching_queries": []})) is False
+
+    def test_any_of_several_rule_values_matches(self):
+        ctx = make_ctx(args={"matching_queries": ["label:b"]})
+        assert self.selector.matches(["label:a", "label:b"], ctx) is True
+
+    def test_a_blank_value_never_matches(self):
+        ctx = make_ctx(args={"matching_queries": ["in:inbox"]})
+        assert self.selector.matches(None, ctx) is False
+        assert self.selector.matches([], ctx) is False
