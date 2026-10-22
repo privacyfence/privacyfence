@@ -61,7 +61,7 @@ conversations on an internal app and about 50 minutes on a distributed one. Each
    delay matters.
 
 On an app distributed outside the Marketplace, step 2 is limited to 1 request per minute. See
-[ADR 0226](adr/0226-member-only-slack-search-drops-other-conversations-before-the-gate.md).
+[ADR 0227](adr/0227-member-only-slack-search-drops-other-conversations-before-the-gate.md).
 
 ## Values
 

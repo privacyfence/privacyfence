@@ -287,7 +287,6 @@ def _running_org_server(tmp_path, monkeypatch, *, push: bool = False):
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"),
     )
-    monkeypatch.setattr("privacyfence.web.oauth_provider.pins_file_path", lambda: tmp_path / "agent_pins.json")
     port = _free_port()
     issuer_url = f"http://localhost:{port}"
     idp = _idp()
@@ -2660,16 +2659,9 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "AI systems", "Stats", "About"]
+        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "Stats", "About"]
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "org-settings-admin")
-
-        # The admin's AI-system pin page (ADR 0035) renders (no client has
-        # registered with this fixture's provider, so it lists none).
-        page.locator('.pf-navitem[data-nav="agents"]').click()
-        page.wait_for_selector(".pf-agents-list")
-        assert page.get_by_text("Registered clients").is_visible()
-        self._screenshot(page, "org-settings-admin-agents")
 
         page.goto(f"{server.base_url}/settings/privacy")
         page.wait_for_load_state("load")
@@ -2844,7 +2836,7 @@ def phone_page(browser, request):
     ctx.close()
 
 
-_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "stats", "about")
+_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "stats", "about")
 _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 

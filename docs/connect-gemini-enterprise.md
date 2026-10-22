@@ -51,8 +51,7 @@ curl -s https://pf.example.com/register -H 'Content-Type: application/json' \
 ```
 
 - **`client_name` must be exactly `Gemini Enterprise`.** That is the name PrivacyFence recognises
-  as Gemini Enterprise and the registration an administrator pins (see
-  [How it is identified](#how-it-is-identified)).
+  as Gemini Enterprise (see [How it is identified](#how-it-is-identified)).
 - The redirect URI is Google's and fixed; Gemini Enterprise uses no other.
 - The response holds a `client_id` and a `client_secret`. **Keep the secret private**: anyone who
   has it can act as this client. Paste it into the data store form in the next step and do not
@@ -171,15 +170,11 @@ Sizes, lifetimes and the organization settings are in [Files](how-it-works.md#fi
 In organization mode, every approval card and audit entry names the AI system that asked. Gemini
 Enterprise's calls carry the name it was registered with in step 3, `Gemini Enterprise`.
 
-That name is a **claim**: the card marks it **Not verified**, because any program that can reach
-the deployment can register under the same name. An administrator can **pin** the registration on
-**Settings → AI systems**; the cards for that registration are then verified. See
+The cards are **Verified**, with no administrator step, because the registration carries Google's
+own redirect URI (`https://vertexaisearch.cloud.google.com/oauth-redirect`) and no other. A
+registration with any other redirect URI is a **claim** and is marked **Not verified**. See
 [Which AI system is asking](how-it-works.md#which-ai-system-is-asking) and
 [AI systems](org-mode-setup-guide.md#11-ai-systems).
-
-Pinning needs a PrivacyFence release that lists Gemini Enterprise as an AI system
-([ADR 0109](adr/0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md)). An earlier
-release records the calls under the claimed name `Gemini Enterprise` and cannot pin them.
 
 A registration nobody has used for 180 days is removed. A connector in use keeps its registration,
 because each token refresh counts as use. Once it is removed, Gemini Enterprise stops working, and
@@ -198,7 +193,7 @@ an administrator registers it again (step 3) and updates the data store's client
 | The sign-in page refuses you | Your account is not allowed to sign in to this deployment. Ask your administrator. |
 | Tools are listed but calls to one service fail | You have not connected that service. Connect it at `/connect`; see [Connecting a service](connecting-a-service.md). |
 | A call waits and nothing happens | It is waiting for your approval at `/approvals`. |
-| Every card says **Not verified** | Expected until an administrator pins your registration. |
+| Every card says **Not verified** | Expected when the registration's redirect URI is not the vendor's own callback; see [AI systems](org-mode-setup-guide.md#11-ai-systems). |
 
 Deployment problems are in the organization guide's
 [Troubleshooting](org-mode-setup-guide.md#15-troubleshooting).

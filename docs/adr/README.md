@@ -115,7 +115,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0003](0003-separated-installs-only.md) | Every shipped local-mode install is privilege-separated | Accepted |
 | [0004](0004-retire-the-v1-auto-accept-config-model.md) | Retire the v1 auto-accept config model | Accepted; superseded in part by 0041 |
 | [0005](0005-moving-the-approval-decision-off-the-device.md) | Moving the approval decision off the device | Proposed |
-| [0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) | Attribute a request to the AI system from the connection, with ranked provenance | Accepted; implemented; amended by 0035, 0037 |
+| [0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) | Attribute a request to the AI system from the connection, with ranked provenance | Accepted; implemented; amended by 0035, 0037, 0224 |
 | [0007](0007-local-file-bridge.md) | Local file access crosses the privilege-separation boundary through the `.mcpb` shim | Accepted; extended by 0028 |
 | [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Accepted; implemented in part; amended by 0043, 0104 |
 | [0009](0009-use-the-official-mcp-sdk.md) | Use the official `mcp` SDK for Streamable HTTP, not a hand-rolled transport | Accepted (retroactive) |
@@ -144,7 +144,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0032](0032-org-settings-share-locals-generic-action-dispatcher.md) | Org mode's settings writes route through local mode's generic action dispatcher | Accepted |
 | [0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md) | One route layer per surface (approvals, settings), with an auth adapter per mode, not a second module | Accepted |
 | [0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md) | Sensitive settings writes require WebAuthn step-up in both local and org mode | Accepted |
-| [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted |
+| [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted; amended by 0224; decision 3 superseded by 0225 |
 | [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive) |
 | [0037](0037-a-local-override-is-a-relabel-and-never-attests.md) | A local `agent_overrides:` match is a relabel recorded as claimed on every install; local mode has no attested source | Accepted |
 | [0038](0038-gmail-draft-signature-is-shown-but-not-write-scanned.md) | A Gmail draft's appended signature is shown in the approval popup but not write-scanned | Accepted |
@@ -312,9 +312,11 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0218](0218-a-gmail-label-rule-can-allow-archiving-a-message-that-carries-the-label.md) | A Gmail label rule can allow archiving a message that carries the label | Accepted; relates to 0172, 0204 |
 | [0219](0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md) | A scoped token can let email and Slack reads return personal data | Accepted; amends 0173 |
 | [0220](0220-a-routines-rule-profile-is-a-scoped-token.md) | A routine's rule profile is a scoped token | Accepted; relates to 0164, 0015 |
-| [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md) | Slack rules cover mentions of the signed-in user | Accepted; relates to 0172; amended by 0227 |
+| [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md) | Slack rules cover mentions of the signed-in user | Accepted; relates to 0172; amended by 0228 |
 | [0222](0222-a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time.md) | A Gmail query rule is evaluated by Gmail against the message at call time | Accepted; relates to 0172, 0204 |
 | [0223](0223-recent-slack-activity-is-read-through-time-sorted-search.md) | Recent Slack activity is read through a time-sorted search | Accepted |
-| [0225](0225-a-slack-rule-can-cover-the-conversations-the-user-is-a-member-of.md) | A Slack rule can cover the conversations the signed-in user is a member of, checked live on each call | Accepted; relates to 0172, 0221 |
-| [0226](0226-member-only-slack-search-drops-other-conversations-before-the-gate.md) | Member-only Slack search drops results from other conversations before the gate, on the agent's request | Accepted; relates to 0221, 0223 |
-| [0227](0227-an-extra-scope-can-give-each-verb-its-own-predicate.md) | An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with | Accepted; amends 0221 |
+| [0224](0224-an-org-registration-is-attested-by-its-redirect-uris.md) | In organization mode a registration is attested by its redirect URIs | Accepted; amends 0006, 0035 |
+| [0225](0225-the-admin-ai-system-pin-is-removed.md) | The admin AI-system pin is removed | Accepted; supersedes 0035 decision 3 |
+| [0226](0226-a-slack-rule-can-cover-the-conversations-the-user-is-a-member-of.md) | A Slack rule can cover the conversations the signed-in user is a member of, checked live on each call | Accepted; relates to 0172, 0221 |
+| [0227](0227-member-only-slack-search-drops-other-conversations-before-the-gate.md) | Member-only Slack search drops results from other conversations before the gate, on the agent's request | Accepted; relates to 0221, 0223 |
+| [0228](0228-an-extra-scope-can-give-each-verb-its-own-predicate.md) | An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with | Accepted; amends 0221 |

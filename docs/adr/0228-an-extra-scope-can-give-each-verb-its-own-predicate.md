@@ -1,4 +1,4 @@
-# ADR 0227: An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with
+# ADR 0228: An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with
 
 ## Status
 
@@ -19,7 +19,7 @@ only `read` still auto-accepted a mentions search, although Settings showed "all
   `scope_of_rule`, `describe` and `outdated` recognise every predicate of a scope.
 - **Mentions** gets `slack.mentions_of_me_all_results` for search. `slack.mentions_of_me` keeps only
   the thread case (ADR 0221 amended: a mentions rule's search verb is now its own predicate).
-- **`slack.my_conversations`** (ADR 0225) uses the same mechanism for its search verb.
+- **`slack.my_conversations`** (ADR 0226) uses the same mechanism for its search verb.
 - **Older scoped tokens keep their reach** through `_LIMIT_PAIR_SUCCESSORS` in `scoped_tokens.py`,
   gated by a stored `limits_split_verbs` flag that tokens made from now on carry.
 
@@ -50,5 +50,5 @@ only `read` still auto-accepted a mentions search, although Settings showed "all
 
 ## Related
 
-- ADR [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md), ADR [0172](0172-one-stored-auto-accept-rule-per-scope.md), ADR [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md), ADR [0225](0225-a-slack-rule-can-cover-the-conversations-the-user-is-a-member-of.md)
+- ADR [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md), ADR [0172](0172-one-stored-auto-accept-rule-per-scope.md), ADR [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md), ADR [0226](0226-a-slack-rule-can-cover-the-conversations-the-user-is-a-member-of.md)
 - [`catalogue.py`](../../src/privacyfence/policy/catalogue.py), [`scope_rows.py`](../../src/privacyfence/policy/scope_rows.py), [`scoped_tokens.py`](../../src/privacyfence/scoped_tokens.py)

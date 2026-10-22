@@ -1,4 +1,4 @@
-# ADR 0225: A Slack rule can cover the conversations the signed-in user is a member of, checked live on each call
+# ADR 0226: A Slack rule can cover the conversations the signed-in user is a member of, checked live on each call
 
 ## Status
 
@@ -44,7 +44,7 @@ membership has to be checked, not assumed.
 
 - Each history or replies read costs one extra Tier 3 `conversations.info` request.
 - Excluded ids are shown raw in Settings, and the agent has to pass the same ids as
-  `exclude_channels` on a member-only search (ADR 0226); if it does not, a result from an excluded
+  `exclude_channels` on a member-only search (ADR 0227); if it does not, a result from an excluded
   channel makes the search need a review. That fails closed.
 - If `conversations.info` did not report `is_member: true` for a group DM the user is in, group DMs
   would fail closed under this rule and stay covered by `group_dm`.
@@ -63,5 +63,5 @@ membership has to be checked, not assumed.
 
 ## Related
 
-- ADR [0172](0172-one-stored-auto-accept-rule-per-scope.md), ADR [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md), ADR [0226](0226-member-only-slack-search-drops-other-conversations-before-the-gate.md)
+- ADR [0172](0172-one-stored-auto-accept-rule-per-scope.md), ADR [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md), ADR [0227](0227-member-only-slack-search-drops-other-conversations-before-the-gate.md)
 - [`scopes.py`](../../src/privacyfence/policy/scopes.py), [`catalogue.py`](../../src/privacyfence/policy/catalogue.py), [`slack.py`](../../src/privacyfence/connectors/slack.py), [`slack_client.py`](../../src/privacyfence/slack_client.py)

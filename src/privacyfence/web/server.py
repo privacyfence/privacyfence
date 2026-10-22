@@ -1304,7 +1304,7 @@ def _build_org_app(
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
-            client_names=org.provider.client_name, pinned_agents=org.provider.pinned_agent_id,
+            client_names=org.provider.client_name, attested_agents=org.provider.attested_agent_id,
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
@@ -1404,8 +1404,6 @@ def _build_org_app(
         # above already resolves from org.org_config -- see that call and
         # this function's own build_org_routes docstring.
         step_up=step_up, step_up_origin=org.issuer_url,
-        # The admin's "AI systems" pin page (ADR 0035) lists and pins this provider's DCR clients.
-        oauth_provider=org.provider,
         # Auto-accept rule values resolve to names through the viewing principal's own connectors.
         connector_registry=org.connector_registry,
         # ADR 0165: the administrator's opt-in and cap from the org config bundle; the section

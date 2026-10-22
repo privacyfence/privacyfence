@@ -52,7 +52,7 @@ _LABEL_MESSAGE = (
 _SECONDS_PER_DAY = 86400
 
 # A token's limit records (predicate, operation) pairs as they compiled when the token was made.
-# A token made before a scope split one predicate per verb (ADR 0227) recorded the old pair for
+# A token made before a scope split one predicate per verb (ADR 0228) recorded the old pair for
 # both verbs, so for such a token -- and only such a token -- the old pair stands for both.
 _LIMIT_PAIR_SUCCESSORS: dict[tuple[str, str], tuple[str, str]] = {
     ("slack.mentions_of_me", "slack.read_messages"):
@@ -78,7 +78,7 @@ class ScopedToken:
     # for this token. A rule id with no entry is used whole (a token never upgraded).
     rule_limits: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict, hash=False)
     # True for a token whose limits were recorded after scopes gave each verb its own predicate
-    # (ADR 0227); only a token without it gets ``_LIMIT_PAIR_SUCCESSORS`` applied on read.
+    # (ADR 0228); only a token without it gets ``_LIMIT_PAIR_SUCCESSORS`` applied on read.
     limits_split_verbs: bool = False
 
     def days_left(self, now: float) -> int:

@@ -1673,7 +1673,7 @@ class SlackClient:
 
     def resolve_is_member(self, channel_id: str) -> bool:
         """Whether the signed-in user is a member of ``channel_id`` right now, from one live
-        ``conversations.info`` call. Never cached: an auto-accept decision depends on it (ADR 0225).
+        ``conversations.info`` call. Never cached: an auto-accept decision depends on it (ADR 0226).
         A 1:1 DM (``is_im``) counts as membership, since a user token sees only its own DMs; any
         other conversation needs ``is_member`` to be exactly ``True``. Reads False on an empty id,
         an API error or an unexpected response. The same response also fills the group-DM,
@@ -1701,7 +1701,7 @@ class SlackClient:
     def my_conversation_ids(self) -> frozenset[str] | None:
         """The id of every conversation (public and private channels, group DMs, 1:1 DMs) the
         signed-in user is a member of right now, from a live ``users.conversations`` walk. Never
-        cached (ADR 0225). None when the own user id or the walk fails."""
+        cached (ADR 0226). None when the own user id or the walk fails."""
         own = self.own_user_id()
         if not own:
             return None
