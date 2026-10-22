@@ -376,6 +376,26 @@ class SlackConnector(Connector):
                             "means no minute window"
                         ),
                     ),
+                    ToolParam(
+                        "member_only", "bool", required=False, default=False,
+                        description=(
+                            "Only return messages from conversations you are a member of right now "
+                            "(channels, DMs and group DMs); PrivacyFence asks Slack for your "
+                            "conversations on each call. Use it for a sweep of everything since your "
+                            "last run; a 'conversations I'm a member of' rule can then auto-accept the "
+                            "search. It reads at most 300 search matches, so in a busy window it can "
+                            "miss older messages: if it returns exactly count results, search again "
+                            "with a smaller minutes."
+                        ),
+                    ),
+                    ToolParam(
+                        "exclude_channels", "str", required=False, default="",
+                        description=(
+                            "Comma-separated channel ids whose messages are dropped from the results. "
+                            "Pass the ids a 'conversations I'm a member of' rule excludes; a result "
+                            "from one of them stops that rule from covering the search."
+                        ),
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -579,6 +599,10 @@ class SlackConnector(Connector):
             self._slack.get_channel_history, channel_id, limit, cursor=cursor, oldest=oldest
         )
         n = len(messages)
+        # First, so the group-DM/self-DM/one-to-one checks below hit the caches
+        # this one conversations.info call fills. Never cached itself: a rule
+        # decision must not outlive leaving the conversation.
+        is_member = await self._fetch(self._slack.resolve_is_member, channel_id)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
@@ -630,6 +654,7 @@ class SlackConnector(Connector):
             my_email=self.my_email,
             args={
                 "channel_id": channel_id,
+                "is_member": is_member,
                 "is_group_dm": is_group_dm,
                 "is_self_dm": is_self_dm,
                 "is_one_to_one_dm": is_one_to_one_dm,
@@ -644,6 +669,10 @@ class SlackConnector(Connector):
             self._slack.get_thread_replies, channel_id, thread_ts, cursor=cursor
         )
         n = len(messages)
+        # First, so the group-DM/self-DM/one-to-one checks below hit the caches
+        # this one conversations.info call fills. Never cached itself: a rule
+        # decision must not outlive leaving the conversation.
+        is_member = await self._fetch(self._slack.resolve_is_member, channel_id)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
@@ -694,6 +723,7 @@ class SlackConnector(Connector):
             args={
                 "channel_id": channel_id,
                 "thread_ts": thread_ts,
+                "is_member": is_member,
                 "is_group_dm": is_group_dm,
                 "is_self_dm": is_self_dm,
                 "is_one_to_one_dm": is_one_to_one_dm,
@@ -703,7 +733,7 @@ class SlackConnector(Connector):
 
     async def _search_messages(
         self, query: str = "", count: int = 20, participant: str = "", days: int = 90,
-        minutes: int = 0,
+        minutes: int = 0, member_only: bool = False, exclude_channels: str = "",
     ) -> Any:
         # Validate before gating, not after -- same reasoning as
         # calendar_set_event_visibility's/slack_create_group_chat's own
@@ -712,8 +742,17 @@ class SlackConnector(Connector):
         minutes = _window_minutes(minutes)
         if not query and not participant and not minutes:
             raise ValueError("slack_search_messages requires a query, a participant, or minutes")
+        excluded = frozenset(c.strip() for c in exclude_channels.split(",") if c.strip())
+        member_ids: frozenset[str] | None = None
+        if member_only:
+            member_ids = await self._fetch(self._slack.my_conversation_ids)
+            if member_ids is None:
+                raise RuntimeError(
+                    "Could not read the Slack conversations you are a member of; try again in a minute."
+                )
         messages = await self._fetch(
-            self._slack.search_messages, query, count, participant, days, minutes
+            self._slack.search_messages, query, count, participant, days, minutes,
+            only_channels=member_ids, exclude_channels=excluded,
         )
         n = len(messages)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
@@ -729,6 +768,10 @@ class SlackConnector(Connector):
             preview["Since"] = _since_minutes(minutes)
         else:
             preview["Since"] = f"last {days} day{'s' if days != 1 else ''}" if days else "all time"
+        if member_only:
+            preview["Conversations"] = "only ones you are a member of"
+        if excluded:
+            preview["Excluded"] = ", ".join(sorted(excluded))
         new_info = {"Results": str(n)}
         lines = [
             f"[{d['channel_name']}] {d['user_name'] or d['user_id'] or 'unknown'}: {d['text']}"
@@ -781,6 +824,10 @@ class SlackConnector(Connector):
                 "participant": participant,
                 "days": days,
                 "minutes": minutes,
+                "member_only": member_only,
+                "exclude_channels": sorted(excluded),
+                "all_results_in_my_conversations": member_ids is not None
+                and all(m.channel_id in member_ids for m in messages),
                 "own_user_id": await self._fetch(self._slack.own_user_id),
             },
         )
