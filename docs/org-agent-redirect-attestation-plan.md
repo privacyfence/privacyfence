@@ -18,10 +18,13 @@ Decided in the planning conversation (no issue):
    the attested tier.
 2. Loopback-redirect clients stay claimed: OK.
 3. The admin pin: removed entirely.
-4. The gap this leaves, found during planning: an org member who is signed in can register their
-   own client under a vendor's redirect URI, finish `/authorize` in their own browser, copy the
-   code out of the address bar before the vendor's page loads, and redeem it with the secret and
-   PKCE verifier they hold. Their own calls are then shown as that vendor, verified. The user
+4. The gap this leaves, found during planning: anything that can complete `/authorize` as a
+   signed-in org member can register its own client under a vendor's redirect URI and read the
+   code before the vendor gets it. That includes the member, and also a program using the member's
+   browser session. The code is in plain sight on PrivacyFence's own consent "continue" page
+   (`oauth_consent.py:110-121`, `render_continue_page`, an `<a href>` plus a meta refresh). It is
+   then redeemed with the secret and PKCE verifier the registrant holds, and that member's own
+   calls are shown as that vendor, verified. It never reaches another member's calls. The user
    chose to keep the attested tier and record this gap in the ADR (option "Attested, gap
    documented"), rather than add a display-only tier or drop org-mode attestation.
 
@@ -30,8 +33,8 @@ reopens the DCR spoofing bypass ADR 0035 decision 3 was written against.
 
 ## Current state
 
-- **Registry.** `src/privacyfence/agent_identity.py:121` defines `RegistryEntry` (`agent_id`,
-  `display_name`, `client_names`, `name_templates`). `REGISTRY` (`:134`) has seven entries:
+- **Registry.** `src/privacyfence/agent_identity.py:98` defines `RegistryEntry` (`agent_id`,
+  `display_name`, `client_names`, `name_templates`). `REGISTRY` (`:112`) has seven entries:
   `claude-code`, `claude`, `claude-desktop`, `chatgpt`, `gemini-cli`, `gemini-enterprise`,
   `cursor`. `entry_for_id` (`:164`) and `identify_registry_id` (`:172`) resolve an `agent_id` to an
   `AgentIdentity` with a given source. `AgentSource.OAUTH_CLIENT.is_attested()` is True (`:54`).
@@ -43,8 +46,8 @@ reopens the DCR spoofing bypass ADR 0035 decision 3 was written against.
   `has_client()` (`:400`, used only by the pin route). `client_name()` (`:368`) is the read-only
   per-call lookup the pin lookup is modelled on. Stored registrations keep their full
   `OAuthClientInformationFull`, `redirect_uris` included.
-- **The redirect URI is enforced by the SDK.** `mcp/shared/auth.py`'s
-  `OAuthClientMetadata.validate_redirect_uri` refuses an `/authorize` whose `redirect_uri` is not
+- **The redirect URI is enforced by the SDK.** `mcp/shared/auth.py:187`'s
+  `OAuthClientInformationFull.validate_redirect_uri` refuses an `/authorize` whose `redirect_uri` is not
   in the registration's `redirect_uris`, and `mcp/server/auth/handlers/token.py:164-181` refuses a
   `/token` whose `redirect_uri` differs from the one the code was issued for. The provider issues
   tokens only through the authorization-code and refresh grants: `exchange_identity_assertion`
@@ -54,7 +57,7 @@ reopens the DCR spoofing bypass ADR 0035 decision 3 was written against.
   `_resolve_agent(..., pinned_agents=...)` (`:200-237`) tries the pin first (recorded as
   `OAUTH_CLIENT` through `identify_registry_id`), then a local override, then the DCR
   `client_name` and the handshake name (both `CLIENT_INFO`). `build_mcp_server` (`:340`),
-  `mount_mcp` (`:885`) and the function at `:932` thread `pinned_agents` through. `server.py:1306`
+  `build_mcp_asgi_app` (`:885`) and `mount_mcp` (`:932`) thread `pinned_agents` through. `server.py:1306`
   wires `pinned_agents=org.provider.pinned_agent_id` for org mode.
 - **The settings surface.** `src/privacyfence/web/routes_settings.py`: `_ORG_ONLY_SENSITIVE_ACTIONS`
   (`:281`, only the two pin actions; also read by `_needs_step_up`, `:731`), the two actions in
@@ -180,7 +183,7 @@ pin tests keep passing until p2 removes pins. After p2 it is exactly the code ab
 
 In `routes_mcp.py`, rename `PinnedAgentLookup` to `AttestedAgentLookup` and the keyword
 `pinned_agents` to `attested_agents` everywhere (`_resolve_agent`, `build_mcp_server`,
-`mount_mcp`, the function at `:932`, and `server.py:1306`, which passes
+`build_mcp_asgi_app`, `mount_mcp`, and `server.py:1306`, which passes
 `attested_agents=org.provider.attested_agent_id`). Keep the logic of `_resolve_agent` as it is.
 The attested lookup is still tried first and still recorded as `AgentSource.OAUTH_CLIENT` through
 `identify_registry_id`, with the handshake version. The comment above `AttestedAgentLookup`
@@ -189,8 +192,9 @@ becomes:
 ```python
 # Looks up the registry agent_id an access token's ``client_id`` is attested as by its registered
 # redirect URIs, or None (ADR 0224). Org mode passes ``OrgOAuthProvider.attested_agent_id``; the
-# redirect URI decides where the code went, which the caller cannot redirect, so it is the one
-# signal on this path that records ``oauth_client``.
+# redirect URI decides where the code went, which only a client the member authorizes can
+# intercept (ADR 0224 says what that leaves open), so it is the one signal on this path that
+# records ``oauth_client``.
 ```
 
 `_resolve_agent`'s docstring item 1 becomes: "a registration whose redirect URIs are all one
@@ -200,6 +204,11 @@ signal is keyed by the access token's `client_id`, which the authorization serve
 by redirect URIs the SDK enforces at `/authorize` and `/token`. Item 3's "since that is the one an
 admin sees and pins" becomes "since that is the name the client registered with". In
 `_scoped_agent`'s docstring (`:115`), "any org admin pin" becomes "any redirect-URI attestation".
+`build_mcp_asgi_app`'s docstring (`:906-908`) says "``attested_agents`` (org mode only) is
+``OrgOAuthProvider.attested_agent_id``, the redirect-URI attestation (ADR 0224)" in place of the
+`pinned_agents` sentence. In `agent_identity.py`, `AgentSource.is_attested`'s docstring (`:55`)
+becomes "True only for a signal the caller could not have chosen (ADR 0006 decision 3), within
+the limit ADR 0224 records for a redirect-URI attestation." 
 
 ### D4. What goes
 
@@ -211,18 +220,25 @@ After p2 these no longer exist: `src/privacyfence/web/agent_pins.py`; in `oauth_
 `build_org_routes` and its docstring paragraph, the `"agents"` key of the org state,
 `_agents_state`, both action branches and `_pin_agent_client`, plus any import only they used
 (`REGISTRY`, `entry_for_id`, `sanitize_client_string`, `datetime`/`timezone`, `_relative_time`:
-remove an import only when `ruff check .` reports it unused); in `org_settings_scope.py`, the two
+remove an import only when `ruff check .` reports it unused); the comment above `_ALLOWED_ACTIONS` (`:209-213`) ends its first
+clause at "every action naming LOCAL_MODE, which is every action there is" and drops "except the
+two org-only AI-system pin actions (ADR 0035 decision 3)"; the comment block above
+`_ORG_ONLY_SENSITIVE_ACTIONS` (`:274-280`) goes with it; in the org state docstring (`:1604-1608`)
+"AI systems (admin only, ADR 0035 decision 3) the OAuth provider's registrations and pins; " is
+deleted; in `org_settings_scope.py`, the two
 `ActionScope` entries and their comment block, with the module docstring's "every action there is
 except the two org-only AI-system pin actions, which have no local-mode meaning at all" replaced
 by "every action there is"; in `server.py`, the `oauth_provider=org.provider` argument and its
 comment (`:1406-1407`); in `settings_window_html.py`, the `agents` section everywhere (CSS rules
-`.pf-agents-*` with `:253` becoming `.pf-audit-row + .pf-audit-row { ... }` alone, the `sections`
+`.pf-agents-*` and their comment at `:271`, with `:253` becoming `.pf-audit-row + .pf-audit-row { ... }`
+alone, the comment at `:2478-2479` (keep only the Stats sentence), the `sections`
 default, the nav entry, `renderAgents`, the dispatch case, `"agents"` in `_ALL_SECTIONS` and in
 `build_capabilities`, and the docstring's "AI systems (ADR 0035 decision 3) and" so it reads
 "Stats (ADR 0217) is org-admin-only and never shown in local mode").
 
-An existing `org/agent_pins.json` on a deployment is left where it is and is no longer read. The
-changelog line tells admins they can delete it. Nothing migrates pins: a pinned claude.ai,
+An existing `org/agent_pins.json` on a deployment is left where it is and is no longer read. Only
+the changelog and ADR 0225 say it can be deleted; reference docs describe the current version only
+(`docs/README.md`), so they do not mention it. Nothing migrates pins: a pinned claude.ai,
 ChatGPT or Gemini Enterprise registration becomes attested by its redirect URI anyway. A pinned
 Claude Code registration goes back to the claimed tier, which is the point of the change.
 
@@ -240,8 +256,8 @@ Log, Stats, About.
   `test_there_are_no_org_only_actions` (`assert _ORG_ONLY_ACTIONS == frozenset()`). Delete the
   parametrized `test_org_only_actions_are_never_permitted_in_local_mode`, since it would collect
   zero cases and pytest would report it skipped. Drop `_ORG_ONLY_SENSITIVE_ACTIONS` from the
-  import, and drop the stale comment line "The org-only AI-system pin actions are admin-only but
-  never local." at `:126`.
+  import, and delete the stale comment line "The org-only AI-system pin actions are admin-only but
+  never local." at `:130`, ending the line before it (`:129`) with a period instead of "--".
 - Fixture READMEs: replace the two `Expected agent_id, unpinned/pinned` lines with
   `- Expected agent_id: `<id>`` and `- Expected agent_source: `<source>``:
 
@@ -265,9 +281,11 @@ Log, Stats, About.
 ## ADRs
 
 - **0224**: In organization mode, a registration whose every redirect URI is one registry entry's
-  own callback is attested as that AI system (`oauth_client`). The ADR records the self-spoofing
-  gap (a signed-in member can copy their own code out of the browser), that it affects only that
-  member's own calls and that the pin had the same gap, and the rejected alternatives: matching on
+  own callback is attested as that AI system (`oauth_client`). The ADR records the gap: anything that
+  can complete `/authorize` as a member, a program using their browser session included, can read
+  the code (it is shown on the consent continue page) and present that member's own calls as the
+  vendor, verified; it never reaches another member's calls; an admin could not tell such a
+  registration from the real one either, so a pin did not close it; and the rejected alternatives: matching on
   host alone (an open redirect anywhere on the vendor's domain would deliver the code elsewhere),
   an unrestricted prefix, a display-only tier, and dropping org-mode attestation. Amends ADR 0006
   (decision 3's attested sources) and ADR 0035 (decision 3).
@@ -302,7 +320,7 @@ deployment, in `manual_after` below, step by step on the
   `attested_agents=provider.attested_agent_id` and registers the default client is now attested.
   Only `test_ai_client_replay.py` wires it today. If any test outside a phase's `touches` fails on
   an `agent_source` expectation, the worker stops with `status=blocked`.
-- **The website** describes pins on five `website/ai-agents/*/index.html` pages,
+- **The website** describes pins on `website/ai-agents/index.html:80`, five `website/ai-agents/*/index.html` pages,
   `website/enterprise/index.html` and `website/security/index.html`. The site deploys from `main`
   but documents the released version
   ([ADR 0052](adr/0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md),
@@ -328,7 +346,7 @@ final_checks:
   - docs/org-agent-redirect-attestation-plan.md and docs/org-agent-redirect-attestation-plan-manual-steps.html are deleted and nothing links to them
   - docs/adr/0224-*.md and docs/adr/0225-*.md exist, are Accepted, and are in docs/adr/README.md's index
   - CHANGELOG.md has the entries under "## [Unreleased]" and no new version heading
-  - grep -rn "pin_agent_client\|agent_pins\|pinned_agent\|renderAgents" src tests docs --include=*.py --include=*.md finds nothing outside docs/adr/
+  - git grep -n "pin_agent_client\|AgentPinStore\|pinned_agent\|renderAgents" -- src tests prints nothing
 phases:
   - id: p1-redirect-attestation
     title: Attest a registration by its redirect URIs (pins still work)
@@ -348,7 +366,8 @@ phases:
     brief: |
       Read docs/org-agent-redirect-attestation-plan.md (Design D1-D3, D5's fixture table) and
       docs/adr/0006-*.md, docs/adr/0035-*.md, docs/adr/0094-*.md first. Must-read docs:
-      CLAUDE.md, CONTRIBUTING.md, docs/coding-and-testing-guidelines.md, docs/testing-policy.md.
+      CLAUDE.md, CONTRIBUTING.md, docs/releasing.md, docs/coding-and-testing-guidelines.md,
+      docs/testing-policy.md, docs/adr/README.md.
 
       1. src/privacyfence/agent_identity.py: add REDIRECT_ID_PLACEHOLDER, _REDIRECT_ID_PATTERN,
          the RegistryEntry.redirect_uris field, the redirect_uris values for "claude", "chatgpt"
@@ -376,13 +395,17 @@ phases:
              if pinned is not None:
                  return pinned
          followed by the D2 body. Leave pinned_agent_id and everything else about pins as it is.
-      4. src/privacyfence/web/routes_mcp.py and src/privacyfence/web/server.py: the renames and
+      4. src/privacyfence/web/routes_mcp.py, src/privacyfence/web/server.py and
+         AgentSource.is_attested's docstring in agent_identity.py: the renames and
          comment/docstring changes in Design D3. server.py:1306 passes
          attested_agents=org.provider.attested_agent_id. In D3's _resolve_agent item 1, add for
          this phase only "or an admin's pin of it (ADR 0035 decision 3)" after "own callbacks
          (ADR 0224)". p2 removes that clause again.
       5. Rename the keyword in tests: tests/unit/web/test_routes_mcp_agent_identity.py (the
-         helper at :96-102 and the calls at :283 and :481; rename only, same lambdas) and
+         helper at :96-102 and the calls at :283 and :481; rename only, same lambdas; also rename
+         test_a_pin_still_wins_over_a_recognised_handshake_name (:278) to
+         test_an_attestation_still_wins_over_a_recognised_handshake_name, and the comment at
+         :478 "and an org admin's pin too" to "and a redirect-URI attestation too") and
          tests/unit/web/test_agent_attestation.py (_resolve_org at :90-93 passes
          attested_agents=provider.attested_agent_id; :253 and every other pinned_agents= keyword
          becomes attested_agents=).
@@ -424,8 +447,9 @@ phases:
     acceptance:
       - python3 -m pytest tests/unit/test_agent_identity.py -q passes
       - python3 -m pytest tests/unit/web/test_agent_attestation.py -q -k TestRedirectAttestation passes
-      - python3 -m pytest tests/unit/web/test_ai_client_replay.py -q passes with 4 parametrized cases of test_handshake_succeeds_and_is_attributed
-      - grep -rn "pinned_agents\|PinnedAgentLookup" src tests finds nothing
+      - python3 -m pytest tests/unit/web/test_ai_client_replay.py -q passes
+      - python3 -m pytest tests/unit/web/test_ai_client_replay.py --collect-only -q -k test_handshake_succeeds_and_is_attributed | grep -c "::test_handshake_succeeds_and_is_attributed\[" prints 4
+      - git grep -n "pinned_agents\|PinnedAgentLookup" -- src tests prints nothing
       - grep -n "Expected agent_source: \`oauth_client\`" tests/fixtures/ai_clients/claude-ai/README.md tests/fixtures/ai_clients/chatgpt/README.md matches both
       - ruff check . passes and python3 -m mypy src/privacyfence passes
 
@@ -447,10 +471,11 @@ phases:
       - tests/unit/web/conftest.py
       - tests/unit/test_settings_window_html.py
       - tests/integration/test_browser_smoke.py
+      - tests/integration/ui_review_capture.py
     brief: |
       Read docs/org-agent-redirect-attestation-plan.md (Design D2, D3, D4, D5) first.
-      Must-read docs: CLAUDE.md, CONTRIBUTING.md, docs/coding-and-testing-guidelines.md,
-      docs/testing-policy.md.
+      Must-read docs: CLAUDE.md, CONTRIBUTING.md, docs/releasing.md,
+      docs/coding-and-testing-guidelines.md, docs/testing-policy.md, docs/adr/README.md.
 
       1. git rm src/privacyfence/web/agent_pins.py.
       2. src/privacyfence/web/oauth_provider.py: everything Design D4 lists for this file.
@@ -461,7 +486,11 @@ phases:
          decision 3)" clause from _resolve_agent's docstring. grep -n -i "pin" in the file and
          reword any other sentence that still says an admin pins a client so it names the
          redirect-URI attestation (ADR 0224) instead. Do not touch the unrelated "the pin is a
-         range" (mcp version) sentences or "pinned to a dead session".
+         range" (mcp version) sentences or "pinned to a dead session". Then run
+         grep -n -i "pin" src/privacyfence/web/routes_settings.py src/privacyfence/settings_window_html.py
+         src/privacyfence/web/oauth_provider.py src/privacyfence/web/server.py and fix every remaining
+         sentence about AI-system pins with Design D4's wording; leave signing-key pins, PINs,
+         peek pinned_base_url and grist_server_url_pinned alone.
       4. src/privacyfence/web/routes_settings.py, org_settings_scope.py, server.py and
          settings_window_html.py: everything Design D4 lists for them. In
          routes_settings.py's org state, delete the "agents": ... line outright.
@@ -475,7 +504,8 @@ phases:
          test_an_unpinned_registration_stays_claimed as test_a_registration_with_a_foreign_redirect_stays_claimed
          and test_an_unpinned_gemini_enterprise_registration_is_attributed_by_its_dcr_name as
          test_a_gemini_enterprise_name_with_a_foreign_redirect_is_claimed into
-         TestRedirectAttestation, unchanged otherwise), TestPinActions, TestAgentsPageState, and
+         TestRedirectAttestation, unchanged otherwise; also move test_a_pin_needs_an_access_token
+         (:252-254) there as test_an_attestation_needs_an_access_token, with its lambda kept), TestPinActions, TestAgentsPageState, and
          test_a_pin_outranks_an_override (replace the last with
          test_a_redirect_attestation_outranks_an_override: a registration with the claude
          callback, an override whose selector matches the handshake name, resolves to "claude"
@@ -487,7 +517,11 @@ phases:
       7. tests/unit/web/test_org_settings_scope.py: Design D5's first bullet.
       8. tests/unit/web/conftest.py: delete the pins_file_path monkeypatch line (:43) and
          "and the AI-systems pin store" from the docstring (:39).
-      9. tests/unit/test_settings_window_html.py: delete test_ai_systems_page_is_org_admin_only
+      9. tests/unit/test_settings_window_html.py: in test_local_mode_default_hides_nothing
+         (:855-867) delete the `caps["sections"]["agents"]` assertion (:862), drop "agents" from
+         the tuple at :866, and change the comment at :859-861 to "Stats is org-only, and Connect
+         an AI client needs an /mcp URL the caller did not pass; every other section stays."
+         Delete test_ai_systems_page_is_org_admin_only
          and add test_there_is_no_ai_systems_page asserting "agents" is not in
          capabilities["sections"] for org admin, org non-admin and local mode (use the same
          self._extract_capabilities(build_html(...)) calls as the deleted test, and
@@ -497,10 +531,11 @@ phases:
           in test_org_settings_page_renders_for_admin, the expected nav becomes
           ["General", "Auto-accept", "Privacy Filter", "Audit Log", "Stats", "About"] and the
           agents-page block (:2667-2672, through the org-settings-admin-agents screenshot) is
-          deleted.
+          deleted; remove "agents" from _ADMIN_SECTIONS (:2847). In
+          tests/integration/ui_review_capture.py remove "agents" from the parametrize list (:203).
       11. Run: ruff check . ; python3 -m pytest tests/unit -q ; python3 -m mypy src/privacyfence ;
           python3 scripts/mypy_strict_modules.py ; bandit -c pyproject.toml -r src ;
-          python3 -m pytest tests/integration/test_browser_smoke.py -q -k "org_settings" (read the
+          python3 -m pytest tests/integration/test_browser_smoke.py -q -k "org_settings or test_settings" (read the
           session-start hook's Chromium line; if browser tests report SKIPPED, say so in the
           phase report and do not count it as a pass). All must pass.
 
@@ -511,7 +546,7 @@ phases:
       No CHANGELOG or docs/ change in this phase.
     acceptance:
       - test ! -e src/privacyfence/web/agent_pins.py
-      - grep -rn "agent_pins\|pin_agent_client\|unpin_agent_client\|pinned_agent\|list_clients\|RegisteredClient\|has_client\|_ORG_ONLY_SENSITIVE_ACTIONS\|renderAgents\|pf-agents" src tests scripts finds nothing
+      - git grep -n "agent_pins\|pin_agent_client\|unpin_agent_client\|pinned_agent\|list_clients\|RegisteredClient\|has_client\|_ORG_ONLY_SENSITIVE_ACTIONS\|renderAgents\|pf-agents" -- src tests scripts prints nothing
       - python3 -m pytest tests/unit/web/test_agent_attestation.py tests/unit/web/test_org_settings_scope.py tests/unit/test_settings_window_html.py tests/unit/web/test_ai_client_replay.py -q passes
       - python3 -m pytest tests/unit/web/test_org_settings_scope.py -q reports no skipped tests
       - python3 -m pytest tests/unit -q passes
@@ -544,7 +579,8 @@ phases:
     brief: |
       Read docs/org-agent-redirect-attestation-plan.md in full (Goal, Design, ADRs, Risks) and
       docs/adr/README.md (template, rules, index format) first. Must-read docs: CLAUDE.md,
-      CONTRIBUTING.md, docs/coding-and-testing-guidelines.md, docs/testing-policy.md. ADRs never
+      CONTRIBUTING.md, docs/releasing.md, docs/coding-and-testing-guidelines.md,
+      docs/testing-policy.md, and docs/README.md (reference docs describe the current version only). ADRs never
       link to the plan document.
 
       1. docs/adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md, Accepted, dated
@@ -557,10 +593,14 @@ phases:
          (claude.ai and ChatGPT from tests/fixtures/ai_clients, Gemini Enterprise from ADR 0110);
          the SDK's redirect enforcement (mcp/shared/auth.py validate_redirect_uri and the /token
          redirect check); only authorization-code and refresh grants exist. A section "What this
-         does not prove" with the self-spoofing gap from the plan's Goal item 4, stated plainly,
-         plus: that it affects only the member's own calls, that the pin had the same gap, and
-         that a future rule keying on attested identity must not treat it as a defence against
-         the signed-in member themselves. Alternatives: host-only matching, an unrestricted
+         does not prove" with the gap from the plan's Goal item 4, stated plainly: anything that
+         can complete /authorize as the member, including a program using their browser
+         session, can read the code (shown on the consent continue page,
+         oauth_consent.render_continue_page) and present that member's own calls as the vendor,
+         verified; it never reaches another member's calls; an admin could not tell such a
+         registration from the real one either, so a pin did not close it; and a future rule
+         keying on attested identity must not treat it as a defence against the member or
+         software running as them. Alternatives: host-only matching, an unrestricted
          prefix, a display-only tier, dropping org attestation (the reasons are in the plan's
          ADRs section). Status line: "Amends ADR 0006 and ADR 0035 (decision 3)."
       2. docs/adr/0225-the-admin-ai-system-pin-is-removed.md, Accepted. Decision and
@@ -581,11 +621,25 @@ phases:
          that Claude Code, Claude Desktop through the extension, and anything with a loopback
          redirect stay Not verified because any local program can register one; that Claude
          Desktop's custom connector most likely registers through claude.ai and is then shown
-         as Claude; the self-spoofing gap in one sentence; that there is nothing for the admin
-         to do and no AI systems page; that an old org/agent_pins.json can be deleted. Links to
-         ADR 0224, ADR 0225 and the existing ADR 0036/0037 links. At :751, "Each client
-         registration shows up on the admin's AI systems page (section 11)." becomes "Section 11
-         says which clients are shown as verified."
+         as Claude; the self-spoofing gap in one sentence; and, as its last
+         sentence, exactly "There is nothing for an administrator to do: which clients are
+         verified follows from how they registered." Do not mention pins, agent_pins.json or a
+         settings page in §11. Links to ADR 0224, ADR 0225 and the existing ADR 0036/0037
+         links. Elsewhere in the same file:
+         - :50: "the install-wide privacy policy, the **AI systems** page and the **Stats** page"
+           -> "the install-wide privacy policy and the **Stats** page";
+         - :150: "**General**, **Privacy Filter**, **AI systems** and **Stats** pages" ->
+           "**General**, **Privacy Filter** and **Stats** pages";
+         - :750-751: "Each client registration shows up on the admin's **AI systems** page
+           ([section 11](#11-ai-systems))." -> "[Section 11](#11-ai-systems) says which clients
+           are shown as verified.";
+         - :811: delete the `| AI systems | | yes |` row;
+         - :910: delete ", and pinning or unpinning an AI system" so the sentence lists the
+           remaining sensitive writes (read the whole sentence and keep its grammar);
+         - :1054: delete the `org/agent_pins.json` row;
+         - :1295: "**Admins do not see Privacy Filter or AI systems.**" -> "**Admins do not see
+           Privacy Filter or Stats.**" (check the following sentences still fit; they are about
+           the admin claim).
       6. Each remaining doc in touches: replace every pin sentence with the redirect-URI
          behaviour for that client (verified with no admin step for claude.ai, ChatGPT, Gemini
          Enterprise; Not verified for Claude Code and Claude Desktop, with nothing an admin can
@@ -593,26 +647,30 @@ phases:
          docs/how-it-works.md:239-240 table rows; docs/security-and-compliance.md:134 (delete the
          bullet), :239 ("outranks an organization pin" -> "outranks a redirect-URI
          attestation"), :375-382 (the oauth_client row and the "only verified identity"
-         paragraph); docs/approvals-and-policy.md:195; docs/ai-client-qa.md:21 (the bullet becomes "agent attribution (`agent_identity.py`, its
-         name and redirect patterns);") and step 6 (becomes
+         paragraph); docs/approvals-and-policy.md:195; docs/ai-client-qa.md:22 (the bullet becomes "agent attribution (`agent_identity.py`, its
+         name and redirect patterns);") step 6 at :114-118 (becomes
          "Attribution tier (organization mode only)": check that a web client's cards are
          verified with agent_source=oauth_client without any admin step, and that a loopback
-         client's are Not verified); the "Every card says Not verified" troubleshooting rows in
-         connect-claude-ai.md, connect-chatgpt.md and connect-gemini-enterprise.md (now: "The
-         registration's redirect URI is not the vendor's own callback, or the PrivacyFence
-         release predates ADR 0224"); connect-gemini-enterprise.md:180-182 (the release note
-         about pinning goes); docs/coding-and-testing-guidelines.md:240 (the source-module cell becomes
+         client's are Not verified), and :143 ("that after pinning it on **Settings → AI
+         systems**, the next card said verified" -> "that its cards are verified without any
+         admin step"). Leave the dated results table in docs/ai-client-qa.md (the rows starting
+         with "| " after the "Results" heading, around :160) unchanged: it is a historical record. the "Every card says Not verified" troubleshooting rows in
+         connect-claude-ai.md, connect-chatgpt.md and connect-gemini-enterprise.md (now: "Expected
+         when the registration's redirect URI is not the vendor's own callback; see
+         [AI systems](org-mode-setup-guide.md#11-ai-systems)."); connect-gemini-enterprise.md:54-55 ("and the
+         registration an administrator pins (see ...)" -> "(see [How it is identified](#how-it-is-identified))"),
+         :175-182 (the pin sentences and the release note about pinning go; say the cards are
+         verified because the registration carries Google's own redirect URI); docs/coding-and-testing-guidelines.md:240 (the source-module cell becomes
          `agent_overrides.py` alone). docs/how-it-works.md:234 and
          docs/security-and-compliance.md:382 cite ADR 0224 for the oauth_client tier alongside
          their ADR 0035 link.
          Then grep -rn -i "pin" over these files and fix any remaining sentence about AI-system
          pins. Leave signing-key, release, Peek and Grist pins alone.
-      7. CHANGELOG.md under "## [Unreleased]": in "### Changed" (create the subsection after
-         "### Added" if it is missing): "**claude.ai, ChatGPT and Gemini Enterprise are verified
+      7. CHANGELOG.md, directly under "## [Unreleased]" (empty today; if another branch has since
+         added "### Added" there, put these after it): "### Changed" with "**claude.ai, ChatGPT and Gemini Enterprise are verified
          without an admin step.** In organization mode, a client that registered only with its
          vendor's own redirect URI is shown as verified. Claude Code and other clients with a
-         local redirect stay Not verified." In "### Removed" (create after "### Changed" if
-         missing): "The **AI systems** settings page and its per-registration pins. Pins are no
+         local redirect stay Not verified." Then "### Removed" with: "The **AI systems** settings page and its per-registration pins. Pins are no
          longer read; an organization deployment can delete `org/agent_pins.json`."
       8. git rm docs/org-agent-redirect-attestation-plan.md
          docs/org-agent-redirect-attestation-plan-manual-steps.html; grep -rn
@@ -625,7 +683,7 @@ phases:
     acceptance:
       - ls docs/adr/0224-*.md docs/adr/0225-*.md lists both, and grep -n "^Accepted" matches in each
       - grep -n "0224\|0225" docs/adr/README.md matches both rows
-      - grep -rn -i "pin it\|admin pin\|pinned the\|pins your registration\|Stale pins\|Settings → AI systems" docs --include=*.md | grep -v "^docs/adr/" finds nothing
+      - grep -rn -i "pin it\|admin pin\|pinned the\|pins your registration\|Stale pins\|Settings → AI systems\|AI systems\*\* page\|agent_pins" docs --include=*.md | grep -v "^docs/adr/" | grep -v "^docs/ai-client-qa.md:[0-9]*:|" prints nothing
       - test ! -e docs/org-agent-redirect-attestation-plan.md && test ! -e docs/org-agent-redirect-attestation-plan-manual-steps.html
       - awk '/^## \[Unreleased\]/{f=1} f&&/^## \[[0-9]/{exit} f' CHANGELOG.md | grep -c "agent_pins.json" prints 1
       - python3 -m pytest tests/unit -q passes
