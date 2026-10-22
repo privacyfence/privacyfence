@@ -192,7 +192,7 @@ depends on where it came from:
 
 | Shown as | Meaning |
 |---|---|
-| The AI system's name and logo, with a **Verified** badge | Organization deployments only: an administrator pinned the OAuth client this request was made with to that AI system, on the **AI systems** settings page. The client could not have chosen this name itself |
+| The AI system's name and logo, with a **Verified** badge | Organization deployments only: the OAuth client this request was made with registered only with that AI system's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), with no administrator step. See [AI systems](org-mode-setup-guide.md#11-ai-systems) |
 | "Says it is …" with a **Not verified** badge | The name the AI system reported about itself, or a relabel set in `agent_overrides:`. PrivacyFence cannot confirm it |
 | "Unrecognised AI system", with the claimed name in quotes if one was sent | The name matches no known AI system, or none was sent |
 

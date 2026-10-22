@@ -131,7 +131,6 @@ says:
   detection or a PII category on or off; the calendar free/busy setting; re-enabling a connector
   that was switched off; turning step-up on;
 - uploading an organization config bundle;
-- in organization mode, pinning or unpinning an OAuth client on the **AI systems** page;
 - confirming a rule an AI client proposed with `privacyfence_propose_policy_change` (see below).
 
 Adding a passkey, and removing your last one, are gated whatever `require_passkey` says (see
@@ -236,7 +235,7 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   It is accepted only on `/mcp`.
 - **Attested agent.** The audit log records the call as the agent `scoped-token:<id>`, named after
   the token, with source `override`. It is attested because a person created the credential, and it
-  outranks an organization pin for that call
+  outranks a redirect-URI attestation for that call
   ([ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).
   Renaming a token changes the name on later entries only; earlier entries keep the name it had.
 - **Personal data in reads.** Two separate boxes on the New token form lift the personal-data scan for
@@ -372,14 +371,20 @@ fields are still recorded
 
 | `agent_source` | Meaning | Shown as (organization mode) |
 | --- | --- | --- |
-| `oauth_client` | Organization mode: the call's access token belongs to an OAuth client an administrator pinned to an AI system on the **AI systems** page | Verified |
+| `oauth_client` | Organization mode: the call's access token belongs to an OAuth client that registered only with a vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise) | Verified |
 | `client_info` | The name the client sent (MCP `clientInfo`, or an organization-mode client's registered name), including one relabelled by a local `agent_overrides:` entry | Not verified, or Unrecognised if it matches no known AI system |
 | `""` (empty) | No usable name | Unrecognised |
 
-The only verified identity is an organization pin. A pin applies to one OAuth registration only:
-it does not follow a client that registers again under the same name, and it lapses when the
-registration expires. Every pin and unpin is audited
-([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)).
+The only verified identity is a redirect-URI attestation: the authorization code can only be
+delivered to a redirect URI the client registered, so a registration whose every redirect URI is
+one vendor's own callback got its tokens through that vendor. It needs no administrator step, and
+it applies to one OAuth registration only. Claude Code, Claude Desktop and any client with a
+loopback redirect stay Not verified, because any local program can register one. A member, or a
+program using their signed-in browser session, can still register under a vendor's redirect URI and
+have their own calls shown as that vendor; it never reaches another member's calls
+([AI systems](org-mode-setup-guide.md#11-ai-systems),
+[ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md),
+[ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)).
 In local mode the AI clients of one OS account share that account's MCP token, so nothing can tell
 them apart, except a client that holds its own [scoped token](#scoped-tokens): its calls are
 recorded as the attested agent `scoped-token:<id>`. An `agent_overrides:` entry only relabels the recorded name and never makes it verified
