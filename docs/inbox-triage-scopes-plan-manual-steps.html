@@ -1,0 +1,207 @@
+<title>Inbox Triage Setup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one narrow reading column; each manual item is a bordered block of checkable steps. */
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --fg: #1a232c;
+    --muted: #55646f;
+    --line: #d3dce3;
+    --accent: #0d6674;
+    --accent-ink: #ffffff;
+    --note-bg: #fff3dc;
+    --note-fg: #6b4300;
+    --code-bg: #e8eef2;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1418;
+      --surface: #151d23;
+      --fg: #e3eaef;
+      --muted: #9aabb7;
+      --line: #28343d;
+      --accent: #5cc3d3;
+      --accent-ink: #062a31;
+      --note-bg: #33290f;
+      --note-fg: #f0cf8a;
+      --code-bg: #1f2a32;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1418;
+    --surface: #151d23;
+    --fg: #e3eaef;
+    --muted: #9aabb7;
+    --line: #28343d;
+    --accent: #5cc3d3;
+    --accent-ink: #062a31;
+    --note-bg: #33290f;
+    --note-fg: #f0cf8a;
+    --code-bg: #1f2a32;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.55;
+    padding-block: 32px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { max-width: 760px; margin-inline: auto; display: flex; flex-direction: column; gap: 32px; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+  h2 { font-size: 1.2rem; margin: 0; text-wrap: balance; }
+  h3 { font-size: 1.02rem; margin: 0; text-wrap: balance; }
+  p { margin: 0; max-width: 68ch; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code { font-family: var(--font-mono); font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+  header { display: flex; flex-direction: column; gap: 12px; }
+  .lede { color: var(--muted); }
+  .progress { display: flex; align-items: center; gap: 12px; font-size: 0.9rem; color: var(--muted); }
+  .bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; min-width: 0; }
+  .bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+  .part { display: flex; flex-direction: column; gap: 16px; }
+  .part-head { display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .part-head p { color: var(--muted); font-size: 0.93rem; }
+  .item { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .item-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; }
+  .time { font-family: var(--font-mono); font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+  .why { color: var(--muted); font-size: 0.93rem; }
+  ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+  ol.steps > li { counter-increment: step; display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; }
+  ol.steps > li input { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--accent); }
+  .step-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .step-body label { cursor: pointer; }
+  .step-body label::before { content: counter(step) ". "; font-family: var(--font-mono); color: var(--muted); }
+  .step-body .see { color: var(--muted); font-size: 0.9rem; }
+  .step-body input[type="checkbox"]:checked ~ * { opacity: 1; }
+  li.done .step-body > label > span { text-decoration: line-through; text-decoration-color: var(--muted); color: var(--muted); }
+  .note { background: var(--note-bg); color: var(--note-fg); padding: 10px 14px; border-radius: 4px; font-size: 0.93rem; }
+  .done-when { border-top: 1px dashed var(--line); padding-top: 12px; font-size: 0.93rem; }
+  .done-when strong { font-weight: 600; }
+  pre { margin: 0; background: var(--code-bg); padding: 10px 12px; border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.84rem; line-height: 1.5; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button.copy { font: inherit; font-size: 0.82rem; background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
+  button.copy:hover { background: var(--accent); color: var(--accent-ink); }
+  footer { color: var(--muted); font-size: 0.88rem; }
+  @media (prefers-reduced-motion: reduce) { .bar > span { transition: none; } }
+</style>
+
+<main>
+  <header>
+    <h1>Inbox Triage Setup</h1>
+    <p class="lede">Steps only you can do for the inbox-triage changes: two before <code>/implement</code> starts, then the rollout after the release ships. Secrets never go into chat, the repo or this page: each step says where one is stored.</p>
+    <div class="progress"><span id="count">0 of 0 steps</span><div class="bar" aria-hidden="true"><span id="fill"></span></div></div>
+  </header>
+
+  <section class="part" id="before" aria-labelledby="before-h">
+    <div class="part-head">
+      <h2 id="before-h">Before implementation</h2>
+      <p>Do both, then run <code>/implement</code>. The second one tells you early whether the scheduled task can hold a scoped token at all.</p>
+    </div>
+
+    <article class="item" id="mb1-enable-scoped-tokens">
+      <div class="item-head"><h3>1. Turn scoped tokens on for the organization install</h3><span class="time">about 10 min</span></div>
+      <p class="why">Organization mode keeps scoped tokens off until an administrator enables them. Without it there is no <strong>Scoped tokens</strong> section in Settings, so neither step 2 nor the rollout can start. A scoped token needs no <code>--enable-unattended-sessions</code>: it starts an unattended session without that opt-in.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="s-mb1-1" data-step><div class="step-body"><label for="s-mb1-1"><span>Open the command or pipeline that builds your organization config bundle (it runs <code>scripts/build_org_bundle.py</code>).</span></label><span class="see">Flag reference: the <code>--enable-scoped-tokens</code> row in the <a href="https://github.com/privacyfence/privacyfence/blob/plan/inbox-triage-scopes/docs/org-mode-setup-guide.md" target="_blank" rel="noopener">organization setup guide</a>, and <code>scoped_tokens.enabled</code> in the <a href="https://github.com/privacyfence/privacyfence/blob/plan/inbox-triage-scopes/docs/configuration-reference.md" target="_blank" rel="noopener">configuration reference</a>.</span></div></li>
+        <li><input type="checkbox" id="s-mb1-2" data-step><div class="step-body"><label for="s-mb1-2"><span>Add <code>--enable-scoped-tokens</code> to the command. Add <code>--scoped-token-max-days 90</code> if you want the lifetime capped.</span></label><span class="see">Keep every other flag as it is.</span></div></li>
+        <li><input type="checkbox" id="s-mb1-3" data-step><div class="step-body"><label for="s-mb1-3"><span>Rebuild the bundle and install it the way you installed the current one, then restart the daemon (or redeploy the container).</span></label><span class="see">In Settings this is <strong>Install/Update Organization Config…</strong> for a desktop install, or your usual deploy for a server.</span></div></li>
+        <li><input type="checkbox" id="s-mb1-4" data-step><div class="step-body"><label for="s-mb1-4"><span>Sign in to PrivacyFence Settings and look for the <strong>Scoped tokens</strong> section.</span></label><span class="see">You should see a <strong>New token</strong> form and an empty token list.</span></div></li>
+      </ol>
+      <p class="done-when"><strong>Done when:</strong> Settings shows the <strong>Scoped tokens</strong> section with a <strong>New token</strong> form.</p>
+    </article>
+
+    <article class="item" id="mb2-prove-token-channel">
+      <div class="item-head"><h3>2. Prove the scheduled task can connect with a scoped token</h3><span class="time">about 20 min</span></div>
+      <p class="why">A scoped token is a bearer credential for <code>/mcp</code>. The repository cannot tell whether a Cowork scheduled task can present one, and request 2 depends on it. Test with a throwaway token that can do almost nothing, so a failure costs nothing.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="s-mb2-1" data-step><div class="step-body"><label for="s-mb2-1"><span>In Settings → Scoped tokens → <strong>New token</strong>: name <code>connectivity-test</code>, lifetime 7 days, no rules, and one tool: <code>gmail_list_labels</code>.</span></label><span class="see">That tool needs no rule. Leave both personal-data boxes unticked. Confirm with your passkey if asked.</span></div></li>
+        <li><input type="checkbox" id="s-mb2-2" data-step><div class="step-body"><label for="s-mb2-2"><span>Copy the secret when it appears. It starts with <code>pfst_</code> and is shown once.</span></label><span class="see">Local mode puts it on your clipboard; organization mode shows it in a dialog with a Copy button.</span></div></li>
+        <li><input type="checkbox" id="s-mb2-3" data-step><div class="step-body"><label for="s-mb2-3"><span>Store the secret where the scheduled task reads secrets: the task's own secret or environment setting, never the prompt, a chat message or the repository.</span></label><span class="see">In a Claude Code environment this is the environment's secrets setting (<a href="https://code.claude.com/docs/en/claude-code-on-the-web" target="_blank" rel="noopener">cloud environment docs</a>). Name it <code>PRIVACYFENCE_TRIAGE_TOKEN</code>.</span></div></li>
+        <li><input type="checkbox" id="s-mb2-4" data-step><div class="step-body"><label for="s-mb2-4"><span>Point the task at your server's <code>/mcp</code> URL with the header <code>Authorization: Bearer &lt;the secret&gt;</code>.</span></label>
+          <span class="see">With Claude Code that is:</span>
+          <pre id="cmd">claude mcp add --transport http privacyfence-triage https://&lt;your-host&gt;/mcp --header "Authorization: Bearer $PRIVACYFENCE_TRIAGE_TOKEN"</pre>
+          <div class="row"><button class="copy" type="button" data-copy="cmd">Copy command</button></div>
+          <span class="see">For Cowork, check whether a connector or plugin setting accepts a bearer or API-key header. Setup reference: <a href="https://github.com/privacyfence/privacyfence/blob/plan/inbox-triage-scopes/docs/connect-claude-code.md#scoped-tokens" target="_blank" rel="noopener">Scoped tokens</a>.</span></div></li>
+        <li><input type="checkbox" id="s-mb2-5" data-step><div class="step-body"><label for="s-mb2-5"><span>Run the task once. It should call <code>privacyfence_status</code> and list <code>gmail_list_labels</code> as its only connector tool.</span></label><span class="see">The status answer shows the token's expiry.</span></div></li>
+        <li><input type="checkbox" id="s-mb2-6" data-step><div class="step-body"><label for="s-mb2-6"><span>Revoke <code>connectivity-test</code> in Settings → Scoped tokens.</span></label></div></li>
+      </ol>
+      <div class="note">If Cowork cannot present a bearer token, stop here and tell Claude before running <code>/implement</code>. The server changes still help, but the token has to come from another runner: a Claude Code scheduled task, or <code>privacyfence-sync</code>.</div>
+      <p class="done-when"><strong>Done when:</strong> a scheduled run listed exactly one connector tool and showed the token's expiry. Or you have told Claude it could not connect.</p>
+    </article>
+  </section>
+
+  <section class="part" id="rollout" aria-labelledby="rollout-h">
+    <div class="part-head">
+      <h2 id="rollout-h">After the release ships</h2>
+      <p>Rollout on your own install once a release with these changes is installed. Not part of <code>/implement</code> and does not block the pull request.</p>
+    </div>
+
+    <article class="item" id="rollout-rules-and-token">
+      <div class="item-head"><h3>Create the inbox-triage rules and token</h3><span class="time">about 25 min</span></div>
+      <p class="why">Order matters: a token keeps only the operations a rule had when the token was created. Edit the rules first, then create the token. A token made earlier never gains the new <code>move</code> verb.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="s-r-1" data-step><div class="step-body"><label for="s-r-1"><span>Settings → Auto-accept: edit the Gmail label rules <code>Proposed Archive</code> and <code>Proposed SPAM</code> and tick <strong>move</strong> next to <strong>update</strong>.</span></label><span class="see">Each rule then reads: Gmail - label …: allow update, move.</span></div></li>
+        <li><input type="checkbox" id="s-r-2" data-step><div class="step-body"><label for="s-r-2"><span>Add the Gmail query rule if you want first-time senders readable: scope <strong>Gmail — query</strong>, verb <strong>read</strong>, value one Gmail search expression such as <code>in:inbox -category:promotions -category:social -label:"Proposed SPAM"</code>.</span></label><span class="see">The whole value is one query; commas stay inside it. A thread is readable only when every message in it matches.</span></div></li>
+        <li><input type="checkbox" id="s-r-3" data-step><div class="step-body"><label for="s-r-3"><span>Add the Slack rules: <strong>Slack — mentions of me</strong> with read and search, and <strong>Slack — direct messages to me</strong> with read.</span></label><span class="see">Neither takes a value.</span></div></li>
+        <li><input type="checkbox" id="s-r-4" data-step><div class="step-body"><label for="s-r-4"><span>Settings → Scoped tokens → <strong>New token</strong>, name <code>inbox-triage</code>. Tick only these rules: the two Gmail label rules, the Inbox Triage Grist document, the one Peek page, the Gmail query rule, the two Slack rules and the watched-channel rules.</span></label><span class="see">Leave out the task lists, Drive and every other Grist or Peek rule. That is what keeps a hostile message from reaching them.</span></div></li>
+        <li><input type="checkbox" id="s-r-5" data-step><div class="step-body"><label for="s-r-5"><span>Tick <strong>Let reads return personal data</strong>, so signatures with phone numbers do not deny the scheduled body reads.</span></label><span class="see">Tick <strong>Let exports, downloads and page uploads carry personal data</strong> too only if the dashboard page can hold personal data.</span></div></li>
+        <li><input type="checkbox" id="s-r-6" data-step><div class="step-body"><label for="s-r-6"><span>Store the new secret as the scheduled task's secret, replacing the old connection, as in step 2 of the first part.</span></label></div></li>
+        <li><input type="checkbox" id="s-r-7" data-step><div class="step-body"><label for="s-r-7"><span>Run the task once at 07:30 or by hand. The audit log should show the agent <code>scoped-token:&lt;id&gt;</code> named <code>inbox-triage</code>, a <code>gmail_add_label</code> followed by a <code>gmail_archive_message</code>, and no <code>denied_scoped_token</code> row.</span></label><span class="see">Settings → Audit log, or the weekly file under the audit folder.</span></div></li>
+      </ol>
+      <p class="done-when"><strong>Report back:</strong> one line for each result, for example "label then archive passed; body read passed; no denials", or the first denied tool.</p>
+    </article>
+  </section>
+
+  <footer>Checkboxes are remembered in this browser only.</footer>
+</main>
+
+<script>
+(function () {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('input[data-step]'));
+  var key = 'inbox-triage-setup-steps';
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { saved = {}; }
+  function save() {
+    var out = {};
+    boxes.forEach(function (b) { if (b.checked) out[b.id] = true; });
+    try { localStorage.setItem(key, JSON.stringify(out)); } catch (e) { /* storage unavailable */ }
+  }
+  function refresh() {
+    var done = boxes.filter(function (b) { return b.checked; }).length;
+    document.getElementById('count').textContent = done + ' of ' + boxes.length + ' steps';
+    document.getElementById('fill').style.width = (boxes.length ? Math.round(100 * done / boxes.length) : 0) + '%';
+    boxes.forEach(function (b) { b.closest('li').classList.toggle('done', b.checked); });
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!saved[b.id];
+    b.addEventListener('change', function () { save(); refresh(); });
+  });
+  refresh();
+  Array.prototype.forEach.call(document.querySelectorAll('button.copy'), function (btn) {
+    btn.addEventListener('click', function () {
+      var el = document.getElementById(btn.getAttribute('data-copy'));
+      var text = el ? el.textContent : '';
+      function selectText() {
+        var range = document.createRange(); range.selectNodeContents(el);
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      }
+      try {
+        navigator.clipboard.writeText(text).then(function () { btn.textContent = 'Copied'; }, selectText);
+      } catch (e) { selectText(); }
+    });
+  });
+})();
+</script>
