@@ -4139,6 +4139,48 @@ def _gmail_read_rule(rule_id: str) -> PolicyRule:
     )
 
 
+class TestRuleValues:
+    """``gate.rule_values``: what a connector reads before gating to compute a selector's input."""
+
+    @pytest.fixture(autouse=True)
+    def _no_rules(self):
+        auto_accept.set_policy_v2_store_rules([])
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    @staticmethod
+    def _rule(rule_id, value, operation="gmail.read_message", predicate="gmail.query"):
+        return PolicyRule(id=rule_id, predicate=predicate, value=value, operations=frozenset({operation}))
+
+    def test_returns_values_of_matching_predicate_and_operation(self):
+        auto_accept.set_policy_v2_store_rules([
+            self._rule("r1", ["in:inbox"]), self._rule("r2", "label:a"),
+            self._rule("r3", ["x"], predicate="other"),
+        ])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == ["in:inbox", "label:a"]
+
+    def test_deduplicates_and_keeps_rule_order(self):
+        auto_accept.set_policy_v2_store_rules([
+            self._rule("r1", ["b", "a"]), self._rule("r2", ["a", "c"]),
+        ])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == ["b", "a", "c"]
+
+    def test_under_a_scoped_token_only_the_tokens_rules(self):
+        auto_accept.set_policy_v2_store_rules([self._rule("r1", ["mine"]), self._rule("r2", ["theirs"])])
+        with scoped_tokens.token_scope(_scoped_token(rule_ids=("r1",))):
+            assert gate.rule_values("gmail.query", "gmail.read_message") == ["mine"]
+
+    def test_non_string_and_empty_values_are_ignored(self):
+        auto_accept.set_policy_v2_store_rules([
+            self._rule("r1", ["", 7, None, "ok"]), self._rule("r2", None), self._rule("r3", 5),
+        ])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == ["ok"]
+
+    def test_other_operations_are_ignored(self):
+        auto_accept.set_policy_v2_store_rules([self._rule("r1", ["q"], operation="gmail.read_thread")])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == []
+
+
 class TestScopedTokenGate:
     """A call made with a scoped token (ADR 0164): only the token's own rules auto-accept, the
     temp-accept window never does, and anything else is denied at once -- never a card, never a

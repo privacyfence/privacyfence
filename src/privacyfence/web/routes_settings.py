@@ -2061,7 +2061,7 @@ def build_org_routes(
             verb_enums = policy_catalogue.parse_verbs(body.get("verbs") or [])
             if not verb_enums:
                 return None
-            value = _parse_value_list(str(body.get("value") or ""))
+            value = _parse_value_list(str(body.get("value") or ""), group)
             try:
                 new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
             except RuleValueError as exc:

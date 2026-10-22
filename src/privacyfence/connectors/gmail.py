@@ -16,10 +16,12 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..download_staging import get_download_staging_store
 from ..google_errors import unavailable_error
-from ..gate import current_reason, gated_call
+from ..auto_accept import TOOL_TO_OPERATION
+from ..gate import current_reason, gated_call, rule_values
 from ..gmail_client import (
     GmailClient,
     GmailClientError,
+    GmailMessage,
     InlineImage,
     drop_unresolved_cid_images,
     resolve_attachment_destination,
@@ -34,6 +36,9 @@ from ..privacy_filter import apply_list, apply_text, category_policy
 from ..text_extraction import extract_text, is_prefetch_worthy, preview_blocks_for
 
 logger = logging.getLogger(__name__)
+
+# Most ``gmail.query`` rule values evaluated against Gmail for one call, in rule order.
+MAX_QUERY_RULES_PER_CALL = 10
 
 # Cap on how big an attachment we'll fetch pre-approval -- for a preview
 # (images) or a PII scan (text/PDF/DOCX/PPTX). gmail_download_attachment's
@@ -876,8 +881,30 @@ class GmailConnector(Connector):
     # Review gate (reads)
     # ------------------------------------------------------------------ #
 
+    async def _matching_queries(self, tool: str, messages: list[GmailMessage]) -> list[str]:
+        """The ``gmail.query`` rule values (at most ``MAX_QUERY_RULES_PER_CALL``) that Gmail's own
+        search finds on every one of ``messages``. Run through ``asyncio.to_thread`` rather than
+        ``_fetch``, which would log a Google error text carrying the query and the Message-IDs; a
+        search failure counts as no match, so the call falls back to the review gate."""
+        queries = rule_values("gmail.query", TOOL_TO_OPERATION[tool])[:MAX_QUERY_RULES_PER_CALL]
+        if not queries or not messages:
+            return []
+        pairs = [(m.id, m.rfc822_id) for m in messages]
+        wanted = {m.id for m in messages}
+        matching: list[str] = []
+        for query in queries:
+            try:
+                found = await asyncio.to_thread(self._gmail.messages_matching, query, pairs)
+            except GmailClientError:
+                logger.warning("%s: a Gmail query rule could not be evaluated; treating it as no match", tool)
+                continue
+            if found == wanted:
+                matching.append(query)
+        return matching
+
     async def _get_message(self, message_id: str, include_html: bool = False) -> Any:
         message = await self._fetch(self._gmail.get_message, message_id)
+        matching_queries = await self._matching_queries("gmail_get_message", [message])
         recipients_raw = message.recipients if isinstance(message.recipients, str) else ", ".join(message.recipients or [])
         sender = apply_text("privacy", "metadata", message.sender or "")
         recipients = apply_text("privacy", "metadata", recipients_raw)
@@ -949,12 +976,13 @@ class GmailConnector(Connector):
             # new_info) -- see gate.py's content_kind docstring.
             content_kind="email",
             my_email=self.my_email,
-            args={"message_id": message_id},
+            args={"message_id": message_id, **({"matching_queries": matching_queries} if matching_queries else {})},
         )
 
     async def _get_thread(self, thread_id: str) -> Any:
         thread = await self._fetch(self._gmail.get_thread, thread_id)
         messages = thread.messages if hasattr(thread, "messages") else []
+        matching_queries = await self._matching_queries("gmail_get_thread", list(messages))
         all_participants: set[str] = set()
         for m in messages:
             if hasattr(m, "sender") and m.sender:
@@ -1055,13 +1083,14 @@ class GmailConnector(Connector):
             },
             preview_blocks=blocks,
             my_email=self.my_email,
-            args={"thread_id": thread_id},
+            args={"thread_id": thread_id, **({"matching_queries": matching_queries} if matching_queries else {})},
         )
 
     async def _download_attachment(
         self, message_id: str, attachment_name: str, destination_dir: str = ""
     ) -> Any:
         message = await self._fetch(self._gmail.get_message, message_id)
+        matching_queries = await self._matching_queries("gmail_download_attachment", [message])
         attachment = next(
             (a for a in (message.attachments or []) if a.name == attachment_name), None
         )
@@ -1188,7 +1217,11 @@ class GmailConnector(Connector):
             preview_mime_type=preview_mime_type,
             preview_blocks=preview_blocks_for(details, pii_scan_text),
             my_email=self.my_email,
-            args={"message_id": message_id, "attachment_name": attachment_name},
+            args={
+                "message_id": message_id,
+                "attachment_name": attachment_name,
+                **({"matching_queries": matching_queries} if matching_queries else {}),
+            },
             delivery=delivery,
         )
         if self.download_mode == "org":

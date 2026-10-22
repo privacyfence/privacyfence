@@ -135,8 +135,16 @@ Notes:
 
   The box is on the token, not on the rule, so a run that uses your own token (not a scoped one)
   always stops for review when personal data is found. Only you can tick it, in Settings, behind
-  your passkey; an AI client cannot propose it. `salesforce_run_report`, `grist_get_records` and
-  the other reads that return data in the tool result are always scanned.
+  your passkey; an AI client cannot propose it.
+
+  A second box, **Let reads return personal data**, covers reads whose result goes to an AI
+  model, when a rule of the token covers the call:
+  - `gmail_get_message` and `gmail_get_thread`;
+  - `slack_get_channel_history`, `slack_get_thread_replies` and `slack_search_messages`.
+
+  The scan still runs for these, and the audit log records what it found; the box only stops
+  the run from being denied. `salesforce_run_report`, `grist_get_records` and the other reads
+  outside both lists are always scanned, and a run is denied when they return personal data.
   [`preflight`](#commands) flags the steps the scan can still deny, one WARNING per step. If a run
   is denied this way, use the covered export tool instead, narrow the step's `columns` or
   `filters` so the result holds no personal data, or run it attended.

@@ -264,7 +264,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0170](0170-a-drive-copy-is-its-own-verb-governed-by-the-move-folder-scope.md) | A Drive copy is its own verb, governed by the move folder scope | Accepted; amended by 0171 |
 | [0171](0171-auto-accept-rules-use-nine-verbs.md) | Auto-accept rules use nine verbs | Accepted; amends 0170 |
 | [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074; amended by 0198 |
-| [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164 |
+| [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164; amended by 0219 |
 | [0174](0174-a-rules-verbs-are-edited-in-place.md) | A rule's verbs are edited in place | Accepted; amends 0166 |
 | [0175](0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md) | An approval is bound to the whole request and to what its card showed | Accepted; amends 0073 |
 | [0176](0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md) | A chain-less audit line is accepted only before the first chained line | Accepted; amends 0071 |
@@ -309,4 +309,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0215](0215-the-organization-image-is-attested-with-github-build-provenance-not-cosign.md) | The organization image is attested with GitHub build provenance, not cosign | Accepted |
 | [0216](0216-privacyfence-check-policy-reports-whether-the-personal-data-scan-applies.md) | `privacyfence_check_policy` reports whether the personal-data scan applies | Accepted |
 | [0217](0217-the-org-admin-stats-page-shows-counts-only.md) | The organization admin's Stats page shows counts only | Accepted |
+| [0218](0218-a-gmail-label-rule-can-allow-archiving-a-message-that-carries-the-label.md) | A Gmail label rule can allow archiving a message that carries the label | Accepted; relates to 0172, 0204 |
+| [0219](0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md) | A scoped token can let email and Slack reads return personal data | Accepted; amends 0173 |
+| [0220](0220-a-routines-rule-profile-is-a-scoped-token.md) | A routine's rule profile is a scoped token | Accepted; relates to 0164, 0015 |
+| [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md) | Slack rules cover mentions of the signed-in user | Accepted; relates to 0172 |
+| [0222](0222-a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time.md) | A Gmail query rule is evaluated by Gmail against the message at call time | Accepted; relates to 0172, 0204 |
 | [0223](0223-recent-slack-activity-is-read-through-time-sorted-search.md) | Recent Slack activity is read through a time-sorted search | Accepted |

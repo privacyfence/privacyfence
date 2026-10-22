@@ -25,6 +25,7 @@ to be pointed at a real, already-authenticated account.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -1665,6 +1666,81 @@ class TestCheckGmail:
         assert headers["From"] == recorder._REDACTED_EMAIL
         assert headers["To"] == recorder._REDACTED_EMAIL
         assert headers["Subject"] == "PrivacyFence QA seed message [QATEST]"
+
+    def _matching_client(self, monkeypatch, headers, search):
+        raw = {"id": "m1", "threadId": "t1", "payload": {"headers": headers}}
+        client = GmailClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = self._service(raw)
+        monkeypatch.setattr(recorder, "_build_gmail_client", lambda: client)
+        monkeypatch.setattr(client, "messages_matching", search)
+
+    def test_check_gmail_reports_messages_matching(self, monkeypatch):
+        headers = [
+            {"name": "From", "value": "real@company.com"},
+            {"name": "Subject", "value": "PrivacyFence QA seed message [QATEST]"},
+            {"name": "Date", "value": "Wed, 15 Jul 2026 10:00:00 +0000"},
+            {"name": "Message-ID", "value": "<seed@mail.example.com>"},
+        ]
+        seen = []
+
+        def search(query, pairs):
+            seen.append((query, pairs))
+            return {"m1"} if query == "in:anywhere" else set()
+
+        self._matching_client(monkeypatch, headers, search)
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert result.ok and result.raw is None and result.fixture_relpath == ""
+        assert seen[0] == ("in:anywhere", [("m1", "seed@mail.example.com")])
+
+        # Gmail finding nothing for in:anywhere, or something for a missing label, fails the check.
+        self._matching_client(monkeypatch, headers, lambda query, pairs: set())
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        assert not next(r for r in results if r.method == "messages_matching").ok
+        self._matching_client(monkeypatch, headers, lambda query, pairs: {"m1"})
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        assert not next(r for r in results if r.method == "messages_matching").ok
+
+    def test_messages_matching_fails_without_a_message_id_and_on_client_errors(self, monkeypatch):
+        headers = [
+            {"name": "From", "value": "real@company.com"},
+            {"name": "Subject", "value": "PrivacyFence QA seed message [QATEST]"},
+            {"name": "Date", "value": "x"},
+        ]
+        self._matching_client(monkeypatch, headers, lambda query, pairs: set())
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert not result.ok and result.note == "seed message has no Message-ID header"
+
+        def boom(query, pairs):
+            raise recorder.GmailClientError("messages_matching failed (HTTP 500)")
+
+        self._matching_client(monkeypatch, headers + [{"name": "Message-ID", "value": "<s@x.com>"}], boom)
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert not result.ok and result.note == "messages_matching failed (HTTP 500)"
+
+    def test_addresses_quoted_in_a_reply_body_and_snippet_are_redacted(self):
+        quoted = base64.urlsafe_b64encode(b"On Fri, Dummy <test@privacyfence.eu> wrote:").decode().rstrip("=")
+        raw = {
+            "snippet": "Dummy &lt;test@privacyfence.eu&gt; wrote",
+            "payload": {"parts": [{"body": {"data": quoted, "size": 1}}, {"body": {"size": 0}}]},
+        }
+        redacted = recorder.redact_gmail_message(raw)
+        assert "privacyfence.eu" not in redacted["snippet"]
+        data = redacted["payload"]["parts"][0]["body"]["data"]
+        assert base64.urlsafe_b64decode(data + "==") == f"On Fri, Dummy <{recorder._REDACTED_EMAIL}> wrote:".encode()
+        assert redacted["payload"]["parts"][0]["body"]["size"] == len(base64.urlsafe_b64decode(data + "=="))
+        # An undecodable body is left alone rather than raising.
+        recorder.redact_gmail_message({"payload": {"body": {"data": "!!!"}}})
+
+    def test_reply_threading_headers_are_redacted(self):
+        raw = {"payload": {"headers": [
+            {"name": "References", "value": "<real-id@mail.gmail.com>"},
+            {"name": "In-Reply-To", "value": "<real-id@mail.gmail.com>"},
+        ]}}
+        headers = recorder.redact_gmail_message(raw)["payload"]["headers"]
+        assert {h["value"] for h in headers} == {recorder._REDACTED_MESSAGE_ID}
 
     def test_untagged_message_is_refused(self, monkeypatch):
         raw_message = {

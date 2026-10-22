@@ -637,6 +637,15 @@ def _mentions_of_me_matches(_value: Any, ctx: ReviewContext) -> bool:
     return False
 
 
+def _gmail_query_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    matched = ctx.args.get("matching_queries")
+    if not isinstance(matched, list):
+        return False
+    return any(q in matched for q in _values_of(value))
+
+
 NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.file": ScopeSelector(
         predicate="drive.file", scope_type="drive.file", kind=ScopeKind.IDENTITY,
@@ -671,5 +680,10 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         predicate="slack.mentions_of_me", scope_type="slack.mentions_of_me",
         kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
         matches=_mentions_of_me_matches,
+    ),
+    # The connector evaluates the query with Gmail itself and passes the matching rule values.
+    "gmail.query": ScopeSelector(
+        predicate="gmail.query", scope_type="gmail.query", kind=ScopeKind.ATTRIBUTE,
+        resolves_from=ResolvesFrom.FETCHED, matches=_gmail_query_matches,
     ),
 }

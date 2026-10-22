@@ -239,6 +239,15 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   outranks an organization pin for that call
   ([ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).
   Renaming a token changes the name on later entries only; earlier entries keep the name it had.
+- **Personal data in reads.** Two separate boxes on the New token form lift the personal-data scan for
+  a token's covered calls: exports, downloads and page uploads, and Gmail and Slack message reads. The
+  scan still runs and the audit log records what it found; every other call still stops for review, or
+  is denied for a token, when personal data is found
+  ([ADR 0173](adr/0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md),
+  [ADR 0219](adr/0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md)).
+- **One token per routine.** A token keeps the operations its rules had when it was created, so edit a
+  rule's verbs first and then create the token
+  ([ADR 0220](adr/0220-a-routines-rule-profile-is-a-scoped-token.md)).
 - **Deleting a rule.** A token's rules cannot be edited, with one exception: removing a rule in
   Settings, or through `privacyfence_propose_policy_change`, also removes it from every scoped token
   that carried it. The token's secret, other rules and tools stay, and adding the same rule again
