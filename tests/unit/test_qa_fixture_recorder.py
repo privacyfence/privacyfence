@@ -1719,6 +1719,14 @@ class TestCheckGmail:
         result = next(r for r in results if r.method == "messages_matching")
         assert not result.ok and result.note == "messages_matching failed (HTTP 500)"
 
+    def test_reply_threading_headers_are_redacted(self):
+        raw = {"payload": {"headers": [
+            {"name": "References", "value": "<real-id@mail.gmail.com>"},
+            {"name": "In-Reply-To", "value": "<real-id@mail.gmail.com>"},
+        ]}}
+        headers = recorder.redact_gmail_message(raw)["payload"]["headers"]
+        assert {h["value"] for h in headers} == {recorder._REDACTED_MESSAGE_ID}
+
     def test_untagged_message_is_refused(self, monkeypatch):
         raw_message = {
             "id": "m99", "threadId": "t99",

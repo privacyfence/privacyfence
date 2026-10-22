@@ -323,7 +323,7 @@ def redact_gmail_message(raw: dict[str, Any]) -> dict[str, Any]:
     for header in headers:
         if isinstance(header, dict) and str(header.get("name", "")).lower() in _SENSITIVE_GMAIL_HEADERS:
             header["value"] = _REDACTED_EMAIL
-        elif isinstance(header, dict) and str(header.get("name", "")).lower() == "message-id":
+        elif isinstance(header, dict) and str(header.get("name", "")).lower() in ("message-id", "references", "in-reply-to"):
             header["value"] = _REDACTED_MESSAGE_ID
     return raw
 
