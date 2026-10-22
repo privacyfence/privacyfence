@@ -757,6 +757,26 @@ class TestScopedTokensSection:
         assert "allow_personal_data: !!ui.stPersonalData" in html
         assert "personal data allowed" in html
 
+    def test_reads_checkbox_label_and_help_are_rendered(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "Let reads return personal data" in html
+        assert 'data-st-personal-data-reads="1"' in html
+        assert "Applies only to calls made with this token, and only to Gmail message and thread reads and Slack " in html
+        assert "reads that one of the token\\'s rules covers. The personal-data scan still runs" in html
+        assert "but the AI system receives the content." in html
+        assert "ui.stPersonalDataReads = !ui.stPersonalDataReads" in html
+
+    def test_reads_badge_is_rendered(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "if (t.allow_personal_data_reads)" in html
+        assert "personal data in reads allowed</span>" in html
+
+    def test_create_payload_carries_the_reads_flag(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "allow_personal_data_reads: !!ui.stPersonalDataReads" in html
+        assert "ui.stPersonalDataReads = !!t.allow_personal_data_reads;" in html
+        assert "ui.stPersonalDataReads = false;" in html
+
     def test_rules_show_their_resource_with_the_verbs_as_a_detail(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "withValuesHtml(r.title_parts, r.value_items, r.title)" in html
@@ -808,7 +828,16 @@ class TestScopedTokensSection:
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "data-st-other-tools" in html
         assert "Tools that need no rule, from other connectors (" in html
-        assert "Select a rule to see the tools it covers." in html
+        assert "Select a rule to see the tools it covers, or pick a tool that needs no rule." in html
+
+    def test_no_rule_selected_opens_the_tools_that_need_no_rule(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "'<details data-st-other-tools=\"1\"' + (anyRule ? '' : ' open')" in html
+        assert "'Tools that need no rule (') + otherTools.length" in html
+
+    def test_rule_selected_keeps_the_other_connectors_disclosure_closed(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "anyRule ? 'Tools that need no rule, from other connectors (' : " in html
 
 
 class TestOrgCapabilities:

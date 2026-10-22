@@ -390,6 +390,7 @@ def scoped_token_page_data(
             "rules": [_token_rule_entry(token, rule_id, rows, rules) for rule_id in sorted(token.rule_ids)],
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
+            "allow_personal_data_reads": token.allow_personal_data_reads,
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
         })
@@ -415,11 +416,12 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
 
     def _create(
         label: str, days: int, rule_ids: list[str], tools: list[str], allow_personal_data: bool,
+        allow_personal_data_reads: bool,
     ) -> tuple[ScopedToken, str]:
         with principal_scope(LOCAL_PRINCIPAL):
             return scoped_tokens.get_store().create(
                 LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=tools, policy=policy,
-                allow_personal_data=allow_personal_data,
+                allow_personal_data=allow_personal_data, allow_personal_data_reads=allow_personal_data_reads,
             )
 
     def _revoke(token_id: str) -> ScopedToken | None:

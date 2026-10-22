@@ -372,7 +372,7 @@ class ScopedTokenWiring:
     clipboard, so no response from this module ever carries it;
     ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
 
-    store_create: Callable[[str, int, list[str], list[str], bool], tuple[ScopedToken, str]]
+    store_create: Callable[[str, int, list[str], list[str], bool, bool], tuple[ScopedToken, str]]
     store_revoke: Callable[[str], ScopedToken | None]
     store_rename: Callable[[str, str], tuple[str, ScopedToken] | None]
     store_revoke_all: Callable[[], int]
@@ -394,9 +394,12 @@ def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
     allow_personal_data = payload.get("allow_personal_data", False)
     if not isinstance(allow_personal_data, bool):
         return None
+    allow_personal_data_reads = payload.get("allow_personal_data_reads", False)
+    if not isinstance(allow_personal_data_reads, bool):
+        return None
     return {
         "label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools),
-        "allow_personal_data": allow_personal_data,
+        "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
     }
 
 
@@ -1228,7 +1231,7 @@ def build_routes(
         try:
             token, secret = await run_in_threadpool(
                 scoped_tokens.store_create, bound["label"], bound["days"], bound["rule_ids"], bound["tools"],
-                bound["allow_personal_data"],
+                bound["allow_personal_data"], bound["allow_personal_data_reads"],
             )
         except ScopedTokenError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1894,6 +1897,7 @@ def build_org_routes(
                         principal, label=bound["label"], days=bound["days"], rule_ids=bound["rule_ids"],
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
+                        allow_personal_data_reads=bound["allow_personal_data_reads"],
                     ),
                 )
             except ScopedTokenError as exc:
@@ -1904,6 +1908,7 @@ def build_org_routes(
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
                 f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)"
                 + (", personal data allowed" if token.allow_personal_data else "")
+                + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
                 + f" (principal={principal.id})",
             )
         # The only place the secret ever leaves the server: this one answer.
