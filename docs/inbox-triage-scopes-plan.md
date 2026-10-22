@@ -46,7 +46,7 @@ Two things in the request text differ from what the code can do, and this plan f
 - **Gmail label scope.** `src/privacyfence/policy/propose.py:314` declares scope type `gmail.label`
   with one predicate, `label_name_allowlist`, verb `update`, comparing the label named in the
   call's arguments (`scopes.py:241`). `gmail_archive_message` has verb `move`
-  (`policy/registry.py:137`, operation key `gmail.archive_message`, `auto_accept.py:86` area) and is
+  (`policy/registry.py:137`, operation key `gmail.archive_message` at `auto_accept.py:98`) and is
   coverable only by `i_am_sender` or `trusted_sender_domain` (`propose.py:309-313`).
 - **The live-label selector exists but is unused.** `scopes.py:233` `_label_match_matches` and its
   `SCOPE_SELECTORS["label_match"]` entry (`scopes.py:478`, scope type `gmail.label`, resolves from the
@@ -70,7 +70,7 @@ Two things in the request text differ from what the code can do, and this plan f
 - **Slack.** Scopes: `approved_channel`, `approved_channel_all_results`, `dm_with_myself`
   (connector-computed `is_self_dm`), `group_dm` (`is_group_dm`) in `propose.py`/`scopes.py`.
   `slack_search_messages` needs `approved_channel_all_results` (every result in a named channel).
-  `SlackMessage.text` keeps Slack's raw markup (`slack_client.py:1808`), so a mention is
+  `SlackMessage.text` keeps Slack's raw markup (`slack_client.py:1820`), so a mention is
   `<@U…>`. `SlackClient.own_user_id()` (`slack_client.py:1499`) returns the signed-in user id.
 - **Gmail read scopes**: only `i_am_sender`, `trusted_sender_domain` (and the label predicate above).
   Rule values are lists of strings; the Settings value field splits on commas
@@ -104,17 +104,25 @@ All decisions are made here. The phase briefs point to these subsections.
   `dataclasses.replace(message, labels=<names>)` as `raw_data` to `gated_call`. The agent's request
   carries only `message_id`; nothing the agent sends can name a label. An id Gmail no longer lists
   is dropped. A label lookup error fails the call (nothing is archived).
-- **Value shape.** `value_format.VALUE_FORMATS["label_match"]` accepts one label name of 1 to 225
-  characters, no leading whitespace, and refuses Gmail's system labels (`INBOX`, `SENT`, `DRAFT`,
-  `TRASH`, `SPAM`, `STARRED`, `UNREAD`, `IMPORTANT`, `CHAT`, `CATEGORY_*`, case-insensitive), so a
-  rule can never read "archive anything in the inbox". Message: `'INBOX' is not a Gmail label name.
-  Use the label's name as shown in Gmail, not a system label such as INBOX or UNREAD, for example
-  Proposed Archive.` (the generic `normalise_rule_value` wording). This applies to the whole
-  `gmail.label` group, because a stored row has one value.
+- **Only user labels count.** `GmailClient.label_names` keeps only labels whose `type` is `user`
+  (`list_labels` already returns it), so a Gmail system label (`INBOX`, `UNREAD`, `STARRED`,
+  `CATEGORY_*`) is never in the names a rule is compared with. A rule whose value is `INBOX` therefore
+  never allows an archive, and no value format is added: update-only rules for `UNREAD` or `STARRED`
+  (mark as read, star) stay writable.
+- **Cost.** Every archive call makes one extra `labels.list` call, also when no `label_match` rule
+  exists. Archiving is a low-volume write; accepted.
+- **Not an independent check.** The same row grants `update` and `move`, so whatever the agent can
+  label it can archive: the label gates the archive, but a steered agent can apply the label first.
+  The safety is that archiving is reversible and leaves the message unread (the request's own
+  argument). ADR 0218 says so.
 - **Rejected.** Matching on the label ids (a rule would carry opaque ids and break when a label is
   recreated). Making `GmailMessage.labels` carry names (it is returned to the agent by
   `gmail_get_message`, and renaming its content changes the tool's output). A new predicate name
   (the old one already has the right semantics and an equivalence-tested selector).
+- **Legacy rows.** A hand-written custom row that uses `label_match` on a read operation (the old
+  evaluator's semantics) shows as allowing nothing in Settings once the predicate has a catalogue
+  entry with only `move`, though the engine still honours it. No such row is written by any current
+  surface; accepted.
 - **Known consequence.** The add-label card's "Always allow" widening list gains "also allow move
   (1 tool)" for a label, because widenings follow the group's verbs. It is an explicit chip the
   reviewer chooses; no change.
@@ -202,6 +210,13 @@ All decisions are made here. The phase briefs point to these subsections.
   gains `is_one_to_one_dm` and `own_user_id`, so an agent cannot supply them to `check_policy`.
 - **Verbs.** Both scopes govern the existing operation key `slack.read_messages`; the READ/SEARCH
   choice in the form is the same cosmetic double-verb the key already has.
+- **Accepted consequence.** A thread read is covered when any message on it mentions the user, so
+  anyone who can reply in a shared channel can make a thread readable by mentioning the user, and
+  with the token's reads flag its personal data too. ADR 0221 records it.
+- **Rule wording.** `describe._catalogue_verbs` falls back to the verbs of the `EXTRA_SCOPES` entry
+  with the rule's predicate when no `PROPOSABLE_SCOPES` entry has it, so the direct-messages rule
+  reads `allow read` and lists no search tool, instead of crediting every verb of
+  `slack.read_messages`.
 - **Rejected.** Filtering mixed search results down to the mentions (an unattended read would then
   return a partial page and hide the filtering from the audit log). A parent-only thread rule (no
   tool exists for it). Putting these predicates in `SCOPE_SELECTORS` (frozen against the old
@@ -223,7 +238,11 @@ All decisions are made here. The phase briefs point to these subsections.
   with several alternative queries. `value_format.VALUE_FORMATS["gmail.query"]`: 1 to 500
   characters, no control characters (`[^\x00-\x1f\x7f]{1,500}`); what `a Gmail search query`, how
   `a Gmail search expression as you would type it into Gmail's search box, up to 500 characters`,
-  example `in:inbox -category:promotions`. The value is set by the policy owner, never by the agent
+  example `in:inbox -category:promotions`. The text must also have balanced parentheses and an even
+  number of double quotes (`value_format.normalise_rule_value` checks this for `gmail.query` and
+  raises `RuleValueError("The Gmail query has unbalanced parentheses or quotes.")`), because the
+  value is wrapped in parentheses when it is evaluated and `in:inbox) OR (in:anywhere` would widen
+  the rule. The value is set by the policy owner, never by the agent
   (a rule change always needs a human confirmation, and is refused in an unattended session).
 - **Evaluation is Gmail's own, in the connector, before gating.** The selector never calls Gmail.
   The Gmail connector computes `matching_queries`, the list of query strings among the call's
@@ -243,59 +262,81 @@ All decisions are made here. The phase briefs point to these subsections.
     `Message-ID` from adding Gmail search syntax, and intersecting by Gmail id keeps a duplicate
     `Message-ID` on another message from vouching for this one. An API error raises
     `GmailClientError`.
-  - `GmailConnector._matching_queries(operation_key, messages)` evaluates at most
+  - `GmailConnector._matching_queries(tool, messages)` (the operation key comes from
+    `auto_accept.TOOL_TO_OPERATION[tool]`) evaluates at most
     `MAX_QUERY_RULES_PER_CALL = 10` query values (rule order), one `messages_matching` call each. A
     query is in the result only when the found set equals all the messages. An evaluation error is
     logged without the query text or message content and counts as no match, so the call falls back
-    to the review gate instead of failing. With no query rules there is no Gmail call.
+    to the review gate instead of failing. With no query rules there is no Gmail call. The search is
+    run with `asyncio.to_thread(self._gmail.messages_matching, ...)`, not through `_fetch`, because
+    `_fetch` logs the exception text and a Google `HttpError` text carries the request URL with the
+    query and the `Message-ID`s; `messages_matching` raises `GmailClientError` with the fixed text
+    `messages_matching failed (HTTP <status>)` and the connector catches `GmailClientError` only.
   - Used by `gmail_get_message` (one message), `gmail_get_thread` (**every message of the thread must
     match**, the product decision recorded with the user) and `gmail_download_attachment` (the
-    message). Computed `args["matching_queries"]` is added to `_CONNECTOR_COMPUTED_ARGS` so an agent
-    cannot supply it to `check_policy`.
+    message). `args["matching_queries"]` is added to the call's `args` only when the list is not empty
+    (a call with no matching query has the same `args` as before), and the name is added to
+    `_CONNECTOR_COMPUTED_ARGS` so an agent cannot supply it to `check_policy`.
+  - `policy/suggest.py` knows `_EXTRA_ARGUMENT` only for `grist.document`, `peek.page` and
+    `apps_script.project`; `gmail.query` has no argument that names it, so `_extra_value_of` returns a
+    builder that gives `NO_VALUE` for a group not in that table. `suggested_rules` then lists a
+    `gmail.query` suggestion with `value: null` and `value_known: false` for an uncovered Gmail read.
 - **PII.** Unchanged: a query rule is a read rule, so the scan applies unless the call is made with
   a token whose `allow_personal_data_reads` is set (D2).
 - **Rejected.** Evaluating the query inside the selector (blocks the event loop with network I/O,
   and `policy/` modules do no I/O). Re-implementing Gmail search locally (never equal to Gmail's).
   Listing the query's results and looking for the message (unbounded paging). Trusting a
   caller-supplied match. "Any message of the thread matches" (releases history outside the query).
+- **Usability note.** A per-message operator such as `in:inbox` never matches a message the user sent
+  (sent mail lacks `INBOX`), so a thread containing the user's own reply is not covered by
+  `in:inbox …`. ADR 0222 and the user documentation say so.
 - **Fail closed.** A `Message-ID` Gmail cannot search by (unusual characters) never matches.
   Search-index delay after a label change can make a just-labelled message not match yet.
 
 ### D5. Documentation, ADRs, changelog
 
-ADR numbers are the next four free numbers at the time of the last phase (`0218` to `0221` as this is
+ADR numbers are the next five free numbers at the time of the last phase (`0218` to `0222` as this is
 written; renumber if `main` has taken them). Each ADR follows `docs/adr/0216-*.md`'s layout.
 
 ## 4. ADRs
 
+One decision per ADR (`docs/adr/README.md`, rule 1). Numbers are the next free ones at the time of the
+last phase: `0218` to `0222` as this is written.
+
 - `0218`, "A Gmail label rule can allow archiving a message that carries the label": D1, including
-  that `check_policy` stays argument-only and answers `unknown`, and why the labels are matched by
-  name after a lookup.
-- `0219`, "A scoped token can let email and Slack reads return personal data": D2, including that a
-  routine's profile is a scoped token and not a new concept, amends ADR 0173 (the flag stays
-  limited to results without rows; a second flag covers reads).
-- `0220`, "Slack rules cover mentions of the signed-in user and their one-to-one DMs": D3, including
-  the whole-thread decision.
-- `0221`, "A Gmail query rule is evaluated by Gmail against the message at call time": D4, including
-  the every-message-of-a-thread decision and the `Message-ID` guard.
+  that `check_policy` stays argument-only and answers `unknown`, that the label is not an
+  independent check on a steered agent, and why labels are matched by name after a lookup.
+- `0219`, "A scoped token can let email and Slack reads return personal data": the reads flag of D2;
+  amends ADR 0173 (that flag stays limited to results without rows; a second flag covers reads).
+- `0220`, "A routine's rule profile is a scoped token": D2's first bullet: no new profile object and
+  no `profile` argument on `privacyfence_begin_unattended_session`; relates to ADR 0164 and ADR 0015.
+- `0221`, "Slack rules cover mentions of the signed-in user": the mentions scope of D3 including the
+  whole-thread decision and the accepted consequence. The one-to-one DM scope is an ordinary
+  attribute scope and needs no ADR.
+- `0222`, "A Gmail query rule is evaluated by Gmail against the message at call time": D4, including
+  the every-message-of-a-thread decision, the `Message-ID` guard and the usability note.
 
 ## 5. Manual steps
 
-Two items before any phase starts (`manual_before`), none after the last merge (`manual_after` is
-empty). The step-by-step page also lists the rollout steps for the install once a release ships;
-those are not part of `/implement`. Page: https://claude.ai/artifact/8Euv1y7YBbp7wZpvFcsDeo, source
-`docs/inbox-triage-scopes-plan-manual-steps.html`.
+No phase needs anything from the user before it starts (`manual_before` is empty): every phase is
+unit-tested. One item after the last merge (`manual_after`): the rollout and first run on the
+user's own install, which only a person can verify against live Gmail and Slack. It is checked once a
+release containing the pull request is installed; the pull request lists it unchecked.
 
-- `mb1-enable-scoped-tokens`: the administrator rebuilds and installs the organization bundle with
-  `--enable-scoped-tokens`.
-- `mb2-prove-token-channel`: a throwaway scoped token proves the scheduled task can connect with a
-  bearer token. If Cowork cannot, stop and tell Claude (Risk 1).
+The step-by-step page, https://claude.ai/artifact/8Euv1y7YBbp7wZpvFcsDeo (source
+`docs/inbox-triage-scopes-plan-manual-steps.html`), also has a recommended first part that is not in
+the manifest because no phase depends on it: turn scoped tokens on and prove with a throwaway token
+that the scheduled task can present a bearer token (Risk 1). Do it before `/implement`; it costs
+nothing and tells you early whether request 2 helps your setup.
+
+- `ma1-rollout-and-first-run`: edit the rules, create the `inbox-triage` token, run the routine
+  once and read the audit log.
 
 ## 6. Risks and open questions
 
 1. **Cowork may not be able to present a bearer token.** Nothing in the repository decides it. The
    server work is still correct; only the runner changes (a Claude Code scheduled task or
-   `privacyfence-sync`). `mb2` finds out before any phase starts.
+   `privacyfence-sync`). The recommended first part of the manual-steps page finds out early.
 2. **`check_policy` is not the oracle the request pictured.** Rules that depend on the fetched
    message give `unknown`. A worker that finds a test or doc expecting `auto_accept` for such a rule
    must stop with `status=blocked`.
@@ -306,8 +347,10 @@ those are not part of `/implement`. Page: https://claude.ai/artifact/8Euv1y7YBbp
 4. **Adding `move` to `gmail.label` changes expectations in existing tests** (verbs of the group,
    widenings on the add-label card, the generated "Always allow" reference). Update the expectation;
    stop if a test shows a rule gaining `move` without the row asking for it.
-5. **A `label_match` value format applies to the whole `gmail.label` group**, so `INBOX` is no longer
-   accepted as the label of an update-only rule either. That is intended.
+5. **Existing tests enumerate things the plan adds to** (verbs and widenings of the `gmail.label`
+   group, `_CONNECTOR_COMPUTED_ARGS`, exact `args` dicts in the Slack and Gmail connector tests, the
+   fake `store_create`). Each phase brief names the ones the review found; a worker that finds
+   another updates its expectation and says so.
 6. **Slack mention searches are the agent's job.** A page that mixes mention and other results is
    not covered. Nothing here tells the agent how to word the search.
 7. **ADR numbers may be taken by a parallel branch.** Take the next free numbers in `p6`.
@@ -322,16 +365,11 @@ feature_branch: feature/inbox-triage-scopes
 max_parallel: 2
 manual_steps_artifact: https://claude.ai/artifact/8Euv1y7YBbp7wZpvFcsDeo
 manual_steps_source: docs/inbox-triage-scopes-plan-manual-steps.html
-manual_before:
-  - id: mb1-enable-scoped-tokens
-    title: Turn scoped tokens on for the organization install
-    why: Organization mode keeps scoped tokens off until the bundle enables them; without it there is no Scoped tokens section, and the routine cannot get a token (p2 and p3 add a flag to that section).
-    done_when: Settings shows the Scoped tokens section with a New token form.
-  - id: mb2-prove-token-channel
-    title: Prove the scheduled task can connect with a scoped token
-    why: The whole of request 2 assumes the scheduled task can present a bearer token; the repository cannot tell. A throwaway token costs nothing to test with.
-    done_when: A scheduled run listed exactly one connector tool and showed the token expiry, or you told Claude it could not connect.
-manual_after: []
+manual_before: []
+manual_after:
+  - id: ma1-rollout-and-first-run
+    title: Roll out the rules and token on your install and run the routine once
+    why: Only a person can check an unattended label-then-archive, a flagged body read and the Slack and Gmail query rules against the live accounts. The recorder check covers Gmail's search syntax only.
 verify_after_merge:
   - python3 -m pytest tests/unit/policy tests/unit/test_scoped_tokens.py tests/unit/test_gate.py tests/unit/test_gate_real_evaluator.py -q
   - python3 -m pytest tests/unit/connectors/test_gmail_connector.py tests/unit/connectors/test_slack_connector.py tests/unit/test_gmail_client.py tests/unit/test_slack_client.py -q
@@ -339,7 +377,7 @@ verify_after_merge:
   - python3 -m pytest tests/unit/test_generate_always_allow_reference.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_links.py tests/unit/test_docs_no_history.py -q
 final_checks:
   - docs/inbox-triage-scopes-plan.md and docs/inbox-triage-scopes-plan-manual-steps.html are deleted and nothing links to them
-  - Four new ADRs exist in docs/adr, are Accepted, and are listed in docs/adr/README.md (the plan's ADRs section names them)
+  - Five new ADRs exist in docs/adr, are Accepted, and are listed in docs/adr/README.md (the plan's ADRs section names them)
   - CHANGELOG.md has entries under ## [Unreleased] and no new version heading
 phases:
   - id: p1-gmail-label-move
@@ -348,13 +386,11 @@ phases:
     complexity: M
     touches:
       - src/privacyfence/policy/propose.py
-      - src/privacyfence/policy/value_format.py
       - src/privacyfence/gmail_client.py
       - src/privacyfence/connectors/gmail.py
       - docs/always-allow-rules-reference.md
       - tests/unit/policy/test_propose.py
       - tests/unit/policy/test_scope_rows.py
-      - tests/unit/policy/test_value_format.py
       - tests/unit/policy/test_suggest.py
       - tests/unit/test_gmail_client.py
       - tests/unit/test_gate_real_evaluator.py
@@ -373,15 +409,16 @@ phases:
          with a short comment: archiving is allowed only when the message already carries the
          label, checked against its live labels. Do not touch scopes.py: `label_match` is already
          in SCOPE_SELECTORS.
-      2. src/privacyfence/policy/value_format.py: add
-         `_GMAIL_LABEL = _fmt(r"(?!(?i:inbox|sent|draft|trash|spam|starred|unread|important|chat|category_[a-z_]+)\Z)\S.{0,224}", "a Gmail label name", "the label's name as shown in Gmail, not a system label such as INBOX or UNREAD", "Proposed Archive")`
-         next to the other formats and register `"label_match": _GMAIL_LABEL` in VALUE_FORMATS.
-         Do not add label_match to UNVALIDATED_VALUE_PREDICATES.
+      2. Do not touch value_format.py: no format is added for `label_match` (Design D1, "Only user
+         labels count"). If `tests/unit/policy/test_value_format.py` has a test asserting that every
+         valued PROPOSABLE predicate has a format or is in UNVALIDATED_VALUE_PREDICATES, add
+         `label_match` to UNVALIDATED_VALUE_PREDICATES in value_format.py and say so in the report.
       3. src/privacyfence/gmail_client.py: after `list_labels` add
          `def label_names(self, label_ids: Iterable[str]) -> list[str]:` that builds
-         `{label["id"]: label["name"] for label in self.list_labels()}` and returns the names of the
-         given ids in input order, dropping an id that is not listed. Docstring: ids to names, one
-         labels.list call. Add the `Iterable` import if missing.
+         `{label["id"]: label["name"] for label in self.list_labels() if label["type"] == "user"}` and
+         returns the names of the given ids in input order, dropping an id that is not a listed user
+         label. Docstring: ids to user label names, one labels.list call; system labels never count.
+         Add the `Iterable` import if missing.
       4. src/privacyfence/connectors/gmail.py `_archive_message`: after the `get_message` fetch add
          `label_names = await self._fetch(self._gmail.label_names, message.labels) if message.labels else []`
          and `gate_message = dataclasses.replace(message, labels=label_names)`, and pass
@@ -393,25 +430,22 @@ phases:
            `test_gmail_label_group_offers_update_and_move`, `test_move_operations_are_archive_only`,
            `test_label_match_is_never_proposed_from_a_popup` (proposals_for on gmail_archive_message
            with raw_data labels ["Proposed Archive"] yields no label proposal).
-         - tests/unit/policy/test_scope_rows.py `TestGmailLabelRow`:
-           `test_row_with_update_and_move_compiles_to_two_rules` (predicates label_name_allowlist
-           and label_match; label_match carries only gmail.archive_message),
-           `test_row_with_only_update_has_no_label_match_rule`.
-         - tests/unit/policy/test_value_format.py `TestGmailLabelValue`:
-           `test_system_labels_are_refused` (parametrize INBOX, unread, Category_Promotions,
-           TRASH), `test_user_label_with_spaces_and_slash_is_accepted` ("Proposed Archive",
-           "Work/Projects").
+         - tests/unit/policy/test_scope_rows.py (module-level functions, the file has no classes):
+           `test_gmail_label_row_with_update_and_move_compiles_to_two_rules` (predicates
+           label_name_allowlist and label_match; label_match carries only gmail.archive_message),
+           `test_gmail_label_row_with_only_update_has_no_label_match_rule`.
          - tests/unit/policy/test_suggest.py `TestGmailArchiveSuggestion`:
            `test_archive_suggests_a_label_rule_with_value_known_at_run_time` (group gmail.label,
            verb move, value None, value_known False).
          - tests/unit/test_gmail_client.py `TestLabelNames`:
-           `test_maps_ids_to_names_in_order_and_drops_unknown_ids`.
+           `test_maps_ids_to_names_in_order_and_drops_unknown_ids`,
+           `test_system_labels_are_dropped` (INBOX, UNREAD, CATEGORY_PROMOTIONS never appear).
          - tests/unit/test_gate_real_evaluator.py `TestArchiveByLabel` (real rules through
            `policy_rules` or the row helpers the neighbouring classes use):
            `test_auto_accepts_when_the_message_carries_the_label`,
            `test_needs_review_when_the_message_lacks_the_label`,
            `test_label_rule_with_only_update_does_not_cover_archive`,
-           `test_label_match_is_case_insensitive`,
+           `test_label_match_is_case_insensitive`, `test_a_system_label_value_never_allows_an_archive`,
            `test_preflight_is_unknown_for_a_label_rule` (gate.preflight_auto_accept for
            gmail.archive_message returns verdict "unknown").
          - tests/unit/connectors/test_gmail_connector.py `TestArchiveByLabel`:
@@ -428,11 +462,12 @@ phases:
       removed from SCOPE_SELECTORS or re-implemented, or if gmail.archive_message gets a verb other
       than move in the registry.
     acceptance:
-      - "python3 -m pytest tests/unit/policy/test_propose.py::TestGmailLabelMove tests/unit/policy/test_scope_rows.py::TestGmailLabelRow tests/unit/policy/test_value_format.py::TestGmailLabelValue tests/unit/policy/test_suggest.py::TestGmailArchiveSuggestion -q passes"
+      - "python3 -m pytest tests/unit/policy/test_propose.py::TestGmailLabelMove tests/unit/policy/test_scope_rows.py -k gmail_label tests/unit/policy/test_suggest.py::TestGmailArchiveSuggestion -q passes"
       - "python3 -m pytest tests/unit/test_gmail_client.py::TestLabelNames tests/unit/test_gate_real_evaluator.py::TestArchiveByLabel tests/unit/connectors/test_gmail_connector.py::TestArchiveByLabel -q passes"
       - "python3 -m pytest tests/unit/test_generate_always_allow_reference.py -q passes"
       - "grep -n label_match src/privacyfence/policy/propose.py matches one PROPOSABLE_SCOPES entry"
       - "ruff check . reports no problems and python3 -m pytest tests/unit -q passes"
+      - "python3 -m pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json passes, python3 scripts/check_coverage_floor.py coverage.json passes, and the term-missing report lists no line or branch of the files this phase changed as missed"
 
   - id: p2-token-read-pii-core
     title: Scoped tokens can allow personal data in email and Slack reads
@@ -453,7 +488,8 @@ phases:
       1. src/privacyfence/auto_accept.py: after PERSONAL_DATA_RULE_TOOLS add
          `PERSONAL_DATA_READ_TOOLS: frozenset[str] = frozenset({"gmail_get_message", "gmail_get_thread", "slack_get_channel_history", "slack_get_thread_replies", "slack_search_messages"})`
          with a comment: reads whose content reaches the AI system by design, which a token's
-         allow_personal_data_reads flag may let through (ADR 0219). Add the name to `__all__`.
+         allow_personal_data_reads flag may let through. Name no ADR number in the comment. Add the
+         name to `__all__`.
       2. src/privacyfence/scoped_tokens.py: add the field
          `allow_personal_data_reads: bool = False` right after `allow_personal_data` in `ScopedToken`;
          write it in `_to_json` only when true (like the existing flag); read it in `_from_json` with
@@ -502,6 +538,7 @@ phases:
       - "grep -n PERSONAL_DATA_READ_TOOLS src/privacyfence/auto_accept.py src/privacyfence/gate.py src/privacyfence/web/mcp_dispatch.py matches in all three files"
       - "ruff check . reports no problems and python3 scripts/mypy_strict_modules.py and python3 -m mypy src/privacyfence pass"
       - "python3 -m pytest tests/unit -q passes"
+      - "python3 -m pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json passes, python3 scripts/check_coverage_floor.py coverage.json passes, and the term-missing report lists no line or branch of the files this phase changed as missed"
 
   - id: p3-token-read-pii-ui
     title: The New token form carries the reads flag and lists the tools that need no rule
@@ -533,7 +570,8 @@ phases:
          non-bool returns None like the existing flag) and returns it in the dict; the local
          create route passes `bound["allow_personal_data_reads"]` as the sixth argument; the
          organization create route passes it as the keyword to `store.create`; the audit summary
-         appends `, personal data in reads allowed` when set (after the existing suffix).
+         appends `, personal data in reads allowed` when set (after the existing suffix). The local
+         route's audit summary has no personal-data suffix today and gets none.
       3. src/privacyfence/settings_window_html.py: state field, the chip
          `personal data in reads allowed` in the token list, the duplicate-from-token fill, the
          reset after create, a second checkbox under the existing one with the label and help text
@@ -551,6 +589,12 @@ phases:
          - tests/unit/test_settings_window_html.py `TestScopedTokensSection`:
            `test_no_rule_selected_opens_the_tools_that_need_no_rule`,
            `test_rule_selected_keeps_the_other_connectors_disclosure_closed`.
+         - Existing tests that break because `store_create` takes a sixth argument: the fake
+           `_create` in tests/unit/web/test_routes_settings.py (line about 1513, five parameters) and
+           the recorded call tuple it asserts (about 1583), and the five-argument calls to
+           `wiring.store_create` in tests/unit/web/test_server.py (about 2120, 2121, 2139). Give the
+           fake the sixth parameter and pass `False` in those calls; do not give the real
+           parameter a default.
          - tests/unit/web/test_server.py: extend the scoped-token wiring test so the closure
            stores the flag (`test_local_wiring_stores_the_reads_flag`).
          - tests/integration/test_settings_scoped_token_form_browser.py: if it ticks the existing
@@ -577,6 +621,7 @@ phases:
       - "grep -l allow_personal_data_reads src/privacyfence/web/server.py src/privacyfence/web/routes_settings.py src/privacyfence/settings_window_html.py lists all three files"
       - "python3 -m pytest tests/integration/test_settings_scoped_token_form_browser.py -q passes, or every test in it reports skipped with the session hook's Chromium warning stated in the report"
       - "ruff check . reports no problems and python3 -m pytest tests/unit -q passes"
+      - "python3 -m pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json passes, python3 scripts/check_coverage_floor.py coverage.json passes, and the term-missing report lists no line or branch of the files this phase changed as missed"
 
   - id: p4-slack-scopes
     title: Slack scopes for mentions of me and for one-to-one DMs
@@ -587,11 +632,13 @@ phases:
       - src/privacyfence/connectors/slack.py
       - src/privacyfence/policy/scopes.py
       - src/privacyfence/policy/catalogue.py
+      - src/privacyfence/policy/describe.py
       - src/privacyfence/web/mcp_dispatch.py
       - tests/unit/test_slack_client.py
       - tests/unit/connectors/test_slack_connector.py
       - tests/unit/policy/test_scopes.py
       - tests/unit/policy/test_catalogue.py
+      - tests/unit/policy/test_describe.py
       - tests/unit/policy/test_engine.py
       - tests/unit/web/test_mcp_dispatch.py
     brief: |
@@ -633,6 +680,18 @@ phases:
          Update the module docstring's list of extra scopes by one clause.
       5. src/privacyfence/web/mcp_dispatch.py: `_CONNECTOR_COMPUTED_ARGS` becomes
          `frozenset({"is_self_dm", "is_group_dm", "is_one_to_one_dm", "own_user_id"})`.
+         src/privacyfence/policy/describe.py `_catalogue_verbs`: when no PROPOSABLE_SCOPES entry has
+         the predicate, return the union of `extra.verbs` of the `catalogue.EXTRA_SCOPES` entries
+         whose `predicate` equals it (import `catalogue` inside the function; catalogue imports
+         describe), else the empty set as today (Design D3, "Rule wording"). If an existing test in
+         tests/unit/policy/test_describe.py or test_catalogue.py changes meaning for an older extra
+         scope (Grist, Peek, Apps Script, Gmail filters, Slack group chats), stop with status=blocked.
+      5b. Existing Slack connector tests break: `make_connector` in
+         tests/unit/connectors/test_slack_connector.py (line about 36-50) builds the Slack client from
+         a bare MagicMock, so the two new calls return MagicMocks that land in `args`. Set
+         `client.resolve_is_one_to_one_dm.return_value = False` and `client.own_user_id.return_value = ""`
+         there, and update the exact `args` assertions for history, thread replies and search (lines
+         about 303, 574, 638, 657, 706, 718) to include the new keys.
       6. Tests, exact names:
          - tests/unit/test_slack_client.py `TestResolveIsOneToOneDm`: `test_im_channel_is_true`,
            `test_channel_and_group_dm_are_false`, `test_non_d_id_makes_no_api_call`,
@@ -653,8 +712,12 @@ phases:
            `test_channel_history_args_carry_is_one_to_one_dm`,
            `test_thread_replies_args_carry_both_values`, `test_search_args_carry_own_user_id`.
          - tests/unit/web/test_mcp_dispatch.py `TestCheckPolicy`:
-           `test_connector_computed_slack_args_are_ignored` (is_one_to_one_dm and own_user_id
-           supplied by the agent do not change the verdict).
+           `test_connector_computed_slack_args_are_not_passed_to_preflight` (monkeypatch
+           `mcp_dispatch.preflight_auto_accept` to record its `args` argument; an agent that sends
+           is_one_to_one_dm and own_user_id gets a preflight call without them).
+         - tests/unit/policy/test_describe.py `TestExtraScopeVerbs`:
+           `test_direct_messages_rule_reads_allow_read_and_lists_no_search_tool`,
+           `test_mentions_rule_lists_read_and_search`.
       7. This phase changes slack_client.py, so after pushing the phase branch dispatch
          `qa-record-fixture.yml` on `main` with inputs `connector=slack` and `branch=<the phase
          branch>` (ci.dispatchable in .claude/toolkit.yaml), wait for it, `git pull`, and read any
@@ -664,10 +727,51 @@ phases:
       cannot express `is_im`, or if the dispatched run fails for a reason other than a queued run.
     acceptance:
       - "python3 -m pytest tests/unit/test_slack_client.py::TestResolveIsOneToOneDm tests/unit/policy/test_scopes.py::TestSlackMentionsOfMe tests/unit/policy/test_scopes.py::TestSlackDirectMessagesToMe tests/unit/policy/test_catalogue.py::TestSlackExtras tests/unit/policy/test_engine.py::TestSlackScopes -q passes"
-      - "python3 -m pytest tests/unit/connectors/test_slack_connector.py::TestComputedScopeArgs tests/unit/web/test_mcp_dispatch.py -q passes"
+      - "python3 -m pytest tests/unit/connectors/test_slack_connector.py tests/unit/policy/test_describe.py::TestExtraScopeVerbs tests/unit/web/test_mcp_dispatch.py -q passes"
       - "grep -n is_one_to_one_dm src/privacyfence/slack_client.py src/privacyfence/connectors/slack.py src/privacyfence/policy/scopes.py src/privacyfence/web/mcp_dispatch.py matches in all four files"
       - "the qa-record-fixture.yml run for connector slack on the phase branch concluded success (URL in the report)"
       - "ruff check . reports no problems and python3 -m pytest tests/unit -q passes"
+      - "python3 -m pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json passes, python3 scripts/check_coverage_floor.py coverage.json passes, and the term-missing report lists no line or branch of the files this phase changed as missed"
+
+  - id: p5c-sync-personal-data-note
+    title: The privacyfence-sync documentation and preflight note describe the reads flag
+    depends_on: [p2-token-read-pii-core]
+    complexity: S
+    touches:
+      - sync/README.md
+      - plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md
+      - sync/src/privacyfence_sync/preflight.py
+      - sync/tests/test_preflight.py
+    brief: |
+      The token flag of Design D2 makes three statements in the sync package false: that only exports,
+      downloads and page uploads can be allowed to carry personal data, and that other reads are
+      always scanned. Correct them.
+
+      1. sync/README.md, the "Personal data" note (search `grep -n "Personal data" sync/README.md`,
+         around line 124-142) and the preflight paragraph (around lines 715-717): keep the existing
+         **Let exports, downloads and page uploads carry personal data** text, add a sentence and a
+         list for the second checkbox **Let reads return personal data**, which covers
+         `gmail_get_message`, `gmail_get_thread`, `slack_get_channel_history`,
+         `slack_get_thread_replies` and `slack_search_messages` when a rule of the token covers the
+         call, and replace the claim that other reads are always scanned by one that names only reads
+         outside both lists. Say that the scan still runs and the audit log records what it found.
+      2. Copy sync/README.md over
+         plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md (`cp`); the
+         sync dod_conditional row requires the copy to be identical.
+      3. sync/src/privacyfence_sync/preflight.py `_PII_NOTE`: the text becomes
+         `note: a WARNING step is denied only when what it returns holds personal data; a scoped token can allow that for exports, downloads and page uploads, and for Gmail and Slack reads (see the README)`.
+         Update `NOTE` (and any assertion that quotes the old text) in sync/tests/test_preflight.py.
+      4. Run, from the repository root: `pip install -e "./sync[test]"`, then
+         `pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100`,
+         `mypy sync/src` and `bandit -r sync/src` (the sync row of dod_conditional in
+         .claude/toolkit.yaml).
+      Stop with status=blocked if a test in tests/unit/test_sync_plugin.py objects to the README copy.
+    acceptance:
+      - "pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100 passes"
+      - "mypy sync/src and bandit -r sync/src pass"
+      - "cmp sync/README.md plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md exits 0"
+      - "grep -c 'Let reads return personal data' sync/README.md prints 1 or more"
+      - "python3 -m pytest tests/unit/test_sync_plugin.py -q passes"
 
   - id: p5a-gmail-query-core
     title: Gmail query scope - client search, selector, catalogue entry and live check
@@ -678,8 +782,10 @@ phases:
       - src/privacyfence/policy/scopes.py
       - src/privacyfence/policy/catalogue.py
       - src/privacyfence/policy/value_format.py
+      - src/privacyfence/policy/suggest.py
       - scripts/qa_fixture_recorder.py
       - tests/unit/test_gmail_client.py
+      - tests/unit/policy/test_suggest.py
       - tests/unit/policy/test_scopes.py
       - tests/unit/policy/test_catalogue.py
       - tests/unit/policy/test_value_format.py
@@ -699,7 +805,9 @@ phases:
          `service.users().messages().list(userId="me", q=f"({query}) ({terms})", maxResults=100)`
          with `terms = " OR ".join(f"rfc822msgid:{rfc822_id}" ...)`; return the response's message
          ids intersected with the pairs' Gmail ids; `HttpError` becomes `GmailClientError` with the
-         same message style as the neighbouring methods. Never log the query.
+         the fixed text `messages_matching failed (HTTP <status>)` (status from `exc.status_code`, empty
+         when absent) and never the exception text, which carries the request URL with the query and
+         the Message-IDs. Never log the query.
       2. src/privacyfence/policy/scopes.py: before `NEW_SCOPE_SELECTORS` add
          `_gmail_query_matches(value, ctx)`: False if `not value`; `matched = ctx.args.get("matching_queries")`;
          False unless it is a list; else `any(q in matched for q in _values_of(value))`. Register
@@ -713,7 +821,18 @@ phases:
       4. src/privacyfence/policy/value_format.py: add
          `"gmail.query": _fmt(r"[^\x00-\x1f\x7f]{1,500}", "a Gmail search query", "a Gmail search expression as you would type it into Gmail's search box, up to 500 characters", "in:inbox -category:promotions")`
          to VALUE_FORMATS. `catalogue._compile_catalogue_rules` passes `{extra.predicate}` to
-         `normalise_rule_value`, so the predicate key is what is looked up.
+         `normalise_rule_value`, so the predicate key is what is looked up. In
+         `normalise_rule_value`, after the format check of each item, when `"gmail.query"` is in
+         `predicates` and the item has unbalanced parentheses (a `)` before its `(`, or a different
+         count) or an odd number of `"` characters, raise
+         `RuleValueError("The Gmail query has unbalanced parentheses or quotes.")`. Put the check in a
+         small private function `_balanced(text)`.
+      4b. src/privacyfence/policy/suggest.py: `_extra_value_of(group)` looks `group` up in
+         `_EXTRA_ARGUMENT`, which has no `gmail.query`, and `suggested_rules` calls it outside its
+         `try`, so every uncovered Gmail read would raise `KeyError`. Change `_extra_value_of` to use
+         `_EXTRA_ARGUMENT.get(group)` and, when it is `None`, return a builder that returns
+         `propose.NO_VALUE`. A `gmail.query` suggestion is then listed with `value` None and
+         `value_known` False (its selector resolves from the fetched item).
       5. scripts/qa_fixture_recorder.py `check_gmail`: after the existing `get_message` check, when
          that check fetched the seed message and `message.rfc822_id` is non-empty, add a check-only
          result `CheckResult("gmail", "messages_matching", seed_message_id, ok, note)` where
@@ -721,7 +840,7 @@ phases:
          equals `{seed_message_id}` and
          `client.messages_matching("label:privacyfence-qa-no-such-label", [...])` is empty; a missing
          id gives `ok=False` with the note `seed message has no Message-ID header`; a
-         `GmailClientError` gives `ok=False` with its text. Read how the neighbouring results with no
+         `GmailClientError` gives `ok=False` with its fixed text (it carries no URL). Read how the neighbouring results with no
          fixture file are handled before writing it.
       6. Tests, exact names:
          - tests/unit/test_gmail_client.py `TestMessagesMatching`:
@@ -741,7 +860,13 @@ phases:
            `test_single_value_groups_names_gmail_query`.
          - tests/unit/policy/test_value_format.py `TestGmailQueryValue`:
            `test_accepts_a_normal_query_with_commas_and_quotes`, `test_refuses_control_characters`,
-           `test_refuses_a_query_over_500_characters`.
+           `test_refuses_a_query_over_500_characters`, `test_refuses_unbalanced_parentheses`
+           (parametrize `in:inbox) OR (in:anywhere`, `(in:inbox`), `test_refuses_an_odd_number_of_quotes`.
+         - tests/unit/policy/test_suggest.py `TestGmailQuerySuggestion`:
+           `test_an_uncovered_gmail_read_suggests_the_query_scope_with_no_known_value` and
+           `test_a_gmail_read_no_longer_raises_for_the_query_scope`; and the existing
+           tests/unit/web/test_mcp_dispatch.py check_policy test for gmail_get_message must still
+           pass (run it, do not edit it).
          - tests/unit/test_qa_fixture_recorder.py: one test for the new result
            (`test_check_gmail_reports_messages_matching`), following the file's existing fake-client
            pattern.
@@ -754,10 +879,11 @@ phases:
       account does not return the seed message for `in:anywhere`), or if a check-only result cannot
       be expressed in the recorder.
     acceptance:
-      - "python3 -m pytest tests/unit/test_gmail_client.py::TestMessagesMatching tests/unit/test_gmail_client.py::TestRfc822Id tests/unit/policy/test_scopes.py::TestGmailQuery tests/unit/policy/test_catalogue.py::TestGmailQueryExtra tests/unit/policy/test_value_format.py::TestGmailQueryValue tests/unit/test_qa_fixture_recorder.py -q passes"
+      - "python3 -m pytest tests/unit/test_gmail_client.py::TestMessagesMatching tests/unit/test_gmail_client.py::TestRfc822Id tests/unit/policy/test_scopes.py::TestGmailQuery tests/unit/policy/test_catalogue.py::TestGmailQueryExtra tests/unit/policy/test_value_format.py::TestGmailQueryValue tests/unit/policy/test_suggest.py::TestGmailQuerySuggestion tests/unit/test_qa_fixture_recorder.py tests/unit/web/test_mcp_dispatch.py -q passes"
       - "grep -n SINGLE_VALUE_GROUPS src/privacyfence/policy/catalogue.py matches the definition and the __all__ entry"
       - "the qa-record-fixture.yml run for connector gmail on the phase branch concluded success and its output lists messages_matching as ok (URL in the report)"
       - "ruff check . reports no problems and python3 -m pytest tests/unit -q passes"
+      - "python3 -m pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json passes, python3 scripts/check_coverage_floor.py coverage.json passes, and the term-missing report lists no line or branch of the files this phase changed as missed"
 
   - id: p5b-gmail-query-wiring
     title: Gmail query scope - connector evaluation, rule values and Settings value parsing
@@ -774,7 +900,7 @@ phases:
       - tests/unit/connectors/test_gmail_connector.py
       - tests/unit/web/test_mcp_dispatch.py
       - tests/unit/test_settings_controller.py
-      - tests/unit/web/test_routes_settings.py
+      - tests/unit/web/test_routes_org_settings.py
     brief: |
       Implement the second half of Design D4 of docs/inbox-triage-scopes-plan.md.
 
@@ -791,14 +917,16 @@ phases:
          as in Design D4: `operation_key = TOOL_TO_OPERATION[tool]`;
          `queries = rule_values("gmail.query", operation_key)[:MAX_QUERY_RULES_PER_CALL]`; return `[]`
          when there are no queries or no messages; for each query call
-         `await self._fetch(self._gmail.messages_matching, query, pairs)` with
-         `pairs = [(m.id, m.rfc822_id) for m in messages]`; catch the exception type that `_fetch`
-         raises for a client error (read `_fetch`), log a warning that names the tool and says the
-         query could not be evaluated, with no query text and no message content, and treat it as no
-         match; a query counts as matching only when the returned set equals `{m.id for m in messages}`.
+         `await asyncio.to_thread(self._gmail.messages_matching, query, pairs)` with
+         `pairs = [(m.id, m.rfc822_id) for m in messages]`, not through `_fetch` (which logs the
+         exception text at ERROR); catch `GmailClientError` only, log a warning that names the tool
+         and says the query could not be evaluated, with no query text, no exception text and no
+         message content, and treat it as no match; a query counts as matching only when the returned set equals `{m.id for m in messages}`.
          Use it in `_get_message` (messages `[message]`), `_get_thread` (`thread.messages`) and
          `_download_attachment` (`[message]`), each adding `"matching_queries": <result>` to the
-         `args` of its `gated_call`. Import `rule_values` from `..gate` and `TOOL_TO_OPERATION` from
+         `args` of its `gated_call` only when the result is not empty (existing assertions of
+         `args == {"message_id": ...}` at tests/unit/connectors/test_gmail_connector.py lines about
+         212, 428, 710 then stay as they are). Import `rule_values` from `..gate` and `TOOL_TO_OPERATION` from
          `..auto_accept` the way the module imports `gated_call`.
       3. src/privacyfence/web/mcp_dispatch.py: add `"matching_queries"` to `_CONNECTOR_COMPUTED_ARGS`
          (it then holds five names).
@@ -826,32 +954,42 @@ phases:
            `test_a_query_rule_does_not_cover_other_operations`,
            `test_preflight_is_unknown_for_a_query_rule`.
          - tests/unit/web/test_mcp_dispatch.py `TestCheckPolicy`:
-           `test_agent_supplied_matching_queries_is_ignored`.
+           `test_matching_queries_is_not_passed_to_preflight` (monkeypatch
+           `mcp_dispatch.preflight_auto_accept` to record its `args`; an agent-supplied
+           matching_queries is gone).
          - tests/unit/test_settings_controller.py `TestAddPolicyRule`:
            `test_gmail_query_value_is_not_split_on_commas`, `test_other_scopes_still_split_on_commas`.
-         - tests/unit/web/test_routes_settings.py: `test_add_policy_rule_keeps_a_gmail_query_whole`
-           (the route path for the same form).
-      6. No docs or changelog (p6).
-      Stop with status=blocked if `_fetch` converts the client error into something that cannot be
-      told apart from a programming error, or if `TOOL_TO_OPERATION` has no entry for one of the
-      three tools.
+         - tests/unit/web/test_routes_org_settings.py: `test_add_policy_rule_keeps_a_gmail_query_whole`
+           (the organization action at routes_settings.py line about 2059, inside
+           `_apply_org_action`; the local route goes through the controller, covered above).
+      6. This phase changes connectors/gmail.py after p5a's dispatch, so dispatch
+         `qa-record-fixture.yml` on `main` again with `connector=gmail` and `branch=<the phase
+         branch>`, wait, `git pull`, read any fixture diff (no account identifier, token or private
+         content), and report the run URL.
+      7. No docs or changelog (p6).
+      Stop with status=blocked if `TOOL_TO_OPERATION` has no entry for one of the three tools, or if
+      `asyncio.to_thread` cannot be used in the connector's existing call style.
     acceptance:
       - "python3 -m pytest tests/unit/test_gate.py::TestRuleValues tests/unit/connectors/test_gmail_connector.py::TestGmailQueryArgs tests/unit/test_gate_real_evaluator.py::TestGmailQueryRule -q passes"
-      - "python3 -m pytest tests/unit/web/test_mcp_dispatch.py tests/unit/test_settings_controller.py tests/unit/web/test_routes_settings.py -q passes"
+      - "python3 -m pytest tests/unit/web/test_mcp_dispatch.py tests/unit/test_settings_controller.py tests/unit/web/test_routes_org_settings.py -q passes"
       - "grep -n matching_queries src/privacyfence/connectors/gmail.py src/privacyfence/web/mcp_dispatch.py src/privacyfence/policy/scopes.py matches in all three files"
       - "ruff check . reports no problems and python3 -m mypy src/privacyfence and python3 scripts/mypy_strict_modules.py pass"
+      - "the qa-record-fixture.yml run for connector gmail on the phase branch concluded success (URL in the report)"
       - "python3 -m pytest tests/unit -q passes"
+      - "python3 -m pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json passes, python3 scripts/check_coverage_floor.py coverage.json passes, and the term-missing report lists no line or branch of the files this phase changed as missed"
 
   - id: p6-retire
     title: ADRs, user documentation, changelog, and retire the plan
-    depends_on: [p1-gmail-label-move, p2-token-read-pii-core, p3-token-read-pii-ui, p4-slack-scopes, p5a-gmail-query-core, p5b-gmail-query-wiring]
+    depends_on: [p1-gmail-label-move, p2-token-read-pii-core, p3-token-read-pii-ui, p4-slack-scopes, p5a-gmail-query-core, p5b-gmail-query-wiring, p5c-sync-personal-data-note]
     complexity: M
     touches:
       - docs/adr/README.md
       - docs/adr/0218-a-gmail-label-rule-can-allow-archiving-a-message-that-carries-the-label.md
       - docs/adr/0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md
-      - docs/adr/0220-slack-rules-cover-mentions-of-the-signed-in-user-and-their-one-to-one-dms.md
-      - docs/adr/0221-a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time.md
+      - docs/adr/0220-a-routines-rule-profile-is-a-scoped-token.md
+      - docs/adr/0221-slack-rules-cover-mentions-of-the-signed-in-user.md
+      - docs/adr/0222-a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time.md
+      - docs/adr/0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md
       - docs/approvals-and-policy.md
       - docs/security-and-compliance.md
       - docs/connect-claude-code.md
@@ -864,7 +1002,7 @@ phases:
       first. Write present-tense documentation: no "new", "now", "previously" (tests
       test_docs_no_history.py and test_code_no_history.py enforce it).
 
-      1. ADRs. Take the next four free numbers in docs/adr (`0218` to `0221` when this plan was
+      1. ADRs. Take the next five free numbers in docs/adr (`0218` to `0222` when this plan was
          written; use the next free ones and rename the files in `touches` if main has taken them).
          Each has Status (`Accepted — <today's date>. Implemented.`, plus an `Amends`/`Relates to`
          line), Context, Decision, Alternatives considered, Consequences, Verification (the test
@@ -874,9 +1012,14 @@ phases:
            ADR 0172, ADR 0204; records that check_policy stays argument-only and answers unknown).
          - `a-scoped-token-can-let-email-and-slack-reads-return-personal-data` (D2; amends ADR 0173
            and relates to ADR 0164, ADR 0216; records that a routine profile is a scoped token).
-         - `slack-rules-cover-mentions-of-the-signed-in-user-and-their-one-to-one-dms` (D3).
-         - `a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time` (D4).
-         Add the four rows to the index table in docs/adr/README.md in the same format. Add an
+         - `a-routines-rule-profile-is-a-scoped-token` (D2's first bullet; relates to ADR 0164 and
+           ADR 0015).
+         - `slack-rules-cover-mentions-of-the-signed-in-user` (D3's mentions scope, with the
+           whole-thread decision and the accepted consequence).
+         - `a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time` (D4, with the
+           usability note).
+         The label ADR also records that the label is not an independent check on a steered agent.
+         Add the five rows to the index table in docs/adr/README.md in the same format. Add an
          `Amended by` line to ADR 0173's Status (the only edit allowed to an accepted ADR).
       2. docs/approvals-and-policy.md: in the scope table, replace the "Gmail label" row's last
          cell with `the message carries one of the labels, compared by name with its live labels (this lets a rule allow archiving); the label being applied or removed is one of these`;
@@ -903,13 +1046,15 @@ phases:
       6. Delete docs/inbox-triage-scopes-plan.md and docs/inbox-triage-scopes-plan-manual-steps.html
          with `git rm`, and check nothing links to either (`grep -rn inbox-triage-scopes .` returns
          nothing).
+      6b. The user documentation in step 2 to 4 also says, in the Gmail query row and the connect
+         page, that a per-message operator such as `in:inbox` does not match a message the user sent.
       7. Run /dod (the definition-of-done gate from .claude/toolkit.yaml) and report its table.
       Stop with status=blocked if an ADR number you need is taken by a branch you cannot see (say
       which) or if a documentation test objects to a link you cannot fix.
     acceptance:
       - "python3 -m pytest tests/unit/test_generate_always_allow_reference.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_links.py tests/unit/test_docs_no_history.py tests/unit/test_code_no_history.py tests/unit/test_changelog_section.py -q passes"
-      - "ls docs/adr shows four new ADR files numbered consecutively after 0217 (or after the highest number on main) and grep -c for each file name in docs/adr/README.md is 1"
-      - "grep -rn inbox-triage-scopes . --include=* returns no match outside .git"
+      - "ls docs/adr shows five new ADR files numbered consecutively after 0217 (or after the highest number on main) and grep -c for each file name in docs/adr/README.md is 1"
+      - "grep -rn inbox-triage-scopes . --exclude-dir=.git returns no match"
       - "grep -n '^## \\[' CHANGELOG.md | head -2 shows ## [Unreleased] followed by the 6.7.0 heading"
       - "/dod reports every row passed"
 ```

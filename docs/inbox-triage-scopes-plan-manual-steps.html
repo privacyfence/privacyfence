@@ -108,7 +108,7 @@
   <section class="part" id="before" aria-labelledby="before-h">
     <div class="part-head">
       <h2 id="before-h">Before implementation</h2>
-      <p>Do both, then run <code>/implement</code>. The second one tells you early whether the scheduled task can hold a scoped token at all.</p>
+      <p>Recommended first, though no phase needs it: the second item tells you early whether the scheduled task can hold a scoped token at all. Then run <code>/implement</code>.</p>
     </div>
 
     <article class="item" id="mb1-enable-scoped-tokens">
@@ -135,18 +135,21 @@
           <pre id="cmd">claude mcp add --transport http privacyfence-triage https://&lt;your-host&gt;/mcp --header "Authorization: Bearer $PRIVACYFENCE_TRIAGE_TOKEN"</pre>
           <div class="row"><button class="copy" type="button" data-copy="cmd">Copy command</button></div>
           <span class="see">For Cowork, check whether a connector or plugin setting accepts a bearer or API-key header. Setup reference: <a href="https://github.com/privacyfence/privacyfence/blob/plan/inbox-triage-scopes/docs/connect-claude-code.md#scoped-tokens" target="_blank" rel="noopener">Scoped tokens</a>.</span></div></li>
-        <li><input type="checkbox" id="s-mb2-5" data-step><div class="step-body"><label for="s-mb2-5"><span>Run the task once. It should call <code>privacyfence_status</code> and list <code>gmail_list_labels</code> as its only connector tool.</span></label><span class="see">The status answer shows the token's expiry.</span></div></li>
+        <li><input type="checkbox" id="s-mb2-5" data-step><div class="step-body"><label for="s-mb2-5"><span>Create a test routine (any routine on the new environment) with this prompt, and run it once.</span></label>
+          <pre id="testprompt">Call privacyfence_status and report the token's expiry. Then list the names of every PrivacyFence tool you can see. Do not call any other tool.</pre>
+          <div class="row"><button class="copy" type="button" data-copy="testprompt">Copy prompt</button></div>
+          <span class="see">It is only a connectivity test, not the inbox-triage routine. It should report an expiry and exactly one connector tool, <code>gmail_list_labels</code>, plus the PrivacyFence meta tools (status, check_policy and similar).</span></div></li>
         <li><input type="checkbox" id="s-mb2-6" data-step><div class="step-body"><label for="s-mb2-6"><span>Revoke <code>connectivity-test</code> in Settings → Scoped tokens.</span></label></div></li>
       </ol>
       <div class="note">If Cowork cannot present a bearer token, stop here and tell Claude before running <code>/implement</code>. The server changes still help, but the token has to come from another runner: a Claude Code scheduled task, or <code>privacyfence-sync</code>.</div>
-      <p class="done-when"><strong>Done when:</strong> a scheduled run listed exactly one connector tool and showed the token's expiry. Or you have told Claude it could not connect.</p>
+      <p class="done-when"><strong>Done when:</strong> the test routine reported the token's expiry and exactly one connector tool. Or you have told Claude it could not connect.</p>
     </article>
   </section>
 
   <section class="part" id="rollout" aria-labelledby="rollout-h">
     <div class="part-head">
-      <h2 id="rollout-h">After the release ships</h2>
-      <p>Rollout on your own install once a release with these changes is installed. Not part of <code>/implement</code> and does not block the pull request.</p>
+      <h2 id="rollout-h">After implementation</h2>
+      <p>The rollout on your own install, once a release with these changes is installed. The pull request lists it as an unchecked item; it does not block the merge.</p>
     </div>
 
     <article class="item" id="rollout-rules-and-token">
