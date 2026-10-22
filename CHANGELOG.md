@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.6.2] — 2026-10-22
+
 ### Changed
 
 - `privacyfence-sync preflight` warns, per step, when a run can still be denied by the personal-data scan, and `privacyfence_check_policy` returns `pii_gate` and `pii_gate_detail` saying whether the scan applies and whether the token's allowance lifts it.
@@ -3415,7 +3417,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.6.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.6.2...HEAD
+[6.6.2]: https://github.com/privacyfence/privacyfence/compare/v6.6.1...v6.6.2
 [6.6.1]: https://github.com/privacyfence/privacyfence/compare/v6.6.0...v6.6.1
 [6.6.0]: https://github.com/privacyfence/privacyfence/compare/v6.5.0...v6.6.0
 [6.5.0]: https://github.com/privacyfence/privacyfence/compare/v6.4.0...v6.5.0
