@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -1689,6 +1690,9 @@ class GmailConnector(Connector):
 
     async def _archive_message(self, message_id: str) -> Any:
         message = await self._fetch(self._gmail.get_message, message_id)
+        # Rules compare label names and Gmail returns ids, so look them up on every call.
+        label_names = await self._fetch(self._gmail.label_names, message.labels) if message.labels else []
+        gate_message = dataclasses.replace(message, labels=label_names)
         preview = {"From": message.sender or "(unknown)", "Subject": message.subject or "(no subject)"}
         details = (
             "Action: Archive (remove from Inbox)\n"
@@ -1700,7 +1704,7 @@ class GmailConnector(Connector):
             tool_name="Archive Email",
             summary=f"Archive: {message.subject or '(no subject)'} from {message.sender or message_id}",
             sender=message.sender or "",
-            raw_data=message,
+            raw_data=gate_message,
             filtered_data=None,
             gate="popup",
             preview=preview,

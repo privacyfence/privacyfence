@@ -123,7 +123,7 @@ VALUE_FORMATS: dict[str, ValueFormat] = {
 }
 
 # Value-taking predicates whose values are names by nature.
-UNVALIDATED_VALUE_PREDICATES: frozenset[str] = frozenset({"label_name_allowlist", "file_type_allowlist"})
+UNVALIDATED_VALUE_PREDICATES: frozenset[str] = frozenset({"label_name_allowlist", "label_match", "file_type_allowlist"})
 
 
 def _shown(item: str) -> str:

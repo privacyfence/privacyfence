@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1237,6 +1238,11 @@ class GmailClient:
         ]
         logger.info("list_labels returned %d labels", len(labels))
         return labels
+
+    def label_names(self, label_ids: Iterable[str]) -> list[str]:
+        """Label ids to user label names, one labels.list call; system labels never count."""
+        names = {label["id"]: label["name"] for label in self.list_labels() if label["type"] == "user"}
+        return [names[label_id] for label_id in label_ids if label_id in names]
 
     def create_label(self, label_name: str) -> dict:
         """Create a label, or a nested chain of labels for a "Parent/Child" name.

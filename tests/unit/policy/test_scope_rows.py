@@ -593,3 +593,18 @@ def test_pairs_of_matches_compile_row():
 def test_pairs_of_an_unknown_row_is_empty():
     assert scope_rows.pairs_of([], "r-none") == frozenset()
 
+
+
+def test_gmail_label_row_with_update_and_move_compiles_to_two_rules():
+    row = _row("gmail.label", ["Proposed Archive"], {Verb.UPDATE, Verb.MOVE})
+    rules = scope_rows.compile_row(row)
+    by_predicate = {r.predicate: r for r in rules}
+    assert set(by_predicate) == {"label_name_allowlist", "label_match"}
+    assert by_predicate["label_match"].operations == frozenset({"gmail.archive_message"})
+    assert by_predicate["label_match"].value == ["Proposed Archive"]
+    assert "gmail.archive_message" not in by_predicate["label_name_allowlist"].operations
+
+
+def test_gmail_label_row_with_only_update_has_no_label_match_rule():
+    row = _row("gmail.label", ["Proposed Archive"], {Verb.UPDATE})
+    assert {r.predicate for r in scope_rows.compile_row(row)} == {"label_name_allowlist"}

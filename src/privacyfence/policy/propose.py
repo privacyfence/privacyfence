@@ -138,6 +138,11 @@ def _sender_domain(ctx: ReviewContext) -> Any:
     return [domain] if domain else NO_VALUE
 
 
+def _not_proposed(_ctx: ReviewContext) -> Any:
+    """A card cannot pick which label of the message should matter, so this scope is configured deliberately and never proposed off one gated call."""
+    return NO_VALUE
+
+
 def _slack_channel(ctx: ReviewContext) -> Any:
     channel_id = ctx.args.get("channel_id", "") or ctx.args.get("channel", "") or ""
     return [channel_id] if channel_id else NO_VALUE
@@ -312,6 +317,8 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
         (Verb.READ, Verb.DOWNLOAD, Verb.MOVE), _sender_domain, "this sender domain",
     ),
     _scope("label_name_allowlist", "gmail.label", "gmail", (Verb.UPDATE,), _args_values("label_name"), "this label"),
+    # Archiving is allowed only when the message already carries the label, checked against its live labels.
+    _scope("label_match", "gmail.label", "gmail", (Verb.MOVE,), _not_proposed, "this label"),
     # Gmail drafting is unconditional (``always_allow`` under ``gmail.create_draft``), and
     # modelling it as an explicit "anything in Gmail" scope is the point -- an unconditional grant
     # that reads as unconditional. It is never widenable: a scope with no resource identity must not

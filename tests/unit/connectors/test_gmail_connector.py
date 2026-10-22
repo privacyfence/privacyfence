@@ -2223,3 +2223,43 @@ class TestGoogleUnavailableErrors:
 
         assert type(excinfo.value) is RuntimeError
         assert public_message(excinfo.value) == GENERIC_PUBLIC_MESSAGE
+
+
+class TestArchiveByLabel:
+    async def test_archive_gate_receives_label_names_not_ids(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(
+            id="m1", thread_id="t1", subject="s", sender="a@b.com", labels=["INBOX", "Label_7"],
+        )
+        client.label_names.return_value = ["Proposed Archive"]
+        client.archive_message.return_value = None
+
+        await connector.call("gmail_archive_message", {"message_id": "m1"})
+
+        client.label_names.assert_called_once_with(["INBOX", "Label_7"])
+        assert gated_call_spy[0]["raw_data"].labels == ["Proposed Archive"]
+        assert gated_call_spy[0]["raw_data"].id == "m1"
+        assert gated_call_spy[0]["args"] == {"message_id": "m1"}
+
+    async def test_archive_without_labels_skips_the_label_lookup(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="s", sender="a@b.com")
+        client.archive_message.return_value = None
+
+        await connector.call("gmail_archive_message", {"message_id": "m1"})
+
+        client.label_names.assert_not_called()
+        assert gated_call_spy[0]["raw_data"].labels == []
+
+    async def test_label_lookup_error_prevents_the_archive(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(
+            id="m1", thread_id="t1", subject="s", sender="a@b.com", labels=["Label_7"],
+        )
+        client.label_names.side_effect = GmailClientError("list_labels failed")
+
+        with pytest.raises(RuntimeError, match="list_labels failed"):
+            await connector.call("gmail_archive_message", {"message_id": "m1"})
+
+        assert gated_call_spy == []
+        client.archive_message.assert_not_called()
