@@ -514,6 +514,46 @@ class TestResolveIsGroupDm:
         assert web_client.conversations_info.call_count == 2
 
 
+class TestResolveIsOneToOneDm:
+    def test_im_channel_is_true(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"is_im": True}}
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        web_client.conversations_info.assert_called_once_with(channel="D1")
+
+    def test_channel_and_group_dm_are_false(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"is_im": False, "is_mpim": True}}
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D2") is False
+
+    def test_non_d_id_makes_no_api_call(self):
+        web_client = MagicMock()
+        client = make_client(web_client)
+        for channel_id in ("", "C1", "G1"):
+            assert client.resolve_is_one_to_one_dm(channel_id) is False
+        web_client.conversations_info.assert_not_called()
+
+    def test_lookup_error_is_false_and_not_cached(self):
+        web_client = MagicMock()
+        web_client.conversations_info.side_effect = [
+            slack_error(), {"channel": {"is_im": True}},
+        ]
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D1") is False
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        assert web_client.conversations_info.call_count == 2
+
+    def test_success_is_cached(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"is_im": True}}
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        web_client.conversations_info.assert_called_once()
+
+
 class TestResolveIsSelfDm:
     def _web_client(self, *, own="U_ME", counterpart="U_ME", is_im=True):
         web_client = MagicMock()

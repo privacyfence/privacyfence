@@ -530,6 +530,21 @@ class TestCheckPolicy:
         with scoped_tokens.token_scope(token):
             return dispatcher.check_policy(connector, tool, {})
 
+    def test_connector_computed_slack_args_are_not_passed_to_preflight(self, monkeypatch):
+        seen = {}
+
+        def fake_preflight(operation_key, args, my_email):
+            seen["args"] = args
+            return "unknown", "", "", "x"
+
+        monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        dispatcher.check_policy(
+            "slack", "slack_get_thread_replies",
+            {"channel_id": "D1", "is_one_to_one_dm": True, "own_user_id": "U_ME", "is_self_dm": True},
+        )
+        assert seen["args"] == {"channel_id": "D1"}
+
     def test_pii_gate_none_for_popup_tool_outside_the_upload_scan(self):
         result = self._pii("grist", "grist_update_csv")
         assert result["gate"] == "popup"

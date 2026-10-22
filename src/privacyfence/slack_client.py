@@ -422,6 +422,7 @@ class SlackClient:
         self._user_cache: dict[str, SlackUser] = {}
         self._channel_name_cache: dict[str, str] = {}
         self._channel_is_mpim_cache: dict[str, bool] = {}
+        self._im_channel_cache: dict[str, bool] = {}
         # IM channel id -> the other participant's user id ("" for a conversation that is not an
         # IM). An IM's participants never change, so this needs no expiry.
         self._im_counterpart_cache: dict[str, str] = {}
@@ -1495,6 +1496,25 @@ class SlackClient:
             is_mpim = False
         self._channel_is_mpim_cache[channel_id] = is_mpim
         return is_mpim
+
+    def resolve_is_one_to_one_dm(self, channel_id: str) -> bool:
+        """Whether `channel_id` is a one-to-one DM (Slack's "im" conversation, including the DM with
+        yourself). The `D` id prefix alone is not enough -- it is only a hint that avoids an API
+        call for ids that cannot be a DM -- so `conversations_info` has the final say. Reads False
+        when unsure (an unknown channel or any API error); only a successful lookup is cached.
+        """
+        if not channel_id.startswith("D"):
+            return False
+        if channel_id in self._im_channel_cache:
+            return self._im_channel_cache[channel_id]
+        try:
+            response = self._client.conversations_info(channel=channel_id)
+            is_im = bool((response.get("channel") or {}).get("is_im", False))
+        except SlackApiError as exc:
+            logger.debug("Could not resolve one-to-one DM status for %s: %s", channel_id, exc)
+            return False
+        self._im_channel_cache[channel_id] = is_im
+        return is_im
 
     def own_user_id(self) -> str:
         """The authenticated user's own Slack id, from auth.test. Best-effort (never raises): a

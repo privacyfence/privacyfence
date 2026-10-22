@@ -136,6 +136,37 @@ class TestRulesForCatalogueEntry:
         assert rules[0].operations == frozenset({"peek.upload_page"})
 
 
+class TestSlackExtras:
+    @staticmethod
+    def _entry(group):
+        return next(e for e in catalogue.scope_catalogue() if e["id"] == group)
+
+    def test_mentions_scope_offers_read_and_search(self):
+        entry = self._entry("slack.mentions_of_me")
+        assert entry["verbs"] == ["read", "search"]
+        assert entry["connector"] == "slack"
+        assert entry["label"] == "Slack — mentions of me"
+
+    def test_direct_messages_scope_offers_read(self):
+        entry = self._entry("slack.direct_messages_to_me")
+        assert entry["verbs"] == ["read"]
+        assert entry["label"] == "Slack — direct messages to me"
+
+    def test_rules_compile_to_the_read_messages_operation(self):
+        for group, verbs in (
+            ("slack.mentions_of_me", [Verb.READ, Verb.SEARCH]),
+            ("slack.direct_messages_to_me", [Verb.READ]),
+        ):
+            rules = catalogue.rules_for_catalogue_entry(group, None, verbs)
+            assert rules
+            assert {r.predicate for r in rules} == {group}
+            assert all(r.operations == frozenset({"slack.read_messages"}) for r in rules)
+
+    def test_neither_scope_takes_a_value(self):
+        for group in ("slack.mentions_of_me", "slack.direct_messages_to_me"):
+            assert self._entry(group)["needs_value"] is False
+
+
 def test_scope_catalogue_has_no_verb_labels():
     assert all("verb_labels" not in entry for entry in catalogue.scope_catalogue())
 

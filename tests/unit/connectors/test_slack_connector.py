@@ -43,6 +43,9 @@ def make_connector(my_email="me@example.com"):
     client.resolve_is_group_dm.return_value = False
     # Default to "not my own DM" so args carry a plain bool, not a MagicMock.
     client.resolve_is_self_dm.return_value = False
+    # Default to "not a one-to-one DM" and "own id unknown" so args carry plain values.
+    client.resolve_is_one_to_one_dm.return_value = False
+    client.own_user_id.return_value = ""
     # Default to "not resolvable" so tests that don't care about participant-name
     # resolution get a plain str (falling back to the raw user id), not a MagicMock,
     # when building slack_create_group_chat's preview.
@@ -300,7 +303,9 @@ class TestGetChannelHistory:
         assert kwargs["filtered_data"]["messages"][0]["ts"] == "1720000000.000100"
         assert kwargs["table_only"] is True
         assert kwargs["raw_data"] == [make_message(text="a" * 100)]
-        assert kwargs["args"] == {"channel_id": "C123", "is_group_dm": False, "is_self_dm": False}
+        assert kwargs["args"] == {
+            "channel_id": "C123", "is_group_dm": False, "is_self_dm": False, "is_one_to_one_dm": False,
+        }
         client.get_channel_history.assert_called_once_with("C123", 10, cursor="")
         client.resolve_channel_name.assert_not_called()
 
@@ -573,6 +578,7 @@ class TestGetThreadReplies:
         assert kwargs["new_info"]["Replies"] == "2"
         assert kwargs["args"] == {
             "channel_id": "C123", "thread_ts": "t1", "is_group_dm": False, "is_self_dm": False,
+            "is_one_to_one_dm": False, "own_user_id": "",
         }
         assert kwargs["preview_tables"] == [{
             "headers": ["Sender", "Date", "Message"],
@@ -635,7 +641,7 @@ class TestSearchMessages:
         assert kwargs["preview"] == {"Query": "budget", "Since": "last 90 days"}
         assert kwargs["new_info"] == {"Results": "2"}
         assert kwargs["gate"] == "review"
-        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 90}
+        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 90, "own_user_id": ""}
         assert kwargs["preview_tables"] == [{
             "headers": ["Channel", "Sender", "Date", "Message"],
             "rows": [
@@ -654,7 +660,7 @@ class TestSearchMessages:
 
         kwargs = gated_call_spy[0]
         assert kwargs["preview"]["Since"] == "last 7 days"
-        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 7}
+        assert kwargs["args"] == {"query": "budget", "participant": "", "days": 7, "own_user_id": ""}
         client.search_messages.assert_called_once_with("budget", 20, "", 7)
 
     async def test_days_zero_previewed_as_all_time(self, gated_call_spy):
@@ -703,7 +709,7 @@ class TestSearchMessages:
         kwargs = gated_call_spy[0]
         assert kwargs["preview"] == {"Participant": "Bob", "Since": "last 90 days"}
         assert kwargs["summary"] == "1 result for messages with Bob"
-        assert kwargs["args"] == {"query": "", "participant": "Bob", "days": 90}
+        assert kwargs["args"] == {"query": "", "participant": "Bob", "days": 90, "own_user_id": ""}
         client.search_messages.assert_called_once_with("", 20, "Bob", 90)
 
     async def test_participant_and_query_combined_preview_and_summary(self, gated_call_spy):
@@ -715,7 +721,7 @@ class TestSearchMessages:
         kwargs = gated_call_spy[0]
         assert kwargs["preview"] == {"Query": "budget", "Participant": "Bob,Jane", "Since": "last 90 days"}
         assert kwargs["summary"] == '2 results for "budget" with Bob,Jane'
-        assert kwargs["args"] == {"query": "budget", "participant": "Bob,Jane", "days": 90}
+        assert kwargs["args"] == {"query": "budget", "participant": "Bob,Jane", "days": 90, "own_user_id": ""}
 
 
 class TestCreateGroupChat:
@@ -804,6 +810,43 @@ class TestCreateGroupChat:
             "id": "G1", "name": "mpdm-a--b-1",
             "member_ids": ["U1", "U2"], "member_names": ["Jane", "Bob"],
         }
+
+
+class TestComputedScopeArgs:
+    async def test_channel_history_args_carry_is_one_to_one_dm(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_channel_history.return_value = ([make_message()], False, "")
+        client.resolve_is_one_to_one_dm.return_value = True
+
+        await connector.call("slack_get_channel_history", {"channel_id": "D123"})
+
+        client.resolve_is_one_to_one_dm.assert_called_once_with("D123")
+        args = gated_call_spy[0]["args"]
+        assert args["is_one_to_one_dm"] is True
+        assert "own_user_id" not in args
+
+    async def test_thread_replies_args_carry_both_values(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_thread_replies.return_value = ([make_message()], False, "")
+        client.resolve_is_one_to_one_dm.return_value = True
+        client.own_user_id.return_value = "U_ME"
+
+        await connector.call("slack_get_thread_replies", {"channel_id": "D123", "thread_ts": "t1"})
+
+        args = gated_call_spy[0]["args"]
+        assert args["is_one_to_one_dm"] is True
+        assert args["own_user_id"] == "U_ME"
+
+    async def test_search_args_carry_own_user_id(self, gated_call_spy):
+        connector, client = make_connector()
+        client.search_messages.return_value = [make_message()]
+        client.own_user_id.return_value = "U_ME"
+
+        await connector.call("slack_search_messages", {"query": "budget"})
+
+        args = gated_call_spy[0]["args"]
+        assert args["own_user_id"] == "U_ME"
+        assert "is_one_to_one_dm" not in args
 
 
 class TestSendMessage:

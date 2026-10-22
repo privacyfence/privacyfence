@@ -35,12 +35,14 @@ named one specific file by id rather than a folder), `apps_script.project` (Apps
 no scope at all), `grist.document` (Grist's seven operation keys name one document by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
 make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
 Auto-accept Settings page; see their own comment below for why they are not simply more
-`always_allow` rules.
+`always_allow` rules. `slack.mentions_of_me` and `slack.direct_messages_to_me` read arguments the Slack
+connector computes (`own_user_id`, `is_one_to_one_dm`) and so resolve from the fetched item.
 
 ``policy.engine.evaluate``/``preflight`` are what consume this module in production.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
@@ -615,6 +617,26 @@ def _anything_matches(_value: Any, _ctx: ReviewContext) -> bool:
     return True
 
 
+def _one_to_one_dm_matches(_value: Any, ctx: ReviewContext) -> bool:
+    return ctx.args.get("is_one_to_one_dm") is True
+
+
+def _mentions_of_me_matches(_value: Any, ctx: ReviewContext) -> bool:
+    own = ctx.args.get("own_user_id")
+    if not isinstance(own, str) or not own:
+        return False
+    messages = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    if not messages or any(m is None for m in messages):
+        return False
+    pattern = re.compile(r"<@" + re.escape(own) + r"(?:\|[^>]*)?>")
+    mentions = [bool(pattern.search(getattr(m, "text", "") or "")) for m in messages]
+    if ctx.tool == "slack_search_messages":
+        return all(mentions)
+    if ctx.tool == "slack_get_thread_replies":
+        return any(mentions)
+    return False
+
+
 NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.file": ScopeSelector(
         predicate="drive.file", scope_type="drive.file", kind=ScopeKind.IDENTITY,
@@ -639,5 +661,15 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "slack.anything": ScopeSelector(
         predicate="slack.anything", scope_type="slack.anything", kind=ScopeKind.ATTRIBUTE,
         resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
+    ),
+    "slack.direct_messages_to_me": ScopeSelector(
+        predicate="slack.direct_messages_to_me", scope_type="slack.direct_messages_to_me",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_one_to_one_dm_matches,
+    ),
+    "slack.mentions_of_me": ScopeSelector(
+        predicate="slack.mentions_of_me", scope_type="slack.mentions_of_me",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_mentions_of_me_matches,
     ),
 }
