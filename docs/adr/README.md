@@ -295,7 +295,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0201](0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md) | The website's security headers are set by Cloudflare and checked from the repository | Accepted; amends 0053 |
 | [0202](0202-cached-atlassian-accounts-are-reported-each-cycle-and-erased-when-they-cannot-be.md) | Cached Atlassian accounts are reported each cycle, and erased when they cannot be | Accepted; amends 0117 |
 | [0203](0203-the-deb-is-built-on-a-pinned-ubuntu-runner.md) | The `.deb` is built on a pinned Ubuntu runner | Accepted; acts on 0039 |
-| [0204](0204-check-policy-names-the-rules-that-would-cover-an-uncovered-call.md) | `privacyfence_check_policy` names the rules that would cover an uncovered call | Accepted |
+| [0204](0204-check-policy-names-the-rules-that-would-cover-an-uncovered-call.md) | `privacyfence_check_policy` names the rules that would cover an uncovered call | Accepted; amended by 0229 |
 | [0205](0205-privacyfence-sync-reports-a-runs-outcome-in-an-opt-in-result-file.md) | `privacyfence-sync` reports a run's outcome in an opt-in result file | Accepted |
 | [0206](0206-scoped-token-activity-is-kept-in-its-own-file.md) | A scoped token's last use and last denial are kept in their own file | Accepted; relates to 0164 |
 | [0207](0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md) | `privacyfence-sync` can start a Claude Code scheduled task, and nothing else | Accepted; amends 0161 |
@@ -320,3 +320,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0226](0226-a-slack-rule-can-cover-the-conversations-the-user-is-a-member-of.md) | A Slack rule can cover the conversations the signed-in user is a member of, checked live on each call | Accepted; relates to 0172, 0221 |
 | [0227](0227-member-only-slack-search-drops-other-conversations-before-the-gate.md) | Member-only Slack search drops results from other conversations before the gate, on the agent's request | Accepted; relates to 0221, 0223 |
 | [0228](0228-an-extra-scope-can-give-each-verb-its-own-predicate.md) | An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with | Accepted; amends 0221 |
+| [0229](0229-check-policy-suggests-the-slack-rules-that-take-no-value.md) | `privacyfence_check_policy` suggests the Slack rules that take no value, from the call's own arguments | Accepted; amends 0204; relates to 0221, 0226, 0228 |

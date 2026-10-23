@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from dataclasses import dataclass, replace
 from typing import Any, TextIO
@@ -52,12 +53,19 @@ def _not_available_text(tool: str, scoped: bool) -> str:
 
 
 def _suggestion_text(suggestion: dict[str, Any]) -> str:
-    """One suggested rule as ``label = values (verb)``, or without values when only known at run time."""
+    """One suggested rule as ``label = values (verb)``, ``label (verb)`` when the rule takes no value,
+    or without values when only known at run time; ``requires_args`` adds what the step must also pass."""
     label, verb = suggestion.get("label"), suggestion.get("verb")
     value = suggestion.get("value")
+    requires = suggestion.get("requires_args")
+    suffix = ""
+    if isinstance(requires, dict) and requires:
+        suffix = ", if the step also passes " + ", ".join(f"{k}={json.dumps(v)}" for k, v in sorted(requires.items()))
     if suggestion.get("value_known") is False or not isinstance(value, list):
-        return f"{label}, naming what it reaches at run time ({verb})"
-    return f"{label} = {', '.join(str(item) for item in value)} ({verb})"
+        return f"{label}, naming what it reaches at run time ({verb}){suffix}"
+    if not value:
+        return f"{label} ({verb}){suffix}"
+    return f"{label} = {', '.join(str(item) for item in value)} ({verb}){suffix}"
 
 
 def _add_hint(result: Any) -> str:

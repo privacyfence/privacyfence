@@ -73,6 +73,8 @@ def _need_text(entry: dict[str, Any]) -> str:
     verbs = ", ".join(entry["verbs"])
     if entry["value"] is None:
         return f"  {entry['label']}, naming what it reaches at run time ({verbs})"
+    if not entry["value"]:
+        return f"  {entry['label']} ({verbs})"
     return f"  {entry['label']} = {', '.join(entry['value'])} ({verbs})"
 
 

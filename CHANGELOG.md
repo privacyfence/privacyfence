@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.8.1] — 2026-10-23
+
+### Fixed
+
+- **`privacyfence_check_policy` suggests the Slack rules for mentions of you, your conversations and one-to-one DMs.** A Slack search or read now lists "Slack — mentions of me", "Slack — conversations I'm a member of" and "Slack — direct messages to me" where they could cover the call, not only the per-channel rule, without asking Slack. A search needs `member_only` for the conversations rule, and the suggestion says so.
+
 ## [6.8.0] — 2026-10-22
 
 ### Added
@@ -3449,7 +3455,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.8.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...HEAD
+[6.8.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.0...v6.8.1
 [6.8.0]: https://github.com/privacyfence/privacyfence/compare/v6.7.0...v6.8.0
 [6.7.0]: https://github.com/privacyfence/privacyfence/compare/v6.6.2...v6.7.0
 [6.6.2]: https://github.com/privacyfence/privacyfence/compare/v6.6.1...v6.6.2

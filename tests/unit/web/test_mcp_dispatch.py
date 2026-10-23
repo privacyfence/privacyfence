@@ -694,6 +694,22 @@ class TestCheckPolicy:
         dispatcher.check_policy("gmail", "gmail_get_message", {})
         assert connector.calls == []
 
+    def test_slack_suggestions_never_call_the_connector(self):
+        connector = FakeConnector("slack")
+        dispatcher = _dispatcher({"slack": connector})
+        result = dispatcher.check_policy(
+            "slack", "slack_get_thread_replies", {"channel_id": "D1", "thread_ts": "1.2"},
+        )
+        assert connector.calls == []
+        assert "slack.direct_messages_to_me" in [s["group"] for s in result["suggested_rules"]]
+
+    def test_slack_membership_suggestion_ignores_an_agent_supplied_is_member(self):
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        result = dispatcher.check_policy(
+            "slack", "slack_get_channel_history", {"channel_id": "", "is_member": True},
+        )
+        assert "slack.my_conversations" not in [s["group"] for s in result["suggested_rules"]]
+
     def test_popup_tool_matching_args_only_rule_is_auto_accept(self):
         from privacyfence import auto_accept
 

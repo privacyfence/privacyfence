@@ -8,7 +8,7 @@ import dataclasses
 
 import pytest
 
-from privacyfence.policy import propose, scopes
+from privacyfence.policy import catalogue, propose, scopes, suggest
 from privacyfence.policy.registry import TOOL_REGISTRY, Verb
 from privacyfence.policy.suggest import suggested_rules
 
@@ -75,6 +75,15 @@ class TestNeverSuggested:
     def test_unconditional_extra_scope_is_not_suggested(self):
         assert suggested_rules("gmail_create_filter", {}) == []
 
+    def test_every_valueless_extra_scope_is_decided(self):
+        undecided = [
+            group for group, extra in catalogue.EXTRA_SCOPES.items()
+            if not extra.needs_value
+            and group not in suggest._VALUELESS_EXTRAS
+            and extra.predicate not in {"gmail.anything", "slack.anything"}
+        ]
+        assert undecided == []
+
     def test_unwidenable_always_allow_scope_is_not_suggested(self):
         assert "gmail.anything" not in _groups(suggested_rules("gmail_create_draft", {"to": "a@b.c"}))
 
@@ -107,6 +116,74 @@ class TestFailClosed:
         selector = dataclasses.replace(scopes.SCOPE_SELECTORS["approved_report_ids"], matches=lambda v, c: False)
         monkeypatch.setitem(scopes.SCOPE_SELECTORS, "approved_report_ids", selector)
         assert suggested_rules("salesforce_export_report", {"report_id": "00O1"}) == []
+
+
+    def test_a_valueless_scope_whose_predicate_is_missing_is_skipped(self, monkeypatch):
+        monkeypatch.delitem(scopes.NEW_SCOPE_SELECTORS, "slack.my_conversations")
+        groups = _groups(suggested_rules("slack_get_channel_history", {"channel_id": "C1"}))
+        assert "slack.my_conversations" not in groups
+
+    def test_a_valueless_applicability_check_that_raises_is_skipped(self, monkeypatch):
+        def boom(_tool, _args):
+            raise RuntimeError("applicability broke")
+
+        monkeypatch.setitem(suggest._VALUELESS_EXTRAS, "slack.my_conversations", boom)
+        groups = _groups(suggested_rules("slack_get_channel_history", {"channel_id": "C1"}))
+        assert "slack.my_conversations" not in groups
+
+
+class TestSlackValuelessSuggestions:
+    @staticmethod
+    def _shape(tool, args):
+        return [
+            (s["group"], s["verb"], s["value"], s["value_known"], s.get("requires_args", "absent"))
+            for s in suggested_rules(tool, args)
+        ]
+
+    def test_search(self):
+        assert self._shape("slack_search_messages", {"query": "x"}) == [
+            ("slack.channel", "search", None, False, "absent"),
+            ("slack.mentions_of_me", "search", [], True, "absent"),
+            ("slack.my_conversations", "search", [], True, {"member_only": True}),
+        ]
+
+    def test_search_member_only(self):
+        assert self._shape("slack_search_messages", {"query": "x", "member_only": True}) == [
+            ("slack.channel", "search", None, False, "absent"),
+            ("slack.mentions_of_me", "search", [], True, "absent"),
+            ("slack.my_conversations", "search", [], True, "absent"),
+        ]
+
+    def test_channel_history(self):
+        assert self._shape("slack_get_channel_history", {"channel_id": "C1"}) == [
+            ("slack.channel", "read", ["C1"], True, "absent"),
+            ("slack.my_conversations", "read", [], True, "absent"),
+        ]
+
+    def test_channel_history_of_a_direct_message(self):
+        assert self._shape("slack_get_channel_history", {"channel_id": "D1"}) == [
+            ("slack.channel", "read", ["D1"], True, "absent"),
+            ("slack.direct_messages_to_me", "read", [], True, "absent"),
+            ("slack.my_conversations", "read", [], True, "absent"),
+        ]
+
+    def test_thread_replies_in_a_group(self):
+        assert self._shape("slack_get_thread_replies", {"channel_id": "G1", "thread_ts": "1.2"}) == [
+            ("slack.channel", "read", ["G1"], True, "absent"),
+            ("slack.mentions_of_me", "read", [], True, "absent"),
+            ("slack.my_conversations", "read", [], True, "absent"),
+        ]
+
+    def test_thread_replies_in_a_direct_message(self):
+        assert _groups(suggested_rules("slack_get_thread_replies", {"channel_id": "D1", "thread_ts": "1.2"})) == [
+            "slack.channel", "slack.mentions_of_me", "slack.direct_messages_to_me", "slack.my_conversations",
+        ]
+
+    def test_no_channel_gets_no_suggestion(self):
+        assert suggested_rules("slack_get_channel_history", {}) == []
+
+    def test_an_unconditional_slack_scope_is_not_suggested(self):
+        assert suggested_rules("slack_create_group_chat", {"participants": "U1,U2"}) == []
 
 
 class TestGmailArchiveSuggestion:

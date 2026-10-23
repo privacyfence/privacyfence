@@ -317,6 +317,27 @@ async def test_needs_approval_suggestion_known_only_at_run_time(write_recipe: Re
     assert "wait for a card; add: Drive folder, naming what it reaches at run time (read)\n" in out
 
 
+async def test_needs_approval_suggestion_with_no_value(write_recipe: RecipeWriter) -> None:
+    suggestion = {"label": "Slack — mentions of me", "value": [], "value_known": True, "verb": "search"}
+    result = {**REVIEW, "suggested_rules": [suggestion]}
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)), attended=False)
+    assert not ok
+    assert "an unattended run would be denied; add: Slack — mentions of me (search)\n" in out
+
+
+async def test_needs_approval_suggestion_with_required_args(write_recipe: RecipeWriter) -> None:
+    suggestion = {
+        "label": "Slack — conversations I'm a member of", "value": [], "value_known": True, "verb": "search",
+        "requires_args": {"member_only": True, "a": "x"},
+    }
+    result = {**REVIEW, "suggested_rules": [suggestion]}
+    ok, out = await run(write_recipe, [step()], FakeClient(names("drive_list_files"), policy(result=result)), attended=False)
+    assert not ok
+    assert (
+        "add: Slack — conversations I'm a member of (search), if the step also passes a=\"x\", member_only=true\n"
+    ) in out
+
+
 @pytest.mark.parametrize("suggested", [None, [], ["junk"]])
 async def test_needs_approval_without_a_usable_suggestion_is_unchanged(
     write_recipe: RecipeWriter, suggested: Any
