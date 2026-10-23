@@ -108,6 +108,15 @@ async def test_needs_rule_value_unknown(write_recipe: RecipeWriter) -> None:
     assert "Rules this recipe needs:\n  Drive folder, naming what it reaches at run time (read)\n" in out
 
 
+async def test_needs_rule_takes_no_value(write_recipe: RecipeWriter) -> None:
+    mine = {**FOLDER, "label": "Slack — mentions of me", "value": [], "verb": "search"}
+    needs = {**mine, "requires_args": {"member_only": True}}
+    out = await run(write_recipe, [step()], checked({**REVIEW, "suggested_rules": [mine, needs]}))
+    assert "NEEDS A RULE: Slack — mentions of me (search)\n" in out
+    assert "NEEDS A RULE: Slack — mentions of me (search), if the step also passes member_only=true\n" in out
+    assert "Rules this recipe needs:\n  Slack — mentions of me (search)\n" in out
+
+
 async def test_needs_rule_without_suggested_rules_key(write_recipe: RecipeWriter) -> None:
     out = await run(write_recipe, [step()], checked(REVIEW))
     assert "this PrivacyFence does not suggest one; update it" in out

@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-20. Implemented: `src/privacyfence/policy/suggest.py` and
 `mcp_dispatch.check_policy`.
+Amended by 0229 (check_policy now suggests the value-less Slack rules).
 
 ## Context
 

@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`privacyfence_check_policy` suggests the Slack rules for mentions of you, your conversations and one-to-one DMs.** A Slack search or read now lists "Slack — mentions of me", "Slack — conversations I'm a member of" and "Slack — direct messages to me" where they could cover the call, not only the per-channel rule, without asking Slack. A search needs `member_only` for the conversations rule, and the suggestion says so.
+
 ## [6.8.0] — 2026-10-22
 
 ### Added

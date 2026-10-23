@@ -813,6 +813,8 @@ Each step shows one of these:
 | `covered by rule <id>` | An existing rule matches |
 | `NEEDS A RULE: <scope> = <values> (<verb>)` | No rule matches; this is the rule that would. One line per suggestion |
 | `NEEDS A RULE: <scope>, naming what it reaches at run time (<verb>)` | The rule names something only known at run time, such as the folder a downloaded file is in |
+| `NEEDS A RULE: <scope> (<verb>)` | The rule takes no value (the Slack mentions, one-to-one DM and conversations rules) |
+| `NEEDS A RULE: <scope> (<verb>), if the step also passes <arg>=<value>` | The rule covers the step only if it also passes that argument |
 | `depends on what it reaches at run time` | The step has `${...}` arguments that were left out of the check; any suggested rules follow |
 | `NOT CHECKED: <error>` | The policy check itself failed |
 | `NOT AVAILABLE ...` | The server (or the token) does not offer the tool |
@@ -843,7 +845,8 @@ Trigger steps need no PrivacyFence rule and are not listed.
 
 `status` is `auto`, `covered`, `needs_rule`, `unknown`, `not_checked` or `not_available`.
 `matched_rule` is set only for `covered`. `suggested_rules` is `null` when the server is too old to
-send suggestions. `value` is `null` where the rule names what the step reaches at run time.
+send suggestions. `value` is `null` where the rule names what the step reaches at run time. `value` is `[]` where the rule takes
+no value, and a suggestion with `requires_args` covers the step only if the step also passes those arguments.
 
 The command exits 0 when it could list, whether or not rules are needed. Otherwise it exits 1 for a
 bad recipe, 2 for a failure and 4 when the token is rejected or sees no tools.
