@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rule chips on the scoped tokens page keep the space before the resource name.** A chip such as "Peek — page my-page" showed the name run into the word before it.
+
 ## [6.8.2] — 2026-10-25
 
 ### Fixed
