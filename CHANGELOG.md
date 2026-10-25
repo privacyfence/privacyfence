@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Slack search with no results is covered by "Slack — mentions of me".** A search for mentions that found nothing was denied under a scoped token, although it releases no message. It is now auto-accepted; a search that returns any message without a mention of you is still refused.
+
 ## [6.8.1] — 2026-10-23
 
 ### Fixed

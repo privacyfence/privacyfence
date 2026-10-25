@@ -645,6 +645,8 @@ def _mentions_of_me_matches(_value: Any, ctx: ReviewContext) -> bool:
 def _mentions_of_me_all_results_matches(_value: Any, ctx: ReviewContext) -> bool:
     if ctx.tool != "slack_search_messages":
         return False
+    if ctx.raw_data == []:  # nothing found releases nothing, so a no-hit search is covered
+        return True
     flags = _mention_flags(ctx)
     return flags is not None and all(flags)
 

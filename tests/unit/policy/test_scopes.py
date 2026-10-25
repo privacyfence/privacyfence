@@ -558,8 +558,11 @@ class TestSlackMentionsOfMeAllResults:
         ctx = make_ctx(connector="slack", tool="slack_search_messages", raw_data=msgs)
         assert self.selector.matches(None, ctx) is False
 
-    def test_empty_results_never_match(self):
-        for data in ([], None, [None]):
+    def test_a_search_with_no_results_matches(self):
+        assert self.selector.matches(None, _mentions_ctx("slack_search_messages", [])) is True
+
+    def test_missing_results_never_match(self):
+        for data in (None, [None]):
             assert self.selector.matches(None, _mentions_ctx("slack_search_messages", data)) is False
 
     def test_mention_with_name_suffix_matches(self):
