@@ -229,6 +229,11 @@ def test_scope_of_rule_maps_an_extra_scope():
 
     assert scope_rows.scope_of_rule(rule) == ("grist.document", ["D1"])
 
+def test_scope_of_rule_maps_the_miro_board_scope():
+    rule = _v2("miro.board", ["uXjVOD6LSME="], [Verb.READ])[0]
+
+    assert scope_rows.scope_of_rule(rule) == ("miro.board", ["uXjVOD6LSME="])
+
 
 # ── RowId ──────────
 

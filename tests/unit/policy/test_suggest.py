@@ -41,6 +41,12 @@ class TestArgumentDerivedSuggestions:
         assert suggestion["group"] == "peek.page"
         assert suggestion["value"] == ["pipeline"]
 
+    def test_miro_board_is_named_by_its_board_id(self):
+        [suggestion] = suggested_rules("miro_list_items", {"board_id": "uXjVOD6LSME="})
+        assert suggestion["group"] == "miro.board"
+        assert suggestion["value"] == ["uXjVOD6LSME="]
+        assert suggestion["verb"] == TOOL_REGISTRY["miro_list_items"].verb.value == "read"
+
     def test_peek_page_without_a_slug_is_not_suggested(self):
         assert "peek.page" not in _groups(suggested_rules("peek_upload_page", {}))
 

@@ -22,6 +22,7 @@ from typing import Any
 
 from ..assets_client import _ID_RE as _ASSETS_ID_RE
 from ..grist_client import DOC_ID_RE as _GRIST_DOC_ID_RE
+from ..miro_client import BOARD_ID_RE as _MIRO_BOARD_ID_RE
 from ..peek_client import _SLUG_RE as _PEEK_SLUG_RE
 
 _SHOWN_CHARS = 60
@@ -119,6 +120,11 @@ VALUE_FORMATS: dict[str, ValueFormat] = {
     ),
     "peek.page": _fmt(
         _PEEK_SLUG_RE, "a Peek page slug", "the page's slug, not its title", "team-dashboard",
+    ),
+    "miro.board": _fmt(
+        _MIRO_BOARD_ID_RE, "a Miro board id",
+        "the id from the board's address (the part after /app/board/), not its name or the full link",
+        "uXjVOD6LSME=",
     ),
     "gmail.query": _fmt(
         r"[^\x00-\x1f\x7f]{1,500}", "a Gmail search query",

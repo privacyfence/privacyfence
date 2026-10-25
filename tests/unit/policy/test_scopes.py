@@ -480,6 +480,23 @@ class TestNewScopeSelectors:
         assert selector.matches([], ctx) is False
         assert selector.matches("", ctx) is False
 
+    def test_miro_board_matches_the_board_id_from_args_verbatim(self):
+        selector = NEW_SCOPE_SELECTORS["miro.board"]
+        ctx = make_ctx(connector="miro", args={"board_id": "uXjVOD6LSME="})
+        assert selector.matches(["uXjVOD6LSME=", "o9J_kzZb3Xg="], ctx) is True
+        assert selector.matches("uXjVOD6LSME=", ctx) is True
+        assert selector.matches(["o9J_kzZb3Xg="], ctx) is False
+        assert selector.matches(["https://miro.com/app/board/uXjVOD6LSME=/"], ctx) is False
+
+    def test_miro_board_never_matches_an_empty_value_or_board_id(self):
+        selector = NEW_SCOPE_SELECTORS["miro.board"]
+        ctx = make_ctx(connector="miro", args={"board_id": "uXjVOD6LSME="})
+        assert selector.matches([], ctx) is False
+        assert selector.matches("", ctx) is False
+        for args in ({}, {"board_id": ""}, {"board_id": None}):
+            assert selector.matches(["uXjVOD6LSME="], make_ctx(connector="miro", args=args)) is False
+        assert selector.matches([""], make_ctx(connector="miro", args={"board_id": ""})) is False
+
     def test_peek_page_matches_a_named_slug(self):
         selector = NEW_SCOPE_SELECTORS["peek.page"]
         ctx = make_ctx(connector="peek", args={"slug": "dash"})

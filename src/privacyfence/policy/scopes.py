@@ -32,7 +32,7 @@ config-authoring work, not something this module's `matches()` needs to know.
 Scope types with no old predicate to be checked against live in `NEW_SCOPE_SELECTORS` rather than
 `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly: `drive.file` (no rule ever
 named one specific file by id rather than a folder), `apps_script.project` (Apps Script's tools had
-no scope at all), `grist.document` (Grist's seven operation keys name one document by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
+no scope at all), `grist.document` (Grist's seven operation keys name one document by id), `miro.board` (Miro's seven gated operation keys name one board by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
 make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
 Auto-accept Settings page; see their own comment below for why they are not simply more
 `always_allow` rules. `slack.mentions_of_me` (thread replies), `slack.mentions_of_me_all_results` (searches) and
@@ -602,6 +602,15 @@ def _peek_page_matches(value: Any, ctx: ReviewContext) -> bool:
     return bool(slug) and slug in set(_values_of(value))
 
 
+def _miro_board_matches(value: Any, ctx: ReviewContext) -> bool:
+    """A Miro board rule names board ids, compared verbatim with the call's ``board_id`` (a pasted
+    board link never matches). A call without a board id never matches."""
+    if not value:
+        return False
+    board_id = ctx.args.get("board_id", "") or ""
+    return bool(board_id) and board_id in set(_values_of(value))
+
+
 # `gmail.create_filter`/`update_filter` and `slack.create_group_chat` have no resource identity to
 # scope to at all (propose.py's own module docstring explains why: a filter's/group chat's
 # *subject* is "the account"/"the audience", not an item any `ScopeSelector` here can name). They
@@ -698,6 +707,10 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "peek.page": ScopeSelector(
         predicate="peek.page", scope_type="peek.page", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.ARGS, matches=_peek_page_matches,
+    ),
+    "miro.board": ScopeSelector(
+        predicate="miro.board", scope_type="miro.board", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.ARGS, matches=_miro_board_matches,
     ),
     "gmail.anything": ScopeSelector(
         predicate="gmail.anything", scope_type="gmail.anything", kind=ScopeKind.ATTRIBUTE,

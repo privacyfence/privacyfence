@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from privacyfence import assets_client, grist_client, peek_client
+from privacyfence import assets_client, grist_client, miro_client, peek_client
 from privacyfence.policy import catalogue, propose
 from privacyfence.policy.value_format import (
     UNVALIDATED_VALUE_PREDICATES,
@@ -46,6 +46,8 @@ VALID = [
     ("apps_script.project", "1A2b3C4d5E6f7G8h"),
     ("grist.document", "8CAN8gKdxY7zq3FvPXbHdM"),
     ("peek.page", "team-dashboard"),
+    ("miro.board", "uXjVOD6LSME="),
+    ("miro.board", "o9J_kzZb3Xg="),
     ("trusted_sender_domain", "example.com"),
     ("approved_recipient_domain", "mail.example.co.uk"),
 ]
@@ -79,6 +81,9 @@ INVALID = [
     ("grist.document", "Budget 2026"),
     ("grist.document", "x" * 129),
     ("peek.page", "Team Dashboard"),
+    ("miro.board", "https://miro.com/app/board/uXjVOD6LSME=/"),
+    ("miro.board", "My board"),
+    ("miro.board", "../x"),
     ("trusted_sender_domain", "alice@example.com"),
     ("trusted_sender_domain", "https://example.com"),
     ("approved_recipient_domain", "example"),
@@ -109,6 +114,7 @@ def test_every_format_accepts_its_own_example(predicate):
 def test_client_regexes_are_reused():
     assert VALUE_FORMATS["grist.document"].pattern is grist_client.DOC_ID_RE
     assert VALUE_FORMATS["peek.page"].pattern is peek_client._SLUG_RE
+    assert VALUE_FORMATS["miro.board"].pattern is miro_client.BOARD_ID_RE
     assert VALUE_FORMATS["approved_schema_ids"].pattern is assets_client._ID_RE
 
 

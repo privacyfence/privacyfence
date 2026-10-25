@@ -39,6 +39,8 @@ deliberately, from the Settings page or the bridge's ``privacyfence_propose_poli
 * ``grist.read_records``/``add_records``/``update_records``/``create_table``/``add_columns``/
   ``import_csv``/``update_csv`` are
   governed by ``grist.document``, a scope with no entry here.
+* ``miro.list_items``/``get_items``/``list_connectors``/``create_items``/``create_connectors``/
+  ``update_items``/``update_board`` are governed by ``miro.board``, a scope with no entry here.
 * ``slack.create_group_chat``'s subject is an audience, and no scope type measures one.
 * ``gmail.create_filter``/``update_filter`` could only be scoped by "anything in Gmail", and an
   unconditional rule for an operation that can silently archive or forward mail indefinitely must be
