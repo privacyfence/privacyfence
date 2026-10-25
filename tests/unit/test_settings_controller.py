@@ -64,7 +64,7 @@ def _drain_run_async(recorded) -> None:
 ORG_CONFIG_ENABLING_EVERY_CONNECTOR = {
     "google": {"client_id": "g"}, "slack": {"client_id": "s"}, "salesforce": {"consumer_key": "k"},
     "atlassian": {"client_id": "a"}, "telegram": {"enabled": True}, "grist": {"enabled": True},
-    "peek": {"enabled": True},
+    "peek": {"enabled": True}, "miro": {"client_id": "m", "client_secret": "s"},
 }
 
 
@@ -1091,7 +1091,7 @@ class TestAuthenticateDispatch:
         ("tasks", "_authenticate_google"), ("apps_script", "_authenticate_google"), ("slack", "_authenticate_slack"),
         ("salesforce", "_authenticate_salesforce"), ("jira", "_authenticate_atlassian"),
         ("confluence", "_authenticate_atlassian"), ("assets", "_authenticate_atlassian"),
-        ("grist", "_authenticate_grist"),
+        ("grist", "_authenticate_grist"), ("miro", "_authenticate_miro"),
     ])
     def test_dispatches_to_the_right_per_service_method(self, controller, monkeypatch, cname, method):
         calls = []
@@ -1347,6 +1347,77 @@ class TestAuthenticateGrist:
         row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "grist")
         assert row["has_org"] is True
         assert row["label"] == "Grist"
+
+
+class TestAuthenticateMiro:
+    APP = {"miro": {"client_id": "cid", "client_secret": "cs"}}
+
+    def test_without_a_section_says_not_installed_and_runs_nothing(self, controller, monkeypatch):
+        monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
+        controller._authenticate_miro({})
+        assert controller.error == "Miro organization config isn't installed yet."
+
+    def test_incomplete_section_sets_error(self, controller, monkeypatch):
+        monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
+        controller._authenticate_miro({"miro": {"client_id": "cid"}})
+        assert controller.error.startswith("Miro organization config is not usable: ")
+        assert "incomplete" in controller.error
+
+    def test_success_signs_in_and_refreshes(self, controller, monkeypatch, tmp_path):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        seen = {}
+
+        def fake(config, token_file):
+            seen["client_id"], seen["token_file"] = config.client_id, token_file
+            return {}
+
+        monkeypatch.setattr(sc.miro_auth, "authorize_interactive", fake)
+        refresh_calls = []
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
+
+        controller._authenticate_miro(self.APP)
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+
+        assert seen["client_id"] == "cid"
+        assert seen["token_file"] == str(tmp_path / "data" / "credentials" / "miro_token.json")
+        assert refresh_calls == [1]
+        assert controller.error == ""
+
+    def test_failure_sets_error(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+
+        def boom(config, token_file):
+            raise sc.miro_auth.MiroClientError("consent denied")
+
+        monkeypatch.setattr(sc.miro_auth, "authorize_interactive", boom)
+        monkeypatch.setattr(controller, "_push_snapshot", lambda: None)
+
+        controller._authenticate_miro(self.APP)
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+
+        assert controller.error == "Miro authentication failed: consent denied"
+
+    def test_authenticate_connector_without_a_section_is_refused_before_sign_in(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        monkeypatch.setattr(sc.miro_auth, "authorize_interactive", lambda *a: pytest.fail("must not run"))
+        monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
+        controller.authenticate_connector("miro")
+        assert controller.error == "Miro isn't enabled in your organization config."
+
+    def test_row_has_org_follows_the_bundle(self, controller, monkeypatch):
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "miro")
+        assert row["has_org"] is True
+        assert row["label"] == "Miro"
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        assert all(c["key"] != "miro" for c in controller.snapshot()["connectors"])
+        rows = controller._connectors_state({}, {})
+        assert next(c for c in rows if c["key"] == "miro")["has_org"] is False
 
 
 class TestAuthenticateAtlassian:
@@ -2912,7 +2983,7 @@ class TestSnapshotStructure:
         assert set(rows) == set(sc.ALL_CONNECTORS)
         assert rows["telegram"]["blocked_by"] == "no_org_config"
 
-    @pytest.mark.parametrize("name", ["telegram", "peek", "grist", "gmail", "slack"])
+    @pytest.mark.parametrize("name", ["telegram", "peek", "grist", "miro", "gmail", "slack"])
     def test_a_connector_the_org_config_does_not_enable_cannot_be_signed_in(self, controller, monkeypatch, name):
         monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
         calls = []

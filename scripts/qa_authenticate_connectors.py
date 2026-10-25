@@ -28,11 +28,11 @@ can do that copy for you, or do it by hand (or via PrivacyFence Settings'
     .venv/bin/python scripts/qa_authenticate_connectors.py
         Runs every QA connector's OAuth flow, in this order: Gmail, Drive,
         Calendar, Contacts, Tasks, Apps Script, Slack, Atlassian (Jira +
-        Confluence share one flow), Salesforce.
+        Confluence share one flow), Salesforce, Miro.
 
     .venv/bin/python scripts/qa_authenticate_connectors.py --only slack salesforce
         Runs just the named services/connectors. Accepts either a group
-        name (google, slack, atlassian, salesforce) or an individual
+        name (google, slack, atlassian, salesforce, miro) or an individual
         connector (gmail, drive, calendar, contacts, tasks, apps_script) --
         useful for re-running a single step that failed or a single
         account that wasn't ready yet.
@@ -70,7 +70,7 @@ class OAuthStep:
 
 
 # One entry per OAuth flow, grouped by QA account: Google (six connectors),
-# Slack, Atlassian (one flow activates both Jira and Confluence), Salesforce.
+# Slack, Atlassian (one flow activates both Jira and Confluence), Salesforce, Miro.
 STEPS: list[OAuthStep] = [
     OAuthStep("gmail", "google", "--gmail-oauth", "Gmail"),
     OAuthStep("drive", "google", "--drive-oauth", "Drive"),
@@ -81,6 +81,7 @@ STEPS: list[OAuthStep] = [
     OAuthStep("slack", "slack", "--slack-oauth", "Slack"),
     OAuthStep("atlassian", "atlassian", "--atlassian-oauth", "Atlassian (Jira + Confluence)"),
     OAuthStep("salesforce", "salesforce", "--salesforce-oauth", "Salesforce"),
+    OAuthStep("miro", "miro", "--miro-oauth", "Miro"),
 ]
 
 GROUPS = {step.group for step in STEPS}

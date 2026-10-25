@@ -2567,6 +2567,63 @@ class TestScopeRowsUpgrade:
 
 
 # ---------------------------------------------------------------------------- #
+# build_connectors: Miro
+# ---------------------------------------------------------------------------- #
+
+class TestBuildConnectorsMiro:
+    ORG = {"miro": {"client_id": "cid", "client_secret": "csecret"}}
+    RECORD = {
+        "access_token": "at", "refresh_token": "rt", "expires_at": 4102444800,
+        "team_id": "3458764549483493025",
+    }
+
+    def _patch(self, monkeypatch, record):
+        from privacyfence.miro_client import MiroClient
+
+        def load(path):
+            if record is None:
+                raise daemon_main.MiroClientError(
+                    "Miro is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                )
+            return record
+
+        monkeypatch.setattr(daemon_main, "load_miro_token", load)
+        monkeypatch.setattr(MiroClient, "check_connection", lambda self: "Team")
+
+    def test_section_and_token_file_build_the_connector(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        connectors, failures = daemon_main.build_connectors({}, self.ORG)
+        assert [c.name for c in connectors] == ["miro"]
+        assert "miro" not in failures
+
+    def test_no_section_is_no_org_config(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["miro"] == "no_org_config"
+
+    def test_no_token_file_is_not_authenticated(self, monkeypatch):
+        self._patch(monkeypatch, None)
+        connectors, failures = daemon_main.build_connectors({}, self.ORG)
+        assert connectors == []
+        assert failures["miro"] == "not_authenticated"
+
+    def test_incomplete_section_is_logged_with_its_message_and_not_built(self, monkeypatch, caplog):
+        self._patch(monkeypatch, self.RECORD)
+        with caplog.at_level("WARNING"):
+            connectors, failures = daemon_main.build_connectors({}, {"miro": {"client_id": "cid"}})
+        assert connectors == []
+        assert failures["miro"] not in ("no_org_config", "not_authenticated")
+        assert "client_id and client_secret go together" in caplog.text
+
+    def test_disabled_has_no_entry(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        config = {"connectors": {"miro": {"enabled": False}}}
+        connectors, failures = daemon_main.build_connectors(config, self.ORG)
+        assert connectors == []
+        assert "miro" not in failures
+
+
 # parse_args
 # ---------------------------------------------------------------------------- #
 
@@ -2576,7 +2633,7 @@ class TestParseArgs:
         assert not any([
             args.gmail_oauth, args.drive_oauth, args.contacts_oauth, args.calendar_oauth,
             args.tasks_oauth, args.apps_script_oauth, args.slack_oauth, args.salesforce_oauth,
-            args.atlassian_oauth, args.grist_oauth, args.telegram_setup,
+            args.atlassian_oauth, args.grist_oauth, args.miro_oauth, args.telegram_setup,
         ])
 
     def test_config_flag_overrides_default(self):
@@ -2594,6 +2651,7 @@ class TestParseArgs:
         ("--salesforce-oauth", "salesforce_oauth"),
         ("--atlassian-oauth", "atlassian_oauth"),
         ("--grist-oauth", "grist_oauth"),
+        ("--miro-oauth", "miro_oauth"),
         ("--telegram-setup", "telegram_setup"),
     ])
     def test_each_oauth_flag_sets_only_its_own_attribute(self, flag, attr):
@@ -2602,7 +2660,7 @@ class TestParseArgs:
         other_attrs = {
             "gmail_oauth", "drive_oauth", "contacts_oauth", "calendar_oauth", "tasks_oauth",
             "apps_script_oauth", "slack_oauth", "salesforce_oauth", "atlassian_oauth", "grist_oauth",
-            "telegram_setup",
+            "miro_oauth", "telegram_setup",
         } - {attr}
         assert not any(getattr(args, other) for other in other_attrs)
 
@@ -2773,6 +2831,38 @@ class TestGristOauthRunner:
         monkeypatch.setattr(daemon_main, "grist_authorize_interactive", raiser)
         assert daemon_main.run_grist_oauth(self.APP) == 1
         assert "Grist OAuth setup failed: consent denied" in capsys.readouterr().err
+
+
+class TestMiroOauthRunner:
+    APP = {"miro": {"client_id": "cid", "client_secret": "cs"}}
+
+    def test_no_section_prints_error_and_returns_1(self, capsys):
+        assert daemon_main.run_miro_oauth({}) == 1
+        assert "Miro OAuth setup failed: Miro organization config not installed" in capsys.readouterr().err
+
+    def test_incomplete_section_prints_its_message_and_returns_1(self, capsys):
+        assert daemon_main.run_miro_oauth({"miro": {"client_id": "cid"}}) == 1
+        assert "client_id and client_secret go together" in capsys.readouterr().err
+
+    def test_success_prints_team_and_returns_0(self, monkeypatch, capsys):
+        seen = {}
+
+        def fake(config, token_file):
+            seen["config"], seen["token_file"] = config, token_file
+            return {"team_id": "3458764549483493025"}
+
+        monkeypatch.setattr(daemon_main, "miro_authorize_interactive", fake)
+        assert daemon_main.run_miro_oauth(self.APP) == 0
+        assert "Miro OAuth complete. Signed in to the Miro team 3458764549483493025." in capsys.readouterr().out
+        assert seen["config"].client_id == "cid"
+        assert seen["token_file"].endswith("miro_token.json")
+
+    def test_client_error_prints_to_stderr_and_returns_1(self, monkeypatch, capsys):
+        def raiser(config, token_file):
+            raise daemon_main.MiroClientError("consent denied")
+        monkeypatch.setattr(daemon_main, "miro_authorize_interactive", raiser)
+        assert daemon_main.run_miro_oauth(self.APP) == 1
+        assert "Miro OAuth setup failed: consent denied" in capsys.readouterr().err
 
 
 class TestAtlassianOauthRunner:
@@ -3661,6 +3751,7 @@ class TestMain:
         ("--salesforce-oauth", "run_salesforce_oauth"),
         ("--atlassian-oauth", "run_atlassian_oauth"),
         ("--grist-oauth", "run_grist_oauth"),
+        ("--miro-oauth", "run_miro_oauth"),
     ])
     def test_oauth_flag_dispatches_to_the_right_runner(self, monkeypatch, flag, runner_name):
         self._patch_config(monkeypatch)

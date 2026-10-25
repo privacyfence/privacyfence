@@ -518,14 +518,15 @@ class WebPushConfig:
 # non-empty section is not offered at all, whatever else is in place: Google's six share one
 # section, Jira, Confluence and Jira Assets share Atlassian's. Telegram, Peek and Grist carry
 # no secret an administrator must supply, so their section can be the bare marker
-# ``{"enabled": true}``; Peek and Grist may add the server they are pinned to.
+# ``{"enabled": true}``; Peek and Grist may add the server they are pinned to. Miro's section carries
+# the app's ``client_id`` and ``client_secret``.
 CONNECTOR_ORG_SECTION: dict[str, str] = {
     "gmail": "google", "drive": "google", "contacts": "google",
     "calendar": "google", "tasks": "google", "apps_script": "google",
     "slack": "slack",
     "jira": "atlassian", "confluence": "atlassian", "assets": "atlassian",
     "salesforce": "salesforce",
-    "telegram": "telegram", "grist": "grist", "peek": "peek",
+    "telegram": "telegram", "grist": "grist", "peek": "peek", "miro": "miro",
 }
 
 
