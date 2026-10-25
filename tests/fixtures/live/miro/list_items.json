@@ -19,7 +19,7 @@
       },
       "id": "qa-placeholder-id-1",
       "links": {
-        "related": "https://api.miro.com/v2/boards/uXjVEVznwZk%3D/items?parent_item_id=3458764688371560270&limit=10&cursor=",
+        "related": "https://example.com/qa-placeholder",
         "self": "https://example.com/qa-placeholder"
       },
       "modifiedAt": "2026-10-25T18:03:06Z",

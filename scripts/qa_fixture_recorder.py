@@ -1285,14 +1285,15 @@ def _build_grist_client() -> tuple[GristClient, bool]:
     server, credential = grist_auth.resolve_credential(bundle, grist_auth.load_token_file(token_path), token_path)
     return GristClient(server, credential), bool(credential.can_refresh)
 
-_MIRO_PERSON_KEYS = {"createdby", "modifiedby", "owner"}
+_MIRO_PERSON_KEYS = {"createdby", "modifiedby", "owner", "lastopenedby"}
 _MIRO_FRAME_TITLE = "QaLifecycleFrame [QATEST]"
 
 
 def _scrub_miro(value: Any) -> Any:
     """Replace every createdBy/modifiedBy/owner object's id and name, and the team's name, with
-    the recorder's placeholders (``redact`` knows neither modifiedBy nor Miro's lower-case keys), and
-    blank the board's viewLink."""
+    the recorder's placeholders (``redact`` knows neither modifiedBy nor Miro's lower-case keys), the
+    caller's own board membership's name, and the board's viewLink and ``links.related`` (both embed
+    the board id)."""
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for k, v in value.items():
@@ -1302,6 +1303,10 @@ def _scrub_miro(value: Any) -> Any:
                 out[k] = _REDACTED_STRUCTURAL_URL  # embeds the board id
             elif k.lower() == "team" and isinstance(v, dict):
                 out[k] = {**_scrub_miro(v), "name": "qa-placeholder-team"}
+            elif k.lower() == "currentusermembership" and isinstance(v, dict):
+                out[k] = {**_scrub_miro(v), "name": _REDACTED_NAME}
+            elif k.lower() == "related" and isinstance(v, str) and v:
+                out[k] = _REDACTED_STRUCTURAL_URL
             else:
                 out[k] = _scrub_miro(v)
         return out
