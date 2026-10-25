@@ -102,6 +102,14 @@ the request on the card, once.
 | `jira_get_issue` | this project, if I'm reporter, if I'm assignee |
 | `jira_search_issues_with_fields` | this project |
 
+### Miro
+
+| Tool | Always allow buttons |
+|---|---|
+| `miro_get_items` |  |
+| `miro_list_connectors` |  |
+| `miro_list_items` |  |
+
 ### Peek
 
 | Tool | Always allow buttons |
