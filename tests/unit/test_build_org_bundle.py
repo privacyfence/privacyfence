@@ -954,6 +954,40 @@ class TestGristFlags:
         assert "https://pf.example.com/oauth/callback/grist" in capsys.readouterr().out
 
 
+class TestMiroFlags:
+    def _build(self, tmp_path, *args):
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(["-o", str(out_path), *args]) == 0
+        return json.loads(out_path.read_text())
+
+    def _exit_message(self, tmp_path, *args):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
+        return str(exc.value)
+
+    def test_the_pair_is_written(self, tmp_path):
+        bundle = self._build(tmp_path, "--miro-client-id", "mid", "--miro-client-secret", "msecret")
+        assert bundle["miro"] == {"client_id": "mid", "client_secret": "msecret"}
+
+    def test_a_miro_only_bundle_is_written(self, tmp_path):
+        bundle = self._build(tmp_path, "--miro-client-id", "mid", "--miro-client-secret", "msecret")
+        assert "miro" in bundle and "google" not in bundle
+
+    @pytest.mark.parametrize("args", [["--miro-client-id", "mid"], ["--miro-client-secret", "msecret"]])
+    def test_one_without_the_other_exits(self, tmp_path, args):
+        assert self._exit_message(tmp_path, *args) == "--miro-client-id and --miro-client-secret must be given together."
+
+    def test_org_mode_build_with_miro_prints_the_callback(self, tmp_path, capsys):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        self._build(
+            tmp_path, "--mode", "org", "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path), "--miro-client-id", "mid", "--miro-client-secret", "msecret",
+        )
+        assert "https://pf.example.com/oauth/callback/miro" in capsys.readouterr().out
+
+
 class TestPeekFlags:
     def _build(self, tmp_path, *args):
         out_path = tmp_path / "org_config.json"

@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 
 import json
 
-from privacyfence import apps_script_client, grist_auth, paths, peek_client, slack_client
+from privacyfence import apps_script_client, grist_auth, miro_auth, paths, peek_client, slack_client
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_connect as rc
@@ -33,6 +33,7 @@ _ORG_CONFIG = {
     "slack": {"client_id": "scid", "client_secret": "scsecret"},
     "salesforce": {"consumer_key": "sfkey", "consumer_secret": "sfsecret"},
     "atlassian": {"client_id": "acid", "client_secret": "acsecret"},
+    "miro": {"client_id": "m", "client_secret": "s"},
     "telegram": {"enabled": True},
 }
 
@@ -219,9 +220,9 @@ class TestConnectPageLook:
 
     def test_rows_are_cards_and_nothing_is_styled_inline(self):
         html = self._page()
-        # Ten OAuth services and Telegram (enabled, but no app credentials on this install); Peek and
+        # Eleven OAuth services and Telegram (enabled, but no app credentials on this install); Peek and
         # Grist have no section in this config, so they are not listed.
-        assert html.count('<li class="service card cluster">') == 11
+        assert html.count('<li class="service card cluster">') == 12
         body = html.split('<div class="pf-connect stack">', 1)[1]
         assert "style=" not in body
 
@@ -1066,6 +1067,79 @@ class TestGristOAuth:
         saved = json.loads((paths.user_dir(principal) / "credentials" / "grist_token.json").read_text())
         assert saved["auth"] == "oauth" and saved["refresh_token"] == "rt"
         assert evicted == [principal.id]
+
+
+class TestMiroOAuth:
+    def _start(self, org_config=None):
+        app, sessions, registry = _app(org_config=_ORG_CONFIG if org_config is None else org_config)
+        session_id, principal = _signed_in(sessions)
+        client = _client(app)
+        r = client.get("/oauth/start/miro", cookies={org_session.SESSION_COOKIE: session_id})
+        client.cookies.set(org_session.SESSION_COOKIE, session_id)
+        return client, r, registry, principal, session_id
+
+    def test_row_is_not_configured_without_a_section_and_connectable_with_one(self):
+        app, sessions, _registry = _app(org_config={"slack": _ORG_CONFIG["slack"]})
+        session_id, _principal = _signed_in(sessions)
+        page = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id}).text
+        assert "/oauth/start/miro" not in page and "Miro" not in page
+
+        app, sessions, _registry = _app(org_config={"miro": _ORG_CONFIG["miro"]})
+        session_id, _principal = _signed_in(sessions)
+        page = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id}).text
+        assert 'class="pf-service-chip">Miro<' in page
+        assert 'href="/oauth/start/miro"' in page
+
+    def test_start_redirects_to_miro_with_state_and_no_scope(self):
+        _client_, r, _registry, _principal, _sid = self._start()
+        assert r.status_code == 302
+        location = r.headers["location"]
+        assert location.startswith("https://miro.com/oauth/authorize?")
+        qs = dict(up.parse_qsl(up.urlparse(location).query))
+        assert qs["client_id"] == "m"
+        assert qs["redirect_uri"] == f"{ISSUER}/oauth/callback/miro"
+        assert qs["state"]
+        assert "scope" not in qs and "code_challenge" not in qs
+
+    def test_start_without_a_section_is_not_configured(self):
+        _client_, r, _registry, _principal, _sid = self._start({"slack": _ORG_CONFIG["slack"]})
+        assert r.headers["location"] == "/connect?error=miro"
+
+    def test_callback_exchanges_the_code_and_saves_the_token(self, monkeypatch):
+        client, start, registry, principal, _sid = self._start()
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+        calls = []
+
+        def fake_exchange(config, code, redirect_uri):
+            calls.append((config.client_id, code, redirect_uri))
+            return {
+                "access_token": "at", "refresh_token": "rt", "expires_at": 9.0, "team_id": "t1",
+                "user_id": "u1", "scope": "boards:read boards:write",
+            }
+
+        monkeypatch.setattr(miro_auth, "exchange_code", fake_exchange)
+        evicted = []
+        monkeypatch.setattr(registry, "evict", lambda pid: evicted.append(pid))
+
+        r = client.get(f"/oauth/callback/miro?code=c1&state={state}")
+
+        assert r.headers["location"] == "/connect?connected=miro"
+        assert calls == [("m", "c1", f"{ISSUER}/oauth/callback/miro")]
+        saved = json.loads((paths.user_dir(principal) / "credentials" / "miro_token.json").read_text())
+        assert saved["refresh_token"] == "rt" and saved["team_id"] == "t1"
+        assert evicted == [principal.id]
+
+    def test_a_failed_exchange_takes_the_sign_in_failed_path(self, monkeypatch):
+        client, start, _registry, principal, _sid = self._start()
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+
+        def boom(config, code, redirect_uri):
+            raise miro_auth.MiroClientError("Miro sign-in failed: bad code")
+
+        monkeypatch.setattr(miro_auth, "exchange_code", boom)
+        r = client.get(f"/oauth/callback/miro?code=c1&state={state}")
+        assert r.headers["location"] == "/connect?error=miro"
+        assert not (paths.user_dir(principal) / "credentials" / "miro_token.json").exists()
 
 
 class TestGristApiKey:
