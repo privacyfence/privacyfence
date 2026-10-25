@@ -35,6 +35,12 @@ class TestScopeCatalogue:
         assert set(entry["verbs"]) == {"read", "add", "update", "restructure"}
         assert entry["connector"] == "grist"
 
+    def test_miro_board_entry_needs_a_value_and_offers_read_add_update(self):
+        entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "miro.board")
+        assert entry["needs_value"] is True
+        assert set(entry["verbs"]) == {"read", "add", "update"}
+        assert entry["connector"] == "miro"
+
     def test_gmail_and_slack_unconditional_extras_need_no_value(self):
         by_id = {e["id"]: e for e in catalogue.scope_catalogue()}
         assert by_id["gmail.filters"]["needs_value"] is False
@@ -100,6 +106,26 @@ class TestRulesForCatalogueEntry:
         assert rules[0].predicate == "grist.document"
         assert rules[0].value == ["DOC1"]
         assert rules[0].operations == frozenset({"grist.read_records", "grist.add_records", "grist.import_csv"})
+
+    def test_miro_board_compiles_read_and_add_to_their_operations(self):
+        rules = catalogue.rules_for_catalogue_entry("miro.board", ["uXjVOD6LSME="], [Verb.READ, Verb.ADD])
+        assert len(rules) == 1
+        assert rules[0].predicate == "miro.board"
+        assert rules[0].value == ["uXjVOD6LSME="]
+        assert rules[0].operations == frozenset({
+            "miro.list_items", "miro.get_items", "miro.list_connectors",
+            "miro.create_items", "miro.create_connectors",
+        })
+
+    def test_miro_board_with_no_value_yields_no_rules(self):
+        assert catalogue.rules_for_catalogue_entry("miro.board", None, [Verb.READ]) == []
+        assert catalogue.rules_for_catalogue_entry("miro.board", [], [Verb.READ]) == []
+
+    def test_miro_board_refuses_a_board_link(self):
+        with pytest.raises(RuleValueError, match="Miro board id"):
+            catalogue.rules_for_catalogue_entry(
+                "miro.board", ["https://miro.com/app/board/uXjVOD6LSME=/"], [Verb.READ],
+            )
 
     def test_grist_document_with_no_value_yields_no_rules(self):
         assert catalogue.rules_for_catalogue_entry("grist.document", None, [Verb.READ]) == []

@@ -25,9 +25,9 @@ from privacyfence.policy.registry import (
     operation_verbs,
 )
 
-# The thirteen operation keys no grant capability in the resource-type manifest (GRANT_RESOURCE_TYPES)
+# The twenty operation keys no grant capability in the resource-type manifest (GRANT_RESOURCE_TYPES)
 # reaches. They are governable all the same: policy/catalogue.py's EXTRA_SCOPES (apps_script.project,
-# gmail.filters, slack.group_chats, grist.document) configures them from Settings and
+# gmail.filters, slack.group_chats, grist.document, miro.board) configures them from Settings and
 # privacyfence_propose_policy_change, and the approval popup never proposes a rule for them (ADR 0077).
 _GRANT_MANIFEST_UNREACHABLE_OPERATIONS = frozenset({
     "apps_script.read_content",
@@ -43,6 +43,13 @@ _GRANT_MANIFEST_UNREACHABLE_OPERATIONS = frozenset({
     "grist.add_columns",
     "grist.import_csv",
     "grist.update_csv",
+    "miro.list_items",
+    "miro.get_items",
+    "miro.list_connectors",
+    "miro.create_items",
+    "miro.create_connectors",
+    "miro.update_items",
+    "miro.update_board",
 })
 
 # Operation keys shared by tools that perform two different verbs. Migrating a v1 rule keyed on

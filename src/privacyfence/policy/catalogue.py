@@ -11,7 +11,7 @@ bridge writer call.
 
 ``EXTRA_SCOPES`` covers the operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
-tools, which had no predicate at all, Grist's seven operation keys (scoped by document), Peek's page tools, and Gmail's two filter tools and
+tools, which had no predicate at all, Grist's seven operation keys (scoped by document), Peek's page tools, Miro's gated tools (scoped by board), and Gmail's two filter tools and
 Slack's group-chat tool, which have no resource identity to scope to, and Slack's two read scopes for
 mentions of the signed-in user and one-to-one DMs, and the scope for conversations the signed-in user
 is a member of. The Settings page and the bridge tool configure them
@@ -81,6 +81,11 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         predicate="peek.page", connector="peek",
         verbs=(Verb.READ, Verb.ADD),
         label="Peek — page", needs_value=True, value_hint="team-dashboard…page-slug",
+    ),
+    "miro.board": PolicyExtraScope(
+        predicate="miro.board", connector="miro",
+        verbs=(Verb.READ, Verb.ADD, Verb.UPDATE),
+        label="Miro — board", needs_value=True, value_hint="uXjVOD6LSME=…board-id",
     ),
     "gmail.filters": PolicyExtraScope(
         predicate="gmail.anything", connector="gmail",

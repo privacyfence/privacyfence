@@ -345,6 +345,13 @@ class TestProposalsAgainstTheV1Tables:
             ("apps_script_write_content", make_ctx(connector="apps_script", args={"script_id": "s1"})),
             ("apps_script_get_execution_log", make_ctx(connector="apps_script", args={"script_id": "s1"})),
             *(
+                (tool, make_ctx(connector="miro", args={"board_id": "uXjVOD6LSME="}))
+                for tool in (
+                    "miro_list_items", "miro_get_items", "miro_list_connectors", "miro_create_items",
+                    "miro_create_connectors", "miro_update_items", "miro_update_board",
+                )
+            ),
+            *(
                 (tool, make_ctx(connector="grist", args={"doc_id": "DOC1", "table_id": "Table1"}))
                 for tool in (
                     "grist_get_records", "grist_export_records", "grist_export_sql", "grist_add_records", "grist_update_records",

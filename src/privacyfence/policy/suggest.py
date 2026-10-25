@@ -27,6 +27,7 @@ from .registry import TOOL_REGISTRY
 _EXTRA_ARGUMENT: dict[str, str] = {
     "grist.document": "doc_id",
     "peek.page": "slug",
+    "miro.board": "board_id",
     "apps_script.project": "script_id",
 }
 
