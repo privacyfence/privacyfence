@@ -1,0 +1,43 @@
+{
+  "data": [
+    {
+      "createdAt": "2026-10-25T18:04:07Z",
+      "createdBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "endItem": {
+        "id": "qa-placeholder-id-3",
+        "links": {
+          "self": "https://example.com/qa-placeholder"
+        }
+      },
+      "id": "qa-placeholder-id-1",
+      "links": {
+        "self": "https://example.com/qa-placeholder"
+      },
+      "modifiedAt": "2026-10-25T18:04:09Z",
+      "modifiedBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "shape": "curved",
+      "startItem": {
+        "id": "qa-placeholder-id-2",
+        "links": {
+          "self": "https://example.com/qa-placeholder"
+        }
+      },
+      "style": {
+        "endStrokeCap": "rounded_stealth",
+        "startStrokeCap": "none",
+        "strokeColor": "#333333",
+        "strokeStyle": "normal",
+        "strokeWidth": "2.0"
+      },
+      "type": "connector"
+    }
+  ]
+}

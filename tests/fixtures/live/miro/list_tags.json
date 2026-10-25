@@ -1,0 +1,13 @@
+{
+  "data": [
+    {
+      "fillColor": "violet",
+      "id": "qa-placeholder-id-1",
+      "links": {
+        "self": "https://example.com/qa-placeholder"
+      },
+      "title": "QATEST",
+      "type": "tag"
+    }
+  ]
+}

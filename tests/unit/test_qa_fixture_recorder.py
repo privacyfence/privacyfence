@@ -2502,11 +2502,7 @@ class TestFixturePresence:
         # left behind for a connector no longer checked at all.
         assert set(recorder.EXPECTED_FIXTURES) == set(recorder.CONNECTOR_CHECKS)
 
-    @pytest.mark.parametrize("connector", [
-        pytest.param(c, marks=pytest.mark.xfail(strict=True, reason="Miro fixtures are recorded on the QA runner"))
-        if c == "miro" else c
-        for c in sorted(recorder.EXPECTED_FIXTURES)
-    ])
+    @pytest.mark.parametrize("connector", sorted(recorder.EXPECTED_FIXTURES))
     def test_every_expected_fixture_file_exists_and_is_nonempty_valid_json(self, connector):
         for filename in recorder.EXPECTED_FIXTURES[connector]:
             path = recorder.FIXTURES_DIR / connector / filename
@@ -3711,6 +3707,10 @@ class _FakeMiroApi:
                 "id": _MIRO_BOARD, "name": self.board_name, "viewLink": "https://miro.com/app/board/x=",
                 "team": {"id": "t1", "name": "Real Team"}, "owner": dict(_MIRO_PERSON),
                 "createdBy": dict(_MIRO_PERSON), "modifiedBy": dict(_MIRO_PERSON),
+                "lastOpenedBy": dict(_MIRO_PERSON),
+                "currentUserMembership": {**_MIRO_PERSON, "type": "board_member", "role": "owner"},
+                "links": {"self": f"https://api.miro.com/v2/boards/{_MIRO_BOARD_Q}",
+                          "related": f"https://api.miro.com/v2/boards/{_MIRO_BOARD_Q}/members?limit=20&offset=0"},
             }
         if path.endswith("/tags"):
             return {"data": [{"id": "9", "title": t, "fillColor": "red"} for t in self.tags], "total": len(self.tags)}
@@ -3822,7 +3822,12 @@ class TestCheckMiro:
         assert _MIRO_PERSON["id"] not in text
         assert _MIRO_FRAME not in text
         assert "miro.com" not in text
+        assert _MIRO_BOARD_Q not in text
         board = results[0].raw
+        assert board["lastOpenedBy"]["name"] == recorder._REDACTED_NAME
+        assert board["currentUserMembership"]["name"] == recorder._REDACTED_NAME
+        assert board["currentUserMembership"]["role"] == "owner"
+        assert board["links"]["related"] == recorder._REDACTED_STRUCTURAL_URL
         for key in ("owner", "createdBy", "modifiedBy"):
             assert board[key]["name"] == recorder._REDACTED_NAME
             assert board[key]["id"] == recorder._REDACTED_ACCOUNT_ID
