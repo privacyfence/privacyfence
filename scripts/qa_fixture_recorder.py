@@ -30,7 +30,7 @@ this imports the same ``privacyfence`` package and third-party clients
 
     .venv/bin/python scripts/qa_fixture_recorder.py --lifecycle [connector ...]
         For each write-capable connector that supports it (calendar,
-        confluence, grist, jira, peek, salesforce, tasks -- see the comment above LIFECYCLE_CHECKS
+        confluence, grist, jira, miro, peek, salesforce, tasks -- see the comment above LIFECYCLE_CHECKS
         below for why the other connectors aren't included), creates a
         fresh, uniquely-tagged QA object, reads it back, updates it, reads
         it back again, then deletes it and confirms the deletion actually
@@ -81,6 +81,9 @@ from privacyfence.assets_client import AssetsClient, AssetsClientError  # noqa: 
 from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientError  # noqa: E402
 from privacyfence.grist_client import GristAccessDenied, GristClient, GristClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
+from privacyfence import miro_auth  # noqa: E402
+from privacyfence.miro_auth import MiroTokenProvider  # noqa: E402
+from privacyfence.miro_client import MiroClient, MiroClientError  # noqa: E402
 from privacyfence import peek_client  # noqa: E402
 from privacyfence.peek_client import PeekClient, PeekClientError  # noqa: E402
 from privacyfence.salesforce_client import (  # noqa: E402
@@ -1282,6 +1285,110 @@ def _build_grist_client() -> tuple[GristClient, bool]:
     server, credential = grist_auth.resolve_credential(bundle, grist_auth.load_token_file(token_path), token_path)
     return GristClient(server, credential), bool(credential.can_refresh)
 
+_MIRO_PERSON_KEYS = {"createdby", "modifiedby", "owner"}
+_MIRO_FRAME_TITLE = "QaLifecycleFrame [QATEST]"
+
+
+def _scrub_miro(value: Any) -> Any:
+    """Replace every createdBy/modifiedBy/owner object's id and name, and the team's name, with
+    the recorder's placeholders (``redact`` knows neither modifiedBy nor Miro's lower-case keys), and
+    blank the board's viewLink."""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            if k.lower() in _MIRO_PERSON_KEYS and isinstance(v, dict):
+                out[k] = {"id": _REDACTED_ACCOUNT_ID, "name": _REDACTED_NAME, "type": "user"}
+            elif k.lower() == "viewlink" and isinstance(v, str) and v:
+                out[k] = _REDACTED_STRUCTURAL_URL  # embeds the board id
+            elif k.lower() == "team" and isinstance(v, dict):
+                out[k] = {**_scrub_miro(v), "name": "qa-placeholder-team"}
+            else:
+                out[k] = _scrub_miro(v)
+        return out
+    if isinstance(value, list):
+        return [_scrub_miro(v) for v in value]
+    return value
+
+
+def _miro_fixture(raw: Any) -> Any:
+    return _scrub_miro(deidentify_structural_fields(redact(raw)))
+
+
+def _build_miro_client() -> MiroClient:
+    config = miro_auth.bundle_settings(daemon_main.load_org_config().get("miro") or {})
+    path = daemon_main._resolve_path(daemon_main.TOKEN_FILES["miro"])
+    provider = MiroTokenProvider(config, path, miro_auth.load_token_file(path))
+    client = MiroClient(provider)
+    client.check_connection()
+    return client
+
+
+def _miro_pages(cap: Any) -> dict[str, Any]:
+    """Every page a paged read made, joined into one response with no next-page cursor."""
+    rows: list[Any] = []
+    for call in cap.calls:
+        if isinstance(call, dict):
+            rows.extend(call.get("data") or [])
+    return {"data": rows}
+
+
+def check_miro(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
+    cfg = manifest.get("miro") or {}
+    board_id = cfg.get("board_id", "")
+    if not board_id:
+        return [CheckResult("miro", "get_board", "", False, "miro.board_id missing from qa_environment.yaml")]
+
+    results: list[CheckResult] = []
+    client = _build_miro_client()
+
+    try:
+        with RawCapture(client) as cap:
+            board = client.get_board(board_id)
+        ok = QATEST_TAG in board.name
+        note = "found" if ok else f"board name does not carry {QATEST_TAG} -- refusing to record"
+        raw = _miro_fixture(cap.captured) if (record and ok) else None
+        results.append(CheckResult("miro", "get_board", board_id, ok, note, raw, "get_board.json"))
+    except MiroClientError as exc:
+        results.append(CheckResult("miro", "get_board", board_id, False, str(exc)))
+
+    try:
+        with RawCapture(client) as cap:
+            items, _ = client.list_items(board_id, item_type="", frame_id="", max_results=50)
+        untagged = [i.id for i in items if i.type == "sticky_note" and QATEST_TAG not in i.content]
+        frames = [i for i in items if i.type == "frame"]
+        ok = not untagged and bool(frames)
+        if untagged:
+            note = f"sticky note(s) {untagged} do not carry {QATEST_TAG} -- refusing to record"
+        elif not frames:
+            note = "board lists no frame"
+        else:
+            note = f"{len(items)} item(s), {len(frames)} frame(s), every sticky note tagged {QATEST_TAG}"
+        raw = _miro_fixture(_miro_pages(cap)) if (record and ok) else None
+        results.append(CheckResult("miro", "list_items", board_id, ok, note, raw, "list_items.json"))
+    except MiroClientError as exc:
+        results.append(CheckResult("miro", "list_items", board_id, False, str(exc)))
+
+    try:
+        with RawCapture(client) as cap:
+            lines, _ = client.list_connectors(board_id, max_results=50)
+        ok = bool(lines)
+        note = f"{len(lines)} connector line(s)" if ok else "board lists no connector line"
+        raw = _miro_fixture(_miro_pages(cap)) if (record and ok) else None
+        results.append(CheckResult("miro", "list_connectors", board_id, ok, note, raw, "list_connectors.json"))
+    except MiroClientError as exc:
+        results.append(CheckResult("miro", "list_connectors", board_id, False, str(exc)))
+
+    try:
+        with RawCapture(client) as cap:
+            tags = client.list_tags(board_id)
+        ok = any(t.title == "QATEST" for t in tags)
+        note = f"{len(tags)} tag(s)" if ok else "no tag titled QATEST"
+        raw = _miro_fixture(_miro_pages(cap)) if (record and ok) else None
+        results.append(CheckResult("miro", "list_tags", board_id, ok, note, raw, "list_tags.json"))
+    except MiroClientError as exc:
+        results.append(CheckResult("miro", "list_tags", board_id, False, str(exc)))
+    return results
+
 
 def _grist_doc_workspaces(captures: list[Any], doc_id: str) -> list[Any]:
     """The workspace holding ``doc_id`` from list_documents' raw calls, cut down to that one
@@ -2252,6 +2359,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
     "jira": check_jira,
     "salesforce": check_salesforce,
     "grist": check_grist,
+    "miro": check_miro,
     "gmail": check_gmail,
     "drive": check_drive,
     "calendar": check_calendar,
@@ -2281,6 +2389,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "jira": ("list_projects.json", "get_issue.json"),
     "salesforce": ("list_reports.json", "run_report_page.json", "get_record.json"),
     "grist": ("list_documents.json", "list_columns.json", "get_records.json"),
+    "miro": ("get_board.json", "list_items.json", "list_connectors.json", "list_tags.json"),
     "gmail": ("get_message.json", "list_send_as.json"),
     "drive": ("get_file_metadata.json",),
     "calendar": ("get_event.json",),
@@ -2773,6 +2882,66 @@ def lifecycle_grist(manifest: dict[str, Any]) -> LifecycleResult:
     return LifecycleResult("grist", ok, note, cleanup_ok=None)
 
 
+def lifecycle_miro(manifest: dict[str, Any]) -> LifecycleResult:
+    """Creates a sticky note, a shape and a frame on the lifecycle board, updates the sticky note,
+    and moves items into and out of frames, reading each change back.
+
+    Never deletes: MiroClient has no delete (items are never removed through PrivacyFence), so the
+    items this adds accumulate on ``lifecycle_board_id`` and are cleaned by hand there. It never
+    touches ``board_id``, whose items check_miro requires to be ``[QATEST]``.
+    """
+    cfg = manifest.get("miro") or {}
+    board = cfg.get("lifecycle_board_id", "")
+    if not board:
+        return LifecycleResult("miro", False, "miro.lifecycle_board_id missing from qa_environment.yaml")
+    client = _build_miro_client()
+    suffix = uuid.uuid4().hex[:8]
+    sticky_text = f"{LIFECYCLE_TAG} miro sticky {suffix}"
+    step = "find the lifecycle frame"
+
+    try:
+        frames, _ = client.list_items(board, item_type="frame", frame_id="", max_results=50)
+        frame = next((f for f in frames if f.title == _MIRO_FRAME_TITLE), None)
+        if frame is None:
+            raise MiroClientError(f"no frame titled {_MIRO_FRAME_TITLE!r} on the lifecycle board")
+        step = "create_items"
+        created = client.create_items(board, [
+            {"type": "sticky_note", "data": {"content": sticky_text}, "position": {"x": 0, "y": 0},
+             "parent": {"id": frame.id}},
+            {"type": "shape", "data": {"content": f"{LIFECYCLE_TAG} miro shape {suffix}", "shape": "rectangle"},
+             "style": {"fillColor": "#fff9b1"}, "position": {"x": 100, "y": 0}},
+        ])
+        if len(created) != 2:
+            raise MiroClientError(f"create_items returned {len(created)} item(s), expected 2")
+        sticky = next((i for i in created if i.type == "sticky_note"), None)
+        shape = next((i for i in created if i.type == "shape"), None)
+        if sticky is None or shape is None:
+            raise MiroClientError("create_items did not return one sticky note and one shape")
+        step = "create_frame"
+        new_frame = client.create_frame(board, {
+            "data": {"title": f"{LIFECYCLE_TAG} miro frame {suffix}"},
+            "position": {"x": 0, "y": 400}, "geometry": {"width": 400, "height": 300},
+        })
+        if not new_frame.id:
+            raise MiroClientError("create_frame returned no id")
+        step = "get_item"
+        if client.get_item(board, sticky.id).content != sticky_text:
+            raise MiroClientError("get_item did not return the created sticky note")
+        step = "update_item"
+        client.update_item(board, "sticky_note", sticky.id, {"data": {"content": f"{sticky_text} updated"}})
+        step = "get_item after update"
+        if client.get_item(board, sticky.id).content != f"{sticky_text} updated":
+            raise MiroClientError("get_item after update did not reflect the new content")
+        step = "set_parent into a frame"
+        client.set_parent(board, shape.id, new_frame.id)
+        step = "set_parent out of a frame"
+        client.set_parent(board, sticky.id, "")
+        ok, note = True, "create_items, create_frame, get, update, get-after-update, move in and move out all verified"
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
+        ok, note = False, f"{step}: {exc}"
+    return LifecycleResult("miro", ok, note, cleanup_ok=None)
+
+
 def lifecycle_jira(manifest: dict[str, Any]) -> LifecycleResult:
     cfg = manifest.get("jira") or {}
     project_key = cfg.get("project_key", "PFQA")
@@ -2996,6 +3165,7 @@ LIFECYCLE_CHECKS: dict[str, Callable[[dict[str, Any]], LifecycleResult]] = {
     "confluence": lifecycle_confluence,
     "grist": lifecycle_grist,
     "jira": lifecycle_jira,
+    "miro": lifecycle_miro,
     "peek": lifecycle_peek,
     "salesforce": lifecycle_salesforce,
     "tasks": lifecycle_tasks,

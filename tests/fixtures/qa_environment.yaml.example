@@ -72,6 +72,15 @@ grist:
   # Table --lifecycle adds rows to and updates; never QaSeed.
   lifecycle_table_id: QaLifecycle
 
+miro:
+  # docs/connector-qa.md, "Seed: Miro" -- required: the seed board's id, the
+  # part after /app/board/ in its address (it ends in "="). A board link is
+  # refused. check_miro reads and records it; every sticky note on it must
+  # be [QATEST].
+  board_id: ""
+  # Board --lifecycle writes to (needs a frame titled "QaLifecycleFrame [QATEST]"); never board_id.
+  lifecycle_board_id: ""
+
 gmail:
   # docs/connector-qa.md, "Seed: Gmail" -- required, unlike most keys here:
   # Gmail has no cheap by-subject resolve fallback (list_messages() makes

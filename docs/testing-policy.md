@@ -231,7 +231,7 @@ setup: [`connector-qa.md`](connector-qa.md).
   `CONNECTOR_CHECKS`; on drift, `--record` and the redacted diff is uploaded as an artifact. A separate
   `open-drift-pr` job on a GitHub-hosted runner, the only one with write access, opens a PR on
   `chore/connector-live-fixture-drift` from it, reviewed like any other PR. Then `--lifecycle` (create, read back and update a tagged QA object in `calendar`, `confluence`, `grist`,
-  `jira`, `peek`, `salesforce` and `tasks`, and delete it where the connector can); a lifecycle failure fails the job.
+  `jira`, `miro`, `peek`, `salesforce` and `tasks`, and delete it where the connector can); a lifecycle failure fails the job.
 - **`qa-record-fixture.yml`** — dispatch only, **on `main`**, with inputs `connector` and `branch` (the
   pushed branch to record for). Its read-only `record` job on the self-hosted runner refuses any
   other ref, `main`, `stable`, `releases/*`, `refs/…`, `pull/…` and a branch that does not exist, then

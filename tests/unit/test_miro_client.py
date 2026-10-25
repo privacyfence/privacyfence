@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -27,6 +28,8 @@ from privacyfence.miro_client import (
 )
 
 pytestmark = pytest.mark.unit
+
+LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "miro"
 
 BOARD = "uXjVOD6LSME="
 BOARD_Q = "uXjVOD6LSME%3D"
@@ -636,3 +639,59 @@ class TestSetParent:
             with pytest.raises(MiroClientError):
                 client.set_parent(*args)
         assert net.calls == []
+
+
+class TestLiveFixtureParsing:
+    """Replays fixtures recorded from the [QATEST]-tagged QA board by
+    scripts/qa_fixture_recorder.py --record miro through the real parsers,
+    with only ``_request`` faked. Skipped (not failed) until each fixture
+    exists; see tests/fixtures/live/README.md and docs/testing-policy.md.
+    """
+
+    def _load(self, name: str) -> Any:
+        path = LIVE_FIXTURES_DIR / name
+        if not path.exists():
+            pytest.skip(
+                f"{path} not recorded yet -- run "
+                "`python3 scripts/qa_fixture_recorder.py --record miro` locally first"
+            )
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _client_returning(self, raw: Any, provider: FakeProvider) -> MiroClient:
+        client = MiroClient(provider)  # type: ignore[arg-type]
+        client._request = lambda *args, **kwargs: raw  # type: ignore[method-assign]
+        return client
+
+    def test_get_board_fixture_still_parses(self, provider: FakeProvider) -> None:
+        raw = self._load("get_board.json")
+
+        board = self._client_returning(raw, provider).get_board(BOARD)
+
+        assert board.id and "[QATEST]" in board.name
+
+    def test_list_items_fixture_still_parses(self, provider: FakeProvider) -> None:
+        raw = self._load("list_items.json")
+
+        items, truncated = self._client_returning(raw, provider).list_items(
+            BOARD, item_type="", frame_id="", max_results=50,
+        )
+
+        assert items and not truncated
+        assert all(i.id and i.type for i in items)
+        assert any(i.type == "frame" and i.title for i in items)
+        assert all("[QATEST]" in i.content for i in items if i.type == "sticky_note")
+
+    def test_list_connectors_fixture_still_parses(self, provider: FakeProvider) -> None:
+        raw = self._load("list_connectors.json")
+
+        lines, truncated = self._client_returning(raw, provider).list_connectors(BOARD, max_results=50)
+
+        assert lines and not truncated
+        assert all(line.id and line.start_item_id and line.end_item_id for line in lines)
+
+    def test_list_tags_fixture_still_parses(self, provider: FakeProvider) -> None:
+        raw = self._load("list_tags.json")
+
+        tags = self._client_returning(raw, provider).list_tags(BOARD)
+
+        assert any(t.title == "QATEST" for t in tags)
