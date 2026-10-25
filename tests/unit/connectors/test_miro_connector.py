@@ -3,7 +3,7 @@
 Invariant: the three listing tools never reach the approval gate, each leaves an audit entry, and
 none of them hands the model more than the board's name, team, dates and link (no description, no
 owner); the three item and connector reads always go through a review card whose preview shows no
-item text; the two create tools validate everything first, write nothing until the approval card
+item text; the four write tools validate everything first, write nothing until the approval card
 is accepted, and show the approver exactly what will be sent."""
 from __future__ import annotations
 
@@ -1025,6 +1025,333 @@ class TestCreateConnectors:
         client.create_connector.assert_not_called()
 
 
+def changes_json(*changes):
+    return json.dumps(list(changes))
+
+
+CARD = MiroItem(
+    ITEM_ID_2, "card", "", "Old title", "Old description", "2026-01-01T12:00:00.000Z", "",
+    "#2D9BF0", 10.0, 20.0, 300.0, 120.0, FRAME_ID, "",
+)
+IMAGE = MiroItem(ITEM_ID, "image", "", "pic", "", "", "", "", 0.0, 0.0, 1.0, 1.0, "", "")
+
+
+class TestUpdateItems:
+    def args(self, *changes):
+        return {"board_id": BOARD_ID, "changes": changes_json(*changes)}
+
+    async def test_the_current_and_new_rows_for_each_field(self, gated_call_spy):
+        connector, client = make_writer(STICKY, CARD, FRAME)
+
+        await connector.call("miro_update_items", self.args(
+            {"id": ITEM_ID, "content": "<p>New</p>", "color": "green", "x": 5, "width": 300},
+            {"id": ITEM_ID_2, "title": "T", "description": "D", "due_date": "2026-05-06",
+             "frame_id": ""},
+        ))
+
+        call = gated_call_spy[0]
+        assert call["tool"] == "miro_update_items"
+        assert call["gate"] == "popup"
+        assert call["filtered_data"] is None
+        assert call["preview"] == {
+            "Board": "QA board", "Team": "QA team", "Items": "2", "Fields changed": "8",
+        }
+        assert call["args"] == {"board_id": BOARD_ID}
+        assert call["preview_tables"] == [{
+            "headers": ["Item", "Field", "Current", "New"],
+            "rows": [
+                [f"sticky_note #{ITEM_ID}", "content", "[QATEST]", "New"],
+                [f"sticky_note #{ITEM_ID}", "color", "yellow", "green"],
+                [f"sticky_note #{ITEM_ID}", "x", "0", "5"],
+                [f"sticky_note #{ITEM_ID}", "width", "199", "300"],
+                [f"card #{ITEM_ID_2}", "title", "Old title", "T"],
+                [f"card #{ITEM_ID_2}", "description", "Old description", "D"],
+                [f"card #{ITEM_ID_2}", "due_date", "2026-01-01T12:00:00.000Z", "2026-05-06"],
+                [f"card #{ITEM_ID_2}", "frame_id", FRAME_ID, "(none)"],
+            ],
+        }]
+
+    async def test_a_frame_that_is_left_shows_none_and_one_that_is_entered_shows_its_id(
+        self, gated_call_spy,
+    ):
+        connector, client = make_writer(STICKY, CARD, FRAME)
+
+        await connector.call("miro_update_items", self.args(
+            {"id": ITEM_ID, "frame_id": FRAME_ID}, {"id": ITEM_ID_2, "frame_id": ""},
+        ))
+
+        rows = gated_call_spy[0]["preview_tables"][0]["rows"]
+        assert rows == [
+            [f"sticky_note #{ITEM_ID}", "frame_id", "(none)", FRAME_ID],
+            [f"card #{ITEM_ID_2}", "frame_id", FRAME_ID, "(none)"],
+        ]
+
+    async def test_details_text_is_the_json_of_the_exact_bodies(self, gated_call_spy):
+        connector, client = make_writer(STICKY, CARD, FRAME)
+        long_content = '<a href="https://example.com/x">' + "a" * 300 + "</a>"
+
+        await connector.call("miro_update_items", self.args(
+            {"id": ITEM_ID, "content": long_content, "x": 5},
+            {"id": ITEM_ID_2, "frame_id": ""},
+        ))
+
+        details = gated_call_spy[0]["details_text"]
+        assert long_content in json.loads(details)[0]["update"]["data"]["content"]
+        assert json.loads(details) == [
+            {"id": ITEM_ID, "type": "sticky_note",
+             "update": {"data": {"content": long_content}, "position": {"x": 5, "y": 0.0}}},
+            {"id": ITEM_ID_2, "type": "card", "update": None, "frame_id": ""},
+        ]
+
+    async def test_the_request_sequence_per_change(self, gated_call_spy):
+        connector, client = make_writer(STICKY, CARD, FRAME)
+        calls = []
+        client.update_item.side_effect = lambda *a: calls.append(("update", *a))
+        client.set_parent.side_effect = lambda *a: calls.append(("parent", *a))
+
+        result = await connector.call("miro_update_items", self.args(
+            {"id": ITEM_ID, "color": "green", "width": 250, "frame_id": FRAME_ID},
+            {"id": ITEM_ID_2, "frame_id": ""},
+        ))
+
+        assert calls == [
+            ("update", BOARD_ID, "sticky_note", ITEM_ID,
+             {"style": {"fillColor": "green"}, "geometry": {"width": 250}}),
+            ("parent", BOARD_ID, ITEM_ID, FRAME_ID),
+            ("parent", BOARD_ID, ITEM_ID_2, ""),
+        ]
+        assert result == {"board_id": BOARD_ID, "updated_ids": [ITEM_ID, ITEM_ID_2]}
+
+    async def test_a_position_change_sends_both_sides_and_each_type_picks_its_style_key(
+        self, gated_call_spy,
+    ):
+        text = MiroItem(ITEM_ID, "text", "t", "", "", "", "", "", 3.0, 4.0, 50.0, None, "", "")
+        connector, client = make_writer(text, CARD)
+
+        await connector.call("miro_update_items", self.args(
+            {"id": ITEM_ID, "y": 9, "color": "#112233"},
+            {"id": ITEM_ID_2, "color": "#445566", "x": 1, "height": 10},
+        ))
+
+        assert [c.args for c in client.update_item.call_args_list] == [
+            (BOARD_ID, "text", ITEM_ID,
+             {"style": {"color": "#112233"}, "position": {"x": 3.0, "y": 9}}),
+            (BOARD_ID, "card", ITEM_ID_2,
+             {"style": {"cardTheme": "#445566"}, "position": {"x": 1, "y": 20.0},
+              "geometry": {"height": 10}}),
+        ]
+
+    async def test_a_frames_change_sends_only_the_title_in_data(self, gated_call_spy):
+        connector, client = make_writer(FRAME)
+
+        await connector.call("miro_update_items", self.args(
+            {"id": FRAME_ID, "title": "Roadmap", "color": "#A6CCF5"},
+        ))
+
+        client.update_item.assert_called_once_with(
+            BOARD_ID, "frame", FRAME_ID,
+            {"data": {"title": "Roadmap"}, "style": {"fillColor": "#a6ccf5"}},
+        )
+
+    async def test_a_change_of_only_frame_id_makes_no_update_call(self, gated_call_spy):
+        connector, client = make_writer(STICKY, FRAME)
+
+        await connector.call("miro_update_items", self.args({"id": ITEM_ID, "frame_id": FRAME_ID}))
+
+        client.update_item.assert_not_called()
+        client.set_parent.assert_called_once_with(BOARD_ID, ITEM_ID, FRAME_ID)
+
+    @pytest.mark.parametrize("changes, message", [
+        ("not json", "changes must be a JSON array of 1 to 20"),
+        ("[]", "changes must be a JSON array of 1 to 20"),
+        ('[{"id": "3458764549483493025"}]', "changes must be a JSON array of 1 to 20"),
+        ('[{"content": "x"}]', "changes must be a JSON array of 1 to 20"),
+        ('[{"id": 5, "content": "x"}]', "changes must be a JSON array of 1 to 20"),
+        ('["x"]', "changes must be a JSON array of 1 to 20"),
+        ('[{"id": "3458764549483493025", "color": "red"}, '
+         '{"id": "3458764549483493025", "x": 1}]',
+         "changes must be a JSON array of 1 to 20"),
+        ('[{"id": "abc", "x": 1}]', "Not a Miro item id: 'abc'"),
+        ('[{"id": "3458764549483493025", "type": "card"}]',
+         "A sticky_note takes only these keys: color, content, frame_id, height, shape, "
+         "width, x, y."),
+        ('[{"id": "3458764549483493025", "title": "x"}]', "A sticky_note takes only these keys"),
+        ('[{"id": "3458764549483493025", "width": 5, "height": 5}]',
+         "A sticky_note takes width or height, not both."),
+        ('[{"id": "3458764549483493025", "x": true}]', "x and y must be numbers."),
+        ('[{"id": "3458764549483493025", "color": "pink!"}]',
+         "A sticky_note color must be one of"),
+        ('[{"id": "3458764549483493025", "frame_id": "3458764549483493030", "x": 1}]',
+         "move it into or out of a frame in one change"),
+        ('[{"id": "3458764549483493025", "frame_id": 7}]', "Not a Miro item id"),
+        ('[{"id": "3458764549483493025", "frame_id": "3458764549483493026"}]',
+         "Item 3458764549483493026 is not a frame on this board."),
+        ('[{"id": "3458764549483493025", "frame_id": "3458764549483499999"}]',
+         "Item 3458764549483499999 is not a frame on this board."),
+        ('[{"id": "3458764549483493030", "frame_id": ""}]', "A frame takes only these keys"),
+        ('[{"id": "3458764549483493099", "x": 1}]',
+         "Item(s) not found on this board: 3458764549483493099."),
+    ])
+    async def test_validation_messages_leave_the_gate_untouched(
+        self, gated_call_spy, changes, message,
+    ):
+        connector, client = make_writer(STICKY, STICKY_2, FRAME)
+
+        with pytest.raises(ValueError, match=message.replace("(", r"\(").replace(")", r"\)")):
+            await connector.call("miro_update_items", {"board_id": BOARD_ID, "changes": changes})
+
+        assert gated_call_spy == []
+        client.update_item.assert_not_called()
+        client.set_parent.assert_not_called()
+
+    async def test_an_image_cannot_be_changed(self, gated_call_spy):
+        connector, client = make_writer(IMAGE)
+
+        with pytest.raises(ValueError, match=f"Item {ITEM_ID} is a image; only sticky notes"):
+            await connector.call("miro_update_items", self.args({"id": ITEM_ID, "x": 1}))
+
+        assert gated_call_spy == []
+
+    async def test_a_text_cannot_be_emptied_but_may_keep_its_content(self, gated_call_spy):
+        text = MiroItem(ITEM_ID, "text", "t", "", "", "", "", "", 0.0, 0.0, 5.0, None, "", "")
+        connector, client = make_writer(text)
+
+        with pytest.raises(ValueError, match="A text needs non-empty content."):
+            await connector.call("miro_update_items", self.args({"id": ITEM_ID, "content": " "}))
+        await connector.call("miro_update_items", self.args({"id": ITEM_ID, "x": 1}))
+
+        assert len(gated_call_spy) == 1
+
+    async def test_a_failed_move_after_the_gate_names_the_items_already_changed(
+        self, gated_call_spy,
+    ):
+        connector, client = make_writer(STICKY, STICKY_2, FRAME)
+        client.set_parent.side_effect = MiroClientError("Miro answered but did not move it.")
+
+        with pytest.raises(RuntimeError) as err:
+            await connector.call("miro_update_items", self.args(
+                {"id": ITEM_ID, "x": 1}, {"id": ITEM_ID_2, "frame_id": FRAME_ID},
+            ))
+
+        assert str(err.value) == (
+            "Miro answered but did not move it. Items changed before the error: " + ITEM_ID + "."
+        )
+
+    async def test_a_failure_on_the_second_item_names_the_first(self, gated_call_spy):
+        connector, client = make_writer(STICKY, STICKY_2)
+        client.update_item.side_effect = [None, MiroClientError("Miro refused."), None]
+
+        with pytest.raises(RuntimeError) as err:
+            await connector.call("miro_update_items", self.args(
+                {"id": ITEM_ID, "x": 1}, {"id": ITEM_ID_2, "x": 2},
+            ))
+
+        assert str(err.value) == f"Miro refused. Items changed before the error: {ITEM_ID}."
+
+    async def test_a_failure_on_the_first_item_says_none(self, gated_call_spy):
+        connector, client = make_writer(STICKY)
+        client.update_item.side_effect = MiroClientError("Miro refused.")
+
+        with pytest.raises(RuntimeError, match="Items changed before the error: none."):
+            await connector.call("miro_update_items", self.args({"id": ITEM_ID, "x": 1}))
+
+    async def test_nothing_is_written_when_the_gate_raises(self, monkeypatch):
+        connector, client = make_writer(STICKY, FRAME)
+
+        async def deny(**kwargs):
+            raise RuntimeError("denied")
+
+        monkeypatch.setattr(miro_module, "gated_call", deny, raising=False)
+
+        with pytest.raises(RuntimeError, match="denied"):
+            await connector.call("miro_update_items", self.args(
+                {"id": ITEM_ID, "x": 1, "y": 2, "color": "red"},
+            ))
+
+        client.update_item.assert_not_called()
+        client.set_parent.assert_not_called()
+
+    async def test_a_lookup_failure_is_a_runtime_error(self, gated_call_spy):
+        connector, client = make_writer(STICKY)
+        client.get_item.side_effect = MiroClientError("Miro is down.")
+
+        with pytest.raises(RuntimeError, match="Miro is down."):
+            await connector.call("miro_update_items", self.args({"id": ITEM_ID, "x": 1}))
+
+
+class TestUpdateBoard:
+    async def test_only_the_given_fields_reach_the_table_and_the_client(self, gated_call_spy):
+        connector, client = make_writer()
+        client.update_board.return_value = MiroBoard(
+            BOARD_ID, "Renamed", "secret notes", "QA team", "", "", "",
+        )
+
+        result = await connector.call(
+            "miro_update_board", {"board_id": BOARD_ID, "name": "Renamed"},
+        )
+
+        call = gated_call_spy[0]
+        assert call["tool"] == "miro_update_board"
+        assert call["gate"] == "popup"
+        assert call["filtered_data"] is None
+        assert call["preview"] == {"Board": "QA board", "Team": "QA team"}
+        assert call["preview_tables"] == [{
+            "headers": ["Field", "Current", "New"], "rows": [["name", "QA board", "Renamed"]],
+        }]
+        client.update_board.assert_called_once_with(BOARD_ID, name="Renamed", description=None)
+        assert result == {
+            "board_id": BOARD_ID, "name": "Renamed", "description": "secret notes",
+        }
+
+    async def test_both_fields_are_sent_together(self, gated_call_spy):
+        connector, client = make_writer()
+        client.update_board.return_value = BOARD
+
+        await connector.call(
+            "miro_update_board", {"board_id": BOARD_ID, "name": "N", "description": "D"},
+        )
+
+        assert [r[0] for r in gated_call_spy[0]["preview_tables"][0]["rows"]] == [
+            "name", "description",
+        ]
+        client.update_board.assert_called_once_with(BOARD_ID, name="N", description="D")
+
+    @pytest.mark.parametrize("args, message", [
+        ({}, "Give a new name, a new description, or both."),
+        ({"name": "x" * 61}, "name is longer than 60 characters."),
+        ({"description": "x" * 301}, "description is longer than 300 characters."),
+        ({"name": 5}, "name and description must be text."),
+    ])
+    async def test_validation_messages(self, gated_call_spy, args, message):
+        connector, client = make_writer()
+
+        with pytest.raises(ValueError, match=message):
+            await connector.call("miro_update_board", {"board_id": BOARD_ID, **args})
+
+        assert gated_call_spy == []
+        client.update_board.assert_not_called()
+
+    async def test_nothing_is_written_when_the_gate_raises(self, monkeypatch):
+        connector, client = make_writer()
+
+        async def deny(**kwargs):
+            raise RuntimeError("denied")
+
+        monkeypatch.setattr(miro_module, "gated_call", deny, raising=False)
+
+        with pytest.raises(RuntimeError, match="denied"):
+            await connector.call("miro_update_board", {"board_id": BOARD_ID, "name": "N"})
+
+        client.update_board.assert_not_called()
+
+    async def test_a_client_failure_is_a_runtime_error(self, gated_call_spy):
+        connector, client = make_writer()
+        client.update_board.side_effect = MiroClientError("Miro refused.")
+
+        with pytest.raises(RuntimeError, match="Miro refused."):
+            await connector.call("miro_update_board", {"board_id": BOARD_ID, "name": "N"})
+
+
 MIRO_SIBLINGS: dict[str, list[str]] = {
     "miro_list_boards": ["miro_get_board"],
     "miro_get_board": ["miro_list_boards", "miro_list_items"],
@@ -1034,6 +1361,8 @@ MIRO_SIBLINGS: dict[str, list[str]] = {
     "miro_list_connectors": ["miro_create_connectors"],
     "miro_create_items": ["miro_update_items"],
     "miro_create_connectors": ["miro_list_connectors"],
+    "miro_update_items": ["miro_get_items", "miro_create_items"],
+    "miro_update_board": ["miro_get_board"],
 }
 
 
@@ -1049,16 +1378,17 @@ class TestToolDefinitions:
         }
         assert_tool_definitions_complete(connector, siblings)
 
-    def test_no_tool_deletes_and_only_the_creates_write(self):
+    def test_no_tool_deletes_and_only_the_writes_write(self):
         specs = MiroConnector(MagicMock()).tool_specs()
         assert [s.name for s in specs] == [
             "miro_list_boards", "miro_get_board", "miro_list_tags",
             "miro_list_items", "miro_get_items", "miro_list_connectors",
             "miro_create_items", "miro_create_connectors",
+            "miro_update_items", "miro_update_board",
         ]
         assert not any(s.destructive for s in specs)
         assert {s.name for s in specs if not s.read_only} == {
-            "miro_create_items", "miro_create_connectors",
+            "miro_create_items", "miro_create_connectors", "miro_update_items", "miro_update_board",
         }
         assert all(s.params[-1].name == "reason" and s.params[-1].required for s in specs)
 
@@ -1075,6 +1405,7 @@ class TestEveryToolIsAudited:
         client.list_connectors.return_value = ([LINE], False)
         client.create_items.return_value = [STICKY]
         client.create_connector.return_value = LINE.id
+        client.update_board.return_value = BOARD
 
         await assert_all_tools_leave_an_audit_trail(
             connector, miro_module, monkeypatch, tmp_path,
@@ -1091,5 +1422,9 @@ class TestEveryToolIsAudited:
                     "board_id": BOARD_ID,
                     "connectors": json.dumps([{"start_item_id": ITEM_ID, "end_item_id": ITEM_ID_2}]),
                 },
+                "miro_update_items": {
+                    "board_id": BOARD_ID, "changes": json.dumps([{"id": ITEM_ID, "color": "green"}]),
+                },
+                "miro_update_board": {"board_id": BOARD_ID, "name": "New name"},
             },
         )

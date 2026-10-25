@@ -1,6 +1,6 @@
 """Miro connector: lists the boards a Miro account can open and each board's tags without a
 card, reads a board's items and connector lines behind a review card, and adds items and connector
-lines behind an approval card. The client is built by the daemon from an OAuth sign-in (see
+lines, changes items and renames a board behind an approval card. The client is built by the daemon from an OAuth sign-in (see
 ``miro_auth``)."""
 from __future__ import annotations
 
@@ -93,6 +93,10 @@ _CREATE_KEYS: dict[str, frozenset[str]] = {
                         "frame_id"}),
     "frame": frozenset({"type", "x", "y", "color", "title", "width", "height"}),
 }
+_CHANGEABLE_TYPES = frozenset(_CREATE_KEYS)
+_BOARD_NAME_LIMIT = 60
+_BOARD_DESCRIPTION_LIMIT = 300
+_NO_FRAME = "(none)"
 _CONNECTOR_KEYS = frozenset({"start_item_id", "end_item_id", "shape", "caption", "color"})
 _HEX_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 _DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -122,6 +126,23 @@ _CONNECTORS_DESCRIPTION = (
     "(#RRGGBB). The two ends are different existing items that are not frames. Example: "
     "[{\"start_item_id\": \"3458764549483493025\", \"end_item_id\": \"3458764549483493026\", "
     "\"caption\": \"leads to\"}]."
+)
+_CHANGES_MESSAGE = (
+    'changes must be a JSON array of 1 to 20 {"id": ..., <field>: <new value>} objects with '
+    "distinct ids and at least one field each."
+)
+_CHANGES_DESCRIPTION = (
+    "A JSON array of 1 to 20 changes, each {\"id\": <item id>, <key>: <new value>, ...} using the "
+    "keys miro_create_items allows for that item's type (not type). Set frame_id to a frame's id "
+    "to move the item into it, or to an empty string to take it out; a change that sets frame_id "
+    "sets no x or y. Example: [{\"id\": \"3458764549483493025\", \"content\": \"Done\", "
+    "\"color\": \"green\"}]."
+)
+_BOARD_NAME_DESCRIPTION = (
+    "New board name, at most 60 characters. Empty keeps the current name."
+)
+_BOARD_DESCRIPTION_DESCRIPTION = (
+    "New board description, at most 300 characters. Empty keeps the current description."
 )
 
 
@@ -263,6 +284,39 @@ class MiroConnector(Connector):
                 ],
                 read_only=False,
             ),
+            ToolSpec(
+                name="miro_update_items",
+                description=(
+                    "Change existing items on one Miro board (text, color, position, size, or "
+                    "which frame they are in), up to 20 in one request. Nothing can be deleted; "
+                    "to take an item out of its frame set frame_id to an empty string. Returns "
+                    "{board_id, updated_ids}. Use miro_get_items to read the items first, and "
+                    "miro_create_items to add new ones. Requires user approval."
+                ),
+                params=[
+                    ToolParam("board_id", "str", description=_BOARD_ID_DESCRIPTION),
+                    ToolParam("changes", "str", description=_CHANGES_DESCRIPTION),
+                    _REASON,
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="miro_update_board",
+                description=(
+                    "Rename a Miro board or change its description. Returns {board_id, name, "
+                    "description}. Use miro_get_board to read the board's current name. "
+                    "Requires user approval."
+                ),
+                params=[
+                    ToolParam("board_id", "str", description=_BOARD_ID_DESCRIPTION),
+                    ToolParam("name", "str", required=False, default="",
+                              description=_BOARD_NAME_DESCRIPTION),
+                    ToolParam("description", "str", required=False, default="",
+                              description=_BOARD_DESCRIPTION_DESCRIPTION),
+                    _REASON,
+                ],
+                read_only=False,
+            ),
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
@@ -282,6 +336,10 @@ class MiroConnector(Connector):
             return await self._create_items(**args)
         if tool == "miro_create_connectors":
             return await self._create_connectors(**args)
+        if tool == "miro_update_items":
+            return await self._update_items(**args)
+        if tool == "miro_update_board":
+            return await self._update_board(**args)
         raise ValueError(f"Unknown Miro tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -583,6 +641,122 @@ class MiroConnector(Connector):
         logger.info("Miro connectors added to board %s: %d", board_id, len(created_ids))
         return {"board_id": board_id, "created_ids": created_ids}
 
+    async def _update_items(self, board_id: str, changes: str) -> Any:
+        board_id = _board_id(board_id)
+        specs = _parse_changes(changes)
+        board = await self._board_info(board_id)
+        current: dict[str, MiroItem] = {}
+        missing: list[str] = []
+        for spec in specs:
+            item = await self._get_item(board_id, spec["id"])
+            if item is None:
+                missing.append(spec["id"])
+            else:
+                current[spec["id"]] = item
+        if missing:
+            raise ValueError(f"Item(s) not found on this board: {', '.join(sorted(missing))}.")
+        for spec in specs:
+            item = current[spec["id"]]
+            if item.type not in _CHANGEABLE_TYPES:
+                raise ValueError(
+                    f"Item {item.id} is a {item.type}; only sticky notes, cards, texts, shapes "
+                    "and frames can be changed."
+                )
+        checked = [_check_change(spec, current[spec["id"]].type) for spec in specs]
+        for frame_id in dict.fromkeys(c["frame_id"] for c in checked if c.get("frame_id")):
+            frame = await self._get_item(board_id, frame_id)
+            if frame is None or frame.type != "frame":
+                raise ValueError(f"Item {frame_id} is not a frame on this board.")
+        bodies = [_update_body(c, current[c["id"]]) for c in checked]
+        rows = [
+            [f"{current[c['id']].type} #{c['id']}", key,
+             _field_cell(key, getattr(current[c["id"]], key)), _field_cell(key, c[key])]
+            for c in checked for key in c if key != "id"
+        ]
+        details = []
+        for c, body in zip(checked, bodies, strict=True):
+            entry: dict[str, Any] = {"id": c["id"], "type": current[c["id"]].type, "update": body}
+            if "frame_id" in c:
+                entry["frame_id"] = c["frame_id"]
+            details.append(entry)
+        await gated_call(
+            connector=self.name,
+            tool="miro_update_items",
+            tool_name="Update Miro Items",
+            summary=f"Update {len(checked)} item(s) on {board.name}",
+            sender=board.name,
+            raw_data={"board_id": board_id, "changes": details},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Board": board.name,
+                "Team": self._client.team_name or _NO_TEAM,
+                "Items": str(len(checked)),
+                "Fields changed": str(len(rows)),
+            },
+            preview_tables=[{"headers": ["Item", "Field", "Current", "New"], "rows": rows}],
+            details_text=json.dumps(details, indent=2, ensure_ascii=False),
+            my_email="",
+            args={"board_id": board_id},
+        )
+        updated_ids: list[str] = []
+        try:
+            for c, body in zip(checked, bodies, strict=True):
+                if body:
+                    await asyncio.to_thread(
+                        self._client.update_item, board_id, current[c["id"]].type, c["id"], body,
+                    )
+                if "frame_id" in c:
+                    await asyncio.to_thread(
+                        self._client.set_parent, board_id, c["id"], c["frame_id"],
+                    )
+                updated_ids.append(c["id"])
+        except MiroClientError as exc:
+            logger.warning("Miro request failed: %s", exc)
+            raise RuntimeError(
+                f"{exc} Items changed before the error: {', '.join(updated_ids) or 'none'}."
+            ) from exc
+        logger.info("Miro items changed on board %s: %d", board_id, len(updated_ids))
+        return {"board_id": board_id, "updated_ids": updated_ids}
+
+    async def _update_board(self, board_id: str, name: str = "", description: str = "") -> Any:
+        board_id = _board_id(board_id)
+        if not isinstance(name, str) or not isinstance(description, str):
+            raise ValueError("name and description must be text.")
+        if not name and not description:
+            raise ValueError("Give a new name, a new description, or both.")
+        for key, value, limit in (
+            ("name", name, _BOARD_NAME_LIMIT), ("description", description, _BOARD_DESCRIPTION_LIMIT),
+        ):
+            if len(value) > limit:
+                raise ValueError(f"{key} is longer than {limit} characters.")
+        board = await self._board_info(board_id)
+        given = {k: v for k, v in (("name", name), ("description", description)) if v}
+        await gated_call(
+            connector=self.name,
+            tool="miro_update_board",
+            tool_name="Update Miro Board",
+            summary=f"Update board {board.name}",
+            sender=board.name,
+            raw_data={"board_id": board_id, **given},
+            filtered_data=None,
+            gate="popup",
+            preview={"Board": board.name, "Team": self._client.team_name or _NO_TEAM},
+            preview_tables=[{
+                "headers": ["Field", "Current", "New"],
+                "rows": [[k, _cell(getattr(board, k)), _cell(v)] for k, v in given.items()],
+            }],
+            details_text=json.dumps(given, indent=2, ensure_ascii=False),
+            my_email="",
+            args={"board_id": board_id},
+        )
+        updated = await self._fetch(
+            self._client.update_board, board_id,
+            name=given.get("name"), description=given.get("description"),
+        )
+        logger.info("Miro board %s updated", board_id)
+        return {"board_id": board_id, "name": updated.name, "description": updated.description}
+
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
@@ -725,13 +899,13 @@ def _parse_items(value: Any) -> list[dict[str, Any]]:
     return [_check_item(raw) for raw in raw_items]
 
 
-def _check_item(raw: Any) -> dict[str, Any]:
+def _check_item(raw: Any, *, update: bool = False) -> dict[str, Any]:
     if not isinstance(raw, dict) or not isinstance(raw.get("type"), str) \
             or raw["type"] not in _CREATE_KEYS:
         raise ValueError(_ITEMS_MESSAGE)
     kind = raw["type"]
-    allowed = _CREATE_KEYS[kind]
-    if set(raw) - allowed:
+    allowed = _CREATE_KEYS[kind] - ({"type"} if update else set())
+    if set(raw) - allowed - ({"type"} if update else set()):
         raise ValueError(f"A {kind} takes only these keys: {', '.join(sorted(allowed))}.")
     if kind == "sticky_note" and "width" in raw and "height" in raw:
         raise ValueError("A sticky_note takes width or height, not both.")
@@ -744,7 +918,8 @@ def _check_item(raw: Any) -> dict[str, Any]:
     _text(raw, "content", _CONTENT_LIMIT)
     _text(raw, "title", _TITLE_LIMIT)
     _text(raw, "description", _CONTENT_LIMIT)
-    if kind == "text" and not str(raw.get("content", "")).strip():
+    if kind == "text" and (not update or "content" in raw) \
+            and not str(raw.get("content", "")).strip():
         raise ValueError("A text needs non-empty content.")
     if "shape" in raw:
         if kind == "sticky_note":
@@ -765,7 +940,7 @@ def _check_item(raw: Any) -> dict[str, Any]:
     if "color" in raw:
         spec["color"] = _check_color(kind, raw["color"])
     if "frame_id" in raw:
-        spec["frame_id"] = _item_id(raw["frame_id"])
+        spec["frame_id"] = "" if update and raw["frame_id"] == "" else _item_id(raw["frame_id"])
     return spec
 
 
@@ -783,20 +958,27 @@ def _check_color(kind: str, color: Any) -> str:
     return color
 
 
-def _item_body(spec: dict[str, Any]) -> dict[str, Any]:
-    kind = spec["type"]
+def _body_groups(
+    kind: str, spec: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     data: dict[str, Any] = {}
     for key in ("content", "title", "description", "shape"):
         if key in spec:
             data[key] = spec[key]
     if "due_date" in spec:
         data["dueDate"] = f"{spec['due_date']}T12:00:00.000Z"
-    if kind == "frame":
-        data.update({"format": "custom", "type": "freeform"})
     style: dict[str, Any] = {}
     if "color" in spec:
         style[{"card": "cardTheme", "text": "color"}.get(kind, "fillColor")] = spec["color"]
-    geometry = {k: spec[k] for k in ("width", "height") if k in spec}
+    geometry: dict[str, Any] = {k: spec[k] for k in ("width", "height") if k in spec}
+    return data, style, geometry
+
+
+def _item_body(spec: dict[str, Any]) -> dict[str, Any]:
+    kind = spec["type"]
+    data, style, geometry = _body_groups(kind, spec)
+    if kind == "frame":
+        data.update({"format": "custom", "type": "freeform"})
     body: dict[str, Any] = {"type": kind}
     for name, group in (("data", data), ("style", style)):
         if group:
@@ -859,3 +1041,55 @@ def _connector_body(spec: dict[str, Any]) -> dict[str, Any]:
     if "color" in spec:
         body["style"] = {"strokeColor": spec["color"]}
     return body
+
+
+def _parse_changes(value: Any) -> list[dict[str, Any]]:
+    raw_changes = _json_list(value)
+    if raw_changes is None or not all(
+        isinstance(r, dict) and isinstance(r.get("id"), str) and len(r) > 1 for r in raw_changes
+    ):
+        raise ValueError(_CHANGES_MESSAGE)
+    ids = [_item_id(r["id"]) for r in raw_changes]
+    if len(set(ids)) != len(ids):
+        raise ValueError(_CHANGES_MESSAGE)
+    return [{**raw, "id": item_id} for raw, item_id in zip(raw_changes, ids, strict=True)]
+
+
+def _check_change(raw: dict[str, Any], kind: str) -> dict[str, Any]:
+    fields = {k: v for k, v in raw.items() if k != "id"}
+    if "type" in fields or ("frame_id" in fields and kind == "frame"):
+        allowed = _CREATE_KEYS[kind] - {"type"} - ({"frame_id"} if "frame_id" in fields else set())
+        raise ValueError(f"A {kind} takes only these keys: {', '.join(sorted(allowed))}.")
+    if "frame_id" in fields and ("x" in fields or "y" in fields):
+        raise ValueError(
+            f"Item {raw['id']}: move it into or out of a frame in one change and set its x and y "
+            "in another."
+        )
+    checked = _check_item({**fields, "type": kind}, update=True)
+    checked.pop("type")
+    return {"id": raw["id"], **checked}
+
+
+def _update_body(change: dict[str, Any], item: MiroItem) -> dict[str, Any] | None:
+    spec = {k: v for k, v in change.items() if k not in ("id", "frame_id")}
+    data, style, geometry = _body_groups(item.type, spec)
+    if item.type == "frame":
+        data = {k: v for k, v in data.items() if k == "title"}
+    body: dict[str, Any] = {}
+    for name, group in (("data", data), ("style", style)):
+        if group:
+            body[name] = group
+    if "x" in spec or "y" in spec:
+        body["position"] = {
+            "x": spec["x"] if "x" in spec else item.x or 0,
+            "y": spec["y"] if "y" in spec else item.y or 0,
+        }
+    if geometry:
+        body["geometry"] = geometry
+    return body or None
+
+
+def _field_cell(key: str, value: Any) -> str:
+    if key == "frame_id" and not value:
+        return _NO_FRAME
+    return _cell(value)
