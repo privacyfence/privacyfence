@@ -5,7 +5,7 @@
 Add a **Miro** connector. An AI client can then list a person's Miro boards and tags straight
 away. It can read a board's items and connector lines after the person reviews them. With approval
 on a card, it can add sticky notes, cards, texts, shapes, frames and connector lines, and change
-existing items (text, color, position, size, moving into or out of a frame) and a board's name or
+existing items (text, color, position, size, moving into a frame) and a board's name or
 description. Nothing the connector does deletes anything.
 
 People connect only by OAuth, with a Miro app an administrator registers once and puts in the
@@ -272,9 +272,11 @@ Sources:
 | `update_item` | `PATCH /v2/boards/{board_id}/{sticky_notes\|cards\|texts\|shapes\|frames}/{item_id}` | partial body `{data?, style?, position?, geometry?}` |
 | `set_parent` | `PATCH /v2/boards/{board_id}/items/{item_id}` body `{"parent": {"id": frame_id}}` | the generic item update accepts only `parent` and `position` |
 
-- **Taking an item out of a frame is undocumented** (the spec's `Parent` is `{id}`, not nullable).
-  This plan sends `{"parent": null}`; manual step `mb2` tries exactly that request by hand before
-  any phase starts (§6).
+- **An item cannot be taken out of a frame through the API.** The spec's `Parent` is `{id}`, not
+  nullable, and manual step `mb3` showed it live on 2026-10-25: `PATCH /v2/boards/{id}/items/{item}`
+  with `{"parent": null}` answers **HTTP 200 and leaves the parent unchanged**. Because Miro reports
+  success for a change it did not make, the connector refuses the request before the card (§3.3), and
+  `set_parent` reads the item back to confirm a move into a frame (§3.2.2).
 - **Fill colors of shapes and frames** are documented as one of 16 hex values (`FILL_COLORS` in
   §3.3); the connector accepts only those. Card border (`cardTheme`) and text color take any
   `#RRGGBB`.
@@ -498,7 +500,11 @@ Sources:
     "shape": "shapes", "frame": "frames"}`. Any other type →
     `MiroClientError(f"Miro items of type {item_type} cannot be changed here.")`.
   - `set_parent(board_id, item_id, frame_id: str) -> None` sends `{"parent": {"id": frame_id}}`,
-    or `{"parent": None}` when `frame_id == ""`.
+    for a non-empty `frame_id`; `""` raises
+    `MiroClientError("Miro's API cannot take an item out of a frame. Move it out in Miro.")` before any
+    request. After the PATCH it calls `get_item` and, when the item's `frame_id` is not `frame_id`,
+    raises `MiroClientError(f"Miro accepted moving item {item_id} into frame {frame_id} but did not move it.")`
+    (Miro answers 200 to a parent change it ignores, §3.1).
 - Every method validates its ids before any request.
 
 ### 3.3 `src/privacyfence/connectors/miro.py`
@@ -556,7 +562,7 @@ First sentences:
 
 Two descriptions carry extra sentences:
 - `miro_list_boards` adds: "Only boards in the Miro team chosen when PrivacyFence was signed in are visible."
-- `miro_update_items` adds: "Nothing can be deleted; to take an item out of its frame set frame_id to an empty string."
+- `miro_update_items` adds: "Nothing can be deleted, and an item cannot be taken out of a frame; that is done in Miro."
 
 **Parameter descriptions**
 - `board_id`: "The board id from miro_list_boards (such as uXjVOD6LSME=), the part of the board's address after /app/board/. Not the full link."
@@ -569,7 +575,7 @@ Two descriptions carry extra sentences:
 - `description`: "New board description, at most 300 characters. Empty keeps the current description."
 - `items`: "A JSON array of 1 to 20 items, each {\"type\": sticky_note|card|text|shape|frame, ...}. Keys by type: sticky_note content, shape (square or rectangle), width or height, frame_id; card title, description, due_date (YYYY-MM-DD), width, height, frame_id; text content (required), width, frame_id; shape content, shape (rectangle, round_rectangle, circle, triangle, rhombus, star, cloud, ...), width, height, frame_id; frame title, width, height. Every type takes x, y and color: a sticky_note color is a name such as yellow, light_blue or green; a shape or frame color is one of Miro's 16 fill colors such as #fff9b1; a card or text color is any #RRGGBB. Inside a frame x and y are measured from the frame's top-left corner. Content may use simple HTML such as <p> and <strong>. Example: [{\"type\": \"sticky_note\", \"content\": \"Idea\", \"color\": \"yellow\", \"x\": 0, \"y\": 0}]."
 - `connectors`: "A JSON array of 1 to 20 lines, each {\"start_item_id\": ..., \"end_item_id\": ...} with optional shape (straight, elbowed or curved), caption (at most 200 characters) and color (#RRGGBB). The two ends are different existing items that are not frames. Example: [{\"start_item_id\": \"3458764549483493025\", \"end_item_id\": \"3458764549483493026\", \"caption\": \"leads to\"}]."
-- `changes`: "A JSON array of 1 to 20 changes, each {\"id\": <item id>, <key>: <new value>, ...} using the keys miro_create_items allows for that item's type (not type). Set frame_id to a frame's id to move the item into it, or to an empty string to take it out; a change that sets frame_id sets no x or y. Example: [{\"id\": \"3458764549483493025\", \"content\": \"Done\", \"color\": \"green\"}]."
+- `changes`: "A JSON array of 1 to 20 changes, each {\"id\": <item id>, <key>: <new value>, ...} using the keys miro_create_items allows for that item's type (not type). Set frame_id to a frame's id to move the item into it; an item cannot be taken out of a frame here. A change that sets frame_id sets no x or y. Example: [{\"id\": \"3458764549483493025\", \"content\": \"Done\", \"color\": \"green\"}]."
 
   These three strings are written as Python string literals in the connector, with the quotes
   escaped as shown; the shape list in `items` is abbreviated with "..." on purpose, and the full
@@ -642,7 +648,9 @@ and no other keys.
 **`changes` format**: a JSON array of 1–20 `{"id": "<item id>", <field>: <new value>, …}` with at
 least one field.
 - The fields are the create keys of the item's current type, minus `type`.
-- `frame_id` may be `""`, meaning take it out of its frame. Frames take no `frame_id`.
+- `frame_id` must name a frame on the board (checked with `get_item` before the gate, like a create's
+  `frame_id`). `""` raises `ValueError("Miro's API cannot take an item out of a frame. Move it out in Miro.")`
+  before the gate (§3.1). Frames take no `frame_id`.
 - A change that carries `frame_id` carries no `x` or `y`: after a move, Miro measures the position
   from the new parent, so the two are separate changes.
 - A frame's change sends only `title` in `data`, never `format` or `type` again.
@@ -691,7 +699,7 @@ least one field.
   `ValueError('changes must be a JSON array of 1 to 20 {"id": ..., <field>: <new value>} objects with distinct ids and at least one field each.')`
 - An item id not on the board: the same "not found" message.
 - `frame_id` together with `x` or `y`:
-  `ValueError(f"Item {id}: move it into or out of a frame in one change and set its x and y in another.")`
+  `ValueError(f"Item {id}: move it into a frame in one change and set its x and y in another.")`
 - A type that cannot be changed:
   `ValueError(f"Item {id} is a {type}; only sticky notes, cards, texts, shapes and frames can be changed.")`
 - `item_ids`: `ValueError("item_ids must be 1 to 50 Miro item ids separated by commas.")`
@@ -764,7 +772,7 @@ least one field.
   - Table `["Item", "Field", "Current", "New"]`, one row per given field, with Item
     `f"{item.type} #{item.id}"`. Current comes from the `MiroItem` field of the same name (`x`,
     `y`, `width`, `height`, `color`, `content`, `title`, `description`, `due_date`, `shape`,
-    `frame_id`). An empty frame value reads `"(none)"`.
+    `frame_id`). An item in no frame reads `"(none)"` in the Current column.
   - The table is the summary (its cells strip tags and stop at 200 characters).
     `details_text` is exactly what will be sent:
     `json.dumps([{"id": …, "type": …, "update": <update_item body or None>, "frame_id": <given value, or omitted>} …], indent=2, ensure_ascii=False)`,
@@ -966,6 +974,7 @@ it against the code. Sections:
   `#miro`. Cover:
   - batches of up to 20 items under one approval;
   - positions inside a frame are measured from the frame's corner;
+  - an item can be moved into a frame but not taken out of one (do that in Miro);
   - content may be simple HTML;
   - comments cannot be read.
 - `## Auto-accept rules`: `miro.board`, set on Settings > Auto-accept with the board id (the part of
@@ -1000,6 +1009,9 @@ it against the code. Sections:
   - It leaves out every Enterprise API, sharing and member changes, board create and copy, and tag
     writes.
   - It cannot read comments, because Miro's public REST API has no endpoint for them.
+  - It cannot take an item out of a frame: Miro's API answers 200 to `{"parent": null}` and keeps the
+    parent, so the connector refuses that change before the card instead of reporting a success
+    that did not happen, and confirms every move into a frame by reading the item back.
   - Rejected:
     - delete tools (a delete of a board or frame takes everything inside it, and the card could show
       only ids);
@@ -1068,21 +1080,16 @@ The step-by-step page is `manual_steps_artifact` in the manifest.
   - Its done-when tells the user not to confirm `mb2` if only the query-parameter request worked.
     The plan is then revised (§3.2.1 and ADR 0230) before `/implement` starts. No phase checks this
     itself.
-- **Taking an item out of a frame.**
-  - Risk: the API does not document how; this plan sends `{"parent": null}`.
-  - Check: `mb3` sends exactly that request before any phase starts. `lifecycle_miro` repeats it
-    on `main` every week after the merge (`ma3`).
-  - Its done-when tells the user not to confirm `mb3` if the sticky note keeps its parent or the
-    request is refused. The planner then applies this fallback to the plan (§3.2.2, §3.3, §3.8 and
-    the `p2`, `p6` and `p10` briefs) before `/implement` starts:
-    - in `connectors/miro.py`, a change with `frame_id == ""` raises
-      `ValueError("Miro's API cannot take an item out of a frame. Move it out in Miro.")` before the
-      gate;
-    - `MiroClient.set_parent` rejects `""` the same way;
-    - the `miro_update_items` description and the setup guide say moving out is not possible;
-    - the matching tests change;
-    - §3.3's extra sentence for `miro_update_items` becomes "Nothing can be deleted.";
-    - `lifecycle_miro` drops its move-out step.
+- **Taking an item out of a frame: settled, not supported.** `mb3` sent `{"parent": null}` on
+  2026-10-25; Miro answered HTTP 200 and kept the parent. The plan applies the fallback throughout:
+  - `connectors/miro.py` refuses a change with `frame_id == ""` before the gate, and
+    `MiroClient.set_parent` refuses `""` the same way (§3.2.2, §3.3);
+  - the `miro_update_items` description, the setup guide (§3.8) and ADR 0231 say an item cannot be
+    taken out of a frame;
+  - because Miro answers 200 to a parent change it ignores, `set_parent` reads the item back and
+    raises when a move into a frame did not happen;
+  - `lifecycle_miro` moves an item into a frame and checks it, and never tries a move out.
+  - If Miro later supports it, adding it back is a new decision.
 - **Token context endpoint.**
   - Risk: `GET /v1/oauth-token` may refuse a `boards:*` token.
   - That is handled: `check_connection` falls back to `GET /v2/boards`, and cards show
@@ -1150,7 +1157,7 @@ manual_before:
   - id: mb3-miro-write-probe
     title: Within the hour after mb2's token exchange, run the Miro write probe on the runner against the lifecycle board
     why: No CI run can execute Miro writes against a branch (connector-live-check.yml checks main's code only), so the three undocumented or spec-only behaviours the plan depends on (frame create, a fill color from the documented list, and taking an item out of a frame with a null parent) are proven here before any phase is built on them (plan §6).
-    done_when: The probe printed "frame created", "bulk created 2 items", "fill color accepted" and "move-out works" (the sticky note's parent is gone). If any line says otherwise, do not confirm this step; tell the planner session the probe's output instead, because the plan must be revised before /implement starts (plan §6).
+    done_when: The probe printed "frame created", "bulk created 2 items" and "fill color accepted". Its move-out line is expected to say "move-out NOT supported" (run on 2026-10-25, plan §6); if it says "move-out works" instead, tell the planner session, because the plan refuses move-outs. Any other failure (frame, bulk create or fill color refused) means the plan must be revised before /implement starts.
 manual_after:
   - id: ma1-local-mode-check
     title: Sign in to Miro from Settings and drive every Miro tool from an AI client in local mode
@@ -1254,7 +1261,9 @@ phases:
          MiroNotFound), TestListConnectors, TestCreateItems (one POST to /items/bulk with the list), TestCreateFrame (one POST
          to /frames), TestCreateConnector, TestUpdateItem (endpoint per type;
          an image type raises the "cannot be changed here" message before any request), TestSetParent (body with id; body
-         {"parent": None} for ""). Each id-taking method rejects a bad id before any request.
+         "" rejected with the move-out message before any request; after the PATCH, get_item is called and a frame_id
+         other than the one asked for raises the "did not move it" message). Each id-taking method rejects a bad id
+         before any request.
       3. ruff check . and python3 -m pytest tests/unit -q.
       Definition of done: the /dod live-check row is deferred to p11-qa-live and p12-docs-adrs-retire; dispatch no
       workflow in this phase (plan §3.0).
@@ -1476,8 +1485,9 @@ phases:
     brief: |
       Read first: plan §3.3 (changes format, update ordering, the two tools' gated_call arguments), §3.4 and §3.7;
       src/privacyfence/connectors/grist.py _update_records (l.1065-1127) as the pattern.
-      1. connectors/miro.py: the changes parser (reusing the per-type key and value rules from p5, with frame_id "" allowed
-         and no frame_id for frames), and the two tools. miro_update_items: validate → _board_info → get_item per id (not
+      1. connectors/miro.py: the changes parser (reusing the per-type key and value rules from p5, with frame_id "" refused
+         with the §3.3 move-out message, frame_id checked to be a frame with get_item as in p5, and no frame_id for
+         frames), and the two tools. miro_update_items: validate → _board_info → get_item per id (not
          found and non-changeable type messages) → build the Current/New rows → gated_call(gate="popup") → per change, in
          order, update_item with only the changed groups (data/style/position/geometry; a position change sends both x and y,
          taking the unchanged one from the current item; a geometry change for a sticky note sends only the one side given)
@@ -1494,9 +1504,10 @@ phases:
       4. Tests: TestUpdateItems — Current/New rows for each field (frame "" shows "(none)"); details_text is the JSON of the
          exact bodies (a 300-character content with an <a href> appears in it whole); preview
          keys exactly Board, Team, Items, Fields changed; the request sequence per change (update_item body groups; set_parent
-         with an id and with ""; a change of only frame_id makes no update_item call); validation messages (unknown key for
-         the item's type, frame_id on a frame, frame_id with x, duplicate ids, empty change, an image item) with the spy
-         empty; a frame's title change sends {"data": {"title": ...}} only; no write when
+         with a frame id; a change of only frame_id makes no update_item call); validation messages (unknown key for
+         the item's type, frame_id on a frame, frame_id with x, frame_id "" with the move-out message, a frame_id that
+         is not a frame, duplicate ids, empty change, an image item) with the spy empty; a set_parent MiroClientError
+         after the gate (Miro ignored the move) raises the §3.3 RuntimeError naming the items already changed; a frame's title change sends {"data": {"title": ...}} only; no write when
          gated_call raises; a failure on the second item raises naming the first. TestUpdateBoard — only given fields in the
          table and the client call; both empty and over-long messages. Extend MIRO_SIBLINGS and TestEveryToolIsAudited
          (update_board returns the MiroBoard; arg_overrides for both tools).
@@ -1698,11 +1709,13 @@ phases:
            f"{LIFECYCLE_TAG} miro sticky {suffix}" and parent that frame, plus one shape with content
            f"{LIFECYCLE_TAG} miro shape {suffix}" and style fillColor "#fff9b1"; create_frame one frame titled
            f"{LIFECYCLE_TAG} miro frame {suffix}"; get_item the sticky note; update_item its content to
-           f"{LIFECYCLE_TAG} miro sticky {suffix} updated"; get_item again and check the content; set_parent(board, id, "")
-           to take it out of the frame; get_item again and check frame_id is now "". No delete: the client has none (plan
+           f"{LIFECYCLE_TAG} miro sticky {suffix} updated"; get_item again and check the content; set_parent(board,
+           shape id, the new frame's id) to move the shape into the new frame, which set_parent itself confirms by
+           reading it back. Never a move out of a frame (plan §6). No delete: the client has none (plan
            §3.7). The docstring says the items accumulate and are cleaned by hand. Return LifecycleResult("miro", ok, note,
-           cleanup_ok=None); ok covers every step (manual step mb3 has proven each one by hand), and note names the first
-           step that failed.
+           cleanup_ok=None); ok covers every step, and note names the first step that failed. Manual step mb3 proved the
+           frame create, the bulk create with a parent and the fill color by hand; the move into a frame through
+           set_parent is first checked here and in mb3's follow-up probe.
          - Register "miro" in CONNECTOR_CHECKS, EXPECTED_FIXTURES ("get_board.json", "list_items.json",
            "list_connectors.json", "list_tags.json") and LIFECYCLE_CHECKS, and name Miro in the module docstring's list of
            lifecycle connectors.
@@ -1727,8 +1740,8 @@ phases:
          docs/testing-policy.md: add Miro where it lists the connectors --lifecycle covers (l.233-234).
       5. tests/unit/test_qa_fixture_recorder.py, against a fake client following the existing per-connector tests there:
          check_miro (the four results; the missing board_id; the non-[QATEST] refusal; the owner and createdBy scrub), and
-         lifecycle_miro (all steps ok; a failed set_parent or a kept parent makes ok False and names the step; it never
-         touches board_id). TestFixturePresence.test_every_expected_fixture_file_exists_and_is_nonempty_valid_json
+         lifecycle_miro (all steps ok; a set_parent MiroClientError makes ok False and names the step; it never
+         touches board_id and never calls set_parent with ""). TestFixturePresence.test_every_expected_fixture_file_exists_and_is_nonempty_valid_json
          (l.2504-2510) fails for miro until the files are recorded. Change its parametrize list to
          [pytest.param(c, marks=pytest.mark.xfail(strict=True, reason="Miro fixtures are recorded on the QA runner"))
          if c == "miro" else c for c in sorted(recorder.EXPECTED_FIXTURES)]; p11-qa-live puts the plain list back. No
@@ -1807,8 +1820,8 @@ phases:
       1. The setup guide miro-setup.md in docs/: replace the skeleton with the full content of every plan §3.8 section,
          taking each statement from the code as it now is: the error texts from miro_auth.py and miro_client.py, the option
          names in build_org_bundle.py, the port and callback paths, the ten tools and their gates from
-         docs/tools-reference.md, and whether an item can be taken out of a frame (the current miro_update_items
-         description, which follows manual step mb3's outcome).
+         docs/tools-reference.md, and that an item cannot be taken out of a frame (Miro answers 200 and ignores it;
+         plan §3.1 and §6).
       2. docs/configuration-reference.md: miro in the connectors.<name>.enabled list (l.131); "[Miro setup](miro-setup.md)" in
          the guide sentence (l.252-256); --miro-oauth in the command-line options table after --grist-oauth (l.363); the
          redirect-URI sentence (l.348) gains Miro. docs/approvals-and-policy.md: after the "Grist document" row of the scope
