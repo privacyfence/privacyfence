@@ -321,3 +321,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0227](0227-member-only-slack-search-drops-other-conversations-before-the-gate.md) | Member-only Slack search drops results from other conversations before the gate, on the agent's request | Accepted; relates to 0221, 0223 |
 | [0228](0228-an-extra-scope-can-give-each-verb-its-own-predicate.md) | An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with | Accepted; amends 0221 |
 | [0229](0229-check-policy-suggests-the-slack-rules-that-take-no-value.md) | `privacyfence_check_policy` suggests the Slack rules that take no value, from the call's own arguments | Accepted; amends 0204; relates to 0221, 0226, 0228 |
+| [0230](0230-miro-connects-only-by-oauth-with-an-expiring-token-app-in-the-bundle.md) | Miro connects only by OAuth, with an expiring-token app that the organization bundle carries | Accepted; relates to 0142, 0196 |
+| [0231](0231-the-miro-connector-reads-adds-and-changes-and-never-deletes.md) | The Miro connector reads, adds and changes, and never deletes | Accepted; relates to 0089, 0145 |
+| [0232](0232-miro-rules-are-per-board-and-set-from-settings-not-the-card.md) | Miro auto-accept rules are per board and are set on Settings, never from the approval card | Accepted; relates to 0077, 0144, 0204, 0228 |
+| [0233](0233-a-miro-write-covers-a-batch-of-up-to-twenty-under-one-card.md) | A Miro write covers a batch of up to twenty items or connector lines under one approval card | Accepted; relates to 0231 |

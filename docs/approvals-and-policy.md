@@ -337,9 +337,9 @@ confirm, and it is refused outright in an unattended session.
 Some operations can only be allowed from Settings or a proposal, never from a card. For most of
 them nothing on the card names a resource to scope the rule to: Apps Script projects (scope "Apps
 Script — project"), Gmail filters ("Gmail — anything (unconditional)") and creating a Slack group
-chat ("Slack — anything (unconditional)"). Grist documents (scope "Grist — document") are the
-exception: the card does name the document, but it proposes rules only from a fixed set of scopes,
-and that set does not include Grist.
+chat ("Slack — anything (unconditional)"). Grist documents (scope "Grist — document") and Miro
+boards (scope "Miro — board") are the exception: the card does name the document or the board, but
+it proposes rules only from a fixed set of scopes, and that set does not include Grist or Miro.
 
 In an organization deployment each person manages their own rules on their own **Settings** page;
 rules are never shared between people.
@@ -417,6 +417,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Contacts label | identity | label names | `label_name_allowlist` | the label being applied or removed is one of these |
 | Apps Script project | identity | script ids | `apps_script.project` | the script is one of these |
 | Grist document | identity | document ids | `grist.document` | the document is one of these |
+| Miro board | identity | board ids | `miro.board` | the board is one of these |
 | Peek page | identity | page slugs | `peek.page` | the call names one of these slugs. A call without a slug (publishing a new page) never matches |
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
