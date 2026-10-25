@@ -220,6 +220,8 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "miro_list_items": Verb.READ,
     "miro_get_items": Verb.READ,
     "miro_list_connectors": Verb.READ,
+    "miro_create_items": Verb.ADD,
+    "miro_create_connectors": Verb.ADD,
     "telegram_search_messages": Verb.SEARCH,
     "telegram_send_message": Verb.SEND,
     "tasks_create_task": Verb.ADD,

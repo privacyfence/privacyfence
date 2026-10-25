@@ -103,8 +103,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Jira Assets](#jira-assets) | 8 | 3 | 5 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| [Miro](#miro) | 6 | 3 | 3 | 0 |
-| **Total** | **162** | **57** | **38** | **67** |
+| [Miro](#miro) | 8 | 3 | 3 | 2 |
+| **Total** | **164** | **57** | **38** | **69** |
 
 ## Gmail
 
@@ -342,3 +342,5 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `miro_get_items` | read | `review` | Read specific items of one Miro board by their ids. |
 | `miro_list_connectors` | read | `review` | Read the connector lines on one Miro board and the ids of the items each one joins. |
 | `miro_list_items` | read | `review` | Read the items on one Miro board, optionally only one type of item or only the items inside one frame. |
+| `miro_create_connectors` | write | `popup` | Draw connector lines between existing items on one Miro board, up to 20 in one request. |
+| `miro_create_items` | write | `popup` | Add sticky notes, cards, texts, shapes or frames to one Miro board, up to 20 in one request. |

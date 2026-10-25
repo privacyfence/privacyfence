@@ -277,6 +277,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "peek_get_comments": WIDE, "peek_get_stats": WIDE, "peek_upload_page": WIDE,
     "peek_add_comment": WIDE,
     "miro_list_items": WIDE, "miro_get_items": WIDE, "miro_list_connectors": WIDE,
+    "miro_create_items": WIDE, "miro_create_connectors": WIDE,
     "drive_sheets_get_values": WIDE, "slack_get_channel_history": WIDE,
     "slack_get_thread_replies": WIDE, "slack_search_messages": WIDE,
     "drive_get_file_content": WIDE,
