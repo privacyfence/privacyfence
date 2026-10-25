@@ -43,6 +43,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rule chips on the scoped tokens page keep the space before the resource name.** A chip such as "Peek — page my-page" showed the name run into the word before it.
+
+## [6.8.2] — 2026-10-25
+
+### Fixed
+
+- **A Slack search with no results is covered by "Slack — mentions of me".** A search for mentions that found nothing was denied under a scoped token, although it releases no message. It is now auto-accepted; a search that returns any message without a mention of you is still refused.
+
 ## [6.8.1] — 2026-10-23
 
 ### Fixed
@@ -3455,7 +3465,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.8.2...HEAD
+[6.8.2]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...v6.8.2
 [6.8.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.0...v6.8.1
 [6.8.0]: https://github.com/privacyfence/privacyfence/compare/v6.7.0...v6.8.0
 [6.7.0]: https://github.com/privacyfence/privacyfence/compare/v6.6.2...v6.7.0
