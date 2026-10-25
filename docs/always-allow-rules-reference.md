@@ -248,6 +248,8 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 |---|---|
 | `miro_create_connectors` |  |
 | `miro_create_items` |  |
+| `miro_update_board` |  |
+| `miro_update_items` |  |
 
 ### Peek
 

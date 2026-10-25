@@ -284,6 +284,8 @@ _VERB_MATRIX: dict[str, Verb] = {
     "miro_list_connectors": Verb.READ,
     "miro_create_items": Verb.ADD,
     "miro_create_connectors": Verb.ADD,
+    "miro_update_items": Verb.UPDATE,
+    "miro_update_board": Verb.UPDATE,
     "telegram_search_messages": Verb.SEARCH,
     "telegram_send_message": Verb.SEND,
     "tasks_create_task": Verb.ADD,
@@ -298,5 +300,5 @@ _VERB_MATRIX: dict[str, Verb] = {
 
 
 def test_tool_to_verb_matches_the_verb_matrix():
-    assert len(_VERB_MATRIX) == 107
+    assert len(_VERB_MATRIX) == 109
     assert TOOL_TO_VERB == _VERB_MATRIX

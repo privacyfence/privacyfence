@@ -200,6 +200,11 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "miro_create_connectors":
         "New connector lines are drawn between the items shown. Nothing already on the board "
         "changes.",
+    "miro_update_items":
+        "The fields shown change to their new values. Other fields and items are not touched.",
+    "miro_update_board":
+        "The board's name or description changes as shown. Its content and sharing do not "
+        "change.",
 }
 
 # The card's own label for this row -- see card_builder.build_card_html.
