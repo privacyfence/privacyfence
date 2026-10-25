@@ -193,6 +193,13 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "peek_rename_page":
         "The page's name changes, and its link may change to match. Old links keep redirecting "
         "to it.",
+
+    # ── Miro ─────────────────────────────────────────────────────────────
+    "miro_create_items":
+        "New items are added to the board. Nothing already on it changes.",
+    "miro_create_connectors":
+        "New connector lines are drawn between the items shown. Nothing already on the board "
+        "changes.",
 }
 
 # The card's own label for this row -- see card_builder.build_card_html.

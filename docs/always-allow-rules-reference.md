@@ -242,6 +242,13 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `jira_transition_issue` | this project |
 | `jira_update_issue` | this project |
 
+### Miro
+
+| Tool | Always allow buttons |
+|---|---|
+| `miro_create_connectors` |  |
+| `miro_create_items` |  |
+
 ### Peek
 
 | Tool | Always allow buttons |
