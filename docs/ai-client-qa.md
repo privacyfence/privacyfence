@@ -19,7 +19,7 @@ surface:
   annotations;
 - the organization-mode OAuth server (`web/oauth_provider.py`, `/register`, `/authorize`, `/token`,
   the `.well-known` metadata);
-- agent attribution (`agent_identity.py`, the **AI systems** pins);
+- agent attribution (`agent_identity.py`, its name and redirect patterns);
 - file delivery to clients without the extension (`privacyfence_create_upload_slot`, staged
   download links, [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md));
 - the extension (`mcpb/`), for the Claude Desktop local row.
@@ -97,8 +97,9 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
    - **Download:** ask it to download a Drive file larger than the inline limit (organization mode:
      `--downloads-inline-max-bytes`, a 100,000-byte tool result by default, so any file over about
      75 KB). The tool result carries a one-time link, and the file reaches you through it. On
-     claude.ai, check that the host is on **Settings → Capabilities → Domain allowlist** first
-     ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)); without
+     claude.ai, check that the host is on its domain allowlist first
+     ([who sets it](connect-claude-ai.md#files),
+     [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)); without
      it the fetch fails from claude.ai's sandbox, so the access log shows no
      `/mcp-files/fetch/` request.
 
@@ -110,11 +111,11 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
    The audit log is under the data directory: `authority/logs/audit/` for a local install's first
    account, `users/<principal>/logs/audit/` in organization mode. An unrecognised client is
    recorded as `agent_id="unknown:<name>"`, which gives the exact name it sent.
-6. **Pin (organization mode only).** On **Settings → AI systems**, find the client's registration,
-   note its registered name, and pin it to the right AI system
-   ([`org-mode-setup-guide.md` section 11](org-mode-setup-guide.md#11-ai-systems)). Make another
-   gated write: the card shows the client as verified, and the audit entry records
-   `agent_source=oauth_client`. Unpin afterwards if the next run should start unverified.
+6. **Attribution tier (organization mode only).** Make a gated write and check the card
+   ([`org-mode-setup-guide.md` section 11](org-mode-setup-guide.md#11-ai-systems)). A web client's
+   (claude.ai, ChatGPT, Gemini Enterprise) cards are verified and the audit entry records
+   `agent_source=oauth_client`, without any admin step. A loopback client's (Claude Code) cards are
+   Not verified.
 7. **Save a fixture.** Record what the client sent, so the replay test can repeat it on every pull
    request, in `tests/fixtures/ai_clients/<client>/`:
    - organization mode: the client's entry in `org/oauth_clients.json` under the data directory
@@ -139,7 +140,7 @@ Post one comment per client run on the issue or pull request the run belongs to,
   `agent_name`, `agent_version` and `agent_source`.
 - **Organization mode only:**
   - the client's `org/oauth_clients.json` entry, with `client_secret` replaced by `REDACTED`;
-  - that after pinning it on **Settings → AI systems**, the next card said verified.
+  - that its cards are verified without any admin step.
 
 ## Recording results
 

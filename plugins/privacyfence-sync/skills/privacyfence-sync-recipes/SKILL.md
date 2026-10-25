@@ -1,6 +1,6 @@
 ---
 name: privacyfence-sync-recipes
-description: Write and maintain privacyfence-sync recipes, the YAML files that run a data sync through PrivacyFence on a schedule with no AI model involved. Use when the user wants to schedule or automate a sync between Salesforce, Jira, Google Drive, Grist and Peek, refresh a dashboard without Claude, turn an existing data-sync skill or a manual Claude routine into a recipe, add a source or step to a recipe, or find out why a scheduled run was denied or failed.
+description: Write and maintain privacyfence-sync recipes, the YAML files that run a data sync through PrivacyFence on a schedule with no AI model involved. Use when the user wants to schedule or automate a sync between Salesforce, Jira, Google Drive, Grist and Peek, refresh a dashboard without Claude, turn an existing data-sync skill or a manual Claude routine into a recipe, add a source or step to a recipe, start a Claude Code scheduled task when a file appears in a Drive folder, or find out why a scheduled run was denied or failed.
 ---
 
 # privacyfence-sync recipes
@@ -28,7 +28,8 @@ Some work is design work. You do it with the user, interactively, once:
 A recipe only repeats things: it reads from a source, runs scripts on the files, and writes into
 Grist tables and Peek pages that already exist. A recipe cannot branch, loop, retry or call a tool
 once per row. If the user asks for any of those, say so, and put the logic in a script that can
-stop the run.
+stop the run. When a change needs judgement rather than a fixed transform, the recipe only detects
+it and ends with a `trigger` step that starts a Claude Code scheduled task to do the work.
 
 ## 3. Designing the sync
 
@@ -67,7 +68,7 @@ Go through the existing skill step by step and turn each part into a recipe step
 A scheduled run gets no approval cards, so every step needs an auto-accept rule. After you write
 a recipe, give the user the exact list of rules to create in Settings:
 
-- the scope (for example Salesforce report, Jira project, Drive folder, Grist document, Peek page),
+- the scope (for example Salesforce report, Jira project, Jira Assets schema, Drive folder, Grist document, Peek page),
 - the value (the report id, project key, folder id, document id or slug),
 - the verbs to tick,
 - whether to tick the personal-data box for that scope.
@@ -80,9 +81,14 @@ create rules, in Settings and behind their passkey, and that you cannot propose 
 Tell the user to test in this order:
 
 1. `privacyfence-sync check recipe.yaml`: validates the recipe, with no network call.
-2. `privacyfence-sync run recipe.yaml --attended`, once: each step without a rule shows an
+2. `privacyfence-sync permissions recipe.yaml`: asks PrivacyFence which rules and tools the recipe
+   needs, and which of them already exist; no data moves. Create what it lists.
+3. `privacyfence-sync preflight recipe.yaml`: connects with the token and reports, per step,
+   whether it is in the token's scope and covered by a rule; no data moves.
+4. `privacyfence-sync run recipe.yaml --attended`, once: each step without a rule shows an
    approval card, which finds the missing rules.
-3. `privacyfence-sync run recipe.yaml`, unattended: no card should appear.
+5. `privacyfence-sync run recipe.yaml`, unattended: no card should appear. A scheduler can add
+   `--result-file PATH` to learn `ok` from `no_change` from a failure.
 
 Exit codes, from the reference:
 

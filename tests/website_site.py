@@ -39,6 +39,7 @@ WEBSITE = REPO / "website"
 
 sys.path.insert(0, str(REPO / "scripts"))
 import build_site  # noqa: E402 -- scripts/ is not a package
+from site_security_headers import headers_for_path  # noqa: E402
 
 API_ORIGIN = "https://downloads.privacyfence.eu"
 GA_ORIGIN = "https://www.googletagmanager.com"
@@ -81,11 +82,18 @@ def read_page(path: str, site: Path | None = None) -> str:
 @contextmanager
 def serve(directory: Path) -> Iterator[str]:
     """Serves `directory` over a real socket (`file://` changes how relative fetches and the
-    page's own origin behave) and yields its base URL, without a trailing slash."""
+    page's own origin behave) and yields its base URL, without a trailing slash. Every response
+    carries the security headers Cloudflare sends in production, so the browser tests run under
+    the site's CSP."""
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(directory), **kwargs)
+
+        def end_headers(self):
+            for name, value in headers_for_path(self.path.split("?")[0]).items():
+                self.send_header(name, value)
+            super().end_headers()
 
         def log_message(self, *args):  # noqa: A003 -- silence per-request logging
             pass

@@ -42,7 +42,7 @@ OS × connector combination. Do not rerun the automated suite by hand because a 
    only warns), after the artifacts are already built. If a run is stale or red, dispatch that
    workflow now.
 4. **`build.yml` pre-flight.** Dispatch `build.yml` (no inputs) against the exact commit to tag and
-   confirm `build`, `build-windows`, `build-deb` and `sbom` succeed. This is the only run of the
+   confirm `build`, `build-windows`, `build-deb`, `build-org-image (amd64)`, `build-org-image (arm64)` and `sbom` succeed. This is the only run of the
    packaged-artifact tests before a tag; every publish step is gated on a tag ref, so it publishes
    nothing ([ADR 0030](adr/0030-preflight-dispatches-build-yml-before-tagging.md)). A failure is
    fixed on `main` and the pre-flight re-run.

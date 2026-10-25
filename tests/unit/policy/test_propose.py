@@ -130,6 +130,14 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ("jira_transition_issue", make_ctx(connector="jira", args={"issue_key": "PROJ-1"})),
     ("confluence_create_page", make_ctx(connector="confluence", args={"space_key": "SP"})),
     ("confluence_update_page", make_ctx(connector="confluence", args={"space_key": "SP", "page_id": "p1"})),
+    ("salesforce_create_record", make_ctx(connector="salesforce", args={"object_type": "Account"}, raw_data={})),
+    ("salesforce_update_record", make_ctx(
+        connector="salesforce", args={"object_type": "Account", "record_id": "001000000000001AAA"}, raw_data={},
+    )),
+    ("salesforce_create_records", make_ctx(connector="salesforce", args={"object_type": "Account"}, raw_data={})),
+    ("salesforce_update_records", make_ctx(
+        connector="salesforce", args={"object_type": "Account", "key_field": "Id"}, raw_data={},
+    )),
     ("tasks_create_task", make_ctx(connector="tasks", args={"task_list_id": "L1"})),
     ("tasks_update_task", make_ctx(connector="tasks", args={"task_list_id": "L1", "task_id": "t"})),
     ("tasks_complete_task", make_ctx(connector="tasks", args={"task_list_id": "L1", "task_id": "t"})),
@@ -217,6 +225,11 @@ class TestCatalogueIsDerived:
                     assert propose.connector_of_operation(operation) == entry.connector
                     assert verb in registry.operation_verbs(operation)
 
+    def test_no_scope_derives_the_assets_tickets_operation(self):
+        for entry in propose.PROPOSABLE_SCOPES:
+            for verb in entry.verbs:
+                assert "assets.read_tickets" not in propose.operations_for(entry, verb)
+
     def test_operations_for_a_verb_the_scope_does_not_govern_is_empty(self):
         folder = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_folder")
         assert propose.operations_for(folder, Verb.DELETE) == frozenset()
@@ -234,6 +247,13 @@ class TestCatalogueIsDerived:
         assert "salesforce.run_report" not in propose.operations_for(object_types, Verb.READ)
         reports = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_report_ids")
         assert "salesforce.read_record" not in propose.operations_for(reports, Verb.READ)
+
+    def test_object_type_scope_derives_the_salesforce_write_operations(self):
+        object_types = next(e for e in propose.PROPOSABLE_SCOPES if e.id == "approved_object_types")
+        assert "salesforce.create_record" in propose.operations_for(object_types, Verb.ADD)
+        assert "salesforce.update_record" in propose.operations_for(object_types, Verb.UPDATE)
+        assert "salesforce.create_records" in propose.operations_for(object_types, Verb.ADD)
+        assert "salesforce.update_records" in propose.operations_for(object_types, Verb.UPDATE)
 
     def test_catalogue_ids_are_unique(self):
         """`label_name_allowlist` serves two scope types, so an entry cannot always be identified
@@ -290,6 +310,23 @@ class TestProposalsAgainstTheV1Tables:
         assert proposals[0].value == ["R1"]
         assert [(p.scope.predicate, p.value) for p in propose.proposals_for("salesforce_run_report", ctx)] == [
             ("approved_report_ids", ["R1"]),
+        ]
+
+    def test_assets_reads_are_offered_this_schema(self):
+        from types import SimpleNamespace
+
+        one = make_ctx(connector="assets", args={"object_id": "1"}, raw_data=SimpleNamespace(schema_id="2"))
+        proposals = propose.proposals_for("assets_get_object", one)
+        assert [(p.scope.predicate, p.scope.hint, p.value) for p in proposals] == [
+            ("approved_schema_ids", "this schema", ["2"]),
+        ]
+        many = make_ctx(
+            connector="assets", args={"aql": "x"},
+            raw_data=[SimpleNamespace(schema_id="5"), SimpleNamespace(schema_id="2"), SimpleNamespace(schema_id="5")],
+        )
+        proposals = propose.proposals_for("assets_search_objects", many)
+        assert [(p.scope.predicate, p.scope.hint, p.value) for p in proposals] == [
+            ("approved_schema_ids_all_results", "this schema", ["2", "5"]),
         ]
 
     def test_an_ungoverned_or_unknown_tool_proposes_nothing(self):
@@ -501,3 +538,29 @@ class TestNineVerbExcludes:
         operations = propose.operations_for(scope, Verb.SEND)
         assert "slack.create_group_chat" not in operations
         assert operations == frozenset({"slack.send_message"})
+
+
+class TestGmailLabelMove:
+    def _label_scopes(self):
+        return [e for e in propose.PROPOSABLE_SCOPES if e.scope_type == "gmail.label"]
+
+    def test_gmail_label_group_offers_update_and_move(self):
+        scopes_ = self._label_scopes()
+        assert {e.id for e in scopes_} == {"label_name_allowlist", "label_match"}
+        assert {v for e in scopes_ for v in e.verbs} == {Verb.UPDATE, Verb.MOVE}
+
+    def test_move_operations_are_archive_only(self):
+        entry = next(e for e in self._label_scopes() if e.id == "label_match")
+        assert propose.operations_for(entry, Verb.MOVE) == frozenset({"gmail.archive_message"})
+        assert propose.operations_for(entry, Verb.UPDATE) == frozenset()
+
+    def test_label_match_is_never_proposed_from_a_popup(self):
+        ctx = make_ctx(
+            tool="gmail_archive_message", my_email="me@corp.com", args={"message_id": "m1"},
+            raw_data=SimpleNamespace(sender="Alice <alice@acme.com>", labels=["Proposed Archive"], attachments=[]),
+        )
+        proposals = propose.proposals_for("gmail_archive_message", ctx)
+        assert all(p.scope.scope_type != "gmail.label" for p in proposals)
+        # Not only the verb filter: the proposer itself must decline.
+        entry = next(e for e in self._label_scopes() if e.id == "label_match")
+        assert entry.value_of(ctx) is propose.NO_VALUE

@@ -1,9 +1,9 @@
-"""The attested org pin (ADR 0006 option C, ADR 0035 decision 3), the local relabel (option D,
+"""The redirect-URI attestation (ADR 0006 option C, ADR 0224), the local relabel (option D,
 ADR 0037) and the audit viewer's agent column.
 
-- Org mode: an admin pins a DCR ``client_id`` to a registry AI system -> ``oauth_client``. The pin
-  is admin-only, step-up gated and audited; the DCR ``client_name`` never overrides it; unpinned
-  stays ``client_info``.
+- Org mode: a registration whose redirect URIs are all one AI system's own callbacks is attested
+  as that system (ADR 0224), ``oauth_client``; any other stays ``client_info``, whatever its
+  ``client_name``.
 - Local mode: ``settings.yaml``'s ``agent_overrides:`` relabels the name and records
   ``client_info`` on every install -- separated or not, whatever file it was read from. Its
   selector is the caller's own claimed name, and every local AI system shares one MCP token.
@@ -11,7 +11,6 @@ ADR 0037) and the audit viewer's agent column.
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -24,7 +23,6 @@ from starlette.testclient import TestClient
 
 from privacyfence import agent_label, agent_overrides, org_identity, paths, privilege_separation
 from privacyfence.agent_identity import (
-    REGISTRY,
     UNKNOWN_AGENT,
     AgentIdentity,
     AgentSource,
@@ -35,7 +33,7 @@ from privacyfence.audit_log import AuditEntry, current_week, get_audit_logger
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import audit_rows
 from privacyfence.step_up_config import StepUpConfig
-from privacyfence.web import agent_pins, org_session
+from privacyfence.web import org_session
 from privacyfence.web import oauth_provider as op
 from privacyfence.web import routes_settings as ros
 from privacyfence.web.routes_mcp import _resolve_agent
@@ -75,7 +73,6 @@ def _idp() -> org_identity.IdpConfig:
 def _provider(tmp_path, monkeypatch) -> op.OrgOAuthProvider:
     monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
     monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
-    monkeypatch.setattr(op, "pins_file_path", lambda: tmp_path / "agent_pins.json")
     return op.OrgOAuthProvider(_idp(), idp_callback_url=f"{BASE_URL}/oauth/idp-callback")
 
 
@@ -88,7 +85,7 @@ async def _register(provider: op.OrgOAuthProvider, client_id: str, client_name: 
 
 def _resolve_org(provider: op.OrgOAuthProvider, client_id: str, *, handshake: str | None = "claude-code"):
     return _resolve_agent(
-        _ctx(handshake), _token(client_id), provider.client_name, pinned_agents=provider.pinned_agent_id,
+        _ctx(handshake), _token(client_id), provider.client_name, attested_agents=provider.attested_agent_id,
     )
 
 
@@ -113,85 +110,57 @@ class TestIdentifyRegistryId:
         assert entry_for_id("cursor") is not None
 
 
-# --------------------------------------------------------------------------- #
-# The pin store
-# --------------------------------------------------------------------------- #
+class TestRedirectAttestation:
+    async def _register_with(self, provider, client_id, client_name, redirect_uris) -> None:
+        await provider.register_client(OAuthClientInformationFull(
+            client_id=client_id, client_name=client_name, redirect_uris=[AnyUrl(u) for u in redirect_uris],
+            token_endpoint_auth_method="none",
+        ))
 
-class TestAgentPinStore:
-    def test_pin_persists_and_reloads(self, tmp_path):
-        path = tmp_path / "agent_pins.json"
-        store = agent_pins.AgentPinStore(path)
-        store.pin("c1", "chatgpt", pinned_by="carol")
-        assert agent_pins.AgentPinStore(path).pinned_agent_id("c1") == "chatgpt"
-        assert json.loads(path.read_text())["c1"]["pinned_by"] == "carol"
-
-    def test_unpin_reports_whether_there_was_a_pin(self, tmp_path):
-        store = agent_pins.AgentPinStore(tmp_path / "agent_pins.json")
-        store.pin("c1", "cursor", pinned_by="carol")
-        assert store.unpin("c1") is True
-        assert store.unpin("c1") is False
-        assert store.pinned_agent_id("c1") is None
-        assert agent_pins.AgentPinStore(tmp_path / "agent_pins.json").pins() == {}
-
-    def test_an_unknown_agent_id_is_refused(self, tmp_path):
-        store = agent_pins.AgentPinStore(tmp_path / "agent_pins.json")
-        with pytest.raises(ValueError):
-            store.pin("c1", "evil", pinned_by="carol")
-        assert store.pins() == {}
-
-    def test_a_pin_to_an_id_the_registry_no_longer_knows_is_dropped_on_load(self, tmp_path):
-        path = tmp_path / "agent_pins.json"
-        path.write_text(json.dumps({
-            "c1": {"agent_id": "retired", "pinned_at": 1.0, "pinned_by": "carol"},
-            "c2": {"agent_id": "gemini-cli", "pinned_at": 1.0, "pinned_by": "carol"},
-        }))
-        assert set(agent_pins.AgentPinStore(path).pins()) == {"c2"}
-
-    def test_a_corrupt_file_fails_closed_to_no_pins(self, tmp_path):
-        path = tmp_path / "agent_pins.json"
-        path.write_text("{not json")
-        assert agent_pins.AgentPinStore(path).pins() == {}
-
-    def test_the_default_path_is_under_org_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        assert agent_pins.pins_file_path() == paths.org_dir() / "agent_pins.json"
-
-
-# --------------------------------------------------------------------------- #
-# Capture: org pin -> oauth_client
-# --------------------------------------------------------------------------- #
-
-class TestOrgPinCapture:
-    async def test_a_pinned_client_attributes_as_oauth_client(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("uri, agent_id", [
+        ("https://claude.ai/api/mcp/auth_callback", "claude"),
+        ("https://chatgpt.com/connector/oauth/abc123", "chatgpt"),
+        ("https://vertexaisearch.cloud.google.com/oauth-redirect", "gemini-enterprise"),
+    ])
+    async def test_a_vendors_own_callback_attests_whatever_the_client_calls_itself(
+        self, tmp_path, monkeypatch, uri, agent_id,
+    ):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
+        await self._register_with(provider, "c1", "Totally Not Claude", [uri])
+
+        agent = _resolve_org(provider, "c1", handshake="evil")
+
+        assert (agent.id, agent.source) == (agent_id, AgentSource.OAUTH_CLIENT)
+
+    async def test_a_loopback_redirect_stays_claimed(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        await self._register_with(provider, "c1", "Claude Code (privacyfence)", ["http://localhost:50520/callback"])
 
         agent = _resolve_org(provider, "c1")
 
-        assert agent == AgentIdentity(id="chatgpt", name="ChatGPT", version="1.0", source=AgentSource.OAUTH_CLIENT)
+        assert (agent.id, agent.source) == ("claude-code", AgentSource.CLIENT_INFO)
 
-    async def test_unpinning_reverts_to_client_info(self, tmp_path, monkeypatch):
+    async def test_one_foreign_redirect_uri_keeps_the_registration_claimed(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
-        provider.agent_pins.unpin("c1")
+        await self._register_with(
+            provider, "c1", "Claude", ["https://claude.ai/api/mcp/auth_callback", "http://localhost:1/cb"],
+        )
 
-        agent = _resolve_org(provider, "c1")
+        assert _resolve_org(provider, "c1").source is AgentSource.CLIENT_INFO
 
-        assert agent.source is AgentSource.CLIENT_INFO
-        assert agent.id == "chatgpt"
+    def test_an_unknown_client_is_not_attested(self, tmp_path, monkeypatch):
+        assert _provider(tmp_path, monkeypatch).attested_agent_id("nobody") is None
 
-    async def test_the_dcr_client_name_never_overrides_a_pin(self, tmp_path, monkeypatch):
+    async def test_asking_does_not_count_as_using_the_client(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "claude-code")
-        provider.agent_pins.pin("c1", "cursor", pinned_by="carol")
+        await self._register_with(provider, "c1", "Claude", ["https://claude.ai/api/mcp/auth_callback"])
+        before = (tmp_path / "oauth_clients.json").read_text()
 
-        agent = _resolve_org(provider, "c1", handshake="claude-code")
+        assert provider.attested_agent_id("c1") == "claude"
 
-        assert (agent.id, agent.source) == ("cursor", AgentSource.OAUTH_CLIENT)
+        assert (tmp_path / "oauth_clients.json").read_text() == before
 
-    async def test_an_unpinned_registration_stays_claimed(self, tmp_path, monkeypatch):
+    async def test_a_registration_with_a_foreign_redirect_stays_claimed(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
         await _register(provider, "c1", "ChatGPT")
 
@@ -199,7 +168,7 @@ class TestOrgPinCapture:
 
         assert (agent.id, agent.source) == ("chatgpt", AgentSource.CLIENT_INFO)
 
-    async def test_an_unpinned_gemini_enterprise_registration_is_attributed_by_its_dcr_name(self, tmp_path, monkeypatch):
+    async def test_a_gemini_enterprise_name_with_a_foreign_redirect_is_claimed(self, tmp_path, monkeypatch):
         # The admin registers Gemini Enterprise with the prescribed client_name; its handshake name
         # is not recognised, so the registered name decides (ADR 0109).
         provider = _provider(tmp_path, monkeypatch)
@@ -209,47 +178,8 @@ class TestOrgPinCapture:
 
         assert (agent.id, agent.name, agent.source) == ("gemini-enterprise", "Gemini Enterprise", AgentSource.CLIENT_INFO)
 
-    async def test_a_pin_never_transfers_to_another_registration_with_the_same_name(self, tmp_path, monkeypatch):
-        provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        await _register(provider, "c2", "ChatGPT")
-        provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
-
-        assert _resolve_org(provider, "c2").source is AgentSource.CLIENT_INFO
-
-    async def test_a_pin_left_by_a_pruned_registration_is_inert(self, tmp_path, monkeypatch):
-        provider = _provider(tmp_path, monkeypatch)
-        provider.agent_pins.pin("gone", "chatgpt", pinned_by="carol")
-
-        assert provider.pinned_agent_id("gone") is None
-        agent = _resolve_org(provider, "gone", handshake=None)
-        assert agent is UNKNOWN_AGENT
-
-    async def test_the_prune_keeps_the_pin_on_disk_as_stale(self, tmp_path, monkeypatch):
-        provider = _provider(tmp_path, monkeypatch)
-        fake_now = [time.time()]
-        monkeypatch.setattr(op.time, "time", lambda: fake_now[0])
-        await _register(provider, "c1", "ChatGPT")
-        provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
-        fake_now[0] += op._STALE_CLIENT_TTL_SECONDS + 1
-        await _register(provider, "c2", "cursor-vscode")
-
-        assert not provider.has_client("c1")
-        assert provider.pinned_agent_id("c1") is None
-        assert "c1" in provider.agent_pins.pins()
-
-    async def test_listing_clients_does_not_count_as_using_them(self, tmp_path, monkeypatch):
-        provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        before = (tmp_path / "oauth_clients.json").read_text()
-
-        listed = provider.list_clients()
-
-        assert [(c.client_id, c.client_name) for c in listed] == [("c1", "ChatGPT")]
-        assert (tmp_path / "oauth_clients.json").read_text() == before
-
-    def test_a_pin_needs_an_access_token(self):
-        agent = _resolve_agent(_ctx("claude-code"), None, None, pinned_agents=lambda _cid: "chatgpt")
+    def test_an_attestation_needs_an_access_token(self):
+        agent = _resolve_agent(_ctx("claude-code"), None, None, attested_agents=lambda _cid: "chatgpt")
         assert agent.source is AgentSource.CLIENT_INFO
 
 
@@ -320,14 +250,22 @@ class TestLocalOverrideNeverAttests:
 
         assert (agent.id, agent.source) == ("chatgpt", AgentSource.CLIENT_INFO)
 
-    def test_a_pin_outranks_an_override(self):
+    async def test_a_redirect_attestation_outranks_an_override(self, tmp_path, monkeypatch):
         overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
-        agent = _resolve_agent(_ctx("x"), _token(), None, pinned_agents=lambda _c: "chatgpt", overrides=overrides)
-        assert (agent.id, agent.source) == ("chatgpt", AgentSource.OAUTH_CLIENT)
+        provider = _provider(tmp_path, monkeypatch)
+        await provider.register_client(OAuthClientInformationFull(
+            client_id="client-1", client_name="x", redirect_uris=[AnyUrl("https://claude.ai/api/mcp/auth_callback")],
+            token_endpoint_auth_method="none",
+        ))
+        agent = _resolve_agent(
+            _ctx("x"), _token("client-1"), provider.client_name, attested_agents=provider.attested_agent_id,
+            overrides=overrides,
+        )
+        assert (agent.id, agent.source) == ("claude", AgentSource.OAUTH_CLIENT)
 
     def test_a_relabel_outranks_the_dcr_name(self):
         overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
-        agent = _resolve_agent(_ctx("x"), _token(), lambda _c: "ChatGPT", pinned_agents=lambda _c: None, overrides=overrides)
+        agent = _resolve_agent(_ctx("x"), _token(), lambda _c: "ChatGPT", attested_agents=lambda _c: None, overrides=overrides)
         assert (agent.id, agent.source) == ("cursor", AgentSource.CLIENT_INFO)
 
     def test_no_claimed_name_matches_no_override(self):
@@ -356,18 +294,14 @@ class TestFromConfig:
 
 
 # --------------------------------------------------------------------------- #
-# The admin's pin page and actions
+# Org settings helpers
 # --------------------------------------------------------------------------- #
 
-def _step_up() -> StepUpConfig:
-    return StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
-
-
-def _settings_client(provider, *, step_up: StepUpConfig | None = None):
+def _settings_client(*, step_up: StepUpConfig | None = None):
     sessions = org_session.OrgSessionStore()
     routes = ros.build_org_routes(
         sessions=sessions, install_wide_settings={}, step_up=step_up or StepUpConfig(),
-        step_up_origin=BASE_URL, oauth_provider=provider,
+        step_up_origin=BASE_URL,
     )
     return TestClient(Starlette(routes=routes), base_url=BASE_URL, follow_redirects=False), sessions
 
@@ -382,156 +316,6 @@ def _sign_in(client, sessions, principal) -> str:
 def org_home(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
     return tmp_path
-
-
-class TestPinActions:
-    async def test_an_admin_pins_and_the_pin_is_audited(self, org_home, monkeypatch):
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        client, sessions = _settings_client(provider)
-        csrf = _sign_in(client, sessions, ADMIN)
-
-        r = client.post("/api/settings/pin_agent_client", json={"client_id": "c1", "agent_id": "chatgpt", "csrf": csrf})
-
-        assert r.status_code == 200
-        assert provider.pinned_agent_id("c1") == "chatgpt"
-        row = r.json()["agents"]["clients"][0]
-        assert (row["client_id"], row["pinned_agent_id"], row["pinned_agent_name"]) == ("c1", "chatgpt", "ChatGPT")
-        with principal_scope(ADMIN):
-            summaries = [e.summary for e in get_audit_logger().recent_entries(10)]
-        assert any("Pinned OAuth client 'c1'" in s and "'chatgpt'" in s and "admin=carol" in s for s in summaries)
-
-        r = client.post("/api/settings/unpin_agent_client", json={"client_id": "c1", "csrf": csrf})
-        assert r.status_code == 200
-        assert provider.pinned_agent_id("c1") is None
-        with principal_scope(ADMIN):
-            summaries = [e.summary for e in get_audit_logger().recent_entries(10)]
-        assert any("Unpinned OAuth client 'c1'" in s for s in summaries)
-
-    async def test_an_admin_pins_a_gemini_enterprise_registration(self, org_home, monkeypatch):
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "Gemini Enterprise")
-        client, sessions = _settings_client(provider)
-        csrf = _sign_in(client, sessions, ADMIN)
-
-        r = client.post("/api/settings/pin_agent_client", json={"client_id": "c1", "agent_id": "gemini-enterprise", "csrf": csrf})
-
-        assert r.status_code == 200
-        agents = r.json()["agents"]
-        assert {"id": "gemini-enterprise", "name": "Gemini Enterprise"} in agents["registry"]
-        row = agents["clients"][0]
-        assert (row["client_id"], row["pinned_agent_id"], row["pinned_agent_name"]) == ("c1", "gemini-enterprise", "Gemini Enterprise")
-        agent = _resolve_org(provider, "c1")
-        assert (agent.id, agent.source) == ("gemini-enterprise", AgentSource.OAUTH_CLIENT)
-
-    async def test_a_repeat_pin_and_an_absent_unpin_change_nothing_and_audit_nothing(self, org_home, monkeypatch):
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
-        client, sessions = _settings_client(provider)
-        csrf = _sign_in(client, sessions, ADMIN)
-
-        assert client.post("/api/settings/pin_agent_client", json={"client_id": "c1", "agent_id": "chatgpt", "csrf": csrf}).status_code == 200
-        assert client.post("/api/settings/unpin_agent_client", json={"client_id": "zz", "csrf": csrf}).status_code == 200
-        with principal_scope(ADMIN):
-            assert [e for e in get_audit_logger().recent_entries(10) if e.decision == "settings_change"] == []
-
-    async def test_a_non_admin_cannot_pin(self, org_home, monkeypatch):
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        client, sessions = _settings_client(provider)
-        csrf = _sign_in(client, sessions, ALICE)
-
-        r = client.post("/api/settings/pin_agent_client", json={"client_id": "c1", "agent_id": "chatgpt", "csrf": csrf})
-
-        assert r.status_code == 403
-        assert provider.agent_pins.pins() == {}
-
-    async def test_pinning_without_step_up_gets_a_428(self, org_home, monkeypatch):
-        from privacyfence import webauthn_stepup as wa
-
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        wa.add_credential(ADMIN, wa.WebAuthnCredential(
-            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
-        ))
-        client, sessions = _settings_client(provider, step_up=_step_up())
-        csrf = _sign_in(client, sessions, ADMIN)
-
-        for action, payload in (("pin_agent_client", {"client_id": "c1", "agent_id": "chatgpt"}),
-                                ("unpin_agent_client", {"client_id": "c1"})):
-            r = client.post(f"/api/settings/{action}", json={**payload, "csrf": csrf})
-            assert r.status_code == 428, action
-            assert r.json()["error"] == "step_up_required"
-        assert provider.agent_pins.pins() == {}
-
-    @pytest.mark.parametrize("payload", [
-        {"client_id": "not-registered", "agent_id": "chatgpt"},
-        {"client_id": "c1", "agent_id": "not-an-ai-system"},
-    ])
-    async def test_a_pin_must_name_a_live_registration_and_a_registry_entry(self, org_home, monkeypatch, payload):
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        client, sessions = _settings_client(provider)
-        csrf = _sign_in(client, sessions, ADMIN)
-
-        r = client.post("/api/settings/pin_agent_client", json={**payload, "csrf": csrf})
-
-        assert r.status_code == 400
-        assert provider.agent_pins.pins() == {}
-
-    def test_without_a_provider_pinning_is_refused_and_unpinning_is_a_no_op(self, org_home):
-        client, sessions = _settings_client(None)
-        csrf = _sign_in(client, sessions, ADMIN)
-
-        assert client.post("/api/settings/pin_agent_client", json={"client_id": "c1", "agent_id": "chatgpt", "csrf": csrf}).status_code == 400
-        r = client.post("/api/settings/unpin_agent_client", json={"client_id": "c1", "csrf": csrf})
-        assert r.status_code == 200
-        assert r.json()["agents"] == {
-            "clients": [], "stale_pins": [],
-            "registry": [{"id": e.agent_id, "name": e.display_name} for e in REGISTRY],
-        }
-
-
-class TestAgentsPageState:
-    async def test_admin_state_lists_clients_sanitized_and_stale_pins(self, org_home, monkeypatch):
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "‮evil\n<b>")
-        provider.agent_pins.pin("gone", "cursor", pinned_by="carol")
-        client, sessions = _settings_client(provider)
-        csrf = _sign_in(client, sessions, ADMIN)
-
-        state = client.post("/api/settings/unpin_agent_client", json={"client_id": "nope", "csrf": csrf}).json()["agents"]
-
-        assert state["clients"][0]["client_name"] == "evil<b>"
-        assert state["clients"][0]["pinned_agent_id"] == ""
-        assert state["stale_pins"] == [{"client_id": "gone", "agent_id": "cursor", "agent_name": "Cursor"}]
-
-    async def test_a_non_admin_gets_no_client_list(self, org_home, monkeypatch):
-        # A client id no other part of the page can contain by chance: the embedded state also
-        # carries the setuptools_scm version, whose "+g<sha>" suffix contained "c1" often enough
-        # to fail this test on unrelated commits.
-        client_id = "registered-client-not-for-alice"
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, client_id, "ChatGPT")
-        client, sessions = _settings_client(provider)
-        _sign_in(client, sessions, ALICE)
-
-        r = client.get("/settings")
-
-        assert r.status_code == 200
-        assert client_id not in r.text.split("window.__pfInitialState = ", 1)[1].split("</script>", 1)[0]
-
-    async def test_the_admin_page_embeds_the_ai_systems_section(self, org_home, monkeypatch):
-        provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "ChatGPT")
-        client, sessions = _settings_client(provider)
-        _sign_in(client, sessions, ADMIN)
-
-        r = client.get("/settings")
-
-        assert '"agents": true' in r.text
-        assert "renderAgents" in r.text
 
 
 # --------------------------------------------------------------------------- #
@@ -570,11 +354,8 @@ class TestAuditRows:
     def test_org_mode_audit_page_shows_the_principals_own_rows_with_agents(self, org_home):
         with principal_scope(ALICE):
             get_audit_logger().record(_entry(agent_id="cursor", agent_name="Cursor", agent_source="oauth_client"))
-        client, sessions = _settings_client(None)
-        csrf = _sign_in(client, sessions, ALICE)
-
-        state = client.post("/api/settings/unpin_agent_client", json={"csrf": csrf})
-        assert state.status_code == 403  # a non-admin cannot even no-op an admin action
+        client, sessions = _settings_client()
+        _sign_in(client, sessions, ALICE)
 
         page = client.get("/settings").text
         initial = json.loads(page.split("window.__pfInitialState = ", 1)[1].split(";</script>", 1)[0])
@@ -582,7 +363,7 @@ class TestAuditRows:
         assert recent[0]["agent"] == {"tier": "attested", "headline": "Cursor", "claim": "", "icon_id": "cursor"}
 
     def test_a_log_that_cannot_be_read_costs_only_the_list(self, org_home, monkeypatch):
-        client, sessions = _settings_client(None)
+        client, sessions = _settings_client()
         _sign_in(client, sessions, ALICE)
 
         def _boom():

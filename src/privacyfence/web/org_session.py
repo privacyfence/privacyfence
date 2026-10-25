@@ -151,11 +151,11 @@ def set_session_cookie(response: Response, session_id: str) -> None:
     # it permits is exactly what OIDC structurally requires -- a top-level
     # GET landing after the IdP.
     #
-    # routes_connect.py solved the sibling half of this problem the other
-    # way, by carrying the principal in a signed `state` so /oauth/callback/
-    # {service} needs no cookie at all. That works for a callback that only
-    # has to identify the flow; it does not help a callback whose whole job
-    # is to *establish* the session the next page then reads.
+    # routes_connect.py's /oauth/callback/{service} relies on exactly this: under Lax the cookie
+    # reaches that top-level GET landing, and the callback only finishes when the signed-in
+    # session is the principal that started the flow (ADR 0178). It does not help a callback
+    # whose whole job is to *establish* the session; routes_org_identity.py's login callback
+    # binds to its browser with a separate cookie instead.
     response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax", secure=True, path="/")
 
 

@@ -11,12 +11,15 @@ is installed on the server instead: copy it to <data>/org/org_config.json
 and restart the daemon (see docs/org-mode-setup-guide.md) — Settings has no
 install button in org mode.
 
-Telegram is not part of this bundle: its api_id/api_hash identify the
-PrivacyFence app itself (not your organization) and are baked into the
-release build — see docs/telegram-setup.md and src/privacyfence/app_credentials.py.
+Telegram's api_id/api_hash identify the PrivacyFence app itself (not your
+organization) and are baked into the release build — see docs/telegram-setup.md
+and src/privacyfence/app_credentials.py — so the bundle carries no secret for it,
+only the --enable-telegram switch.
 
 Only pass the flags for services you've set up; a connector is offered to
-users only if its section is present in the bundle. Stdlib only — no
+users only if its section is present in the bundle (--enable-telegram,
+--enable-peek and --enable-grist write the bare section for the three that
+need nothing else, ADR 0196). Stdlib only — no
 PrivacyFence install required to run this -- except --sign-key/
 --generate-signing-key (bundle signing, below), which need the
 `cryptography` package (pip install cryptography) specifically, not a
@@ -29,6 +32,10 @@ docs/how-it-works.md's "Unattended sessions" section.
 --enable-scoped-tokens lets each person create scoped AI client tokens in
 Settings (--scoped-token-max-days N caps how long one lasts, 1-365); without
 it the feature is off in organization mode (ADR 0165).
+
+--sign-key also signs a "serial" into the bundle (--serial N, default: the
+current Unix time); an install refuses a bundle whose serial is lower than the
+highest it has accepted, so a later build always wins.
 
 Example:
     python3 scripts/build_org_bundle.py \\
@@ -45,7 +52,9 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -61,6 +70,9 @@ _CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
     "atlassian": ("atlassian",),
     "grist": ("grist",),
 }
+
+# Mirrors assets_client.WORKSPACE_ID_RE; this script stays standard-library only.
+WORKSPACE_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
 def _grist_url(value: str) -> str:
@@ -107,6 +119,16 @@ def _scoped_token_days(value: str) -> int:
     if not 1 <= days <= 365:
         raise argparse.ArgumentTypeError("must be a whole number of days from 1 to 365.")
     return days
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive whole number.")
+    return number
 
 
 def _canonical_payload_bytes(bundle: dict[str, Any]) -> bytes:
@@ -248,6 +270,15 @@ def build_parser() -> argparse.ArgumentParser:
     atlassian = parser.add_argument_group("Atlassian (Jira + Confluence)")
     atlassian.add_argument("--atlassian-client-id")
     atlassian.add_argument("--atlassian-client-secret")
+    atlassian.add_argument(
+        "--atlassian-assets", action="store_true",
+        help="Request Jira Assets permissions at Atlassian sign-in (the app must have the read:cmdb-* scopes)",
+    )
+    atlassian.add_argument(
+        "--atlassian-assets-workspace-id", metavar="ID",
+        help="The site's Assets workspace id (the workspaceId shown at "
+             "https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace)",
+    )
 
     grist = parser.add_argument_group("Grist")
     grist.add_argument(
@@ -268,6 +299,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--peek-base-url", metavar="URL",
         help="The Peek server people connect to (for example https://peek.example.com). Pins it in local mode; "
              "organization mode offers Peek only with it.",
+    )
+
+    enable = parser.add_argument_group("Connectors that need no credentials in the bundle")
+    enable.add_argument(
+        "--enable-telegram", action="store_true",
+        help="Offer Telegram. Its app credentials are baked into the build, so the section is just a switch.",
+    )
+    enable.add_argument(
+        "--enable-peek", action="store_true",
+        help="Offer Peek without pinning a server (local mode; people enter their own address). "
+             "Implied by --peek-base-url.",
+    )
+    enable.add_argument(
+        "--enable-grist", action="store_true",
+        help="Offer Grist with an API key and no pinned server (local mode). Implied by --grist-server-url.",
     )
 
     mode = parser.add_argument_group(
@@ -468,6 +514,15 @@ def build_parser() -> argparse.ArgumentParser:
              "the signed-in browser route (/downloads/<token>) instead.",
     )
 
+    downloads.add_argument(
+        "--exports", action=argparse.BooleanOptionalAction, default=None,
+        help="The export tools (grist_export_records, grist_export_sql, salesforce_export_report, "
+             "jira_export_issues, assets_export_objects), which stage the whole file on the server "
+             "until the user claims it. On by default; --no-exports writes "
+             "download_delivery.allow_exports=false, which leaves them out of the tool list and "
+             "refuses them.",
+    )
+
     push = parser.add_argument_group("Web push notifications (org mode, docs/adr/0081-*)")
     push.add_argument(
         "--web-push", action=argparse.BooleanOptionalAction, default=None,
@@ -544,12 +599,20 @@ def build_parser() -> argparse.ArgumentParser:
              "in org mode with an unsigned bundle. Optional but recommended otherwise. Needs the "
              "`cryptography` package.",
     )
+    signing.add_argument(
+        "--serial", type=_positive_int, metavar="N", default=None,
+        help="Serial signed into the bundle (default: the current Unix time). Installs refuse a "
+             "bundle whose serial is lower than the highest they have accepted.",
+    )
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.serial is not None and not args.sign_key:
+        parser.error("--serial needs --sign-key (only a signed bundle carries a serial).")
 
     if args.generate_signing_key:
         return _generate_signing_key(args.generate_signing_key)
@@ -566,6 +629,7 @@ def main(argv: list[str] | None = None) -> int:
     # signature/key forward implicitly.
     bundle.pop("signature", None)
     bundle.pop("signing_public_key", None)
+    bundle.pop("serial", None)
     # A 5.0.0a1 bundle may carry mcp.tool_annotations, which the daemon now
     # refuses to start with (ADR 0089). --merge is the way to rebuild one, so
     # drop the key here rather than carry forward a bundle that cannot load.
@@ -605,6 +669,16 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.atlassian_client_id and args.atlassian_client_secret):
             raise SystemExit("--atlassian-client-id and --atlassian-client-secret must be given together.")
         bundle["atlassian"] = {"client_id": args.atlassian_client_id, "client_secret": args.atlassian_client_secret}
+        if args.atlassian_assets:
+            bundle["atlassian"]["assets"] = True
+        if args.atlassian_assets_workspace_id:
+            workspace_id = args.atlassian_assets_workspace_id.strip()
+            if not WORKSPACE_ID_RE.fullmatch(workspace_id):
+                raise SystemExit("--atlassian-assets-workspace-id is not a workspace id (expected a UUID).")
+            bundle["atlassian"]["assets_workspace_id"] = workspace_id
+    elif args.atlassian_assets or args.atlassian_assets_workspace_id:
+        flag = "--atlassian-assets" if args.atlassian_assets else "--atlassian-assets-workspace-id"
+        raise SystemExit(f"{flag} needs --atlassian-client-id and --atlassian-client-secret.")
 
     if (
         args.grist_server_url or args.grist_client_id or args.grist_client_secret or args.grist_auth_server_url
@@ -624,9 +698,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.grist_auth_server_url:
             raise SystemExit("--grist-auth-server-url needs --grist-client-id and --grist-client-secret.")
         bundle["grist"] = grist_section
+    elif args.enable_grist:
+        bundle["grist"] = {"enabled": True}
 
     if args.peek_base_url:
         bundle["peek"] = {"base_url": _peek_url(args.peek_base_url)}
+    elif args.enable_peek:
+        bundle["peek"] = {"enabled": True}
+
+    if args.enable_telegram:
+        bundle["telegram"] = {"enabled": True}
 
     if args.enable_unattended_sessions:
         bundle["unattended_sessions"] = {"enabled": True}
@@ -727,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.downloads_link_ttl_seconds is not None
         or args.downloads_disable_staging
         or args.agent_links is not None
+        or args.exports is not None
     ):
         if bundle.get("mode") != "org":
             raise SystemExit(
@@ -741,6 +823,8 @@ def main(argv: list[str] | None = None) -> int:
             downloads_section["allow_disk_staging"] = False
         if args.agent_links is not None:
             downloads_section["agent_links"] = args.agent_links
+        if args.exports is not None:
+            downloads_section["allow_exports"] = args.exports
         bundle["download_delivery"] = downloads_section
 
     if args.web_push is not None:
@@ -811,7 +895,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         bundle["audit_forwarding"] = forwarding_section
 
-    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "peek") if k in bundle]
+    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "peek", "telegram") if k in bundle]
     if (
         not services and "unattended_sessions" not in bundle and "scoped_tokens" not in bundle
         and "mode" not in bundle
@@ -828,6 +912,7 @@ def main(argv: list[str] | None = None) -> int:
             "first with --generate-signing-key if you haven't yet)."
         )
     if args.sign_key:
+        bundle["serial"] = args.serial if args.serial is not None else int(time.time())
         bundle = _sign_bundle(bundle, args.sign_key)
 
     out_path.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
@@ -849,6 +934,7 @@ def main(argv: list[str] | None = None) -> int:
     if "download_delivery" in bundle:
         summary += f", download_delivery.allow_disk_staging={bundle['download_delivery'].get('allow_disk_staging', True)}"
         summary += f", download_delivery.agent_links={bundle['download_delivery'].get('agent_links', True)}"
+        summary += f", download_delivery.allow_exports={bundle['download_delivery'].get('allow_exports', True)}"
     if "authz" in bundle:
         n_domains = len(bundle["authz"].get("allowed_domains") or [])
         n_groups = len(bundle["authz"].get("required_groups") or [])

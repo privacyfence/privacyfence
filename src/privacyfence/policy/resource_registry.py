@@ -32,6 +32,22 @@ class GrantCapability:
     targets: tuple[tuple[str, str], ...]
 
 
+# Every resolver below returns a name, or ``None`` only when a lookup that worked found no such
+# resource -- the Auto-accept page shows that as a deleted one. A lookup that could not answer (an
+# API error, a timeout, a list cut off before the id could appear) raises instead, so a hiccup is
+# never shown as a deletion; ``ResourceNameResolver.resolve`` logs it and retries later.
+
+# How many Slack channels / Telegram chats a resolver lists before it gives up. An id missing from
+# a list this long may sit past the cut-off, so that miss raises rather than reading as deleted.
+_SLACK_CHANNEL_LIMIT = 1000
+_TELEGRAM_CHAT_LIMIT = 200
+_SALESFORCE_REPORT_LIMIT = 200  # SalesforceClient.list_reports's own LIMIT
+
+
+class InconclusiveLookup(LookupError):
+    """A lookup that answered, but not completely enough to say the resource does not exist."""
+
+
 def _find_by(items: Any, attr: str, target: str) -> str | None:
     """First item's `attr` where str(item.attr) == target, else None."""
     for item in items or []:
@@ -40,65 +56,113 @@ def _find_by(items: Any, attr: str, target: str) -> str | None:
     return None
 
 
-def _resolve_drive_file(client: Any, resource_id: str) -> str | None:
+def _find_in_list(items: Any, attr: str, target: str, *, limit: int) -> str | None:
+    """``_find_by`` over a list the client cut off at ``limit``: a miss in a full-length list is
+    inconclusive, not a deletion."""
+    items = list(items or [])
+    name = _find_by(items, attr, target)
+    if name is None and len(items) >= limit:
+        raise InconclusiveLookup(f"{target!r} is not among the first {limit} results")
+    return name
+
+
+def _is_not_found(exc: BaseException) -> bool:
+    """True when ``exc``, or an exception it was raised from, is an HTTP 404 -- the provider saying
+    there is no such resource. Reads ``requests``' ``response.status_code`` and
+    googleapiclient's ``resp.status``."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status = getattr(getattr(current, "response", None), "status_code", None)
+        if status is None:
+            status = getattr(getattr(current, "resp", None), "status", None)
+        if str(status) == "404":
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _unless_not_found(lookup: Callable[[], Any]) -> Any:
+    """``lookup()``, or ``None`` when it fails with a 404; any other failure raises."""
     try:
-        return client.get_file_metadata(resource_id).name or None
-    except Exception:
+        return lookup()
+    except Exception as exc:
+        if _is_not_found(exc):
+            return None
+        raise
+
+
+def _resolve_drive_file(client: Any, resource_id: str) -> str | None:
+    """``My Drive: name`` or ``<Shared Drive name>: name`` -- a file or folder's origin comes first,
+    as the same name can exist in several drives. A Shared Drive's own root shows just the drive's
+    name."""
+    meta = _unless_not_found(lambda: client.get_file_metadata(resource_id))
+    name = getattr(meta, "name", None) if meta is not None else None
+    if not name:
         return None
+    drive_id = getattr(meta, "drive_id", "")
+    if not drive_id:
+        return f"My Drive: {name}"
+    drive_name = _try_lookup(lambda: client.get_shared_drive_name(drive_id)) or "Shared Drive"
+    return drive_name if resource_id == drive_id else f"{drive_name}: {name}"
 
 
 def _resolve_task_list(client: Any, resource_id: str) -> str | None:
-    try:
-        return _find_by(client.list_task_lists(), "id", resource_id)
-    except Exception:
-        return None
+    return _find_by(client.list_task_lists(), "id", resource_id)
 
 
 def _resolve_slack_channel(client: Any, resource_id: str) -> str | None:
-    try:
-        name = _find_by(client.list_channels(), "id", resource_id)
-        return f"#{name}" if name else None
-    except Exception:
-        return None
+    channels = client.list_channels(max_results=_SLACK_CHANNEL_LIMIT)
+    name = _find_in_list(channels, "id", resource_id, limit=_SLACK_CHANNEL_LIMIT)
+    return f"#{name}" if name else None
 
 
 def _resolve_telegram_chat(client: Any, resource_id: str) -> str | None:
-    try:
-        import asyncio
+    import asyncio
 
-        chats = asyncio.run(client.list_chats())
-        return _find_by(chats, "id", resource_id)
-    except Exception:
-        return None
+    chats = asyncio.run(client.list_chats(limit=_TELEGRAM_CHAT_LIMIT))
+    return _find_in_list(chats, "id", resource_id, limit=_TELEGRAM_CHAT_LIMIT)
 
 
 def _resolve_jira_project(client: Any, resource_id: str) -> str | None:
-    try:
-        return _find_by(client.list_projects(), "key", resource_id)
-    except Exception:
-        return None
+    # By key, not by searching list_projects(), which stops at 50 projects.
+    project = _unless_not_found(lambda: client.get_project(resource_id))
+    return (getattr(project, "name", None) or None) if project is not None else None
+
+
+def _resolve_assets_schema(client: Any, resource_id: str) -> str | None:
+    schema = _unless_not_found(lambda: client.get_schema(resource_id))
+    return (getattr(schema, "name", None) or None) if schema is not None else None
 
 
 def _resolve_confluence_space(client: Any, resource_id: str) -> str | None:
-    try:
-        return _find_by(client.list_spaces(), "key", resource_id)
-    except Exception:
-        return None
+    # By key, not by searching list_spaces(), which stops at 50 spaces.
+    space = client.get_space(resource_id)
+    return (getattr(space, "name", None) or None) if space is not None else None
 
 
 def _resolve_calendar(client: Any, resource_id: str) -> str | None:
-    try:
-        return _find_by(client.list_calendars(), "id", resource_id)
-    except Exception:
-        return None
+    return _find_by(client.list_calendars(), "id", resource_id)
 
 
 def _first_name(*lookups: Callable[[], str | None]) -> str | None:
-    """The first lookup that yields a name; one that raises just falls through to the next."""
+    """The first lookup that yields a name; one that raises just falls through to the next. When
+    none yields a name, ``None`` if at least one of them answered, else the last error is raised:
+    lookups that all failed have not shown the resource is gone."""
+    error: Exception | None = None
+    answered = False
     for lookup in lookups:
-        name = _try_lookup(lookup)
+        try:
+            name = lookup()
+        except Exception as exc:
+            error = exc
+            continue
         if name:
             return name
+        answered = True
+    if error is not None and not answered:
+        raise error
     return None
 
 
@@ -113,20 +177,24 @@ def _resolve_salesforce_report(client: Any, resource_id: str) -> str | None:
     # A rule may hold the 15-character form of an ID while Salesforce returns the 18-character one
     # (same 15-character prefix), and the report list is capped, so look the report up by ID first.
     def by_list() -> str | None:
-        for report in client.list_reports() or []:
+        reports = list(client.list_reports() or [])
+        for report in reports:
             rid = str(report.id)
             if rid == resource_id or (len(resource_id) >= 15 and rid[:15] == resource_id[:15]):
                 return report.name or None
+        if len(reports) >= _SALESFORCE_REPORT_LIMIT:
+            raise InconclusiveLookup(f"{resource_id!r} is not among the first {_SALESFORCE_REPORT_LIMIT} reports")
         return None
 
     return _first_name(lambda: client.get_report_name(resource_id), by_list)
 
 
 def _resolve_grist_document(client: Any, resource_id: str) -> str | None:
-    return _first_name(
-        lambda: client.get_document(resource_id).name or None,
-        lambda: _find_by(client.list_documents(), "id", resource_id),
-    )
+    def by_id() -> str | None:
+        document = _unless_not_found(lambda: client.get_document(resource_id))
+        return (getattr(document, "name", None) or None) if document is not None else None
+
+    return _first_name(by_id, lambda: _find_by(client.list_documents(), "id", resource_id))
 
 
 @dataclass(frozen=True)
@@ -141,7 +209,8 @@ class GrantResourceType:
     connector: str  # e.g. "drive"
     config_key: str  # resource kind within the connector, e.g. "folders", "task_lists"
     capabilities: dict[str, GrantCapability]
-    # (client, resource_id) -> display name, or None if not resolvable right now.
+    # (client, resource_id) -> display name; None when there is no such resource, and raises when
+    # the lookup could not tell (see the resolvers above).
     resolver: Callable[[Any, str], str | None]
 
 
@@ -235,6 +304,16 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
             )),
         },
         resolver=_resolve_jira_project,
+    ),
+    GrantResourceType(
+        connector="assets", config_key="schemas",
+        capabilities={
+            "read": GrantCapability("Read auto-accept", (
+                ("assets.read_object", "approved_schema_ids"),
+                ("assets.read_object", "approved_schema_ids_all_results"),
+            )),
+        },
+        resolver=_resolve_assets_schema,
     ),
     GrantResourceType(
         connector="confluence", config_key="spaces",

@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("cryptography")
 
 from privacyfence import org_bundle_signing
 from privacyfence.step_up_config import STEP_UP_SCOPES, StepUpConfig
@@ -177,6 +176,93 @@ class TestMainSigningIntegration:
         assert "signing_public_key" not in bundle
         assert bundle["slack"]["client_id"] == "id1"  # the earlier merge survives
         assert bundle["salesforce"]["consumer_key"] == "ckey"
+
+    def test_signing_adds_a_serial_that_defaults_to_the_current_time(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(build_org_bundle.time, "time", lambda: 1_700_000_000.9)
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path),
+        ])
+
+        assert json.loads(out_path.read_text())["serial"] == 1_700_000_000
+
+    def test_serial_flag_sets_the_serial(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path), "--serial", "42",
+        ])
+
+        assert json.loads(out_path.read_text())["serial"] == 42
+
+    def test_serial_without_sign_key_is_an_error(self, tmp_path, capsys):
+        out_path = tmp_path / "org_config.json"
+
+        with pytest.raises(SystemExit):
+            build_org_bundle.main([
+                "-o", str(out_path), "--org-name", "Acme",
+                "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+                "--serial", "42",
+            ])
+
+        assert "--serial needs --sign-key" in capsys.readouterr().err
+        assert not out_path.exists()
+
+    @pytest.mark.parametrize("value", ["0", "-1", "abc"])
+    def test_serial_must_be_a_positive_integer(self, tmp_path, value):
+        with pytest.raises(SystemExit):
+            build_org_bundle.main([
+                "-o", str(tmp_path / "o.json"), "--org-name", "Acme",
+                "--sign-key", str(tmp_path / "key.pem"), "--serial", value,
+            ])
+
+    def test_merge_does_not_carry_the_old_serial(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path), "--serial", "42",
+        ])
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--merge",
+            "--salesforce-consumer-key", "ckey", "--salesforce-consumer-secret", "csecret",
+        ])
+        assert "serial" not in json.loads(out_path.read_text())
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--merge",
+            "--salesforce-consumer-key", "ckey", "--salesforce-consumer-secret", "csecret",
+            "--sign-key", str(key_path),
+        ])
+        assert json.loads(out_path.read_text())["serial"] != 42
+
+    def test_a_script_signed_bundle_with_a_serial_verifies_in_the_daemon_copy(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme",
+            "--slack-client-id", "id1", "--slack-client-secret", "secret1",
+            "--sign-key", str(key_path), "--serial", "42",
+        ])
+        bundle = json.loads(out_path.read_text())
+
+        trust = org_bundle_signing.verify_and_maybe_pin(bundle, tmp_path / "orgdir")
+
+        assert trust.ok and trust.signed
+        assert trust.serial == 42
 
     def test_authz_flags_write_the_authz_section(self, tmp_path):
         key_path = tmp_path / "key.pem"
@@ -541,6 +627,9 @@ class TestAgentLinksFlag:
     def test_no_agent_links_writes_false(self, tmp_path):
         assert self._build(tmp_path, "--no-agent-links")["download_delivery"]["agent_links"] is False
 
+    def test_no_exports_writes_false(self, tmp_path):
+        assert self._build(tmp_path, "--no-exports")["download_delivery"]["allow_exports"] is False
+
     def test_agent_links_writes_true(self, tmp_path):
         assert self._build(tmp_path, "--agent-links")["download_delivery"]["agent_links"] is True
 
@@ -626,6 +715,53 @@ class TestInstructionsPrintedAfterWriting:
         for name in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script", "atlassian"):
             assert f"https://pf.example.com/oauth/callback/{name}" in out
         assert "/oauth/callback/slack" not in out
+
+    def test_atlassian_assets_flag_sets_the_bundle_flag(self, tmp_path):
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
+            "--atlassian-assets",
+        ])
+        assert json.loads(out_path.read_text())["atlassian"]["assets"] is True
+
+    def test_atlassian_without_the_assets_flag_leaves_it_out(self, tmp_path):
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
+        ])
+        assert "assets" not in json.loads(out_path.read_text())["atlassian"]
+
+    def test_atlassian_assets_flag_without_credentials_exits(self, tmp_path):
+        with pytest.raises(SystemExit) as excinfo:
+            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--atlassian-assets"])
+        assert str(excinfo.value) == "--atlassian-assets needs --atlassian-client-id and --atlassian-client-secret."
+
+    def test_atlassian_assets_workspace_id_is_written(self, tmp_path):
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
+            "--atlassian-assets", "--atlassian-assets-workspace-id", " 6d8c7ed1-92a5-4693-b107-226f466d78a3 ",
+        ])
+        atlassian = json.loads(out_path.read_text())["atlassian"]
+        assert atlassian["assets_workspace_id"] == "6d8c7ed1-92a5-4693-b107-226f466d78a3"
+
+    def test_atlassian_assets_workspace_id_must_be_a_uuid(self, tmp_path):
+        with pytest.raises(SystemExit) as excinfo:
+            build_org_bundle.main([
+                "-o", str(tmp_path / "org_config.json"), "--atlassian-client-id", "a",
+                "--atlassian-client-secret", "as", "--atlassian-assets-workspace-id", "../x",
+            ])
+        assert str(excinfo.value) == "--atlassian-assets-workspace-id is not a workspace id (expected a UUID)."
+
+    def test_atlassian_assets_workspace_id_without_credentials_exits(self, tmp_path):
+        with pytest.raises(SystemExit) as excinfo:
+            build_org_bundle.main([
+                "-o", str(tmp_path / "org_config.json"),
+                "--atlassian-assets-workspace-id", "6d8c7ed1-92a5-4693-b107-226f466d78a3",
+            ])
+        assert str(excinfo.value) == (
+            "--atlassian-assets-workspace-id needs --atlassian-client-id and --atlassian-client-secret."
+        )
 
     def test_merge_without_mode_flags_reads_the_issuer_from_the_existing_bundle(self, tmp_path, capsys):
         build_org_bundle.main(self._org_args(tmp_path))
@@ -747,6 +883,20 @@ class TestGristFlags:
         with pytest.raises(SystemExit) as exc:
             build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
         return str(exc.value)
+
+    def test_enable_flags_write_the_bare_sections(self, tmp_path):
+        bundle = self._build(tmp_path, "--enable-telegram", "--enable-peek", "--enable-grist")
+        assert bundle["telegram"] == {"enabled": True}
+        assert bundle["peek"] == {"enabled": True}
+        assert bundle["grist"] == {"enabled": True}
+
+    def test_a_pinned_server_is_not_replaced_by_the_bare_section(self, tmp_path):
+        bundle = self._build(
+            tmp_path, "--enable-peek", "--peek-base-url", "https://peek.example.com",
+            "--enable-grist", "--grist-server-url", "https://grist.example.com",
+        )
+        assert bundle["peek"] == {"base_url": "https://peek.example.com"}
+        assert bundle["grist"] == {"server_url": "https://grist.example.com"}
 
     def test_server_url_alone_writes_just_the_server_with_the_trailing_slash_stripped(self, tmp_path):
         bundle = self._build(tmp_path, "--grist-server-url", "https://grist.example.com/")

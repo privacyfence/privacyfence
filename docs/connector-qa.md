@@ -119,6 +119,8 @@ Items the checks delete go to Drive's trash, which Google purges after 30 days.
 - [ ] Set `slack.channel_name` (default `privacyfence-qa-control`). Optionally set
       `slack.channel_id` (blank to resolve by name) and `slack.seed_thread_ts` (blank to scan the
       channel's last 200 messages for `[QATEST]`).
+- [ ] Optionally set `slack.group_dm_id`: the id of a group DM the QA account is in. It enables the
+      group-DM membership check; without it that check is skipped.
 
 The recorder reads that thread with `get_thread_replies` and checks that the thread starter
 carries `[QATEST]` and has text and a user id.
@@ -303,6 +305,27 @@ every run.
 | Approved project | `approved_project_keys` | `[PFQA]` | `jira.read_issue` |
 | Own issues | `i_am_reporter` / `i_am_assignee` | — | `jira.read_issue` |
 
+### Seed: Jira Assets
+
+- [ ] Create an Assets schema with key exactly `PFQA`, holding the object types Account, Contract
+      and Asset. Contract references Account, and Asset references Contract.
+- [ ] Create two accounts, two contracts and three assets, every label tagged `[QATEST]`.
+- [ ] Name one contract `PrivacyFence QA seed contract [QATEST]`.
+- [ ] Optional: link the seed contract to a `[QATEST]` Jira issue through an **Assets objects**
+      custom field (object schema `PFQA`, filter `objectType = Contract`), so connected tickets has
+      something to return; without it the recording holds an empty list. The field is created in
+      the site-wide Fields admin and attaches only to a company-managed space; a team-managed
+      space's own field dialog has no Assets type.
+- [ ] Build the QA bundle with `--atlassian-assets --atlassian-assets-workspace-id <workspaceId>`,
+      the id shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`.
+- [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
+      `PrivacyFence QA seed contract [QATEST]`) and optionally `assets.seed_object_key` (blank to
+      resolve by label inside the schema).
+
+| Optional rule | Predicate | Value | Operations |
+|---|---|---|---|
+| Approved schema | `approved_schema_ids` | `[<PFQA schema id>]` | `assets.read_object` |
+
 ### Seed: Confluence
 
 - [ ] Create a space with key exactly `PFQA`.
@@ -332,14 +355,14 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 |---|---|---|---|
 | `gmail` | **`seed_message_id`** | `get_message.json`, `list_send_as.json` | — |
 | `drive` | `folder_name`, `folder_id` | `get_file_metadata.json` | — |
-| `slack` | `channel_name`, `channel_id`, `seed_thread_ts` | `get_thread_replies.json` | — |
+| `slack` | `channel_name`, `channel_id`, `seed_thread_ts`, `group_dm_id` | `get_thread_replies.json`; checks `conversation_membership` and `group_dm_membership` (no fixture) | — |
 | `calendar` | **`calendar_id`**, `seed_event_title`, `seed_event_id` | `get_event.json` | creates, updates and deletes one event and one two-instance recurring series on `calendar_id` |
 | `contacts` | `seed_contact_display_name`, `seed_contact_resource_name` | `get_contact.json` | — |
 | `tasks` | **`task_list_id`**, **`seed_task_id`** | `get_task.json` | creates, updates and deletes one task in `task_list_id` |
 | `apps_script` | `seed_script_title`, `seed_script_id` | `get_content.json` | — |
 | `telegram` | `chat_id`, `history_limit` | `get_messages.json` | — |
 | `peek` | **`page_slug`** | `list_pages.json`, `get_comments.json` | uploads, publishes, renames, comments on and deletes one page |
-| `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id` | `list_reports.json`, `run_report_page.json`, `get_record.json` | — |
+| `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id`, `lifecycle_object_type`, `lifecycle_name_field`, `lifecycle_note_field` | `list_reports.json`, `run_report_page.json`, `get_record.json` | creates and updates one Task (`lifecycle_object_type`), then two more in one batch; never deletes them |
 | `grist` | **`doc_id`**, `table_id`, `lifecycle_table_id` | `list_documents.json`, `list_columns.json`, `get_records.json` | adds and updates one row in `lifecycle_table_id`; never deletes it |
 | `jira` | `project_key`, `seed_issue_summary`, `seed_issue_key` | `list_projects.json`, `get_issue.json` | creates, updates and deletes one issue in `project_key` |
 | `confluence` | `space_key`, `seed_page_title`, `seed_page_id` | `list_spaces.json`, `get_page.json` | creates and updates one page in `space_key`; never deletes it |
@@ -390,9 +413,9 @@ Always use the project venv; the recorder imports the same third-party clients a
 - `--record` makes the same calls, redacts identity fields (`redact()` and the connector-specific
   passes), de-identifies structural ids and URLs (`deidentify_structural_fields()`), and writes
   `tests/fixtures/live/<connector>/<method>.json` for every result that passed.
-- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira`, `peek` and `tasks` only (the comment above
+- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira`, `peek`, `salesforce` and `tasks` only (the comment above
   `LIFECYCLE_CHECKS` says why the others are excluded) and never writes a fixture. A cleanup that
-  ran but left the object behind fails the run. Confluence and Grist have no cleanup step.
+  ran but left the object behind fails the run. Confluence, Grist and Salesforce have no cleanup step.
 
 With no connector named, every connector implemented for the mode runs. `--report-file PATH` also
 saves the report; `-v`/`--verbose` turns on DEBUG logging on stderr. The exit status is non-zero
@@ -417,7 +440,12 @@ classes (see [`tests/fixtures/live/README.md`](../tests/fixtures/live/README.md)
 
 A dedicated Linux host or VM, not shared with other repositories or workloads:
 
-- a GitHub Actions runner registered to this repository with the label `privacyfence-test`;
+- a GitHub Actions runner registered in the organization runner group `privacyfence-test` (not to
+  this repository) with the label `privacyfence-test`. The group allows public repositories but is set to
+  **Selected workflows**: only `connector-live-check.yml` and `qa-record-fixture.yml` as they stand
+  on `main`, so a pull request, a fork or any other branch's copy of a workflow can never be
+  scheduled on it. Fork pull requests from outside collaborators also require approval before any
+  workflow runs;
 - installed as a service in persistent (non-ephemeral) mode — an `--ephemeral` registration
   deregisters itself after one job;
 - running as a dedicated unprivileged user whose home directory holds the persistent QA state;
@@ -430,7 +458,8 @@ A dedicated Linux host or VM, not shared with other repositories or workloads:
 - OS updates enabled and key-only SSH.
 
 If the repository restricts allowed actions, `peter-evans/create-pull-request` must be on the
-allowlist for the drift PR step.
+allowlist for the drift PR step, which runs in `connector-live-check.yml`'s `open-drift-pr` job on a
+GitHub-hosted runner, not on this host.
 
 ### Persistent QA state
 
@@ -461,13 +490,13 @@ already-spent token.
 `.github/workflows/connector-live-check.yml` runs weekly (Monday 06:00 UTC) and on
 `workflow_dispatch`, with a 20-minute timeout. It:
 
-1. checks out the repository (full history) and builds a fresh `.venv` with
-   `pip install -e ".[test]"`;
+1. checks out the repository (full history) and builds a fresh `.venv` from the hash-pinned lock
+   (`pip install --require-hashes -r requirements/dev.lock.txt`, then `pip install --no-deps -e .`);
 2. copies the persistent QA state into the checkout;
 3. runs `--check` with `continue-on-error`, since drift is a finding, not a crash;
 4. if the check failed, runs `--record`;
 5. runs `--lifecycle`, which fails the job on any failure;
-6. if the check failed, opens or updates a PR from `chore/connector-live-fixture-drift` that
+6. if the check failed, the separate `open-drift-pr` job (on a GitHub-hosted runner) opens or updates a PR from `chore/connector-live-fixture-drift` that
    contains only `tests/fixtures/live/**`, with the record report as its body;
 7. copies refreshed credentials back (always);
 8. uploads `/tmp/qa-*-report.md` as the `connector-live-check-report` artifact, kept for 90 days
@@ -478,16 +507,23 @@ above.
 
 ### Recording one connector
 
-`.github/workflows/qa-record-fixture.yml` (`workflow_dispatch` only, input `connector`, default
-`apps_script`) records one connector's fixture and commits it to the branch it was dispatched
-against. Use it to record the first fixture for a newly added `check_<connector>()`, which the live
+`.github/workflows/qa-record-fixture.yml` (`workflow_dispatch` only, dispatched **on `main`**, inputs
+`connector`, default `apps_script`, and `branch`, the pushed branch to record for) records one
+connector's fixture and commits it to that branch. Use it to record the first fixture for a newly added `check_<connector>()`, which the live
 check never records because its `--check` does not fail. It:
 
-- refuses to run on `main` or a `releases/*` branch, because it pushes directly to the branch;
+- the `record` job (self-hosted, read-only `contents`) refuses to run unless dispatched on `main`,
+  refuses a `branch` that is `main`, `stable`, `releases/*` or starts with `refs/` or `pull/`, and
+  one that does not exist on `origin` as a branch, so no pull-request ref (fork code included) can
+  reach the runner; the branch is passed through an environment variable, never interpolated into a
+  script;
 - fails unless the connector is registered in `CONNECTOR_CHECKS`;
 - runs `--record <connector>` without `continue-on-error`, so a refused recording fails the job;
-- stages only `tests/fixtures/live/**`, commits as `github-actions[bot]` and pushes;
-- copies refreshed credentials back and uploads the report as `qa-record-report-<connector>`.
+- copies refreshed credentials back, uploads the report as `qa-record-report-<connector>` and the
+  recorded `tests/fixtures/live/<connector>` as the `recorded-fixture` artifact;
+- the `commit-fixture` job (`ubuntu-latest`, the only one with `contents: write`) checks out
+  `branch`, restores that artifact, commits as `github-actions[bot]` and pushes, skipping when
+  nothing changed.
 
 It shares the `connector-live-check` concurrency group with the live check (no cancellation), so
 the two never race on the credential store. A queued run is waiting for the other one. GitHub
@@ -517,7 +553,7 @@ Never add a QA credential as a GitHub Actions secret as a workaround.
 | A result says the fetched object "does not carry [QATEST]" | The manifest id points at the wrong object, or the seed artifact was renamed. Repair the artifact or the id. |
 | `Telegram app credentials not available in this build.` | The `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` repository secrets are missing. An error naming `credentials/telegram.session` instead means the session file is missing from `~/privacyfence/credentials/`. |
 | Atlassian `401`/`403` while refreshing the token | Check that the copy-back step ran and that the runner user can write to `~/privacyfence/credentials/`. A spent Atlassian refresh token needs a fresh reconnect; a rerun will not fix it. A `403` from the token endpoint can also mean the client id/secret in `org_config.json` does not match the app at developer.atlassian.com. |
-| `--lifecycle` shows `n/a` under Cleanup for Confluence | Expected; see [Seed: Confluence](#seed-confluence). |
+| `--lifecycle` shows `n/a` under Cleanup for Confluence, Grist or Salesforce | Expected; see [Seed: Confluence](#seed-confluence). Grist and Salesforce have no delete either. |
 
 The runner holds real QA grants: patch it, watch its health, require review on changes to the two
 workflows above, and revoke every QA grant if the host is compromised.
@@ -603,6 +639,13 @@ For each representative read, list, search, create, update, send or upload tool:
   on `privacyfence-qa-control` it prompts.
 - **Search.** `slack_search_messages` whose results all come from the approved channel reads
   without a card; one unapproved result gates the whole search.
+- **Recent window.** `slack_search_messages` with `minutes` and no query returns the
+  channel, DM, group DM and thread messages posted in that window, newest first, and the card's
+  **Since** reads `last N minutes`; `slack_get_channel_history` with `minutes` returns only
+  that window.
+- **Member conversations.** With a 'conversations I'm a member of' rule,
+  `slack_get_channel_history` on `privacyfence-qa-control` reads without a card; a `member_only`
+  search of the last 60 minutes reads without a card; the same search without `member_only` prompts.
 - `slack_get_thread_replies` on the seed thread prompts for review; `slack_send_message` to your
   own DM prompts.
 
@@ -648,6 +691,7 @@ For each representative read, list, search, create, update, send or upload tool:
   rejected before any card appears.
 - **Report overrides.** `salesforce_run_report` with `columns`, `filters` or `summary_only` narrows that run only. The approved-report rule still reads it without a card, and `--check`'s `run_report` row covers the three live.
 - **Report paging.** `--check`'s `run_report_page` row covers `sortBy`, `greaterThan`, the `RowCount` aggregate and flattening a summary report live, on the QA report's `PF QA Number` column. It records only the `[QATEST]` rows of the first page.
+- **Lifecycle.** `--lifecycle` creates and updates Tasks (`lifecycle_object_type`, `lifecycle_name_field`, `lifecycle_note_field`) tagged `[QATEST-LIFECYCLE]`: one single-record create and update, then two records in one batch. It never deletes them, so they are deleted by hand now and then.
 
 ### Grist checks
 
@@ -683,7 +727,8 @@ For each representative read, list, search, create, update, send or upload tool:
 
 - **Approved project.** With the `approved_project_keys` rule, `jira_get_issue` on a `PFQA` issue
   reads without a card; an issue in another project prompts.
-- **Own issues.** An issue you created reads without a card through `i_am_reporter` or
+- **Own issues.** An issue whose reporter or assignee is your Atlassian account (matched by
+  account id, never by a name or email) reads without a card through `i_am_reporter` or
   `i_am_assignee`, independently of the project rule.
 - `jira_transition_issue` with a transition name that is not available fails with an error listing
   the available transitions.
@@ -695,7 +740,7 @@ For each representative read, list, search, create, update, send or upload tool:
 
 - **Approved space.** With the `approved_space_keys` rule, `confluence_get_page` on a `PFQA` page
   reads without a card; a page in another space prompts.
-- **Own pages.** A page you created reads without a card through `i_am_author`, independently of
+- **Own pages.** A page whose author is your Atlassian account (matched by account id) reads without a card through `i_am_author`, independently of
   the space rule.
 - `confluence_download_attachment` prompts for review and saves a file whose size matches
   `confluence_list_attachments`.

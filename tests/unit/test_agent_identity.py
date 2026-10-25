@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import AnyUrl
 
 from privacyfence.agent_identity import (
     MAX_CLIENT_STRING_LENGTH,
@@ -16,6 +17,7 @@ from privacyfence.agent_identity import (
     AgentSource,
     agent_scope,
     current_agent,
+    entry_for_redirect_uris,
     identify,
     lookup,
     sanitize_client_string,
@@ -168,6 +170,52 @@ class TestRegistry:
     def test_agent_ids_are_unique(self):
         ids = [e.agent_id for e in REGISTRY]
         assert len(ids) == len(set(ids))
+
+
+CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback"
+CHATGPT_CALLBACK = "https://chatgpt.com/connector/oauth/dummy-callback-id"
+
+
+class TestEntryForRedirectUris:
+    @pytest.mark.parametrize("uri, agent_id", [
+        (CLAUDE_CALLBACK, "claude"),
+        (CHATGPT_CALLBACK, "chatgpt"),
+        ("https://vertexaisearch.cloud.google.com/oauth-redirect", "gemini-enterprise"),
+    ])
+    def test_a_vendors_own_callback_is_attested(self, uri, agent_id):
+        entry = entry_for_redirect_uris([uri])
+        assert entry is not None and entry.agent_id == agent_id
+
+    @pytest.mark.parametrize("uri", [
+        "http://claude.ai/api/mcp/auth_callback",
+        "https://claude.ai/api/mcp/auth_callback/x",
+        "https://claude.ai/api/mcp/auth_callback?x=1",
+        "https://evil.example/api/mcp/auth_callback",
+        "https://claude.ai.evil.example/api/mcp/auth_callback",
+        "https://chatgpt.com/connector/oauth/a/b",
+        "https://chatgpt.com/connector/oauth/",
+        "https://chatgpt.com/connector/oauth/a.b",
+        "https://chatgpt.com/connector/oauth/" + "a" * 129,
+    ])
+    def test_near_misses_are_not_attested(self, uri):
+        assert entry_for_redirect_uris([uri]) is None
+
+    def test_no_redirect_uris_attest_nothing(self):
+        assert entry_for_redirect_uris([]) is None
+
+    def test_one_foreign_redirect_uri_keeps_the_registration_claimed(self):
+        assert entry_for_redirect_uris([CLAUDE_CALLBACK, "http://localhost:1/cb"]) is None
+
+    def test_callbacks_of_two_vendors_attest_nothing(self):
+        assert entry_for_redirect_uris([CLAUDE_CALLBACK, CHATGPT_CALLBACK]) is None
+
+    def test_the_same_callback_twice_is_still_that_vendor(self):
+        entry = entry_for_redirect_uris([CLAUDE_CALLBACK, CLAUDE_CALLBACK])
+        assert entry is not None and entry.agent_id == "claude"
+
+    def test_a_pydantic_url_is_compared_as_its_string(self):
+        entry = entry_for_redirect_uris([AnyUrl(CLAUDE_CALLBACK)])
+        assert entry is not None and entry.agent_id == "claude"
 
 
 class TestIdentify:

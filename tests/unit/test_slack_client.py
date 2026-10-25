@@ -514,6 +514,46 @@ class TestResolveIsGroupDm:
         assert web_client.conversations_info.call_count == 2
 
 
+class TestResolveIsOneToOneDm:
+    def test_im_channel_is_true(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"is_im": True}}
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        web_client.conversations_info.assert_called_once_with(channel="D1")
+
+    def test_channel_and_group_dm_are_false(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"is_im": False, "is_mpim": True}}
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D2") is False
+
+    def test_non_d_id_makes_no_api_call(self):
+        web_client = MagicMock()
+        client = make_client(web_client)
+        for channel_id in ("", "C1", "G1"):
+            assert client.resolve_is_one_to_one_dm(channel_id) is False
+        web_client.conversations_info.assert_not_called()
+
+    def test_lookup_error_is_false_and_not_cached(self):
+        web_client = MagicMock()
+        web_client.conversations_info.side_effect = [
+            slack_error(), {"channel": {"is_im": True}},
+        ]
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D1") is False
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        assert web_client.conversations_info.call_count == 2
+
+    def test_success_is_cached(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"is_im": True}}
+        client = make_client(web_client)
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        web_client.conversations_info.assert_called_once()
+
+
 class TestResolveIsSelfDm:
     def _web_client(self, *, own="U_ME", counterpart="U_ME", is_im=True):
         web_client = MagicMock()
@@ -1519,7 +1559,7 @@ class TestGetMessage:
 class TestSearchMessages:
     def test_requires_query_or_participant(self):
         client = make_client(MagicMock())
-        with pytest.raises(SlackClientError, match="requires a query, a participant, or both"):
+        with pytest.raises(SlackClientError, match="requires a query, a participant, or minutes"):
             client.search_messages("")
 
     def test_uses_channel_name_from_match_when_present(self):
@@ -1567,6 +1607,91 @@ class TestSearchMessages:
         client.search_messages("budget", days=0)
 
         assert web_client.search_messages.call_args.kwargs["query"] == "budget"
+
+    @staticmethod
+    def _match(text, seconds_ago):
+        return {
+            "text": text,
+            "ts": f"{time.time() - seconds_ago:.6f}",
+            "channel": {"id": "C1", "name": "general"},
+        }
+
+    @staticmethod
+    def _web_client(*matches):
+        web_client = MagicMock()
+        web_client.search_messages.return_value = {"messages": {"matches": list(matches)}}
+        return web_client
+
+    def test_minutes_alone_is_enough(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("", minutes=60)
+        web_client.search_messages.assert_called_once()
+
+    def test_minutes_search_sorts_by_timestamp(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("", count=7, minutes=60)
+        d = (datetime.now(timezone.utc) - timedelta(minutes=60, days=2)).strftime("%Y-%m-%d")
+        assert web_client.search_messages.call_args.kwargs == {
+            "query": f"after:{d}", "count": 7, "sort": "timestamp", "sort_dir": "desc",
+        }
+
+    def test_minutes_search_with_query_prefixes_it(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("budget", minutes=60)
+        assert web_client.search_messages.call_args.kwargs["query"].startswith("budget after:")
+
+    def test_minutes_drops_matches_older_than_the_cutoff(self):
+        web_client = self._web_client(self._match("new", 300), self._match("old", 7200))
+        results = make_client(web_client).search_messages("", minutes=60)
+        assert [m.text for m in results] == ["new"]
+
+    def test_minutes_result_is_newest_first(self):
+        web_client = self._web_client(
+            self._match("a", 600), self._match("b", 60), self._match("c", 300)
+        )
+        results = make_client(web_client).search_messages("", minutes=60)
+        assert [m.text for m in results] == ["b", "c", "a"]
+
+    def test_minutes_api_error_becomes_slack_client_error(self):
+        web_client = MagicMock()
+        web_client.search_messages.side_effect = slack_error()
+        with pytest.raises(SlackClientError, match="search_messages failed"):
+            make_client(web_client).search_messages("", minutes=60)
+
+    def test_minutes_with_participant_reads_history_from_the_cutoff(self):
+        web_client = MagicMock()
+        web_client.conversations_list.side_effect = [
+            {"channels": [{"id": "D1", "user": "U1"}], "response_metadata": {}},  # list_dms
+            {"channels": [], "response_metadata": {}},  # list_group_chats
+        ]
+        web_client.users_info.return_value = {"user": {"id": "U1", "name": "bob", "real_name": "Bob Smith"}}
+        web_client.conversations_info.return_value = {"channel": {"name": "bob-dm"}}
+        web_client.conversations_history.return_value = {
+            "messages": [{"user": "U1", "text": "hi there", "ts": "1"}]
+        }
+        make_client(web_client).search_messages(participant="bob", minutes=60)
+        oldest = web_client.conversations_history.call_args.kwargs["oldest"]
+        assert isinstance(oldest, str)
+        assert abs(float(oldest) - (time.time() - 3600)) < 5
+        web_client.search_messages.assert_not_called()
+
+    def test_minutes_is_clamped_to_seven_days(self):
+        huge, capped = self._web_client(), self._web_client()
+        make_client(huge).search_messages("", minutes=10**6)
+        make_client(capped).search_messages("", minutes=10080)
+        assert (
+            huge.search_messages.call_args.kwargs == capped.search_messages.call_args.kwargs
+        )
+
+    def test_negative_minutes_with_nothing_else_raises(self):
+        with pytest.raises(SlackClientError, match="requires a query, a participant, or minutes"):
+            make_client(MagicMock()).search_messages("", minutes=-5)
+
+    def test_days_search_sends_no_sort(self):
+        web_client = self._web_client()
+        make_client(web_client).search_messages("budget")
+        web_client.search_messages.assert_called_once()
+        assert "sort" not in web_client.search_messages.call_args.kwargs
 
     def test_participant_given_skips_slack_search_api_entirely(self):
         web_client = MagicMock()
@@ -2559,3 +2684,209 @@ class TestLiveFixtureParsing:
         starter = client._parse_message(messages[0], "C1", "privacyfence-qa-control")
 
         assert starter.text and "[QATEST]" in starter.text
+
+
+class TestResolveIsMember:
+    @staticmethod
+    def _client(channel):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": channel}
+        return make_client(web_client), web_client
+
+    def test_member_channel_is_true(self):
+        client, _ = self._client({"is_member": True})
+        assert client.resolve_is_member("C1") is True
+
+    def test_non_member_channel_is_false(self):
+        client, _ = self._client({"is_member": False})
+        assert client.resolve_is_member("C1") is False
+
+    def test_missing_is_member_is_false(self):
+        client, _ = self._client({"name": "general"})
+        assert client.resolve_is_member("C1") is False
+
+    def test_one_to_one_dm_counts_as_membership(self):
+        client, _ = self._client({"is_im": True, "user": "U2"})
+        assert client.resolve_is_member("D1") is True
+
+    def test_api_error_is_false(self):
+        web_client = MagicMock()
+        web_client.conversations_info.side_effect = slack_error("channel_not_found")
+        assert make_client(web_client).resolve_is_member("C1") is False
+
+    def test_unexpected_response_is_false(self):
+        client, _ = self._client("not a dict")
+        assert client.resolve_is_member("C1") is False
+
+    def test_empty_id_makes_no_api_call(self):
+        web_client = MagicMock()
+        assert make_client(web_client).resolve_is_member("") is False
+        web_client.conversations_info.assert_not_called()
+
+    def test_is_never_cached(self):
+        client, web_client = self._client({"is_member": True})
+        client.resolve_is_member("C1")
+        client.resolve_is_member("C1")
+        assert web_client.conversations_info.call_count == 2
+
+    def test_fills_the_channel_type_caches(self):
+        client, web_client = self._client({"is_im": True, "user": "U2", "is_mpim": False})
+        web_client.auth_test.return_value = {"user_id": "U_ME"}
+        client.resolve_is_member("D1")
+        web_client.conversations_info.reset_mock()
+        assert client.resolve_is_group_dm("D1") is False
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        assert client.resolve_is_self_dm("D1") is False
+        web_client.conversations_info.assert_not_called()
+
+
+class TestMyConversationIds:
+    _TYPES = "public_channel,private_channel,mpim,im"
+
+    @staticmethod
+    def _client(pages):
+        web_client = MagicMock()
+        web_client.auth_test.return_value = {"user_id": "U_ME"}
+        web_client.users_conversations.side_effect = pages
+        return make_client(web_client), web_client
+
+    def test_collects_channel_objects_across_pages(self):
+        client, web_client = self._client([
+            {"channels": [{"id": "C1"}, {"id": "D2"}], "response_metadata": {"next_cursor": "p2"}},
+            {"channels": [{"id": "G3"}], "response_metadata": {"next_cursor": ""}},
+        ])
+        assert client.my_conversation_ids() == frozenset({"C1", "D2", "G3"})
+        assert web_client.users_conversations.call_args.kwargs["types"] == self._TYPES
+        assert web_client.users_conversations.call_args.kwargs["user"] == "U_ME"
+
+    def test_accepts_bare_id_strings(self):
+        client, _ = self._client([{"channels": ["C1", "C2"], "response_metadata": {}}])
+        assert client.my_conversation_ids() == frozenset({"C1", "C2"})
+
+    def test_is_none_when_auth_test_fails(self):
+        web_client = MagicMock()
+        web_client.auth_test.side_effect = slack_error("invalid_auth")
+        assert make_client(web_client).my_conversation_ids() is None
+        web_client.users_conversations.assert_not_called()
+
+    def test_is_none_when_users_conversations_raises(self):
+        client, _ = self._client(slack_error("internal_error"))
+        assert client.my_conversation_ids() is None
+
+
+class TestParticipantFastPathChannelObjects:
+    def test_participant_fast_path_accepts_channel_objects(self):
+        web_client = MagicMock()
+        web_client.conversations_list.side_effect = [
+            {"channels": [{"id": "C1", "name": "eng"}, {"id": "C2", "name": "sales"}],
+             "response_metadata": {}},
+            {"channels": [{"id": "G1", "name": "g1"}, {"id": "G2", "name": "g2"}],
+             "response_metadata": {}},
+        ]
+        web_client.users_conversations.side_effect = (
+            lambda types="", **k: {
+                "channels": [{"id": "C1"}] if "public" in types else [{"id": "G1"}],
+                "response_metadata": {},
+            }
+        )
+        web_client.conversations_members.return_value = {"members": ["U1"]}
+        web_client.users_info.return_value = {"user": {"id": "U1", "name": "u1"}}
+        client = make_client(web_client)
+
+        assert [c.id for c in client.list_channels(participant="U1")] == ["C1"]
+        assert [c.id for c in client.list_group_chats(participant="U1")] == ["G1"]
+
+
+class TestFilteredSearch:
+    @staticmethod
+    def _match(channel_id, text="hit", age_seconds=60):
+        return {
+            "text": text, "ts": str(time.time() - age_seconds), "user": "U1",
+            "channel": {"id": channel_id, "name": channel_id.lower()},
+        }
+
+    @classmethod
+    def _page(cls, matches, pages=1):
+        return {"messages": {"matches": matches, "paging": {"pages": pages}}}
+
+    def test_only_channels_drops_other_conversations(self):
+        web_client = MagicMock()
+        web_client.search_messages.return_value = self._page(
+            [self._match("C1", "a"), self._match("C2", "b"), self._match("C3", "c")]
+        )
+        results = make_client(web_client).search_messages(
+            "q", only_channels=frozenset({"C1", "C3"})
+        )
+        assert [m.text for m in results] == ["a", "c"]
+
+    def test_exclude_channels_drops_listed_ids(self):
+        web_client = MagicMock()
+        web_client.search_messages.return_value = self._page(
+            [self._match("C1", "a"), self._match("C2", "b")]
+        )
+        results = make_client(web_client).search_messages(
+            "q", exclude_channels=frozenset({"C2"})
+        )
+        assert [m.text for m in results] == ["a"]
+
+    def test_dropped_matches_cost_no_name_lookup(self):
+        web_client = MagicMock()
+        no_name = {"text": "x", "ts": "1", "channel": {"id": "C9"}}
+        web_client.search_messages.return_value = self._page([no_name])
+        make_client(web_client).search_messages("q", only_channels=frozenset({"C1"}))
+        web_client.conversations_info.assert_not_called()
+
+    def test_reads_a_second_page_when_the_first_is_short_of_count(self):
+        web_client = MagicMock()
+        first = [self._match("C1", "keep")] + [self._match("C2") for _ in range(99)]
+        second = [self._match("C1", "keep2")] + [self._match("C2") for _ in range(99)]
+        web_client.search_messages.side_effect = [self._page(first, 3), self._page(second, 3)]
+        results = make_client(web_client).search_messages(
+            "q", count=2, only_channels=frozenset({"C1"})
+        )
+        assert [m.text for m in results] == ["keep", "keep2"]
+        pages = [c.kwargs["page"] for c in web_client.search_messages.call_args_list]
+        assert pages == [1, 2]
+        assert all(c.kwargs["count"] == 100 for c in web_client.search_messages.call_args_list)
+
+    def test_stops_at_the_page_cap(self, caplog):
+        web_client = MagicMock()
+        web_client.search_messages.side_effect = lambda **k: self._page(
+            [self._match("C2") for _ in range(100)], pages=10
+        )
+        with caplog.at_level("WARNING"):
+            results = make_client(web_client).search_messages(
+                "q", count=5, only_channels=frozenset({"C1"})
+            )
+        assert results == []
+        assert web_client.search_messages.call_count == 3
+        assert "filtered search stopped after 3 pages with 0 of 5 results" in caplog.text
+
+    def test_minutes_path_stops_at_a_page_older_than_the_cutoff(self):
+        web_client = MagicMock()
+        page = [self._match("C1", "new", 60)] + [
+            self._match("C1", "old", 7200) for _ in range(99)
+        ]
+        web_client.search_messages.return_value = self._page(page, pages=3)
+        results = make_client(web_client).search_messages(
+            "", minutes=60, count=50, only_channels=frozenset({"C1"})
+        )
+        assert [m.text for m in results] == ["new"]
+        web_client.search_messages.assert_called_once()
+        assert web_client.search_messages.call_args.kwargs["sort"] == "timestamp"
+
+    def test_participant_path_filters_its_result(self):
+        client = make_client(MagicMock())
+        kept, dropped = MagicMock(channel_id="D1"), MagicMock(channel_id="D2")
+        client._search_by_participant = MagicMock(return_value=[kept, dropped])
+        assert client.search_messages(participant="bob", only_channels=frozenset({"D1"})) == [kept]
+        assert client.search_messages(participant="bob", exclude_channels=frozenset({"D1"})) == [
+            dropped
+        ]
+
+    def test_unfiltered_search_makes_one_request(self):
+        web_client = MagicMock()
+        web_client.search_messages.return_value = self._page([self._match("C1")])
+        make_client(web_client).search_messages("q")
+        web_client.search_messages.assert_called_once()
+        assert "page" not in web_client.search_messages.call_args.kwargs

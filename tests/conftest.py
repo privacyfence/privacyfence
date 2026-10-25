@@ -18,6 +18,8 @@ test module -- see ``pytest_runtest_makereport`` below.
 """
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -41,8 +43,47 @@ from privacyfence import (
     upload_staging,
     web_approval_ui,
 )
-from privacyfence.web import state_stream
+from privacyfence.web import control_channel, state_stream
 from tests.diagnostics import capture_failure_diagnostics, suite_name_for
+
+
+_REQUIRE_PACKAGED = "PRIVACYFENCE_REQUIRE_PACKAGED"
+_REQUIRE_BROWSER = "PRIVACYFENCE_REQUIRE_BROWSER"
+# A browser test may skip for a reason unrelated to the browser (the docs site
+# was not built in a job without zensical); only a missing Chromium/Playwright
+# is a CI misconfiguration.
+_PACKAGED_SKIP_REASON = re.compile(
+    r"(?i)no dist/|built yet|not installed|not on PATH|missing after build|could not build"
+    r"|needs root|elevated|only meaningful|systemd|not present|chromium|playwright"
+)
+# Skips a dispatched (unsigned, un-notarized) build legitimately takes -- "is unsigned for this
+# build", "is signed but not notarized" -- match none of the above and stay skips.
+_BROWSER_SKIP_REASON = re.compile(r"(?i)chromium|playwright")
+_BROWSER_COLLECT_SKIP_REASON = re.compile(r"(?i)playwright")
+
+
+def _skip_reason(longrepr) -> str:
+    """The human-readable reason of a skipped report's ``longrepr``."""
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        return str(longrepr[2]).removeprefix("Skipped: ")
+    return str(longrepr)
+
+
+def _required_run_switch(markers, reason: str) -> str | None:
+    """The REQUIRE switch (if any) that turns this skip into a failure."""
+    if (
+        os.environ.get(_REQUIRE_PACKAGED) == "1"
+        and "packaged" in markers
+        and _PACKAGED_SKIP_REASON.search(reason)
+    ):
+        return _REQUIRE_PACKAGED
+    if (
+        os.environ.get(_REQUIRE_BROWSER) == "1"
+        and "browser" in markers
+        and _BROWSER_SKIP_REASON.search(reason)
+    ):
+        return _REQUIRE_BROWSER
+    return None
 
 
 def _reset() -> None:
@@ -66,6 +107,7 @@ def _reset() -> None:
     local_files.force_bridge_for_tests(False)
     settings_controller._main_dispatch = None
     state_stream._loop = None
+    control_channel._mint_nonces.clear()
     # privilege_separation caches the parsed marker file for
     # the life of the process (it can't change under a running daemon), so a
     # test that provisions a fake separated layout would otherwise leave that
@@ -129,6 +171,14 @@ def _reset_singletons():
 def pytest_runtest_makereport(item, call):
     rep = yield
     setattr(item, f"rep_{rep.when}", rep)
+    # An xfail also reports as skipped (with ``wasxfail``) and is not a missing prerequisite.
+    if rep.skipped and not hasattr(rep, "wasxfail"):
+        reason = _skip_reason(rep.longrepr)
+        markers = {m.name for m in item.iter_markers()}
+        name = _required_run_switch(markers, reason)
+        if name:
+            rep.outcome = "failed"
+            rep.longrepr = f"skipped while {name}=1 requires it to run: {reason}"
     if rep.when == "call" and rep.failed and (
         item.get_closest_marker("packaged") or item.get_closest_marker("system")
     ):
@@ -146,3 +196,27 @@ def pytest_runtest_makereport(item, call):
                 "rather than re-running locally.",
             ))
     return rep
+
+
+# A module-level ``pytest.skip(..., allow_module_level=True)`` or a failed
+# ``importorskip`` skips the whole module at collection, before any item (and
+# so any marker) exists -- the switches therefore apply to the collection
+# report itself: each packaged CI step runs one module, so any collection skip
+# there means the artifact or its env was not provided. This is stricter than the
+# per-test rule (which matches the reason), and is correct only while every
+# packaged step runs a single module; revisit it before a step runs several.
+@pytest.hookimpl(wrapper=True)
+def pytest_collectreport(report):
+    # Mutated before the yield so the session's own collectreport handling
+    # (which counts failed collections and aborts the run) sees the failure.
+    if report.skipped:
+        reason = _skip_reason(report.longrepr)
+        name = None
+        if os.environ.get(_REQUIRE_PACKAGED) == "1":
+            name = _REQUIRE_PACKAGED
+        elif os.environ.get(_REQUIRE_BROWSER) == "1" and _BROWSER_COLLECT_SKIP_REASON.search(reason):
+            name = _REQUIRE_BROWSER
+        if name:
+            report.outcome = "failed"
+            report.longrepr = f"skipped while {name}=1 requires it to run: {reason}"
+    return (yield)

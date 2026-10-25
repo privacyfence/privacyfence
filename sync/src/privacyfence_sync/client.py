@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx2
-from mcp import ClientSession
+from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 from mcp.types import TextContent
@@ -94,6 +94,18 @@ class SyncClient:
             return json.loads(text)
         except ValueError:
             return text
+
+    async def list_tool_names(self) -> frozenset[str]:
+        session = self._require_session()
+        names: set[str] = set()
+        cursor: str | None = None
+        while True:
+            params = types.PaginatedRequestParams(cursor=cursor) if cursor else None
+            result = await session.list_tools(params=params)
+            names.update(tool.name for tool in result.tools)
+            cursor = result.next_cursor
+            if not cursor:
+                return frozenset(names)
 
     async def download(self, url: str, dest: Path, expected_sha256: str | None) -> None:
         # The URL is the credential (ADR 0028), so this client carries no Authorization header.

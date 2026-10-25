@@ -31,7 +31,7 @@ You need two things from PrivacyFence: the MCP URL and your token. Both are on *
 clients**.
 
 1. In PrivacyFence, open **Settings → AI clients**. Note the **MCP URL**, normally
-   `http://127.0.0.1:8765/mcp`.
+   `http://localhost:8765/mcp`.
 2. Click **Copy token** there, or choose **Copy AI Client Token** in the companion's menu bar menu.
    Your token is now on the clipboard. Treat it like a password.
 3. In ChatGPT desktop, open **Settings** → **MCP servers** → **Add server**. The form is titled
@@ -152,7 +152,8 @@ Two things can ask you before a tool runs:
    [Approvals and policy](approvals-and-policy.md).
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). There is no switch that
 advertises writes as read-only ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)).
 
@@ -170,9 +171,9 @@ recognises it.
 
 That name is a **claim**: the card says the caller *says* it is that system and marks it
 **Not verified**, because any program that can reach the deployment can register under the same
-name. An administrator can **pin** ChatGPT's registration on **Settings → AI systems**, for
-example by matching its last-used time to their own sign-in from ChatGPT; the cards for that
-registration are then verified. See
+name. When the registration carries only ChatGPT's own callback
+(`https://chatgpt.com/connector/oauth/<connector id>`), PrivacyFence shows it as **Verified**
+instead, with no administrator step. See
 [Which AI system is asking](how-it-works.md#which-ai-system-is-asking) and
 [AI systems](org-mode-setup-guide.md#11-ai-systems).
 
@@ -188,7 +189,7 @@ registration are then verified. See
 | Tools are listed but none of your services' tools | No service is connected yet. Ask ChatGPT to call `privacyfence_status`, then connect services at `/connect`. See [Connecting a service](connecting-a-service.md). |
 | A call waits and nothing happens | It is waiting for your approval at `/approvals`. |
 | An upload fails after you approve it, with "the upload expired or was already used" | The deployment runs 5.0.0, and the approval waited. Ask your administrator to upgrade to 5.1.0 or later. |
-| Every card says **Not verified** | Expected until an administrator pins your registration. |
+| Every card says **Not verified** | Expected when the registration's redirect URI is not the vendor's own callback; see [AI systems](org-mode-setup-guide.md#11-ai-systems). |
 | ChatGPT desktop cannot connect to PrivacyFence | Check that PrivacyFence is running, that the URL matches **Settings → AI clients**, and that the header value is `Bearer ` followed by the token. After **Rotate token**, paste the new token. |
 | **Copy token** says the companion is not running | Start PrivacyFence's companion app, or run `--print-mcp-token` in a terminal (see [Connect Claude Code](connect-claude-code.md#local-mode)). |
 

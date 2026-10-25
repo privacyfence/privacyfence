@@ -11,8 +11,6 @@ import sys
 
 import pytest
 
-pytest.importorskip("cryptography")
-
 from privacyfence import org_bundle_signing as obs
 
 
@@ -196,3 +194,156 @@ class TestPinnedPublicKeyFile:
         trust = obs.verify_and_maybe_pin(second, tmp_path)
         assert trust.ok
         assert trust.newly_pinned
+
+
+class TestBundleSerial:
+    """The serial pin (SEC-A7): a validly signed bundle older than one this
+    install has already accepted is a rollback and is refused."""
+
+    @staticmethod
+    def _accept(bundle_key_pair, serial, tmp_path):
+        signed, key = _signed({"org_name": "Acme", "serial": serial}, bundle_key_pair)
+        trust = obs.verify_and_maybe_pin(signed, tmp_path)
+        obs.record_accepted_serial(trust, tmp_path)
+        return trust, key
+
+    def test_a_lower_serial_than_the_pinned_one_is_refused_as_a_rollback(self, tmp_path):
+        key, _ = obs.generate_keypair()
+        self._accept(key, 200, tmp_path)
+
+        older, _ = _signed({"org_name": "Acme", "serial": 100}, key)
+        trust = obs.verify_and_maybe_pin(older, tmp_path)
+
+        assert not trust.ok
+        assert trust.remedy == "serial"
+        assert "rollback refused" in trust.detail
+        assert "serial 100 is older than serial 200" in trust.detail
+
+    def test_the_same_serial_is_accepted_on_reload(self, tmp_path):
+        key, _ = obs.generate_keypair()
+        self._accept(key, 200, tmp_path)
+
+        again, _ = _signed({"org_name": "Acme", "serial": 200}, key)
+        trust = obs.verify_and_maybe_pin(again, tmp_path)
+
+        assert trust.ok
+        assert trust.serial == 200
+
+    def test_a_bundle_without_a_serial_is_refused_once_a_serial_is_pinned(self, tmp_path):
+        key, _ = obs.generate_keypair()
+        self._accept(key, 200, tmp_path)
+
+        serial_less, _ = _signed({"org_name": "Acme"}, key)
+        trust = obs.verify_and_maybe_pin(serial_less, tmp_path)
+
+        assert not trust.ok
+        assert trust.remedy == "serial"
+        assert trust.detail == "this bundle carries no serial, but this install has already accepted serial 200"
+
+    def test_a_bundle_without_a_serial_is_accepted_while_none_is_pinned(self, tmp_path):
+        signed, _ = _signed({"org_name": "Acme"})
+
+        trust = obs.verify_and_maybe_pin(signed, tmp_path)
+
+        assert trust.ok
+        assert trust.serial is None
+        obs.record_accepted_serial(trust, tmp_path)
+        assert not obs.pinned_serial_path(tmp_path).exists()
+
+    @pytest.mark.parametrize("bad", [True, False, 0, -5, "7", 1.5])
+    @pytest.mark.parametrize("pinned_first", [False, True])
+    def test_a_boolean_or_non_positive_serial_is_refused_with_no_remedy(self, tmp_path, bad, pinned_first):
+        key, _ = obs.generate_keypair()
+        if pinned_first:
+            self._accept(key, 5, tmp_path)
+
+        signed, _ = _signed({"org_name": "Acme", "serial": bad}, key)
+        trust = obs.verify_and_maybe_pin(signed, tmp_path)
+
+        assert not trust.ok
+        assert trust.remedy == "none"
+        assert trust.detail == "serial is not a positive integer"
+
+    @pytest.mark.parametrize("content", ["abc\n", "0\n", "-3\n", "", "٣\n"])
+    def test_an_unreadable_serial_pin_fails_closed_with_the_serial_remedy(self, tmp_path, content):
+        key, _ = obs.generate_keypair()
+        self._accept(key, 5, tmp_path)
+        obs.pinned_serial_path(tmp_path).write_text(content, encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            obs.load_pinned_serial(tmp_path)
+        signed, _ = _signed({"org_name": "Acme", "serial": 9}, key)
+        trust = obs.verify_and_maybe_pin(signed, tmp_path)
+
+        assert not trust.ok
+        assert trust.remedy == "serial"
+        assert trust.detail == "the pinned serial file is unreadable"
+
+    def test_a_pin_path_that_cannot_be_read_fails_closed(self, tmp_path):
+        obs.pinned_serial_path(tmp_path).mkdir()
+
+        with pytest.raises(ValueError, match="cannot read"):
+            obs.load_pinned_serial(tmp_path)
+
+    def test_a_rollback_bundle_with_a_new_key_does_not_pin_the_key(self, tmp_path):
+        key, _ = obs.generate_keypair()
+        self._accept(key, 200, tmp_path)
+        obs.pinned_public_key_path(tmp_path).unlink()  # key rotation, serial pin kept
+
+        older, _ = _signed({"org_name": "Acme", "serial": 100})  # new key, older serial
+        trust = obs.verify_and_maybe_pin(older, tmp_path)
+
+        assert not trust.ok
+        assert "rollback refused" in trust.detail
+        assert obs.load_pinned_public_key(tmp_path) is None
+
+    def test_a_first_signed_bundle_with_a_serial_pins_the_key_and_reports_the_serial(self, tmp_path):
+        signed, _ = _signed({"org_name": "Acme", "serial": 7})
+
+        trust = obs.verify_and_maybe_pin(signed, tmp_path)
+
+        assert trust.ok and trust.newly_pinned
+        assert trust.serial == 7
+        assert not obs.pinned_serial_path(tmp_path).exists()  # recording is the caller's job
+
+    def test_record_accepted_serial_only_raises_the_pin(self, tmp_path):
+        record = obs.record_accepted_serial
+        record(obs.BundleTrust(ok=True, detail="", serial=10), tmp_path)
+        assert obs.load_pinned_serial(tmp_path) == 10
+        record(obs.BundleTrust(ok=True, detail="", serial=5), tmp_path)
+        assert obs.load_pinned_serial(tmp_path) == 10
+        record(obs.BundleTrust(ok=True, detail="", serial=20), tmp_path)
+        assert obs.load_pinned_serial(tmp_path) == 20
+        assert obs.pinned_serial_path(tmp_path).read_text(encoding="utf-8") == "20\n"
+        record(obs.BundleTrust(ok=False, detail="", serial=99), tmp_path)
+        record(obs.BundleTrust(ok=True, detail="", serial=None), tmp_path)
+        assert obs.load_pinned_serial(tmp_path) == 20
+
+    def test_record_accepted_serial_swallows_a_write_error(self, tmp_path, monkeypatch, caplog):
+        def boom(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(obs, "atomic_write_text", boom)
+
+        obs.record_accepted_serial(obs.BundleTrust(ok=True, detail="", serial=3), tmp_path)
+
+        assert "Could not record the accepted organization config serial" in caplog.text
+        assert obs.load_pinned_serial(tmp_path) is None
+
+    def test_record_accepted_serial_swallows_an_unreadable_pin(self, tmp_path, caplog):
+        obs.pinned_serial_path(tmp_path).write_text("junk", encoding="utf-8")
+
+        obs.record_accepted_serial(obs.BundleTrust(ok=True, detail="", serial=3), tmp_path)
+
+        assert "Could not record the accepted organization config serial" in caplog.text
+
+    def test_deleting_the_serial_pin_allows_an_older_bundle(self, tmp_path):
+        key, _ = obs.generate_keypair()
+        self._accept(key, 200, tmp_path)
+        obs.pinned_serial_path(tmp_path).unlink()
+
+        older, _ = _signed({"org_name": "Acme", "serial": 100}, key)
+        trust = obs.verify_and_maybe_pin(older, tmp_path)
+
+        assert trust.ok
+        assert trust.serial == 100

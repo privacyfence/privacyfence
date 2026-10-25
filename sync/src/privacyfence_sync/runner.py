@@ -8,6 +8,7 @@ import contextlib
 import csv
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any, TextIO
@@ -16,10 +17,21 @@ from urllib.parse import urlparse
 import httpx2
 
 from . import refs
-from .client import RecipeRuntimeError, SyncClient, SyncError, ToolDenied, ToolFailed
-from .recipe import DOWNLOAD_TOOLS, EXPORT_TOOLS, Recipe, RunStep, TemplateStep, ToolStep, produced_files
+from .client import RecipeRuntimeError, SignInError, SyncClient, SyncError, ToolDenied, ToolFailed
+from .recipe import (
+    DOWNLOAD_TOOLS,
+    EXPORT_TOOLS,
+    MAX_TRIGGER_TEXT,
+    Recipe,
+    RunStep,
+    TemplateStep,
+    ToolStep,
+    TriggerStep,
+    produced_files,
+)
 from .template import render_template
 from .transform import StopRun, run_script
+from .trigger import fire
 
 _FETCH_PATH = "/mcp-files/fetch/"
 _APPROVAL_POLLS = 8
@@ -30,8 +42,16 @@ _UNATTENDED_DISABLED = (
 )
 
 
-async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out: TextIO) -> bool:
-    """True when every step ran, False when a script step stopped the run (exit 10)."""
+async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out: TextIO) -> str | None:
+    """The id of the step that stopped the run (a script exited 10), or None when every step ran."""
+    tokens: dict[str, str] = {}
+    for step in recipe.steps:
+        if isinstance(step, TriggerStep):
+            tokens[step.id] = os.environ.get(step.token_env, "")
+            if not tokens[step.id]:
+                raise SignInError(
+                    f"step {step.id}: ${step.token_env} is empty; store the scheduled task's API token in it"
+                )
     work_dir = recipe.work_dir
     work_dir.mkdir(parents=True, exist_ok=True)
     session_reason = f"privacyfence-sync {recipe.name}"
@@ -41,14 +61,16 @@ async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out:
         except ToolFailed:
             raise SyncError(_UNATTENDED_DISABLED) from None
     try:
-        return await _run_steps(recipe, client, attended, out)
+        return await _run_steps(recipe, client, attended, out, tokens)
     finally:
         if not attended:
             with contextlib.suppress(Exception):
                 await client.call("privacyfence_end_unattended_session", {"reason": f"{session_reason}: run finished"})
 
 
-async def _run_steps(recipe: Recipe, client: SyncClient, attended: bool, out: TextIO) -> bool:
+async def _run_steps(
+    recipe: Recipe, client: SyncClient, attended: bool, out: TextIO, tokens: dict[str, str]
+) -> str | None:
     work_dir = recipe.work_dir
     files: dict[str, Path] = {}
 
@@ -65,16 +87,18 @@ async def _run_steps(recipe: Recipe, client: SyncClient, attended: bool, out: Te
                 await _tool_step(recipe, step, client, files, read_json, attended, out)
             elif isinstance(step, RunStep):
                 await _run_step(recipe, step, files, read_json, out)
+            elif isinstance(step, TriggerStep):
+                await _trigger_step(step, tokens[step.id], read_json, out)
             else:
                 _template_step(recipe, step, files, read_json)
         except StopRun:
             out.write(f"[{step.id}] nothing to do, run stopped\n")
-            return False
+            return step.id
         except refs.RefError as exc:
             raise RecipeRuntimeError(f"step {step.id}: {exc}") from None
         for ref, relative in produced_files(step).items():
             files[ref] = (work_dir / relative).absolute()
-    return True
+    return None
 
 
 async def _run_step(recipe: Recipe, step: RunStep, files: dict[str, Path], read_json: Any, out: TextIO) -> None:
@@ -94,13 +118,27 @@ async def _run_step(recipe: Recipe, step: RunStep, files: dict[str, Path], read_
     await asyncio.to_thread(run_script, step, argv, work_dir)
 
 
+async def _trigger_step(step: TriggerStep, token: str, read_json: Any, out: TextIO) -> None:
+    text = step.text
+    if text is not None:
+        filled = refs.substitute_value_refs(text, read_json)
+        text = filled if isinstance(filled, str) else json.dumps(filled, ensure_ascii=False)
+        if len(text) > MAX_TRIGGER_TEXT:
+            raise RecipeRuntimeError(
+                f"step {step.id}: text is longer than 65,536 characters once its references are filled in"
+            )
+    url = await fire(step.id, step.trigger, step.token_env, token, text)
+    suffix = f": {url}" if url else ""
+    out.write(f"[{step.id}] started scheduled task {step.trigger}{suffix}\n")
+
+
 def _template_step(recipe: Recipe, step: TemplateStep, files: dict[str, Path], read_json: Any) -> None:
     template_text = step.template.read_text(encoding="utf-8")
     page = render_template(template_text, read_json(step.data))
     (recipe.work_dir / step.output).write_text(page, encoding="utf-8")
 
 
-def _json_text_args(args: dict[str, Any]) -> dict[str, Any]:
+def json_text_args(args: dict[str, Any]) -> dict[str, Any]:
     return {k: json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v for k, v in args.items()}
 
 
@@ -115,14 +153,14 @@ async def _tool_step(
 ) -> None:
     work_dir = recipe.work_dir
     reason = step.reason or f"privacyfence-sync {recipe.name}: step {step.id}"
-    args = _json_text_args(refs.substitute_value_refs(step.args, read_json))
+    args = json_text_args(refs.substitute_value_refs(step.args, read_json))
     args["reason"] = reason
     result: Any
 
     if step.tool in EXPORT_TOOLS:
         args["destination_dir"] = str(work_dir)
         result = await _call(client, step, step.tool, args, attended, out)
-        await _receive_file(step, result, work_dir / str(step.args["file_name"]), client)
+        await _receive_file(step, result, work_dir / str(step.args["file_name"]), client, work_dir)
         return
     if step.tool in DOWNLOAD_TOOLS:
         holder = work_dir / f".download-{step.id}"
@@ -130,7 +168,7 @@ async def _tool_step(
         args["destination_dir"] = str(holder)
         try:
             result = await _call(client, step, step.tool, args, attended, out)
-            await _receive_file(step, result, work_dir / str(step.save_as), client)
+            await _receive_file(step, result, work_dir / str(step.save_as), client, work_dir)
         finally:
             shutil.rmtree(holder, ignore_errors=True)
         return
@@ -191,12 +229,14 @@ async def _call(
     return await client.call(tool, args)
 
 
-async def _receive_file(step: ToolStep, result: Any, dest: Path, client: SyncClient) -> None:
+async def _receive_file(step: ToolStep, result: Any, dest: Path, client: SyncClient, work_dir: Path) -> None:
     delivery = result.get("delivery") if isinstance(result, dict) else None
     if delivery == "local_disk" or (delivery is None and isinstance(result, dict) and result.get("path")):
         if result.get("truncated"):
             raise SyncError(f"step {step.id}: the download was truncated")
         written = Path(result["path"])
+        if written.is_symlink() or not written.resolve().is_relative_to(work_dir.resolve()):
+            raise SyncError(f"step {step.id}: the server named a file outside the work folder")
         if written != dest:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(written), dest)

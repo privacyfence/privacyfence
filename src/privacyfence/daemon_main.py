@@ -32,6 +32,9 @@ Threading model:
     web server's event loop is known, refreshing Slack/Telegram directory
     caches if they've gone stale -- see _warm_connector_caches(). Kept off
     the main thread so a large workspace/account doesn't delay startup.
+  - Personal data sweep: a background thread erasing Atlassian user-cache
+    entries that missed their personal data report, at startup and every
+    few hours -- see _run_personal_data_sweep().
 
 Configuration is split into two files (see paths.py):
   - ``org/org_config.json``    — organization-level app registrations (Google
@@ -131,6 +134,7 @@ from .secure_files import (
     audit_directory_permissions,
 )
 from .connectors.apps_script import AppsScriptConnector
+from .connectors.assets import AssetsConnector
 from .connectors.calendar import CalendarConnector
 from .connectors.confluence import ConfluenceConnector
 from .connectors.contacts import ContactsConnector
@@ -144,11 +148,12 @@ from .connectors.tasks import TasksConnector
 from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
-from .atlassian_oauth import AtlassianOAuthError
-from .atlassian_users import AtlassianUserDirectory
+from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override, scopes_for
+from .atlassian_users import AtlassianUserDirectory, erase_overdue_caches
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
 from .calendar_client import CalendarClient, CalendarClientError
+from .assets_client import AssetsClient, AssetsClientError
 from .confluence_client import ConfluenceClient, ConfluenceClientError
 from .connector_host import ConnectorHost
 from .contacts_client import ContactsClient, ContactsClientError
@@ -290,6 +295,23 @@ def _run_update_check_timer(controller: Any) -> None:
     while True:
         controller.on_update_check_timer()
         if _shutdown_event.wait(UPDATE_CHECK_TIMER_INTERVAL_SECONDS):
+            return
+
+
+PERSONAL_DATA_SWEEP_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+def _run_personal_data_sweep() -> None:
+    """Erase the Atlassian user-cache entries that missed their personal data report (ADR 0202)
+    once at startup, then every PERSONAL_DATA_SWEEP_INTERVAL_SECONDS until shutdown. It reads the
+    cache files themselves, so it also covers organization-server users whose connectors are not
+    built and who therefore report nothing."""
+    while True:
+        try:
+            erase_overdue_caches(data_dir())
+        except Exception as exc:
+            logger.warning("Atlassian personal data sweep failed (will retry): %s", exc)
+        if _shutdown_event.wait(PERSONAL_DATA_SWEEP_INTERVAL_SECONDS):
             return
 
 
@@ -463,6 +485,16 @@ def load_org_config() -> dict[str, Any]:
 
     trust = org_bundle_signing.verify_and_maybe_pin(data, org_dir())
     if not trust.ok:
+        if trust.remedy == "serial":
+            raise org_mode.ConfigurationError(
+                f"Organization config at {path} was refused ({trust.detail}) -- refusing to start. "
+                f"To deliberately go back to an older bundle, an administrator must delete "
+                f"{org_bundle_signing.pinned_serial_path(org_dir())} first."
+            )
+        if trust.remedy == "none":
+            raise org_mode.ConfigurationError(
+                f"Organization config at {path} was refused ({trust.detail}) -- refusing to start."
+            )
         raise org_mode.ConfigurationError(
             f"Organization config at {path} failed signing-key verification ({trust.detail}) -- "
             f"refusing to start. If a legitimate signing-key rotation is expected, an "
@@ -481,6 +513,7 @@ def load_org_config() -> dict[str, Any]:
             "requires a signed bundle (build one with scripts/build_org_bundle.py --sign-key ...; "
             "generate a signing key first with --generate-signing-key if you haven't yet)."
         )
+    org_bundle_signing.record_accepted_serial(trust, org_dir())
     return data
 
 
@@ -1533,6 +1566,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     atlassian_users = AtlassianUserDirectory(
         cache_file=str(user_dir() / "atlassian_user_cache.json"),
         cloud_id=atlassian_config.get("cloud_id", ""),
+        background_reports=True,
     )
 
     if enabled("jira"):
@@ -1547,9 +1581,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 user_directory=atlassian_users,
             )
             info = jira_client.check_connection()
+            if jira_client.account_id:
+                atlassian_config["account_id"] = jira_client.account_id
             logger.info("Jira connector ready: %s", info)
             jira_connector = JiraConnector(jira_client)
             jira_connector.my_email = atlassian_token.get("account_email", "")
+            jira_connector.my_account_id = jira_client.account_id
             jira_connector.download_mode = download_mode
             jira_connector.download_config = download_config
             jira_connector.download_base_url = download_base_url
@@ -1573,6 +1610,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Confluence connector ready: %s", url)
             confluence_connector = ConfluenceConnector(confluence_client)
             confluence_connector.my_email = atlassian_token.get("account_email", "")
+            confluence_connector.my_account_id = confluence_client.account_id
             confluence_connector.download_mode = download_mode
             confluence_connector.download_config = download_config
             confluence_connector.download_base_url = download_base_url
@@ -1581,6 +1619,30 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.warning("Confluence connector disabled: %s", exc)
             failures["confluence"] = _classify_connector_failure(exc)
 
+    # Jira Assets — off unless switched on (connectors.assets.enabled, else the
+    # bundle's atlassian.assets), so it is guarded by assets_enabled(), not enabled().
+    if assets_enabled(config, org_config):
+        try:
+            if not atlassian_org.get("client_id"):
+                raise AssetsClientError("Atlassian organization config not installed")
+            if not atlassian_token:
+                raise AssetsClientError("Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+            assets_client = AssetsClient(
+                config={**atlassian_config, **assets_workspace_override(config)},
+                token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+            )
+            assets_client.check_connection()
+            logger.info("Jira Assets connector ready")
+            assets_connector = AssetsConnector(assets_client)
+            assets_connector.my_email = atlassian_token.get("account_email", "")
+            assets_connector.download_mode = download_mode
+            assets_connector.download_config = download_config
+            assets_connector.download_base_url = download_base_url
+            connectors.append(assets_connector)
+        except (AssetsClientError, FileNotFoundError) as exc:
+            logger.warning("Jira Assets connector disabled: %s", exc)
+            failures["assets"] = _classify_connector_failure(exc)
+
     # Telegram — the sole exception to browser OAuth (MTProto has no
     # equivalent for full user-session access). api_id/api_hash identify the
     # PrivacyFence app itself and are baked into the build (app_credentials.py),
@@ -1588,6 +1650,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     # still per-user.
     if enabled("telegram"):
         try:
+            if not org_mode.connector_enabled_by_org(org_config, "telegram"):
+                raise TelegramClientError("Telegram organization config not installed")
             creds = telegram_app_credentials()
             if not creds:
                 raise TelegramClientError("Telegram app credentials not available in this build")
@@ -1620,6 +1684,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     # server it was issued for (ADR 0152).
     if enabled("peek"):
         try:
+            if not org_mode.connector_enabled_by_org(org_config, "peek"):
+                raise PeekClientError("Peek organization config not installed")
             pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=download_mode == "org")
             record = load_peek_token(_resolve_path(TOKEN_FILES["peek"]))
             client = PeekClient(peek_resolve_server(pinned, record), record["token"])
@@ -1633,6 +1699,8 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     # Grist
     if enabled("grist"):
         try:
+            if not org_mode.connector_enabled_by_org(org_config, "grist"):
+                raise GristClientError("Grist organization config not installed")
             grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=download_mode == "org")
             token_path = _resolve_path(TOKEN_FILES["grist"])
             server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)
@@ -1874,7 +1942,7 @@ def _cli_pick_atlassian_resource(resources: list[dict[str, Any]]) -> dict[str, A
         print("Invalid choice, try again.")
 
 
-def run_atlassian_oauth(org_config: dict[str, Any]) -> int:
+def run_atlassian_oauth(org_config: dict[str, Any], config: dict[str, Any] | None = None) -> int:
     atlassian_org = org_config.get("atlassian") or {}
     if not atlassian_org.get("client_id") or not atlassian_org.get("client_secret"):
         print("No Atlassian organization config installed.", file=sys.stderr)
@@ -1884,6 +1952,7 @@ def run_atlassian_oauth(org_config: dict[str, Any]) -> int:
             client_id=atlassian_org["client_id"],
             client_secret=atlassian_org["client_secret"],
             token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+            scopes=scopes_for(assets=assets_enabled(config or {}, org_config)),
             pick_resource=_cli_pick_atlassian_resource,
         )
     except AtlassianOAuthError as exc:
@@ -2081,6 +2150,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     threading.Thread(
         target=_run_update_check_timer, args=(settings_controller,),
         name="update-check-timer", daemon=True,
+    ).start()
+    threading.Thread(
+        target=_run_personal_data_sweep, name="atlassian-personal-data-sweep", daemon=True,
     ).start()
 
     try:
@@ -2421,7 +2493,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.salesforce_oauth:
                 return run_salesforce_oauth(org_config)
             if args.atlassian_oauth:
-                return run_atlassian_oauth(org_config)
+                return run_atlassian_oauth(org_config, config)
             if args.grist_oauth:
                 return run_grist_oauth(org_config)
             if args.telegram_setup:

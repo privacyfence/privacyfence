@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -15,6 +17,7 @@ from mcp.shared.exceptions import MCPError
 
 from privacyfence_sync import cli
 from privacyfence_sync.auth import FileTokenStorage, storage_path
+from privacyfence_sync.transform import script_env
 from privacyfence_sync.client import SignInError, SyncError, ToolDenied, ToolFailed
 
 
@@ -25,6 +28,10 @@ class FakeSession:
         self.results = results or {}
         self.enter_error = enter_error
         self.calls: list[str] = []
+        self.tool_names: frozenset[str] = frozenset()
+
+    async def list_tool_names(self) -> frozenset[str]:
+        return self.tool_names
 
     async def __aenter__(self) -> FakeSession:
         if self.enter_error is not None:
@@ -150,19 +157,34 @@ def test_token_env_names_another_variable(
     assert cli.main(["run", simple(write_recipe), "--token-env", "MY_TOKEN"]) == 0
 
 
+def test_custom_token_env_is_hidden_from_scripts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MY_TOKEN", "t")
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "connect_token", lambda server, token: seen.append(token) or FakeSession())
+    cli._connect("http://x/mcp", "MY_TOKEN")
+    assert seen == ["t"]
+    assert "MY_TOKEN" not in os.environ
+    assert "MY_TOKEN" not in script_env()
+
+
 def test_server_resolution_order(write_recipe: RecipeWriter, daemon: Daemon, monkeypatch: pytest.MonkeyPatch) -> None:
     servers = daemon.servers
+
+    def main(*argv: str) -> int:
+        monkeypatch.setenv("PRIVACYFENCE_TOKEN", "secret-token")  # a run takes the token out of the environment
+        return cli.main(list(argv))
+
     plain = simple(write_recipe)
 
-    assert cli.main(["run", plain]) == 0
+    assert main("run", plain) == 0
     assert servers[-1] == "http://127.0.0.1:8765/mcp"
     monkeypatch.setenv("PRIVACYFENCE_MCP_URL", "http://env/mcp")
-    assert cli.main(["run", plain]) == 0
+    assert main("run", plain) == 0
     assert servers[-1] == "http://env/mcp"
     with_server = simple(write_recipe, server="http://recipe/mcp")
-    assert cli.main(["run", with_server]) == 0
+    assert main("run", with_server) == 0
     assert servers[-1] == "http://recipe/mcp"
-    assert cli.main(["run", with_server, "--server", "http://flag/mcp"]) == 0
+    assert main("run", with_server, "--server", "http://flag/mcp") == 0
     assert servers[-1] == "http://flag/mcp"
 
 
@@ -284,3 +306,171 @@ def test_running_the_module_exits_with_main_status(
         runpy.run_module("privacyfence_sync.cli", run_name="__main__")
     assert caught.value.code == 0
     assert "OK" in capsys.readouterr().out
+
+
+_META = {
+    "privacyfence_status",
+    "privacyfence_check_policy",
+    "privacyfence_create_upload_slot",
+    "privacyfence_begin_unattended_session",
+    "privacyfence_end_unattended_session",
+}
+
+
+def test_preflight_ok_exits_0(write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]) -> None:
+    daemon.session.tool_names = frozenset(_META | {"drive_list_files"})
+    daemon.session.results["privacyfence_check_policy"] = {"gate": "auto"}
+    assert cli.main(["preflight", simple(write_recipe)]) == 0
+    assert "preflight: 1 step(s) checked, 0 problem(s)" in capsys.readouterr().out
+    assert "privacyfence_end_unattended_session" in daemon.session.calls
+
+
+def test_preflight_problem_exits_3(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["preflight", simple(write_recipe), "--attended"]) == 3
+    captured = capsys.readouterr()
+    assert "NOT AVAILABLE" in captured.out and captured.err == ""
+
+
+def test_preflight_without_token_exits_4(
+    write_recipe: RecipeWriter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("PRIVACYFENCE_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
+    assert cli.main(["preflight", simple(write_recipe)]) == 4
+    assert "privacyfence-sync login" in capsys.readouterr().err
+
+
+def test_preflight_unwraps_task_group_errors(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.enter_error = ExceptionGroup("tg", [SignInError("expired")])
+    assert cli.main(["preflight", simple(write_recipe)]) == 4
+    assert capsys.readouterr().err == "privacyfence-sync: expired\n"
+
+
+def test_preflight_help_mentions_attended(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["preflight", "--help"]) == 0
+    assert "--attended" in capsys.readouterr().out
+
+
+def read_result(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def test_result_file_ok(write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path) -> None:
+    result = tmp_path / "out" / "result.json"
+    result.parent.mkdir()
+    assert cli.main(["run", simple(write_recipe), "--result-file", str(result)]) == 0
+    document = read_result(result)
+    assert document["outcome"] == "ok" and document["recipe"] == "demo"
+    assert document["exit_code"] == 0 and document["stopped_at_step"] is None
+
+
+def test_result_file_no_change(write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path) -> None:
+    recipe = write_recipe([{"id": "s", "run": "scripts/stop.py"}, {"id": "after", "tool": "drive_list_files"}])
+    (tmp_path / "scripts" / "stop.py").write_text("import sys\nsys.exit(10)\n")
+    result = tmp_path / "result.json"
+    assert cli.main(["run", str(recipe), "--result-file", str(result)]) == 0
+    document = read_result(result)
+    assert document["outcome"] == "no_change" and document["stopped_at_step"] == "s"
+    assert document["exit_code"] == 0
+
+
+def test_result_file_denied(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session = FakeSession({"drive_list_files": ToolDenied("Request denied: no rule")})
+    result = tmp_path / "result.json"
+    assert cli.main(["run", simple(write_recipe), "--result-file", str(result)]) == 3
+    document = read_result(result)
+    assert document["outcome"] == "denied" and document["exit_code"] == 3
+    assert "Request denied" not in result.read_text(encoding="utf-8")
+    assert capsys.readouterr().err == "privacyfence-sync: Request denied: no rule\n"
+
+
+def test_result_file_for_a_bad_recipe(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    recipe = write_recipe([{"id": "one", "tool": "drive_list_files", "bogus": 1}])
+    result = tmp_path / "result.json"
+    assert cli.main(["run", str(recipe), "--result-file", str(result)]) == 1
+    document = read_result(result)
+    assert document["outcome"] == "recipe_error" and document["recipe"] is None
+
+
+def test_unwritable_result_file_keeps_the_exit_code(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = tmp_path / "missing-folder" / "result.json"
+    assert cli.main(["run", simple(write_recipe), "--result-file", str(result)]) == 0
+    assert capsys.readouterr().err.startswith("privacyfence-sync: could not write the result file: ")
+
+
+def test_unexpected_error_propagates_and_writes_no_result_file(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path
+) -> None:
+    daemon.session = FakeSession({"drive_list_files": RuntimeError("bug")})
+    result = tmp_path / "result.json"
+    with pytest.raises(RuntimeError):
+        cli.main(["run", simple(write_recipe), "--result-file", str(result)])
+    assert not result.exists()
+
+
+def test_permissions_exits_0_when_rules_are_needed(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.tool_names = frozenset(_META | {"drive_list_files"})
+    daemon.session.results["privacyfence_check_policy"] = {"verdict": "requires_review", "suggested_rules": []}
+    assert cli.main(["permissions", simple(write_recipe), "--json"]) == 0
+    assert '"status": "needs_rule"' in capsys.readouterr().out
+    assert "privacyfence_begin_unattended_session" not in daemon.session.calls
+
+
+def test_permissions_denied_status_exits_4(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon.session.results["privacyfence_status"] = ToolDenied("no")
+    assert cli.main(["permissions", simple(write_recipe)]) == 4
+    assert "revoked or has expired" in capsys.readouterr().err
+
+
+def test_permissions_unwraps_task_group_errors(
+    write_recipe: RecipeWriter, daemon: Daemon, capsys: pytest.CaptureFixture[str]
+) -> None:
+    group = ExceptionGroup("unhandled errors in a TaskGroup", [SignInError("expired")])
+    daemon.session.results["privacyfence_status"] = group
+    assert cli.main(["permissions", simple(write_recipe)]) == 4
+
+
+def test_permissions_bad_recipe_exits_1(write_recipe: RecipeWriter, capsys: pytest.CaptureFixture[str]) -> None:
+    recipe = write_recipe([{"id": "one", "tool": "drive_list_files", "bogus": 1}])
+    assert cli.main(["permissions", str(recipe)]) == 1
+    assert "unknown key bogus" in capsys.readouterr().err
+
+
+def trigger_recipe(write_recipe: RecipeWriter) -> str:
+    step = {"id": "go", "trigger": "trig_abc", "token_env": "PRIVACYFENCE_TRIGGER_X"}
+    return str(write_recipe([{"id": "one", "tool": "drive_list_files"}, step]))
+
+
+def test_result_file_for_a_missing_trigger_token(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PRIVACYFENCE_TRIGGER_X", raising=False)
+    result = tmp_path / "result.json"
+    assert cli.main(["run", trigger_recipe(write_recipe), "--result-file", str(result)]) == 4
+    assert read_result(result)["outcome"] == "not_signed_in"
+    assert daemon.session.calls == []
+
+
+def test_result_file_for_a_failed_trigger(
+    write_recipe: RecipeWriter, daemon: Daemon, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing(*_: object) -> str | None:
+        raise SyncError("step go: Claude answered HTTP 500 when starting scheduled task trig_abc")
+
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "tok")
+    monkeypatch.setattr("privacyfence_sync.runner.fire", failing)
+    result = tmp_path / "result.json"
+    assert cli.main(["run", trigger_recipe(write_recipe), "--result-file", str(result)]) == 2
+    assert read_result(result)["outcome"] == "failed"

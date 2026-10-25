@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import httpx2
 import pytest
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from privacyfence_sync import client as client_mod
 from privacyfence_sync.client import (
@@ -181,3 +181,17 @@ async def test_failed_initialize_closes_the_transport(monkeypatch: pytest.Monkey
     with pytest.raises(ValueError):
         await connect_token("http://x/mcp", "tok").__aenter__()
     assert log[-2:] == ["exit session", "exit stream"]
+
+
+async def test_list_tool_names_follows_every_page() -> None:
+    client = SyncClient("http://x/mcp", None, {})
+    session = AsyncMock()
+    session.list_tools.side_effect = [
+        ListToolsResult(tools=[Tool(name="a", inputSchema={})], nextCursor="c2"),
+        ListToolsResult(tools=[Tool(name="b", inputSchema={})]),
+    ]
+    client._session = session
+    assert await client.list_tool_names() == frozenset({"a", "b"})
+    first, second = session.list_tools.await_args_list
+    assert first.kwargs == {"params": None}
+    assert second.kwargs["params"].cursor == "c2"

@@ -42,14 +42,15 @@ can get it rate-limited or blocked for every user of the build.
 | Local redirect | None — Telegram does not use a browser redirect |
 | Org redirect | None |
 | Scopes | None — the session has your account's full access; PrivacyFence's tools and approvals decide what is used |
-| Bundle flags | None — Telegram is not part of `org_config.json` |
+| Bundle flags | `--enable-telegram` (writes `telegram.enabled`; no secret) |
 | Where the session is stored | `credentials/telegram.session` in PrivacyFence's data folder (see [platform-support.md](platform-support.md)); on an organization server, in each user's own folder on the server |
 
 ## Build and distribute the bundle
 
-Nothing to add. Telegram is available on every install that carries the app credentials, with or
-without an organization config bundle, and on an organization server without any Telegram-specific
-setup.
+Add `--enable-telegram` to `build_org_bundle.py` (with `--merge` to extend an existing bundle). It
+writes a bare `telegram` section with no secret in it; without that section Telegram is neither
+listed in Settings nor offered on `/connect`, on any install, even one that carries the app
+credentials ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
 
 ## Users connect
 

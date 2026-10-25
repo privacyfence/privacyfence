@@ -48,8 +48,10 @@ a user name, password, query or fragment. A path prefix is kept.
 `--peek-base-url URL` writes the `peek.base_url` entry of the organization config bundle (see
 [Configuration reference](configuration-reference.md#build-options)). In local mode it pins the
 server, so people do not type it; a token saved for another server stops working and asks to
-connect again. Organization mode offers Peek only when the bundle has it. Peek needs no other
-entry: there is no callback URL and no client secret.
+connect again. Organization mode offers Peek only when the bundle has it. Without a `peek` section,
+in either mode, Peek is not listed at all; `--enable-peek` writes the bare switch for local mode when
+you do not want to pin a server ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
+Peek needs no other entry: there is no callback URL and no client secret.
 
 ## What the assistant can do
 

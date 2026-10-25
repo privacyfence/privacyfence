@@ -19,7 +19,24 @@ from ..salesforce_client import (
     ReportFilter,
     SalesforceClient,
     SalesforceClientError,
+    SalesforceField,
+    SalesforceObjectNotFoundError,
+    SalesforceWriteError,
+    SalesforceWriteUncertainError,
+    _validate_object_type_name,
+    _validate_salesforce_id,
     report_page_info,
+)
+from ..salesforce_writes import (
+    cell_text,
+    field_index,
+    key_norm,
+    key_text,
+    parse_fields_object,
+    parse_records,
+    resolve_fields,
+    resolve_key_field,
+    values_differ,
 )
 
 logger = logging.getLogger(__name__)
@@ -171,6 +188,18 @@ _FILTERS_SHAPE_ERROR = (
 )
 
 
+class SalesforceWriteRefusedError(RuntimeError):
+    """Salesforce refused an approved write and saved nothing. Shown to the model verbatim: it
+    carries Salesforce's status codes, field API names and messages cut to 200 characters,
+    which the caller needs to fix a validation-rule failure."""
+
+
+class SalesforceWriteUnconfirmedError(RuntimeError):
+    """An approved write got no clear answer from Salesforce (a 5xx or a dropped connection), so
+    it may or may not have been saved. Shown to the model verbatim, so that it checks the
+    records instead of writing again; it never carries Salesforce's own text."""
+
+
 def _page_rows_text(info: dict) -> str:
     """The card's "Rows" line for one page of a paged report read."""
     number = info["number"]
@@ -264,6 +293,11 @@ _PAGE_BY_DESCRIPTION = (
     "page in order of this column; a grouped report is read as one flat "
     "table. Leave empty for one run as saved."
 )
+_FIELDS_DESCRIPTION = (
+    "A JSON object mapping field API names to values: text, numbers, true/false, dates as "
+    "YYYY-MM-DD and date-times as ISO 8601. Lookup fields take a record id."
+)
+
 _DESTINATION_DIR = (
     "Folder on the user's computer to write the file to, absolute or starting with ~/."
 )
@@ -307,6 +341,13 @@ def _export_table(
     return names, table
 
 
+def _check_object_type(object_type: str) -> str:
+    try:
+        return _validate_object_type_name(object_type)
+    except SalesforceClientError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 class SalesforceConnector(Connector):
     def __init__(self, client: SalesforceClient) -> None:
         self._sf = client
@@ -324,6 +365,9 @@ class SalesforceConnector(Connector):
         return "salesforce"
 
     def tool_specs(self) -> list[ToolSpec]:
+        return export_files.visible_specs(self._all_tool_specs(), self.download_mode, self.download_config)
+
+    def _all_tool_specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(
                 name="salesforce_list_reports",
@@ -467,9 +511,100 @@ class SalesforceConnector(Connector):
                 ],
                 read_only=True,
             ),
+            ToolSpec(
+                name="salesforce_create_record",
+                description=(
+                    "Create one new Salesforce record. fields maps field API names to values, "
+                    'such as {"Name": "Acme", "Industry": "Retail"}; the names are checked '
+                    "against the object's own fields before you are asked. Returns "
+                    "{object_type, id}, the new record's 18-character id. Use "
+                    "salesforce_create_records to create several records of one object type in "
+                    "one approval, and salesforce_get_record to see an existing record's field "
+                    "names. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_type", "str",
+                              description="API name of the Salesforce object, e.g. 'Account', 'Contact', "
+                                          "'Opportunity' or a custom object like 'Invoice__c'."),
+                    ToolParam("fields", "str", description=_FIELDS_DESCRIPTION),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="salesforce_update_record",
+                description=(
+                    "Change fields of one existing Salesforce record, by its id. Only the "
+                    "fields you list change; a field set to null is cleared. The approval card "
+                    "shows each field's current and new value; fields that already hold the "
+                    "given value are left as they are. Returns {object_type, id, fields}. Use "
+                    "salesforce_update_records to change several records in one approval, and "
+                    "salesforce_get_record to read the record first. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_type", "str",
+                              description="API name of the Salesforce object, e.g. 'Account', 'Contact', "
+                                          "'Opportunity' or a custom object like 'Invoice__c'."),
+                    ToolParam("record_id", "str",
+                              description="The record's 15- or 18-character Salesforce id, from "
+                                          "salesforce_search or salesforce_get_record (its id field)."),
+                    ToolParam("fields", "str", description=_FIELDS_DESCRIPTION + " null clears a field."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="salesforce_create_records",
+                description=(
+                    "Create 1 to 200 new records of one Salesforce object type in one approval, "
+                    "all or none: if Salesforce refuses one record, none is created and the error "
+                    "names each refused record by its position. Returns {object_type, created, "
+                    "ids}, the new ids in input order. Use salesforce_create_record for a single "
+                    "record. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_type", "str",
+                              description="API name of the Salesforce object, e.g. 'Account', 'Contact', "
+                                          "'Opportunity' or a custom object like 'Invoice__c'."),
+                    ToolParam("records", "str",
+                              description="A JSON array of 1 to 200 objects, each mapping field API names "
+                                          "to one new record's values, as fields on "
+                                          "salesforce_create_record."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="salesforce_update_records",
+                description=(
+                    "Change 1 to 200 existing records of one Salesforce object type in one "
+                    "approval, all or none. Each record is found by key_field: Id (default) or a "
+                    "field marked External ID. Only the fields listed change, records that already "
+                    "have those values are left alone, and a key that matches no record or several "
+                    "records refuses the whole call. Returns {object_type, updated, ids}. Use "
+                    "salesforce_update_record for one record by id and salesforce_search to find "
+                    "ids. Requires user approval."
+                ),
+                params=[
+                    ToolParam("object_type", "str",
+                              description="API name of the Salesforce object, e.g. 'Account', 'Contact', "
+                                          "'Opportunity' or a custom object like 'Invoice__c'."),
+                    ToolParam("records", "str",
+                              description="A JSON array of 1 to 200 objects, each holding key_field's "
+                                          "value and the fields to change, such as "
+                                          '[{"Id": "001...", "Phone": "+1 555 0100"}]. null clears a field.'),
+                    ToolParam("key_field", "str", required=False, default="Id",
+                              description="Field that identifies each record: Id (the default), or the "
+                                          "API name of a field marked External ID on this object, such "
+                                          "as 'Customer_Number__c'. It is never changed itself."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=False,
+            ),
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
+        export_files.refuse_if_exports_off(tool, self.download_mode, self.download_config)
         if tool == "salesforce_list_reports":
             return await self._list_reports()
         if tool == "salesforce_get_record":
@@ -480,6 +615,14 @@ class SalesforceConnector(Connector):
             return await self._export_report(**args)
         if tool == "salesforce_search":
             return await self._search(**args)
+        if tool == "salesforce_create_record":
+            return await self._create_record(**args)
+        if tool == "salesforce_update_record":
+            return await self._update_record(**args)
+        if tool == "salesforce_create_records":
+            return await self._create_records(**args)
+        if tool == "salesforce_update_records":
+            return await self._update_records(**args)
         raise ValueError(f"Unknown Salesforce tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -727,7 +870,7 @@ class SalesforceConnector(Connector):
         )
         n = len(rows)
         report_name = first_metadata.get("name") or report_id
-        data = await asyncio.to_thread(export_files.render, names, rows, fmt)
+        data = await asyncio.to_thread(export_files.render, names, rows, fmt, spreadsheet_safe=True)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
         saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
@@ -834,8 +977,282 @@ class SalesforceConnector(Connector):
         )
 
     # ------------------------------------------------------------------ #
+    # Popup gate (writes)
+    # ------------------------------------------------------------------ #
+
+    async def _create_record(self, object_type: str, fields: str) -> Any:
+        # Everything that can be checked from the request and the object's own field
+        # definitions happens before the card, so a doomed call costs no approval.
+        object_type = _check_object_type(object_type)
+        values = parse_fields_object(fields, "fields")
+        index = await self._field_index(object_type)
+        resolved = resolve_fields(values, index, object_type, "create", "fields")
+
+        summary = f"Create {object_type} record"
+        preview = {"Object type": object_type, "Fields": str(len(resolved))}
+        preview_tables = [{
+            "headers": ["Field", "Label", "Value"],
+            "rows": [[name, index[name.lower()].label, cell_text(value)] for name, value in resolved.items()],
+        }]
+        details_text = "\n".join(f"{name}: {cell_text(value, None)}" for name, value in resolved.items())
+        raw_data = {"object_type": object_type, "fields": sorted(resolved)}
+        args = {"object_type": object_type}
+        await gated_call(
+            connector=self.name,
+            tool="salesforce_create_record",
+            gate="popup",
+            tool_name="Create Salesforce Record",
+            summary=summary,
+            sender=object_type,
+            raw_data=raw_data,
+            filtered_data=None,
+            preview=preview,
+            preview_tables=preview_tables,
+            details_text=details_text,
+            table_only=True,
+            my_email=self.my_email,
+            args=args,
+        )
+        record_id = await self._write(self._sf.create_record, object_type, resolved)
+        return {"object_type": object_type, "id": record_id}
+
+    async def _update_record(self, object_type: str, record_id: str, fields: str) -> Any:
+        object_type = _check_object_type(object_type)
+        try:
+            record_id = _validate_salesforce_id(record_id, "record_id")
+        except SalesforceClientError as exc:
+            raise ValueError(str(exc)) from exc
+        values = parse_fields_object(fields, "fields")
+        index = await self._field_index(object_type)
+        resolved = resolve_fields(values, index, object_type, "update", "fields")
+        current = await self._fetch(self._sf.get_record, object_type, record_id)
+        # Never refuse an update that would change nothing: whether a field already holds a value
+        # is Salesforce data, and refusing before the card would hand it to the caller with no
+        # review and no audit entry. The card shows the no-op and the write is skipped.
+        rows = [
+            (name, current.fields.get(name), new, values_differ(new, current.fields.get(name), index[name.lower()].type))
+            for name, new in resolved.items()
+        ]
+        changed = {name: new for name, _old, new, differs in rows if differs}
+
+        record_name = current.fields.get("Name") or record_id
+        summary = f"Update {object_type}: {record_name}"
+        preview = {
+            "Object type": object_type,
+            "Record ID": record_id,
+            "Fields changed": str(len(changed)),
+        }
+        preview_tables = [{
+            "headers": ["Field", "Current", "New"],
+            "rows": [[name, cell_text(old), cell_text(new)] for name, old, new, _differs in rows],
+        }]
+        details_text = "\n".join(
+            f"{name}: {cell_text(old, None)} → {cell_text(new, None)}" for name, old, new, _differs in rows
+        )
+        raw_data = {"object_type": object_type, "fields": sorted(resolved)}
+        args = {"object_type": object_type, "record_id": record_id}
+        await gated_call(
+            connector=self.name,
+            tool="salesforce_update_record",
+            gate="popup",
+            tool_name="Update Salesforce Record",
+            summary=summary,
+            sender=object_type,
+            raw_data=raw_data,
+            filtered_data=None,
+            preview=preview,
+            preview_tables=preview_tables,
+            details_text=details_text,
+            table_only=True,
+            my_email=self.my_email,
+            args=args,
+        )
+        if changed:
+            await self._write(self._sf.update_record, object_type, record_id, changed)
+        return {"object_type": object_type, "id": record_id, "fields": list(resolved)}
+
+    async def _create_records(self, object_type: str, records: str) -> Any:
+        object_type = _check_object_type(object_type)
+        parsed = parse_records(records)
+        index = await self._field_index(object_type)
+        resolved = [
+            resolve_fields(values, index, object_type, "create", f"records[{i}]")
+            for i, values in enumerate(parsed)
+        ]
+        n = len(resolved)
+        names: list[str] = []
+        for record in resolved:
+            for name in record:
+                if name not in names:
+                    names.append(name)
+
+        summary = f"Create {n} {object_type} record(s)"
+        preview = {"Object type": object_type, "Records": str(n)}
+        preview_tables = [{
+            "headers": ["#", *names],
+            "rows": [
+                [str(i + 1), *[cell_text(record[name]) if name in record else "" for name in names]]
+                for i, record in enumerate(resolved)
+            ],
+        }]
+        details_text = "\n".join(
+            "\n".join([f"Record {i + 1}", *[f"  {name}: {cell_text(value, None)}" for name, value in record.items()]])
+            for i, record in enumerate(resolved)
+        )
+        raw_data = {"object_type": object_type, "records": n, "fields": sorted(names)}
+        args = {"object_type": object_type}
+        await gated_call(
+            connector=self.name,
+            tool="salesforce_create_records",
+            gate="popup",
+            tool_name="Create Salesforce Records",
+            summary=summary,
+            sender=object_type,
+            raw_data=raw_data,
+            filtered_data=None,
+            preview=preview,
+            preview_tables=preview_tables,
+            details_text=details_text,
+            table_only=True,
+            my_email=self.my_email,
+            args=args,
+        )
+        ids = await self._write(self._sf.create_records, object_type, resolved)
+        return {"object_type": object_type, "created": n, "ids": ids}
+
+    async def _update_records(self, object_type: str, records: str, key_field: str = "Id") -> Any:
+        object_type = _check_object_type(object_type)
+        parsed = parse_records(records)
+        index = await self._field_index(object_type)
+        key = resolve_key_field(key_field, index, object_type)
+        is_id = key.type == "id"
+
+        key_values: list[str] = []
+        changes_wanted: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for i, values in enumerate(parsed):
+            where = f"records[{i}]"
+            key_entries = [name for name in values if name.lower() == key.name.lower()]
+            if len(key_entries) > 1:
+                raise ValueError(f"{where}: field {key.name} is named twice")
+            if not key_entries:
+                raise ValueError(f"{where}: has no {key.name} value")
+            key_value = key_text(values[key_entries[0]], where, key.name)
+            if is_id:
+                try:
+                    key_value = _validate_salesforce_id(key_value, key.name)
+                except SalesforceClientError as exc:
+                    raise ValueError(f"{where}: {key.name} must be a 15- or 18-character Salesforce id") from exc
+            rest = {name: value for name, value in values.items() if name != key_entries[0]}
+            if not rest:
+                raise ValueError(f"{where}: names no field to change")
+            resolved = resolve_fields(rest, index, object_type, "update", where)
+            norm = key_norm(key_value, is_id)
+            if norm in seen:
+                raise ValueError(f"{where}: {key.name} {key_value!r} is listed twice")
+            seen.add(norm)
+            key_values.append(key_value)
+            changes_wanted.append(resolved)
+
+        union = sorted({name for resolved in changes_wanted for name in resolved})
+        found = await self._fetch(self._sf.find_records, object_type, key.name, key_values, union)
+        by_key: dict[str, list[dict[str, Any]]] = {}
+        for row in found:
+            by_key.setdefault(key_norm(str(row[key.name]), is_id), []).append(row)
+        for key_value in key_values:
+            matches = by_key.get(key_norm(key_value, is_id), [])
+            if len(matches) > 1:
+                raise ValueError(
+                    f"{key.name} {key_value!r} matches {len(matches)} {object_type} records; it must match one"
+                )
+        unmatched = [k for k in key_values if key_norm(k, is_id) not in by_key]
+        if unmatched:
+            shown = ", ".join(repr(k) for k in unmatched[:10])
+            more = f" and {len(unmatched) - 10} more" if len(unmatched) > 10 else ""
+            raise ValueError(f"No {object_type} record has {key.name} {shown}{more}")
+
+        # An update that would change nothing still gets a card (and no write): whether a field
+        # already holds a value is Salesforce data, so refusing before the card would hand it to
+        # the caller with no review and no audit entry.
+        matched: list[dict[str, Any]] = []
+        shown_changes: list[tuple[str, str, Any, Any]] = []
+        write_records: list[dict[str, Any]] = []
+        unchanged_keys: list[str] = []
+        for key_value, resolved in zip(key_values, changes_wanted, strict=True):
+            row = by_key[key_norm(key_value, is_id)][0]
+            matched.append(row)
+            changed = {
+                name: new for name, new in resolved.items()
+                if values_differ(new, row.get(name), index[name.lower()].type)
+            }
+            if not changed:
+                unchanged_keys.append(key_value)
+                continue
+            for name, new in changed.items():
+                shown_changes.append((key_value, name, row.get(name), new))
+            write_records.append({"Id": row["Id"], **changed})
+
+        n = len(parsed)
+        summary = f"Update {n} {object_type} record(s)"
+        preview = {
+            "Object type": object_type,
+            "Matched by": key.name,
+            "Records to update": str(len(write_records)),
+            "Unchanged records": str(len(unchanged_keys)),
+            "Fields changed": str(len(shown_changes)),
+        }
+        rows = [[k, name, cell_text(old), cell_text(new)] for k, name, old, new in shown_changes]
+        rows += [[k, "(unchanged)", "", ""] for k in unchanged_keys]
+        preview_tables = [{"headers": ["Record", "Field", "Current", "New"], "rows": rows}]
+        detail_lines = [
+            f"{k} {name}: {cell_text(old, None)} → {cell_text(new, None)}" for k, name, old, new in shown_changes
+        ]
+        detail_lines += [f"{k}: unchanged" for k in unchanged_keys]
+        details_text = "\n".join(detail_lines)
+        raw_data = {"object_type": object_type, "records": n, "fields": union}
+        args = {"object_type": object_type, "key_field": key.name}
+        await gated_call(
+            connector=self.name,
+            tool="salesforce_update_records",
+            gate="popup",
+            tool_name="Update Salesforce Records",
+            summary=summary,
+            sender=object_type,
+            raw_data=raw_data,
+            filtered_data=None,
+            preview=preview,
+            preview_tables=preview_tables,
+            details_text=details_text,
+            table_only=True,
+            my_email=self.my_email,
+            args=args,
+        )
+        if write_records:
+            await self._write(self._sf.update_records, object_type, write_records)
+        return {"object_type": object_type, "updated": n, "ids": [row["Id"] for row in matched]}
+
+    # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    async def _field_index(self, object_type: str) -> dict[str, SalesforceField]:
+        try:
+            fields = await asyncio.to_thread(self._sf.describe_fields, object_type)
+        except SalesforceObjectNotFoundError as exc:
+            raise ValueError(str(exc)) from exc
+        except SalesforceClientError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return field_index(fields)
+
+    async def _write(self, func, *args) -> Any:
+        try:
+            return await asyncio.to_thread(func, *args)
+        except SalesforceWriteError as exc:
+            raise SalesforceWriteRefusedError(str(exc)) from exc
+        except SalesforceWriteUncertainError as exc:
+            raise SalesforceWriteUnconfirmedError(str(exc)) from exc
+        except SalesforceClientError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     async def _fetch(self, func, *args) -> Any:
         try:

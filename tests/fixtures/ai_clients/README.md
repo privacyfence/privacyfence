@@ -17,15 +17,15 @@ ai_clients/
 Each `README.md` carries two lines the replay test reads:
 
 ```text
-- Expected agent_id, unpinned: `<agent_id>`
-- Expected agent_id, pinned: `<registry agent_id>`
+- Expected agent_id: `<agent_id>`
+- Expected agent_source: `<source>`
 ```
 
-*Unpinned* is what the call is attributed to from the client's own claims: in organization mode,
-a DCR `client_name` the registry matches wins over `clientInfo.name`; one it doesn't match yields
-to a `clientInfo.name` it does (ADR 0094); and when neither matches, the DCR name is recorded as
-`unknown:<name>`. *Pinned* is the registry entry an admin pins the registration to on
-**Settings → AI systems**.
+`agent_source` is `oauth_client` when the recorded redirect URIs are the vendor's own callback
+(ADR 0224), and `client_info` otherwise. A `client_info` call is attributed from the client's own
+claims: in organization mode, a DCR `client_name` the registry matches wins over `clientInfo.name`;
+one it doesn't match yields to a `clientInfo.name` it does (ADR 0094); and when neither matches, the
+DCR name is recorded as `unknown:<name>`.
 
 The first line of a fixture's `README.md` says when it was captured and from which client version.
 A field that could not be observed is named as such there, never filled with a guess.
@@ -47,6 +47,7 @@ A fixture is committed, so scrub it before it enters the repository:
 - Remove every secret: client secrets, tokens, codes, PKCE verifiers.
 - Keep everything the client decides: `client_name`, `redirect_uris`,
   `token_endpoint_auth_method`, `grant_types`, `response_types`, scopes and `clientInfo`. Those
-  are what the replay tests. A redirect URI on the vendor's own domain stays as it is.
+  are what the replay tests. A redirect URI on the vendor's own domain stays as it is, and a per-connector id in it is replaced
+  with `dummy-callback-id`, which keeps it within the registry's redirect pattern.
 
 Read the diff before committing it, as `connector-qa.md` asks for connector fixtures.

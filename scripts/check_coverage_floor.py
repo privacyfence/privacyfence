@@ -13,7 +13,10 @@ still go green. This script is the gate: it reads the `coverage.json` report
     combined metric pytest-cov's own summary line reports) drops below
     OVERALL_FLOOR, or
   * any module in MODULE_FLOORS drops below its own, individually higher,
-    floor.
+    floor, or
+  * with `--platform windows` (the platform-windows job), any module in
+    WINDOWS_MODULE_FLOORS drops below its Windows floor. That mode checks
+    only those modules: not the overall floor, not MODULE_FLOORS.
 
 MODULE_FLOORS exists because a single overall floor doesn't protect any one
 file -- gate.py is ~2% of this package's statements, so a regression there
@@ -38,6 +41,11 @@ scripts/pre_release_check.py):
 
     pytest --cov=src/privacyfence --cov-branch --cov-report=json:coverage.json
     python scripts/check_coverage_floor.py coverage.json
+
+and, on the platform-windows job (its coverage.json uses backslash paths, which
+`_load_totals` normalises):
+
+    python scripts/check_coverage_floor.py --platform windows coverage.json
 """
 from __future__ import annotations
 
@@ -59,7 +67,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # just let a real, module-sized regression hide inside the aggregate, which
 # is the exact failure mode MODULE_FLOORS exists to close for the modules
 # listed below; it shouldn't reopen for everything else.
-OVERALL_FLOOR = 95.1
+OVERALL_FLOOR = 95.9
 
 # Security-critical modules get a floor of their own, on top of the overall
 # one above -- see the module docstring for why. Paths are repository-
@@ -71,16 +79,16 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/email_markdown.py": 99.0,
     "src/privacyfence/markdown_to_html.py": 95.0,
     # Core gate/auto-accept/audit path.
-    "src/privacyfence/gate.py": 91.0,
-    "src/privacyfence/auto_accept.py": 94.0,  # identity-matching rules live here
-    "src/privacyfence/audit_log.py": 95.0,  # audit-export formula-injection guard
-    "src/privacyfence/approvals.py": 92.0,  # per-principal pending-approval cap
+    "src/privacyfence/gate.py": 95.0,
+    "src/privacyfence/auto_accept.py": 98.0,  # identity-matching rules live here
+    "src/privacyfence/audit_log.py": 97.0,  # audit-export formula-injection guard
+    "src/privacyfence/approvals.py": 94.0,  # per-principal pending-approval cap
     "src/privacyfence/pii_detector.py": 98.0,
     # Org-config fail-closed load path.
     "src/privacyfence/org_mode.py": 100.0,
     "src/privacyfence/daemon_main.py": 96.0,
     # Org bundle trust.
-    "src/privacyfence/org_bundle_signing.py": 98.0,
+    "src/privacyfence/org_bundle_signing.py": 99.0,
     # 91.0, not the ~93.2% the rest of this module would suggest: whether
     # coverage sees _resolve_names_async()'s done() callback body (fired
     # from a background thread started by _run_async(), not on the test's
@@ -90,7 +98,7 @@ MODULE_FLOORS: dict[str, float] = {
     # fix is a deterministic wait on that thread rather than a wider floor;
     # until then
     # this floor carries enough headroom not to flake red on that one line.
-    "src/privacyfence/settings_controller.py": 91.0,
+    "src/privacyfence/settings_controller.py": 93.0,
     # Bootstrap flow, session and token lifetimes.
     "src/privacyfence/web/oauth_provider.py": 99.0,
     "src/privacyfence/web/org_session.py": 100.0,
@@ -149,13 +157,17 @@ MODULE_FLOORS: dict[str, float] = {
     # principal -- the same class of thing as the fail-closed load path
     # privacy_filter.py above is pinned at 100 for, just on the write side.
     "src/privacyfence/web/org_install_policy.py": 100.0,
+    # Jira Assets: the client is the only parser of Atlassian's Assets responses (replayed against
+    # the recorded live fixtures) and the connector builds the review cards from what it parses.
+    "src/privacyfence/assets_client.py": 100.0,
+    "src/privacyfence/connectors/assets.py": 100.0,
     # The daemon's own session-minting interface (MINT/QUIT) and
     # the companion's OPEN channel share this module's accept-loop plumbing,
     # including the peer-uid gate. 61.0, not a number in the
     # nineties like the rest of this file's IPC-adjacent modules, because
     # most of what's uncovered here is the Windows named-pipe half of
     # _LineProtocolServer -- exercised for real by the platform-windows job
-    # (tests/platform/), not by this Linux-only run, the same split
+    # (tests/platform/test_control_channel_windows.py), not by this Linux-only run, the same split
     # windows_acl.py's own floor documents above. Without a floor at all, a
     # regression in the POSIX half this CI run *does* exercise -- the
     # peer-uid check included -- was invisible to the gate. Raised from 61.0
@@ -166,7 +178,7 @@ MODULE_FLOORS: dict[str, float] = {
     # COMPANION/MINT CONSOLE, their CONFIRM MINT/CONFIRM SIGNIN call-backs,
     # SHOW, and the client helpers for all of them -- every one of which this
     # run drives against real servers on both sides.
-    "src/privacyfence/web/control_channel.py": 75.0,
+    "src/privacyfence/web/control_channel.py": 77.0,
     # Was 81.0, then 83.0 (ADR 0003 decision 3's _complete_pending_
     # separation()), then 86.0 (the first-run enrollment offer and the
     # recovery-code action). Each of those left _run_tray() -- macOS/
@@ -180,19 +192,83 @@ MODULE_FLOORS: dict[str, float] = {
     # channel's setup/teardown and the Quit ordering -- running the real
     # loop still needs a display, wiring it up does not. 86.0 -> 98.0.
     "src/privacyfence/companion.py": 98.0,
-    # The SSE stream's own generator body (approvals_stream's event_source,
-    # a poll loop no test here consumes to exhaustion) plus a couple of
-    # decide()'s edge branches (the bare-index "choice" coercion, the plain
-    # "/" redirect) account for the gap. decide() itself -- the module's
-    # actual authorization surface -- is otherwise well covered.
-    "src/privacyfence/web/routes_approvals.py": 88.0,
+    # decide() -- the module's actual authorization surface -- and the SSE
+    # stream's event_source are both covered; only a few edge branches remain.
+    "src/privacyfence/web/routes_approvals.py": 98.0,
+    # Added with the ratchet audit; each is one point under what the suite measured.
+    "src/privacyfence/scoped_tokens.py": 98.0,
+    "src/privacyfence/web/mcp_dispatch.py": 95.0,
+    "src/privacyfence/web/step_up_decide.py": 99.0,
+    "src/privacyfence/web/approval_step_up.py": 99.0,
+    "src/privacyfence/web/mcp_auth.py": 98.0,
+    "src/privacyfence/policy/scopes.py": 99.0,
+    "src/privacyfence/policy/engine.py": 99.0,
+    "src/privacyfence/policy/store.py": 99.0,
+    "src/privacyfence/policy/conditions.py": 99.0,
+    "src/privacyfence/local_files.py": 99.0,
+    "src/privacyfence/upload_staging.py": 99.0,
+    "src/privacyfence/download_staging.py": 95.0,
+    "src/privacyfence/principal.py": 97.0,
+    "src/privacyfence/audit_forwarding.py": 97.0,
+    "src/privacyfence/deny_feedback.py": 99.0,
+    "src/privacyfence/web/routes_connect.py": 91.0,
+    "src/privacyfence/web/server.py": 95.0,
+    "src/privacyfence/web/routes_org_stepup.py": 96.0,
+    "src/privacyfence/web/csp.py": 99.0,
+    "src/privacyfence/web/state_stream.py": 99.0,
 }
+
+# The platform-windows job's floors, kept apart from MODULE_FLOORS because the same modules read
+# differently on Windows: the pywin32 and named-pipe code that the Linux run cannot execute is
+# covered there, and the POSIX half is not. These numbers gate only `--platform windows`.
+# Whole-percent, rounded down, measured on the platform-windows job on 2026-10-17
+# (control_channel.py 35.81%, windows_acl.py 89.66%, windows_service.py 32.00%).
+WINDOWS_MODULE_FLOORS: dict[str, float] = {
+    "src/privacyfence/windows_service.py": 32.0,
+    "src/privacyfence/windows_acl.py": 89.0,
+    "src/privacyfence/web/control_channel.py": 35.0,
+}
+
+
+# How far above its floor a number may sit before the run says the floor should be raised. A
+# warning only: a PR that merely adds tests must never be blocked by it.
+STALE_MODULE_MARGIN = 1.0
+STALE_OVERALL_MARGIN = 0.5
+
+
+def _stale_warning(name: str, actual: float, floor: float) -> str:
+    return f"::warning::stale coverage floor: {name} is at {actual:.2f}%, floor {floor:.1f}% -- raise it"
 
 
 def _load_totals(cov_json: dict) -> tuple[float, dict[str, float]]:
     overall = cov_json["totals"]["percent_covered"]
-    per_file = {path: data["summary"]["percent_covered"] for path, data in cov_json["files"].items()}
+    # coverage writes `src\\privacyfence\\...` keys on Windows.
+    per_file = {path.replace("\\", "/"): data["summary"]["percent_covered"] for path, data in cov_json["files"].items()}
     return overall, per_file
+
+
+def _check_module_floors(
+    floors: dict[str, float], per_file: dict[str, float], cov_path: Path, table: str, failures: list[str]
+) -> None:
+    for module, floor in sorted(floors.items()):
+        actual = per_file.get(module)
+        if actual is None:
+            # A module in this list was renamed, moved, or deleted without
+            # updating the table -- that silently drops its floor
+            # enforcement, so treat it as a failure rather than skipping it.
+            print(f"  [MISSING] {module} (floor {floor:.1f}%) -- not present in {cov_path}")
+            failures.append(
+                f"{module} is in {table} but has no coverage data in {cov_path} "
+                f"(renamed, moved, or deleted? update this script's {table})"
+            )
+            continue
+        ok = actual >= floor
+        status = "ok" if ok else "FAIL"
+        print(f"  [{status:4}] {module}: {actual:.2f}% (floor {floor:.1f}%)")
+        if not ok:
+            failures.append(f"{module} coverage {actual:.2f}% is below its {floor:.1f}% floor")
+        elif actual > floor + STALE_MODULE_MARGIN:
+            print(_stale_warning(module, actual, floor))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -202,6 +278,12 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         default="coverage.json",
         help="Path to the coverage.json report from `--cov-report=json:...` (default: coverage.json)",
+    )
+    parser.add_argument(
+        "--platform",
+        choices=("linux", "windows"),
+        default="linux",
+        help="linux (default): overall floor and MODULE_FLOORS; windows: only WINDOWS_MODULE_FLOORS",
     )
     args = parser.parse_args(argv)
 
@@ -219,28 +301,18 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[str] = []
 
-    print(f"Overall coverage: {overall:.2f}% (floor {OVERALL_FLOOR:.1f}%)")
-    if overall < OVERALL_FLOOR:
-        failures.append(f"overall coverage {overall:.2f}% is below the {OVERALL_FLOOR:.1f}% floor")
+    if args.platform == "windows":
+        print("Windows module floors:")
+        _check_module_floors(WINDOWS_MODULE_FLOORS, per_file, cov_path, "WINDOWS_MODULE_FLOORS", failures)
+    else:
+        print(f"Overall coverage: {overall:.2f}% (floor {OVERALL_FLOOR:.1f}%)")
+        if overall < OVERALL_FLOOR:
+            failures.append(f"overall coverage {overall:.2f}% is below the {OVERALL_FLOOR:.1f}% floor")
+        elif overall > OVERALL_FLOOR + STALE_OVERALL_MARGIN:
+            print(_stale_warning("overall", overall, OVERALL_FLOOR))
 
-    print("\nSecurity-critical module floors:")
-    for module, floor in sorted(MODULE_FLOORS.items()):
-        actual = per_file.get(module)
-        if actual is None:
-            # A module in this list was renamed, moved, or deleted without
-            # updating MODULE_FLOORS -- that silently drops its floor
-            # enforcement, so treat it as a failure rather than skipping it.
-            print(f"  [MISSING] {module} (floor {floor:.1f}%) -- not present in {cov_path}")
-            failures.append(
-                f"{module} is in MODULE_FLOORS but has no coverage data in {cov_path} "
-                "(renamed, moved, or deleted? update this script's MODULE_FLOORS)"
-            )
-            continue
-        ok = actual >= floor
-        status = "ok" if ok else "FAIL"
-        print(f"  [{status:4}] {module}: {actual:.2f}% (floor {floor:.1f}%)")
-        if not ok:
-            failures.append(f"{module} coverage {actual:.2f}% is below its {floor:.1f}% floor")
+        print("\nSecurity-critical module floors:")
+        _check_module_floors(MODULE_FLOORS, per_file, cov_path, "MODULE_FLOORS", failures)
 
     if failures:
         print("\nCoverage ratchet failed:")

@@ -83,6 +83,28 @@ class TestRender:
         assert data == '[{"a":1,"b":"é"},{"a":null,"b":true}]\n'.encode()
         assert json.loads(data) == [{"a": 1, "b": "é"}, {"a": None, "b": True}]
 
+    @pytest.mark.parametrize("value", ["=1+1", "+1", "-1+1", "@SUM(A1)", "\t=1", "\r=1"])
+    def test_formula_leading_cells_are_neutralised(self, value):
+        data = export_files.render(["a"], [[value]], "csv", spreadsheet_safe=True).decode()
+        assert data.startswith("a\n")
+        assert data[2:].startswith(("'", '"\''))
+
+    def test_neutralised_cell_is_written_exactly(self):
+        assert export_files.render(["a"], [["=1+1"]], "csv", spreadsheet_safe=True) == b"a\n'=1+1\n"
+
+    def test_numbers_and_plain_text_are_unchanged_when_spreadsheet_safe(self):
+        data = export_files.render(["a", "b"], [[-5, "hello"]], "csv", spreadsheet_safe=True)
+        assert data == b"a,b\n-5,hello\n"
+
+    def test_cells_are_left_alone_by_default(self):
+        assert export_files.render(["a"], [["=1+1"]], "csv") == b"a\n=1+1\n"
+
+    def test_json_is_unchanged_by_spreadsheet_safe(self):
+        rows = [["=1+1"]]
+        assert export_files.render(["a"], rows, "json", spreadsheet_safe=True) == export_files.render(
+            ["a"], rows, "json",
+        )
+
 
 class TestSampleTable:
     def test_shows_twenty_rows_and_truncates_long_cells(self):
@@ -116,3 +138,31 @@ class TestExportSummary:
     def test_merges_delivery(self):
         out = export_files.export_summary(["a"], [[1], [2]], "h", {"path": "/p", "delivery": "local_disk"})
         assert out == {"rows": 2, "columns": ["a"], "sha256": "h", "path": "/p", "delivery": "local_disk"}
+
+
+class _Spec:
+    def __init__(self, name):
+        self.name = name
+
+
+class TestExportsOff:
+    def _cfg(self, allow_exports):
+        from privacyfence.org_mode import DownloadDeliveryConfig
+        return DownloadDeliveryConfig(allow_exports=allow_exports)
+
+    def test_specs_lose_only_export_tools_in_org_mode_when_off(self):
+        specs = [_Spec("grist_get_records"), _Spec("grist_export_sql"), _Spec("jira_export_issues")]
+        kept = export_files.visible_specs(specs, "org", self._cfg(False))
+        assert [s.name for s in kept] == ["grist_get_records"]
+
+    @pytest.mark.parametrize("mode,cfg", [("org", True), ("local", False), ("org", None)])
+    def test_specs_untouched_otherwise(self, mode, cfg):
+        specs = [_Spec("grist_export_sql")]
+        config = None if cfg is None else self._cfg(cfg)
+        assert export_files.visible_specs(specs, mode, config) == specs
+
+    def test_call_refused_when_off(self):
+        with pytest.raises(ValueError, match="allow_exports"):
+            export_files.refuse_if_exports_off("assets_export_objects", "org", self._cfg(False))
+        export_files.refuse_if_exports_off("assets_get_object", "org", self._cfg(False))
+        export_files.refuse_if_exports_off("assets_export_objects", "org", self._cfg(True))

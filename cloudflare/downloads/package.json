@@ -6,19 +6,20 @@
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "dry-run": "wrangler deploy --dry-run --outdir dist"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.23.0",
-    "@cloudflare/workers-types": "5.20261008.1",
+    "@cloudflare/workers-types": "5.20261016.1",
+    "@vitest/coverage-istanbul": "4.1.12",
     "typescript": "7.0.2",
-    "vitest": "4.1.11",
-    "wrangler": "4.149.0"
+    "vitest": "4.1.12",
+    "wrangler": "4.151.1"
   },
   "overrides": {
-    "vitest": "4.1.11",
+    "vitest": "4.1.12",
     "sharp": "0.35.5",
     "undici": "7.29.1"
   }

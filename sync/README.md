@@ -1,7 +1,7 @@
 # privacyfence-sync
 
 `privacyfence-sync` runs a data-sync recipe against PrivacyFence with no AI model involved. A recipe
-reads data from your connected services (Salesforce reports, Jira searches, Grist tables, files in
+reads data from your connected services (Salesforce reports, Jira searches, Jira Assets queries, Grist tables, files in
 Google Drive), runs your own scripts on the files, writes the result back to Grist, and can publish
 an HTML dashboard on Peek.
 
@@ -86,13 +86,17 @@ off `download_delivery.agent_links`, steps that receive a file fail with a messa
 
 ### Unattended sessions must be allowed
 
-Both modes need `unattended_sessions.enabled` in PrivacyFence's organization config bundle (built
-with `build_org_bundle.py --enable-unattended-sessions`). Without it, a run stops before the first
-step with:
+A plain sign-in (the stored `login`, or your own AI client token) needs `unattended_sessions.enabled`
+in PrivacyFence's organization config bundle (built with `build_org_bundle.py
+--enable-unattended-sessions`). Without it, a run stops before the first step with:
 
 ```
 privacyfence-sync: This PrivacyFence does not allow unattended sessions (unattended_sessions.enabled in org_config.json). Ask your administrator, or run with --attended.
 ```
+
+A scoped token does not need it: the token is already limited to the rules and tools it was created
+with, and it can only be denied, never prompted. It needs `scoped_tokens.enabled` instead (built
+with `--enable-scoped-tokens`); see [On a server, against organization mode](#on-a-server-against-organization-mode).
 
 ## The rules a recipe needs
 
@@ -100,10 +104,14 @@ A scheduled run gets no approval cards, so every step needs an auto-accept rule,
 one PrivacyFence never asks about (listing tools such as `drive_list_files`). Create rules in
 PrivacyFence's **Settings → Auto-accept → Add a rule**. Each one asks for your passkey.
 
+`privacyfence-sync permissions RECIPE` asks your PrivacyFence which rules and tools a given recipe
+needs, so the table below is background, no longer the way to work them out.
+
 | Recipe step | Scope in Settings | Verbs to tick |
 |---|---|---|
 | `salesforce_export_report`, `salesforce_run_report` | **Salesforce — report**, the report id | read |
 | `jira_export_issues` | **Jira — project**, the project key(s) | search |
+| `assets_export_objects` | **Jira Assets — schema**, the schema id | search |
 | `drive_download_file` | **Drive — folder**, the folder id the file is in | download |
 | `drive_list_files` | none needed | |
 | `grist_export_records`, `grist_export_sql`, `grist_get_records` | **Grist — document**, the document id | read |
@@ -118,8 +126,8 @@ Notes:
   run is denied, even when a rule matches. For the tools whose data goes to a file or a page
   rather than to an AI model, the recipe's scoped token can say otherwise. When you create the
   token, tick **Let exports, downloads and page uploads carry personal data**. It covers:
-  - `salesforce_export_report`, `jira_export_issues`, `grist_export_records` and
-    `grist_export_sql`;
+  - `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`,
+    `grist_export_records` and `grist_export_sql`;
   - `drive_download_file` when the file is delivered as a file (on an organization server a small
     file, up to about 75 KB by default, comes back inside the tool result instead, and is still
     scanned);
@@ -127,10 +135,23 @@ Notes:
 
   The box is on the token, not on the rule, so a run that uses your own token (not a scoped one)
   always stops for review when personal data is found. Only you can tick it, in Settings, behind
-  your passkey; an AI client cannot propose it. `salesforce_run_report`, `grist_get_records` and
-  the other reads that return data in the tool result are always scanned.
+  your passkey; an AI client cannot propose it.
+
+  A second box, **Let reads return personal data**, covers reads whose result goes to an AI
+  model, when a rule of the token covers the call:
+  - `gmail_get_message` and `gmail_get_thread`;
+  - `slack_get_channel_history`, `slack_get_thread_replies` and `slack_search_messages`.
+
+  The scan still runs for these, and the audit log records what it found; the box only stops
+  the run from being denied. `salesforce_run_report`, `grist_get_records` and the other reads
+  outside both lists are always scanned, and a run is denied when they return personal data.
+  [`preflight`](#commands) flags the steps the scan can still deny, one WARNING per step. If a run
+  is denied this way, use the covered export tool instead, narrow the step's `columns` or
+  `filters` so the result holds no personal data, or run it attended.
 - **A Jira project rule** covers an export only when every exported issue belongs to an approved
   project. A JQL query that reaches into another project needs that project in the rule too.
+- **A Jira Assets schema rule** covers an export only when every exported object belongs to an
+  approved schema. An AQL query that reaches into another schema needs that schema in the rule too.
 - **A Drive folder rule** covers files whose parent folder is the one named. A file in a subfolder
   needs the subfolder's id.
 - **A Peek page rule** covers new versions of pages that already exist. Publish the page once by
@@ -159,7 +180,7 @@ steps:                              # required, 1 to 50 steps, run in order
 ```
 
 Every step has an `id` (lowercase letters, digits, `-` and `_`, up to 40 characters, unique in
-the recipe) and exactly one of `tool`, `run` or `template`. A step may only refer to steps above
+the recipe) and exactly one of `tool`, `run`, `template` or `trigger`. A step may only refer to steps above
 it. Any unknown key is an error, so a typo fails `check` instead of being ignored.
 
 **The work folder** (`work_dir`) is where every file of a run lands. It is created if needed.
@@ -187,6 +208,7 @@ Steps pass files to each other by name. These steps produce files:
 | Any other tool step with `save_result` | the tool's result, as JSON | `<step id>` |
 | A script step | each entry of `outputs`, and `stdout` if given | `<step id>.<output name>` |
 | A template step | `output` | `<step id>` |
+| A trigger step | none | not referred to |
 
 Two kinds of reference use them:
 
@@ -203,7 +225,8 @@ Two kinds of reference use them:
 
 ### Export steps
 
-`salesforce_export_report`, `jira_export_issues`, `grist_export_records`, `grist_export_sql`.
+`salesforce_export_report`, `jira_export_issues`, `assets_export_objects`, `grist_export_records`,
+`grist_export_sql`.
 
 ```yaml
 - id: issues
@@ -222,7 +245,7 @@ Two kinds of reference use them:
   organization server hands out a one-time download link, which `privacyfence-sync` fetches at
   once (the link expires after 5 minutes). Either way the file's SHA-256 is checked against what
   PrivacyFence reported, and the step fails if they differ.
-- A `jira_export_issues` query that matches no issue writes no file on PrivacyFence's side;
+- A `jira_export_issues` or `assets_export_objects` query that matches nothing writes no file on PrivacyFence's side;
   `privacyfence-sync` writes a CSV with just the header row (or `[]` for `.json`), so later steps
   still find their input.
 
@@ -232,6 +255,7 @@ What each export writes:
 |---|---|---|
 | `salesforce_export_report` | the report's detail columns, or `columns` | `cell_format: value` (default) writes raw values: dates as YYYY-MM-DD, amounts as numbers, record ids for lookups. `label` writes what Salesforce shows. `both` writes, for each column `C`, the raw value as `C` and the shown text as `C.label`, plus `C.currency` for money columns. A report over 2,000 rows or a grouped report needs `page_by`, a column unique per row. |
 | `jira_export_issues` | key, summary, status, issue_type, priority, assignee, reporter, labels, created, updated, url, then `fields` | People are display names. Lists (labels, multi-select fields) are JSON in a CSV cell. |
+| `assets_export_objects` | id, key, label, type, then one column per attribute name | A multi-value attribute is its values joined with `; `. |
 | `grist_export_records` | every column of the table, including formula columns | `filter` narrows rows by column values. |
 | `grist_export_sql` | what the `SELECT` returns | Cells are as Grist stores them: dates as seconds since 1970, true/false as 1/0. Only people who can copy the whole document may run SQL; others get a message pointing to `grist_export_records`. |
 
@@ -341,6 +365,41 @@ Runs your Python script. See [Script steps](#script-steps) below.
 
 Puts a JSON file into an HTML template. See [Dashboard templates](#dashboard-templates).
 
+### Trigger steps
+
+```yaml
+- id: start
+  trigger: trig_01AbCdEfGhIjKlMnOpQrStUv     # the scheduled task's ID, from its API trigger
+  token_env: PRIVACYFENCE_TRIGGER_NOTES      # environment variable holding that task's token
+  text: "New notes PDF in Drive: file_id=${pick.stdout:file_id} name=${pick.stdout:name}"   # optional
+```
+
+Starts a Claude Code cloud scheduled task, so a cheap recipe can watch for a change and Claude runs
+only when there is work. The step makes one `POST` to
+`https://api.anthropic.com/v1/claude_code/routines/<trigger>/fire`, with the token from the
+variable `token_env`, and prints `[<id>] started scheduled task <trigger>: <session link>`. That is
+the only address a recipe can send anything to, apart from your PrivacyFence.
+
+- `trigger` is the task's ID (it starts with `trig_`), shown with the task's API trigger.
+- `token_env` names the environment variable that holds the task's token. It must start with
+  `PRIVACYFENCE_`, because `run` removes every such variable from a script's environment, so no
+  script sees the token. It must not be `PRIVACYFENCE_TOKEN` or `PRIVACYFENCE_MCP_URL`, and it must
+  be a different variable from the one `--token-env` names, because `run` removes that one from the
+  environment before any step runs. A run with an empty variable exits 4 before it calls
+  PrivacyFence.
+- `text` is optional, at most 65,536 characters once its `${...}` references are filled in. The
+  task receives it as untrusted data, not as instructions, so put IDs and names in it, not
+  content: the task reads the content itself through PrivacyFence.
+- **No retry.** Claude's endpoint has no idempotency key, so a retry could start the task twice
+  for the same file. Put the step that records the work as done after the trigger step: if the
+  start fails, that step never runs, and the next scheduled run tries again.
+- Claude accepts 30 starts per task per hour. A refused token (HTTP 401 or 403) exits 4; every
+  other failure exits 2.
+- Only Claude Code cloud scheduled tasks can be started this way. Cowork scheduled tasks have no
+  trigger that can be called from outside. The endpoint is marked experimental by Anthropic and
+  may change.
+- `--attended` changes nothing for this step, and `preflight` never starts the task.
+
 ## Script steps
 
 A script step runs an ordinary Python script with the same Python as `privacyfence-sync`:
@@ -369,10 +428,10 @@ python <run> <args...>
   small check after your plan step: it reads the plan's summary and exits non-zero on warnings, a
   row count that moved more than you expect, or an empty parse. Nothing after it runs, and a
   person looks at it.
-- **Environment.** The script runs in the work folder and gets your environment **without** any
-  variable whose name starts with `PRIVACYFENCE_`, so it never sees the token. It has no
-  PrivacyFence access: everything it needs comes in as files, and everything it produces goes out
-  as files. It may read and write your own files elsewhere (state, run history).
+- **Environment.** The script runs in the work folder and gets your environment without any
+  variable whose name starts with `PRIVACYFENCE_`, and without the variable `--token-env` names, so
+  it never sees the token. It runs as you, so it can read anything you can, including the stored
+  sign-in file.
 - The script's own folder is on its import path, so it can import modules that sit next to it.
   The work folder is not, so a file that lands there is never imported by accident.
 - `run` must be inside the recipe's folder. Keep the recipe, its scripts and templates in one
@@ -555,16 +614,89 @@ Before the first scheduled run of any recipe:
 
 ```sh
 privacyfence-sync check recipe.yaml
+privacyfence-sync preflight recipe.yaml        # will my token work?
 privacyfence-sync run recipe.yaml --attended   # approve, and add any missing rule
 privacyfence-sync run recipe.yaml              # unattended: no card should appear
 ```
 
+### Starting Claude when a file lands in a Drive folder
+
+```yaml
+version: 1
+name: notes-inbox
+steps:
+  - id: listing
+    tool: drive_list_folder
+    args: {folder_id: 1AbCdEfGhIjKlMnOpQrStUvWxYz, max_results: 1000}
+    save_result: listing.json
+
+  - id: pick
+    run: scripts/inbox.py
+    args: [pick, --listing, "{file:listing}", --state, /Users/me/notes-inbox-state/seen.txt]
+    stdout: pick.json
+
+  - id: start
+    trigger: trig_01AbCdEfGhIjKlMnOpQrStUv
+    token_env: PRIVACYFENCE_TRIGGER_NOTES
+    text: "New handwritten notes in Drive: file_id=${pick.stdout:file_id} name=${pick.stdout:name}"
+
+  - id: commit
+    run: scripts/inbox.py
+    args: [commit, --state, /Users/me/notes-inbox-state/seen.txt, --file-id, "${pick.stdout:file_id}"]
+```
+
+`scripts/inbox.py`:
+
+```python
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ap = argparse.ArgumentParser()
+ap.add_argument("mode", choices=["pick", "commit"])
+ap.add_argument("--state", required=True)
+ap.add_argument("--listing")
+ap.add_argument("--file-id")
+args = ap.parse_args()
+state = Path(args.state)
+
+if args.mode == "commit":
+    state.parent.mkdir(parents=True, exist_ok=True)
+    with state.open("a", encoding="utf-8") as handle:
+        handle.write(args.file_id + "\n")
+    sys.exit(0)
+
+listing = json.loads(Path(args.listing).read_text(encoding="utf-8"))
+files = listing["result"] if isinstance(listing, dict) else listing
+seen = set(state.read_text(encoding="utf-8").split()) if state.exists() else set()
+new = [f for f in files if f.get("mime_type") == "application/pdf" and f.get("id") not in seen]
+if not new:
+    sys.exit(10)
+oldest = min(new, key=lambda f: f.get("created_time", ""))
+print(json.dumps({"file_id": oldest["id"], "name": oldest.get("name", "")}))
+```
+
+It starts one Claude session per new file, so a backlog drains one file per scheduled run.
+
+`drive_list_folder` returns at most 1,000 children, in no set order, so keep the watched folder
+small: move processed files out of it.
+
+`commit` runs only after the start succeeded, so a failed start is retried by the next run.
+
+`drive_list_folder` is always auto-approved, so the watch needs no rule. The Claude task needs its
+own rules for what it does.
+
+With `run --result-file`, `ok` means Claude was started and `no_change` means no new file arrived.
+
 ## Commands
 
 ```
-privacyfence-sync run RECIPE [--server URL] [--attended] [--token-env NAME]
+privacyfence-sync run RECIPE [--server URL] [--attended] [--token-env NAME] [--result-file PATH]
 privacyfence-sync login --server URL [--callback-port N]
 privacyfence-sync check RECIPE
+privacyfence-sync preflight RECIPE [--server URL] [--attended] [--token-env NAME]
+privacyfence-sync permissions RECIPE [--server URL] [--token-env NAME] [--json]
 ```
 
 - **`run`** runs every step in order and stops at the first failure. Each step prints a line
@@ -574,9 +706,29 @@ privacyfence-sync check RECIPE
     the call once you approve. Use it for a first run and to find missing rules.
   - `--token-env NAME` reads the token from the variable `NAME` instead of `PRIVACYFENCE_TOKEN`.
   - Without a token in the environment, `run` uses the stored sign-in from `login`.
+  - `--result-file PATH` writes a small JSON file saying how the run ended; see
+    [The result file](#the-result-file).
 - **`login`** signs in to an organization server, then checks the connection.
 - **`check`** validates the recipe, its references and its paths, and prints
   `<name>: <n> step(s), OK`. It makes no network call and runs no script.
+- **`preflight`** connects with the same token as `run` and reports, per tool step, whether the
+  token can call that tool and whether an unattended run would pass without an approval card, then
+  prints `preflight: <n> step(s) checked, <m> problem(s)`. It moves no data and runs no script. It
+  does write audit entries (a status call and one policy check per step) and, unless you pass
+  `--attended`, declares and ends an unattended session, which the PrivacyFence UI may show
+  briefly. It takes the same `--server`, `--attended` and `--token-env` options as `run`. A step
+  whose arguments are filled in at run time (`${...}`) is checked without them, and what depends
+  on content PrivacyFence only sees at run time is reported as `unknown`. For a step a rule
+  covers but the personal-data scan can still deny, unattended or attended with a scoped token, the
+  line ends with `; WARNING: <why>: a run is denied if the result holds personal data`, and a note
+  follows the steps. The warning changes neither the problem count nor the exit code, and the run
+  is denied only when the result really holds personal data. Use it after creating a scoped token or rules and before scheduling.
+  When a step would need approval, the line ends with `; add: <rule>`, the first rule PrivacyFence
+  suggests for it. A trigger step is reported by whether its token variable is set; preflight
+  never starts the task.
+- **`permissions`** lists the auto-accept rules and the tools a recipe needs, from your PrivacyFence
+  itself, so a scheduler does not have to keep its own table of them. See
+  [Listing the rules a recipe needs](#listing-the-rules-a-recipe-needs).
 
 The server address is, in order: `--server`, the recipe's `server`, the variable
 `PRIVACYFENCE_MCP_URL`, then `http://127.0.0.1:8765/mcp`.
@@ -588,11 +740,116 @@ Exit codes:
 | 0 | Every step succeeded, or a script step said there was nothing to do (exit 10) |
 | 1 | The recipe, a command-line argument, a reference or a template is wrong |
 | 2 | A tool call, a file transfer or a script failed, or the server refused the connection |
-| 3 | PrivacyFence denied a step (in an unattended run: no rule covers it) |
-| 4 | Not signed in, the sign-in expired, or no token |
+| 3 | PrivacyFence denied a step (in an unattended run: no rule covers it); for `preflight`, a step is outside the token or would need approval |
+| 4 | Not signed in, the sign-in expired, or no token; or a trigger step's token is empty or refused |
 
 Every error prints one line starting with `privacyfence-sync:` to the error output; when a script
 failed, the script's own error output is shown just above it. No message ever contains a token.
+
+### The result file
+
+A scheduler cannot tell "nothing to do" from a full run by the exit code: both are 0. With
+`run --result-file PATH`, the command writes one JSON file for every outcome that has an exit code
+(0 to 4). A usage error from the command line, a crash or an interrupt writes no file, so treat a
+missing file as a failure.
+
+```json
+{
+ "version": 1,
+ "recipe": "pipeline-overview",
+ "outcome": "no_change",
+ "exit_code": 0,
+ "stopped_at_step": "build",
+ "started_at": "2026-10-20T06:15:00Z",
+ "finished_at": "2026-10-20T06:15:42Z",
+ "privacyfence_sync_version": "6.6.0"
+}
+```
+
+| `outcome` | Exit code | Meaning |
+|---|---|---|
+| `ok` | 0 | Every step ran |
+| `no_change` | 0 | A script step exited 10, so the run stopped there on purpose; `stopped_at_step` is that step's id |
+| `recipe_error` | 1 | The recipe, an argument, a reference or a template is wrong; `recipe` is `null` when the recipe could not be loaded |
+| `failed` | 2 | A tool call, a file transfer or a script failed, or the server refused the connection |
+| `denied` | 3 | PrivacyFence denied a step |
+| `not_signed_in` | 4 | Not signed in, the sign-in expired, or no token; or a trigger step's token is empty or refused |
+
+- `recipe` is the recipe's `name`. `stopped_at_step` is `null` unless the outcome is `no_change`.
+  Times are UTC, to the second.
+- The file holds no error text: a script's error output can contain data. The log has the text.
+- The exit code does not change, and `no_change` still exits 0, so an existing wrapper keeps
+  working. The file is written to a temporary file next to `PATH` and then renamed, so a reader
+  never sees half of it.
+- If the file cannot be written, the command prints
+  `privacyfence-sync: could not write the result file: <reason>` to the error output and keeps the
+  run's own exit code.
+
+### Listing the rules a recipe needs
+
+`permissions RECIPE` connects like `preflight`, asks PrivacyFence what each tool step would need,
+and prints it. It moves no data, runs no script, and does not declare an unattended session, so it
+works with a token that is not allowed to. A scoped token works too. It asks for `--server` and
+`--token-env` like `run`.
+
+```
+$ privacyfence-sync permissions recipe.yaml
+token "nightly": 3 rule(s), 4 tool(s), expires in 80 day(s)
+[export] salesforce_export_report: NEEDS A RULE: Salesforce — report = 00O1 (read)
+[files] drive_list_files: never asks for approval
+[fetch] drive_download_file: covered by rule rule-8f2c
+[load] grist_update_csv: NEEDS A RULE: Grist — document = docA (update)
+Rules this recipe needs:
+  Grist — document = docA (update)
+  Salesforce — report = 00O1 (read)
+Tools a scoped token for this recipe needs: drive_download_file, drive_list_files, grist_update_csv, salesforce_export_report
+```
+
+Each step shows one of these:
+
+| Line | Meaning |
+|---|---|
+| `never asks for approval` | PrivacyFence never asks about this tool |
+| `covered by rule <id>` | An existing rule matches |
+| `NEEDS A RULE: <scope> = <values> (<verb>)` | No rule matches; this is the rule that would. One line per suggestion |
+| `NEEDS A RULE: <scope>, naming what it reaches at run time (<verb>)` | The rule names something only known at run time, such as the folder a downloaded file is in |
+| `NEEDS A RULE: <scope> (<verb>)` | The rule takes no value (the Slack mentions, one-to-one DM and conversations rules) |
+| `NEEDS A RULE: <scope> (<verb>), if the step also passes <arg>=<value>` | The rule covers the step only if it also passes that argument |
+| `depends on what it reaches at run time` | The step has `${...}` arguments that were left out of the check; any suggested rules follow |
+| `NOT CHECKED: <error>` | The policy check itself failed |
+| `NOT AVAILABLE ...` | The server (or the token) does not offer the tool |
+
+The summary lists each distinct rule once, with the verbs of every step merged, and then the tools a
+scoped token needs: create the token with exactly these. Create each rule in **Settings →
+Auto-accept → Add a rule**, and tick the personal-data box on the token if the data holds personal
+data (see the notes above).
+
+Trigger steps need no PrivacyFence rule and are not listed.
+
+`--json` prints one object instead:
+
+```json
+{
+  "version": 1,
+  "recipe": "pipeline-overview",
+  "steps": [
+    {"id": "export", "tool": "salesforce_export_report", "status": "needs_rule", "matched_rule": null,
+     "dropped": [],
+     "suggested_rules": [{"group": "salesforce.report", "label": "Salesforce — report", "value": ["00O1"],
+                          "value_known": true, "verb": "read", "operation": "salesforce.run_report"}]}
+  ],
+  "needed": [{"group": "salesforce.report", "label": "Salesforce — report", "value": ["00O1"], "verbs": ["read"]}],
+  "tools": ["salesforce_export_report"]
+}
+```
+
+`status` is `auto`, `covered`, `needs_rule`, `unknown`, `not_checked` or `not_available`.
+`matched_rule` is set only for `covered`. `suggested_rules` is `null` when the server is too old to
+send suggestions. `value` is `null` where the rule names what the step reaches at run time. `value` is `[]` where the rule takes
+no value, and a suggestion with `requires_args` covers the step only if the step also passes those arguments.
+
+The command exits 0 when it could list, whether or not rules are needed. Otherwise it exits 1 for a
+bad recipe, 2 for a failure and 4 when the token is rejected or sees no tools.
 
 ## Scheduling
 
@@ -677,6 +934,20 @@ if (( ${#failed} )); then
 fi
 ```
 
+A recipe with a trigger step stores the task's token as a second Keychain item, under the same
+recipe folder name:
+
+```sh
+security add-generic-password -U -s privacyfence-sync-trigger -a 10-notes-inbox -T /usr/bin/security -w
+```
+
+The wrapper's run line then becomes the following, with the variable name the recipe's `token_env`
+gives:
+
+```zsh
+PRIVACYFENCE_TOKEN="$token" PRIVACYFENCE_TRIGGER_NOTES="$(/usr/bin/security find-generic-password -s privacyfence-sync-trigger -a "$name" -w 2>/dev/null)" "$S" run "$recipe"
+```
+
 The agent, `~/Library/LaunchAgents/local.pf-sync.daily.plist`, runs it every day at 06:10. launchd
 does not expand `~` or `$HOME`, so write your home folder out, and create the log folder first:
 
@@ -734,6 +1005,33 @@ The exit code tells your scheduler or monitoring what happened (see [Commands](#
 that exits 3 means a rule is missing, or a step's data changed so that a rule no longer covers it,
 for example a new project appearing in a Jira export or a file moved to another Drive folder.
 
+### On a server, against organization mode
+
+A scheduler on a server (a container, a CI runner, a cron host with no browser) cannot use the
+stored sign-in: `login` needs a browser on the same machine, and the sign-in lasts only 30 days. Use
+a scoped token instead. It is a named, expiring credential limited to the rules and tools you
+choose, and it can only be denied, never prompted.
+
+1. **The administrator enables scoped tokens** in the organization config bundle
+   (`build_org_bundle.py --enable-scoped-tokens`). A scoped token needs no
+   `unattended_sessions.enabled` ([ADR 0164](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md));
+   a plain sign-in does.
+2. **Create a scoped token** in **Settings** with the recipe's rules and tools.
+   `privacyfence-sync permissions RECIPE` lists both. Create each rule first, then the token that
+   uses them.
+3. **Store the token in the scheduler's secret store**, never in the recipe, and hand it to the
+   process as `PRIVACYFENCE_TOKEN` (or the variable named with `--token-env`). A trigger step's
+   token goes into the same secret store, handed to the process under its `token_env` name.
+4. **Run `preflight`, then schedule `run --result-file`.** `preflight` confirms every step is in
+   the token's scope and covered; the result file tells the scheduler `ok` from `no_change` and a
+   failure (see [The result file](#the-result-file)).
+5. **Renew the token before it expires.** Settings shows each token's expiry, when it was last
+   used and when it was last denied, and for which tool. A denial just after a use usually means a
+   rule is missing; a denial with no use means the tool is outside the token's scope. A token that
+   is no longer used may be pointing at a recipe nobody runs.
+
+The recipe's scripts run on the scheduler's machine, never on the PrivacyFence server.
+
 ## Limits
 
 These come from PrivacyFence's tools, not from `privacyfence-sync`:
@@ -743,6 +1041,7 @@ These come from PrivacyFence's tools, not from `privacyfence-sync`:
 | `grist_export_records`, `grist_export_sql` | 50,000 rows per export |
 | `salesforce_export_report` | 2,000 rows without `page_by`; with it, up to `salesforce.report_max_pages` runs (50 by default) |
 | `jira_export_issues` | 10,000 issues per export; narrow the JQL and export in parts above that |
+| `assets_export_objects` | 10,000 objects per export; narrow the AQL and export in parts above that |
 | Any delivered file | 200 MB (`file_bridge.max_download_bytes`) |
 | `grist_update_csv`, `grist_import_csv` | 20,000 rows, 100 columns, 10,000 characters per cell, 50 MB per file; one key column; formula columns can't be written |
 | Upload slot | 50 MB, valid 10 minutes |
@@ -761,6 +1060,8 @@ after the writes, not before.
 - The token (or the stored sign-in) is the key to everything your rules allow without a card.
   Treat it like a password: environment variables or a file only you can read, never a recipe,
   a crontab line or a shared folder.
+- A trigger step makes one outbound call, to `api.anthropic.com` only, with the token from its
+  `PRIVACYFENCE_*` variable, which scripts never see.
 - Files are written to the work folder in plain text. They hold whatever the source holds,
   personal data included when your rule allows it.
 - Scripts and templates run with your user's rights. Review them like any code; a recipe folder in

@@ -5,6 +5,7 @@ own orchestration in the way.
 """
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -467,6 +468,20 @@ class TestHoldWindow:
         )
         assert await registry.wait_async(approval, 0.05) is False
         assert not approval.is_finalized()
+
+    async def test_wait_async_wakes_for_a_decision_made_on_another_thread_mid_window(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        timer = threading.Timer(0.1, registry.finalize, args=(approval.id, "accept"))
+        timer.start()
+        started = time.monotonic()
+        try:
+            assert await registry.wait_async(approval, 5.0) is True
+        finally:
+            timer.join()
+        assert time.monotonic() - started < 1.0
 
 
 class TestPendingTTLExpiry:

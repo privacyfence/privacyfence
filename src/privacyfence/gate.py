@@ -158,11 +158,13 @@ from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, binding_key, card_digest
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
+    PERSONAL_DATA_READ_TOOLS,
     PERSONAL_DATA_RULE_TOOLS,
     TOOL_TO_OPERATION,
     ReviewContext,
     add_policy_v2_rules,
     add_rules_changed_listener,
+    forget_removed_rules,
     get_policy_rows,
     get_policy_v2_store_rules,
     is_temp_accepted,
@@ -171,13 +173,14 @@ from .auto_accept import (
     remove_policy_v2_rule,
     temp_accept_key,
 )
+from . import latency
 from .deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
 from .policy import scope_rows as policy_scope_rows
-from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_token_scope
+from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_store, current_token_scope
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -262,8 +265,13 @@ _TOOL_LAYOUT: dict[str, str] = {
     "confluence_download_attachment": WIDE,
     "salesforce_get_record": WIDE, "salesforce_search": WIDE, "salesforce_run_report": WIDE,
     "salesforce_export_report": WIDE,
+    "salesforce_create_record": WIDE, "salesforce_update_record": WIDE,
+    "salesforce_create_records": WIDE, "salesforce_update_records": WIDE,
     "grist_get_records": WIDE, "grist_export_records": WIDE, "grist_export_sql": WIDE, "grist_add_records": WIDE, "grist_update_records": WIDE,
     "grist_import_csv": WIDE, "grist_update_csv": WIDE,
+    "assets_get_object": WIDE, "assets_search_objects": WIDE,
+    "assets_get_related_objects": WIDE, "assets_get_connected_tickets": WIDE,
+    "assets_export_objects": WIDE,
     "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "jira_export_issues": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "peek_get_comments": WIDE, "peek_get_stats": WIDE, "peek_upload_page": WIDE,
@@ -393,7 +401,9 @@ async def _run_in_popup_executor(func, *args, **kwargs) -> Any:
     on another principal's behalf, the call blocks on it forever.
     """
     loop = asyncio.get_running_loop()
-    call = functools.partial(func, *args, **kwargs)
+    call = functools.partial(
+        latency.timed_call(func, time.monotonic(), getattr(func, "__name__", "dialog")), *args, **kwargs,
+    )
     ctx = contextvars.copy_context()
     return await loop.run_in_executor(_popup_executor, ctx.run, call)
 
@@ -734,18 +744,40 @@ def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]
     return scoped
 
 
+def rule_values(predicate: str, operation_key: str) -> list[str]:
+    """The string values of the current call's rules that use ``predicate`` for ``operation_key``,
+    deduplicated, in rule order. A connector uses it before gating to compute what a rule's selector
+    compares against (for example the Gmail queries Gmail is asked to evaluate). Under a scoped
+    token only the token's own rules are seen (ADR 0164)."""
+    values: list[str] = []
+    for rule in _rules_in_scope(current_token_scope()):
+        if rule.predicate != predicate or operation_key not in rule.operations:
+            continue
+        for item in rule.value if isinstance(rule.value, list) else [rule.value]:
+            if isinstance(item, str) and item and item not in values:
+                values.append(item)
+    return values
+
+
 def _personal_data_rule(
     tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
 ) -> policy_engine.PolicyRule | None:
-    """The token's own rule that covers this call, when the call is made with a scoped token
-    that has ``allow_personal_data`` (ADR 0173), for a tool in ``PERSONAL_DATA_RULE_TOOLS`` only
-    (ADR 0157); ``None`` for an unscoped call, a token without the flag, a revoked token, every
-    other tool, when the result carries the content itself (``content_reaches_result``), or when
-    no rule of the token matches."""
-    if tool not in PERSONAL_DATA_RULE_TOOLS or content_reaches_result:
-        return None
+    """The token's own rule that covers this call, when the call is made with a scoped token that
+    allows personal data for this tool: ``allow_personal_data_reads`` for a tool in
+    ``PERSONAL_DATA_READ_TOOLS``, or ``allow_personal_data`` (ADR 0173) for a tool in
+    ``PERSONAL_DATA_RULE_TOOLS`` (ADR 0157) whose result does not carry the content itself
+    (``content_reaches_result``). ``None`` for an unscoped call, a revoked token, a token without the
+    matching flag, every other tool, or when no rule of the token matches."""
     scope = current_token_scope()
-    if scope is None or scope is REVOKED_SCOPE or not scope.allow_personal_data:
+    if scope is None or scope is REVOKED_SCOPE:
+        return None
+    if tool in PERSONAL_DATA_READ_TOOLS:
+        allowed = scope.allow_personal_data_reads
+    elif tool in PERSONAL_DATA_RULE_TOOLS and not content_reaches_result:
+        allowed = scope.allow_personal_data
+    else:
+        return None
+    if not allowed:
         return None
     rules = _rules_in_scope(scope)
     if not rules:
@@ -981,6 +1013,7 @@ async def gated_call(
         # itself (an inline download), so a rule's allow_personal_data flag does not apply
         # (ADR 0157).
     my_email: str = "",
+    my_account_id: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
     delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- which
@@ -992,6 +1025,7 @@ async def gated_call(
 ) -> Any:
     created_at = time.time()
     request_id = uuid.uuid4().hex[:12]
+    timer = latency.StageTimer(request_id, connector, tool)
     operation_key = TOOL_TO_OPERATION.get(tool, f"{connector}.{tool}")
     # Set by web/mcp_dispatch.py's McpDispatcher.call() via reason_scope(),
     # from the mandatory "reason" param every gated ToolSpec now declares --
@@ -1005,6 +1039,7 @@ async def gated_call(
         args=args or {},
         raw_data=raw_data,
         my_email=my_email,
+        my_account_id=my_account_id,
         session_created_ids=session_created_ids or set(),
     )
     details = details_text or _default_details(raw_data)
@@ -1028,7 +1063,7 @@ async def gated_call(
     # single event loop for that whole duration.
     if gate == "review":
         pii_scan_source = details if pii_scan_text is None else pii_scan_text
-        pii_categories = await asyncio.to_thread(detect_pii_categories, pii_scan_source)
+        pii_categories = await latency.to_thread(timer, "pii_scan", detect_pii_categories, pii_scan_source)
     else:
         pii_categories = []
     # A separate, deliberately weaker signal for the popup (write) gate:
@@ -1044,7 +1079,9 @@ async def gated_call(
     # pii_categories's machinery.
     if gate == "popup":
         write_scan_source = details if write_content_scan_text is None else write_content_scan_text
-        write_content_flags = await asyncio.to_thread(detect_pii_categories, write_scan_source)
+        write_content_flags = await latency.to_thread(
+            timer, "write_scan", detect_pii_categories, write_scan_source,
+        )
     else:
         write_content_flags = []
     # The one deliberate exception to the comment above: drive_upload_file's
@@ -1053,7 +1090,9 @@ async def gated_call(
     # real scan pii_categories does -- folded into pii_detected below and
     # routed through _confirm_pii_or_deny, unlike write_content_flags.
     if gate == "popup" and upload_pii_scan_text:
-        upload_pii_categories = await asyncio.to_thread(detect_pii_categories, upload_pii_scan_text)
+        upload_pii_categories = await latency.to_thread(
+            timer, "upload_pii_scan", detect_pii_categories, upload_pii_scan_text,
+        )
     else:
         upload_pii_categories = []
     # PII-refinement trial capture (opt-in, off by default -- see
@@ -1064,12 +1103,14 @@ async def gated_call(
     # install never runs this extra scan at all.
     pii_audit_matches: list[PIIAuditMatch]
     if gate == "review" and is_pii_audit_match_details_enabled():
-        pii_audit_matches = await asyncio.to_thread(scan_pii_for_audit, pii_scan_source)
+        pii_audit_matches = await latency.to_thread(timer, "pii_audit_scan", scan_pii_for_audit, pii_scan_source)
     else:
         pii_audit_matches = []
     upload_pii_audit_matches: list[PIIAuditMatch]
     if gate == "popup" and upload_pii_scan_text and is_pii_audit_match_details_enabled():
-        upload_pii_audit_matches = await asyncio.to_thread(scan_pii_for_audit, upload_pii_scan_text)
+        upload_pii_audit_matches = await latency.to_thread(
+            timer, "upload_pii_audit_scan", scan_pii_for_audit, upload_pii_scan_text,
+        )
     else:
         upload_pii_audit_matches = []
     # The value everything below actually branches on for "does PII force a
@@ -1095,7 +1136,8 @@ async def gated_call(
     # cheap singleton lookup, called synchronously first so only the actual
     # file scan runs on the thread.
     audit_logger = get_audit_logger()
-    seen_count = await asyncio.to_thread(audit_logger.recent_matches, connector, tool, summary)
+    seen_count = await latency.to_thread(timer, "seen_count", audit_logger.recent_matches, connector, tool, summary)
+    timer.log_if_slow()
 
     # The deferred-protocol registry, if the active ApprovalUI has one (see
     # this module's own docstring) -- None for a registry-less ApprovalUI.
@@ -1202,7 +1244,7 @@ async def gated_call(
                 # A scoped token is deny-only (ADR 0164): never a card, never
                 # a pending approval -- the same point, for the same reason,
                 # as the unattended denial below.
-                _deny_scoped(audit, connector, tool, scope=scope, pii_categories=pii_forces_confirmation)
+                _deny_scoped(audit, connector, tool, scope=scope, pii_categories=pii_forces_confirmation, ctx=ctx)
             elif is_unattended():
                 # No rule matched, or one did but the PII gate still routed
                 # this to a human (see module docstring) -- either way,
@@ -1595,9 +1637,11 @@ async def propose_policy_change(
         changed = remove_policy_v2_rule(rule_id)
         affected_ids = [rule_id]
     else:
-        removed = remove_policy_v2_rule(rule_id) if operation == "update" else False
+        removed = remove_policy_v2_rule(rule_id, forget_in_tokens=False) if operation == "update" else False
         row_ids = policy_row_ids_for(new_rules)
         added = add_policy_v2_rules(new_rules)
+        if operation == "update" and rule_id not in row_ids:
+            forget_removed_rules([rule_id])
         changed = removed or added
         affected_ids = row_ids
 
@@ -1633,22 +1677,67 @@ def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[s
         "Unattended session: denying %s/%s without prompting -- no auto-accept rule matched%s",
         connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "",
     )
+    if pii_categories:
+        raise GateDeniedError(_pii_denial_text("this connection is in an unattended session", pii_categories))
     raise GateDeniedError(
         "Request denied: this connection is in an unattended session and no auto-accept rule "
         "matches this call, so it can't be approved without a human present."
     )
 
 
-def _deny_scoped(audit, connector: str, tool: str, *, scope: ScopedToken, pii_categories: list[str]) -> None:
+def _pii_denial_text(who: str, pii_categories: list[str]) -> str:
+    """The refusal text when the PII scan, not a missing rule, stopped a call that cannot get a
+    human's confirmation. Names the categories found (never the matched text), so a rule that does
+    cover the call is not blamed, and says which tools a scoped token's personal-data allowance
+    can lift this for (ADR 0157, 0173)."""
+    return (
+        f"Request denied: {who} and the result holds personal data ({', '.join(sorted(set(pii_categories)))}), "
+        "which needs a person's confirmation even when a rule covers the call. A scoped token's "
+        "personal-data allowance lifts this only for exports, downloads and page uploads."
+    )
+
+
+def _assets_schema_detail(scope: ScopedToken, ctx: ReviewContext) -> str:
+    """For a refused Assets call: the schema ids of the objects it touched and the ones the token's
+    schema rules allow, so a mismatch is visible in the log. ``""`` when nothing applies."""
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    touched = sorted({str(getattr(i, "schema_id", "") or "") for i in items if i is not None})
+    allowed = sorted({
+        str(v) for rule in _rules_in_scope(scope)
+        if rule.predicate in ("approved_schema_ids", "approved_schema_ids_all_results")
+        for v in (rule.value if isinstance(rule.value, list) else [rule.value])
+    })
+    return f"; object schema ids {touched or 'none'}, token's allowed schema ids {allowed or 'none'}"
+
+
+def _note_scoped_denial(scope: ScopedToken, tool: str) -> None:
+    """Record a refusal for the token's last-denied line on Settings (ADR 0206). Never raises."""
+    store = current_store()
+    if store is None or scope is REVOKED_SCOPE:
+        return
+    try:
+        store.note_denial(scope, tool)
+    except Exception:  # the refusal itself must go out unchanged
+        logger.warning("Could not record a scoped token denial for %s", scope.id, exc_info=True)
+
+
+def _deny_scoped(
+    audit, connector: str, tool: str, *, scope: ScopedToken, pii_categories: list[str],
+    ctx: ReviewContext | None = None,
+) -> None:
     """Fail-fast path for a call made with a scoped token (ADR 0164) that none of the token's
     rules auto-accepted (or that the PII gate routed to a human anyway): denied at once, before
     any card or pending approval, like ``_deny_unattended``. Logs the token's id, never its
     secret. Always raises."""
     audit(decision="denied_scoped_token", auto_accept_rule="", pii_detected=bool(pii_categories))
+    _note_scoped_denial(scope, tool)
+    detail = _assets_schema_detail(scope, ctx) if connector == "assets" and ctx is not None else ""
     logger.warning(
-        "Scoped token %s: denying %s/%s without prompting -- none of its rules matched%s",
-        scope.id, connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "",
+        "Scoped token %s: denying %s/%s without prompting -- none of its rules matched%s%s",
+        scope.id, connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "", detail,
     )
+    if pii_categories:
+        raise GateDeniedError(_pii_denial_text("this call uses a scoped token", pii_categories))
     raise GateDeniedError(
         "Request denied: this call uses a scoped token, and none of the token's rules covers it."
     )
@@ -1659,6 +1748,7 @@ def audit_scoped_refusal(connector: str, tool: str, scope: ScopedToken, summary:
     the token's tools, or a revoked token -- web/routes_mcp.py). The agent fields, filled from
     ``current_agent()``, name the token (ADR 0164); ``scope`` is logged by id, never a secret."""
     logger.warning("Scoped token %s: refused %s/%s -- %s", scope.id, connector, tool, summary)
+    _note_scoped_denial(scope, tool)
     _audit(
         created_at=time.time(), request_id=uuid.uuid4().hex[:12], connector=connector, tool=tool,
         tool_name="", summary=summary, sender="", decision="denied_scoped_token",

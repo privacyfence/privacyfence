@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import pathlib
 import threading
 import time
 from types import SimpleNamespace
@@ -30,7 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from privacyfence import auto_accept, daemon_main, org_mode, resource_names, scoped_tokens, settings_controller as sc, update_checker
+from privacyfence import auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, update_checker
 from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
 from privacyfence import peek_client, policy_upgrade
@@ -40,6 +41,7 @@ from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.registry import Verb
+from privacyfence.principal import current_principal
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -57,12 +59,21 @@ def _drain_run_async(recorded) -> None:
         func(*args, **kwargs)
 
 
+# A connector is listed and usable only when the org config carries its section (ADR 0196); the
+# default fixture enables them all so tests of one connector don't each have to say so.
+ORG_CONFIG_ENABLING_EVERY_CONNECTOR = {
+    "google": {"client_id": "g"}, "slack": {"client_id": "s"}, "salesforce": {"consumer_key": "k"},
+    "atlassian": {"client_id": "a"}, "telegram": {"enabled": True}, "grist": {"enabled": True},
+    "peek": {"enabled": True},
+}
+
+
 @pytest.fixture
 def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "resource_name_cache.json")
     monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
     monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
-    monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+    monkeypatch.setattr(daemon_main, "load_org_config", lambda: dict(ORG_CONFIG_ENABLING_EVERY_CONNECTOR))
 
     org_dir_path = tmp_path / "org"
     org_dir_path.mkdir()
@@ -70,6 +81,8 @@ def controller(tmp_path, monkeypatch):
     data_dir_path = tmp_path / "data"
     data_dir_path.mkdir()
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
+    # Deleting a rule also edits the principal's scoped-token file (ADR 0198).
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("connectors: {}\n", encoding="utf-8")
@@ -773,6 +786,49 @@ class TestOrgConfigInstallSigning:
         installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
         assert installed == first_bundle  # unchanged -- the bad update was never written
 
+    def test_install_org_config_refuses_an_older_serial_and_keeps_the_installed_file(self, controller):
+        from privacyfence import org_bundle_signing
+
+        key, _ = org_bundle_signing.generate_keypair()
+        newer = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Acme", "serial": 200}, key)
+        controller.install_org_config_bytes(json.dumps(newer).encode())
+        assert controller.error == ""
+        assert org_bundle_signing.load_pinned_serial(sc.org_dir()) == 200
+
+        older = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Old", "serial": 100}, key)
+        controller.install_org_config_bytes(json.dumps(older).encode())
+
+        assert "rollback refused" in controller.error
+        assert str(org_bundle_signing.pinned_serial_path(sc.org_dir())) in controller.error
+        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        assert installed == newer
+        assert org_bundle_signing.load_pinned_serial(sc.org_dir()) == 200
+
+    def test_install_org_config_refuses_an_invalid_serial_without_a_remedy(self, controller):
+        from privacyfence import org_bundle_signing
+
+        key, _ = org_bundle_signing.generate_keypair()
+        bundle = org_bundle_signing.sign_bundle({"version": 1, "serial": True}, key)
+
+        controller.install_org_config_bytes(json.dumps(bundle).encode())
+
+        assert controller.error == "Refusing to install: serial is not a positive integer."
+
+    def test_install_org_config_records_the_serial_only_after_the_write(self, controller, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        key, _ = org_bundle_signing.generate_keypair()
+        bundle = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Acme", "serial": 50}, key)
+
+        def boom(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sc, "atomic_write_json", boom)
+        controller.install_org_config_bytes(json.dumps(bundle).encode())
+
+        assert "Could not install organization config" in controller.error
+        assert not org_bundle_signing.pinned_serial_path(sc.org_dir()).exists()
+
 
 @pytest.mark.usefixtures("stub_connector_build")
 class TestWouldPinNewOrgSigningKey:
@@ -836,6 +892,31 @@ class TestConnectorEnableDisable:
         cfg = controller._load_config()
         assert cfg["connectors"]["gmail"]["enabled"] is True
         assert refresh_calls == [1, 1]
+
+    def test_jira_assets_row_is_off_by_default_and_enable_turns_it_on(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"atlassian": {"client_id": "ci"}})
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["label"] == "Jira Assets"
+        assert row["enabled"] is False
+        assert row["has_org"] is True
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
+
+        controller.enable_connector("assets")
+
+        assert controller._load_config()["connectors"]["assets"]["enabled"] is True
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["enabled"] is True
+
+    def test_jira_assets_row_follows_the_bundle_flag_unless_explicitly_disabled(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"atlassian": {"client_id": "ci", "assets": True}})
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["enabled"] is True
+
+        controller.disable_connector("assets")
+
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "assets")
+        assert row["enabled"] is False
 
     def test_disable_is_idempotent(self, controller, monkeypatch):
         monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
@@ -1009,7 +1090,8 @@ class TestAuthenticateDispatch:
         ("contacts", "_authenticate_google"), ("calendar", "_authenticate_google"),
         ("tasks", "_authenticate_google"), ("apps_script", "_authenticate_google"), ("slack", "_authenticate_slack"),
         ("salesforce", "_authenticate_salesforce"), ("jira", "_authenticate_atlassian"),
-        ("confluence", "_authenticate_atlassian"), ("grist", "_authenticate_grist"),
+        ("confluence", "_authenticate_atlassian"), ("assets", "_authenticate_atlassian"),
+        ("grist", "_authenticate_grist"),
     ])
     def test_dispatches_to_the_right_per_service_method(self, controller, monkeypatch, cname, method):
         calls = []
@@ -1277,7 +1359,37 @@ class TestAuthenticateAtlassian:
         assert controller.error
         assert run_async_calls == []
 
-    def test_success_marks_busy_for_both_jira_and_confluence(self, controller, monkeypatch):
+    @pytest.mark.parametrize(("yaml_text", "org", "expect_assets"), [
+        ("", {"client_id": "ci"}, False),
+        ("connectors:\n  assets:\n    enabled: true\n", {"client_id": "ci"}, True),
+        ("", {"client_id": "ci", "assets": True}, True),
+        ("connectors:\n  assets:\n    enabled: false\n", {"client_id": "ci", "assets": True}, False),
+    ])
+    def test_authorize_scopes_include_assets_only_when_enabled(
+        self, controller, monkeypatch, tmp_path, yaml_text, org, expect_assets,
+    ):
+        config_path = tmp_path / "assets-settings.yaml"
+        config_path.write_text(yaml_text)
+        controller._config_path = str(config_path)
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
+        captured = {}
+
+        def fake_authorize(**kwargs):
+            captured.update(kwargs)
+            return {"site_url": "https://acme.atlassian.net"}
+
+        monkeypatch.setattr(sc, "atlassian_authorize_interactive", fake_authorize)
+
+        controller._authenticate_atlassian({"atlassian": org})
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert ("read:cmdb-object:jira" in captured["scopes"]) is expect_assets
+        assert "read:jira-work" in captured["scopes"]
+
+    def test_success_marks_busy_for_jira_confluence_and_assets(self, controller, monkeypatch):
         recorded = []
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(sc, "atlassian_authorize_interactive", lambda **kw: {"site_url": "https://acme.atlassian.net"})
@@ -1286,13 +1398,14 @@ class TestAuthenticateAtlassian:
 
         controller._authenticate_atlassian({"atlassian": {"client_id": "ci"}})
 
-        assert {"jira", "confluence"} <= controller._busy_connectors
+        assert {"jira", "confluence", "assets"} <= controller._busy_connectors
         assert wait_until(lambda: recorded)
         _drain_run_async(recorded)
 
         assert refresh_calls == [1]
         assert "jira" not in controller._busy_connectors
         assert "confluence" not in controller._busy_connectors
+        assert "assets" not in controller._busy_connectors
 
     def test_no_approval_ui_registered_falls_back_to_the_first_resource(self, controller, monkeypatch):
         # _pick_resource_index's own "no registry" case (approval_ui.py's
@@ -1877,6 +1990,78 @@ class TestPolicyScopeCatalogue:
         }
 
 
+class TestImportPolicyRules:
+    """import_policy_rules is the personal-settings import's writer: add_policy_rule's merge for rules
+    that are already compiled, through the same save-and-reload path."""
+
+    @staticmethod
+    def _rules(scope="drive.folder", value=("FOLDER1",)):
+        row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, list(value)), scope=scope, value=list(value),
+            verbs=frozenset(scope_rows.scope_verbs(scope)),
+            operations=scope_rows.implied_operations(scope, scope_rows.scope_verbs(scope)),
+        )
+        return scope_rows.compile_row(row)
+
+    def test_policy_rows_reads_what_is_on_disk(self, controller):
+        assert controller.policy_rows() == []
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        assert [row.scope for row in controller.policy_rows()] == ["drive.folder"]
+
+    def test_policy_rows_is_empty_when_the_section_cannot_be_upgraded(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_load_rows", lambda: None)
+        assert controller.policy_rows() == []
+
+    def test_writes_the_rows_and_hot_reloads_the_rule_cache(self, controller):
+        assert controller.import_policy_rules(self._rules()) is True
+
+        cfg = controller._load_config()
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["version"] == 3
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["scope"] == "drive.folder"
+        assert auto_accept.get_policy_v2_store_rules()
+
+    def test_an_unchanged_merge_writes_nothing(self, controller):
+        controller.import_policy_rules(self._rules())
+        before = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
+        assert controller.import_policy_rules(self._rules()) is False
+        after = pathlib.Path(controller._config_path).read_text(encoding="utf-8")
+        assert after == before
+
+    def test_does_nothing_when_the_rows_cannot_be_loaded(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_load_rows", lambda: None)
+        assert controller.import_policy_rules(self._rules()) is False
+
+    def test_keeps_existing_rows_and_extends_a_matching_one(self, controller):
+        controller.add_policy_rule("drive.folder", "KEEP", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        assert controller.import_policy_rules(self._rules()) is True
+        rows = {tuple(row.value or ()): row for row in controller.policy_rows()}
+        assert set(rows) == {("KEEP",), ("FOLDER1",)}
+        assert len(rows[("FOLDER1",)].verbs) > 1
+
+    def test_refreshes_the_audit_loggers_policy_hash_like_add_policy_rule(self, controller, monkeypatch):
+        seen: list[str] = []
+        logger = SimpleNamespace(set_security_config_hash=seen.append)
+        monkeypatch.setattr(sc, "get_audit_logger", lambda: logger)
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        added = list(seen)
+        controller.import_policy_rules(self._rules("drive.folder", ("OTHER",)))
+        assert len(seen) == len(added) + 1 and seen[-1] != added[-1]
+
+    def test_rules_changed_listeners_see_the_imported_rules(self, controller):
+        seen: list = []
+
+        def listener() -> None:
+            seen.append(list(auto_accept.get_policy_v2_store_rules()))
+
+        auto_accept.add_rules_changed_listener(listener)
+        try:
+            controller.import_policy_rules(self._rules())
+        finally:
+            auto_accept.remove_rules_changed_listener(listener)
+        assert seen and seen[-1] == list(auto_accept.get_policy_v2_store_rules()) and seen[-1]
+
+
 class TestAddPolicyRule:
     """add_policy_rule is the Auto-accept page's one writer, straight to the on-disk version-3
     ``auto_accept:`` section -- never through v1's auto_accept_rules/auto_accept_grants."""
@@ -1896,6 +2081,39 @@ class TestAddPolicyRule:
         # Writes only the current section: nothing a later load_config would refuse, and no marker.
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
+
+    def test_gmail_query_value_is_not_split_on_commas(self, controller):
+        query = 'in:inbox (from:a OR from:b) subject:"x, y"'
+
+        state = controller.add_policy_rule("gmail.query", f"  {query}  ", ["read"])
+
+        assert state["error"] == ""
+        [row] = state["auto_accept"]["rules"]
+        assert row["connector"] == "gmail"
+        assert query in row["value"]
+
+    def test_other_scopes_still_split_on_commas(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1, FOLDER2", ["read"])
+
+        [row] = state["auto_accept"]["rules"]
+        assert "FOLDER1" in row["value"] and "FOLDER2" in row["value"]
+
+    def test_a_title_instead_of_an_id_is_refused_with_the_message_in_the_snapshot(self, controller):
+        before = controller._load_config()
+
+        state = controller.add_policy_rule("slack.channel", "#general", ["read"])
+
+        assert state["error"].startswith("'#general' is not a Slack ID.")
+        assert state["auto_accept"]["rules"] == []
+        assert controller._load_config() == before
+
+    def test_a_valid_add_after_a_refused_one_clears_the_error(self, controller):
+        controller.add_policy_rule("slack.channel", "#general", ["read"])
+
+        state = controller.add_policy_rule("slack.channel", "C0123456789", ["read"])
+
+        assert state["error"] == ""
+        assert len(state["auto_accept"]["rules"]) == 1
 
     @pytest.mark.parametrize("method", ["add", "remove", "set_verbs", "update"])
     def test_rules_changed_listeners_see_the_new_rule(self, controller, method):
@@ -2062,6 +2280,51 @@ class TestPolicyRuleRows:
         controller.remove_policy_rule(drop)
 
         assert [r.id for r in scope_rows.rows_from_config(controller._load_config())] == [keep]
+
+    @staticmethod
+    def _seed_token(rule_ids):
+        token = scoped_tokens.ScopedToken(
+            id="st-000000000000", label="sync", digest="d", principal_id="local", principal_email="",
+            principal_display_name="", created_at=0.0, expires_at=1e12,
+            rule_ids=frozenset(rule_ids), tools=frozenset({"drive_download_file"}),
+        )
+        principal = current_principal()
+        path = paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
+        secure_files.atomic_write_json(path, {"version": 1, "tokens": [scoped_tokens._to_json(token)]})
+        store = scoped_tokens.ScopedTokenStore(lambda: [principal])
+        store.load()
+        scoped_tokens.set_store(store)
+        return token
+
+    @staticmethod
+    def _reread(token):
+        reread = scoped_tokens.get_store().get(token.principal_id, token.id)
+        assert reread is not None
+        return reread
+
+    def test_remove_drops_the_id_from_a_token_that_carried_it(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        controller.add_policy_rule("drive.folder", "FOLDER2", ["read"])
+        keep = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        drop = scope_rows.row_id_for("drive.folder", ["FOLDER2"])
+        token = self._seed_token([keep, drop])
+
+        controller.remove_policy_rule(drop)
+
+        assert self._reread(token).rule_ids == {keep}
+
+    def test_adding_the_same_scope_again_does_not_restore_the_token_access(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        rule_id = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
+        token = self._seed_token([rule_id])
+
+        controller.remove_policy_rule(rule_id)
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+
+        assert scope_rows.row_id_for("drive.folder", ["FOLDER1"]) == rule_id
+        reread = self._reread(token)
+        assert reread.rule_ids == frozenset()
+        assert gate_module._rules_in_scope(reread) == []
 
     def test_update_fills_missing_on_row(self, controller):
         controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
@@ -2357,6 +2620,18 @@ class TestAutoAcceptRuleUsage:
         assert row["never_matched"] is True
 
 
+class _DriveFailing:
+    """A Drive client whose every metadata lookup fails with the given HTTP status."""
+
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def get_file_metadata(self, file_id: str):
+        error = RuntimeError(f"HTTP {self.status}")
+        error.resp = SimpleNamespace(status=self.status)
+        raise error
+
+
 class TestScopeRowState:
     """The Auto-accept page reads scope rows (ADR 0172), not one entry per stored predicate."""
 
@@ -2386,11 +2661,50 @@ class TestScopeRowState:
             "r-unrelated": {"count": 9, "last_matched": "2026-07-09T12:00:00+00:00"},
         }
         rows = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
-        state = sc._auto_accept_state_from_rows(rows, usage, resolve_value=lambda row: "v")
+        state = sc._auto_accept_state_from_rows(
+            rows, usage, resolve_value=lambda row: "v", resolver=sc.get_resolver(),
+        )
         (row,) = state["rules"]
         assert row["match_count"] == 5
         assert row["never_matched"] is False
         assert row["last_matched"] == sc._relative_time("2026-07-08T12:00:00+00:00")
+
+    def test_row_carries_its_values_and_the_sentence_around_them(self, controller):
+        (row,) = controller._auto_accept_state(self._v2_cfg())["rules"]
+        assert row["value_items"] == [
+            {"id": i, "short_id": sc._short_id(i), "name": None, "status": "pending"} for i in row["value_ids"]
+        ]
+        before, after = row["sentence_parts"]
+        assert before + ", ".join(row["value_ids"]) + after != ""
+        assert before + row["value"] + after == row["sentence"]
+
+    def test_an_id_a_live_lookup_could_not_find_is_invalid(self, controller):
+        (scope_row,) = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
+        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
+        resolver = sc.get_resolver()
+        gone = scope_row.value[0]
+        resolver.resolve(rt, gone, _DriveFailing(status=404))
+        (item, *_) = sc.row_value_items(scope_row, resolver)
+        assert item["id"] == gone and item["status"] == "invalid"
+
+    def test_an_id_whose_lookup_failed_is_not_invalid(self, controller):
+        (scope_row,) = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
+        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
+        resolver = sc.get_resolver()
+        resolver.resolve(rt, scope_row.value[0], _DriveFailing(status=429))
+        (item, *_) = sc.row_value_items(scope_row, resolver)
+        assert item["status"] == "pending"
+
+    def test_a_row_that_compiles_to_nothing_lists_its_values_as_plain(self):
+        row = sc.policy_scope_rows.ScopeRow(
+            id="r-empty", scope="drive.folder", value=["a", "b"], verbs=frozenset(), operations=frozenset(),
+        )
+        assert [(i["id"], i["status"]) for i in sc.row_value_items(row, sc.get_resolver())] == [
+            ("a", "plain"), ("b", "plain"),
+        ]
+        assert sc.sentence_parts(sc.policy_scope_rows.ScopeRow(
+            id="r-none", scope="drive.folder", value=None, verbs=frozenset(), operations=frozenset(),
+        )) is None
 
 
 class TestResolvedRuleValue:
@@ -2573,12 +2887,43 @@ class TestSnapshotStructure:
         assert row["has_org"] is True
         assert row["auth_label"] == "Authenticate…"
 
-    def test_peek_row_needs_no_bundle_in_local_mode(self, controller, monkeypatch):
-        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+    def test_peek_row_needs_only_the_bare_section_in_local_mode(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"peek": {"enabled": True}})
         row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "peek")
         assert row["label"] == "Peek"
         assert row["has_org"] is True
         assert row["authed"] is False
+
+    def test_only_connectors_the_org_config_enables_are_listed(self, controller, monkeypatch):
+        monkeypatch.setattr(
+            controller, "_org_config_or_empty",
+            lambda: {"slack": {"client_id": "s"}, "telegram": {"enabled": True}, "atlassian": {}},
+        )
+        assert [c["key"] for c in controller.snapshot()["connectors"]] == ["slack", "telegram"]
+
+    def test_no_org_config_lists_no_connectors(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        assert controller.snapshot()["connectors"] == []
+
+    def test_status_still_reports_connectors_the_org_config_does_not_enable(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        controller._connector_failures = {"telegram": "no_org_config"}
+        rows = {r["name"]: r for r in controller.status_connectors()}
+        assert set(rows) == set(sc.ALL_CONNECTORS)
+        assert rows["telegram"]["blocked_by"] == "no_org_config"
+
+    @pytest.mark.parametrize("name", ["telegram", "peek", "grist", "gmail", "slack"])
+    def test_a_connector_the_org_config_does_not_enable_cannot_be_signed_in(self, controller, monkeypatch, name):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
+        calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda *a: calls.append(a))
+        monkeypatch.setattr(sc, "telegram_app_credentials", lambda: ("1", "h"))
+        controller.authenticate_connector(name)
+        controller.telegram_start_auth("+15550100")
+        controller.peek_start_login("https://peek.example.com")
+        controller.grist_connect("key", "https://docs.getgrist.com")
+        assert calls == []
+        assert "isn't enabled in your organization config" in controller.error
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()

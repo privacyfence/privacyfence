@@ -95,7 +95,7 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import __version__, auto_accept, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
+from .. import __version__, auto_accept, latency, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
@@ -106,7 +106,9 @@ from ..policy.registry import TOOL_REGISTRY
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
 from ..resource_names import get_resolver
-from ..settings_controller import SettingsController, cached_row_value, set_main_dispatcher
+from ..settings_controller import (
+    SettingsController, cached_row_value, row_value_items, sentence_parts, set_main_dispatcher,
+)
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from ..web_push import PushNotifier, PushSubscriptionStore
@@ -135,7 +137,7 @@ from .mcp_auth import (
     single_token_verifier,
 )
 from .mcp_dispatch import McpDispatcher
-from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
+from .oauth_provider import CONSENT_PATH, IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
@@ -287,20 +289,34 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     )
 
 
-def _scoped_rule_entry(row: scope_rows.ScopeRow, value_display: str) -> dict[str, Any]:
+def _scoped_rule_entry(
+    row: scope_rows.ScopeRow, value_display: str, value_items: list[dict[str, Any]],
+) -> dict[str, Any]:
     """One row as the scoped token form shows it: ``title`` says which resource it covers,
-    ``verbs`` what it allows there, ``tools`` which tools those verbs govern."""
+    ``verbs`` what it allows there, ``tools`` which tools those verbs govern. ``title_parts`` and
+    ``sentence_parts`` are the same texts split around the value and ``value_items`` the value
+    itself, so the page can show it by id or by name (``row_value_items``)."""
     compiled = scope_rows.compile_row(row)
     connectors = sorted({policy_propose.connector_of_operation(op) for op in row.operations})
     connector = describe.connector_label(connectors[0]) if connectors else ""
     scope_type = describe.scope_type_of(compiled[0]) if compiled else ""
-    if scope_type:
-        subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip()
-    else:
-        subject = compiled[0].predicate if compiled else (row.predicate or row.scope or "")
+
+    def title(display: str) -> str:
+        if scope_type:
+            joiner = " except " if scope_type in describe.EXCLUSION_SCOPE_TYPES and row.value else " "
+            subject = f"{describe.scope_type_label(scope_type)}{joiner}{display}".strip()
+        else:
+            subject = compiled[0].predicate if compiled else (row.predicate or row.scope or "")
+        return f"{connector} — {subject}" if connector else subject
+
+    marker = "\x00"
+    before, found, after = title(marker).partition(marker) if scope_type and row.value else ("", "", "")
     return {
         "id": row.id,
-        "title": f"{connector} — {subject}" if connector else subject,
+        "title": title(value_display),
+        "title_parts": [before, after] if found else None,
+        "sentence_parts": sentence_parts(row),
+        "value_items": value_items,
         "verbs": [verb.value for verb in sorted(row.verbs, key=policy_propose.verb_sort_key)],
         "sentence": describe.row_sentence(row, value_display=value_display or None),
         "tools": sorted({tool for rule in compiled for tool in describe.covered_tools(rule)}),
@@ -323,7 +339,10 @@ def _token_rule_entry(
 ) -> dict[str, Any]:
     if rule_id not in rules:
         return {"id": rule_id, "missing": True}
-    entry = {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
+    entry = {
+        "id": rule_id, "title": rules[rule_id]["title"],
+        **{key: rules[rule_id][key] for key in ("sentence", "sentence_parts", "value_items")},
+    }
     limit = token.rule_limits.get(rule_id)
     # A token's limit is narrower than the row when some of the row's pairs are not in it.
     if limit is not None and scope_rows.pairs_of(rows.values(), rule_id) - limit:
@@ -349,14 +368,20 @@ def scoped_token_page_data(
     with principal_scope(principal):
         resolver = get_resolver()
         rows = {row.id: row for row in auto_accept.get_policy_rows()}
-        rules = {row.id: _scoped_rule_entry(row, cached_row_value(row, resolver)) for row in rows.values()}
+        rules = {
+            row.id: _scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver))
+            for row in rows.values()
+        }
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
         connector = name.split("_", 1)[0]
         if connector in connector_names:
             by_connector.setdefault(connector, []).append(name)
     tokens = []
-    for token in scoped_tokens.get_store().tokens_for(principal):
+    store = scoped_tokens.get_store()
+    activity = store.activity_for(principal)
+    for token in store.tokens_for(principal):
+        seen = activity.get(token.id, scoped_tokens.TokenActivity())
         expired = token.expired(now)
         days_left = token.days_left(now)
         tokens.append({
@@ -366,6 +391,9 @@ def scoped_token_page_data(
             "rules": [_token_rule_entry(token, rule_id, rows, rules) for rule_id in sorted(token.rule_ids)],
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
+            "allow_personal_data_reads": token.allow_personal_data_reads,
+            "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
+            "last_denied_tool": seen.last_denied_tool,
         })
     return {
         "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
@@ -389,17 +417,21 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
 
     def _create(
         label: str, days: int, rule_ids: list[str], tools: list[str], allow_personal_data: bool,
+        allow_personal_data_reads: bool,
     ) -> tuple[ScopedToken, str]:
         with principal_scope(LOCAL_PRINCIPAL):
             return scoped_tokens.get_store().create(
                 LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=tools, policy=policy,
-                allow_personal_data=allow_personal_data,
+                allow_personal_data=allow_personal_data, allow_personal_data_reads=allow_personal_data_reads,
             )
 
     def _revoke(token_id: str) -> ScopedToken | None:
         store = scoped_tokens.get_store()
         token = store.get(LOCAL_PRINCIPAL.id, token_id)
         return token if token is not None and store.revoke(LOCAL_PRINCIPAL, token_id) else None
+
+    def _rename(token_id: str, label: str) -> tuple[str, ScopedToken] | None:
+        return scoped_tokens.get_store().rename(LOCAL_PRINCIPAL, token_id, label)
 
     def _revoke_all() -> int:
         return scoped_tokens.get_store().revoke_all(LOCAL_PRINCIPAL.id)
@@ -414,8 +446,8 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
         )
 
     return ScopedTokenWiring(
-        store_create=_create, store_revoke=_revoke, store_revoke_all=_revoke_all, send_secret=_send,
-        page_data=_page_data,
+        store_create=_create, store_revoke=_revoke, store_rename=_rename, store_revoke_all=_revoke_all,
+        send_secret=_send, page_data=_page_data,
     )
 
 
@@ -549,8 +581,14 @@ def _clear_web_base_url_file() -> None:
 # browsing-context group and nulls its ``window.opener`` -- and a client
 # whose redirect page hands the code back through ``window.opener``
 # (Gemini Enterprise's does) then never exchanges it. Neither path renders
-# a document, so COOP protected nothing on them. ADR 0108.
+# a document, so COOP protected nothing on them. ADR 0108. The consent pages
+# (``CONSENT_PATH``/<id>, ADR 0177) are the one exception to "neither renders a
+# document": they do, but they sit in the same chain and must keep the opener too.
 _OAUTH_POPUP_PATHS = frozenset({"/authorize", IDP_CALLBACK_PATH})
+
+
+def _keeps_popup_opener(path: str) -> bool:
+    return path in _OAUTH_POPUP_PATHS or path.startswith(CONSENT_PATH + "/")
 
 
 class _SecurityHeadersMiddleware:
@@ -629,7 +667,7 @@ class _SecurityHeadersMiddleware:
                 headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
                 headers["cross-origin-opener-policy"] = (
-                    "unsafe-none" if scope.get("path") in _OAUTH_POPUP_PATHS else "same-origin"
+                    "unsafe-none" if _keeps_popup_opener(scope.get("path") or "") else "same-origin"
                 )
                 if self._hsts:
                     headers["strict-transport-security"] = _HSTS
@@ -896,7 +934,10 @@ class _BootstrapMiddleware:
         if not code:
             await self._app(scope, receive, send)
             return
-        response = RedirectResponse(request.url.path, status_code=303)
+        response = RedirectResponse(
+            # A leading "//" or "/\\" would be read as a scheme-relative URL to another host.
+            "/" + request.url.path.lstrip("/\\"), status_code=303,
+        )
         # The code carries its own provenance (web/session_auth.py's
         # ``PROVENANCE_*``) and, since ADR 0008, the principal that minted it
         # (which OS user's control-channel connection asked), and the session
@@ -931,8 +972,13 @@ def _state_stream_route(stream: StateStream, *, sessions: LocalSessionStore) -> 
         session_id = request.cookies.get(_SESSION_COOKIE, "")
         if not session_id or not sessions.touch(session_id):
             return _unauthorized_response(request)
+        # The settings snapshot is the owner's: another OS user's stream carries approvals only.
+        receives_settings = current_principal().id == LOCAL_PRINCIPAL.id
         return StreamingResponse(
-            stream.subscribe(request.is_disconnected, touch=lambda: sessions.touch(session_id)),
+            stream.subscribe(
+                request.is_disconnected, touch=lambda: sessions.touch(session_id),
+                receives_settings=receives_settings,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store"},
         )
@@ -1109,6 +1155,8 @@ def build_app(
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
+        # Only a real dispatcher-backed server carries gated calls worth watching -- see latency.py.
+        lifespans.append(latency.loop_health_lifespan())
         # ADR 0007: the local file bridge's own upload/download endpoints,
         # authenticated exactly like /mcp (same bearer-token verifier) --
         # see routes_file_bridge.py's own module docstring for why this
@@ -1256,10 +1304,12 @@ def _build_org_app(
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
-            client_names=org.provider.client_name, pinned_agents=org.provider.pinned_agent_id,
+            client_names=org.provider.client_name, attested_agents=org.provider.attested_agent_id,
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
+        # Only a real dispatcher-backed server carries gated calls worth watching -- see latency.py.
+        lifespans.append(latency.loop_health_lifespan())
         # ADR 0028: org mode's own privacyfence_create_upload_slot and
         # DownloadDeliveryConfig.agent_links need the same two
         # unauthenticated capability routes local mode mounts above --
@@ -1354,14 +1404,14 @@ def _build_org_app(
         # above already resolves from org.org_config -- see that call and
         # this function's own build_org_routes docstring.
         step_up=step_up, step_up_origin=org.issuer_url,
-        # The admin's "AI systems" pin page (ADR 0035) lists and pins this provider's DCR clients.
-        oauth_provider=org.provider,
         # Auto-accept rule values resolve to names through the viewing principal's own connectors.
         connector_registry=org.connector_registry,
         # ADR 0165: the administrator's opt-in and cap from the org config bundle; the section
         # needs /mcp, so without a dispatcher the page offers none.
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
         scoped_token_page_data=org_scoped_token_page_data,
+        # The admin's Stats page (ADR 0217) lists the connectors this bundle offers.
+        org_config=org.org_config,
     ))
 
     lifespan = None

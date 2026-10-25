@@ -39,6 +39,7 @@ jobs:
     # cost with no signal, since the shim is a separate Node runtime not
     # affected by which CPython version the daemon runs under.
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -115,6 +116,8 @@ jobs:
       - name: Run test suite (100% pass rate required)
         env:
           CLAUDE_CODE_BIN: ${{ github.workspace }}/tests/integration/ai_clients/node_modules/.bin/claude
+          PRIVACYFENCE_REQUIRE_BROWSER: "1"
+          PRIVACYFENCE_REQUIRE_NODE: "1"
         run: |
           pytest -v --cov=src/privacyfence --cov-branch \
             --cov-report=term-missing \
@@ -201,6 +204,7 @@ jobs:
   test-python-compat:
     name: Test (Python ${{ matrix.python-version }}, core suite)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -254,8 +258,15 @@ jobs:
   # ordinary modules with no platform marker (settings_controller.py,
   # drive.py, a shim-contract test, an audit-log test), none of which a
   # subset chosen ahead of time would have included.
+  #
+  # It gates coverage of the Windows-only code the Linux run cannot execute: the
+  # `Windows coverage floors` step holds windows_service.py, windows_acl.py and
+  # web/control_channel.py at WINDOWS_MODULE_FLOORS in scripts/check_coverage_floor.py
+  # (the overall floor and MODULE_FLOORS stay the `test` job's). coverage.json is
+  # uploaded as `platform-windows-coverage`.
   platform-windows:
     runs-on: windows-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -274,7 +285,19 @@ jobs:
       # catch Windows-specific breakage in the Python core, not to
       # re-prove the (already cross-platform, Node-runtime) shim.
       - name: Run test suite (100% pass rate required)
-        run: pytest -v --cov=src/privacyfence --cov-report=term-missing
+        run: pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
+
+      - name: Windows coverage floors
+        run: python scripts/check_coverage_floor.py --platform windows coverage.json
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: platform-windows-coverage
+          path: coverage.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       # Same failure-diagnostics capture as the `test` job's identically-named step.
       - name: Upload failure diagnostics
@@ -298,6 +321,7 @@ jobs:
   # to tests/platform/, for the same reason platform-windows above gives.
   platform-macos:
     runs-on: macos-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -340,6 +364,7 @@ jobs:
   # minutes) without waiting for a release tag to find out org mode broke.
   org-mode-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -380,11 +405,62 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  # The per-PR leg of build.yml's `build-org-image` (amd64 only): builds the organization-mode
+  # Docker image from this checkout's wheel and runs tests/integration/test_org_docker_image.py
+  # against it, so a break in the Dockerfile, entrypoint or health check surfaces on the PR
+  # rather than on a release tag. Deliberately not in scripts/update_branch_protection.py's
+  # REQUIRED_STATUS_CHECKS: it needs a Docker daemon and a multi-minute image build, so it
+  # reports on every PR without blocking merges.
+  org-docker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned runtime dependencies
+        run: pip install --require-hashes -r requirements/runtime.lock.txt
+
+      - name: Install Python dependencies
+        run: |
+          pip install --require-hashes -r requirements/dev.lock.txt
+          pip install --no-deps --no-build-isolation -e .
+
+      # No Telegram credentials step: PR builds have no secrets, and the check is only a warning
+      # off a stable tag anyway.
+      - name: Build wheel
+        run: python -m build --wheel --no-isolation
+
+      - name: Build org image
+        run: bash scripts/build_org_image.sh --platform linux/amd64 --tag privacyfence-org:ci-amd64
+
+      - name: Run org image test
+        env:
+          PRIVACYFENCE_ORG_IMAGE: privacyfence-org:ci-amd64
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
+        run: pytest tests/integration/test_org_docker_image.py -v
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: org-docker-image-failure-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
   # A separate job (not a step tacked onto `test` above) so a lint failure is reported
   # on its own line in the checks list, and so it doesn't need the Node/npm
   # setup or shim build the `test` job carries for pytest's sake.
   static-analysis:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -431,6 +507,7 @@ jobs:
   sync:
     name: Sync client (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false

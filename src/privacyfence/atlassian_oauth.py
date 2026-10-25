@@ -65,6 +65,38 @@ DEFAULT_SCOPES: list[str] = [
     "offline_access",
 ]
 
+# Requested only when Jira Assets is switched on (see ``scopes_for``), so Jira
+# and Confluence users who never enable it keep their current consent.
+ASSETS_SCOPES: list[str] = [
+    "read:cmdb-schema:jira", "read:cmdb-type:jira", "read:cmdb-attribute:jira",
+    "read:cmdb-object:jira",
+    # Not read:servicedesk-request, although /rest/servicedeskapi/assets/workspace
+    # (the workspace id lookup) accepts only that scope: the developer console no
+    # longer offers the Jira Service Management API to every OAuth app, and asking
+    # for a scope the app lacks fails the whole sign-in. The workspace id is
+    # configured instead (atlassian.assets_workspace_id); see ADR 0188.
+]
+
+
+def scopes_for(*, assets: bool) -> list[str]:
+    return DEFAULT_SCOPES + ASSETS_SCOPES if assets else list(DEFAULT_SCOPES)
+
+
+def assets_enabled(config: dict[str, Any], org_config: dict[str, Any]) -> bool:
+    """Assets is off unless switched on. An explicit connectors.assets.enabled wins;
+    otherwise the org bundle's atlassian.assets flag is the default."""
+    explicit = ((config.get("connectors") or {}).get("assets") or {}).get("enabled")
+    if explicit is not None:
+        return bool(explicit)
+    return bool((org_config.get("atlassian") or {}).get("assets", False))
+
+
+def assets_workspace_override(config: dict[str, Any]) -> dict[str, str]:
+    """``{"assets_workspace_id": ...}`` from connectors.assets.workspace_id, which wins over the
+    bundle's atlassian.assets_workspace_id; empty when the setting is not given."""
+    value = ((config.get("connectors") or {}).get("assets") or {}).get("workspace_id")
+    return {"assets_workspace_id": str(value).strip()} if value else {}
+
 
 class AtlassianOAuthError(Exception):
     """Raised for unrecoverable Atlassian OAuth problems."""
@@ -163,6 +195,8 @@ def resolve_resource_and_save(
         "cloud_id": cloud_id,
         "site_url": resource.get("url", ""),
         "account_email": _fetch_account_email(access_token, cloud_id),
+        "account_id": _fetch_account_id(access_token, cloud_id),
+        "scopes": sorted({s for r in resources if r.get("id") == cloud_id for s in r.get("scopes") or []}),
     }
     save_token_file(token_file, token_record)
     logger.info("Atlassian OAuth complete for site %s", token_record["site_url"])
@@ -248,6 +282,26 @@ def _fetch_account_email(access_token: str, cloud_id: str) -> str:
         return resp.json().get("emailAddress", "")
     except requests.RequestException as exc:
         logger.debug("Could not resolve Atlassian account email (non-fatal): %s", exc)
+        return ""
+
+
+def _fetch_account_id(access_token: str, cloud_id: str) -> str:
+    """Best-effort lookup of the signed-in account's Atlassian account id via Jira's ``myself``.
+
+    Used to populate connector.my_account_id for the i_am_reporter / i_am_assignee /
+    i_am_author rules, which compare account ids rather than names. Never raises: an
+    empty string just means those rules won't match.
+    """
+    try:
+        resp = requests.get(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("accountId", "")
+    except requests.RequestException as exc:
+        logger.debug("Could not resolve Atlassian account id (non-fatal): %s", exc)
         return ""
 
 

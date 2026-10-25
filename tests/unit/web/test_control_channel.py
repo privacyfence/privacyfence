@@ -164,28 +164,68 @@ class TestControlChannelServerPosix:
         finally:
             server.stop()
 
-    def test_refuses_to_take_over_a_socket_owned_by_another_account(self, tmp_path, monkeypatch, caplog):
-        # The multi-user guard (ADR 0027): a socket file left
-        # by a different uid is never unlinked-and-rebound, even a stale
-        # one -- see _existing_socket_owner_problem()'s own docstring for
-        # the takeover this stops.
+    def _plant_foreign(self, tmp_path, monkeypatch, path_fn):
         from privacyfence import paths
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        stranger_path = cc.posix_socket_path()
-        stranger_path.parent.mkdir(parents=True, exist_ok=True)
-        stranger_path.touch()
-        monkeypatch.setattr(cc.os, "geteuid", lambda: stranger_path.stat().st_uid + 1)
+        planted = path_fn()
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.touch()
+        monkeypatch.setattr(cc.os, "geteuid", lambda: planted.stat().st_uid + 1)
+        return planted
+
+    def test_a_foreign_owned_socket_is_removed_and_the_daemon_channel_starts(self, tmp_path, monkeypatch, caplog):
+        # The daemon's service account owns handoff/, so a control socket
+        # there owned by anyone else was planted: remove it rather than
+        # running with no channel (amends ADR 0027).
+        planted = self._plant_foreign(tmp_path, monkeypatch, cc.posix_socket_path)
+        monkeypatch.setattr(cc, "_existing_socket_owner_problem", lambda _p: "foreign owner")
+        monkeypatch.setattr(cc.os, "geteuid", os.geteuid)
+
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore())
+        try:
+            with caplog.at_level("WARNING"):
+                server.start()
+            assert server.address == str(planted)
+            assert "Removed" in caplog.text
+            assert _mint(server.address).startswith("OK ")
+        finally:
+            server.stop()
+
+    def test_an_undeletable_foreign_socket_leaves_the_channel_off(self, tmp_path, monkeypatch, caplog):
+        planted = self._plant_foreign(tmp_path, monkeypatch, cc.posix_socket_path)
+        monkeypatch.setattr(cc, "_existing_socket_owner_problem", lambda _p: "foreign owner")
+
+        def _refuse(self, *args, **kwargs):
+            raise PermissionError("not yours")
+
+        monkeypatch.setattr(cc.Path, "unlink", _refuse)
 
         server = cc.ControlChannelServer(bootstrap=BootstrapStore())
         try:
             with caplog.at_level("WARNING"):
                 server.start()
             assert server.address is None
+            assert "Could not start the control-channel: foreign owner" in caplog.text
+            assert planted.exists()
+        finally:
+            server.stop()
+
+    def test_the_companion_channel_still_refuses_a_foreign_socket(self, tmp_path, monkeypatch, caplog):
+        # ADR 0027 decision 2: a socket another account left is never
+        # unlinked-and-rebound by the companion -- see
+        # _existing_socket_owner_problem()'s own docstring for the takeover
+        # this stops.
+        # Pinned so faking the euid below cannot move the companion's address.
+        monkeypatch.setattr(cc, "current_os_principal_id", lambda: cc.LOCAL_PRINCIPAL_ID)
+        planted = self._plant_foreign(tmp_path, monkeypatch, cc.companion_socket_path)
+        server = cc.CompanionChannelServer()
+        try:
+            with caplog.at_level("WARNING"):
+                server.start()
+            assert server.address is None
             assert "refusing to take it over" in caplog.text
-            # The stranger's file is left exactly as it was -- refusing means
-            # refusing, not "unlink it anyway and just skip the bind".
-            assert stranger_path.exists()
+            assert planted.exists()
         finally:
             server.stop()
 

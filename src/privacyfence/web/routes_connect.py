@@ -21,29 +21,21 @@ own ``GOOGLE_CONNECTORS``/``_GOOGLE_CLIENTS``, which already draws this
 same distinction for local mode's own Connectors-page flow: each is a
 distinct OAuth grant with its own scopes and its own token file.
 
-**The one load-bearing subtlety this module exists to get right**: the
-browser's GET that lands back on ``/oauth/callback/{service}`` after a
-redirect from Google/Slack/Salesforce/Atlassian is a cross-site-initiated
-top-level navigation from the provider's own domain, and this route
-resolves the principal without depending on a session cookie arriving on
-it at all -- entirely from the single-use ``state`` value
-``_PendingAuthStore`` recorded at ``/oauth/start/{service}`` time, where
-the cookie is unambiguously present (that request is a same-site
-navigation the user's own click on ``/connect`` made).
+**The one load-bearing rule this module exists to get right**: the callback
+must be finished in the same signed-in session that started it (ADR 0178).
+The browser's GET that lands back on ``/oauth/callback/{service}`` after a
+redirect from Google/Slack/Salesforce/Atlassian carries the Lax
+``pf_org_session`` cookie (a top-level GET navigation), and the route
+requires that session's principal to be the one ``_PendingAuthStore``
+recorded at ``/oauth/start/{service}`` time. A consent link started by one
+person and opened by a colleague therefore saves nothing: it would otherwise
+connect the starter's account to the colleague's provider grant, or the
+reverse. The single-use ``state`` still identifies the flow (and its PKCE
+verifier); the session binds it to a browser.
 
-This was originally forced: ``pf_org_session`` was ``SameSite=Strict``,
-which omits the cookie on exactly that kind of landing. The cookie is
-``SameSite=Lax`` now -- Strict made the *sign-in* landing
-(routes_org_identity.py's ``/oauth/idp/login-callback`` -> post-login
-page) an infinite redirect loop, which no amount of ``state`` can fix
-for a callback whose job is to establish the session in the first place;
-see ``org_session.set_session_cookie``'s own comment. Under Lax the
-cookie would in fact now reach this callback, but resolving the principal
-from ``state`` is kept, and is the better design independent of cookie
-policy: it binds the callback to the specific authorization flow that
-started it rather than to whoever merely happens to be signed in in that
-browser, and it leaves this module correct whatever the cookie policy
-does next.
+The cookie is ``SameSite=Lax`` so that the *sign-in* landing
+(routes_org_identity.py's ``/oauth/idp/login-callback`` -> post-login page)
+does not loop; see ``org_session.set_session_cookie``'s own comment.
 
 **Atlassian's multi-site accounts** are handled with one deliberate
 simplification versus local mode: if the signed-in account can reach more
@@ -71,8 +63,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
+from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
+from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
 from ..calendar_client import SCOPES as _CALENDAR_SCOPES
 from ..connector_registry import ConnectorRegistry
@@ -180,6 +173,8 @@ def _is_connected(principal: Principal, service: str, org_config: dict[str, Any]
 
 
 def _is_configured(org_config: dict[str, Any], service: str) -> bool:
+    if not org_mode.connector_enabled_by_org(org_config, service):
+        return False
     if service == "telegram":
         return telegram_app_credentials() is not None
     if service == "peek":
@@ -216,9 +211,9 @@ class _PendingAuth:
 
 
 class _PendingAuthStore:
-    """State -> principal/service/PKCE-verifier, single-use. See module
-    docstring's own note on why the callback route trusts *this*, not the
-    session cookie, to know who is signing in."""
+    """State -> principal/service/PKCE-verifier, single-use, and good for
+    ``ttl`` seconds. The callback checks the principal recorded here against
+    the signed-in session (module docstring, ADR 0178)."""
 
     def __init__(self, ttl: float = _PENDING_TTL_SECONDS) -> None:
         self._ttl = ttl
@@ -232,7 +227,10 @@ class _PendingAuthStore:
 
     def pop(self, state: str) -> _PendingAuth | None:
         with self._lock:
-            return self._pending.pop(state, None)
+            pending = self._pending.pop(state, None)
+        if pending is None or (time.time() - pending.created_at) > self._ttl:
+            return None
+        return pending
 
     def _prune(self) -> None:
         now = time.time()
@@ -377,7 +375,11 @@ def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri:
         if not atlassian_org.get("client_id"):
             raise _NotConfigured(service)
         verifier, challenge = org_identity.generate_pkce_pair()
-        return atlassian_oauth.build_authorize_url(atlassian_org["client_id"], redirect_uri, state, challenge), verifier
+        scopes = atlassian_oauth.scopes_for(assets=atlassian_oauth.assets_enabled({}, org_config))
+        return (
+            atlassian_oauth.build_authorize_url(atlassian_org["client_id"], redirect_uri, state, challenge, scopes),
+            verifier,
+        )
 
     raise _NotConfigured(service)
 
@@ -481,10 +483,9 @@ def build_routes(
         return RedirectResponse(authorize_url, status_code=302, headers={"Cache-Control": "no-store"})
 
     async def callback(request: Request) -> Response:
-        # Deliberately does not read org_session.authenticated()/the
-        # session cookie -- see module docstring's own note on why it
-        # can't be relied on here. Trust is rooted entirely in the
-        # single-use `state` value, popped exactly once.
+        # The callback must be finished in the same signed-in session that started it, so a
+        # consent link cannot be handed to a colleague (ADR 0178). Trust is rooted in the
+        # single-use `state` (popped exactly once, within its TTL) *and* in that session.
         #
         # The path segment here is a *grant key* (see _GRANT_KEY), not
         # necessarily the real service the user asked to connect -- for
@@ -499,6 +500,10 @@ def build_routes(
         if pending is None or _GRANT_KEY.get(pending.service) != grant_key:
             return PlainTextResponse("Invalid or expired sign-in attempt. Return to /connect and try again.", status_code=400)
         service = pending.service
+        signed_in = org_session.authenticated(request, sessions)
+        if signed_in is None or signed_in.id != pending.principal_id:
+            logger.info("OAuth callback for %s ignored: not finished by the principal that started it", service)
+            return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
         if provider_error or not code:
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
 
@@ -554,7 +559,9 @@ def build_routes(
 
         creds = telegram_app_credentials()
         phone = str(form.get("phone", "")).strip()
-        if creds is None:
+        if not org_mode.connector_enabled_by_org(org_config, "telegram"):
+            telegram_states.set(principal.id, _TelegramState(error="Telegram is not set up by your organization."))
+        elif creds is None:
             telegram_states.set(principal.id, _TelegramState(step="phone", error="Telegram isn't available on this install."))
         elif not phone:
             telegram_states.set(principal.id, _TelegramState(step="phone", error="Enter a phone number."))
@@ -798,6 +805,7 @@ li.service{--cluster-gap:var(--space-xs) var(--space-s);justify-content:space-be
 li.telegram{--stack-gap:var(--space-s)}
 .pf-telegram-form{--stack-gap:var(--space-xs)}
 li.peek{--stack-gap:var(--space-s)}
+li.assets{--stack-gap:var(--space-xs)}
 .pf-peek-form{--stack-gap:var(--space-xs)}
 .pf-peek-code{font-family:var(--font-mono);font-size:var(--step-h3);letter-spacing:.12em}
 """
@@ -837,6 +845,42 @@ def _service_row_html(principal: Principal, org_config: dict[str, Any], service:
         f'<li class="service card cluster"><span class="pf-service-head cluster">'
         f'<span class="pf-service-chip">{_esc(label)}</span>{badge}</span>{action}</li>'
     )
+
+
+def _assets_row_html(principal: Principal, org_config: dict[str, Any]) -> str:
+    """Jira Assets has no sign-in of its own: it rides on the Atlassian grant Jira and Confluence
+    share, which asks for the Assets scopes only when the bundle switches Assets on (ADR 0188). So
+    this row has no Connect of its own; it says whether that grant carries the Assets scopes, and
+    sends the user back through the Atlassian sign-in when it does not."""
+    if not _is_configured(org_config, "jira"):
+        badge = '<span class="badge badge-dashed">Not set up by your organization</span>'
+        help_text, action = "", ""
+    elif not _is_connected(principal, "jira"):
+        badge = '<span class="badge">Not connected</span>'
+        help_text = "Uses your Jira and Confluence sign-in. Connect either one to turn it on."
+        action = ""
+    elif ASSETS_REQUIRED_SCOPE in _atlassian_granted_scopes(principal):
+        badge, help_text = _CONNECTED_BADGE, "Uses your Jira and Confluence sign-in."
+        action = ""
+    else:
+        badge = '<span class="badge">Needs reconnect</span>'
+        help_text = "Your Atlassian sign-in was made before Assets was switched on. Reconnect to grant it."
+        action = '<div class="cluster"><a class="button primary" href="/oauth/start/jira">Reconnect</a></div>'
+    help_html = f'<div class="field-help">{help_text}</div>' if help_text else ""
+    return (
+        f'<li class="service assets card stack"><div class="pf-service-head cluster">'
+        f'<span class="pf-service-chip">Jira Assets</span>{badge}</div>{help_html}{action}</li>'
+    )
+
+
+def _atlassian_granted_scopes(principal: Principal) -> list[str]:
+    """The scopes the saved Atlassian token records; empty when it cannot be read."""
+    try:
+        record = atlassian_oauth.load_token_file(_token_file_path(principal, "jira"))
+    except (atlassian_oauth.AtlassianOAuthError, OSError, ValueError):
+        return []
+    scopes = record.get("scopes") if isinstance(record, dict) else None
+    return list(scopes) if isinstance(scopes, list) else []
 
 
 def _telegram_box_html(principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState, csrf: str) -> str:
@@ -972,11 +1016,21 @@ def _render_connect_page(
     flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
     peek_state: _PeekState | None = None,
 ) -> str:
-    google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"))
-    other_rows = "".join(_service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence"))
-    telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf)
-    peek_row = _peek_box_html(principal, org_config, peek_state or _PeekState(), csrf)
-    grist_row = _grist_box_html(principal, org_config, csrf, grist_error)
+    def offered(service: str) -> bool:  # ADR 0196: a service the org config doesn't enable is not listed
+        return org_mode.connector_enabled_by_org(org_config, service)
+
+    google_rows = "".join(
+        _service_row_html(principal, org_config, s)
+        for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script") if offered(s)
+    )
+    other_rows = "".join(
+        _service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence") if offered(s)
+    )
+    if offered("assets") and atlassian_oauth.assets_enabled({}, org_config):
+        other_rows += _assets_row_html(principal, org_config)
+    telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf) if offered("telegram") else ""
+    peek_row = _peek_box_html(principal, org_config, peek_state or _PeekState(), csrf) if offered("peek") else ""
+    grist_row = _grist_box_html(principal, org_config, csrf, grist_error) if offered("grist") else ""
     who = principal.email or principal.display_name or principal.id
 
     body = (

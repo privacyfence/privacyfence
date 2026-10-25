@@ -6,6 +6,7 @@ instead.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 
 import pytest
@@ -775,6 +776,32 @@ class TestBootstrapFlow:
         assert r.headers["location"] == "/approvals"
         assert "pf_session" in r.headers.get("set-cookie", "")
 
+    @pytest.mark.parametrize("path", ["//evil.example.com", "/\\evil.example.com", "//evil.example.com/%2e%2e"])
+    async def test_double_slash_path_never_redirects_off_origin(self, path):
+        app, _sessions, bootstrap = self._app()
+        code = bootstrap.mint()
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+            "scheme": "http", "path": path, "raw_path": path.encode(), "root_path": "",
+            "query_string": f"bootstrap={code}".encode(), "headers": [(b"host", b"localhost")],
+            "client": ("127.0.0.1", 5000), "server": ("localhost", 8765),
+        }
+        sent: list[dict] = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        await app(scope, receive, send)
+
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        location = dict(start["headers"])[b"location"].decode()
+        assert location.startswith("/")
+        assert not location.startswith("//")
+        assert not location.startswith("/\\")
+
     def test_the_session_inherits_the_code_s_own_provenance(self):
         """The mint is the only moment
         anything knew how this credential came to exist (web/session_auth.py's
@@ -1391,6 +1418,92 @@ class TestStateStreamTouchesItsOwnSession:
         assert '{"a": 1}' in chunk
 
 
+class TestStateStreamIsScopedToTheRequestingPrincipal:
+    """Driven through ``WebServer``'s own wiring (its ``list_pending`` lambda and the settings
+    snapshot), not a ``StateStream`` the test builds itself, so a regression in that wiring shows."""
+
+    OTHER = Principal(id="os-1001")
+
+    @staticmethod
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    def _request(self, session_id: str):
+        from starlette.requests import Request
+
+        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
+        scope = {
+            "type": "http", "headers": headers, "method": "GET", "path": "/api/state/stream",
+            "scheme": "http", "server": ("localhost", 8765),
+        }
+        return Request(scope, receive=self._receive)
+
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web.server import _state_stream_route
+
+        web_ui = WebApprovalUI()
+        server = WebServer(web_ui, port=0, controller=_controller(tmp_path, monkeypatch))
+        ids = {}
+        for principal in (LOCAL_PRINCIPAL, self.OTHER):
+            with principal_scope(principal):
+                approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                    dedupe_key=f"k-{principal.id}", connector="gmail", tool="gmail_get_message",
+                    gate_kind="review", request_id=f"r-{principal.id}", summary="s", tool_name="t",
+                )
+            ids[principal.id] = approval.id
+        sessions = LocalSessionStore()
+        route = _state_stream_route(server.state_stream, sessions=sessions)
+        return server, sessions, route, ids
+
+    async def _events(self, route, sessions, principal, server, *, push=None, count=3) -> list[tuple[str, str]]:
+        session_id = sessions.create(principal_id=principal.id)
+        out: list[tuple[str, str]] = []
+        with principal_scope(principal):
+            response = await route.endpoint(self._request(session_id))
+            agen = response.body_iterator
+            try:
+                for i in range(count):
+                    if i == 1 and push is not None:
+                        server.state_stream.push_settings(push)
+                    try:
+                        chunk = await asyncio.wait_for(agen.__anext__(), 1.5)
+                    except (asyncio.TimeoutError, StopAsyncIteration):
+                        break
+                    event, _, data = chunk.strip("\n").partition("\n")
+                    out.append((event.removeprefix("event: "), data))
+            finally:
+                await agen.aclose()
+        return out
+
+    async def test_stream_carries_only_the_requesting_principals_approvals(self, tmp_path, monkeypatch):
+        server, sessions, route, ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, self.OTHER, server, count=1)
+
+        approvals = [data for event, data in events if event == "approvals"]
+        assert len(approvals) == 1
+        assert ids["os-1001"] in approvals[0]
+        assert ids["local"] not in approvals[0]
+
+    async def test_non_owner_stream_carries_no_settings_event(self, tmp_path, monkeypatch):
+        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, self.OTHER, server, push={"a": 1})
+
+        assert events  # the approvals event did arrive
+        assert all(event != "settings" for event, _ in events)
+
+    async def test_owner_stream_still_carries_settings(self, tmp_path, monkeypatch):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
+
+        events = await self._events(route, sessions, LOCAL_PRINCIPAL, server, push={"a": 1})
+
+        assert [event for event, _ in events].count("settings") == 2
+
+
 class TestWebServerWiresTheStateStream:
     def test_controller_is_registered_as_a_change_listener(self, tmp_path, monkeypatch):
         controller = _controller(tmp_path, monkeypatch)
@@ -1927,6 +2040,33 @@ class TestScopedTokenWiring:
         self._store(tmp_path, monkeypatch)
         assert _status(mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok").count("No such token.") == 1
 
+    def test_a_row_that_compiles_to_no_rule_is_titled_by_its_scope_and_has_no_value_to_toggle(self):
+        from privacyfence.web.server import _scoped_rule_entry
+
+        row = scope_rows.ScopeRow(
+            id="r-empty", scope="drive.folder", value=["f"], verbs=frozenset(), operations=frozenset(),
+        )
+        entry = _scoped_rule_entry(row, "f", [])
+
+        assert entry["title"] == "drive.folder"
+        assert entry["title_parts"] is None
+        assert entry["value_items"] == []
+
+    def test_scoped_rule_title_says_except_for_an_exclusion_scope(self):
+        from privacyfence.web.server import _scoped_rule_entry
+
+        row = scope_rows.ScopeRow(
+            id="r-mc", scope="slack.my_conversations", value=["C1"],
+            verbs=frozenset({Verb.READ, Verb.SEARCH}), operations=frozenset({"slack.read_messages"}),
+        )
+        assert "my conversations except C1" in _scoped_rule_entry(row, "C1", ["C1"])["title"]
+        no_value = scope_rows.ScopeRow(
+            id="r-mc", scope="slack.my_conversations", value=None,
+            verbs=frozenset({Verb.READ}), operations=frozenset({"slack.read_messages"}),
+        )
+        title = _scoped_rule_entry(no_value, "", [])["title"]
+        assert "my conversations" in title and "except" not in title
+
     def test_page_data_names_rules_by_their_cached_resource_names(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept
         from privacyfence.policy.engine import PolicyRule
@@ -1949,6 +2089,9 @@ class TestScopedTokenWiring:
             def cached_name(self, rt, resource_id):
                 return "Salesforce mirror" if resource_id == "8CAN8gKdxY7z" else None
 
+            def is_invalid(self, rt, resource_id):
+                return False
+
         monkeypatch.setattr(server_module, "get_resolver", lambda: _Names())
         [entry] = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()["rules"]
 
@@ -1958,6 +2101,11 @@ class TestScopedTokenWiring:
         assert entry["verbs"] == ["read", "update"]
         assert "Salesforce mirror" in entry["sentence"]
         assert "grist_update_csv" in entry["tools"]
+        assert entry["title_parts"] == ["Grist — document ", ""]
+        assert entry["sentence_parts"] == ["Grist - document ", ": allow read, update"]
+        assert entry["value_items"] == [
+            {"id": "8CAN8gKdxY7z", "short_id": "8CAN8gKdxY7z", "name": "Salesforce mirror", "status": "resolved"},
+        ]
 
     def test_page_data_lists_the_tools_that_need_no_rule(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept
@@ -1984,12 +2132,52 @@ class TestScopedTokenWiring:
         )
         wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
 
-        flagged, _ = wiring.store_create("flagged", 30, [rule.id], ["gmail_list_messages"], True)
-        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], False)
+        flagged, _ = wiring.store_create("flagged", 30, [rule.id], ["gmail_list_messages"], True, False)
+        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], False, False)
 
         assert (flagged.allow_personal_data, plain.allow_personal_data) == (True, False)
         tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
         assert (tokens["flagged"]["allow_personal_data"], tokens["plain"]["allow_personal_data"]) == (True, False)
+
+    def test_local_wiring_stores_the_reads_flag(self, tmp_path, monkeypatch):
+        from privacyfence import scoped_tokens
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        monkeypatch.setattr(
+            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
+        )
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
+
+        reads, _ = wiring.store_create("reads", 30, [rule.id], ["gmail_list_messages"], False, True)
+        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], True, False)
+
+        assert (reads.allow_personal_data_reads, plain.allow_personal_data_reads) == (True, False)
+        assert (reads.allow_personal_data, plain.allow_personal_data) == (False, True)
+        tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
+        assert (tokens["reads"]["allow_personal_data_reads"], tokens["plain"]["allow_personal_data_reads"]) == (True, False)
+
+    def test_the_wiring_renames_in_the_store(self, tmp_path, monkeypatch):
+        import dataclasses
+
+        from privacyfence import scoped_tokens
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        monkeypatch.setattr(
+            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
+        )
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
+        token, _ = wiring.store_create("old", 30, [rule.id], ["gmail_list_messages"], False, False)
+
+        old_label, renamed = wiring.store_rename(token.id, "new")
+
+        assert old_label == "old"
+        assert renamed == dataclasses.replace(token, label="new")
+        assert wiring.store_rename("st-missing", "x") is None
+        assert [t["label"] for t in wiring.page_data()["tokens"]] == ["new"]
 
     def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
         import time
@@ -2074,3 +2262,39 @@ def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
     assert "drive_download_file" not in entries["before"]["limited_to"]
     assert entries["before"]["limited_to"]
     assert "limited_to" not in entries["after"]
+
+
+def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+    idle, _ = store.create(alice, label="idle", days=30, rule_ids=[], tools=["drive_list_files"], policy=policy)
+    busy, _ = store.create(alice, label="busy", days=30, rule_ids=[], tools=["drive_list_files"], policy=policy)
+
+    def page():
+        with principal_scope(alice):
+            data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
+        return {t["label"]: t for t in data["tokens"]}
+
+    before = page()["idle"]
+    assert (before["last_used_at"], before["last_denied_at"], before["last_denied_tool"]) == (None, None, "")
+
+    store.note_use(busy, now=1000.0)
+    store.note_denial(busy, "drive_download_file", now=2000.0)
+    tokens = page()
+    assert (tokens["busy"]["last_used_at"], tokens["busy"]["last_denied_at"], tokens["busy"]["last_denied_tool"]) == (
+        1000.0, 2000.0, "drive_download_file",
+    )
+    assert (tokens["idle"]["last_used_at"], tokens["idle"]["last_denied_at"], tokens["idle"]["last_denied_tool"]) == (
+        None, None, "",
+    )

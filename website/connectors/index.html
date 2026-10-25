@@ -26,7 +26,7 @@
   <main id="top">
     <section class="page-intro shell">
       <p class="kicker">Connectors</p>
-      <h1>Thirteen connectors, 144 tools, each with a fixed gate.</h1>
+      <h1>Fourteen connectors, 156 tools, each with a fixed gate.</h1>
       <p class="lede">PrivacyFence governs a defined set of connectors and the operations each one supports. It is not a generic proxy for arbitrary MCP tools. Every tool's gate is fixed in code: it runs straight away, its result is <strong>reviewed</strong> before release, or it <strong>needs your approval</strong> before anything changes.</p>
     </section>
 
@@ -119,15 +119,15 @@
           </dl>
           <p class="cluster connector-links"><a href="/docs/tools-reference/#telegram">Every Telegram tool</a> <a href="/connectors/telegram/">Telegram connector</a></p>
         </article>
-        <article class="card stack connector-card" id="salesforce" data-connector="Salesforce" data-tools="5" data-auto="1" data-review="4" data-popup="0">
+        <article class="card stack connector-card" id="salesforce" data-connector="Salesforce" data-tools="9" data-auto="1" data-review="4" data-popup="4">
           <h3>Salesforce</h3>
-          <p class="connector-counts">5 tools: 1 without a card · 4 reviewed · 0 need approval</p>
+          <p class="connector-counts">9 tools: 1 without a card · 4 reviewed · 4 need approval</p>
           <dl class="connector-gates">
             <dt>Without a card</dt><dd>The list of reports you can run.</dd>
             <dt>Reviewed before release</dt><dd>A record, search results, a report's results, and a whole report exported to a file.</dd>
-            <dt>Needs your approval</dt><dd>Nothing: this connector has no writes.</dd>
+            <dt>Needs your approval</dt><dd>Creating or updating a record, or up to 200 at once.</dd>
           </dl>
-          <p class="connector-note">Read-only: PrivacyFence offers no Salesforce write.</p>
+          <p class="connector-note">Writes create or update records, never delete, each behind a card.</p>
           <p class="cluster connector-links"><a href="/docs/tools-reference/#salesforce">Every Salesforce tool</a> <a href="/connectors/salesforce/">Salesforce connector</a></p>
         </article>
         <article class="card stack connector-card" id="jira" data-connector="Jira" data-tools="13" data-auto="6" data-review="3" data-popup="4">
@@ -149,6 +149,16 @@
             <dt>Needs your approval</dt><dd>Creating and updating pages.</dd>
           </dl>
           <p class="cluster connector-links"><a href="/docs/tools-reference/#confluence">Every Confluence tool</a> <a href="/connectors/jira-confluence/">Jira and Confluence connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="jira-assets" data-connector="Jira Assets" data-tools="8" data-auto="3" data-review="5" data-popup="0">
+          <h3>Jira Assets</h3>
+          <p class="connector-counts">8 tools: 3 without a card · 5 reviewed · 0 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Object schemas, their object types, and the attribute definitions of a type.</dd>
+            <dt>Reviewed before release</dt><dd>Objects matched by an AQL search, one object with every attribute value, the objects linked to it, the Jira tickets connected to it, and exports of an AQL search to a file.</dd>
+            <dt>Needs your approval</dt><dd>Nothing yet.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="https://github.com/privacyfence/privacyfence/blob/main/docs/tools-reference.md#jira-assets">Every Jira Assets tool</a> <a href="/connectors/jira-confluence/#jira-assets">Jira Assets connector</a></p>
         </article>
         <article class="card stack connector-card" id="grist" data-connector="Grist" data-tools="11" data-auto="2" data-review="3" data-popup="6">
           <h3>Grist</h3>

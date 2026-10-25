@@ -54,15 +54,24 @@ dependencies = [
     "google-auth-oauthlib>=1.1.0",
     "google-api-python-client>=2.100.0",
     "pyyaml>=6.0",
-    "cryptography>=41.0.0",
+    # Floor at 50.0.0: 49.0.0 (the lowest version the other floors let a fresh resolve pick)
+    # carries PYSEC-2026-3552; dependency-audit.yml's floor-audit job checks the lowest-direct set.
+    "cryptography>=50.0.0",
     "slack-sdk>=3.27.0",
     "telethon>=1.36.0",
     "atlassian-python-api>=4.0.0",
     "simple-salesforce>=1.12.0",
     "requests>=2.31.0",
-    "certifi>=2024.2.2",
+    # Floor at 2.8: urllib3 1.26.20, which the lowest-direct resolution otherwise picks, has 12
+    # advisories (e.g. PYSEC-2026-1999); a direct dependency so the floor does not depend on requests.
+    "urllib3>=2.8",
+    # Floor at 2026.10.19: earlier releases carry GHSA-6q48-6c7w-9gw2, and 2024.7.4 was the lowest
+    # version a fresh resolve could pick (it also still trusted the GLOBALTRUST root, PYSEC-2024-230).
+    "certifi>=2026.10.19",
     "openpyxl>=3.1",
-    "pypdf>=5.0",
+    # Floor at 6.19: every pypdf release below it has at least one of 85 advisories pip-audit
+    # reports against the lowest-direct resolution (dependency-audit.yml's floor-audit job).
+    "pypdf>=6.19",
     # pdf_render.py rasterises a PDF preview's first pages to PNG, so a review card can show the
     # document on a phone, where no browser renders an inline <embed> of a PDF (ADR 0080). An exact
     # pin, unlike its neighbours: it bundles PDFium, a C parser that is handed attacker-supplied
@@ -131,7 +140,9 @@ dependencies = [
     # itself (and of simple-salesforce) as of this writing, so this adds no
     # new package to what's actually installed -- it just stops relying on
     # that being true by accident.
-    "PyJWT>=2.8,<3.0",
+    # Floor at 2.15: every PyJWT release below it has at least one of 21 advisories (e.g.
+    # PYSEC-2026-120) pip-audit reports against the lowest-direct resolution.
+    "PyJWT>=2.15,<3.0",
     # WebAuthn step-up authentication for org-mode write approvals:
     # parsing CBOR attestation objects and verifying COSE signatures is exactly the same
     # "security-critical, spec-governed, don't hand-roll it" case ADR 0009
@@ -271,7 +282,7 @@ test = [
 # build never installs the package or its runtime dependencies. See
 # docs/adr/0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md.
 docs = [
-    "zensical==0.0.69",
+    "zensical==0.0.71",
 ]
 # Static analysis gate. ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
 # [tool.bandit] below); mypy runs in CI twice, both blocking:
@@ -305,11 +316,11 @@ testpaths = ["tests"]
 # A hung asyncio socket test (e.g. a fixture never closing a connection)
 # would otherwise block the whole suite indefinitely instead of failing.
 timeout = 30
+addopts = "--strict-markers"
 # The seven-layer taxonomy docs/testing-policy.md describes. Registered here
-# so `pytest -m <marker>` and `pytest -m "not live"` work and so an
-# unregistered-marker typo fails loudly (pytest's default
-# `--strict-markers`-independent warning) rather than silently matching
-# nothing. See testing-policy.md for which modules carry which marker.
+# so `pytest -m <marker>` and `pytest -m "not live"` work and, with
+# `--strict-markers`, so a typo'd or unregistered marker is a collection
+# error rather than a silent match of nothing. See testing-policy.md for which modules carry which marker.
 markers = [
     "unit: fast, fully offline",
     "integration: real internal stack, no external network",

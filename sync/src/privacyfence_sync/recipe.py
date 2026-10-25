@@ -11,7 +11,10 @@ import yaml
 
 from privacyfence_sync.refs import FILE_PLACEHOLDER, VALUE_REF
 
-EXPORT_TOOLS = frozenset({"grist_export_records", "grist_export_sql", "salesforce_export_report", "jira_export_issues"})
+EXPORT_TOOLS = frozenset({
+    "grist_export_records", "grist_export_sql", "salesforce_export_report",
+    "jira_export_issues", "assets_export_objects",
+})
 DOWNLOAD_TOOLS = frozenset({"drive_download_file"})
 UPLOAD_TOOLS = frozenset({"grist_import_csv", "grist_update_csv", "peek_upload_page"})
 STOP_EXIT_CODE = 10
@@ -27,7 +30,13 @@ _TOP_KEYS = frozenset({"version", "name", "server", "work_dir", "steps"})
 _TOOL_KEYS = frozenset({"id", "tool", "args", "file", "save_as", "save_result", "skip_if_empty", "reason"})
 _RUN_KEYS = frozenset({"id", "run", "args", "outputs", "stdout", "timeout_seconds"})
 _TEMPLATE_KEYS = frozenset({"id", "template", "data", "output"})
-_KIND_KEYS = {"tool": _TOOL_KEYS, "run": _RUN_KEYS, "template": _TEMPLATE_KEYS}
+_TRIGGER_KEYS = frozenset({"id", "trigger", "token_env", "text"})
+_KIND_KEYS = {"tool": _TOOL_KEYS, "run": _RUN_KEYS, "template": _TEMPLATE_KEYS, "trigger": _TRIGGER_KEYS}
+
+_TRIGGER_ID = re.compile(r"trig_[A-Za-z0-9_-]{1,100}")
+_TOKEN_ENV = re.compile(r"PRIVACYFENCE_[A-Z0-9_]{1,60}")
+_RESERVED_ENV = frozenset({"PRIVACYFENCE_TOKEN", "PRIVACYFENCE_MCP_URL"})
+MAX_TRIGGER_TEXT = 65_536
 
 
 class RecipeError(ValueError):
@@ -64,7 +73,15 @@ class TemplateStep:
     output: str
 
 
-Step = ToolStep | RunStep | TemplateStep
+@dataclass(frozen=True)
+class TriggerStep:
+    id: str
+    trigger: str
+    token_env: str
+    text: str | None
+
+
+Step = ToolStep | RunStep | TemplateStep | TriggerStep
 
 
 @dataclass(frozen=True)
@@ -91,7 +108,9 @@ def produced_files(step: Step) -> dict[str, str]:
         if step.stdout is not None:
             files[f"{step.id}.stdout"] = step.stdout
         return files
-    return {step.id: step.output}
+    if isinstance(step, TemplateStep):
+        return {step.id: step.output}
+    return {}
 
 
 def load_recipe(path: Path) -> Recipe:
@@ -164,7 +183,7 @@ def _build_step(raw: Any, position: int, seen_ids: set[str], base_dir: Path, fai
         raise fail(f"step {step_id}: duplicate id")
     kinds = [kind for kind in _KIND_KEYS if kind in raw]
     if len(kinds) != 1:
-        raise fail(f"step {step_id}: needs exactly one of tool, run, template")
+        raise fail(f"step {step_id}: needs exactly one of tool, run, template, trigger")
     kind = kinds[0]
     for key in raw:
         if key not in _KIND_KEYS[kind]:
@@ -173,7 +192,9 @@ def _build_step(raw: Any, position: int, seen_ids: set[str], base_dir: Path, fai
         return _build_tool_step(step_id, raw, fail)
     if kind == "run":
         return _build_run_step(step_id, raw, base_dir, fail)
-    return _build_template_step(step_id, raw, base_dir, fail)
+    if kind == "template":
+        return _build_template_step(step_id, raw, base_dir, fail)
+    return _build_trigger_step(step_id, raw, fail)
 
 
 def _optional_str(step_id: str, raw: dict[str, Any], key: str, fail: Any) -> str | None:
@@ -297,6 +318,24 @@ def _build_template_step(step_id: str, raw: dict[str, Any], base_dir: Path, fail
     return TemplateStep(step_id, template, data, output)
 
 
+def _build_trigger_step(step_id: str, raw: dict[str, Any], fail: Any) -> TriggerStep:
+    trigger = raw["trigger"]
+    if not isinstance(trigger, str) or not _TRIGGER_ID.fullmatch(trigger):
+        raise fail(f"step {step_id}: trigger must be a scheduled task ID starting with trig_")
+    token_env = raw.get("token_env")
+    if not isinstance(token_env, str) or not _TOKEN_ENV.fullmatch(token_env):
+        raise fail(
+            f"step {step_id}: token_env must name an environment variable starting with PRIVACYFENCE_, "
+            "so scripts never see it"
+        )
+    if token_env in _RESERVED_ENV:
+        raise fail(f"step {step_id}: token_env must not be PRIVACYFENCE_TOKEN or PRIVACYFENCE_MCP_URL")
+    text = _optional_str(step_id, raw, "text", fail)
+    if text is not None and len(text) > MAX_TRIGGER_TEXT:
+        raise fail(f"step {step_id}: text must be at most 65,536 characters")
+    return TriggerStep(step_id, trigger, token_env, text)
+
+
 def _strings(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -330,6 +369,9 @@ def _check_references(step: Step, produced: dict[str, str], fail: Any) -> None:
         need_file(step.data)
         if not produced[step.data].endswith(".json"):
             raise fail(f"step {step.id}: data must be a JSON file")
+    elif isinstance(step, TriggerStep):
+        if step.text is not None:
+            check_value_refs(step.text)
     else:
         for text in step.args:
             check_value_refs(text)

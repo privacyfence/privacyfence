@@ -14,6 +14,7 @@ from privacyfence.policy import catalogue, propose, scope_rows, store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import Verb
 from privacyfence.policy.scope_rows import ScopeRow
+from privacyfence.policy.value_format import VALUE_FORMATS
 
 FOLDER = "FOLDER1"
 FLAGGED_ID = "r-flagged0001"
@@ -62,11 +63,19 @@ def _needs_value(group):
     return propose.scope_needs_value(propose.SCOPES_BY_GROUP[group][0])
 
 
+def _example_value(group):
+    if group in catalogue.EXTRA_SCOPES:
+        predicate = catalogue.EXTRA_SCOPES[group].predicate
+    else:
+        predicate = propose.SCOPES_BY_GROUP[group][0].predicate
+    return VALUE_FORMATS[predicate].example if predicate in VALUE_FORMATS else "V1"
+
+
 # ── Migration ──────────
 
 @pytest.mark.parametrize("group", _all_groups())
 def test_each_catalogue_group_round_trips_through_migration(group):
-    value = [FOLDER, "FOLDER2"] if _needs_value(group) else None
+    value = [_example_value(group)] if _needs_value(group) else None
     verbs = scope_rows.scope_verbs(group)
     v2 = _v2(group, value, list(verbs))
     assert v2
@@ -308,6 +317,36 @@ def test_a_custom_row_compiles_to_exactly_one_rule():
     assert scope_rows.compile_row(row) == [
         PolicyRule(id="r-c", predicate="some_predicate", value=["v"],
                    operations=frozenset({"x.read"}), conditions=(("c", None),))]
+
+
+class TestExtraVerbPredicates:
+    def test_read_and_search_compile_to_two_rules_sharing_the_row_id(self):
+        row = _row("slack.mentions_of_me", None, [Verb.READ, Verb.SEARCH])
+
+        rules = scope_rows.compile_row(row)
+
+        assert [r.predicate for r in rules] == ["slack.mentions_of_me", "slack.mentions_of_me_all_results"]
+        assert {r.id for r in rules} == {row.id}
+        assert all(r.operations == {"slack.read_messages"} for r in rules)
+
+    def test_read_only_compiles_to_the_thread_rule_only(self):
+        (rule,) = scope_rows.compile_row(_row("slack.mentions_of_me", None, [Verb.READ]))
+
+        assert rule.predicate == "slack.mentions_of_me"
+
+    def test_search_only_compiles_to_the_all_results_rule_only(self):
+        (rule,) = scope_rows.compile_row(_row("slack.mentions_of_me", None, [Verb.SEARCH]))
+
+        assert rule.predicate == "slack.mentions_of_me_all_results"
+
+    def test_add_rules_maps_a_search_only_rule_to_a_scoped_row(self):
+        (rule,) = catalogue.rules_for_catalogue_entry("slack.mentions_of_me", None, [Verb.SEARCH])
+
+        rows, touched = scope_rows.add_rules([], [rule])
+
+        (row,) = rows
+        assert (row.scope, row.verbs) == ("slack.mentions_of_me", frozenset({Verb.SEARCH}))
+        assert touched == [row.id]
 
 
 # ── Serialization ──────────
@@ -584,3 +623,18 @@ def test_pairs_of_matches_compile_row():
 def test_pairs_of_an_unknown_row_is_empty():
     assert scope_rows.pairs_of([], "r-none") == frozenset()
 
+
+
+def test_gmail_label_row_with_update_and_move_compiles_to_two_rules():
+    row = _row("gmail.label", ["Proposed Archive"], {Verb.UPDATE, Verb.MOVE})
+    rules = scope_rows.compile_row(row)
+    by_predicate = {r.predicate: r for r in rules}
+    assert set(by_predicate) == {"label_name_allowlist", "label_match"}
+    assert by_predicate["label_match"].operations == frozenset({"gmail.archive_message"})
+    assert by_predicate["label_match"].value == ["Proposed Archive"]
+    assert "gmail.archive_message" not in by_predicate["label_name_allowlist"].operations
+
+
+def test_gmail_label_row_with_only_update_has_no_label_match_rule():
+    row = _row("gmail.label", ["Proposed Archive"], {Verb.UPDATE})
+    assert {r.predicate for r in scope_rows.compile_row(row)} == {"label_name_allowlist"}

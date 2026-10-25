@@ -101,7 +101,6 @@ yet doesn't need adding here too.
 """
 from __future__ import annotations
 
-import json
 import re
 import secrets
 from datetime import datetime, timezone
@@ -115,6 +114,7 @@ from .agent_label import (
 )
 from .deny_note_html import PANEL_JS as _DENY_NOTE_JS
 from .deny_note_html import batch_panel_html as _deny_note_panel_html
+from .html_embed import json_for_script
 
 _AGENT_TIERS = (TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN, TIER_UNDETECTED)
 
@@ -1376,13 +1376,13 @@ def build_list_html(
         # Already branched: whether a connector is authenticated is fixed
         # for this document's lifetime, so render() needs the resolved
         # string rather than the flag and a second copy of the branch.
-        "empty": json.dumps(empty_state),
-        "csrf": json.dumps(csrf),
+        "empty": json_for_script(empty_state),
+        "csrf": json_for_script(csrf),
         # Names only -- the image data is in the <style> block below, once.
-        "icon_connectors": json.dumps(sorted(icon_uris)),
-        "icon_agents": json.dumps(sorted(agent_icon_uris)),
-        "unrecognised": json.dumps(UNRECOGNISED_LABEL),
-        "not_verified": json.dumps(NOT_VERIFIED.lower()),
+        "icon_connectors": json_for_script(sorted(icon_uris)),
+        "icon_agents": json_for_script(sorted(agent_icon_uris)),
+        "unrecognised": json_for_script(UNRECOGNISED_LABEL),
+        "not_verified": json_for_script(NOT_VERIFIED.lower()),
     }
     return (
         f'<style nonce="{nonce}">{_CSS}{_icon_css(icon_uris)}{_agent_icon_css(agent_icon_uris)}</style>'

@@ -44,6 +44,7 @@ class ConfluenceConnector(Connector):
     def __init__(self, client: ConfluenceClient) -> None:
         self._confluence = client
         self.my_email: str = ""
+        self.my_account_id: str = ""
         # See connectors/drive.py's own DriveConnector.__init__ comment.
         self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
@@ -476,6 +477,7 @@ class ConfluenceConnector(Connector):
             pii_scan_text=pii_scan_text,
             preview_blocks=[{"type": "markdown", "text": body_text}] if body_text else None,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"page_id": page_id},
         )
 
@@ -512,6 +514,7 @@ class ConfluenceConnector(Connector):
             pii_scan_text=pii_scan_text,
             preview_blocks=[{"type": "markdown", "text": body_text}] if body_text else None,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"space_key": space_key, "title": title},
         )
 
@@ -619,7 +622,7 @@ class ConfluenceConnector(Connector):
                 # Not an image -- extract_text() below feeds a rich
                 # "markdown" preview_blocks entry (see this call's
                 # gated_call below) instead of a visual thumbnail.
-                pii_scan_text = extract_text(fetched_bytes, attachment.media_type)
+                pii_scan_text = await asyncio.to_thread(extract_text, fetched_bytes, attachment.media_type)
 
         # Gate before touching disk: gated_call raises on denial, and only a
         # decision made here should ever cause the attachment to be written.
@@ -640,6 +643,7 @@ class ConfluenceConnector(Connector):
             preview_mime_type=preview_mime_type,
             preview_blocks=preview_blocks_for(details, pii_scan_text),
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"page_id": page_id, "attachment_name": attachment_name},
             delivery=delivery,
         )
@@ -733,6 +737,7 @@ class ConfluenceConnector(Connector):
             preview=preview,
             details_text=storage_body,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"space_key": space_key, "title": title, "parent_id": parent_id},
         )
         page = await self._fetch(
@@ -770,6 +775,7 @@ class ConfluenceConnector(Connector):
             preview=preview,
             details_text="(unchanged)" if body_omitted else storage_body,
             my_email=self.my_email,
+            my_account_id=self.my_account_id,
             args={"page_id": page_id, "space_key": current.space_key, "title": title},
         )
         page = await self._fetch(self._confluence.update_page, page_id, title, storage_body)

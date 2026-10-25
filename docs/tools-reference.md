@@ -97,12 +97,13 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Apps Script](#apps-script) | 4 | 1 | 2 | 1 |
 | [Slack](#slack) | 11 | 6 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
-| [Salesforce](#salesforce) | 5 | 1 | 4 | 0 |
+| [Salesforce](#salesforce) | 9 | 1 | 4 | 4 |
 | [Jira](#jira) | 13 | 6 | 3 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
+| [Jira Assets](#jira-assets) | 8 | 3 | 5 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **144** | **51** | **30** | **63** |
+| **Total** | **156** | **54** | **35** | **67** |
 
 ## Gmail
 
@@ -225,7 +226,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `slack_resolve_permalink` | read | `auto` | Parse a Slack message permalink (from a message's "Copy link") into the channel id, timestamp, and (if the link points at a threaded reply) thread root timestamp needed by slack_get_channel_history/slack_get_thread_replies. |
 | `slack_get_channel_history` | read | `review` | Fetch recent messages in a Slack channel. |
 | `slack_get_thread_replies` | read | `review` | Fetch all replies in a Slack thread. |
-| `slack_search_messages` | read | `review` | Search Slack messages matching a query, a participant, or both. |
+| `slack_search_messages` | read | `review` | Search Slack messages by query, participant, recent time window, or a combination. |
 | `slack_create_group_chat` | write | `popup` | Create (or reopen the existing) group-DM conversation with the given participants and return its channel id, ready for slack_send_message. |
 | `slack_send_message` | write | `popup` | Send a message to a Slack channel or DM. |
 
@@ -248,6 +249,10 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `salesforce_get_record` | read | `review` | Fetch a Salesforce record by object type and id. |
 | `salesforce_run_report` | read | `review` | Run a Salesforce report by id and return the results. |
 | `salesforce_search` | read | `review` | Search Salesforce by name or id across one or more object types — the same mechanism as the search bar at the top of the Salesforce UI. |
+| `salesforce_create_record` | write | `popup` | Create one new Salesforce record. |
+| `salesforce_create_records` | write | `popup` | Create 1 to 200 new records of one Salesforce object type in one approval, all or none: if Salesforce refuses one record, none is created and the error names each refused record by its position. |
+| `salesforce_update_record` | write | `popup` | Change fields of one existing Salesforce record, by its id. |
+| `salesforce_update_records` | write | `popup` | Change 1 to 200 existing records of one Salesforce object type in one approval, all or none. |
 
 ## Jira
 
@@ -283,6 +288,19 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `confluence_get_page_by_title` | read | `review` | Fetch a Confluence page by space key and exact title. |
 | `confluence_create_page` | write | `popup` | Create a new Confluence page in the given space. |
 | `confluence_update_page` | write | `popup` | Update the title and/or body of an existing Confluence page. |
+
+## Jira Assets
+
+| Tool | Direction | Gate | What it does |
+|---|---|---|---|
+| `assets_list_attributes` | read | `auto` | List the attribute definitions of one Jira Assets object type, including which attributes reference other object types. |
+| `assets_list_object_types` | read | `auto` | List the object types in one Jira Assets schema. |
+| `assets_list_schemas` | read | `auto` | List the Jira Assets object schemas on the connected Atlassian site. |
+| `assets_export_objects` | read | `review` | Write every Jira Assets object an AQL query matches, up to 10,000, to a CSV or JSON file on the user's computer, in one approval. |
+| `assets_get_connected_tickets` | read | `review` | List the Jira tickets connected to one Jira Assets object. |
+| `assets_get_object` | read | `review` | Read one Jira Assets object with every attribute value and its outbound references. |
+| `assets_get_related_objects` | read | `review` | Read the Jira Assets objects linked to one object, following references outbound, inbound or both, up to three hops. |
+| `assets_search_objects` | read | `review` | Search Jira Assets objects with an AQL query and return them with their attribute values. |
 
 ## Grist
 

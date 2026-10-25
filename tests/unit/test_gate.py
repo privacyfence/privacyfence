@@ -43,16 +43,18 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from privacyfence import approval_ui, auto_accept, gate, scoped_tokens
+from privacyfence import approval_ui, auto_accept, gate, paths, scoped_tokens, secure_files
 from privacyfence.auto_accept import ReviewContext
 from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.connectors.gmail import GmailConnector
 from privacyfence.connectors.grist import GristConnector
+from privacyfence.connectors.salesforce import SalesforceConnector
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from privacyfence.gmail_client import GmailMessage, SendAsAlias
 from privacyfence.grist_client import GristColumn
+from privacyfence.salesforce_client import SalesforceField
 from privacyfence.pii_detector import init_pii_detection
 from privacyfence.principal import Principal, current_principal, principal_scope
 from privacyfence.policy import catalogue as policy_catalogue
@@ -1139,9 +1141,31 @@ class TestProposePolicyChange:
         auto_accept.init_config_path(str(self._config_path))
         auto_accept.set_policy_v2_store_rules([])
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
+        # Deleting a rule also edits the principal's scoped-token file (ADR 0198).
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
     def teardown_method(self):
         auto_accept.set_policy_v2_store_rules([])
+
+    @staticmethod
+    def _seed_token(rule_ids):
+        token = ScopedToken(
+            id="st-0123456789ab", label="sales-sync", digest="d", principal_id="local", principal_email="",
+            principal_display_name="", created_at=0.0, expires_at=1e12,
+            rule_ids=frozenset(rule_ids), tools=frozenset({"gmail_get_message"}),
+        )
+        path = paths.authority_dir(current_principal()) / scoped_tokens.STORE_FILE_NAME
+        secure_files.atomic_write_json(path, {"version": 1, "tokens": [scoped_tokens._to_json(token)]})
+        store = scoped_tokens.ScopedTokenStore(lambda: [current_principal()])
+        store.load()
+        scoped_tokens.set_store(store)
+        return token
+
+    @staticmethod
+    def _carried(token):
+        reread = scoped_tokens.get_store().get(token.principal_id, token.id)
+        assert reread is not None
+        return reread.rule_ids
 
     async def test_confirmed_add_persists_to_the_auto_accept_section(self, audit_dir):
         result = await gate.propose_policy_change(
@@ -1156,6 +1180,19 @@ class TestProposePolicyChange:
         assert "migrated_to_policy_v2" not in cfg
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
+
+    async def test_a_title_instead_of_an_id_is_refused_before_any_popup(self, audit_dir, monkeypatch):
+        shown = []
+        monkeypatch.setattr(
+            gate, "show_rule_confirmation_popup", lambda *a, **k: (shown.append(a) or True),
+        )
+        with pytest.raises(ValueError, match="not a Slack ID"):
+            await gate.propose_policy_change(
+                operation="add", reason="x", group="slack.channel", value="general", verbs=["read"],
+            )
+        assert shown == []
+        cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8"))
+        assert cfg["auto_accept"] == {}
 
     async def test_the_bridge_add_returns_the_row_id(self, audit_dir):
         result = await gate.propose_policy_change(
@@ -1259,6 +1296,46 @@ class TestProposePolicyChange:
         assert update_result["confirmed"] is True
         rules = auto_accept.get_policy_v2_rules()
         assert [r.value for r in rules] == [["folder2"]]
+
+    async def test_update_to_another_folder_drops_the_old_id_from_a_token(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        old_id = add_result["rule_ids"][0]
+        token = self._seed_token([old_id, "r-other"])
+
+        await gate.propose_policy_change(
+            operation="update", reason="Narrowing to a different folder.", rule_id=old_id,
+            group="drive.folder", value=["folder2"], verbs=["read"],
+        )
+
+        assert self._carried(token) == {"r-other"}
+
+    async def test_update_of_only_the_verbs_keeps_the_id_in_a_token(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        old_id = add_result["rule_ids"][0]
+        token = self._seed_token([old_id])
+
+        update_result = await gate.propose_policy_change(
+            operation="update", reason="Also download.", rule_id=old_id,
+            group="drive.folder", value=["folder1"], verbs=["read", "download"],
+        )
+
+        assert update_result["rule_ids"] == [old_id]
+        assert self._carried(token) == {old_id}
+
+    async def test_remove_drops_the_id_from_a_token(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        rule_id = add_result["rule_ids"][0]
+        token = self._seed_token([rule_id, "r-other"])
+
+        await gate.propose_policy_change(operation="remove", reason="Cleaning up.", rule_id=rule_id)
+
+        assert self._carried(token) == {"r-other"}
 
     async def test_update_with_an_unknown_rule_id_raises_before_any_popup(self, monkeypatch):
         popup_calls = []
@@ -2118,6 +2195,140 @@ class TestPIIGate:
         assert entries[0]["pii_detected"] is False
 
 
+class TestPersonalDataReads:
+    """A scoped token with ``allow_personal_data_reads`` lets the tools in ``PERSONAL_DATA_READ_TOOLS``
+    auto-accept despite a PII finding, through one of its own rules, and nothing else."""
+
+    PII_TEXT = "Please wire the deposit to DE89370400440532013000, thanks."
+
+    @staticmethod
+    def _install(monkeypatch, *, predicate="trusted_sender_domain", value=("example.com",),
+                 operation="gmail.read_thread") -> PolicyRule:
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate=predicate, value=list(value), operations=frozenset({operation}),
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return rule
+
+    @staticmethod
+    def _token(rule: PolicyRule, tool: str, *, reads: bool = True, exports: bool = False) -> ScopedToken:
+        return dataclasses.replace(
+            _scoped_token(rule_ids=(rule.id,), tools=(tool,)),
+            allow_personal_data_reads=reads, allow_personal_data=exports,
+        )
+
+    @staticmethod
+    def _thread(**overrides):
+        return gate.gated_call(**base_kwargs(
+            tool="gmail_get_thread", raw_data=SimpleNamespace(sender="alice@example.com"),
+            args={"thread_id": "t1"}, pii_scan_text=TestPersonalDataReads.PII_TEXT, **overrides,
+        ))
+
+    @staticmethod
+    def _search(**overrides):
+        return gate.gated_call(**base_kwargs(
+            connector="slack", tool="slack_search_messages",
+            raw_data=[SimpleNamespace(channel_id="C1")], args={"query": "x"},
+            pii_scan_text=TestPersonalDataReads.PII_TEXT, **overrides,
+        ))
+
+    async def test_flagged_token_lets_personal_data_through_a_gmail_thread_read(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread")):
+            result = await self._thread()
+
+        assert result is FILTERED
+        assert popups == []
+
+    async def test_flagged_token_lets_personal_data_through_a_slack_search(self, monkeypatch, audit_dir):
+        rule = self._install(
+            monkeypatch, predicate="approved_channel_all_results", value=("C1",), operation="slack.read_messages",
+        )
+
+        with scoped_tokens.token_scope(self._token(rule, "slack_search_messages")):
+            result = await self._search()
+
+        assert result is FILTERED
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+    async def test_token_without_the_flag_is_denied(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread", reads=False)):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._thread()
+
+        assert popups == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_unscoped_call_keeps_the_scan(self, monkeypatch, audit_dir):
+        self._install(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._thread()
+
+        assert len(popups) == 1
+
+    async def test_revoked_scope_keeps_the_scan(self, monkeypatch, audit_dir):
+        self._install(monkeypatch)
+        revoked = dataclasses.replace(scoped_tokens.REVOKED_SCOPE, allow_personal_data_reads=True)
+        ctx = ReviewContext(connector="gmail", tool="gmail_get_thread", args={}, raw_data=None)
+
+        with scoped_tokens.token_scope(revoked):
+            assert gate._personal_data_rule("gmail_get_thread", "gmail.read_thread", ctx) is None
+
+    async def test_exports_flag_does_not_lift_reads(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread", reads=False, exports=True)):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._thread()
+
+    async def test_reads_flag_does_not_lift_exports(self, monkeypatch, audit_dir):
+        rule = TestPersonalDataRules._install(monkeypatch)
+        token = dataclasses.replace(
+            _scoped_token(rule_ids=(rule.id,), tools=("grist_export_records",)),
+            allow_personal_data_reads=True,
+        )
+
+        with scoped_tokens.token_scope(token):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await gate.gated_call(**base_kwargs(
+                    connector="grist", tool="grist_export_records", args={"doc_id": "doc1"},
+                    pii_scan_text=self.PII_TEXT,
+                ))
+
+    async def test_flagged_token_still_needs_a_matching_rule(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+        other = dataclasses.replace(self._token(rule, "gmail_get_thread"), rule_ids=frozenset({"r-other"}))
+
+        with scoped_tokens.token_scope(other):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._thread()
+
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_audit_entry_records_pii_detected_and_the_rule(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch)
+
+        with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread")):
+            await self._thread()
+
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+        assert entry["pii_categories"] == ["IBAN (bank account number)"]
+
+
 class TestPersonalDataRules:
     """A scoped token with ``allow_personal_data`` lets the tools in ``PERSONAL_DATA_RULE_TOOLS``
     auto-accept despite a PII finding, through one of its own rules (ADR 0173), and nothing else.
@@ -2221,11 +2432,27 @@ class TestPersonalDataRules:
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
         with scoped_tokens.token_scope(self._token(rule, "grist_get_records")):
-            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+            with pytest.raises(gate.GateDeniedError, match="scoped token") as err:
                 await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
 
         assert popups == []
         assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+        # A rule covers the call; the personal-data scan is what stopped it, and the text says so.
+        assert "personal data (IBAN (bank account number))" in str(err.value)
+        assert "none of the token's rules" not in str(err.value)
+
+    async def test_unattended_denial_for_personal_data_names_the_scan_not_a_missing_rule(
+        self, monkeypatch, audit_dir,
+    ):
+        self._install(monkeypatch)
+
+        with gate.unattended_scope(True):
+            with pytest.raises(gate.GateDeniedError) as err:
+                await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
+
+        assert "personal data (IBAN (bank account number))" in str(err.value)
+        assert "no auto-accept rule" not in str(err.value)
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_unattended"]
 
     async def test_flag_applies_to_jira_export_issues(self, monkeypatch, audit_dir):
         rule = self._install(
@@ -2825,6 +3052,34 @@ class TestApprovalBinding:
         client.add_records.assert_called_once()
         assert registry.list_pending() == []
 
+    async def test_identical_salesforce_update_records_reissue_collects_the_decision(
+        self, monkeypatch, audit_dir,
+    ):
+        registry = self._registry(monkeypatch)
+        client = MagicMock()
+        client.describe_fields.return_value = [
+            SalesforceField("Id", "Record ID", "id", False, False, False, False),
+            SalesforceField("Phone", "Phone", "phone", True, True, True, False),
+        ]
+        id_a, id_b = "001000000000001AAA", "001000000000002AAA"
+        rows = [{"Id": id_a, "Phone": "1"}, {"Id": id_b, "Phone": "2"}]
+        client.find_records.side_effect = [rows, list(reversed(rows))]
+        connector = SalesforceConnector(client)
+        dispatcher = McpDispatcher(lambda: {"salesforce": connector})
+        args = {
+            "object_type": "Account",
+            "records": json.dumps([{"Id": id_a, "Phone": "10"}, {"Id": id_b, "Phone": "20"}]),
+            "reason": "r",
+        }
+
+        first = await dispatcher.call("s1", "salesforce", "salesforce_update_records", dict(args))
+        assert first["status"] == "approval_pending"
+        await self._accept(registry, first)
+        await dispatcher.call("s1", "salesforce", "salesforce_update_records", dict(args))
+
+        client.update_records.assert_called_once()
+        assert registry.list_pending() == []
+
     async def test_a_differing_write_does_not_coalesce_onto_a_pending_card(self, monkeypatch, audit_dir):
         registry = self._registry(monkeypatch, hold_window=5.0)
         connector, _client = self._slack()
@@ -3016,17 +3271,12 @@ class TestManyPendingApprovalsAreAllReviewable:
             # 300s is simply longer than this test can take; production's own
             # default is 15 minutes.
             #
-            # hold_window is the other half. Every registered call parks a
-            # thread of asyncio.to_thread's *default* pool for the whole
-            # window inside registry.wait_async() -- and that is the same
-            # pool the calls that haven't registered yet need for their own
-            # PII/audit hops. At 5.0 with fewer default workers than n
-            # (min(32, cpu_count + 4): 7 on a 3-core macOS runner), the
-            # already-registered calls starve the rest into exactly the
-            # stagger above. Collapsing it to ~0 removes that self-inflicted
-            # serialization: every call returns its "approval_pending" result
-            # promptly and the approval stays live for _drive_interaction to
-            # render. Nothing here is testing the hold window.
+            # hold_window is the other half: every call returns its
+            # "approval_pending" result promptly and the approval stays live
+            # for _drive_interaction to render. Nothing here is testing the
+            # hold window. (It once also starved the default to_thread pool
+            # -- wait_async() parked a worker per held call -- see
+            # test_gate_latency.py for the guard against that coming back.)
             hold_window=0.05, pending_ttl=300.0, ledger_ttl=300.0,
             max_pending=n, max_pending_per_principal=n,
         )
@@ -3889,6 +4139,48 @@ def _gmail_read_rule(rule_id: str) -> PolicyRule:
     )
 
 
+class TestRuleValues:
+    """``gate.rule_values``: what a connector reads before gating to compute a selector's input."""
+
+    @pytest.fixture(autouse=True)
+    def _no_rules(self):
+        auto_accept.set_policy_v2_store_rules([])
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    @staticmethod
+    def _rule(rule_id, value, operation="gmail.read_message", predicate="gmail.query"):
+        return PolicyRule(id=rule_id, predicate=predicate, value=value, operations=frozenset({operation}))
+
+    def test_returns_values_of_matching_predicate_and_operation(self):
+        auto_accept.set_policy_v2_store_rules([
+            self._rule("r1", ["in:inbox"]), self._rule("r2", "label:a"),
+            self._rule("r3", ["x"], predicate="other"),
+        ])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == ["in:inbox", "label:a"]
+
+    def test_deduplicates_and_keeps_rule_order(self):
+        auto_accept.set_policy_v2_store_rules([
+            self._rule("r1", ["b", "a"]), self._rule("r2", ["a", "c"]),
+        ])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == ["b", "a", "c"]
+
+    def test_under_a_scoped_token_only_the_tokens_rules(self):
+        auto_accept.set_policy_v2_store_rules([self._rule("r1", ["mine"]), self._rule("r2", ["theirs"])])
+        with scoped_tokens.token_scope(_scoped_token(rule_ids=("r1",))):
+            assert gate.rule_values("gmail.query", "gmail.read_message") == ["mine"]
+
+    def test_non_string_and_empty_values_are_ignored(self):
+        auto_accept.set_policy_v2_store_rules([
+            self._rule("r1", ["", 7, None, "ok"]), self._rule("r2", None), self._rule("r3", 5),
+        ])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == ["ok"]
+
+    def test_other_operations_are_ignored(self):
+        auto_accept.set_policy_v2_store_rules([self._rule("r1", ["q"], operation="gmail.read_thread")])
+        assert gate.rule_values("gmail.query", "gmail.read_message") == []
+
+
 class TestScopedTokenGate:
     """A call made with a scoped token (ADR 0164): only the token's own rules auto-accept, the
     temp-accept window never does, and anything else is denied at once -- never a card, never a
@@ -3919,6 +4211,55 @@ class TestScopedTokenGate:
         assert shown == []
         [entry] = read_audit_entries(audit_dir)
         assert (entry["decision"], entry["rule_id"]) == ("auto_accepted", "r-in")
+
+    class _RecordingStore:
+        def __init__(self, *, fail: bool = False) -> None:
+            self.fail = fail
+            self.denials: list[tuple[ScopedToken, str]] = []
+
+        def note_denial(self, token, tool, now=None):
+            if self.fail:
+                raise OSError("disk full")
+            self.denials.append((token, tool))
+
+    async def test_a_denied_scoped_call_notes_the_tool_on_the_token(self, monkeypatch, audit_dir):
+        recorder = self._RecordingStore()
+        scoped_tokens.set_store(recorder)
+        self._popups(monkeypatch)
+        token = _scoped_token()
+
+        with scoped_tokens.token_scope(token):
+            with pytest.raises(gate.GateDeniedError):
+                await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert recorder.denials == [(token, "gmail_get_message")]
+
+    async def test_a_refusal_before_the_gate_notes_the_tool_on_the_token(self, audit_dir):
+        recorder = self._RecordingStore()
+        scoped_tokens.set_store(recorder)
+        token = _scoped_token()
+
+        gate.audit_scoped_refusal("gmail", "gmail_send_message", token, "Tool not in scoped token")
+
+        assert recorder.denials == [(token, "gmail_send_message")]
+
+    async def test_a_store_that_cannot_record_leaves_the_denial_unchanged(self, monkeypatch, audit_dir):
+        scoped_tokens.set_store(self._RecordingStore(fail=True))
+        self._popups(monkeypatch)
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            with pytest.raises(gate.GateDeniedError) as err:
+                await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert str(err.value) == "Request denied: this call uses a scoped token, and none of the token's rules covers it."
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_a_revoked_scope_or_a_missing_store_notes_nothing(self, audit_dir):
+        gate.audit_scoped_refusal("gmail", "gmail_get_message", _scoped_token(), "no store")
+        recorder = self._RecordingStore()
+        scoped_tokens.set_store(recorder)
+        gate.audit_scoped_refusal("gmail", "gmail_get_message", scoped_tokens.REVOKED_SCOPE, "revoked")
+        assert recorder.denials == []
 
     async def test_a_matching_rule_outside_the_scope_is_denied(self, monkeypatch, audit_dir):
         auto_accept.set_policy_v2_store_rules([_gmail_read_rule("r-out")])

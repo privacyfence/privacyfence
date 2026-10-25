@@ -14,6 +14,7 @@ guide: [macOS](install-macos.md), [Windows](install-windows.md), [Linux](install
 | Debian/Ubuntu local mode | glibc 2.38 and systemd 242 (Ubuntu 24.04, Debian 13 or newer, amd64) | `privacyfence_<version>_amd64.deb` | the `privacyfence-daemon` system service, as the `privacyfence` account | [Install on Linux](install-linux.md) |
 | Linux Python install | Python 3.11 | `pip install privacyfence` / `pipx install privacyfence` | your own account (not separated) | [Install on Linux](install-linux.md#other-linux-systems-and-arm64) |
 | Linux org mode | Python 3.11 | `pip install privacyfence` on a server | a system service you define | [Organization deployment](org-mode-setup-guide.md) |
+| Linux org mode (Docker) | Docker Engine 24 (amd64, arm64) | ghcr.io/privacyfence/privacyfence-org | the container's privacyfence-org account (uid 10001) | [Organization deployment with Docker](org-mode-docker.md) |
 
 Each installer refuses a system below its row instead of installing something that cannot start
 ([ADR 0039](adr/0039-installers-refuse-an-os-below-the-support-matrix.md)): the `.pkg` refuses a
@@ -29,6 +30,14 @@ finds itself unseparated refuses to serve. A `pip`/`pipx` or source install is n
 [Security and compliance](security-and-compliance.md) explains what separation does and does not
 protect.
 
+## Signing
+
+macOS: the DMG, and the app and installer it holds, are Developer ID signed and notarized for
+stable releases. Windows: the installer is Authenticode-signed for stable releases. Debian/Ubuntu:
+the `.deb` is not signed; check it by its SHA-256. Pre-releases may be unsigned. CycloneDX SBOMs are
+attached to stable releases only. The org Docker image carries a GitHub
+build-provenance attestation.
+
 ## Data locations
 
 Your installed PrivacyFence keeps all of its data in one directory:
@@ -39,6 +48,7 @@ Your installed PrivacyFence keeps all of its data in one directory:
 | Windows | `%ProgramData%\PrivacyFence` | `authority\config\` | `authority\logs\audit\` | `logs\privacyfence.log` | `handoff\` |
 | Debian/Ubuntu `.deb` | `/var/lib/privacyfence` | `authority/config/` | `authority/logs/audit/` | `logs/privacyfence.log` | `handoff/` |
 | `pip`/`pipx` install | `~/.privacyfence` (Windows: `%LOCALAPPDATA%\PrivacyFence`) | `authority/config/` | `authority/logs/audit/` | `logs/privacyfence.log` | the data directory itself |
+| Docker org image | the volume at `/var/lib/privacyfence-org/.privacyfence` | `authority/config/` | `authority/logs/audit/` | `logs/privacyfence.log` | the data directory itself |
 | Source checkout | the repository root | `authority/config/` | `authority/logs/audit/` | `logs/privacyfence.log` | the data directory itself |
 
 Paths in the last four columns are relative to the data directory. On a separated install only

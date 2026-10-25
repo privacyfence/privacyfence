@@ -33,6 +33,14 @@ jira:
   seed_issue_key: ""
   seed_issue_summary: "PrivacyFence QA seed issue [QATEST]"
 
+assets:
+  # docs/connector-qa.md, "Seed: Jira Assets"
+  schema_key: PFQA
+  # Leave blank to resolve by label inside the QA schema instead (one extra
+  # API call per run).
+  seed_object_key: ""
+  seed_object_label: "PrivacyFence QA seed contract [QATEST]"
+
 salesforce:
   # docs/connector-qa.md, "Seed: Salesforce" -- no separate seed artifact here,
   # unlike Confluence/Jira: the sample Account records that section
@@ -49,6 +57,11 @@ salesforce:
   # Leave blank to resolve by search() on seed_record_name instead (one
   # extra API call per run).
   seed_record_id: ""
+  # The --lifecycle check creates and updates tagged records of this object type and
+  # never deletes them. These are its defaults; uncomment a line to override it.
+  # lifecycle_object_type: Task
+  # lifecycle_name_field: Subject
+  # lifecycle_note_field: Description
 
 grist:
   # docs/connector-qa.md, "Seed: Grist" -- required: the QA document's full

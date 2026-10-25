@@ -79,7 +79,8 @@ Two things can ask you before a tool runs:
    [Approvals and policy](approvals-and-policy.md).
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So Claude Desktop may
 ask before a write, in front of PrivacyFence's own card. There is one extension and no switch that
 advertises writes as read-only. If you would rather confirm only once, on PrivacyFence's card,
@@ -102,9 +103,10 @@ log still records the name Claude Desktop sent: through the extension that is
 In organization mode, Claude Desktop sends its own name when it registers and in the MCP handshake.
 Its custom connector most likely registers through your claude.ai account exactly as claude.ai does,
 as `Claude`, but that has not been verified. That name is a **claim**: the card says the caller *says* it is Claude Desktop and marks it **Not verified**,
-because any program can send the same name. An administrator can **pin** Claude Desktop's registration on
-**Settings → AI systems**; the cards for that registration are then verified.
-See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking).
+because any program can send the same name. There is nothing an administrator can do about it.
+If the custom connector registers through claude.ai with claude.ai's own callback, it is shown as
+Claude, verified; otherwise its name stays a claim. See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking) and
+[AI systems](org-mode-setup-guide.md#11-ai-systems).
 
 ## Troubleshooting
 

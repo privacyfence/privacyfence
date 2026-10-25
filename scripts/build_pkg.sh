@@ -130,6 +130,15 @@ ditto "$BUNDLE" "${PKG_ROOT}/${APP_NAME}.app"
 cp -p installer/macos/pkg/postinstall "${SCRIPTS_DIR}/postinstall"
 chmod +x "${SCRIPTS_DIR}/postinstall"
 
+# The postinstall runs its own copy of the separation script (not the one in the
+# bundle under /Applications). The script finds its two launchd templates relative
+# to itself, so they ship at the matching relative path.
+mkdir -p "${SCRIPTS_DIR}/scripts" "${SCRIPTS_DIR}/installer/macos"
+cp -p scripts/macos_privilege_separation.sh "${SCRIPTS_DIR}/scripts/macos_privilege_separation.sh"
+chmod 755 "${SCRIPTS_DIR}/scripts/macos_privilege_separation.sh"
+cp -p installer/macos/com.privacyfence.daemon.plist.tmpl installer/macos/com.privacyfence.companion.plist.tmpl \
+  "${SCRIPTS_DIR}/installer/macos/"
+
 cp -p installer/macos/pkg/resources/welcome.html "${RESOURCES_DIR}/welcome.html"
 # The conclusion screen tells the user to open the .mcpb sitting next to this
 # installer, so the name baked in has to be the name the extension has *in the

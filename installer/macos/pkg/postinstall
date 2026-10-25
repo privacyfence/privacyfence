@@ -21,9 +21,20 @@
 set -uo pipefail
 
 APP_PATH="/Applications/PrivacyFenceApp.app"
-SEPARATION_SCRIPT="${APP_PATH}/Contents/Resources/scripts/macos_privilege_separation.sh"
+# The copy of the script that ships in this package's own Scripts directory, which
+# Installer unpacks to a root-only temporary directory -- not the one inside the
+# bundle, which sits in /Applications where an admin account could have swapped it.
+SEPARATION_SCRIPT="$(cd "$(dirname "$0")" && pwd)/scripts/macos_privilege_separation.sh"
+# What a person is told to run later: the installed copy, since the one above is
+# gone once the installer finishes.
+INSTALLED_SCRIPT="${APP_PATH}/Contents/Resources/scripts/macos_privilege_separation.sh"
+# A plain assignment, never `${FIND:-...}`: this runs as root.
+FIND=/usr/bin/find
 
 log() { printf 'PrivacyFence postinstall: %s\n' "$*" >&2; }
+
+# True when nothing in the installed bundle belongs to anyone but root.
+bundle_is_root_owned() { [ -z "$("$FIND" "$APP_PATH" ! -user root -print -quit 2>/dev/null)" ]; }
 
 # Apple's installer runs this as root with no login session of its own --
 # $SUDO_USER (what macos_privilege_separation.sh normally reads) is unset here,
@@ -53,6 +64,11 @@ if [ ! -x "$SEPARATION_SCRIPT" ]; then
   exit 0
 fi
 
+if ! bundle_is_root_owned; then
+  log "PrivacyFenceApp.app is not owned by root throughout -- not setting up the background service"
+  exit 0
+fi
+
 log "provisioning privilege separation for ${CONSOLE_USER:-this machine} (ADR 0003 decision 3)…"
 ENABLE_STATUS=0
 if [ -n "$CONSOLE_USER" ]; then
@@ -62,16 +78,16 @@ else
 fi
 if [ "$ENABLE_STATUS" -eq 0 ]; then
   if [ -n "$CONSOLE_USER" ]; then
-    log "privilege separation enabled -- ${CONSOLE_USER} still needs to log out and back in once before the companion app and MCP client can reach the daemon (macOS only evaluates group membership at login; see 'sudo ${SEPARATION_SCRIPT} status')."
+    log "privilege separation enabled -- ${CONSOLE_USER} still needs to log out and back in once before the companion app and MCP client can reach the daemon (macOS only evaluates group membership at login; see 'sudo ${INSTALLED_SCRIPT} status')."
   else
-    log "privilege separation enabled -- nobody is in the service group yet; the companion app adds the first account to log in, or run 'sudo ${SEPARATION_SCRIPT} enable --for-user <name>'."
+    log "privilege separation enabled -- nobody is in the service group yet; the companion app adds the first account to log in, or run 'sudo ${INSTALLED_SCRIPT} enable --for-user <name>'."
   fi
 else
   # enable --auto itself never exits non-zero (it logs and returns 0 on every
   # failure path -- see that script's own --auto handling), so reaching this
   # branch at all means the script couldn't even run to completion. Still not
   # a reason to fail the package install.
-  log "automatic privilege-separation enable did not complete -- install continues; run 'sudo ${SEPARATION_SCRIPT} enable' by hand later, or check Console.app / /var/log/install.log for details."
+  log "automatic privilege-separation enable did not complete -- install continues; run 'sudo ${INSTALLED_SCRIPT} enable' by hand later, or check Console.app / /var/log/install.log for details."
 fi
 
 # `enable`'s own internal call to `daemon ensure-running`

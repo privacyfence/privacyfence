@@ -47,13 +47,17 @@ What people see, all at `https://<your-hostname>`:
 | `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence, Grist, Peek and Telegram. |
 | `/approvals` | Pending AI requests to approve or deny. |
 | `/security` | Enroll and remove passkeys. |
-| `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy and the **AI systems** page. |
+| `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy and the **Stats** page. |
 | `/mcp` | The MCP endpoint AI clients connect to. It uses OAuth 2.1 with dynamic client registration. |
 
 **This is the only way claude.ai can use PrivacyFence.** A desktop install listens on `localhost`,
 which claude.ai's servers cannot reach. Claude Desktop, Claude Code and other MCP-compatible clients
 can use either kind of install. [Section 9](#9-first-sign-in-and-validation) shows how to add each
 client.
+
+To run the daemon and the reverse proxy as containers, follow
+[Organization deployment with Docker](org-mode-docker.md) instead of sections 3, 7 and 8; every
+other section applies unchanged.
 
 ## 2. Prerequisites
 
@@ -78,6 +82,9 @@ client.
   needs only the Python standard library, plus the `cryptography` package for signing.
 
 ## 3. Service account and install
+
+With the Docker image, skip this section and sections 7 and 8; see
+[Organization deployment with Docker](org-mode-docker.md).
 
 Create a dedicated system account. Its home directory holds all PrivacyFence data:
 
@@ -140,14 +147,37 @@ longer than 200 characters) is stored under a stable hash instead (`idp-<hash>`)
 
 ### Who is an admin
 
-Admins see the **General**, **Privacy Filter** and **AI systems** pages in Settings. Nobody is an
+Admins see the **General**, **Privacy Filter** and **Stats** pages in Settings. Nobody is an
 admin unless you name a claim and its values with `--idp-admin-group-claim` and
 `--idp-admin-group-value` ([section 6](#6-signing-key-and-bundle)). A person is an admin when the
 claim contains any of the values. A claim that is a single string is matched like a one-item list.
+The match is exact and case-sensitive.
 
-**If Google is your identity provider, use `email` as the admin claim.** Google ID tokens carry no
-group membership and no Workspace admin role, so `groups` never matches anyone. List each admin's
-exact address:
+The daemon reads the claim from the **ID token** only, and it always requests the scopes
+`openid email profile`. It cannot ask for an extra scope such as `groups`. A claim that your
+provider adds only when another scope is requested, or puts only in the access token, never
+reaches the daemon, and nobody becomes an admin.
+
+Two kinds of claim work:
+
+- **`email`** works with every provider that puts the address in the ID token, with no setup at
+  the provider. List each admin's address exactly as the provider spells it. Use it for a few
+  admins, and always with Google.
+- **A group or role claim** (`groups`, `roles` or a custom claim) works only when you configure
+  the provider to put it in the ID token. Use it to manage admins in the provider instead of in
+  the bundle.
+
+| Identity provider | Use | What to set up at the provider | Value to pass |
+|---|---|---|---|
+| Google | `email` | Nothing. Google ID tokens carry no groups and no Workspace admin role, so `groups` never matches. | Each admin's address. |
+| Microsoft Entra ID | `roles` (recommended) | Under **App roles**, create a role, for example `PrivacyFence.Admin`, then assign people or groups to it in **Enterprise applications**. Assigned roles are put in the ID token. | The role's **Value**, for example `PrivacyFence.Admin`. |
+| Microsoft Entra ID | `groups` | Under **Token configuration**, add a groups claim and include it in the ID token. | The group's **Object ID** (a GUID), not its name. A person in more than 200 groups gets no `groups` claim; choose **Groups assigned to the application** to avoid that. |
+| Okta | `groups` | Add a claim named `groups` of type *Groups* with a filter, for example *Equals* `privacyfence-admins`. On the org authorization server set it under the app's **Sign On** > **OpenID Connect ID Token**. On a custom authorization server add it under **Claims**, with **Include in token type** *ID Token*, *Always*. *Always* matters: with *Any scope* or the `groups` scope it is left out. | The group name. |
+| Keycloak | `groups` | On the client's dedicated scope add a **Group Membership** mapper with **Token Claim Name** `groups`, **Add to ID token** on and **Full group path** off. With the full path on, the value is `/privacyfence-admins`, with a leading slash. | The group name. |
+| authentik | `groups` | Nothing. The default `profile` scope mapping includes `groups`. | The group name. |
+| Auth0 | a custom claim | Auth0 adds no groups or roles to the ID token. Add a post-login Action that sets a namespaced claim, for example `api.idToken.setCustomClaim("https://acme.example.com/roles", event.authorization.roles)`. | `--idp-admin-group-claim https://acme.example.com/roles` and the role name. |
+
+With Google:
 
 ```bash
   --idp-admin-group-claim email \
@@ -157,6 +187,18 @@ exact address:
 
 Do not use `hd` (the Workspace domain): every account in the domain has the same value, so every
 account would be an admin.
+
+With a group, for example on Okta, Keycloak or authentik:
+
+```bash
+  --idp-admin-group-claim groups \
+  --idp-admin-group-value privacyfence-admins \
+```
+
+Before you build the bundle, sign in to the provider as an admin and look at a real ID token, for
+example with the provider's token preview (Okta's **Token Preview**, Keycloak's **Client scopes** >
+**Evaluate** > **Generated ID token**) or by decoding one. Check that the claim is there and that
+its value is exactly what you pass. The daemon does not log the claims.
 
 Admin status is decided at sign-in and kept for the browser session. To add or remove an admin
 later, see [Changing a bundle later](#changing-a-bundle-later). After you change the admin list and
@@ -169,7 +211,10 @@ either or both of these to the bundle:
 
 - `--authz-allowed-domain acme.example.com` (repeatable): only email addresses at these domains.
 - `--authz-groups-claim groups --authz-required-group privacyfence-users` (value repeatable): only
-  people whose claim contains one of the values. This is independent of the admin claim.
+  people whose claim contains one of the values. This is independent of the admin claim, but it
+  is matched the same way: the claim must be in the ID token, as set up in the table under
+  [Who is an admin](#who-is-an-admin). With Google there is no such claim; use
+  `--authz-allowed-domain`.
 
 A person who fails either check is refused, and no session is created.
 
@@ -192,7 +237,7 @@ the connector's console must list it exactly.
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `--atlassian-client-id`, `--atlassian-client-secret` | [Atlassian setup](atlassian-setup.md) |
 | Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |
 | Peek | none (device sign-in) | `--peek-base-url` | [Peek setup](peek-setup.md) |
-| Telegram | none | none | [Telegram setup](telegram-setup.md) |
+| Telegram | none | `--enable-telegram` | [Telegram setup](telegram-setup.md) |
 
 Notes:
 
@@ -208,9 +253,10 @@ Notes:
   app accepts only one callback URL.
 - **Peek** has no OAuth app and no callback URL: each person approves a code in Peek itself on
   `/connect`. `--peek-base-url` names the Peek server; the connector is offered only with it.
-- **Telegram** needs nothing from you: its app credentials ship inside PrivacyFence. Each person
-  signs in with their phone number on `/connect`.
-- A connector appears on `/connect` only if its section is in the bundle.
+- **Telegram** needs no registration: its app credentials ship inside PrivacyFence. `--enable-telegram`
+  offers it, and each person signs in with their phone number on `/connect`.
+- A connector appears on `/connect` only if its section is in the bundle; the others are not listed
+  ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
 
 The same app registrations can also carry the loopback redirect URIs used by desktop installs; the
 setup guides cover both.
@@ -220,6 +266,12 @@ setup guides cover both.
 The daemon refuses to start in organization mode unless the bundle is signed. The first signed
 bundle a server sees pins its signing key (trust on first use). Every later bundle must verify
 against that key.
+
+Each signed bundle also carries a `serial` (see [Build the bundle](#build-the-bundle)). The server
+pins the highest serial it has accepted in `org/org_config_serial.txt` and refuses a bundle with a
+lower one, so an old bundle cannot be put back by accident. Bundles built before this field existed
+are accepted until a serial has been pinned; from then on a bundle without one is refused. The
+reasoning is in [ADR 0200](adr/0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md).
 
 ### Generate the signing key
 
@@ -254,6 +306,12 @@ backed up: every future bundle, including `--merge` runs, must be signed with it
 ```
 
 The script writes `org_config.json` with mode `0600` and prints what it contains.
+
+A signed bundle gets a `serial`: the current Unix time unless you pass `--serial N`, so each new
+build is higher than the last without you tracking a counter. If you set `--serial` by hand, keep it
+increasing. `--merge` drops the old serial and signs a new one. To go back to an older bundle on
+purpose, stop the daemon and delete `org/org_config_serial.txt`; delete it together with
+`org/org_config_signing_pubkey.txt` to rotate the key and reset the serial in one step.
 
 | Option | Default | What it sets |
 |---|---|---|
@@ -302,6 +360,7 @@ The script writes `org_config.json` with mode `0600` and prints what it contains
 | `--audit-forwarding-http-bearer-token-env NAME` | none | The name of an environment variable the daemon reads a bearer token from. The token itself never goes in the bundle; set the variable in the systemd unit ([section 8](#8-hardened-systemd-unit)). |
 | `--generate-signing-key PATH` | | Create a signing key and exit. |
 | `--sign-key PATH` | none (required with `--mode org`) | Sign the bundle. |
+| `--serial N` | current Unix time | The serial signed into the bundle; needs `--sign-key`. An install refuses a bundle whose serial is lower than the highest it has accepted. |
 
 `python3 build_org_bundle.py --help` lists the same options. The daemon also reads a few bundle
 keys that the script does not set, and each person's policy lives in `settings.yaml`; the
@@ -364,7 +423,7 @@ sudo install -o privacyfence-org -g privacyfence-org -m 600 org_config.json \
 Copying the file is the only way to install a bundle on an organization server. The daemon reads
 it once at startup, so restart the service after replacing it (`sudo systemctl restart
 privacyfence-org`). It refuses to start, and says why, if the bundle is malformed, is missing its
-`server` or `idp` section, is unsigned, or does not verify against the pinned key.
+`server` or `idp` section, is unsigned, or does not verify against the pinned key, or carries a lower serial than the install has accepted.
 
 ## 7. Reverse proxy and TLS
 
@@ -669,12 +728,16 @@ People reconnect or check a connection the same way; see
 
 Every client connects to `https://pf.acme.example.com/mcp`. The client discovers the authorization
 server from `/.well-known/oauth-protected-resource/mcp`, registers itself at `/register`, and opens
-the organization's sign-in page. After sign-in it holds its own tokens; there is nothing to copy or
-paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
+the organization's sign-in page. The first time a person connects a given client, PrivacyFence then
+shows a consent page that names the client and the host it returns to, and issues nothing until the
+person allows it; the choice is remembered per person, client and redirect address
+([ADR 0177](adr/0177-an-org-mode-mcp-client-needs-the-persons-consent-once.md)). After that the client
+holds its own tokens; there is nothing to copy or paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
 which the person signs in again.
 
-claude.ai also needs this host on its **Settings → Capabilities → Domain allowlist** to move
-files larger than about 75 KB, in either direction; see
+claude.ai also needs this host on its domain allowlist to move files larger than about 75 KB,
+in either direction. On Team and Enterprise plans that list is set by a claude.ai Owner or admin
+under **Admin settings → Capabilities**, not by each person; see
 [File delivery](#13-file-delivery).
 
 Each AI client has its own page with the exact steps, what it asks before PrivacyFence's card, and
@@ -684,8 +747,7 @@ how it is identified: [claude.ai](connect-claude-ai.md), [Claude Desktop](connec
 Any other client that supports the Streamable HTTP transport with OAuth 2.1 and dynamic client
 registration works the same way.
 
-Each client registration shows up on the admin's **AI systems** page
-([section 11](#11-ai-systems)).
+[Section 11](#11-ai-systems) says which clients are shown as verified.
 
 #### Gemini Enterprise
 
@@ -733,7 +795,8 @@ explicitly so the file documents the intended policy. The categories and their m
 
 **Per-person rules.** Nobody, admins included, can see or change another person's always-allow
 rules from the browser. An administrator who must review or remove someone else's rules edits that
-person's file on the server.
+person's file on the server. The admin's **Stats** page counts rules per connector across everyone,
+but never shows whose they are or what they allow.
 
 Settings pages each person sees:
 
@@ -744,10 +807,43 @@ Settings pages each person sees:
 | About | yes | |
 | General (PII detection) | | yes |
 | Privacy Filter | | yes |
-| AI systems | | yes |
+| Stats (users, connectors and auto-accept rules, counts only) | | yes |
 
 Connector management, update checks, the log level, the Calendar free/busy and Gmail signature
 switches, and notification preferences are desktop-only settings and do not appear here.
+
+### Moving a person from a desktop install
+
+A person's always-allow rules and step-up level can move from their desktop install to the
+organization server (and back) as a file:
+
+1. On the desktop, open **Settings > Auto-accept** and choose **Export…**. The browser saves
+   `privacyfence-personal-settings.json`.
+2. Sign in to the organization server.
+3. Connect the same accounts at `/connect`. A rule names folders, channels and projects by id, so it
+   only matches when the same account is connected here.
+4. Open **Settings > Auto-accept** and choose **Import…**, then pick the file.
+5. Read the preview. Each rule is listed as will be added, will be extended, already there, or
+   skipped with the reason. Nothing has changed yet.
+6. Confirm. When step-up is in force, approve with your passkey; the approval is for that exact file.
+
+Import only adds: it never removes or narrows a rule or lowers a step-up level, and it applies to the
+signed-in person's own settings only. An administrator cannot import for someone else. What does not
+move:
+
+- Connector sign-ins and tokens: connect your accounts again on the new install.
+- Passkeys: enroll a passkey on the new install at `/security`.
+- Scoped tokens: create new ones if your administrator allows them.
+- Privacy filter and PII detection: install-wide, a desktop install's own or an administrator's on an
+  organization server.
+- Connector on/off switches, notification detail, AI system names, update checks and log level:
+  desktop-only settings.
+- The audit log: it stays on the install that wrote it.
+- Rules written by hand in `settings.yaml` that have no entry on the Auto-accept page (custom
+  rules): add them again on the page.
+
+See [ADR 0194](adr/0194-personal-settings-are-exported-as-a-file-of-auto-accept-rows-and-the-step-up-level.md)
+and [ADR 0195](adr/0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md).
 
 ## 11. AI systems
 
@@ -756,26 +852,29 @@ can be trusted depends on where it came from:
 
 | Source | Recorded as `agent_source` | Shown as |
 |---|---|---|
-| An admin pinned the client's registration to an AI system | `oauth_client` | Verified, with the AI system's icon |
+| The client registered only with its vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise) | `oauth_client` | Verified, with the AI system's icon |
 | The name the client gave when it registered, or in its MCP handshake | `client_info` | Not verified, with the claimed name |
 | Nothing | empty | Unrecognised AI system |
 
-Any program that can reach `/register` can call itself anything, so only a pin makes a name
-verified. To pin, an admin opens **Settings → AI systems**, which lists every registered client
-with its registered name, client ID and when it was last used, checks that a registration really is
-what it claims (for example by matching the last-used time to their own sign-in from claude.ai),
-and clicks the AI system to pin it to. **Unpin** removes it.
+Every vendor's authorization code can only be delivered to a redirect URI the client registered, and
+PrivacyFence's authorization server refuses any other. So when a registration's only redirect URIs
+are one vendor's own callback, its tokens were obtained by that vendor, and its cards are verified:
 
-- A pin names one registration, never a name. A client that registers again gets a new client ID
-  and starts unverified.
-- A registration unused for 180 days is removed the next time any client registers. Its pin stays
-  listed under **Stale pins**, applies to nothing, and can be removed there.
-- Pinning and unpinning are sensitive settings writes ([section 12](#12-approvals-and-step-up)) and
-  are recorded in the audit log with the admin's identity and the registration's claimed name.
-- Pins are stored in `org/agent_pins.json` in the data directory, not in the bundle, because client
-  IDs are issued at runtime.
+- claude.ai: `https://claude.ai/api/mcp/auth_callback`
+- ChatGPT: `https://chatgpt.com/connector/oauth/<connector id>`
+- Gemini Enterprise: `https://vertexaisearch.cloud.google.com/oauth-redirect`
 
-The reasoning is in [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md),
+A registration with any other redirect URI alongside them stays Not verified. Claude Code and
+anything else with a loopback redirect (`http://localhost:...`)
+stay Not verified, because any local program can register one. Claude Desktop's custom connector
+most likely registers through claude.ai and is then shown as Claude. A person, or a program using
+their signed-in browser session, can register a client under a vendor's redirect URI and so have
+their own calls shown as that vendor, verified; this never reaches another member's calls
+([ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md) says what that leaves
+open). There is nothing for an administrator to do: which clients are verified follows from how they registered.
+
+The reasoning is in [ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md),
+[ADR 0225](adr/0225-the-admin-ai-system-pin-is-removed.md),
 [ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md) and
 [ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md).
 
@@ -808,8 +907,8 @@ With step-up on:
   `--step-up-require-passkey`: they approve each card on its own, or enroll a passkey first.
   Denying never needs step-up.
 
-**Sensitive settings writes.** Adding or removing an always-allow rule, changing the privacy policy
-or PII detection, and pinning or unpinning an AI system are sensitive: they change what gets gated
+**Sensitive settings writes.** Adding or removing an always-allow rule and changing the privacy policy
+or PII detection are sensitive: they change what gets gated
 in future. When the bundle sets both `--step-up-enabled` and `--step-up-require-passkey`, each of
 these needs a fresh passkey confirmation, exactly as on a desktop install. With either flag off,
 they need only a signed-in session. A fresh identity-provider sign-in is never accepted for them. See
@@ -880,9 +979,10 @@ Which link a staged file gets:
 
 **The AI client has to be able to reach this host.** A client opens an agent link, and sends an
 upload, from wherever it runs its own code, which is not necessarily where it runs the MCP
-connection. claude.ai does both from its sandbox, which reaches only the domains on
-**Settings → Capabilities → Domain allowlist**. Put this deployment's host there, or every file
-over the inline limit, and every upload, fails from claude.ai after it has been approved. A
+connection. claude.ai does both from its sandbox, which reaches only the domains on its
+domain allowlist. Have a claude.ai Owner or admin put this deployment's host there (**Admin
+settings → Capabilities**, with **Code execution and file creation** on), or every file over the
+inline limit, and every upload, fails from claude.ai after it has been approved. A
 failure there never reaches PrivacyFence; see
 [Connect claude.ai](connect-claude-ai.md#files) and
 [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md). To read a
@@ -902,7 +1002,10 @@ removed the next time that person stages or claims a download, and every staged 
 when the daemon starts. The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`,
 `jira_export_issues`) use the same staged link: after the approval the file is staged and the tool
 result carries the link, with no `destination_dir`. They respect `allow_disk_staging` and are
-refused before any request when it is off
+refused before any request when it is off. Set `download_delivery.allow_exports: false`
+(`--no-exports`) to remove them altogether, `assets_export_objects` included: they are then not
+listed and a call is refused, so no export file is held on the server
+([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md))
 ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
 
 The approval gate, not the delivery channel, is where the privacy decision
@@ -918,6 +1021,23 @@ person who created it. Once a tool call has read it, the slot is kept until the 
 it, for up to 20 minutes, so an approval that waits for you does not lose the file. `drive_upload_file` also accepts the file inline as `content_base64`. Gmail
 attachments are limited to 18,000,000 bytes in total per message.
 
+### Scheduled recipes
+
+`privacyfence-sync` runs recipes on a schedule against this server, with no AI model involved. For
+a scheduler on a server, the administrator needs to do one thing and leave one thing alone:
+
+- **Enable scoped tokens** with `--enable-scoped-tokens` (see the table in
+  [Build the bundle](#build-the-bundle)). Each person then creates, in Settings, a named token
+  limited to the rules and tools one recipe needs. A scoped token does not need
+  `--enable-unattended-sessions`.
+- **Leave `download_delivery.agent_links` on.** It is on by default, and `privacyfence-sync` needs
+  it to receive a file; with `--no-agent-links`, steps that receive a file fail.
+
+Recipe scripts run on the scheduler's machine, never on this server
+([ADR 0161](adr/0161-privacyfence-sync-is-a-separate-plain-mcp-client.md)). For the person's side
+(listing the rules and tools a recipe needs, storing the token, and reading the result file), see
+[On a server, against organization mode](https://github.com/privacyfence/privacyfence/blob/main/sync/README.md#on-a-server-against-organization-mode).
+
 ## 14. Operations
 
 ### Backup
@@ -929,9 +1049,9 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 |---|---|
 | `org/org_config.json` | The installed bundle, including the identity provider and connector client secrets. |
 | `org/org_config_signing_pubkey.txt` | The pinned signing key. |
+| `org/org_config_serial.txt` | The highest bundle serial this install has accepted. |
 | `org/oauth_clients.json` | Registered AI clients. Without it every client has to register again. |
 | `org/oauth_refresh.json` | AI clients' refresh tokens, each sealed under its own token. |
-| `org/agent_pins.json` | AI-system pins. |
 | `org/web_push_vapid_key.pem` | The server's push-notification key. Without it every browser has to subscribe again. |
 | `authority/config/settings.yaml` | Install-wide policy. |
 | `authority/logs/audit/` | The install's own audit log and its chain key. |
@@ -1110,7 +1230,9 @@ Notes:
 
 - **Bundle signing key:** generate a new key, build the bundle with it, stop the daemon, delete
   `org/org_config_signing_pubkey.txt`, install the new bundle and start. The first start pins the
-  new key and logs a warning saying so.
+  new key and logs a warning saying so. The serial pin (`org/org_config_serial.txt`) stays, and the
+  new bundle's default serial is a current timestamp, so it is accepted. Delete the serial file too
+  only to reset the serial.
 - **Identity provider client secret:** rebuild with `--merge --mode org` and every `--server-*` and
   `--idp-*` flag ([section 6](#changing-a-bundle-later)), install, restart.
 - **Connector client secrets:** rebuild with `--merge` and that connector's flags, install,
@@ -1145,6 +1267,7 @@ cause:
 |---|---|
 | `has "mode": "org" but is not signed` | Rebuild the bundle with `--sign-key`. |
 | `failed signing-key verification` | The bundle was signed with a different key than the pinned one. Sign it with the original key, or rotate the key ([section 14](#key-and-secret-rotation)). |
+| `rollback refused`, or `carries no serial, but this install has already accepted serial` | The bundle's serial is lower than the one in `org/org_config_serial.txt`, or it has none. Rebuild it with `--sign-key` (the default serial is the current time). To go back to an older bundle on purpose, delete `org/org_config_serial.txt` ([section 6](#build-the-bundle)). |
 | `requires an "idp" section` or `requires org_config.json's "server"."issuer_url"` | Rebuild with `--mode org` and all `--server-issuer-url` and `--idp-*` flags. |
 | `is not HTTPS -- org mode requires every IdP endpoint to be HTTPS`, or a discovery error | The identity provider's issuer or endpoints are not HTTPS, or the server cannot reach `<issuer>/.well-known/openid-configuration`. |
 | `Refusing to start in organization mode:` followed by a permissions finding | A directory in the data directory grants group or other access. Set it back to `0700`, owned by `privacyfence-org`. |
@@ -1169,9 +1292,13 @@ does not list that service's exact redirect URI. Each Google service has its own
 **A service is missing from `/connect`.** Its section is not in the bundle. Rebuild with its flags
 and `--merge`, install and restart.
 
-**Admins do not see Privacy Filter or AI systems.** The admin claim does not match. With Google as
-the identity provider, use `email` ([section 4](#who-is-an-admin)). After changing it, restart and
-sign out and back in.
+**Admins do not see Privacy Filter or Stats.** The admin claim does not match. Look at an
+admin's ID token: either the claim is missing, because the provider does not put it in the ID
+token (with Google it never does; use `email`), or its value differs from
+`--idp-admin-group-value`, for example a Keycloak group path with a leading `/`, an Entra group's
+Object ID instead of its name, or different capitalization. See the table in
+[section 4](#who-is-an-admin). After changing the bundle or the provider, restart and sign out and
+back in.
 
 **Sign-in fails with an authorization error for some people.** They are outside
 `--authz-allowed-domain` or `--authz-required-group`.

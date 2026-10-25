@@ -43,15 +43,150 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.8.1] — 2026-10-23
+
+### Fixed
+
+- **`privacyfence_check_policy` suggests the Slack rules for mentions of you, your conversations and one-to-one DMs.** A Slack search or read now lists "Slack — mentions of me", "Slack — conversations I'm a member of" and "Slack — direct messages to me" where they could cover the call, not only the per-channel rule, without asking Slack. A search needs `member_only` for the conversations rule, and the suggestion says so.
+
+## [6.8.0] — 2026-10-22
+
+### Added
+
+- **A Gmail label rule can allow archiving.** A rule on a label can carry the verb `move`, and `gmail_archive_message` is then auto-accepted only when the message already carries that label, checked by name against its live labels. Create a new scoped token after editing the rule; existing tokens keep the operations they were created with.
+- **A scoped token can let email and Slack reads return personal data.** The New token form has a second checkbox, **Let reads return personal data**, for Gmail message and thread reads and Slack channel, thread and search reads that one of the token's rules covers. The scan still runs and the audit log records what it found.
+- **Slack rules for mentions of you and for one-to-one DMs.** "Slack, mentions of me" covers a search whose every result @-mentions you and a thread in which at least one message does; "Slack, direct messages to me" covers one-to-one DMs.
+- **A Gmail query rule.** "Gmail, query" takes one Gmail search expression, evaluated by Gmail against the message when it is read; a thread is covered only when every message matches.
+- Slack search and channel history take a `minutes` window: an agent can ask for everything from the last hour across channels, DMs, group DMs and threads, newest first.
+- **A Slack rule for conversations you are a member of.** "Slack — conversations I'm a member of" auto-accepts channel history and thread reads in any conversation you are in right now (checked with Slack on each call), with an optional list of channel ids it never covers, and a `member_only` search whose every result is from such a conversation.
+- `slack_search_messages` takes `member_only` and `exclude_channels`, so a routine can sweep everything since its last run in a few requests instead of one per conversation.
+
+### Changed
+
+- A "Slack — mentions of me" rule saved with only read no longer auto-accepts searches; add search to it if you relied on that.
+- **claude.ai, ChatGPT and Gemini Enterprise are verified without an admin step.** In organization mode, a client that registered only with its vendor's own redirect URI is shown as verified. Claude Code and other clients with a local redirect stay Not verified.
+
+### Fixed
+
+- The New token form shows the tools that need no rule while no rule is selected, so a token without rules can be created.
+- Slack participant filters (`slack_list_channels`, `slack_list_group_chats`, `slack_search_messages` with `participant`) read conversation ids from Slack's channel objects.
+
+### Removed
+
+- The **AI systems** settings page and its per-registration pins. Pins are no longer read; an organization deployment can delete `org/agent_pins.json`.
+
+## [6.7.0] — 2026-10-22
+
+### Added
+
+- **Organization admins get a Stats page in Settings.** It shows how many people have signed in, how many have connected each service, and how many auto-accept rules they keep per connector. It shows counts only, never who or which rule.
+
+## [6.6.2] — 2026-10-22
+
+### Changed
+
+- `privacyfence-sync preflight` warns, per step, when a run can still be denied by the personal-data scan, and `privacyfence_check_policy` returns `pii_gate` and `pii_gate_detail` saying whether the scan applies and whether the token's allowance lifts it.
+- The daemon log now says where a slow approval spent its time: a request whose preparation (personal-data scan, history lookup) took a second or more gets one line with each step's time, including how long it waited for a free worker; a dialog whose worker started late, a card page served before it was ready, a blocked event loop and a full worker pool are each logged too.
+
+### Fixed
+
+- **In organization mode, a new card no longer waits for other people's pending approvals.** Each request waiting on a person held one of the daemon's shared worker threads for up to 30 seconds. Once more people had an approval waiting than the daemon had threads (about 12 on an 8-core machine), the next request's card did not appear until one of those waits ended, often half a minute later.
+
+## [6.6.1] — 2026-10-21
+
+### Fixed
+
+- On the Scoped tokens page, a tool's "covered by …" line wraps instead of running off the page when many rules are selected.
+- A call refused because the personal-data scan found something, in an unattended session or with a scoped token, no longer says that no rule covers it. The message now names the categories found and says that a token's "carry personal data" allowance applies only to exports, downloads and page uploads, so a covered `salesforce_run_report` or `grist_get_records` is denied for that reason, not for a missing rule.
+
+## [6.6.0] — 2026-10-20
+
+### Added
+
+- **Organization mode ships as a Docker image.** Each stable release now publishes `ghcr.io/privacyfence/privacyfence-org` for amd64 and arm64, with a Compose file that puts Caddy in front of it. See [Organization deployment with Docker](docs/org-mode-docker.md).
+- **privacyfence-sync can start a Claude Code scheduled task.** A new `trigger` step starts a cloud scheduled task through its API trigger and passes it a short text, so a cheap scheduled recipe can watch a Drive folder and start Claude only when a new file arrives. The task's token comes from a `PRIVACYFENCE_*` environment variable that scripts never see.
+- `privacyfence-sync permissions RECIPE` lists the auto-accept rules and the tools a recipe needs, `preflight` names the rule a step is missing, and `run --result-file PATH` writes a JSON file saying how the run ended (`ok`, `no_change`, `denied`, ...) so a scheduler can tell a quiet day from a full run; exit codes are unchanged. See [On a server, against organization mode](sync/README.md#on-a-server-against-organization-mode).
+- `privacyfence_check_policy` returns `suggested_rules`: the scope, value and verb of the rules that would cover a call that would not auto-accept, derived from the call's own arguments, for scoped tokens too.
+- Settings shows each scoped token's last use and last denial (with the tool that was denied).
+
+### Fixed
+
+- **Calendar invitations are now emailed to guests.** `calendar_create_event` created the event without asking Google to notify the attendees, so it appeared on their calendars but nobody got a mail. Creating an event with attendees now sends the invitation to all of them. Rescheduling already emailed everyone and is unchanged.
+
 ### Security
 
+- The `certifi` floor was raised to 2026.10.19, covering GHSA-6q48-6c7w-9gw2, which affects every earlier release. The floor matters for `pip install privacyfence`, which resolves fresh from `pyproject.toml` and could previously land on 2024.7.4.
+
+## [6.5.0] — 2026-10-20
+
+### Added
+
+- **Org mode's Connect page lists Jira Assets.** Assets uses the Jira and Confluence sign-in, so it had no row there and nothing said whether it was working. When the bundle switches Assets on, a **Jira Assets** row now says whether your Atlassian sign-in has the Assets permissions, and offers **Reconnect** when it was made before Assets was on.
+
+### Changed
+
+- **PrivacyFence reports the Atlassian accounts it caches to Atlassian's personal data reporting API, and erases the ones Atlassian says are closed or changed.** The Jira and Confluence name cache is reported once per cycle (7 days unless Atlassian asks otherwise) with the user's own sign-in, and an entry that has been neither fetched nor reported for a cycle and a day is erased, so a cached name never outlives its report. The Atlassian setup guide now also covers sharing the app (Distribution), without which only the app's creator can sign in.
+
+- **The organization setup guide says which admin claim works with which identity provider.** `email` works everywhere with no setup; `groups` or `roles` work only once the provider puts them in the ID token. The guide now gives the setup and the value to pass for Google, Microsoft Entra ID, Okta, Keycloak, authentik and Auth0, and how to check a real ID token first.
+
+### Fixed
+
+- **Auto-accept no longer marks existing resources as deleted.** Only a lookup that worked and found no such resource now shows a value as deleted. A lookup that failed (a rate limit, a timeout, a connector error) shows the value as not looked up yet and tries again a minute later. Jira projects and Confluence spaces are now looked up by key, so a project or space past the first 50 is no longer shown as deleted. A Slack channel, Telegram chat or Salesforce report missing from a list that was cut off is no longer shown as deleted either.
+
+## [6.4.0] — 2026-10-17
+
+### Changed
+
+- **The Jira "if I'm the reporter / assignee" and Confluence "if I'm the author" rules match your Atlassian account id.** They no longer compare your email inside a display name, so nobody can make issues auto-readable by naming themselves after you, and the Confluence rule now works. Installs with Jira pick the id up on their next start; installs with only Confluence need to sign in to Atlassian once more. ([ADR 0199](docs/adr/0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md))
+- **An install refuses an older organization bundle.** Bundles signed with `build_org_bundle.py --sign-key` carry a `serial` (`--serial N`, default the current time), and an install refuses a bundle with a lower serial than the highest it has accepted. Delete `org_config_serial.txt` to go back on purpose. ([ADR 0200](docs/adr/0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md))
+- **privacyfence.eu sends security headers.** HSTS, a Content-Security-Policy, `X-Content-Type-Options: nosniff` and a Referrer-Policy. ([ADR 0201](docs/adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md))
+- **Connectors are enabled by the organization config, all of them.** Telegram, Peek and Grist now need a section in the organization config too (`build_org_bundle.py --enable-telegram`, `--enable-peek`, `--enable-grist`; `--peek-base-url` and `--grist-server-url` imply theirs). Settings > Connectors and the organization sign-in page list only the connectors it enables and hide the rest. An install without a bundle lists none until an administrator adds the sections ([ADR 0196](docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
+
+### Added
+
+- **`privacyfence-sync` can export Jira Assets objects.** A recipe step `tool: assets_export_objects` with an AQL query and a `file_name` now works with a scoped token: the runner fetches the one-time download link, checks the SHA-256, and writes a header-only file when nothing matches, as for `jira_export_issues`. The rule it needs is a search rule on the Jira Assets schema.
+- **An organization can turn the export tools off.** `download_delivery.allow_exports: false` in the organization config (`--no-exports` on `scripts/build_org_bundle.py`) leaves `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` and `assets_export_objects` out of the tool list and refuses them, so no export file is staged on the server. On by default; local mode is unaffected.
+- **Export and import your personal settings.** From Settings > Auto-accept you can export your personal settings (always-allow rules and step-up level) to a file and import them on another install, to move from a desktop install to an organization server or back. Import previews every rule, only adds, and asks for your passkey when step-up applies.
+- **Show IDs or names on Auto-accept and Scoped tokens.** A "Show IDs" toggle on both pages switches a rule's folders, projects, channels and so on between their names and their raw IDs. An ID that a live lookup could not find, most likely because it was deleted, is shown in red. Drive items now name their origin: `My Drive: Reports` or `<Shared Drive name>: Reports`.
+
+### Fixed
+
+- **Deleting an auto-accept rule removes it from scoped tokens.** A scoped token no longer keeps the id of a deleted rule, so adding the same rule again does not give it back its old access. The token's other rules and tools are unchanged ([ADR 0198](docs/adr/0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md)).
+- **Adding an auto-accept rule checks the value.** A Drive folder, Slack channel, Jira project, calendar, task list, ... given by its name or title, or by something that is not an id, is now refused with a message saying which id to enter, in Settings, in organization Settings and through `privacyfence_propose_policy_change`, instead of being saved as a rule that never matches.
+
+## [6.3.0] — 2026-10-16
+
+### Added
+
+- **Salesforce: create and update records.** One at a time or up to 200 of one object type in one approval, all or none. Updates show each field's current and new value; nothing deletes. An object-type "Always allow" rule can hold the add and update verbs.
+- **`privacyfence-sync preflight`.** Tells you, before a scheduled run, whether your token can call each step of a recipe and whether an auto-accept rule covers it, without moving any data.
+- **Jira Assets connector (read-only, off by default).** Browse schemas and object types, search objects with AQL, read an object with its linked objects and connected Jira tickets, and export objects to CSV or JSON. Switching it on asks for one extra Atlassian consent. It needs the site's Assets workspace id, set in the bundle (`--atlassian-assets-workspace-id`) or in settings (`connectors.assets.workspace_id`). Review cards say when they cut attributes or values, and connected tickets always need your approval.
+- **Scoped tokens can be renamed.** Rename on the Scoped tokens page changes only the token's name; the token itself, its rules, tools and expiry stay the same, so clients using it keep working.
+
+## [6.2.0] — 2026-10-15
+
+### Security
+
+- **macOS: the installer runs its own copy of the setup script and skips setup when the app bundle is not owned by root.**
+- **Linux: separating an install refuses a daemon program that a non-root account can modify, and the password prompt now names what it is for and only ever starts, stops or restarts the service or sets it up for your account.** `--daemon-exec` must be root-owned along its whole path, e.g. `/opt/privacyfence/venv/bin/privacyfence-app`; paths containing `&`, `|` or `\` also render correctly in the installed service file.
 - **An approval now covers exactly the request and content the card showed.** A repeated call with any different argument, or whose content changed, gets a new card, so an approved message can no longer be swapped for another one.
 - **`trusted_sender_domain`, `approved_recipient_domain` and `to_is_myself` rules read the real email address**, so a display name such as `"CEO <ceo@trusted.com>" <attacker@evil.com>` no longer matches.
 - **`verify_audit_log.py` now reports a forged line placed after chained entries, a removed week, and entries cut from the end of the log** (unless the chain-state file was edited too).
+- **Organization mode: the first time an MCP client signs in for you, PrivacyFence shows which client is asking and where it returns, and issues nothing until you allow it.**
+- **Organization mode: connecting Google, Slack, Atlassian or Grist, and signing in, must be finished in the browser that started them.**
+- **Organization mode: the identity-provider check for an approval starts only from the approval card.**
+- **Hostile client names and connector values can no longer break the Settings page or the approval card's markup.**
+- **On a computer shared by several people, the live Settings updates go only to the owner, and the sign-in link no longer redirects to other sites.**
+- **Large or malformed Excel attachments are refused before they are read.**
+- **Raised minimum versions of `pypdf`, `PyJWT` and `urllib3` for `pip install privacyfence`, to releases without known advisories.** `cryptography` and `certifi` minimums are raised too.
+- **Jira and Salesforce CSV exports start formula-looking cells with `'` so a spreadsheet shows them as text.**
+- **`privacyfence-sync`: scripts no longer see a token passed with `--token-env`, and a download path outside the work folder is refused.**
+- **Claude Desktop extension: it now connects only to a PrivacyFence on this computer whose files belong to PrivacyFence's own service account.** On a separated install the daemon removes a control socket another account left in the shared folder instead of running without one.
 
 ### Fixed
 
 - **A rule added in Settings now resolves the pending approvals it covers right away.**
+- **The docs and privacyfence.eu now list all three tools marked destructive, name Grist and Peek wherever they list the services PrivacyFence connects to, and say which installers are signed.** downloads.privacyfence.eu no longer keeps request logs ([ADR 0186](docs/adr/0186-the-download-worker-keeps-no-request-logs.md)).
 
 ### Changed
 
@@ -3320,7 +3455,17 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...HEAD
+[6.8.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.0...v6.8.1
+[6.8.0]: https://github.com/privacyfence/privacyfence/compare/v6.7.0...v6.8.0
+[6.7.0]: https://github.com/privacyfence/privacyfence/compare/v6.6.2...v6.7.0
+[6.6.2]: https://github.com/privacyfence/privacyfence/compare/v6.6.1...v6.6.2
+[6.6.1]: https://github.com/privacyfence/privacyfence/compare/v6.6.0...v6.6.1
+[6.6.0]: https://github.com/privacyfence/privacyfence/compare/v6.5.0...v6.6.0
+[6.5.0]: https://github.com/privacyfence/privacyfence/compare/v6.4.0...v6.5.0
+[6.4.0]: https://github.com/privacyfence/privacyfence/compare/v6.3.0...v6.4.0
+[6.3.0]: https://github.com/privacyfence/privacyfence/compare/v6.2.0...v6.3.0
+[6.2.0]: https://github.com/privacyfence/privacyfence/compare/v6.1.1...v6.2.0
 [6.1.1]: https://github.com/privacyfence/privacyfence/compare/v6.1.0...v6.1.1
 [6.1.0]: https://github.com/privacyfence/privacyfence/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...v6.0.0

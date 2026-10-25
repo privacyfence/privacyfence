@@ -8,6 +8,8 @@ import io
 import json
 from typing import Any
 
+from .audit_log import _FORMULA_TRIGGER_CHARS as FORMULA_TRIGGER_CHARS
+
 EXPORT_MAX_ROWS = 50_000
 SAMPLE_ROWS = 20
 SCAN_CHARS = 1_000_000
@@ -47,6 +49,32 @@ ORG_DELIVERY_SENTENCE = (
 )
 
 
+EXPORT_TOOLS = frozenset({
+    "grist_export_records", "grist_export_sql", "salesforce_export_report",
+    "jira_export_issues", "assets_export_objects",
+})
+
+
+def _exports_off(download_mode: str, download_config: Any) -> bool:
+    return download_mode == "org" and download_config is not None and not download_config.allow_exports
+
+
+def visible_specs(specs: list[Any], download_mode: str, download_config: Any) -> list[Any]:
+    """``specs`` without the export tools when the organization turned them off
+    (``download_delivery.allow_exports``)."""
+    if not _exports_off(download_mode, download_config):
+        return specs
+    return [spec for spec in specs if spec.name not in EXPORT_TOOLS]
+
+
+def refuse_if_exports_off(tool: str, download_mode: str, download_config: Any) -> None:
+    if tool in EXPORT_TOOLS and _exports_off(download_mode, download_config):
+        raise ValueError(
+            f"{tool} is not available: this organization turned off the export tools "
+            "(download_delivery.allow_exports)."
+        )
+
+
 def refuse_org_without_staging(
     tool: str, download_mode: str, allow_disk_staging: bool, alternative: str,
 ) -> None:
@@ -78,8 +106,25 @@ def csv_cell(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def render(columns: list[str], rows: list[list[Any]], fmt: str) -> bytes:
+def _neutralise(value: Any) -> Any:
+    """Prefix a string cell a spreadsheet would read as a formula with ``'`` so it shows as text."""
+    if isinstance(value, str) and value.startswith(FORMULA_TRIGGER_CHARS):
+        return "'" + value
+    return value
+
+
+def render(
+    columns: list[str], rows: list[list[Any]], fmt: str, *, spreadsheet_safe: bool = False,
+) -> bytes:
+    """Serialise ``rows`` as CSV or JSON.
+
+    ``spreadsheet_safe`` applies to CSV only: a string cell starting with a formula trigger
+    character is written with a leading ``'``. Exports that must round-trip unchanged
+    (Grist) leave it off.
+    """
     if fmt == "csv":
+        if spreadsheet_safe:
+            rows = [[_neutralise(v) for v in row] for row in rows]
         buf = io.StringIO()
         writer = csv.writer(buf, lineterminator="\n")
         writer.writerow(columns)

@@ -17,7 +17,7 @@ import os
 import re as _re
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 
 import requests
 
@@ -86,6 +86,65 @@ class ReportPage:
     keys: list[str]      # the page_by key text of each detail row, in row order
     all_data: bool       # Salesforce's allData for this run
     row_count: int       # the run's RowCount aggregate: every row matching this run, not only those returned
+
+
+@dataclass
+class SalesforceField:
+    name: str
+    label: str
+    type: str
+    createable: bool
+    updateable: bool
+    nillable: bool
+    external_id: bool
+
+
+@dataclass
+class WriteFailure:
+    index: int            # position in the request (0 for a single-record write)
+    status_code: str      # Salesforce's errorCode/statusCode, or "UNKNOWN"
+    fields: list[str]
+    message: str          # Salesforce's message, cut to 200 characters
+
+
+MAX_WRITE_FAILURES_SHOWN = 10
+_WRITE_MESSAGE_CHARS = 200
+_ROLLED_BACK = "ALL_OR_NONE_OPERATION_ROLLED_BACK"
+
+
+class SalesforceWriteError(SalesforceClientError):
+    """Salesforce refused a write with a 4xx answer or a composite result that is not success;
+    nothing was saved, because every batch is sent with allOrNone."""
+
+    def __init__(self, failures: list[WriteFailure], total: int) -> None:
+        self.failures = failures
+        self.total = total
+        shown = [f for f in failures if f.status_code != _ROLLED_BACK]
+        parts = []
+        for f in shown[:MAX_WRITE_FAILURES_SHOWN]:
+            part = f"records[{f.index}]: {f.status_code}"
+            if f.fields:
+                part += f" ({', '.join(f.fields)})"
+            if f.message:
+                part += f": {f.message}"
+            parts.append(part)
+        if len(shown) > MAX_WRITE_FAILURES_SHOWN:
+            parts.append(f"and {len(shown) - MAX_WRITE_FAILURES_SHOWN} more")
+        if total == 1:
+            head = "Salesforce did not save the record: "
+        else:
+            head = f"Salesforce saved none of the {total} records: "
+        super().__init__(head + "; ".join(parts))
+
+
+class SalesforceWriteUncertainError(SalesforceClientError):
+    """A write got no clear answer from Salesforce (a 5xx, a dropped connection, or a 2xx answer
+    that cannot be read), so it may or may not have been saved. The text never carries
+    Salesforce's own text."""
+
+
+class SalesforceObjectNotFoundError(SalesforceClientError):
+    """describe_fields got 404: no object type of that name is visible to the user."""
 
 
 # ------------------------------------------------------------------ #
@@ -417,6 +476,108 @@ def report_page_info(number: int, rows_before: int, count: int, more: bool) -> d
     }
 
 
+# ------------------------------------------------------------------ #
+# Record writes — create/update helpers. Values go to Salesforce as JSON, so
+# only the SOQL built by find_records needs quoting; every identifier there is
+# checked against _OBJECT_TYPE_NAME_RE first.
+# ------------------------------------------------------------------ #
+
+_MAX_BATCH_RECORDS = 200
+_SOQL_IN_LIST_MAX_ENCODED_CHARS = 4000
+
+
+def _soql_quote(value: str) -> str:
+    if any(ord(ch) < 32 for ch in value):
+        raise SalesforceClientError("key value contains a control character")
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _composite_failures(results: list[dict]) -> list[WriteFailure]:
+    failures: list[WriteFailure] = []
+    for index, result in enumerate(results):
+        if isinstance(result, dict) and result.get("success") is True:
+            continue
+        errors = result.get("errors") if isinstance(result, dict) else None
+        before = len(failures)
+        if isinstance(errors, list):
+            for err in errors:
+                failures.append(_failure_from_error(index, err))
+        if len(failures) == before:
+            failures.append(WriteFailure(index, "UNKNOWN", [], ""))
+    return failures
+
+
+def _failure_from_error(index: int, err: Any) -> WriteFailure:
+    if not isinstance(err, dict):
+        return WriteFailure(index, "UNKNOWN", [], "")
+    code = err.get("errorCode") or err.get("statusCode") or "UNKNOWN"
+    fields = err.get("fields")
+    message = err.get("message")
+    return WriteFailure(
+        index,
+        str(code),
+        [str(f) for f in fields] if isinstance(fields, list) else [],
+        message[:_WRITE_MESSAGE_CHARS] if isinstance(message, str) else "",
+    )
+
+
+def _write_failures(content: Any) -> list[WriteFailure]:
+    """Failures from an error body or a composite result list. Never raises."""
+    if (
+        isinstance(content, list) and content
+        and all(isinstance(item, dict) and "success" in item for item in content)
+    ):
+        return _composite_failures(content) or [WriteFailure(0, "UNKNOWN", [], "")]
+    if isinstance(content, list) and content and all(
+        isinstance(item, dict) and (item.get("errorCode") or item.get("statusCode"))
+        for item in content
+    ):
+        return [_failure_from_error(0, item) for item in content]
+    return [WriteFailure(0, "UNKNOWN", [], "")]
+
+
+_UNCERTAIN_SUFFIX = "the write may or may not have been saved. Check the records before trying again."
+
+
+def _guard_write(total: int, func: Callable[[], T]) -> T:
+    """Run one write request, mapping Salesforce's answers onto the write errors."""
+    from simple_salesforce.exceptions import (
+        SalesforceGeneralError,
+        SalesforceMalformedRequest,
+        SalesforceRefusedRequest,
+        SalesforceResourceNotFound,
+    )
+
+    try:
+        return func()
+    except (SalesforceMalformedRequest, SalesforceRefusedRequest, SalesforceResourceNotFound) as exc:
+        raise SalesforceWriteError(_write_failures(exc.content), total) from exc
+    except SalesforceGeneralError as exc:
+        raise SalesforceWriteUncertainError(
+            f"Salesforce returned HTTP {exc.status}; {_UNCERTAIN_SUFFIX}"
+        ) from exc
+    except requests.RequestException as exc:
+        raise SalesforceWriteUncertainError(
+            f"The connection to Salesforce failed; {_UNCERTAIN_SUFFIX}"
+        ) from exc
+
+
+def _composite_ids(results: Any, count: int) -> list[str]:
+    """The ids of a composite write that Salesforce accepted; raises if any record failed."""
+    if (
+        not isinstance(results, list)
+        or len(results) != count
+        or any(not isinstance(r, dict) or not isinstance(r.get("success"), bool) for r in results)
+    ):
+        raise SalesforceWriteUncertainError(
+            f"Salesforce's answer could not be read; {_UNCERTAIN_SUFFIX}"
+        )
+    failures = _composite_failures(results)
+    if failures:
+        raise SalesforceWriteError(failures, count)
+    return [str(r.get("id") or "") if isinstance(r, dict) else "" for r in results]
+
+
 def build_authorize_url(
     consumer_key: str, redirect_uri: str, state: str, code_challenge: str,
     login_url: str = DEFAULT_LOGIN_URL,
@@ -649,6 +810,8 @@ class SalesforceClient:
             if _is_expired_session_error(exc) and self._try_refresh():
                 try:
                     return fn(self._get_sf())
+                except SalesforceClientError:
+                    raise
                 except Exception as retry_exc:
                     raise SalesforceClientError(str(retry_exc)) from retry_exc
             raise SalesforceClientError(str(exc)) from exc
@@ -774,6 +937,162 @@ class SalesforceClient:
         logger.info("search %r returned %d record(s)", search_term, len(records))
         return records
 
+    def describe_fields(self, object_type: str) -> list[SalesforceField]:
+        """The fields of an object type, as its describe reports them."""
+        object_type = _validate_object_type_name(object_type)
+
+        def _run(sf):
+            from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+            try:
+                return sf.restful(f"sobjects/{object_type}/describe")
+            except SalesforceResourceNotFound as exc:
+                raise SalesforceObjectNotFoundError(
+                    f"{object_type} is not an object type your Salesforce user can see"
+                ) from exc
+
+        raw = self._call(_run)
+        entries = raw.get("fields", []) if isinstance(raw, dict) else []
+        fields = [
+            SalesforceField(
+                name=entry.get("name", ""),
+                label=entry.get("label", ""),
+                type=entry.get("type", ""),
+                createable=bool(entry.get("createable", False)),
+                updateable=bool(entry.get("updateable", False)),
+                nillable=bool(entry.get("nillable", False)),
+                external_id=bool(entry.get("externalId", False)),
+            )
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+        logger.info("describe_fields %s: %d field(s)", object_type, len(fields))
+        return fields
+
+    def create_record(self, object_type: str, fields: dict[str, Any]) -> str:
+        """Create one record and return its id."""
+        object_type = _validate_object_type_name(object_type)
+
+        def _run(sf):
+            return _guard_write(
+                1, lambda: sf.restful(f"sobjects/{object_type}/", method="POST", json=fields),
+            )
+
+        result = self._call(_run)
+        if isinstance(result, dict) and result.get("success") is False:
+            raise SalesforceWriteError(_write_failures(result.get("errors")), 1)
+        if not isinstance(result, dict) or result.get("success") is not True or not result.get("id"):
+            # A 2xx answer that is not a clear failure may still mean the record exists, so a
+            # caller that read "not saved" could create it twice.
+            raise SalesforceWriteUncertainError(
+                f"Salesforce's answer could not be read; {_UNCERTAIN_SUFFIX}"
+            )
+        logger.info("create_record %s: 1 record(s)", object_type)
+        return str(result["id"])
+
+    def update_record(self, object_type: str, record_id: str, fields: dict[str, Any]) -> None:
+        """Change fields of one record."""
+        object_type = _validate_object_type_name(object_type)
+        record_id = _validate_salesforce_id(record_id, "record_id")
+
+        def _run(sf):
+            return _guard_write(
+                1,
+                lambda: sf.restful(
+                    f"sobjects/{object_type}/{record_id}", method="PATCH", json=fields,
+                ),
+            )
+
+        self._call(_run)
+        logger.info("update_record %s: 1 record(s)", object_type)
+
+    def _composite_write(
+        self, method: str, object_type: str, records: list[dict[str, Any]],
+    ) -> list[str]:
+        payload = {
+            "allOrNone": True,
+            "records": [{"attributes": {"type": object_type}, **r} for r in records],
+        }
+
+        def _run(sf):
+            return _guard_write(
+                len(records),
+                lambda: sf.restful("composite/sobjects", method=method, json=payload),
+            )
+
+        return _composite_ids(self._call(_run), len(records))
+
+    def create_records(self, object_type: str, records: list[dict[str, Any]]) -> list[str]:
+        """Create 1 to 200 records of one object type, all or none; returns the ids in order."""
+        object_type = _validate_object_type_name(object_type)
+        if not 1 <= len(records) <= _MAX_BATCH_RECORDS:
+            raise SalesforceClientError(f"create_records takes 1 to {_MAX_BATCH_RECORDS} records")
+        ids = self._composite_write("POST", object_type, records)
+        logger.info("create_records %s: %d record(s)", object_type, len(records))
+        return ids
+
+    def update_records(self, object_type: str, records: list[dict[str, Any]]) -> None:
+        """Change 1 to 200 records of one object type, all or none; each carries its "Id"."""
+        object_type = _validate_object_type_name(object_type)
+        if not 1 <= len(records) <= _MAX_BATCH_RECORDS:
+            raise SalesforceClientError(f"update_records takes 1 to {_MAX_BATCH_RECORDS} records")
+        for i, record in enumerate(records):
+            record_id = record.get("Id")
+            if not isinstance(record_id, str):
+                raise SalesforceClientError(f"records[{i}] needs an Id")
+            _validate_salesforce_id(record_id, f"records[{i}].Id")
+        self._composite_write("PATCH", object_type, records)
+        logger.info("update_records %s: %d record(s)", object_type, len(records))
+
+    def find_records(
+        self, object_type: str, key_field: str, keys: list[str], fields: list[str],
+    ) -> list[dict[str, Any]]:
+        """The records whose ``key_field`` is one of ``keys``, with ``fields`` selected."""
+        object_type = _validate_object_type_name(object_type)
+        for name in [key_field, *fields]:
+            if not _OBJECT_TYPE_NAME_RE.match(name):
+                raise SalesforceClientError(f"Invalid Salesforce field name: {name!r}")
+        if not 1 <= len(keys) <= _MAX_BATCH_RECORDS:
+            raise SalesforceClientError(f"find_records takes 1 to {_MAX_BATCH_RECORDS} keys")
+        if key_field == "Id":
+            for key in keys:
+                if not _SALESFORCE_ID_RE.match(key):
+                    raise SalesforceClientError(f"Invalid Salesforce ID: {key!r}")
+            quoted = [f"'{key}'" for key in keys]
+        else:
+            quoted = [_soql_quote(key) for key in keys]
+
+        selected: list[str] = []
+        for name in ["Id", key_field, *fields]:
+            if name.lower() not in {s.lower() for s in selected}:
+                selected.append(name)
+
+        chunks: list[list[str]] = [[]]
+        size = 0
+        for item in quoted:
+            item_size = len(quote_plus(item)) + 3  # the encoded comma between items
+            if chunks[-1] and size + item_size > _SOQL_IN_LIST_MAX_ENCODED_CHARS:
+                chunks.append([])
+                size = 0
+            chunks[-1].append(item)
+            size += item_size
+
+        def _run(sf):
+            rows: list[dict[str, Any]] = []
+            for chunk in chunks:
+                # Identifiers match _OBJECT_TYPE_NAME_RE and every value is a validated id or goes through _soql_quote.
+                soql = f"SELECT {', '.join(selected)} FROM {object_type} WHERE {key_field} IN ({','.join(chunk)})"  # nosec B608
+                result = sf.query_all(soql)
+                rows.extend(
+                    {k: v for k, v in rec.items() if k != "attributes"}
+                    for rec in result.get("records", [])
+                )
+            return rows
+
+        rows = self._call(_run)
+        logger.info("find_records %s: %d key(s), %d row(s)", object_type, len(keys), len(rows))
+        return rows
+
     def run_report(
         self, report_id: str, columns: list[str] | None = None,
         filters: list[ReportFilter] | None = None, summary_only: bool = False,
@@ -819,6 +1138,7 @@ class SalesforceClient:
         """
         if not report_id:
             raise SalesforceClientError("run_report_page requires a report_id")
+        report_id = _validate_salesforce_id(report_id, "report_id")
         if pages_done >= self.report_max_pages:
             raise ReportPagingError(
                 "page_limit",

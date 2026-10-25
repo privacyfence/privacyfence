@@ -25,9 +25,9 @@ Your administrator gives you the deployment's URL, for example `https://pf.examp
 1. In claude.ai's connector settings, add a custom connector with the URL
    `https://pf.example.com/mcp`. Leave the optional OAuth client ID and secret empty: claude.ai
    registers itself.
-2. Add the deployment's host, `pf.example.com`, to **Settings → Capabilities → Domain
-   allowlist**. Without it, every file larger than about 75 KB and every upload fails after you
-   approve it; see [Files](#files).
+2. Make sure the deployment's host, `pf.example.com`, is on claude.ai's domain allowlist.
+   Without it, every file larger than about 75 KB and every upload fails after you approve it;
+   see [Files](#files) for where the list is and who can change it.
 3. Click **Connect** on the connector and sign in with your organization account.
 4. Connect your services at `https://pf.example.com/connect`.
 
@@ -52,9 +52,20 @@ extension. Files travel through one-time links instead
 
 **Both need the host on claude.ai's domain allowlist.** claude.ai opens a link and sends an upload
 from its own sandbox, not through the connector. That sandbox reaches only the domains on
-**Settings → Capabilities → Domain allowlist**. If the deployment's host is not on the list, the
-approval goes through and claude.ai then reports that it cannot reach the site. PrivacyFence never
-sees the attempt ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)).
+claude.ai's domain allowlist. If the deployment's host is not on the list, the approval goes
+through and claude.ai then reports that it cannot reach the site. PrivacyFence never sees the
+attempt ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)).
+
+The allowlist is a claude.ai setting, not a PrivacyFence one, and it belongs to the claude.ai
+account, not to the connector:
+
+- **Team and Enterprise plans:** a claude.ai Owner or admin sets it once for the whole
+  organization, under **Admin settings → Capabilities**: turn on **Code execution and file
+  creation**, allow network egress to additional domains, and add the host. Members cannot add a
+  domain from their own settings, so ask your claude.ai admin.
+- **Pro and Max plans:** you set it yourself under **Settings → Capabilities**, the same way.
+
+The list appears only once **Code execution and file creation** is on.
 
 **To read a document, no download is needed.** `drive_get_file_content` returns a PDF, Word,
 PowerPoint or Excel file's text, so claude.ai can read it whatever its network settings. A scanned
@@ -76,7 +87,8 @@ Two things can ask you before a tool runs:
    [Approvals and policy](approvals-and-policy.md).
 
 PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
-and the two tools that delete something are destructive
+and the tools that delete something (`calendar_delete_event`,
+`drive_sheets_delete_dimensions` and `peek_delete_page`) are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So claude.ai may ask
 before a write, in front of PrivacyFence's own card. There is no switch that advertises writes as
 read-only ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)). Where claude.ai offers
@@ -94,9 +106,9 @@ registers with PrivacyFence and again in the MCP handshake; the registered name 
 when PrivacyFence recognises it. claude.ai registers as `Claude`, so the card says the caller
 *says* it is **Claude**. That name is a **claim**: the card says the caller *says* it is that system and marks it
 **Not verified**, because any program that can reach the deployment can register under the same
-name. An administrator can **pin** claude.ai's registration on **Settings → AI systems**, for
-example by matching its last-used time to their own sign-in from claude.ai; the cards for that
-registration are then verified. See
+name. When the registration carries only claude.ai's own callback
+(`https://claude.ai/api/mcp/auth_callback`), PrivacyFence shows it as **Verified** instead, with no
+administrator step. See
 [Which AI system is asking](how-it-works.md#which-ai-system-is-asking) and
 [AI systems](org-mode-setup-guide.md#11-ai-systems).
 
@@ -109,7 +121,7 @@ registration are then verified. See
 | The connector was working and now asks you to connect again | A sign-in lasts 30 days. Click **Connect** again. |
 | Tools are listed but none of your services' tools | No service is connected yet. Ask Claude to call `privacyfence_status`, then connect services at `/connect`. See [Connecting a service](connecting-a-service.md). |
 | A call waits and nothing happens | It is waiting for your approval at `/approvals`. |
-| Every card says **Not verified** | Expected until an administrator pins your registration. |
+| Every card says **Not verified** | Expected when the registration's redirect URI is not the vendor's own callback; see [AI systems](org-mode-setup-guide.md#11-ai-systems). |
 
 Deployment problems are in the organization guide's
 [Troubleshooting](org-mode-setup-guide.md#15-troubleshooting).

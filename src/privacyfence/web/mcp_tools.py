@@ -132,16 +132,16 @@ CHECK_POLICY_TOOL = types.Tool(
     description=(
         "Before calling a gated tool, ask whether that exact call would auto-accept or need a human. "
         "Pass the connector, tool and args you're about to call. Returns {gate, verdict, "
-        "matched_rule, matched_rule_id, reason, pii_gate_may_apply}. verdict is 'auto_accept' (the "
-        "real call will pass through identically), 'requires_review' (no configured rule can match "
-        "these args), or 'unknown' (it depends on fetched content this can't see in advance). "
-        "matched_rule_id is set only for 'auto_accept': the privacyfence_list_policy rule id that "
-        "lets this call through, usable as privacyfence_propose_policy_change's rule_id. For "
-        "'review'-gated (read) tools pii_gate_may_apply is always true: the PII gate scans real "
-        "content and can force a popup even when a rule matches, which can't be predicted. No "
-        "external API call, no popup, no side effects -- call it freely while planning, especially "
-        "before and during an unattended run. reason: one sentence on why you're checking now "
-        "(logged, self-reported, unverified)."
+        "matched_rule, matched_rule_id, reason, pii_gate_may_apply, pii_gate, pii_gate_detail, "
+        "suggested_rules}. verdict: 'auto_accept' (the real call passes through identically), "
+        "'requires_review' (no rule can match these args) or 'unknown' (depends on fetched content). "
+        "matched_rule_id (auto_accept only) is privacyfence_propose_policy_change's rule_id. "
+        "suggested_rules: rules that would cover an uncovered call, {group, label, value, "
+        "value_known, verb, operation, requires_args?}; value is null if the call reaches it at run "
+        "time, [] if the rule takes none; requires_args: args the call must also pass. pii_gate: "
+        "whether the PII scan can still force a popup or, unattended or with a scoped token, a "
+        "denial: 'none', 'allowed_by_token', 'allowed_unless_inline' or 'applies' (see "
+        "pii_gate_detail). No side effects. reason: why you check (logged, unverified)."
     ),
     input_schema={
         "type": "object",
@@ -184,14 +184,12 @@ PROPOSE_POLICY_CHANGE_TOOL = types.Tool(
         "rule_id must be listed, not guessed; a verb not in that group's scope_groups entry is "
         "rejected before any popup.\n\n"
         "operation='add'/'update' need group (a scope_groups id, e.g. 'drive.folder'), value "
-        "(resource ids/names the scope matches, e.g. a Drive folder id; omit if the group's "
-        "needs_value is false) and verbs (a non-empty subset of the group's verbs, e.g. ['read', "
-        "'update']). Verbs: read, download, search, add, update, restructure, move, send, delete "
-        "(older names are mapped). 'update' also takes rule_id (replaces that rule). 'remove' "
+        "(the resource's id -- folder id, channel ID, project key -- not its name or title, except "
+        "label names and file types; a non-id is refused; omit unless needs_value or value_optional) and verbs (non-empty subset of the group's verbs). Verbs: read, download, search, add, update, restructure, move, send, delete "
+        "(older names map). 'update' also takes rule_id (replaces that rule). 'remove' "
         "needs only rule_id.\n\n"
-        "Returns {confirmed, changed, description, rule_ids}: changed is false if nothing "
-        "differed; rule_ids names the rules affected.\n\n"
-        "reason: one sentence on why you're proposing this (logged, unverified)."
+        "Returns {confirmed, changed, description, rule_ids}; changed is false if nothing differed.\n\n"
+        "reason: one sentence on why you're proposing this (logged)."
     ),
     input_schema={
         "type": "object",

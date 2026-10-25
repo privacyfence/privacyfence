@@ -163,6 +163,22 @@ EFFECT_BY_TOOL: dict[str, str] = {
         "The cells counted on the card change to the CSV's values. Other cells and records are "
         "not touched; rows with no match are added only if the card says so.",
 
+    # ── Salesforce ───────────────────────────────────────────────────────
+    "salesforce_create_record":
+        "A new record of that object type is created in Salesforce with the fields shown. "
+        "PrivacyFence changes no other record; your org's own automation, such as flows and "
+        "triggers, may still react.",
+    "salesforce_update_record":
+        "The fields shown change to their new values on that record. PrivacyFence changes no "
+        "other field or record; your org's own automation may still react.",
+    "salesforce_create_records":
+        "New records of that object type are created in Salesforce with the fields shown, all or "
+        "none. PrivacyFence changes no other record; your org's own automation may still react.",
+    "salesforce_update_records":
+        "The fields shown change to their new values on the records shown, all or none. "
+        "PrivacyFence changes no other field or record; your org's own automation may still "
+        "react.",
+
     # ── Peek ─────────────────────────────────────────────────────────────
     "peek_upload_page":
         "A new page is published at a new link, open to whoever its visibility allows. A new "

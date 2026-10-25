@@ -84,7 +84,7 @@
         <h2 id="confirmations-heading">Claude Code follows its own permission rules. PrivacyFence's card decides.</h2>
       </div>
       <div class="page-copy stack">
-        <p>PrivacyFence tells Claude Code truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. Whether Claude Code asks before it calls a tool from an MCP server depends on its permission mode and rules, not on those annotations.</p>
+        <p>PrivacyFence tells Claude Code truthfully what each tool does: reads are read-only, writes are writes, and the tools that delete something (<code>calendar_delete_event</code>, <code>drive_sheets_delete_dimensions</code> and <code>peek_delete_page</code>) are marked destructive. Whether Claude Code asks before it calls a tool from an MCP server depends on its permission mode and rules, not on those annotations.</p>
         <p>If it asks, you can choose not to be asked again for that tool, or allow <code>mcp__privacyfence</code> under <code>/permissions</code> for all of PrivacyFence's tools at once. That only stops Claude Code asking: a gated call still waits for PrivacyFence's approval card, whatever Claude Code was told or allowed. There is no mode that advertises writes as read-only.</p>
         <p>What we observed in local mode: with no permission rules configured, Claude Code did not ask before calling any PrivacyFence tool in the run, creating a calendar event included, and PrivacyFence's approval card was the only confirmation.</p>
       </div>

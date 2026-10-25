@@ -12,7 +12,8 @@ from typing import Any
 import httpx2
 import pytest
 
-from privacyfence_sync.client import RecipeRuntimeError, SyncError, ToolDenied, ToolFailed
+from privacyfence_sync import runner as runner_mod
+from privacyfence_sync.client import RecipeRuntimeError, SignInError, SyncError, ToolDenied, ToolFailed
 from privacyfence_sync.recipe import load_recipe
 from privacyfence_sync.runner import run_recipe
 
@@ -85,7 +86,7 @@ def writer_script(tmp_path: Path, name: str, files: dict[str, str]) -> None:
     )
 
 
-async def run(recipe_path: Path, client: FakeClient, *, attended: bool = False) -> tuple[bool, str]:
+async def run(recipe_path: Path, client: FakeClient, *, attended: bool = False) -> tuple[str | None, str]:
     out = io.StringIO()
     done = await run_recipe(load_recipe(recipe_path), client, attended=attended, out=out)  # type: ignore[arg-type]
     return done, out.getvalue()
@@ -99,7 +100,7 @@ async def test_begins_and_ends_an_unattended_session(write_recipe: RecipeWriter)
     client = FakeClient()
     recipe = write_recipe([{"id": "one", "tool": "drive_list_files"}])
     done, out = await run(recipe, client)
-    assert done is True
+    assert done is None
     assert client.tools() == [BEGIN, "drive_list_files", END]
     assert client.args_of(BEGIN) == {"reason": "privacyfence-sync demo: scheduled run"}
     assert client.args_of(END)["reason"].startswith("privacyfence-sync demo")
@@ -109,7 +110,7 @@ async def test_begins_and_ends_an_unattended_session(write_recipe: RecipeWriter)
 async def test_end_errors_are_ignored(write_recipe: RecipeWriter) -> None:
     client = FakeClient({END: ToolFailed("gone")})
     done, _ = await run(write_recipe([{"id": "one", "tool": "drive_list_files"}]), client)
-    assert done is True
+    assert done is None
 
 
 async def test_json_text_in_a_script_argument_passes_unchanged(write_recipe: RecipeWriter, tmp_path: Path) -> None:
@@ -140,13 +141,34 @@ async def test_export_via_link_downloads_into_work_dir(write_recipe: RecipeWrite
     assert client.args_of("grist_export_records")["destination_dir"] == str(tmp_path / "work")
 
 
-async def test_export_on_local_disk_is_copied_and_checked(write_recipe: RecipeWriter, tmp_path: Path) -> None:
-    elsewhere = tmp_path / "elsewhere.csv"
-    elsewhere.write_text("a\n1\n")
-    sha = hashlib.sha256(b"a\n1\n").hexdigest()
-    client = FakeClient({"grist_export_records": {"delivery": "local_disk", "path": str(elsewhere), "sha256": sha}})
-    await run(write_recipe([export_step()]), client)
-    assert (tmp_path / "work" / "t.csv").read_text() == "a\n1\n"
+async def test_assets_export_via_link_downloads_into_work_dir(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    link = {"delivery": "link", "download_url": "https://pf.example/mcp-files/fetch/abc", "sha256": "ff"}
+    client = FakeClient({"assets_export_objects": link})
+    step = {"id": "obj", "tool": "assets_export_objects", "args": {"aql": "objectType = X", "file_name": "obj.csv"}}
+    await run(write_recipe([step]), client)
+    assert client.downloads == [("https://pf.example/mcp-files/fetch/abc", tmp_path / "work" / "obj.csv", "ff")]
+    assert client.args_of("assets_export_objects")["destination_dir"] == str(tmp_path / "work")
+
+
+async def test_a_download_path_outside_the_work_folder_is_refused(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    client = FakeClient({"grist_export_records": {"delivery": "local_disk", "path": str(outside)}})
+    with pytest.raises(SyncError, match="outside the work folder"):
+        await run(write_recipe([export_step()]), client)
+    assert outside.exists()
+
+
+async def test_a_symlinked_download_path_is_refused(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    link = tmp_path / "work" / "link.txt"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside)
+    client = FakeClient({"grist_export_records": {"delivery": "local_disk", "path": str(link)}})
+    with pytest.raises(SyncError, match="outside the work folder"):
+        await run(write_recipe([export_step()]), client)
+    assert outside.exists()
 
 
 async def test_export_written_in_place_is_checked_where_it_is(write_recipe: RecipeWriter, tmp_path: Path) -> None:
@@ -214,6 +236,20 @@ async def test_empty_jira_export_writes_an_empty_list_for_json(write_recipe: Rec
     step = {"id": "iss", "tool": "jira_export_issues", "args": {"jql": "x", "file_name": "iss.json"}}
     await run(write_recipe([step]), client)
     assert (tmp_path / "work" / "iss.json").read_text() == "[]"
+
+
+async def test_empty_assets_export_writes_a_header_only_csv(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    client = FakeClient({"assets_export_objects": {"delivery": "none", "columns": ["id", "key", "label", "type"]}})
+    step = {"id": "obj", "tool": "assets_export_objects", "args": {"aql": "objectType = X", "file_name": "obj.csv"}}
+    await run(write_recipe([step]), client)
+    assert (tmp_path / "work" / "obj.csv").read_text().strip() == "id,key,label,type"
+
+
+async def test_empty_assets_export_writes_an_empty_list_for_json(write_recipe: RecipeWriter, tmp_path: Path) -> None:
+    client = FakeClient({"assets_export_objects": {"delivery": "none", "columns": ["id", "key", "label", "type"]}})
+    step = {"id": "obj", "tool": "assets_export_objects", "args": {"aql": "objectType = X", "file_name": "obj.json"}}
+    await run(write_recipe([step]), client)
+    assert (tmp_path / "work" / "obj.json").read_text() == "[]"
 
 
 async def test_unexpected_delivery_fails(write_recipe: RecipeWriter) -> None:
@@ -390,7 +426,7 @@ async def test_script_exit_10_stops_the_run_and_ends_the_session(write_recipe: R
     ]
     client = FakeClient()
     done, out = await run(write_recipe(steps), client)
-    assert done is False
+    assert done == "stop"
     assert "[stop] nothing to do, run stopped" in out
     assert client.tools() == [BEGIN, END]
 
@@ -490,7 +526,7 @@ async def test_readme_salesforce_example_runs_end_to_end(tmp_path: Path) -> None
         }
     )
     done, out = await run(tmp_path / "recipe.yaml", client)
-    assert done is True
+    assert done is None
     assert client.tools()[0] == BEGIN and client.tools()[-1] == END
     assert [u[0].name for u in client.uploads] == ["upsert.csv", "sync_log.csv"]
     assert "[flag_out] skipped: flag_out.csv has no rows" in out
@@ -499,3 +535,89 @@ async def test_readme_salesforce_example_runs_end_to_end(tmp_path: Path) -> None
     assert json.loads((work / "flag_out_result.json").read_text()) == {"skipped": True}
     assert json.loads((work / "upsert_result.json").read_text()) == {"updated": 1}
     assert client.args_of("salesforce_export_report")["file_name"] == "opps.csv"
+
+
+class Fire:
+    """Stands in for trigger.fire: records its calls and answers with a scripted URL."""
+
+    def __init__(self, url: str | None = "https://claude.ai/code/session_1") -> None:
+        self.url = url
+        self.calls: list[tuple[str, str, str, str, str | None]] = []
+
+    async def __call__(self, step_id: str, trigger: str, token_env: str, token: str, text: str | None) -> str | None:
+        self.calls.append((step_id, trigger, token_env, token, text))
+        return self.url
+
+
+def trigger_step(**kw: Any) -> dict[str, Any]:
+    return {"id": "go", "trigger": "trig_abc", "token_env": "PRIVACYFENCE_TRIGGER_X", **kw}
+
+
+@pytest.fixture
+def fire(monkeypatch: pytest.MonkeyPatch) -> Fire:
+    fake = Fire()
+    monkeypatch.setattr(runner_mod, "fire", fake)
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "tok")
+    return fake
+
+
+async def test_a_missing_trigger_token_fails_before_any_call(
+    write_recipe: RecipeWriter, fire: Fire, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PRIVACYFENCE_TRIGGER_X", "")
+    client = FakeClient()
+    with pytest.raises(SignInError) as info:
+        await run(write_recipe([{"id": "one", "tool": "drive_list_files"}, trigger_step()]), client)
+    assert str(info.value) == (
+        "step go: $PRIVACYFENCE_TRIGGER_X is empty; store the scheduled task's API token in it"
+    )
+    assert client.calls == [] and fire.calls == []
+
+
+async def test_a_trigger_without_text_sends_none(write_recipe: RecipeWriter, fire: Fire) -> None:
+    done, output = await run(write_recipe([trigger_step()]), FakeClient())
+    assert done is None
+    assert fire.calls == [("go", "trig_abc", "PRIVACYFENCE_TRIGGER_X", "tok", None)]
+    assert output == "[go] ...\n[go] started scheduled task trig_abc: https://claude.ai/code/session_1\n"
+
+
+async def test_trigger_text_is_filled_from_an_earlier_result(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"file_id": "f1", "name": "Notes é"})
+    step = trigger_step(text="file_id=${pick.out:file_id} name=${pick.out:name}")
+    await run(write_recipe([pick, step]), FakeClient())
+    assert fire.calls[0][4] == "file_id=f1 name=Notes é"
+
+
+async def test_a_whole_string_number_becomes_its_json_text(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"n": 5, "d": {"a": "é"}})
+    await run(write_recipe([pick, trigger_step(text="${pick.out:n}")]), FakeClient())
+    await run(write_recipe([pick, trigger_step(text="${pick.out:d}")]), FakeClient())
+    assert [call[4] for call in fire.calls] == ["5", '{"a": "é"}']
+
+
+async def test_trigger_text_that_grows_too_long_is_refused(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"big": "a" * 65_537})
+    with pytest.raises(RecipeRuntimeError, match="step go: text is longer than 65,536 characters once"):
+        await run(write_recipe([pick, trigger_step(text="${pick.out:big}")]), FakeClient())
+    assert fire.calls == []
+
+
+async def test_a_trigger_without_a_session_url_says_so(write_recipe: RecipeWriter, fire: Fire) -> None:
+    fire.url = None
+    _, output = await run(write_recipe([trigger_step()]), FakeClient())
+    assert output.endswith("[go] started scheduled task trig_abc\n")
+
+
+async def test_a_bad_reference_in_trigger_text_names_the_step(
+    write_recipe: RecipeWriter, tmp_path: Path, fire: Fire
+) -> None:
+    pick = json_source(tmp_path, {"n": 5})
+    with pytest.raises(RecipeRuntimeError, match="step go: nope not found"):
+        await run(write_recipe([pick, trigger_step(text="${pick.out:nope}")]), FakeClient())
+    assert fire.calls == []

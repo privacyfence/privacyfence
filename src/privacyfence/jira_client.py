@@ -26,6 +26,7 @@ import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -46,6 +47,7 @@ from .atlassian_users import (
     AtlassianUser,
     AtlassianUserDirectory,
     AtlassianUsersError,
+    ReportOutcome,
     mask_emails,
     mention_markup,
 )
@@ -165,6 +167,10 @@ class JiraIssue:
         # Not a dataclass field either: the requested extra fields, {key: simplified value}, set only by a
         # search or get_issue that asked for them (keys from JiraClient.extra_field_keys). None otherwise.
         self.extra_fields: dict[str, Any] | None = None
+        # Not dataclass fields either, like display_description: the reporter's and assignee's
+        # Atlassian account ids, for the i_am_reporter / i_am_assignee rules. The agent never receives them.
+        self.reporter_account_id: str = ""
+        self.assignee_account_id: str = ""
 
     def short_summary(self) -> str:
         snippet = self.summary[:60] + "…" if len(self.summary) > 60 else self.summary
@@ -252,12 +258,15 @@ class JiraClient:
         client_id = self._config.get("client_id", "")
         client_secret = self._config.get("client_secret", "")
         refresh_token = self._config.get("refresh_token", "")
+        stored_account_id = ""
         if self._token_file:
             # The token file is shared with ConfluenceClient; if it already
             # refreshed (and Atlassian rotated the refresh token), pick up
             # its latest value instead of retrying a spent one.
             try:
-                refresh_token = load_token_file(self._token_file).get("refresh_token") or refresh_token
+                stored = load_token_file(self._token_file)
+                refresh_token = stored.get("refresh_token") or refresh_token
+                stored_account_id = stored.get("account_id") or ""
             except AtlassianOAuthError:
                 pass
         if not client_id or not client_secret or not refresh_token:
@@ -280,6 +289,8 @@ class JiraClient:
                 "cloud_id": self._config.get("cloud_id", ""),
                 "site_url": self._config.get("site_url", ""),
                 "account_email": self._config.get("account_email", ""),
+                "account_id": self._config.get("account_id", "") or stored_account_id,
+                "scopes": self._config.get("scopes", []),
             })
         logger.info("Jira access token refreshed")
         return True
@@ -297,15 +308,39 @@ class JiraClient:
     # Connection
     # ------------------------------------------------------------------ #
 
+    @property
+    def account_id(self) -> str:
+        return str(self._config.get("account_id", "") or "")
+
+    def _record_account_id(self, account_id: str) -> None:
+        """Remember the signed-in account id and persist it to the shared token file.
+
+        Read-modify-write, so a stale in-memory token is never written back. A failed
+        save is logged and ignored: it must not disable the connector.
+        """
+        if not account_id or account_id == self._config.get("account_id"):
+            return
+        self._config["account_id"] = account_id
+        if not self._token_file:
+            return
+        try:
+            record = dict(load_token_file(self._token_file))
+            record["account_id"] = account_id
+            save_token_file(self._token_file, record)
+        except (AtlassianOAuthError, OSError) as exc:
+            logger.warning("Could not save the Atlassian account id: %s", exc)
+
     def check_connection(self) -> str:
         """Verify credentials. Returns the site URL on success."""
         try:
             myself = self._request(self._client.myself)
             display = myself.get("displayName", "unknown user")
             logger.info("Connected to Jira at %s as %r", self._base_url, display)
-            return f"{display} @ {self._base_url}"
+            self._record_account_id(myself.get("accountId", ""))
         except Exception as exc:
             raise JiraClientError(f"Jira connection check failed: {exc}") from exc
+        self._users.report_soon(self._report_accounts)
+        return f"{display} @ {self._base_url}"
 
     # ------------------------------------------------------------------ #
     # Users
@@ -319,9 +354,14 @@ class JiraClient:
             account_ids,
         )
 
+    def _report_accounts(self, accounts: list[tuple[str, datetime]]) -> ReportOutcome:
+        return self._request(atlassian_users.report_accounts, self._session, accounts)
+
     def resolve_user_names(self, account_ids: list[str]) -> dict[str, str]:
         """Map account ids to display names; ids that cannot be resolved are omitted."""
-        return self._users.resolve(account_ids, self._fetch_users_bulk)
+        names = self._users.resolve(account_ids, self._fetch_users_bulk)
+        self._users.report_soon(self._report_accounts)
+        return names
 
     def find_users(self, query: str, max_results: int = 10) -> list[AtlassianUser]:
         if not query or not query.strip():
@@ -340,6 +380,7 @@ class JiraClient:
                 f"find_users failed: {atlassian_users.redact_query(exc, query)}"
             ) from exc
         self._users.remember(users)
+        self._users.report_soon(self._report_accounts)
         return users
 
     def refresh_user_cache(self) -> int:
@@ -361,6 +402,15 @@ class JiraClient:
         projects = [self._parse_project(p) for p in (raw or [])][:max_results]
         logger.info("list_projects returned %d project(s)", len(projects))
         return projects
+
+    def get_project(self, key: str) -> JiraProject:
+        """One project by key. A key that does not exist (or that this user cannot browse) fails
+        with Jira's 404, kept as the ``JiraClientError``'s cause."""
+        try:
+            raw = self._request(self._client.project, key)
+        except Exception as exc:
+            raise JiraClientError(f"get_project failed: {exc}") from exc
+        return self._parse_project(raw or {})
 
     # ------------------------------------------------------------------ #
     # Issues
@@ -768,6 +818,8 @@ class JiraClient:
             url=f"{self._base_url}/browse/{key}" if key else "",
         )
         issue.display_description = display_desc
+        issue.reporter_account_id = (f.get("reporter") or {}).get("accountId", "")
+        issue.assignee_account_id = (f.get("assignee") or {}).get("accountId", "")
         return issue
 
     @staticmethod

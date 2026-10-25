@@ -59,6 +59,7 @@ def fake_client_class(*, result=None, connection_error: Exception | None = None,
         instantiated = False
         authorize_called = False
         directories_refreshed = False
+        account_id = ""
 
         def __init__(self, **kwargs):
             type(self).instantiated = True
@@ -121,18 +122,13 @@ def _no_ambient_google_clients(monkeypatch):
 # ---------------------------------------------------------------------------- #
 
 class TestResolvePath:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
-    def test_absolute_path_is_returned_unchanged(self):
-        assert daemon_main._resolve_path("/etc/hosts") == "/etc/hosts"
+    def test_absolute_path_is_returned_unchanged(self, tmp_path):
+        path = str(tmp_path / "x.json")
+        assert daemon_main._resolve_path(path) == path
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
-    def test_relative_path_is_joined_with_project_root(self, monkeypatch):
-        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", "/tmp/pf-root")
-        assert daemon_main._resolve_path("credentials/x.json") == "/tmp/pf-root/credentials/x.json"
+    def test_relative_path_is_joined_with_project_root(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
+        assert daemon_main._resolve_path("credentials/x.json") == os.path.join(str(tmp_path), "credentials/x.json")
 
     def test_relative_path_for_a_non_local_principal_uses_its_own_storage_root(self, monkeypatch, tmp_path):
         # The branch connector_registry.py's ConnectorRegistry.get() relies on;
@@ -152,11 +148,9 @@ class TestResolvePath:
 # ---------------------------------------------------------------------------- #
 
 class TestResolveAuthorityPath:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a known gap, found when this suite first ran on Windows CI",
-    )
-    def test_absolute_path_is_returned_unchanged(self):
-        assert daemon_main._resolve_authority_path("/etc/hosts") == "/etc/hosts"
+    def test_absolute_path_is_returned_unchanged(self, tmp_path):
+        path = str(tmp_path / "x.json")
+        assert daemon_main._resolve_authority_path(path) == path
 
     def test_relative_path_is_joined_with_project_roots_authority_subdirectory(self, monkeypatch, tmp_path):
         monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
@@ -1044,6 +1038,7 @@ class TestBuildConnectorsAtlassian:
         directory = jira_fake.captured_kwargs["user_directory"]
         assert directory is confluence_fake.captured_kwargs["user_directory"]
         assert directory._cache_file == str(data_dir() / "atlassian_user_cache.json")
+        assert directory._background_reports is True
         assert directory._cloud_id == "cloud-1"
 
     def test_config_passed_to_clients_merges_org_registration_and_token(self, monkeypatch):
@@ -1088,6 +1083,21 @@ class TestBuildConnectorsAtlassian:
         assert jira_fake.instantiated is False
         assert confluence_fake.instantiated is False
 
+    def test_jira_and_confluence_connectors_get_the_clients_account_id(self, monkeypatch):
+        self._patch_token(monkeypatch, token={"access_token": "at", "account_email": "me@x.com"})
+        jira_fake = fake_client_class(result="jira info")
+        jira_fake.account_id = "acc-me"
+        confluence_fake = fake_client_class(result="https://x.atlassian.net/wiki")
+        confluence_fake.account_id = "acc-me"
+        monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
+        monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
+
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
+
+        assert {c.name: c.my_account_id for c in connectors} == {"jira": "acc-me", "confluence": "acc-me"}
+        # The id Jira learned reaches the clients built after it.
+        assert confluence_fake.captured_kwargs["config"]["account_id"] == "acc-me"
+
     def test_jira_disabled_does_not_affect_confluence(self, monkeypatch):
         self._patch_token(monkeypatch, token={"access_token": "at", "account_email": "me@x.com"})
         jira_fake = fake_client_class(result="ok")
@@ -1113,6 +1123,92 @@ class TestBuildConnectorsAtlassian:
         assert [c.name for c in connectors] == ["confluence"]
 
 
+class TestBuildConnectorsAssets:
+    """Jira Assets is off by default and guarded by atlassian_oauth.assets_enabled()."""
+
+    _TOKEN = {"access_token": "at", "cloud_id": "c1", "account_email": "me@x.com",
+              "scopes": ["read:cmdb-object:jira"]}
+
+    def _setup(self, monkeypatch, token=None):
+        monkeypatch.setattr(daemon_main, "load_atlassian_token", lambda path: token or self._TOKEN)
+        monkeypatch.setattr(daemon_main, "JiraClient", fake_client_class(result="ok"))
+        monkeypatch.setattr(daemon_main, "ConfluenceClient", fake_client_class(result="ok"))
+        fake = fake_client_class(result=None)
+        monkeypatch.setattr(daemon_main, "AssetsClient", fake)
+        return fake
+
+    def _org(self, **extra):
+        return {"atlassian": {"client_id": "ac", "client_secret": "as", **extra}}
+
+    def test_not_built_by_default(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+
+        connectors, failures = daemon_main.build_connectors({}, self._org())
+
+        assert "assets" not in {c.name for c in connectors}
+        assert fake.instantiated is False
+        assert "assets" not in failures
+
+    def test_built_when_explicitly_enabled(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+
+        connectors, _ = daemon_main.build_connectors({"connectors": {"assets": {"enabled": True}}}, self._org())
+
+        assets = next(c for c in connectors if c.name == "assets")
+        assert assets.my_email == "me@x.com"
+        assert fake.captured_kwargs["config"]["scopes"] == ["read:cmdb-object:jira"]
+
+    def test_bundle_workspace_id_reaches_the_client(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+
+        daemon_main.build_connectors({}, self._org(assets=True, assets_workspace_id="ws-bundle"))
+
+        assert fake.captured_kwargs["config"]["assets_workspace_id"] == "ws-bundle"
+
+    def test_settings_workspace_id_wins_over_the_bundle(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+        config = {"connectors": {"assets": {"enabled": True, "workspace_id": " ws-settings "}}}
+
+        daemon_main.build_connectors(config, self._org(assets_workspace_id="ws-bundle"))
+
+        assert fake.captured_kwargs["config"]["assets_workspace_id"] == "ws-settings"
+
+    def test_built_when_the_bundle_flag_is_set(self, monkeypatch):
+        self._setup(monkeypatch)
+
+        connectors, _ = daemon_main.build_connectors({}, self._org(assets=True))
+
+        assert "assets" in {c.name for c in connectors}
+
+    def test_explicit_false_beats_the_bundle_flag(self, monkeypatch):
+        fake = self._setup(monkeypatch)
+        config = {"connectors": {"assets": {"enabled": False}}}
+
+        connectors, _ = daemon_main.build_connectors(config, self._org(assets=True))
+
+        assert "assets" not in {c.name for c in connectors}
+        assert fake.instantiated is False
+
+    def test_token_without_the_assets_scope_is_not_authenticated(self, monkeypatch):
+        self._setup(monkeypatch, token={"access_token": "at", "cloud_id": "c1", "scopes": ["read:jira-work"]})
+        from privacyfence.assets_client import AssetsClient as RealAssetsClient
+        monkeypatch.setattr(daemon_main, "AssetsClient", RealAssetsClient)
+
+        connectors, failures = daemon_main.build_connectors(
+            {"connectors": {"assets": {"enabled": True}}}, self._org(),
+        )
+
+        assert "assets" not in {c.name for c in connectors}
+        assert failures["assets"] == "not_authenticated"
+
+    def test_missing_org_config_is_recorded(self, monkeypatch):
+        self._setup(monkeypatch)
+
+        _, failures = daemon_main.build_connectors({"connectors": {"assets": {"enabled": True}}}, {})
+
+        assert failures["assets"] == "no_org_config"
+
+
 # ---------------------------------------------------------------------------- #
 # build_connectors: Telegram
 # ---------------------------------------------------------------------------- #
@@ -1124,22 +1220,19 @@ class TestBuildConnectorsTelegram:
         if exists:
             (tmp_path / "credentials" / "telegram.session").write_bytes(b"")
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
-    )
     def test_built_when_creds_and_session_present(self, monkeypatch, tmp_path):
         self._make_session(tmp_path, monkeypatch, exists=True)
         monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: (123, "hash"))
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert len(connectors) == 1
         assert connectors[0].name == "telegram"
         assert fake.captured_kwargs == {
             "api_id": 123, "api_hash": "hash",
-            "session_file": str(tmp_path / "credentials" / "telegram.session"),
+            "session_file": os.path.join(str(tmp_path), "credentials/telegram.session"),
             "chat_cache_file": str(data_dir() / "telegram_chat_cache.json"),
         }
         # Same as Slack (see TestBuildConnectorsSlack): directory-cache
@@ -1148,13 +1241,25 @@ class TestBuildConnectorsTelegram:
         # _warm_connector_caches() (see run_app()).
         assert fake.directories_refreshed is False
 
+    def test_skipped_without_the_org_config_section(self, monkeypatch, tmp_path):
+        self._make_session(tmp_path, monkeypatch, exists=True)
+        monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: (123, "hash"))
+        fake = fake_client_class()
+        monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
+
+        connectors, failures = daemon_main.build_connectors({}, {})
+
+        assert connectors == []
+        assert failures["telegram"] == "no_org_config"
+        assert fake.instantiated is False
+
     def test_skipped_when_no_app_credentials(self, monkeypatch, tmp_path):
         self._make_session(tmp_path, monkeypatch, exists=True)
         monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: None)
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -1165,7 +1270,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -1176,7 +1281,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors, _failures = daemon_main.build_connectors({"connectors": {"telegram": {"enabled": False}}}, {})
+        connectors, _failures = daemon_main.build_connectors({"connectors": {"telegram": {"enabled": False}}}, {"telegram": {"enabled": True}})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -1192,7 +1297,7 @@ class TestBuildConnectorsTelegram:
             fake_client_class(init_error=RuntimeError("unexpected MTProto failure")),
         )
 
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
 
         assert connectors == []
 
@@ -1203,7 +1308,7 @@ class TestBuildConnectorsTelegram:
 
 class TestBuildConnectorsCrossCutting:
     def test_no_connectors_configured_returns_empty_list_not_fatal(self):
-        connectors, _failures = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {"telegram": {"enabled": True}})
         assert connectors == []
 
     def test_all_ten_connectors_built_together(self, monkeypatch, tmp_path):
@@ -1230,6 +1335,7 @@ class TestBuildConnectorsCrossCutting:
             "slack": {"client_id": "x"},
             "salesforce": {"consumer_key": "x"},
             "atlassian": {"client_id": "x"},
+            "telegram": {"enabled": True},
         }
         connectors, _failures = daemon_main.build_connectors({}, org_config)
 
@@ -1269,9 +1375,9 @@ class TestBuildConnectorsGrist:
         monkeypatch.setattr(daemon_main, "load_grist_token", load)
         monkeypatch.setattr(GristClient, "check_connection", check)
 
-    def test_api_key_file_builds_connector_without_a_bundle_section(self, monkeypatch):
+    def test_api_key_file_builds_connector_with_only_the_bare_section(self, monkeypatch):
         self._patch(monkeypatch, self.API_KEY)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"grist": {"enabled": True}})
         assert [c.name for c in connectors] == ["grist"]
         assert connectors[0].download_mode == "local"
         assert "grist" not in failures
@@ -1293,7 +1399,7 @@ class TestBuildConnectorsGrist:
 
     def test_no_file_is_not_authenticated(self, monkeypatch):
         self._patch(monkeypatch, None)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"grist": {"enabled": True}})
         assert connectors == []
         assert failures["grist"] == "not_authenticated"
 
@@ -1310,10 +1416,16 @@ class TestBuildConnectorsGrist:
         assert connectors == []
         assert failures["grist"] == "not_authenticated"
 
+    def test_without_the_section_is_no_org_config_in_local_mode_too(self, monkeypatch):
+        self._patch(monkeypatch, self.API_KEY)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["grist"] == "no_org_config"
+
     def test_disabled_has_no_entry(self, monkeypatch):
         self._patch(monkeypatch, self.API_KEY)
         config = {"connectors": {"grist": {"enabled": False}}}
-        connectors, failures = daemon_main.build_connectors(config, {})
+        connectors, failures = daemon_main.build_connectors(config, {"grist": {"enabled": True}})
         assert connectors == []
         assert "grist" not in failures
 
@@ -1337,9 +1449,9 @@ class TestBuildConnectorsPeek:
         monkeypatch.setattr(daemon_main, "load_peek_token", load)
         monkeypatch.setattr(PeekClient, "check_connection", check)
 
-    def test_token_file_builds_connector_without_a_bundle_section(self, monkeypatch):
+    def test_token_file_builds_connector_with_only_the_bare_section(self, monkeypatch):
         self._patch(monkeypatch, self.RECORD)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
         assert [c.name for c in connectors] == ["peek"]
         assert connectors[0].download_mode == "local"
         assert "peek" not in failures
@@ -1366,7 +1478,7 @@ class TestBuildConnectorsPeek:
 
     def test_no_file_is_not_authenticated(self, monkeypatch):
         self._patch(monkeypatch, None)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
         assert connectors == []
         assert failures["peek"] == "not_authenticated"
 
@@ -1379,14 +1491,20 @@ class TestBuildConnectorsPeek:
             status=401,
         )
         self._patch(monkeypatch, self.RECORD, check_error=err)
-        connectors, failures = daemon_main.build_connectors({}, {})
+        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
         assert connectors == []
         assert failures["peek"] == "not_authenticated"
+
+    def test_without_the_section_is_no_org_config_in_local_mode_too(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["peek"] == "no_org_config"
 
     def test_disabled_has_no_entry(self, monkeypatch):
         self._patch(monkeypatch, self.RECORD)
         config = {"connectors": {"peek": {"enabled": False}}}
-        connectors, failures = daemon_main.build_connectors(config, {})
+        connectors, failures = daemon_main.build_connectors(config, {"peek": {"enabled": True}})
         assert connectors == []
         assert "peek" not in failures
 
@@ -2387,6 +2505,7 @@ class TestScopeRowsUpgrade:
         from privacyfence.policy import catalogue, propose
         from privacyfence.policy.engine import evaluate
         from privacyfence.policy.registry import Verb
+        from privacyfence.policy.value_format import VALUE_FORMATS
         from privacyfence.principal import LOCAL_PRINCIPAL
 
         v2: list[PolicyRule] = []
@@ -2395,7 +2514,9 @@ class TestScopeRowsUpgrade:
             needs_value = extra.needs_value if extra else propose.scope_needs_value(propose.SCOPES_BY_GROUP[group][0])
             from privacyfence.policy import scope_rows
             verbs = list(scope_rows.scope_verbs(group))
-            v2.extend(catalogue.rules_for_catalogue_entry(group, ["V1"] if needs_value else None, verbs))
+            predicate = extra.predicate if extra else propose.SCOPES_BY_GROUP[group][0].predicate
+            value = ([VALUE_FORMATS[predicate].example if predicate in VALUE_FORMATS else "V1"]) if needs_value else None
+            v2.extend(catalogue.rules_for_catalogue_entry(group, value, verbs))
         # the custom cases the scope_rows round-trip test covers
         v2 += [
             PolicyRule(id="r-d76028ec0b", predicate="always_allow", value=None,
@@ -2658,6 +2779,26 @@ class TestAtlassianOauthRunner:
     def test_missing_org_config_prints_error_and_returns_1(self, capsys):
         assert daemon_main.run_atlassian_oauth({}) == 1
         assert "No Atlassian organization config" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(("config", "org_extra", "expect_assets"), [
+        (None, {}, False),
+        ({"connectors": {"assets": {"enabled": True}}}, {}, True),
+        (None, {"assets": True}, True),
+        ({"connectors": {"assets": {"enabled": False}}}, {"assets": True}, False),
+    ])
+    def test_authorize_scopes_include_assets_only_when_enabled(self, monkeypatch, config, org_extra, expect_assets):
+        captured = {}
+
+        def fake_authorize(**kw):
+            captured.update(kw)
+            return {"site_url": "https://acme.atlassian.net"}
+
+        monkeypatch.setattr(daemon_main, "atlassian_authorize_interactive", fake_authorize)
+        org = {"atlassian": {"client_id": "ci", "client_secret": "cs", **org_extra}}
+
+        assert daemon_main.run_atlassian_oauth(org, config) == 0
+        assert ("read:cmdb-object:jira" in captured["scopes"]) is expect_assets
+        assert "read:jira-work" in captured["scopes"]
 
     def test_success_prints_site_url_and_returns_0(self, monkeypatch, capsys):
         monkeypatch.setattr(
@@ -2998,6 +3139,7 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: (connectors, {}))
         monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
         monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
+        monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
 
         _FakeWebServer.instances = []
         self._web_server_calls: list[dict[str, Any]] = []
@@ -3065,6 +3207,17 @@ class TestRunApp:
         assert wait_until(lambda: timer_calls)
         from privacyfence.settings_controller import SettingsController
         assert isinstance(timer_calls[0], SettingsController)
+
+    def test_personal_data_sweep_thread_started(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        sweeps = []
+        monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: sweeps.append(1))
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert wait_until(lambda: sweeps)
 
     def test_background_cache_warm_kicked_off_with_connectors_and_web_loop(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -3512,7 +3665,7 @@ class TestMain:
     def test_oauth_flag_dispatches_to_the_right_runner(self, monkeypatch, flag, runner_name):
         self._patch_config(monkeypatch)
         calls = []
-        monkeypatch.setattr(daemon_main, runner_name, lambda org_config: calls.append(1) or 0)
+        monkeypatch.setattr(daemon_main, runner_name, lambda org_config, *a: calls.append(1) or 0)
 
         result = daemon_main.main([flag])
 
@@ -4139,3 +4292,71 @@ class TestRevokeScopedTokens:
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
         assert daemon_main.run_revoke_scoped_tokens("local") == 0
         assert capsys.readouterr().out == "Revoked 0 scoped token(s) for local.\n"
+
+
+class TestLoadOrgConfigSerial:
+    """SEC-A7: the serial pin is wired into every load_org_config() call."""
+
+    def test_load_org_config_rejects_older_signed_bundle(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        key = _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 200})
+        daemon_main.load_org_config()
+
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 100}, key)
+
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.load_org_config()
+        assert "rollback refused" in str(excinfo.value)
+        assert str(org_bundle_signing.pinned_serial_path(tmp_path)) in str(excinfo.value)
+
+    def test_load_org_config_records_the_highest_serial(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        key = _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 100})
+        daemon_main.load_org_config()
+        assert org_bundle_signing.load_pinned_serial(tmp_path) == 100
+
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 300}, key)
+        daemon_main.load_org_config()
+
+        assert org_bundle_signing.load_pinned_serial(tmp_path) == 300
+
+    def test_load_org_config_refuses_an_invalid_serial_without_a_remedy(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        _write_signed_bundle(tmp_path, {"slack": {"client_id": "abc"}, "serial": 0})
+
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.load_org_config()
+        assert str(excinfo.value).endswith("(serial is not a positive integer) -- refusing to start.")
+
+
+class TestPersonalDataSweep:
+    """The sweep erases Atlassian user-cache entries that missed their report (ADR 0202) for every
+    principal under data_dir(), at startup and then on each interval, until shutdown."""
+
+    def test_sweeps_data_dir_until_shutdown(self, monkeypatch):
+        roots = []
+
+        def sweep(root):
+            roots.append(root)
+            if len(roots) == 2:
+                daemon_main._shutdown_event.set()
+            return 0
+
+        monkeypatch.setattr(daemon_main, "erase_overdue_caches", sweep)
+        monkeypatch.setattr(daemon_main, "PERSONAL_DATA_SWEEP_INTERVAL_SECONDS", 0)
+        daemon_main._run_personal_data_sweep()
+        assert roots == [data_dir(), data_dir()]
+
+    def test_failure_is_logged_and_retried(self, monkeypatch, caplog):
+        def sweep(root):
+            daemon_main._shutdown_event.set()
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(daemon_main, "erase_overdue_caches", sweep)
+        with caplog.at_level(logging.WARNING):
+            daemon_main._run_personal_data_sweep()
+        assert "personal data sweep failed" in caplog.text

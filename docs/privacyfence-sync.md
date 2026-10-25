@@ -2,7 +2,7 @@
 
 `privacyfence-sync` runs a data-sync recipe against PrivacyFence with no AI model involved, so a
 regular refresh costs no model tokens. A recipe reads from your connected services (Salesforce
-reports, Jira searches, Grist tables, Drive files), runs your own scripts on the files, writes the
+reports, Jira searches, Jira Assets queries, Grist tables, Drive files), runs your own scripts on the files, writes the
 result back to Grist, and can publish an HTML dashboard on Peek.
 
 ## Who it is for
@@ -13,6 +13,15 @@ PrivacyFence, like Claude Code: every call goes through the gate, your rules and
 it holds none of your service credentials, cannot approve anything and cannot change rules. It
 declares an unattended session (see [Unattended sessions](how-it-works.md#unattended-sessions)),
 so a step that no rule covers fails at once instead of waiting for a card nobody will answer.
+
+## Starting Claude when something changes
+
+A recipe can watch for a change without a model and start Claude only when there is work. A script
+step finds the new file (and stops the run when there is none), then a `trigger` step starts a
+Claude Code cloud scheduled task through its API trigger and passes it the file's ID. Watching costs
+no tokens, and no Claude session waits for hours. See
+[Trigger steps](https://github.com/privacyfence/privacyfence/blob/main/sync/README.md#trigger-steps)
+and [ADR 0207](adr/0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md).
 
 ## Install
 
@@ -47,14 +56,16 @@ step.
 
 Every step needs an auto-accept rule, because a scheduled run gets no cards. Create them in
 **Settings → Auto-accept → Add a rule** (each asks for your passkey): the report, Jira project,
-Drive folder, Grist document and Peek page the recipe touches, with the verbs its steps use. The
+Jira Assets schema, Drive folder, Grist document and Peek page the recipe touches, with the verbs its steps use. The
 export tools and a Peek page upload also need **Let exports, downloads and page uploads carry
 personal data** ticked on the recipe's scoped token if the data holds personal data
 ([Letting personal data through](approvals-and-policy.md#letting-personal-data-through)).
 
 To find a missing rule, run the recipe once with `privacyfence-sync run recipe.yaml --attended`:
 each uncovered step shows a card, and the card's **Always allow** button or Settings adds the rule.
-Then run it without `--attended` and no card should appear.
+Then run it without `--attended` and no card should appear. Before scheduling, `privacyfence-sync permissions` lists the rules and tools a recipe needs, and `privacyfence-sync preflight` reports with the token whether each step is in its scope and covered by a rule.
+
+To schedule recipes on a server against an organization-mode PrivacyFence, with a scoped token and a result file the scheduler can read, see [On a server, against organization mode](https://github.com/privacyfence/privacyfence/blob/main/sync/README.md#on-a-server-against-organization-mode).
 
 ## The recipe-writing plugin
 

@@ -40,10 +40,12 @@ type is a ``policy/scopes.py`` scope.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -53,7 +55,7 @@ import yaml
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import auto_accept, paths, privacy_filter, scoped_tokens
+from privacyfence import auto_accept, paths, personal_settings, privacy_filter, scoped_tokens, secure_files, step_up_config
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
@@ -62,6 +64,7 @@ from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session
+from privacyfence.web import org_stats
 from privacyfence.web import routes_settings as ros
 
 
@@ -109,7 +112,7 @@ def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
 def _app(
     *, install_wide_settings=None, sessions=None, install_wide_settings_path="",
     step_up: StepUpConfig | None = None, connector_registry=None,
-    scoped_token_policy=None, scoped_token_store=None, scoped_token_page_data=None,
+    scoped_token_policy=None, scoped_token_store=None, scoped_token_page_data=None, org_config=None,
 ):
     sessions = sessions or org_session.OrgSessionStore()
     routes = ros.build_org_routes(
@@ -118,7 +121,7 @@ def _app(
         step_up=step_up or StepUpConfig(), step_up_origin=BASE_URL,
         connector_registry=connector_registry,
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_token_store,
-        scoped_token_page_data=scoped_token_page_data,
+        scoped_token_page_data=scoped_token_page_data, org_config=org_config,
     )
     return Starlette(routes=routes), sessions
 
@@ -210,6 +213,42 @@ class TestPrivacyPageAdminGating:
         assert '"grist_signin": "unavailable"' in body
         assert '"grist_server_url_pinned": ""' in body
         assert '"grist_auth": {"error": ""}' in body
+
+
+def _initial_state(body: str) -> dict:
+    match = re.search(r"window\.__pfInitialState = (\{.*?\});</script>", body, re.DOTALL)
+    assert match, "window.__pfInitialState assignment not found in the settings page"
+    return json.loads(match.group(1))
+
+
+class TestStatsSection:
+    """The admin's Stats page (ADR 0217): install-wide counts for an admin, nothing for anyone
+    else -- not even the counts, since those describe other people's use."""
+
+    def test_admin_state_counts_every_principal(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "carol")
+        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("drive.folder", "read", ["folder-a"]))
+        (tmp_path / "users" / "alice" / "credentials").mkdir()
+        (tmp_path / "users" / "alice" / "credentials" / "slack_token.json").write_text("{}", encoding="utf-8")
+        app, sessions = _app(org_config={"slack": {"client_id": "scid"}})
+        client = _client(app)
+        _signed_in(client, sessions, ADMIN)
+        body = client.get("/settings").text
+        assert _capabilities(body)["sections"]["stats"] is True
+        stats = _initial_state(body)["stats"]
+        assert stats["users"] == {"total": 2, "with_connectors": 1, "with_rules": 1}
+        assert {"service": "slack", "label": "Slack", "configured": True, "users": 1} in stats["connectors"]
+        assert stats["rules"]["by_connector"] == [{"connector": "drive", "label": "Drive", "rules": 1, "users": 1}]
+
+    def test_non_admin_gets_no_counts_and_no_section(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "bob")
+        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("drive.folder", "read", ["folder-a"]))
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, BOB)
+        body = client.get("/settings").text
+        assert _capabilities(body)["sections"]["stats"] is False
+        assert _initial_state(body)["stats"] == org_stats.empty()
 
 
 class TestPrivacyStateFromConfig:
@@ -307,6 +346,18 @@ class TestPrincipalScopedRules:
         assert caps2["sections"]["general"] is True
 
 
+class TestMoveYourSettingsCard:
+    def test_page_carries_the_card_capability_and_the_shim(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        body = client.get("/settings").text
+        assert _capabilities(body)["personalTransfer"] is True
+        assert "Move your settings" in body
+        assert "/api/settings/personal/import" in body
+
+
 class TestOrgStepUpScope:
     """ADR 0091: any org principal, admin or not, can widen the org's
     ``step_up.scope`` for their own approvals, and never narrow it."""
@@ -399,7 +450,7 @@ class TestRuleValueNames:
         client = _client(app)
         _signed_in(client, sessions, ALICE)
         body = client.get("/settings").text
-        assert '"value": "Q3 Reports"' in body
+        assert '"value": "My Drive: Q3 Reports"' in body
         assert drive.calls == [self.FOLDER_ID]
 
     def test_a_cached_name_is_not_looked_up_again(self, tmp_path, monkeypatch):
@@ -409,7 +460,7 @@ class TestRuleValueNames:
         client = _client(app)
         _signed_in(client, sessions, ALICE)
         client.get("/settings")
-        assert '"value": "Q3 Reports"' in client.get("/settings").text
+        assert '"value": "My Drive: Q3 Reports"' in client.get("/settings").text
         assert drive.calls == [self.FOLDER_ID]
 
     def test_names_resolve_only_through_the_viewing_principals_own_connectors(self, tmp_path, monkeypatch):
@@ -434,7 +485,7 @@ class TestRuleValueNames:
             client, "add_policy_rule", {"group": "drive.folder", "value": self.FOLDER_ID, "verbs": ["update"]}, csrf,
         )
         assert r.status_code == 200
-        assert [row["value"] for row in r.json()["auto_accept"]["rules"]] == ["Q3 Reports"]
+        assert [row["value"] for row in r.json()["auto_accept"]["rules"]] == ["My Drive: Q3 Reports"]
 
     def test_a_slow_lookup_renders_short_ids_then_names_on_the_next_load(self, tmp_path, monkeypatch):
         self._seed_folder_rule(tmp_path, monkeypatch, "alice")
@@ -460,8 +511,11 @@ class TestRuleValueNames:
             if drive.calls:
                 break
             time.sleep(0.01)
-        time.sleep(0.05)
-        assert '"value": "Q3 Reports"' in client.get("/settings").text
+        for _ in range(200):
+            if '"value": "My Drive: Q3 Reports"' in client.get("/settings").text:
+                break
+            time.sleep(0.01)
+        assert '"value": "My Drive: Q3 Reports"' in client.get("/settings").text
         assert drive.calls == [self.FOLDER_ID]
 
     def test_without_a_registry_an_uncached_id_is_shortened(self, tmp_path, monkeypatch):
@@ -499,6 +553,35 @@ class TestAddRule:
 
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
+
+    def test_add_policy_rule_keeps_a_gmail_query_whole(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        query = "in:inbox subject:(a, b)"
+
+        r = _post_action(client, "add_policy_rule", {"group": "gmail.query", "value": query, "verbs": ["read"]}, csrf)
+        assert r.status_code == 200
+
+        with principal_scope(ALICE):
+            values = [rule.value for rule in auto_accept.get_policy_v2_rules() if rule.predicate == "gmail.query"]
+        assert values == [[query]]
+
+    def test_a_title_instead_of_an_id_is_a_400_with_the_message_and_adds_no_rule(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = _post_action(
+            client, "add_policy_rule", {"group": "slack.channel", "value": "#general", "verbs": ["read"]}, csrf,
+        )
+
+        assert r.status_code == 400
+        assert r.json()["error"].startswith("'#general' is not a Slack ID.")
+        with principal_scope(ALICE):
+            assert auto_accept.get_policy_v2_rules() == []
 
     def test_org_add_policy_rule_ignores_a_personal_data_field(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
@@ -891,6 +974,35 @@ class TestRemoveRule:
 
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == []
+
+    def test_drops_the_rule_from_that_principals_tokens_only(self, tmp_path, monkeypatch):
+        rules = _catalogue_rules("gmail.sender", "read")
+        _seed(tmp_path, monkeypatch, "alice", rules=rules)
+        _seed(tmp_path, monkeypatch, "bob", rules=rules)
+        files = {}
+        for principal in (ALICE, BOB):
+            token = scoped_tokens.ScopedToken(
+                id="st-000000000000", label="sync", digest="d", principal_id=principal.id,
+                principal_email=principal.email, principal_display_name=principal.display_name,
+                created_at=0.0, expires_at=1e12, rule_ids=frozenset({rules[0].id, "r-other"}),
+                tools=frozenset({"gmail_get_message"}),
+            )
+            files[principal.id] = paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
+            secure_files.atomic_write_json(
+                files[principal.id], {"version": 1, "tokens": [scoped_tokens._to_json(token)]},
+            )
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = _post_action(client, "remove_policy_rule", {"rule_id": rules[0].id}, csrf)
+        assert r.status_code == 200
+
+        carried = {
+            pid: json.loads(path.read_text(encoding="utf-8"))["tokens"][0]["rule_ids"]
+            for pid, path in files.items()
+        }
+        assert carried == {"alice": ["r-other"], "bob": sorted([rules[0].id, "r-other"])}
 
     def test_removes_exactly_that_rule_and_nothing_else(self, tmp_path, monkeypatch):
         sender_rule = _catalogue_rules("gmail.sender", "read")[0]
@@ -1415,7 +1527,7 @@ class TestV1PerUserSettings:
 
 
 class TestScopedTokenRoutes:
-    """The three scoped token routes of org mode (ADR 0165): the administrator's opt-in, the
+    """The four scoped token routes of org mode (ADR 0165): the administrator's opt-in, the
     org gates, the one-time secret and the token working on /mcp as its owner."""
 
     ENABLED = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30)
@@ -1483,6 +1595,32 @@ class TestScopedTokenRoutes:
 
             summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
         assert any(f"({token.id})" in text and ", personal data allowed (principal=alice)" in text for text in summaries)
+
+    def test_org_create_stores_the_reads_flag(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data_reads": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.allow_personal_data_reads is True
+        assert token.allow_personal_data is False
+
+    def test_org_audit_summary_names_the_reads_flag(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "allow_personal_data_reads": True, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        assert any(
+            f"({token.id})" in text and ", personal data in reads allowed (principal=alice)" in text
+            for text in summaries
+        )
 
     def test_a_token_without_the_flag_does_not_allow_personal_data(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
@@ -1611,6 +1749,40 @@ class TestScopedTokenRoutes:
             summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
         assert any("Revoked all scoped tokens (2)" in text for text in summaries)
 
+    def test_rename(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        for label in ("one", "two"):
+            assert self._post(client, "create", {**self.BODY, "label": label, "confirmed": True}, csrf).status_code == 200
+        bob_token, _secret = store.create(
+            BOB, label="bobs", days=5, rule_ids=[], tools=["gmail_get_message"], policy=self.ENABLED,
+        )
+        one = next(t for t in store.tokens_for(ALICE) if t.label == "one")
+
+        done = self._post(client, "rename", {"token_id": one.id, "label": "uno", "confirmed": True}, csrf)
+        assert (done.status_code, done.json()) == (200, {"renamed": {"id": one.id, "label": "uno"}})
+        assert sorted(t.label for t in store.tokens_for(ALICE)) == ["two", "uno"]
+        miss = self._post(client, "rename", {"token_id": bob_token.id, "label": "x", "confirmed": True}, csrf)
+        assert (miss.status_code, miss.json()) == (404, {"error": "No such token."})
+        assert store.get("bob", bob_token.id).label == "bobs"
+        taken = self._post(client, "rename", {"token_id": one.id, "label": "two", "confirmed": True}, csrf)
+        assert (taken.status_code, taken.json()) == (400, {"error": "You already have a token with that name."})
+        same = self._post(client, "rename", {"token_id": one.id, "label": "uno", "confirmed": True}, csrf)
+        assert same.status_code == 200
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        renamed = [t for t in summaries if "Renamed scoped token" in t]
+        assert len(renamed) == 1
+        assert renamed[0] == f"Renamed scoped token 'one' to 'uno' ({one.id}) (principal=alice)"
+
+    def test_rename_is_refused_when_scoped_tokens_are_disabled(self, tmp_path, monkeypatch):
+        client, csrf, _store = self._setup(
+            tmp_path, monkeypatch, policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90),
+        )
+        r = self._post(client, "rename", {"token_id": "st-x", "label": "y", "confirmed": True}, csrf)
+        assert r.status_code == 403
+
     def test_the_page_offers_the_section_only_once_enabled(self, tmp_path, monkeypatch):
         data = {"delivery": "once", "max_days": 30, "default_days": 30, "warn_days": 14,
                 "tokens": [], "rules": [], "tools": []}
@@ -1636,3 +1808,175 @@ class TestScopedTokenRoutes:
         body = client.get("/settings").text
         assert "Create this token? It is shown once and cannot be shown again." in body
         assert "window.__pfShowScopedSecret(res.state.secret" in body
+
+
+class TestPersonalSettingsRoutes:
+    """Export/import of a person's own rules and step-up level in organization mode
+    (web/personal_settings_routes.py, wired by build_org_routes)."""
+
+    NOW = datetime(2026, 10, 16, 9, 30, tzinfo=timezone.utc)
+    FILE_FIELD = ("privacyfence-personal-settings.json", None, "application/json")
+    ENROLLED = SimpleNamespace(new_sign_count=1, credential_device_type=None, credential_backed_up=False)
+
+    @pytest.fixture(autouse=True)
+    def _data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    @staticmethod
+    def _row(scope: str, value: list[str]) -> scope_rows.ScopeRow:
+        verbs = scope_rows.scope_verbs(scope)
+        return scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, value), scope=scope, value=value,
+            verbs=frozenset(verbs), operations=scope_rows.implied_operations(scope, verbs),
+        )
+
+    def _file(self, rows, step_up_scope=None, *, mode="org") -> bytes:
+        return personal_settings.export_bytes(
+            personal_settings.build_export(rows, step_up_scope, mode=mode, version="6.3.0", now=self.NOW),
+        )
+
+    @staticmethod
+    def _import(client, raw: bytes, csrf: str, **fields):
+        fields.setdefault("sha256", hashlib.sha256(raw).hexdigest())
+        fields.setdefault("confirmed", "true")
+        return client.post(
+            "/api/settings/personal/import", data={"csrf": csrf, **fields},
+            files={"file": ("privacyfence-personal-settings.json", raw, "application/json")},
+        )
+
+    def _setup(self, tmp_path, monkeypatch, principal=ALICE, *, step_up=None, seed=("alice", "bob")):
+        for principal_id in seed:
+            _seed(tmp_path, monkeypatch, principal_id)
+        app, sessions = _app(step_up=step_up)
+        client = _client(app)
+        return client, _signed_in(client, sessions, principal)
+
+    @staticmethod
+    def _rows_of(principal: Principal) -> list:
+        with principal_scope(principal):
+            from privacyfence.daemon_main import _load_principal_settings
+            _load_principal_settings(install_wide_config={})
+            return auto_accept.get_policy_rows()
+
+    def test_a_signed_in_user_exports_a_file_that_parses(self, tmp_path, monkeypatch):
+        client, _csrf = self._setup(tmp_path, monkeypatch)
+        r = client.get("/api/settings/personal/export")
+        assert r.status_code == 200
+        assert r.headers["content-disposition"] == f'attachment; filename="{personal_settings.FILE_NAME}"'
+        document = personal_settings.parse_document(r.content)
+        assert document.rows == ()
+        assert document.source_mode == "org"
+
+    def test_two_principals_are_isolated(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("gmail.sender", "read", ["a@example.com"]))
+        _seed(tmp_path, monkeypatch, "bob", rules=_catalogue_rules("gmail.sender", "read", ["b@example.com"]))
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        exported = client.get("/api/settings/personal/export").content.decode()
+        assert "a@example.com" in exported and "b@example.com" not in exported
+
+        bob_before = _on_disk_rules(tmp_path, "bob")
+        raw = self._file([self._row("drive.folder", ["FOLDER"])])
+        assert self._import(client, raw, csrf).status_code == 200
+        assert _on_disk_rules(tmp_path, "bob") == bob_before
+        assert len(self._rows_of(BOB)) == 1
+        assert {tuple(row.value or ()) for row in self._rows_of(ALICE)} == {("a@example.com",), ("FOLDER",)}
+
+    def test_import_by_a_non_admin_works(self, tmp_path, monkeypatch):
+        assert not ALICE.is_admin
+        client, csrf = self._setup(tmp_path, monkeypatch)
+        r = self._import(client, self._file([self._row("drive.folder", ["F"])]), csrf)
+        assert r.status_code == 200
+        assert r.json()["added"] == 1
+
+    def test_all_three_routes_are_401_when_signed_out(self, tmp_path, monkeypatch):
+        app, _sessions = _app()
+        client = _client(app)
+        raw = self._file([])
+        files = {"file": ("f.json", raw, "application/json")}
+        assert client.get("/api/settings/personal/export").status_code == 401
+        assert client.post("/api/settings/personal/preview", data={"csrf": "x"}, files=files).status_code == 401
+        assert client.post("/api/settings/personal/import", data={"csrf": "x"}, files=files).status_code == 401
+
+    def test_a_bad_csrf_is_refused(self, tmp_path, monkeypatch):
+        client, _csrf = self._setup(tmp_path, monkeypatch)
+        assert self._import(client, self._file([]), "wrong").status_code == 401
+
+    def test_a_v1_settings_file_is_a_500_with_the_message(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        path = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
+        path.write_text(yaml.safe_dump({"auto_accept_rules": [{"scope": "x"}]}), encoding="utf-8")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/api/settings/personal/export")
+        assert r.status_code == 500
+        assert "auto_accept_rules" not in r.json()["error"]  # a non-admin gets the generic text
+
+    def test_import_with_require_passkey_needs_the_assertion(self, tmp_path, monkeypatch):
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+        client, csrf = self._setup(tmp_path, monkeypatch, step_up=step_up)
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        raw = self._file([self._row("drive.folder", ["NEW"])])
+
+        r = self._import(client, raw, csrf)
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+        assert _on_disk_rules(tmp_path, "alice") == []
+
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=self.ENROLLED):
+            r = self._import(client, raw, csrf, webauthn_assertion=json.dumps({"id": "Y3JlZC0x"}))
+        assert r.status_code == 200
+        assert r.json()["added"] == 1
+        assert len(_on_disk_rules(tmp_path, "alice")) == 1
+
+    def test_a_refused_step_up_is_audited(self, tmp_path, monkeypatch):
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+        client, csrf = self._setup(tmp_path, monkeypatch, step_up=step_up)
+        lines: list[str] = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: lines.append(summary))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        assert self._import(client, self._file([]), csrf).status_code == 428
+        assert any("Step-up required" in line and "principal=alice" in line for line in lines)
+
+    def test_the_file_step_up_scope_widens_the_persons_scope_and_never_goes_below_the_floor(
+        self, tmp_path, monkeypatch,
+    ):
+        floor = StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_pii_reads")
+        client, csrf = self._setup(tmp_path, monkeypatch, step_up=floor)
+
+        wider = self._import(client, self._file([], step_up_scope="writes_and_reads"), csrf).json()
+        assert wider["step_up_applied"] is True
+        assert step_up_config.personal_scope(ALICE) == "writes_and_reads"
+        assert step_up_config.personal_scope(BOB) is None
+
+        narrower = self._import(client, self._file([], step_up_scope="writes"), csrf).json()
+        assert narrower["step_up_applied"] is False
+        assert step_up_config.personal_scope(ALICE) == "writes_and_reads"
+        assert step_up_config.effective_scope(floor, ALICE) == "writes_and_reads"
+
+        # A file narrower than the org floor, for someone with no choice of their own, changes nothing.
+        other_sessions = org_session.OrgSessionStore()
+        other_app, other_sessions = _app(step_up=floor, sessions=other_sessions)
+        other_client = _client(other_app)
+        bob_csrf = _signed_in(other_client, other_sessions, BOB)
+        below = self._import(other_client, self._file([], step_up_scope="writes"), bob_csrf).json()
+        assert below["step_up_applied"] is False
+        assert step_up_config.personal_scope(BOB) is None
+        assert step_up_config.effective_scope(floor, BOB) == "writes_and_pii_reads"
+
+    def test_a_local_shaped_file_imports_into_an_org_principal(self, tmp_path, monkeypatch):
+        client, csrf = self._setup(tmp_path, monkeypatch)
+        raw = self._file([self._row("drive.folder", ["FROM-DESKTOP"])], mode="local")
+        r = self._import(client, raw, csrf)
+        assert r.status_code == 200
+        assert r.json()["added"] == 1
+        assert [tuple(row.value or ()) for row in self._rows_of(ALICE)] == [("FROM-DESKTOP",)]
+        assert len(_on_disk_rules(tmp_path, "alice")) == 1
+        assert _on_disk_rules(tmp_path, "bob") == []

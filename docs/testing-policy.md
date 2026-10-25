@@ -23,13 +23,17 @@ below; a new test module carries the marker for its layer.
 | 3 | Cross-platform system | OS path/process/locking/daemon behavior; the full daemon → MCP → approval → audit scenario | `system`, `platform` | `tests.yml`, every PR, on Linux, Windows and macOS |
 | 4 | Browser system | JS, CSP and rendering in real Chromium | `browser` | `tests.yml`, every PR; `qa_web_smoke.py` by hand |
 | 5 | Live connector | Provider API drift | `live` | `connector-live-check.yml`, self-hosted runner, weekly |
-| 6 | Packaged artifact | Installer/package correctness, autostart, upgrade, uninstall | `packaged` | `build.yml` and the graphical-session workflows |
+| 6 | Packaged artifact | Installer/package correctness, autostart, upgrade, uninstall | `packaged` | `build.yml`, `tests.yml`'s `org-docker-image` and the graphical-session workflows |
 | 7 | Manual | Subjective judgment, first-time consent, OS-native presentation | — | [`release-testing.md`](release-testing.md) |
 
-Markers are applied to new modules, not backfilled across old ones. Today `system` is on
-`tests/system/test_local_mode_system.py` and `test_org_ubuntu_release_smoke.py`; `platform` on every
-module under `tests/platform/`; `packaged` on every module in layer 6; `browser` on
-`test_download_page.py` and `test_releases_page.py` (not yet on `test_browser_smoke.py`); `live` on nothing, since layer 5 is a
+Markers are applied to new modules, not backfilled across old ones. `--strict-markers` makes an unregistered marker a collection
+error. Today `system` is on `tests/system/test_local_mode_system.py` and
+`test_org_ubuntu_release_smoke.py`; `platform` on every module under `tests/platform/`; `packaged` on
+every module in layer 6, `test_org_ubuntu_release_smoke.py` included; `browser` on every module that
+drives Chromium (`test_browser_smoke.py`, `test_settings_grist_modal_browser.py`,
+`test_settings_edit_verbs_browser.py`, `test_settings_scoped_token_form_browser.py`,
+`test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_releases_page.py`,
+`test_website_layout.py`, `test_website_consent.py`, `test_website_csp.py`); `live` on nothing, since layer 5 is a
 script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
 `tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit
 logs) under `test-results/`, which CI uploads as an artifact of the failed job.
@@ -47,30 +51,45 @@ logs) under `test-results/`, which CI uploads as an artifact of the failed job.
 ## Layers 1–4: every PR
 
 `.github/workflows/tests.yml` runs on every pull request, every push to `main` or `releases/**`,
-and on dispatch. A 100% pass rate is required to merge.
+and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout-minutes` (45; 90 for
+`platform-windows` and `platform-macos`), so a hung run fails instead of holding a runner.
 
 | Job | Runs |
 |---|---|
 | `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; `npm ci --prefix tests/integration/ai_clients` (the pinned AI-client CLIs); the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
-| `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest` |
+| `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest`; the Windows job then runs `check_coverage_floor.py --platform windows`, which holds the Windows-only modules at `WINDOWS_MODULE_FLOORS` |
 | `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
+| `sync` (Python 3.11, 3.13) | `privacyfence-sync` alone: `pip install -e "./sync[test]"`, `pytest sync/tests` at 100 % branch coverage, `mypy sync/src`, `bandit -r sync/src`; one `Sync client (Python 3.x)` check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
+| `org-docker-image` | Builds the organization-mode Docker image (amd64) from the checkout's wheel and runs `test_org_docker_image.py` against it; the per-PR leg of `build.yml`'s `build-org-image`, deliberately not a required check |
 | `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, whole-tree `mypy src/privacyfence`, `scripts/mypy_strict_modules.py` (all blocking); `ruff format` is not run (ADR 0150) |
 
 `pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
-also runs `playwright install --with-deps chromium`. Browser tests skip when Playwright or Chromium
-is missing, and layer-6 tests skip when no built artifact is under `dist/`. On a machine whose
+also runs `playwright install --with-deps chromium`. A skipped test is not a pass where CI
+expects it to run, so three switches turn a skip into a failure (two in `tests/conftest.py`, the third in `tests/system/test_local_mode_system.py`):
+`PRIVACYFENCE_REQUIRE_BROWSER=1` (the `test` job's pytest step and `website-build.yml`'s test step) fails
+a `browser` test that skips because Chromium or Playwright is missing, and a module whose Playwright
+import skips it — a browser test that skips for another reason, such as a docs site that was not
+built, stays a skip; `PRIVACYFENCE_REQUIRE_PACKAGED=1` (the six packaged steps in `build.yml`, the
+`org-docker-image` step in `tests.yml`, and the pytest steps of the three graphical-session workflows) fails a `packaged` test that skips for a
+missing-artifact or missing-environment reason, and any module collection skip (each of those steps
+runs one module), while the skips a dispatched, unsigned build legitimately takes stay skips;
+`PRIVACYFENCE_REQUIRE_NODE=1` (the `test` job) fails the real-shim system test instead of skipping it
+without Node or the built shim. Without the switches, browser tests skip when Playwright or Chromium
+is missing and layer-6 tests skip when no built artifact is under `dist/`. On a machine whose
 Chromium is not the revision the installed `playwright` expects, set `PRIVACYFENCE_TEST_CHROMIUM`
 to that binary rather than accepting the skips; the Claude Code on the web session-start hook
 probes for this and exports it.
 
 **Coverage is a ratchet.** `check_coverage_floor.py` fails if overall coverage, or any module on its
 security-critical list (`MODULE_FLOORS`), drops below its recorded floor. Raise a floor in the PR
-that raises its coverage; lowering one is a regression, not a config edit.
+that raises its coverage; lowering one is a regression, not a config edit. A module more than 1.0
+point above its floor, or overall coverage more than 0.5 above, prints a `stale coverage floor`
+warning (never a failure) as a prompt to raise it. The Windows job has its own, separate floors for the code the Linux run cannot execute (`WINDOWS_MODULE_FLOORS`, checked with `check_coverage_floor.py --platform windows`); the overall floor and `MODULE_FLOORS` stay the `test` job's.
 
 **Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
 reviewed list: `test`, `platform-windows`, `platform-macos`, the three `Test (Python 3.x, core
-suite)` checks, `static-analysis`, `org-mode-smoke`, and `website-build` (`website-build.yml`'s
+suite)` checks, `static-analysis`, `org-mode-smoke`, the two `Sync client (Python 3.x)` checks, and `website-build` (`website-build.yml`'s
 job, which also runs on every PR). Update it in the PR that adds, renames or removes one of those
 jobs. It is applied to the live repository ruleset by hand (`... apply`, and
 `--branch "releases/**" apply` for the release branches) — no CI job does it; `... show` compares
@@ -133,22 +152,26 @@ variable removed: these tests need no vendor account or credential, and must kee
 - **`dependency-audit.yml`** — on a PR or a push to `main`/`releases/**` that touches
   `pyproject.toml`, `requirements/*.lock.txt` or either `package.json`/`package-lock.json`, weekly
   (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
-  `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`
-  and `docs.lock.txt` (the website's docs generator) and reports `dev.lock.txt` informationally; `npm-audit` blocks on high/critical in the shim's
+  `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`,
+  `docs.lock.txt` (the website's docs generator) and `release.lock.txt` (the hash-pinned `uv` and
+  `pip-audit` that CI itself installs, compiled from `requirements/release.in`) and reports
+  `dev.lock.txt` informationally; `floor-audit` resolves `pyproject.toml` at the lowest version each
+  range allows (`uv pip compile --resolution lowest-direct`) and blocks on any finding in that set,
+  because `pip install privacyfence` can land there; `npm-audit` blocks on high/critical in the shim's
   runtime dependencies (`--omit=dev`); `npm-audit-worker` blocks on high/critical across the whole
   `cloudflare/downloads/` tree, dev dependencies included, because `wrangler` deploys with a
   production token.
 - **`deploy-download-worker.yml`'s `verify` job** — on a PR, or a push to `main`, that touches
   `cloudflare/downloads/**`: `npm ci`, `npm run typecheck`, `npm test` (local Miniflare, no
   Cloudflare credentials), `npm run dry-run`. Its `deploy` job needs `verify` and runs only on
-  `main` or dispatch. Neither job is in `REQUIRED_STATUS_CHECKS`.
+  `main`, in the `downloads-worker` environment. Not in `REQUIRED_STATUS_CHECKS`.
 - **`website-build.yml`** — on every PR and every push to `main`/`releases/**`: builds
   privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
   `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
-  `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
-  sites and the layout screenshots. Not in `REQUIRED_STATUS_CHECKS`.
+  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  sites and the layout screenshots.
 
 ### The shared design system
 
@@ -203,22 +226,26 @@ runner, never reachable from `pull_request` ([ADR
 0019](adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md)). Runner and QA-account
 setup: [`connector-qa.md`](connector-qa.md).
 
-- **`connector-live-check.yml`** — weekly (Monday 06:00 UTC) and on dispatch. Runs
-  `qa_fixture_recorder.py --check` over every connector in `CONNECTOR_CHECKS`; on drift, `--record`
-  and a PR on `chore/connector-live-fixture-drift` with the redacted diff, reviewed like any other
-  PR. Then `--lifecycle` (create, read, update, delete a tagged QA object in `calendar`,
-  `confluence`, `jira`, `tasks`); a lifecycle failure fails the job.
-- **`qa-record-fixture.yml`** — dispatch only, input `connector`. Records one connector's fixture
-  and commits it to the branch it was dispatched against; refuses a protected branch. Use it for a
+- **`connector-live-check.yml`** — weekly (Monday 06:00 UTC) and on dispatch. Its `live-check` job
+  (self-hosted, read-only) runs `qa_fixture_recorder.py --check` over every connector in
+  `CONNECTOR_CHECKS`; on drift, `--record` and the redacted diff is uploaded as an artifact. A separate
+  `open-drift-pr` job on a GitHub-hosted runner, the only one with write access, opens a PR on
+  `chore/connector-live-fixture-drift` from it, reviewed like any other PR. Then `--lifecycle` (create, read back and update a tagged QA object in `calendar`, `confluence`, `grist`,
+  `jira`, `peek`, `salesforce` and `tasks`, and delete it where the connector can); a lifecycle failure fails the job.
+- **`qa-record-fixture.yml`** — dispatch only, **on `main`**, with inputs `connector` and `branch` (the
+  pushed branch to record for). Its read-only `record` job on the self-hosted runner refuses any
+  other ref, `main`, `stable`, `releases/*`, `refs/…`, `pull/…` and a branch that does not exist, then
+  records the one connector; a `commit-fixture` job on `ubuntu-latest` commits the fixture to `branch`.
+  The runner group admits only `main`'s two workflow files. Use it for a
   connector with no fixture yet, which the drift-only record step never records. It shares the
   `connector-live-check` concurrency group, so it queues behind a running check.
 - **`/qa-record <connector>`** (`.claude/commands/qa-record.md`) — dispatches `qa-record-fixture.yml`
-  for the current branch, then pulls and reviews the fixture diff. A connector name missing from
+  on `main` with the current branch as `branch`, then pulls and reviews the fixture diff. A connector name missing from
   `CONNECTOR_CHECKS` makes the recorder exit 0 having recorded nothing, so the command checks first.
 
 A PR touching `src/privacyfence/*_client.py` or `src/privacyfence/connectors/**` owes a `--check`
 report, scoped to that connector, under a `## Local QA check` heading. Run it on a machine with QA
-credentials, or dispatch `connector-live-check.yml`:
+credentials, or dispatch `qa-record-fixture.yml` on `main` with `branch=` (a dispatch on a branch never gets the runner, and `connector-live-check.yml` checks `main`):
 
 ```bash
 .venv/bin/python scripts/qa_fixture_recorder.py --check confluence    # never writes
@@ -237,12 +264,14 @@ email, name or account id means the redaction needs fixing before the commit.
 | `test_macos_pkg_smoke.py` | `build.yml`, `build` | `.pkg` structure, postinstall, OS/arch refusal, signature — no install |
 | `test_windows_packaged_smoke.py` | `build.yml`, `build-windows` | Silent install separates, upgrade over a running install, uninstall keeps data, purge, refusal of a user-writable install dir |
 | `test_deb_packaged_lifecycle.py` | `build.yml`, `build-deb` | Install, remove, reinstall, purge, upgrade, unattended install, a failing machine half failing the install |
+| `test_org_docker_image.py` | `build.yml`, `build-org-image`; also `tests.yml`, `org-docker-image` | The organization-mode Docker image: unprivileged user, private data volume, image metadata, refusal to start without or with an unsigned bundle, a running container behind the Host check, health check, clean `docker stop`, state surviving a new container |
 | `test_linux_graphical_session_autostart.py` | `linux-graphical-session.yml` | XDG autostart under a real `systemd --user` session; the OAuth loopback opening a browser under Xvfb |
 | `test_windows_graphical_session_autostart.py` | `windows-graphical-session.yml` | Task Scheduler's stored companion task against `tests/windows_task_contract.py`; the companion started as the signed-in user; SCM restart of a killed service |
 | `test_macos_graphical_session_autostart.py`, `test_macos_pkg_install.py` | `macos-graphical-session.yml` | `enable` and a real `installer -pkg` bringing up the LaunchDaemon as `_privacyfence` and the companion LaunchAgent |
 
 `build.yml` runs on a `v*` tag push and on dispatch. Each packaged test runs right after its job
-builds the artifact and before any upload; `build-deb` also runs `test_org_ubuntu_release_smoke.py`.
+builds the artifact and before any upload; `build-deb` also runs `test_org_ubuntu_release_smoke.py`, and
+`build-org-image` (one leg per architecture, on native runners) runs `test_org_docker_image.py`.
 Every upload and publish step is gated on a tag ref, so a dispatched run builds and tests everything
 and publishes nothing — which is the pre-flight in [`release-testing.md`](release-testing.md).
 `publish-pypi.yml`'s `wait_for_build` job blocks every publish until `build.yml`'s run for the same
@@ -252,7 +281,8 @@ The three graphical-session workflows run on a push to `main` or `releases/**` t
 packaging paths, weekly (Monday 07:00, 08:00, 09:00 UTC for Linux, Windows, macOS), and on dispatch —
 never on `pull_request`, never as part of `build.yml`. `build.yml`'s `finalize-release` runs
 `scripts/check_graphical_session_coverage.py`, which reads the latest completed run of each on the
-release branch: a run that is missing, not an ancestor of the tagged commit, or red warns on a
+release branch: a run that is missing, not an ancestor of the tagged commit, red, or green but older than a
+change to a file in the workflow's `on.push.paths` warns on a
 pre-release tag and fails a stable one. It never waits for a new run. They run on GitHub-hosted
 runners with one secret, `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`, the shared app identity every
 release build already carries ([ADR 0040](adr/0040-telegram-app-credentials-ship-in-every-distribution.md)),

@@ -25,9 +25,11 @@ to be pointed at a real, already-authenticated account.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,7 +53,7 @@ from privacyfence.calendar_client import CalendarClient  # noqa: E402
 from privacyfence.contacts_client import ContactsClient  # noqa: E402
 from privacyfence.tasks_client import TasksClient  # noqa: E402
 from privacyfence.apps_script_client import AppsScriptClient  # noqa: E402
-from privacyfence.slack_client import SlackClient  # noqa: E402
+from privacyfence.slack_client import SlackClient, SlackClientError  # noqa: E402
 from privacyfence.telegram_client import TelegramPrivacyFenceClient  # noqa: E402
 
 
@@ -296,6 +298,11 @@ class TestRedactGmailMessage:
         ]}}
         assert recorder.redact_gmail_message(raw) == raw
 
+    def test_message_id_header_redacted(self):
+        raw = {"payload": {"headers": [{"name": "Message-ID", "value": "<abc@mail.gmail.com>"}]}}
+        out = recorder.redact_gmail_message(raw)
+        assert out["payload"]["headers"][0]["value"] == "<qa-placeholder-message-id@example.com>"
+
     def test_missing_payload_does_not_raise(self):
         assert recorder.redact_gmail_message({}) == {}
 
@@ -326,6 +333,12 @@ class TestRedactJiraIssue:
         raw = {"fields": {"creator": {"self": "https://x/user?accountId=712020%3Areal"}, "assignee": None}}
         out = recorder.redact_jira_issue(raw)
         assert out["fields"]["creator"]["self"] == recorder._REDACTED_JIRA_USER_URL
+
+    def test_entity_ids_redacted_in_issue_and_projects(self):
+        issue = recorder.redact_jira_issue({"fields": {"project": {"entityId": "4633c0de-4f6f-472d-98f8-2eb4361d642f"}}})
+        assert issue["fields"]["project"]["entityId"] == "qa-placeholder-entity-id"
+        projects = recorder.redact_jira_projects([{"entityId": "x-1", "uuid": "x-1", "key": "K"}])
+        assert projects == [{"entityId": "qa-placeholder-entity-id", "uuid": "qa-placeholder-entity-id", "key": "K"}]
 
     def test_missing_fields_does_not_raise(self):
         assert recorder.redact_jira_issue({}) == {}
@@ -838,6 +851,216 @@ class TestCheckConfluence:
 DUEDATE_FIELD = {"id": "duedate", "name": "Due date", "custom": False, "schema": {"type": "date"}}
 
 
+class _FakeAssetsClient:
+    """Stands in for AssetsClient: every read goes through ``_request`` as the real one does."""
+
+    def __init__(self, label="PrivacyFence QA seed contract [QATEST]", schemas=None, search_labels=None):
+        from privacyfence.assets_client import AssetsObject, AssetsSchema
+        self._obj_cls = AssetsObject
+        self._label = label
+        self._schemas = schemas if schemas is not None else [
+            {"id": "2", "name": "QA", "objectSchemaKey": "PFQA"},
+            {"id": "9", "name": "Real CMDB", "objectSchemaKey": "REAL"},
+        ]
+        self._schema_cls = AssetsSchema
+        self._search_labels = search_labels
+        self.checked = False
+        self.searches: list[str] = []
+
+    def _request(self, fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    def check_connection(self):
+        self.checked = True
+
+    def _obj(self, oid, label):
+        return self._obj_cls(id=oid, key=f"PFQA-{oid}", label=label, type_id="7", type_name="Contract",
+                             schema_id="2", created="c", updated="u", attributes={}, references={})
+
+    def list_schemas(self, max_results=100):
+        page = self._request(lambda: {"values": self._schemas, "isLast": True})
+        return [self._schema_cls(id=v["id"], name=v["name"], key=v["objectSchemaKey"], description="",
+                                 object_count=0, object_type_count=0) for v in page["values"]]
+
+    def search_objects(self, aql, max_results=25):
+        self.searches.append(aql)
+        labels = self._search_labels if self._search_labels is not None else [self._label]
+        values = [{"id": str(i + 1), "label": lab} for i, lab in enumerate(labels)]
+        self._request(lambda: {"values": values, "isLast": True})
+        return [self._obj(str(i + 1), lab) for i, lab in enumerate(labels)]
+
+    def get_object(self, object_id):
+        self._request(lambda: {"id": object_id, "label": self._label})
+        self._request(lambda: [{"objectTypeAttributeId": "1"}])
+        return self._obj(object_id, self._label)
+
+
+class TestDeidentifyAssets:
+    UUID_A = "0f3c9a52-7d1e-4b6a-9c20-1a2b3c4d5e6f"
+    UUID_B = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+
+    def test_same_id_under_id_and_attribute_id_gets_the_same_digits(self):
+        raw = {"objectTypeAttributes": [{"id": "4711"}],
+               "values": [{"attributes": [{"objectTypeAttributeId": "4711"}]}]}
+        out = recorder._deidentify_assets(raw)
+        assert out["objectTypeAttributes"][0]["id"] == "1"
+        assert out["values"][0]["attributes"][0]["objectTypeAttributeId"] == "1"
+
+    def test_different_ids_get_consecutive_digits(self):
+        out = recorder._deidentify_assets({"id": "4711", "objectType": {"id": "99", "objectSchemaId": "4711"}})
+        assert out["id"] == "1"
+        assert out["objectType"] == {"id": "2", "objectSchemaId": "1"}
+
+    def test_reference_type_id_joins_its_reference_type(self):
+        raw = {"objectTypeAttributes": [{"id": "13", "referenceObjectTypeId": "1",
+                                         "referenceObjectType": {"id": "1", "objectSchemaId": "1"}}]}
+        definition = recorder._deidentify_assets(raw)["objectTypeAttributes"][0]
+        assert definition["id"] == "1"
+        assert definition["referenceObjectTypeId"] == definition["referenceObjectType"]["id"] == "2"
+
+    def test_integer_ids_are_numbered_too(self):
+        numbered, id_map = recorder._numeric_assets_ids({"id": 4711, "parentObjectTypeId": "4711", "x": {"ID": 8}})
+        assert numbered == {"id": "1", "parentObjectTypeId": "1", "x": {"ID": "2"}}
+        assert id_map == {"1": "1", "2": "2"}
+
+    def test_empty_and_bool_values_are_left_alone(self):
+        numbered, id_map = recorder._numeric_assets_ids({"id": "", "objectId": True})
+        assert numbered == {"id": "", "objectId": True}
+        assert id_map == {}
+
+    def test_uuids_in_nested_strings_and_lists_are_scrubbed(self):
+        raw = {"workspaceId": self.UUID_A,
+               "link": {"href": f"https://x/{self.UUID_B}/object/1?w={self.UUID_A}"},
+               "tags": [self.UUID_B, "plain"]}
+        out = recorder._deidentify_assets(raw)
+        assert not recorder._UUID_RE.search(json.dumps(out))
+        assert out["tags"] == ["qa-placeholder-uuid", "plain"]
+        assert out["workspaceId"] == "qa-placeholder-uuid"
+
+    def test_uuid_valued_ids_stay_distinct_until_the_scrub(self):
+        out = recorder._deidentify_assets({"a": {"id": self.UUID_A}, "b": {"id": self.UUID_B}})
+        assert out["a"]["id"] == "1" and out["b"]["id"] == "2"
+
+    def test_object_key_and_label_are_unchanged(self):
+        out = recorder._deidentify_assets({"objectKey": "PFQA-7", "label": "Seed contract [QATEST]"})
+        assert out == {"objectKey": "PFQA-7", "label": "Seed contract [QATEST]"}
+
+    def test_account_id_is_redacted(self):
+        out = recorder._deidentify_assets({"user": {"accountId": "712020:abc"}})
+        assert out["user"]["accountId"] == "qa-placeholder-account-id"
+
+    def test_placeholder_is_not_uuid_shaped(self):
+        assert not recorder._UUID_RE.search(recorder._REDACTED_UUID)
+
+
+class TestCheckAssets:
+    def _run(self, monkeypatch, client, record=True, cfg=None):
+        monkeypatch.setattr(recorder, "_build_assets_client", lambda: client)
+        return recorder.check_assets(record=record, manifest={"assets": cfg or {}})
+
+    def test_all_three_fixtures_record(self, monkeypatch):
+        client = _FakeAssetsClient()
+        results = self._run(monkeypatch, client)
+        assert [r.method for r in results] == ["list_schemas", "get_object", "aql_search"]
+        assert all(r.ok for r in results)
+        assert client.checked
+        assert [r.fixture_relpath for r in results] == ["list_schemas.json", "get_object.json", "aql_search.json"]
+        get_object = results[1]
+        assert set(get_object.raw) == {"object", "attributes"}
+        assert client.searches[-1] == "objectSchemaId = 2"
+
+    def test_list_schemas_is_filtered_to_the_qa_key(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeAssetsClient())
+        kept = results[0].raw["values"]
+        assert len(kept) == 1
+        assert kept[0]["objectSchemaKey"] == "PFQA"
+
+    def test_record_off_records_nothing(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeAssetsClient(), record=False)
+        assert all(r.ok and r.raw is None for r in results)
+
+    def test_seed_key_is_looked_up_by_key(self, monkeypatch):
+        client = _FakeAssetsClient()
+        self._run(monkeypatch, client, cfg={"seed_object_key": "PFQA-5"})
+        assert client.searches[0] == 'Key = "PFQA-5"'
+
+    def test_missing_schema_stops_after_list_schemas(self, monkeypatch):
+        client = _FakeAssetsClient(schemas=[{"id": "9", "name": "Real", "objectSchemaKey": "REAL"}])
+        results = self._run(monkeypatch, client)
+        assert len(results) == 1
+        assert not results[0].ok
+        assert "not in list_schemas" in results[0].note
+        assert results[0].raw is None
+
+    def test_seed_object_not_found(self, monkeypatch):
+        client = _FakeAssetsClient(search_labels=[])
+        results = self._run(monkeypatch, client)
+        get_object = next(r for r in results if r.method == "get_object")
+        assert not get_object.ok
+        assert "no object found" in get_object.note
+
+    def test_untagged_seed_object_is_refused(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeAssetsClient(label="A real contract"))
+        get_object = next(r for r in results if r.method == "get_object")
+        assert not get_object.ok and get_object.raw is None
+        assert "does not carry" in get_object.note
+
+    def test_untagged_search_results_are_refused(self, monkeypatch):
+        client = _FakeAssetsClient(search_labels=["Seed [QATEST]", "Real one"])
+        results = self._run(monkeypatch, client)
+        aql = next(r for r in results if r.method == "aql_search")
+        assert not aql.ok and aql.raw is None
+        assert "do not carry" in aql.note
+
+    def test_empty_search_is_not_ok(self, monkeypatch):
+        class Empty(_FakeAssetsClient):
+            def search_objects(self, aql, max_results=25):
+                self.searches.append(aql)
+                if aql.startswith("objectSchemaId = 2 AND"):
+                    return [self._obj("1", self._label)]
+                return []
+
+        results = self._run(monkeypatch, Empty())
+        aql = next(r for r in results if r.method == "aql_search")
+        assert not aql.ok and "matched no object" in aql.note
+
+    def test_client_errors_become_failed_rows(self, monkeypatch):
+        from privacyfence.assets_client import AssetsClientError
+
+        class Broken(_FakeAssetsClient):
+            def list_schemas(self, max_results=100):
+                raise AssetsClientError("boom")
+
+        results = self._run(monkeypatch, Broken())
+        assert len(results) == 1 and not results[0].ok and results[0].note == "boom"
+
+        class BrokenSearch(_FakeAssetsClient):
+            def search_objects(self, aql, max_results=25):
+                raise AssetsClientError("nope")
+
+        results = self._run(monkeypatch, BrokenSearch())
+        assert [r.ok for r in results] == [True, False, False]
+
+    def test_connection_failure_is_one_failed_row(self, monkeypatch):
+        from privacyfence.assets_client import AssetsClientError
+
+        class NoWorkspace(_FakeAssetsClient):
+            def check_connection(self):
+                raise AssetsClientError("no Assets workspace")
+
+        results = self._run(monkeypatch, NoWorkspace())
+        assert len(results) == 1 and "no Assets workspace" in results[0].note
+
+    def test_registered_with_its_three_fixtures(self):
+        assert recorder.CONNECTOR_CHECKS["assets"] is recorder.check_assets
+        assert recorder.EXPECTED_FIXTURES["assets"] == ("list_schemas.json", "get_object.json", "aql_search.json")
+
+    def test_build_assets_client_uses_the_atlassian_token(self, monkeypatch):
+        monkeypatch.setattr(recorder, "_load_atlassian_config", lambda: (
+            {"access_token": "t", "cloud_id": "c", "scopes": ["read:cmdb-object:jira"]}, "/tmp/tok"))
+        assert recorder._build_assets_client()._jira_url.endswith("/c")
+
+
 class TestCheckJira:
     def _client(self) -> JiraClient:
         client = JiraClient(config={"access_token": "t", "cloud_id": "c1", "site_url": "https://acme.atlassian.net"})
@@ -1176,10 +1399,10 @@ class TestReportPagingCheck:
         sf.restful.side_effect = restful
         return sf
 
-    def _check(self, sf, *, summary="sum", record=False, label="PF QA Number"):
+    def _check(self, sf, *, summary="00O5e000004SumARY1", record=False, label="PF QA Number"):
         client = SalesforceClient(config={"access_token": "t", "instance_url": "https://my.salesforce.com"})
         client._get_sf = lambda: sf
-        return recorder._check_salesforce_report_paging(client, "rep", summary, label, "QA Report", record)
+        return recorder._check_salesforce_report_paging(client, "00O5e000004RepORT1", summary, label, "QA Report", record)
 
     def test_report_paging_check_passes(self):
         res = self._check(self._sf())
@@ -1225,7 +1448,7 @@ class TestReportPagingCheck:
             return page
 
         client.run_report_page = run_report_page
-        res = recorder._check_salesforce_report_paging(client, "rep", "sum", "PF QA Number", "QA Report", False)
+        res = recorder._check_salesforce_report_paging(client, "00O5e000004RepORT1", "00O5e000004SumARY1", "PF QA Number", "QA Report", False)
         assert not res.ok and res.note == "greaterThan on page_by not honoured"
 
     def test_report_paging_check_summary_report_without_rows(self):
@@ -1443,6 +1666,89 @@ class TestCheckGmail:
         assert headers["From"] == recorder._REDACTED_EMAIL
         assert headers["To"] == recorder._REDACTED_EMAIL
         assert headers["Subject"] == "PrivacyFence QA seed message [QATEST]"
+
+    def _matching_client(self, monkeypatch, headers, search):
+        raw = {"id": "m1", "threadId": "t1", "payload": {"headers": headers}}
+        client = GmailClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = self._service(raw)
+        monkeypatch.setattr(recorder, "_build_gmail_client", lambda: client)
+        monkeypatch.setattr(client, "messages_matching", search)
+
+    def test_check_gmail_reports_messages_matching(self, monkeypatch):
+        headers = [
+            {"name": "From", "value": "real@company.com"},
+            {"name": "Subject", "value": "PrivacyFence QA seed message [QATEST]"},
+            {"name": "Date", "value": "Wed, 15 Jul 2026 10:00:00 +0000"},
+            {"name": "Message-ID", "value": "<seed@mail.example.com>"},
+        ]
+        seen = []
+
+        def search(query, pairs):
+            seen.append((query, pairs))
+            return {"m1"} if query == "in:anywhere" else set()
+
+        self._matching_client(monkeypatch, headers, search)
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert result.ok and result.raw is None and result.fixture_relpath == ""
+        assert seen[0] == ("in:anywhere", [("m1", "seed@mail.example.com")])
+
+        # Gmail finding nothing for in:anywhere, or something for a missing label, fails the check.
+        self._matching_client(monkeypatch, headers, lambda query, pairs: set())
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        assert not next(r for r in results if r.method == "messages_matching").ok
+        self._matching_client(monkeypatch, headers, lambda query, pairs: {"m1"})
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        assert not next(r for r in results if r.method == "messages_matching").ok
+
+    def test_messages_matching_fails_without_a_message_id_and_on_client_errors(self, monkeypatch):
+        headers = [
+            {"name": "From", "value": "real@company.com"},
+            {"name": "Subject", "value": "PrivacyFence QA seed message [QATEST]"},
+            {"name": "Date", "value": "x"},
+        ]
+        self._matching_client(monkeypatch, headers, lambda query, pairs: set())
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert not result.ok and result.note == "seed message has no Message-ID header"
+
+        def boom(query, pairs):
+            raise recorder.GmailClientError("messages_matching failed (HTTP 500)")
+
+        self._matching_client(monkeypatch, headers + [{"name": "Message-ID", "value": "<s@x.com>"}], boom)
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+        result = next(r for r in results if r.method == "messages_matching")
+        assert not result.ok and result.note == "messages_matching failed (HTTP 500)"
+
+    def test_addresses_quoted_in_a_reply_body_and_snippet_are_redacted(self):
+        quoted = base64.urlsafe_b64encode(b"On Fri, Dummy <test@privacyfence.eu> wrote:").decode().rstrip("=")
+        raw = {
+            "snippet": "Dummy &lt;test@privacyfence.eu&gt; wrote",
+            "payload": {"parts": [{"body": {"data": quoted, "size": 1}}, {"body": {"size": 0}}]},
+        }
+        redacted = recorder.redact_gmail_message(raw)
+        assert "privacyfence.eu" not in redacted["snippet"]
+        data = redacted["payload"]["parts"][0]["body"]["data"]
+        assert base64.urlsafe_b64decode(data + "==") == recorder._REDACTED_ATTRIBUTION.encode()
+        assert redacted["payload"]["parts"][0]["body"]["size"] == len(base64.urlsafe_b64decode(data + "=="))
+        # An undecodable body is left alone rather than raising.
+        recorder.redact_gmail_message({"payload": {"body": {"data": "!!!"}}})
+
+    def test_display_name_in_the_quote_attribution_line_is_redacted(self):
+        text = "Thanks\n\nOn Fri, Oct 3, 2025 at 10:00 AM Real Person <real@example.org> wrote:\n> hi"
+        data = base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+        raw = {"payload": {"body": {"data": data, "size": 1}}}
+        out = base64.urlsafe_b64decode(recorder.redact_gmail_message(raw)["payload"]["body"]["data"] + "==").decode()
+        assert "Real Person" not in out and "Oct 3" not in out
+        assert out == f"Thanks\n\n{recorder._REDACTED_ATTRIBUTION}\n> hi"
+
+    def test_reply_threading_headers_are_redacted(self):
+        raw = {"payload": {"headers": [
+            {"name": "References", "value": "<real-id@mail.gmail.com>"},
+            {"name": "In-Reply-To", "value": "<real-id@mail.gmail.com>"},
+        ]}}
+        headers = recorder.redact_gmail_message(raw)["payload"]["headers"]
+        assert {h["value"] for h in headers} == {recorder._REDACTED_MESSAGE_ID}
 
     def test_untagged_message_is_refused(self, monkeypatch):
         raw_message = {
@@ -1902,6 +2208,97 @@ class TestCheckSlack:
         assert get_thread.raw is None
         assert "[QATEST]" in get_thread.note
 
+    def _membership_client(self, monkeypatch, *, member=True, ids=frozenset({"C1", "G1"}), ids_error=None):
+        client = self._client({
+            "conversations.replies": {
+                "messages": [{"ts": "100.1", "user": "U1", "text": self.SEED_TEXT}],
+            },
+        })
+        monkeypatch.setattr(client, "resolve_is_member", lambda _cid: member)
+
+        def my_conversation_ids():
+            if ids_error is not None:
+                raise ids_error
+            return ids
+
+        monkeypatch.setattr(client, "my_conversation_ids", my_conversation_ids)
+        monkeypatch.setattr(recorder, "_build_slack_client", lambda: client)
+        return client
+
+    def _check(self, **slack_cfg):
+        manifest = {"slack": {"channel_id": "C1", "seed_thread_ts": "100.1", **slack_cfg}}
+        return recorder.check_slack(record=True, manifest=manifest)
+
+    def test_conversation_membership_ok_when_both_calls_agree(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert membership.ok
+        assert membership.note == "conversations.info and users.conversations agree"
+
+    def test_conversation_membership_not_ok_when_info_says_not_a_member(self, monkeypatch):
+        self._membership_client(monkeypatch, member=False)
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+        assert "is_member=False" in membership.note
+
+    def test_conversation_membership_not_ok_when_the_listing_lacks_the_id(self, monkeypatch):
+        self._membership_client(monkeypatch, ids=frozenset({"C9"}))
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+        assert "listed by users.conversations=False" in membership.note
+
+    def test_conversation_membership_not_ok_when_the_listing_fails(self, monkeypatch):
+        self._membership_client(monkeypatch, ids=None)
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+
+    def test_conversation_membership_carries_the_error_text(self, monkeypatch):
+        self._membership_client(monkeypatch, ids_error=SlackClientError("users.conversations failed: ratelimited"))
+
+        membership = next(r for r in self._check() if r.method == "conversation_membership")
+
+        assert not membership.ok
+        assert membership.note == "users.conversations failed: ratelimited"
+
+    def test_membership_still_runs_when_get_thread_replies_raises(self, monkeypatch):
+        client = self._membership_client(monkeypatch)
+
+        def boom(*_a, **_k):
+            raise SlackClientError("replies failed")
+
+        monkeypatch.setattr(client, "get_thread_replies", boom)
+
+        results = self._check()
+
+        assert not next(r for r in results if r.method == "get_thread_replies").ok
+        assert next(r for r in results if r.method == "conversation_membership").ok
+
+    def test_group_dm_membership_only_when_group_dm_id_is_set(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        assert not any(r.method == "group_dm_membership" for r in self._check())
+
+        group = next(r for r in self._check(group_dm_id="G1") if r.method == "group_dm_membership")
+        assert group.ok
+        assert group.seed_artifact == "G1"
+
+    def test_membership_checks_record_no_fixture(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        results = self._check(group_dm_id="G1")
+
+        membership = [r for r in results if r.method.endswith("_membership")]
+        assert len(membership) == 2
+        assert all(not r.fixture_relpath and r.raw is None for r in membership)
+
 
 class TestCheckTelegram:
     """check_telegram() is a sync wrapper around asyncio.run() -- called
@@ -2111,6 +2508,57 @@ class TestFixturePresence:
             assert path.is_file(), f"missing recorded fixture: {path}"
             data = json.loads(path.read_text(encoding="utf-8"))
             assert data, f"recorded fixture is empty: {path}"
+
+    def test_every_expected_fixture_is_replayed_by_a_unit_test(self):
+        # A recorded fixture no test loads is dead weight that can rot
+        # unnoticed: every manifest file name must appear in a
+        # _load("<name>") call (or a LIVE_FIXTURES_DIR / "<name>" read)
+        # somewhere under tests/unit.
+        unit_dir = Path(__file__).resolve().parent
+        sources = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in unit_dir.rglob("*.py")
+            if p.resolve() != Path(__file__).resolve()
+        )
+        missing = [
+            f"{connector}/{filename}"
+            for connector, filenames in recorder.EXPECTED_FIXTURES.items()
+            for filename in filenames
+            if not re.search(r"(_load\(|LIVE_FIXTURES_DIR\s*/\s*)\s*[\"']" + re.escape(filename), sources)
+        ]
+        assert not missing, f"fixtures no unit test replays: {missing}"
+
+    def test_committed_fixtures_carry_no_unredacted_identifiers(self):
+        email = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+        patterns = [
+            re.compile(p)
+            for p in (
+                r"\bBearer [A-Za-z0-9._-]{10,}",
+                r"\bxox[abpr]-",
+                r"\bya29\.",
+                r"\beyJ[A-Za-z0-9_-]{10,}",
+                r"\bsk-[A-Za-z0-9]{20,}",
+                r"\bghp_[A-Za-z0-9]{20,}",
+            )
+        ]
+        uuid_re = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+        allowed_uuids: set[str] = set()
+        problems = []
+        for path in sorted(recorder.FIXTURES_DIR.glob("**/*.json")):
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(recorder.FIXTURES_DIR)
+            for match in email.finditer(text):
+                if match.group(1).lower() != "example.com" and not match.group(1).lower().endswith(".example.com"):
+                    problems.append(f"{rel}: email domain {match.group(1)}")
+            if "@mail.gmail.com" in text:
+                problems.append(f"{rel}: @mail.gmail.com")
+            for pattern in patterns:
+                if pattern.search(text):
+                    problems.append(f"{rel}: matches {pattern.pattern}")
+            for match in uuid_re.finditer(text):
+                if match.group(0).lower() not in allowed_uuids:
+                    problems.append(f"{rel}: UUID {match.group(0)}")
+        assert not problems, problems
 
     def test_no_undocumented_fixture_files_are_silently_ignored(self):
         # The inverse direction: a fixture file sitting on disk that no
@@ -3214,6 +3662,96 @@ class TestLifecycleGrist:
 
     def test_registered_for_lifecycle(self):
         assert recorder.LIFECYCLE_CHECKS["grist"] is recorder.lifecycle_grist
+
+
+class TestLifecycleSalesforce:
+    @staticmethod
+    def _client():
+        client = MagicMock()
+        store: dict[str, dict] = {}
+
+        def create_record(object_type, fields):
+            store["001000000000001AAA"] = dict(fields)
+            return "001000000000001AAA"
+
+        def update_record(object_type, record_id, fields):
+            store[record_id].update(fields)
+
+        def create_records(object_type, records):
+            ids = [f"001000000000002AA{i}" for i in range(len(records))]
+            for i, rec in zip(ids, records, strict=True):
+                store[i] = dict(rec)
+            return ids
+
+        def update_records(object_type, records):
+            for rec in records:
+                store[rec["Id"]].update({k: v for k, v in rec.items() if k != "Id"})
+
+        client.describe_fields.return_value = [
+            SimpleNamespace(name="Subject", createable=True),
+            SimpleNamespace(name="Description", createable=True),
+        ]
+        client.create_record.side_effect = create_record
+        client.update_record.side_effect = update_record
+        client.create_records.side_effect = create_records
+        client.update_records.side_effect = update_records
+        client.get_record.side_effect = lambda ot, rid: SimpleNamespace(id=rid, fields=dict(store[rid]))
+        client.find_records.side_effect = lambda ot, key, keys, fields: [
+            {"Id": k, **store[k]} for k in keys
+        ]
+        return client, store
+
+    def test_creates_and_updates_tagged_records_and_never_deletes(self, monkeypatch):
+        client, store = self._client()
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+
+        result = recorder.lifecycle_salesforce({})
+
+        assert (result.connector, result.ok, result.cleanup_ok) == ("salesforce", True, None)
+        assert result.note == "create, get, update, batch create, find, batch update all verified"
+        assert len(store) == 3
+        assert all(v["Subject"].startswith(recorder.LIFECYCLE_TAG) for v in store.values())
+        assert store["001000000000001AAA"]["Description"] == "updated"
+        assert store["001000000000002AA0"]["Description"] == "batch updated"
+        assert client.create_record.call_args.args[0] == "Task"
+
+    def test_manifest_overrides_object_type_and_fields(self, monkeypatch):
+        client, store = self._client()
+        client.describe_fields.return_value = [SimpleNamespace(name="Name", createable=True)]
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+        manifest = {"salesforce": {
+            "lifecycle_object_type": "Note__c", "lifecycle_name_field": "Name",
+            "lifecycle_note_field": "Body__c",
+        }}
+
+        result = recorder.lifecycle_salesforce(manifest)
+
+        assert result.ok
+        assert client.create_record.call_args.args[0] == "Note__c"
+        assert store["001000000000001AAA"]["Body__c"] == "updated"
+
+    def test_a_failing_update_is_reported_with_its_error(self, monkeypatch):
+        client, _ = self._client()
+        client.update_record.side_effect = recorder.SalesforceClientError("update refused")
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+
+        result = recorder.lifecycle_salesforce({})
+
+        assert not result.ok and "update refused" in result.note
+        assert result.cleanup_ok is None
+
+    def test_name_field_that_cannot_be_created_fails_before_writing(self, monkeypatch):
+        client, _ = self._client()
+        client.describe_fields.return_value = [SimpleNamespace(name="Subject", createable=False)]
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+
+        result = recorder.lifecycle_salesforce({})
+
+        assert not result.ok and "Subject" in result.note
+        client.create_record.assert_not_called()
+
+    def test_registered_for_lifecycle(self):
+        assert recorder.LIFECYCLE_CHECKS["salesforce"] is recorder.lifecycle_salesforce
 
 
 # ---------------------------------------------------------------------------- #

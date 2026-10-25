@@ -2409,3 +2409,94 @@ class TestLiveFixtureParsing:
         assert alias.email
         if alias.signature_html:
             assert signature_plain_text(alias.signature_html).startswith("\n\n-- \n")
+
+
+class TestLabelNames:
+    @staticmethod
+    def _client(labels):
+        service = MagicMock()
+        service.users.return_value.labels.return_value.list.return_value.execute.return_value = {"labels": labels}
+        return make_client(service)
+
+    def test_maps_ids_to_names_in_order_and_drops_unknown_ids(self):
+        client = self._client([
+            {"id": "Label_1", "name": "Work", "type": "user"},
+            {"id": "Label_2", "name": "Proposed Archive", "type": "user"},
+        ])
+        assert client.label_names(["Label_2", "Gone", "Label_1"]) == ["Proposed Archive", "Work"]
+
+    def test_system_labels_are_dropped(self):
+        client = self._client([
+            {"id": "INBOX", "name": "INBOX", "type": "system"},
+            {"id": "UNREAD", "name": "UNREAD", "type": "system"},
+            {"id": "CATEGORY_PROMOTIONS", "name": "CATEGORY_PROMOTIONS", "type": "system"},
+            {"id": "Label_1", "name": "Work", "type": "user"},
+        ])
+        assert client.label_names(["INBOX", "UNREAD", "CATEGORY_PROMOTIONS", "Label_1"]) == ["Work"]
+
+
+class TestMessagesMatching:
+    @staticmethod
+    def _client(found_ids=(), error=None):
+        service = MagicMock()
+        listing = service.users.return_value.messages.return_value.list
+        if error is not None:
+            listing.return_value.execute.side_effect = error
+        else:
+            listing.return_value.execute.return_value = {"messages": [{"id": i} for i in found_ids]}
+        return make_client(service), listing
+
+    def test_returns_only_our_ids_that_the_search_found(self):
+        client, _ = self._client(found_ids=["m1"])
+        assert client.messages_matching("in:inbox", [("m1", "a@x.com"), ("m2", "b@x.com")]) == {"m1"}
+
+    def test_the_query_is_wrapped_and_joined_with_msgid_terms(self):
+        client, listing = self._client(found_ids=["m1", "m2"])
+        client.messages_matching("in:inbox -label:x", [("m1", "a@x.com"), ("m2", "b@x.com")])
+        listing.assert_called_once_with(
+            userId="me", q="(in:inbox -label:x) (rfc822msgid:a@x.com OR rfc822msgid:b@x.com)", maxResults=100,
+        )
+
+    @pytest.mark.parametrize("bad", ["a@x.com OR in:anywhere", "a b@x.com", "x) OR (in:anywhere@x.com", "", "no-at-sign", "a@x.com\n"])
+    def test_a_message_id_with_search_syntax_fails_closed(self, bad):
+        client, listing = self._client(found_ids=["m1"])
+        assert client.messages_matching("in:inbox", [("m1", "ok@x.com"), ("m2", bad)]) == set()
+        listing.assert_not_called()
+
+    def test_more_than_25_messages_fails_closed(self):
+        client, listing = self._client(found_ids=["m0"])
+        pairs = [(f"m{i}", f"id{i}@x.com") for i in range(26)]
+        assert client.messages_matching("in:inbox", pairs) == set()
+        listing.assert_not_called()
+        assert client.messages_matching("in:inbox", pairs[:25]) == {"m0"}
+
+    def test_blank_query_fails_closed(self):
+        client, listing = self._client(found_ids=["m1"])
+        assert client.messages_matching("   ", [("m1", "a@x.com")]) == set()
+        listing.assert_not_called()
+
+    def test_no_messages_fails_closed(self):
+        client, listing = self._client(found_ids=["m1"])
+        assert client.messages_matching("in:inbox", []) == set()
+        listing.assert_not_called()
+
+    def test_a_found_id_of_another_message_is_ignored(self):
+        client, _ = self._client(found_ids=["other"])
+        assert client.messages_matching("in:inbox", [("m1", "a@x.com")]) == set()
+
+    def test_api_error_raises_gmail_client_error(self):
+        client, _ = self._client(error=http_error(500, b'{"q": "secret-query a@x.com"}'))
+        with pytest.raises(GmailClientError) as info:
+            client.messages_matching("secret-query", [("m1", "a@x.com")])
+        assert str(info.value) == "messages_matching failed (HTTP 500)"
+        assert "secret-query" not in str(info.value) and "a@x.com" not in str(info.value)
+
+
+class TestRfc822Id:
+    def test_parse_message_strips_angle_brackets(self):
+        raw = {"id": "m1", "payload": {"headers": header_list(**{"Message-ID": "  <abc.123@mail.example.com> "})}}
+        assert make_client(MagicMock())._parse_message(raw).rfc822_id == "abc.123@mail.example.com"
+
+    def test_missing_header_is_empty(self):
+        raw = {"id": "m1", "payload": {"headers": header_list(Subject="x")}}
+        assert make_client(MagicMock())._parse_message(raw).rfc822_id == ""

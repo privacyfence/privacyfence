@@ -33,3 +33,19 @@ class TestRun:
 
         assert ok is True
         assert "PASS" in capsys.readouterr().out
+
+
+class TestMain:
+    def test_runs_the_sync_client_checks(self, monkeypatch, capsys):
+        # CI's `sync` job is a required check, so the pre-release script must run its commands.
+        commands: dict[str, list[str]] = {}
+
+        def fake_run(description, cmd, cwd):
+            commands[description] = cmd
+            return True
+
+        monkeypatch.setattr(pre_release_check, "run", fake_run)
+
+        assert pre_release_check.main() == 0
+        assert "sync tests" in commands
+        assert "sync/tests" in commands["sync tests"]

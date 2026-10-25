@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -262,6 +263,21 @@ class TestParseIssue:
         assert issue.url == "https://acme.atlassian.net/browse/ENG-1"
         assert issue.labels == ["urgent"]
 
+    def test_parse_issue_records_reporter_and_assignee_account_ids(self):
+        client = make_client()
+        raw = {"key": "ENG-1", "fields": {
+            "assignee": {"displayName": "Jane", "accountId": "acct-a"},
+            "reporter": {"displayName": "Bob", "accountId": "acct-r"},
+        }}
+        issue = client._parse_issue(raw)
+        assert issue.assignee_account_id == "acct-a"
+        assert issue.reporter_account_id == "acct-r"
+        assert "reporter_account_id" not in asdict(issue)
+        assert "assignee_account_id" not in asdict(issue)
+        unassigned = client._parse_issue({"key": "ENG-2", "fields": {"assignee": None}})
+        assert unassigned.assignee_account_id == ""
+        assert unassigned.reporter_account_id == ""
+
     def test_description_extracted_from_adf_when_requested(self):
         client = make_client()
         raw = {"key": "ENG-1", "fields": {
@@ -339,7 +355,7 @@ class TestTryRefresh:
                              lambda cid, cs, rt: {"access_token": "new-tok", "refresh_token": "new-rt"})
         token_file = str(tmp_path / "atlassian_token.json")
         client = make_client(
-            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "account_email": "me@x.com"},
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "account_email": "me@x.com", "account_id": "acct-1"},
             token_file=token_file,
         )
         monkeypatch.setattr(
@@ -354,7 +370,44 @@ class TestTryRefresh:
         assert saved == {
             "access_token": "new-tok", "refresh_token": "new-rt",
             "cloud_id": "cloud-1", "site_url": "https://acme.atlassian.net", "account_email": "me@x.com",
+            "account_id": "acct-1", "scopes": [],
         }
+
+    def test_refresh_keeps_the_account_id_from_disk_when_config_lacks_it(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(jira_client_module, "atlassian_refresh",
+                             lambda cid, cs, rt: {"access_token": "new-tok", "refresh_token": "new-rt"})
+        monkeypatch.setattr(
+            jira_client_module, "load_token_file",
+            lambda path: {"refresh_token": "rt", "account_id": "acct-disk"},
+        )
+        saved = {}
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saved.update(record))
+        client = make_client(
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt"},
+            token_file=str(tmp_path / "atlassian_token.json"),
+        )
+
+        client._try_refresh()
+
+        assert saved["account_id"] == "acct-disk"
+
+    def test_refresh_keeps_the_recorded_scopes(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(jira_client_module, "atlassian_refresh",
+                             lambda cid, cs, rt: {"access_token": "new-tok", "refresh_token": "new-rt"})
+        monkeypatch.setattr(
+            jira_client_module, "load_token_file",
+            lambda path: (_ for _ in ()).throw(AtlassianOAuthError("no file yet")),
+        )
+        saved = {}
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saved.update(record))
+        client = make_client(
+            {"client_id": "ci", "client_secret": "cs", "refresh_token": "rt", "scopes": ["read:cmdb-object:jira"]},
+            token_file=str(tmp_path / "atlassian_token.json"),
+        )
+
+        client._try_refresh()
+
+        assert saved["scopes"] == ["read:cmdb-object:jira"]
 
     def test_picks_up_refresh_token_already_rotated_by_confluence_client(self, monkeypatch, tmp_path):
         # Jira/Confluence share one token file; if Confluence refreshed first
@@ -447,6 +500,45 @@ class TestCheckConnection:
         client._client.myself.return_value = {"displayName": "Jane Doe"}
         assert client.check_connection() == "Jane Doe @ https://acme.atlassian.net"
 
+    def test_check_connection_records_the_account_id(self):
+        client = make_client()
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+        client.check_connection()
+        assert client.account_id == "acct-1"
+
+    def test_check_connection_persists_a_missing_account_id(self, monkeypatch, tmp_path):
+        on_disk = {"access_token": "disk-tok", "refresh_token": "disk-rt", "cloud_id": "cloud-1", "scopes": ["s"]}
+        saved = {}
+        monkeypatch.setattr(jira_client_module, "load_token_file", lambda path: on_disk)
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saved.update(record))
+        client = make_client(token_file=str(tmp_path / "t.json"))
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+
+        client.check_connection()
+
+        assert saved == {**on_disk, "account_id": "acct-1"}
+
+    def test_check_connection_does_not_rewrite_an_unchanged_account_id(self, monkeypatch, tmp_path):
+        saves = []
+        monkeypatch.setattr(jira_client_module, "save_token_file", lambda path, record: saves.append(record))
+        client = make_client({"account_id": "acct-1"}, token_file=str(tmp_path / "t.json"))
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+
+        client.check_connection()
+
+        assert saves == []
+
+    def test_check_connection_survives_a_failed_account_id_save(self, monkeypatch, tmp_path):
+        def failing_save(path, record):
+            raise OSError("disk full")
+        monkeypatch.setattr(jira_client_module, "load_token_file", lambda path: {"refresh_token": "rt"})
+        monkeypatch.setattr(jira_client_module, "save_token_file", failing_save)
+        client = make_client(token_file=str(tmp_path / "t.json"))
+        client._client.myself.return_value = {"displayName": "Jane Doe", "accountId": "acct-1"}
+
+        assert client.check_connection() == "Jane Doe @ https://acme.atlassian.net"
+        assert client.account_id == "acct-1"
+
     def test_error_becomes_jira_client_error(self):
         client = make_client()
         client._client.myself.side_effect = RuntimeError("boom")
@@ -466,6 +558,23 @@ class TestListProjects:
         client._client.projects.side_effect = RuntimeError("boom")
         with pytest.raises(JiraClientError, match="list_projects failed"):
             client.list_projects()
+
+
+class TestGetProject:
+    def test_reads_one_project_by_key(self):
+        client = make_client()
+        client._client.project.return_value = {"key": "VWHCM", "name": "VWHCM"}
+        assert client.get_project("VWHCM").name == "VWHCM"
+        client._client.project.assert_called_once_with("VWHCM")
+
+    def test_a_404_stays_the_errors_cause(self):
+        client = make_client()
+        error = RuntimeError("404 Not Found")
+        error.response = SimpleNamespace(status_code=404)
+        client._client.project.side_effect = error
+        with pytest.raises(JiraClientError, match="get_project failed") as info:
+            client.get_project("GONE")
+        assert info.value.__cause__ is error
 
 
 STORY_POINTS = {
@@ -1326,3 +1435,61 @@ class TestResolveFields:
         assert JiraClient.extra_field_keys([sprint1, sprint2, points]) == [
             "Sprint (customfield_1)", "Sprint (customfield_2)", "Story Points",
         ]
+
+
+class TestPersonalDataReporting:
+    """Jira lookups and the connection check give the shared directory its chance to report the
+    cached accounts to Atlassian (ADR 0202)."""
+
+    def _spy(self, client: JiraClient) -> MagicMock:
+        spy = MagicMock()
+        client._users.report_soon = spy
+        return spy
+
+    def test_check_connection_reports(self):
+        client = make_client()
+        client._client.myself.return_value = {"displayName": "Jane Doe"}
+        spy = self._spy(client)
+        client.check_connection()
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_failed_connection_check_does_not_report(self):
+        client = make_client()
+        client._client.myself.side_effect = RuntimeError("down")
+        spy = self._spy(client)
+        with pytest.raises(JiraClientError):
+            client.check_connection()
+        spy.assert_not_called()
+
+    def test_resolve_user_names_reports(self, monkeypatch):
+        fake_bulk(monkeypatch, {JANE_ID: "Jane Doe"})
+        client = make_client()
+        spy = self._spy(client)
+        assert client.resolve_user_names([JANE_ID]) == {JANE_ID: "Jane Doe"}
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_find_users_reports(self, monkeypatch):
+        monkeypatch.setattr(
+            "privacyfence.atlassian_users.search_users",
+            lambda *a: [AtlassianUser(JANE_ID, "Jane Doe")],
+        )
+        client = make_client()
+        spy = self._spy(client)
+        client.find_users("jane")
+        spy.assert_called_once_with(client._report_accounts)
+
+    def test_report_refreshes_an_expired_token_once(self, monkeypatch):
+        outcome = jira_client_module.ReportOutcome({}, None)
+        calls = []
+
+        def report(session, accounts):
+            calls.append((session, accounts))
+            if len(calls) == 1:
+                raise unauthorized_error()
+            return outcome
+
+        monkeypatch.setattr("privacyfence.atlassian_users.report_accounts", report)
+        client = make_client()
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+        assert client._report_accounts([(JANE_ID, None)]) is outcome
+        assert len(calls) == 2 and calls[0][0] is client._session

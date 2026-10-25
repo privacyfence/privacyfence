@@ -18,7 +18,7 @@
       "total": 0
     },
     "components": [],
-    "created": "2026-07-16T12:07:38.596+0200",
+    "created": "2026-09-11T13:55:25.690+0200",
     "creator": {
       "accountId": "qa-placeholder-account-id",
       "accountType": "atlassian",
@@ -34,16 +34,25 @@
       "self": "https://example.com/qa-placeholder",
       "timeZone": "Europe/Budapest"
     },
+    "customfield_10000": "{}",
     "customfield_10001": null,
     "customfield_10015": null,
-    "customfield_10019": "0|i0004v:",
+    "customfield_10019": "0|i0002v:",
     "customfield_10021": null,
-    "customfield_10073": null,
+    "customfield_10026": null,
     "description": {
       "content": [
         {
+          "attrs": {
+            "localId": "54a227548195"
+          },
           "content": [
             {
+              "marks": [
+                {
+                  "type": "code"
+                }
+              ],
               "text": "Synthetic PrivacyFence QA test issue. No real information. Safe to comment on, update, or transition by any automated test.",
               "type": "text"
             }
@@ -63,21 +72,21 @@
       "shouldDisplay": true
     },
     "issuetype": {
-      "avatarId": 10318,
-      "description": "A small, distinct piece of work.",
-      "entityId": "4633c0de-4f6f-472d-98f8-2eb4361d642f",
+      "avatarId": 10303,
+      "description": "",
+      "entityId": "qa-placeholder-entity-id",
       "hierarchyLevel": 0,
       "iconUrl": "https://example.com/qa-placeholder",
-      "id": "qa-placeholder-id-3",
-      "name": "Task",
+      "id": "qa-placeholder-id-1",
+      "name": "Bug",
       "self": "https://example.com/qa-placeholder",
       "subtask": false
     },
     "labels": [],
-    "lastViewed": null,
+    "lastViewed": "2026-10-13T12:40:29.337+0200",
     "priority": {
       "iconUrl": "https://example.com/qa-placeholder",
-      "id": "qa-placeholder-id-8",
+      "id": "qa-placeholder-id-7",
       "name": "Medium",
       "self": "https://example.com/qa-placeholder"
     },
@@ -92,8 +101,8 @@
         "32x32": "https://example.com/qa-placeholder",
         "48x48": "https://example.com/qa-placeholder"
       },
-      "id": "qa-placeholder-id-4",
-      "key": "qa-placeholder-id-5",
+      "id": "qa-placeholder-id-3",
+      "key": "qa-placeholder-id-4",
       "name": "PrivacyFence QA Test",
       "projectTypeKey": "software",
       "self": "https://example.com/qa-placeholder",
@@ -120,32 +129,32 @@
     "status": {
       "description": "",
       "iconUrl": "https://example.com/qa-placeholder",
-      "id": "qa-placeholder-id-9",
+      "id": "qa-placeholder-id-8",
       "name": "To Do",
       "self": "https://example.com/qa-placeholder",
       "statusCategory": {
         "colorName": "blue-gray",
-        "id": "qa-placeholder-id-6",
-        "key": "qa-placeholder-id-7",
+        "id": "qa-placeholder-id-5",
+        "key": "qa-placeholder-id-6",
         "name": "To Do",
         "self": "https://example.com/qa-placeholder"
       }
     },
     "statusCategory": {
       "colorName": "blue-gray",
-      "id": "qa-placeholder-id-6",
-      "key": "qa-placeholder-id-7",
+      "id": "qa-placeholder-id-5",
+      "key": "qa-placeholder-id-6",
       "name": "To Do",
       "self": "https://example.com/qa-placeholder"
     },
-    "statuscategorychangedate": "2026-07-16T12:07:39.379+0200",
+    "statuscategorychangedate": "2026-09-11T13:55:26.419+0200",
     "subtasks": [],
     "summary": "PrivacyFence QA seed issue [QATEST]",
     "timeestimate": null,
     "timeoriginalestimate": null,
     "timespent": null,
     "timetracking": {},
-    "updated": "2026-07-16T12:07:38.845+0200",
+    "updated": "2026-09-11T13:55:48.305+0200",
     "versions": [],
     "votes": {
       "hasVoted": false,

@@ -8,6 +8,8 @@ on:
       - "docs/images/**"
       - "scripts/build_site.py"
       - "scripts/r2_release.py"
+      - "scripts/site_security_headers.py"
+      - "scripts/check_site_headers.py"
       - "requirements/docs.lock.txt"
       - "src/privacyfence/resources/icon_512.png"
       - ".github/workflows/pages.yml"
@@ -100,3 +102,11 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      # Cloudflare, not this repository, sends the security headers; this fails the run when the
+      # live site's differ from scripts/site_security_headers.py (docs/adr/0053).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the security headers
+        run: python3 scripts/check_site_headers.py https://privacyfence.eu

@@ -35,12 +35,15 @@ named one specific file by id rather than a folder), `apps_script.project` (Apps
 no scope at all), `grist.document` (Grist's seven operation keys name one document by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
 make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
 Auto-accept Settings page; see their own comment below for why they are not simply more
-`always_allow` rules.
+`always_allow` rules. `slack.mentions_of_me` (thread replies), `slack.mentions_of_me_all_results` (searches) and
+`slack.direct_messages_to_me` read arguments the Slack
+connector computes (`own_user_id`, `is_one_to_one_dm`, `is_member`, `all_results_in_my_conversations`) and so resolve from the fetched item.
 
 ``policy.engine.evaluate``/``preflight`` are what consume this module in production.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
@@ -144,8 +147,8 @@ def _i_am_organizer_matches(_value: Any, ctx: ReviewContext) -> bool:
 
 def _i_am_author_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
-    author = (raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")) or ""
-    return bool(ctx.my_email) and ctx.my_email.lower() in author.lower()
+    author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")
+    return bool(ctx.my_account_id) and (author or "") == ctx.my_account_id
 
 
 def _approved_space_keys_matches(value: Any, ctx: ReviewContext) -> bool:
@@ -291,16 +294,44 @@ def _approved_project_keys_all_results_matches(value: Any, ctx: ReviewContext) -
     return bool(keys) and all("-" in k and k.rsplit("-", 1)[0].upper() in allowed for k in keys)
 
 
+# ── Assets ────────────────────────────────────────────────────────────────────────────────────
+
+
+def _assets_raw_items(ctx: ReviewContext) -> list[Any]:
+    return ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+
+
+def _approved_schema_ids_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    allowed = {str(v) for v in _values_of(value)}
+    items = _assets_raw_items(ctx)
+    if len(items) != 1:
+        return False
+    schema_id = str(getattr(items[0], "schema_id", "") or "")
+    return bool(schema_id) and schema_id in allowed
+
+
+def _approved_schema_ids_all_results_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    allowed = {str(v) for v in _values_of(value)}
+    if not isinstance(ctx.raw_data, list):
+        return False
+    ids = [str(getattr(i, "schema_id", "") or "") for i in ctx.raw_data]
+    return bool(ids) and all(i and i in allowed for i in ids)
+
+
 def _i_am_reporter_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
-    reporter = (raw.get("reporter") if isinstance(raw, dict) else getattr(raw, "reporter", "")) or ""
-    return bool(ctx.my_email) and ctx.my_email.lower() in reporter.lower()
+    reporter_id = raw.get("reporter_account_id") if isinstance(raw, dict) else getattr(raw, "reporter_account_id", "")
+    return bool(ctx.my_account_id) and (reporter_id or "") == ctx.my_account_id
 
 
 def _i_am_assignee_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
-    assignee = (raw.get("assignee") if isinstance(raw, dict) else getattr(raw, "assignee", "")) or ""
-    return bool(ctx.my_email) and ctx.my_email.lower() in assignee.lower()
+    assignee_id = raw.get("assignee_account_id") if isinstance(raw, dict) else getattr(raw, "assignee_account_id", "")
+    return bool(ctx.my_account_id) and (assignee_id or "") == ctx.my_account_id
 
 
 # ── Salesforce ────────────────────────────────────────────────────────────────────────────────
@@ -475,6 +506,14 @@ SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         predicate="approved_project_keys_all_results", scope_type="jira.project", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.FETCHED, matches=_approved_project_keys_all_results_matches,
     ),
+    "approved_schema_ids": ScopeSelector(
+        predicate="approved_schema_ids", scope_type="assets.schema", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_approved_schema_ids_matches,
+    ),
+    "approved_schema_ids_all_results": ScopeSelector(
+        predicate="approved_schema_ids_all_results", scope_type="assets.schema", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_approved_schema_ids_all_results_matches,
+    ),
     "i_am_reporter": ScopeSelector(
         predicate="i_am_reporter", scope_type="jira.my_issues", kind=ScopeKind.ATTRIBUTE,
         resolves_from=ResolvesFrom.FETCHED, matches=_i_am_reporter_matches,
@@ -579,6 +618,68 @@ def _anything_matches(_value: Any, _ctx: ReviewContext) -> bool:
     return True
 
 
+def _one_to_one_dm_matches(_value: Any, ctx: ReviewContext) -> bool:
+    return ctx.args.get("is_one_to_one_dm") is True
+
+
+def _mention_flags(ctx: ReviewContext) -> list[bool] | None:
+    """One flag per fetched message: whether it mentions the signed-in user. ``None`` when the
+    user id is unknown or the fetched item is missing or holds a ``None``."""
+    own = ctx.args.get("own_user_id")
+    if not isinstance(own, str) or not own:
+        return None
+    messages = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    if not messages or any(m is None for m in messages):
+        return None
+    pattern = re.compile(r"<@" + re.escape(own) + r"(?:\|[^>]*)?>")
+    return [bool(pattern.search(getattr(m, "text", "") or "")) for m in messages]
+
+
+def _mentions_of_me_matches(_value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool != "slack_get_thread_replies":
+        return False
+    flags = _mention_flags(ctx)
+    return flags is not None and any(flags)
+
+
+def _mentions_of_me_all_results_matches(_value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool != "slack_search_messages":
+        return False
+    flags = _mention_flags(ctx)
+    return flags is not None and all(flags)
+
+
+_MY_CONVERSATION_READ_TOOLS = frozenset({"slack_get_channel_history", "slack_get_thread_replies"})
+
+
+def _my_conversations_matches(value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool not in _MY_CONVERSATION_READ_TOOLS or ctx.args.get("is_member") is not True:
+        return False
+    channel_id = ctx.args.get("channel_id", "") or ""
+    return bool(channel_id) and channel_id not in set(_values_of(value))
+
+
+def _my_conversations_all_results_matches(value: Any, ctx: ReviewContext) -> bool:
+    if ctx.tool != "slack_search_messages":
+        return False
+    if ctx.args.get("member_only") is not True or ctx.args.get("all_results_in_my_conversations") is not True:
+        return False
+    messages = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    if any(m is None for m in messages):
+        return False
+    excluded = set(_values_of(value))
+    return all(getattr(m, "channel_id", "") not in excluded for m in messages)
+
+
+def _gmail_query_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    matched = ctx.args.get("matching_queries")
+    if not isinstance(matched, list):
+        return False
+    return any(q in matched for q in _values_of(value))
+
+
 NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.file": ScopeSelector(
         predicate="drive.file", scope_type="drive.file", kind=ScopeKind.IDENTITY,
@@ -603,5 +704,35 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "slack.anything": ScopeSelector(
         predicate="slack.anything", scope_type="slack.anything", kind=ScopeKind.ATTRIBUTE,
         resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
+    ),
+    "slack.direct_messages_to_me": ScopeSelector(
+        predicate="slack.direct_messages_to_me", scope_type="slack.direct_messages_to_me",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_one_to_one_dm_matches,
+    ),
+    "slack.mentions_of_me": ScopeSelector(
+        predicate="slack.mentions_of_me", scope_type="slack.mentions_of_me",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_mentions_of_me_matches,
+    ),
+    "slack.mentions_of_me_all_results": ScopeSelector(
+        predicate="slack.mentions_of_me_all_results", scope_type="slack.mentions_of_me",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_mentions_of_me_all_results_matches,
+    ),
+    "slack.my_conversations": ScopeSelector(
+        predicate="slack.my_conversations", scope_type="slack.my_conversations",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_my_conversations_matches,
+    ),
+    "slack.my_conversations_all_results": ScopeSelector(
+        predicate="slack.my_conversations_all_results", scope_type="slack.my_conversations",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.FETCHED,
+        matches=_my_conversations_all_results_matches,
+    ),
+    # The connector evaluates the query with Gmail itself and passes the matching rule values.
+    "gmail.query": ScopeSelector(
+        predicate="gmail.query", scope_type="gmail.query", kind=ScopeKind.ATTRIBUTE,
+        resolves_from=ResolvesFrom.FETCHED, matches=_gmail_query_matches,
     ),
 }

@@ -40,11 +40,11 @@ position across that re-render.
 """
 from __future__ import annotations
 
-import json
 import secrets
 from typing import Any
 
 from .design_css import DOCUMENT_CSS
+from .html_embed import json_for_script
 from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 
 # The settings page is built from the shared design system (resources/design/, ADR 0078/0079),
@@ -180,7 +180,8 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-st-chip { cursor: default; }
 /* Rule picker: one rule per line; a rule with long verbs wraps and grows taller instead of overflowing. */
 .pf-st-rules { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
-.pf-st-rules .pf-chip {
+/* Tool picker: the status text can list many rule titles, so the chip wraps instead of running off the page. */
+.pf-st-rules .pf-chip, .pf-chip.pf-st-tool {
   max-width: 100%; box-sizing: border-box; white-space: normal; justify-content: flex-start; text-align: left;
   padding: var(--space-2xs) 14px; line-height: 1.4; overflow-wrap: anywhere; border-radius: var(--radius-s);
 }
@@ -218,6 +219,12 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-aa-usage-stale { color: var(--warning); font-weight: 650; }
 .pf-aa-usage-stale::before { content: "\\26A0\\FE0E  "; }
 .pf-aa-row { gap: var(--space-2xs); }
+/* A resource value by name or id. Pending (no lookup finished yet) is muted; invalid (a live lookup
+   found no such resource, most likely deleted) is red with a marker, so it never rests on colour alone. */
+.pf-val-pending { color: var(--muted); }
+.pf-val-invalid { color: var(--danger); }
+.pf-val-invalid::before { content: "\\26A0\\FE0E\\00a0"; }
+.pf-val-legend { font-size: var(--step-small); color: var(--danger); }
 
 /* ---- Copy-ID toast (right-click a grant row -- see data-copy-id) ---- */
 .pf-copy-toast {
@@ -243,7 +250,7 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-audit-logfile { font-size: 13px; color: var(--ink-soft); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .pf-list { padding: 0; overflow: hidden; }
 .pf-audit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--space-xs); padding: 12px var(--space-s); }
-.pf-audit-row + .pf-audit-row, .pf-agents-row + .pf-agents-row { border-top: 1px solid var(--line); }
+.pf-audit-row + .pf-audit-row { border-top: 1px solid var(--line); }
 /* Who asked, with its tier -- agent_label.py's wording, the approval list's tiers. On its own
    line when narrow; a fixed column beside the rest from 900 px up. */
 .pf-audit-agent { flex: 1 1 100%; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-soft); min-width: 0; }
@@ -261,12 +268,14 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
   .pf-audit-connector { width: 80px; }
   .pf-audit-time { width: 70px; text-align: right; }
 }
-/* The admin's AI-system pin page (ADR 0035 decision 3). */
-.pf-agents-row { padding: 12px var(--space-s); display: flex; flex-direction: column; gap: 4px; }
-.pf-agents-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px var(--space-xs); }
-.pf-agents-name { font-size: var(--step-body); font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
-.pf-agents-meta { font-size: 13px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
-.pf-agents-controls { display: flex; flex-wrap: wrap; gap: var(--space-2xs); align-items: center; margin-top: 6px; font-size: var(--step-small); color: var(--ink-soft); }
+/* The admin's Stats page (ADR 0217). */
+.pf-stats-tiles { --min: 160px; --grid-gap: var(--space-xs); }
+.pf-stat-value { font-size: var(--step-h3); font-weight: 750; color: var(--ink); font-variant-numeric: tabular-nums; }
+.pf-stat-label { font-size: var(--step-small); color: var(--ink-soft); margin-top: 2px; }
+.pf-stats-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px var(--space-xs); padding: 12px var(--space-s); }
+.pf-stats-row + .pf-stats-row { border-top: 1px solid var(--line); }
+.pf-stats-name { font-size: var(--step-body); font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.pf-stats-count { font-size: var(--step-small); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
 /* ---- About ---- */
 .pf-about-page { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding-block: var(--space-l); }
@@ -314,8 +323,9 @@ _JS = r"""
   // (ADR 0032).
   var CAPS = window.__pfCapabilities || {
     mode: 'local', is_admin: false,
-    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
+    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, stats: false, about: true },
     not_applicable_actions: [],
+    personalTransfer: false,
   };
 
   function notApplicable(action) {
@@ -338,7 +348,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
-    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stDuplicateOf: null,
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stPersonalDataReads: false, stDuplicateOf: null,
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -463,7 +473,7 @@ _JS = r"""
 
   var NAV_ITEMS = [
     ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['scoped_tokens', 'Scoped tokens'], ['auto_accept', 'Auto-accept'],
-    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
+    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['stats', 'Stats'], ['about', 'About'],
   ];
 
   // A tabstrip (app.css) above the content when the page is narrow, a
@@ -736,8 +746,8 @@ _JS = r"""
     html += '<div class="pf-row-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
       'real accounts (Gmail, Drive, Slack, and similar) -- it governs access to them, it does not provide them ' +
       'itself. Nothing is governed until at least one connector below is authenticated. If your IT team gave ' +
-      'you an organization config bundle, install it first from the General page; otherwise authenticate a ' +
-      'connector directly below, then go back to Claude.</div></div>';
+      'you an organization config bundle, install it first from the General page; only the connectors it ' +
+      'enables are listed. Authenticate one below, then go back to Claude.</div></div>';
     html += '<div class="pf-banner-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
       'data-dismiss-welcome="1">✕</div>';
     html += '</div></div>';
@@ -750,6 +760,11 @@ _JS = r"""
     html += '<div class="pf-page-subtitle">Authenticate a connector to let Claude access it, subject to approval and policy. ' +
       'Signing in opens a browser window on the machine running PrivacyFence -- not necessarily this device.</div>';
     html += renderWelcomeBanner(state);
+    if (!state.connectors.length) {
+      html += '<div class="card"><div class="pf-row-title">No connectors are enabled</div>' +
+        '<div class="pf-row-desc">Connectors appear here once your organization config enables them. ' +
+        'Install it from the General page.</div></div>';
+    }
     html += '<div class="pf-connector-list">';
     var gristSignin = state.grist_signin || 'unavailable';
     var gristAuth = state.grist_auth || { error: '' };
@@ -820,6 +835,54 @@ _JS = r"""
   // has, answering "which of my rules have never matched".
   // -------------------------------------------------------------------- //
 
+  // A rule's resource values (a Drive folder, a Jira project, ...) by name or by id: one choice for
+  // the Auto-accept and Scoped tokens pages, remembered in this browser when it lets us.
+  function readShowIds() {
+    try { return window.localStorage.getItem('pf-show-ids') === '1'; } catch (err) { return false; }
+  }
+  function writeShowIds(on) {
+    try { window.localStorage.setItem('pf-show-ids', on ? '1' : '0'); } catch (err) { /* per-viewer convenience only */ }
+  }
+  ui.showIds = readShowIds();
+
+  function valueLabel(item) {
+    return ui.showIds ? item.id : (item.name || item.short_id);
+  }
+
+  function valueHtml(item) {
+    var cls = item.status === 'invalid' ? ' pf-val-invalid' : (item.status === 'pending' ? ' pf-val-pending' : '');
+    var title = item.status === 'invalid' ? ' title="Not found -- it may have been deleted"' : '';
+    return '<span class="pf-val' + cls + '"' + title + '>' + esc(valueLabel(item)) + '</span>';
+  }
+
+  // `parts` is the text before and after the value, `items` the value itself; either missing falls
+  // back to `text`, the ready-made by-name rendering.
+  function withValuesHtml(parts, items, text) {
+    if (!parts || !items || !items.length) { return esc(text); }
+    return esc(parts[0]) + items.map(valueHtml).join(', ') + esc(parts[1]);
+  }
+
+  function withValuesText(parts, items, text) {
+    if (!parts || !items || !items.length) { return text; }
+    return parts[0] + items.map(valueLabel).join(', ') + parts[1];
+  }
+
+  function anyInvalidValue(rules) {
+    return rules.some(function (r) {
+      return (r.value_items || []).some(function (item) { return item.status === 'invalid'; });
+    });
+  }
+
+  function showIdsToggleHtml() {
+    return '<div class="pf-chip' + (ui.showIds ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
+      (ui.showIds ? 'true' : 'false') + '" aria-label="Show ids instead of names" data-show-ids-toggle="1">Show IDs</div>';
+  }
+
+  function invalidLegendHtml(rules) {
+    return anyInvalidValue(rules)
+      ? '<div class="pf-val-legend" role="status">Shown in red: not found, it may have been deleted.</div>' : '';
+  }
+
   // A verb's family as a badge: read is the accent, send a warning,
   // destructive a danger; the verb's own name is always the text.
   var VERB_BADGE = { read: 'badge-accent', write: '', send: 'badge-warning', destructive: 'badge-danger' };
@@ -889,6 +952,15 @@ _JS = r"""
     html += '<h1 class="pf-page-title">Auto-accept</h1>';
     html += '<div class="pf-page-subtitle">Every standing rule that lets Claude act without asking first, across every connector -- what a rule actually unblocks is shown before you add it, and again on its own row below.</div>';
 
+    if (CAPS.personalTransfer) {
+      html += '<div class="card pf-card pf-personal-transfer"><h2 class="pf-row-title">' + esc('Move your settings') + '</h2>';
+      html += '<div class="pf-page-subtitle">' + esc('Export your always-allow rules and your step-up level to a file, or bring them in from another PrivacyFence install. Importing only adds; it never removes or narrows anything.') + '</div>';
+      html += '<div class="pf-modal-buttons">';
+      html += '<div class="button" role="button" tabindex="0" aria-label="Export your settings" data-pf-personal-export="1">' + esc('Export…') + '</div>';
+      html += '<div class="button" role="button" tabindex="0" aria-label="Import your settings" data-pf-personal-import="1">' + esc('Import…') + '</div>';
+      html += '</div></div>';
+    }
+
     html += '<div class="pf-chips pf-aa-filterbar">';
     html += '<input type="text" class="field pf-aa-search" placeholder="Filter by connector, tool, or value…" aria-label="Filter rules" value="' +
       esc(ui.aaSearch) + '" data-aa-search="1"/>';
@@ -904,13 +976,16 @@ _JS = r"""
         (active ? 'true' : 'false') + '" aria-label="Filter to ' + esc(fam) + ' rules" data-aa-family-filter="' +
         fam + '">' + esc(fam) + '</div>';
     });
+    html += showIdsToggleHtml();
     html += '</div>';
+    html += invalidLegendHtml(aa.rules);
 
     var rows = aa.rules.filter(function (r) {
       if (connFilter.length && connFilter.indexOf(r.connector) === -1) return false;
       if (famFilter.length && !r.verbs.some(function (v) { return famFilter.indexOf(v.family) !== -1; })) return false;
       if (!search) return true;
-      var haystack = (r.sentence + ' ' + r.connector + ' ' + r.covered_tools.join(' ') + ' ' + r.value_ids.join(' ')).toLowerCase();
+      var haystack = (r.sentence + ' ' + r.connector + ' ' + r.covered_tools.join(' ') + ' ' + r.value_ids.join(' ') + ' ' +
+        (r.value_items || []).map(function (item) { return item.name || ''; }).join(' ')).toLowerCase();
       return haystack.indexOf(search) !== -1;
     });
 
@@ -924,7 +999,7 @@ _JS = r"""
       var copyAttr = r.value_ids.length ? ' data-copy-id="' + esc(r.value_ids.join(', ')) +
         '" title="' + esc(r.value_ids.join(', ')) + ' -- right-click to copy"' : '';
       html += '<div class="card pf-card pf-aa-row"' + copyAttr + '>';
-      html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + esc(r.sentence) + '</div>';
+      html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + withValuesHtml(r.sentence_parts, r.value_items, r.sentence) + '</div>';
       html += '<div class="pf-aa-verbs">' + verbChipsHtml(r.verbs) + '</div></div>';
       html += '<div class="pf-aa-links">';
       html += '<div class="pf-link" role="button" tabindex="0" aria-expanded="' + (isExpanded ? 'true' : 'false') +
@@ -973,9 +1048,10 @@ _JS = r"""
       html += '<option value="' + esc(g.id) + '"' + (g.id === ui.aaGroup ? ' selected' : '') + '>' + esc(g.label) + '</option>';
     });
     html += '</select></label>';
-    if (group && group.needs_value) {
+    if (group && (group.needs_value || group.value_optional)) {
       html += '<input type="text" class="field pf-input-mono" placeholder="' + esc(group.value_hint) +
-        '" aria-label="Value (comma-separated for more than one)" value="' + esc(ui.aaValue) + '" data-aa-value="1"/>';
+        '" aria-label="' + (group.needs_value ? 'Value (comma-separated for more than one)' : 'Value, optional (comma-separated for more than one)') +
+        '" value="' + esc(ui.aaValue) + '" data-aa-value="1"/>';
     }
     if (group) {
       html += '<div class="pf-chips pf-caps-row">';
@@ -1145,56 +1221,56 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
-  // AI systems (org mode, admin only -- ADR 0035 decision 3)
+  // Stats (org mode, admin only -- ADR 0217)
   // -------------------------------------------------------------------- //
 
-  function renderAgents(state) {
-    var agents = state.agents || { clients: [], stale_pins: [], registry: [] };
-    var html = '<div class="pf-page">';
-    html += '<h1 class="pf-page-title">AI systems</h1>';
-    html += '<div class="pf-page-subtitle">Every OAuth client registered with this server names itself — anything that can reach the server can register as "ChatGPT". Pin a registration you have checked to the AI system it really is: only a pinned client is shown as verified, and a pin never moves to another registration.</div>';
+  function plural(n, one, many) {
+    return n + ' ' + (n === 1 ? one : many);
+  }
 
-    html += '<h2 class="pf-group-title">Registered clients</h2>';
-    html += '<div class="card pf-list pf-agents-list">';
-    if (agents.clients.length === 0) {
-      html += '<div class="pf-agents-row"><div class="pf-agents-meta">No OAuth clients are registered yet.</div></div>';
-    }
-    agents.clients.forEach(function (c) {
-      html += '<div class="pf-agents-row" data-agent-client="' + esc(c.client_id) + '">';
-      html += '<div class="pf-agents-head"><div class="pf-agents-name">' +
-        (c.client_name ? 'Registered as \u201c' + esc(c.client_name) + '\u201d' : 'No name registered') + '</div>';
-      html += '<div class="pf-agents-meta">last used ' + esc(c.last_used) + '</div></div>';
-      html += '<div class="pf-agents-meta">' + esc(c.client_id) + '</div>';
-      html += '<div class="pf-agents-controls">';
-      if (c.pinned_agent_id) {
-        html += '<span>Pinned to <strong>' + esc(c.pinned_agent_name) + '</strong></span>';
-        html += '<div class="button secondary" role="button" tabindex="0" aria-label="Unpin" ' +
-          dataAttr('unpin_agent_client', { client_id: c.client_id }) + '>Unpin</div>';
-      } else {
-        html += '<span>Not verified. Pin to:</span>';
-        agents.registry.forEach(function (r) {
-          html += '<div class="button secondary" role="button" tabindex="0" aria-label="Pin to ' + esc(r.name) + '" ' +
-            dataAttr('pin_agent_client', { client_id: c.client_id, agent_id: r.id }) + '>' + esc(r.name) + '</div>';
-        });
-      }
-      html += '</div></div>';
+  function renderStats(state) {
+    var stats = state.stats || {
+      users: { total: 0, with_connectors: 0, with_rules: 0 }, connectors: [], rules: { total: 0, by_connector: [] },
+    };
+    var html = '<div class="pf-page">';
+    html += '<h1 class="pf-page-title">Stats</h1>';
+    html += '<div class="pf-page-subtitle">How this server is used, counted from every user who has signed in. Counts only: no user, rule value or credential is shown here.</div>';
+
+    html += '<h2 class="pf-group-title">Users</h2>';
+    html += '<div class="grid-auto pf-stats-tiles">';
+    [
+      [stats.users.total, 'signed in'],
+      [stats.users.with_connectors, 'connected a service'],
+      [stats.users.with_rules, 'keep an auto-accept rule'],
+    ].forEach(function (tile) {
+      html += '<div class="card pf-stat" data-stat-tile><div class="pf-stat-value">' + esc(String(tile[0])) +
+        '</div><div class="pf-stat-label">' + esc(tile[1]) + '</div></div>';
     });
     html += '</div>';
 
-    if (agents.stale_pins.length > 0) {
-      html += '<h2 class="pf-group-title">Stale pins</h2>';
-      html += '<div class="pf-page-subtitle">These registrations were removed after going unused. Their pins no longer apply to anything; a client that registers again is a new registration and starts unverified.</div>';
-      html += '<div class="card pf-list pf-agents-list">';
-      agents.stale_pins.forEach(function (p) {
-        html += '<div class="pf-agents-row" data-agent-stale-pin="' + esc(p.client_id) + '">';
-        html += '<div class="pf-agents-head"><div class="pf-agents-name">' + esc(p.agent_name) + '</div></div>';
-        html += '<div class="pf-agents-meta">' + esc(p.client_id) + '</div>';
-        html += '<div class="pf-agents-controls"><div class="button secondary" role="button" tabindex="0" aria-label="Remove pin" ' +
-          dataAttr('unpin_agent_client', { client_id: p.client_id }) + '>Remove pin</div></div>';
-        html += '</div>';
-      });
-      html += '</div>';
+    html += '<h2 class="pf-group-title">Connectors</h2>';
+    html += '<div class="card pf-list pf-stats-list">';
+    if (stats.connectors.length === 0) {
+      html += '<div class="pf-stats-row"><div class="pf-stats-count">This organization offers no connectors yet.</div></div>';
     }
+    stats.connectors.forEach(function (c) {
+      html += '<div class="pf-stats-row" data-stat-connector="' + esc(c.service) + '">';
+      html += '<div class="pf-stats-name">' + esc(c.label) + (c.configured ? '' : ' <span class="badge">no longer offered</span>') + '</div>';
+      html += '<div class="pf-stats-count">' + esc(plural(c.users, 'user', 'users')) + ' connected</div></div>';
+    });
+    html += '</div>';
+
+    html += '<h2 class="pf-group-title">Auto-accept rules</h2>';
+    html += '<div class="card pf-list pf-stats-list">';
+    html += '<div class="pf-stats-row" data-stat-rules-total><div class="pf-stats-name">All connectors</div>' +
+      '<div class="pf-stats-count">' + esc(plural(stats.rules.total, 'rule', 'rules')) + '</div></div>';
+    stats.rules.by_connector.forEach(function (r) {
+      html += '<div class="pf-stats-row" data-stat-rules="' + esc(r.connector) + '">';
+      html += '<div class="pf-stats-name">' + esc(r.label) + '</div>';
+      html += '<div class="pf-stats-count">' + esc(plural(r.rules, 'rule', 'rules')) + ' from ' +
+        esc(plural(r.users, 'user', 'users')) + '</div></div>';
+    });
+    html += '</div>';
     html += '</div>';
     return html;
   }
@@ -1277,11 +1353,20 @@ _JS = r"""
     if (t.allow_personal_data) {
       chips += '<span class="pf-chip pf-st-chip">personal data allowed</span>';
     }
+    if (t.allow_personal_data_reads) {
+      chips += '<span class="pf-chip pf-st-chip">personal data in reads allowed</span>';
+    }
+    function stamp(x) { return new Date(x * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'; }
+    var activity = t.last_used_at ? 'Last used ' + stamp(t.last_used_at) : 'Never used';
+    if (t.last_denied_at) {
+      activity += ' \u00b7 Last denied ' + stamp(t.last_denied_at) + ' (' + t.last_denied_tool + ')';
+    }
+    var activityHtml = '<div class="pf-hint pf-st-activity">' + esc(activity) + '</div>';
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
     t.rules.forEach(function (r) {
-      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : esc(r.sentence) +
+      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : withValuesHtml(r.sentence_parts, r.value_items, r.sentence) +
         (r.limited_to ? ' (limited to: ' + esc(r.limited_to.join(', ')) + ')' : '')) + '</li>';
     });
     detail += '</ul><div class="pf-hint">Tools</div><ul class="pf-st-list">';
@@ -1289,9 +1374,10 @@ _JS = r"""
     t.tools.forEach(function (name) { detail += '<li><code>' + esc(name) + '</code></li>'; });
     detail += '</ul></details>';
     var control = chips + '<div class="button" role="button" tabindex="0" aria-label="Duplicate ' + esc(t.label) + '" data-st-duplicate="' +
-      esc(t.id) + '">Duplicate</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
+      esc(t.id) + '">Duplicate</div><div class="button" role="button" tabindex="0" aria-label="Rename ' + esc(t.label) +
+      '" data-st-rename="' + esc(t.id) + '">Rename</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
       dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div>';
-    return rowHtml(t.label, esc(scopedExpiryText(t)) + detail, control, 'pf-st-row');
+    return rowHtml(t.label, esc(scopedExpiryText(t)) + activityHtml + detail, control, 'pf-st-row');
   }
 
   // "Daily sync" -> "Daily sync 2", "Daily sync 2" -> "Daily sync 3"; skips
@@ -1322,6 +1408,7 @@ _JS = r"""
     ui.stTools = {};
     t.tools.forEach(function (name) { ui.stTools[name] = true; });
     ui.stPersonalData = !!t.allow_personal_data;
+    ui.stPersonalDataReads = !!t.allow_personal_data_reads;
     render(pyState);
     var form = document.querySelector('.pf-st-form');
     if (form && form.scrollIntoView) { form.scrollIntoView({block: 'start'}); }
@@ -1336,13 +1423,14 @@ _JS = r"""
     ui.stRules = {};
     ui.stTools = {};
     ui.stPersonalData = false;
+    ui.stPersonalDataReads = false;
     render(pyState);
   }
 
   function scopedToolChip(name, coverage) {
     var on = !!ui.stTools[name];
     var status = scopedToolStatus(name, coverage);
-    return '<div class="pf-chip' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
+    return '<div class="pf-chip pf-st-tool' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
       (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
       esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
   }
@@ -1354,6 +1442,7 @@ _JS = r"""
       (SCOPED.delivery === 'once'
         ? 'A new token is shown once and cannot be shown again.'
         : 'A new token is copied to your clipboard once and cannot be shown again.') + '</div>';
+    html += '<div class="pf-chips">' + showIdsToggleHtml() + '</div>' + invalidLegendHtml(SCOPED.rules);
 
     html += '<h2 class="pf-group-title">Your tokens</h2><div class="card pf-card">';
     if (SCOPED.tokens.length === 0) {
@@ -1396,7 +1485,8 @@ _JS = r"""
       var on = !!ui.stRules[r.id];
       var allows = r.verbs.length ? 'allows ' + r.verbs.join(', ') : '';
       html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
-        esc(r.title + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' + esc(r.title) +
+        esc(withValuesText(r.title_parts, r.value_items, r.title) + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' +
+        withValuesHtml(r.title_parts, r.value_items, r.title) +
         (allows ? ' <span class="pf-st-meta">· ' + esc(allows) + '</span>' : '') + '</div>';
     });
     html += '</div>';
@@ -1404,7 +1494,7 @@ _JS = r"""
     html += '<div class="pf-row-title">Tools</div>';
     var autoTools = SCOPED.auto_tools || [];
     var anyRule = SCOPED.rules.some(function (r) { return ui.stRules[r.id]; });
-    if (!anyRule) { html += '<div class="pf-hint" data-st-no-rule-hint="1">Select a rule to see the tools it covers.</div>'; }
+    if (!anyRule) { html += '<div class="pf-hint" data-st-no-rule-hint="1">Select a rule to see the tools it covers, or pick a tool that needs no rule.</div>'; }
     var shownTools = {};
     SCOPED.tools.forEach(function (g) {
       var hasCovered = g.tools.some(function (name) { return !!coverage[name]; });
@@ -1423,7 +1513,8 @@ _JS = r"""
       });
     });
     if (otherTools.length) {
-      html += '<details data-st-other-tools="1"><summary>Tools that need no rule, from other connectors (' + otherTools.length + ')</summary>' +
+      html += '<details data-st-other-tools="1"' + (anyRule ? '' : ' open') + '><summary>' +
+        (anyRule ? 'Tools that need no rule, from other connectors (' : 'Tools that need no rule (') + otherTools.length + ')</summary>' +
         '<div class="pf-chips">';
       otherTools.forEach(function (name) { html += scopedToolChip(name, coverage); });
       html += '</div></details>';
@@ -1442,6 +1533,13 @@ _JS = r"""
       (stPdOn ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(stPdLabel) + '" data-st-personal-data="1">' + esc(stPdLabel) + '</div></div>';
     html += '<div class="pf-hint">Only for calls made with this token, and only for Drive downloads delivered as a file, Grist, ' +
       'Salesforce and Jira exports, and Peek page uploads. Other calls still stop for review when personal data is found.</div>';
+    var stPdrOn = !!ui.stPersonalDataReads;
+    var stPdrLabel = 'Let reads return personal data';
+    html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdrOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
+      (stPdrOn ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(stPdrLabel) + '" data-st-personal-data-reads="1">' + esc(stPdrLabel) + '</div></div>';
+    html += '<div class="pf-hint">Applies only to calls made with this token, and only to Gmail message and thread reads and Slack ' +
+      'channel, thread and search reads that one of the token\'s rules covers. The personal-data scan still runs and the audit log ' +
+      'records what it found, but the AI system receives the content. Other calls still stop for review when personal data is found.</div>';
     html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Add the tools these rules cover" data-st-add-covered="1">Add the tools these rules cover</div></div>';
     html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';
     html += '</div></div>';
@@ -1469,6 +1567,72 @@ _JS = r"""
       if (ui.stRules[r.id]) { r.tools.forEach(function (name) { ui.stTools[name] = true; }); }
     });
     render(pyState);
+  }
+
+  // Rename a token (only its name changes). The Enter/Escape keys are handled on
+  // the input alone: the page's body keydown handler already clicks any
+  // role="button" element on Enter/Space, so per-button listeners would post twice.
+  function renameScopedToken(tokenId) {
+    var t = SCOPED.tokens.filter(function (x) { return x.id === tokenId; })[0];
+    if (!t) { return; }
+    var overlay = document.createElement('div');
+    overlay.className = 'pf-modal-overlay';
+    overlay.setAttribute('role', 'presentation');
+    var box = document.createElement('div');
+    box.className = 'pf-modal';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Rename scoped token');
+    var title = document.createElement('div');
+    title.className = 'pf-modal-title';
+    title.textContent = 'Rename token';
+    var desc = document.createElement('div');
+    desc.className = 'pf-modal-desc';
+    desc.textContent = 'Only the name changes. The token, its rules, tools and expiry stay the same.';
+    var field = document.createElement('input');
+    field.type = 'text';
+    field.className = 'field';
+    field.maxLength = 60;
+    field.setAttribute('aria-label', 'Token name');
+    field.setAttribute('autocomplete', 'off');
+    field.value = t.label;
+    var buttons = document.createElement('div');
+    buttons.className = 'pf-modal-buttons';
+    var cancel = document.createElement('div');
+    cancel.className = 'button';
+    cancel.setAttribute('role', 'button');
+    cancel.setAttribute('tabindex', '0');
+    cancel.setAttribute('aria-label', 'Cancel rename');
+    cancel.textContent = 'Cancel';
+    var save = document.createElement('div');
+    save.className = 'button primary';
+    save.setAttribute('role', 'button');
+    save.setAttribute('tabindex', '0');
+    save.setAttribute('aria-label', 'Save name');
+    save.textContent = 'Save';
+    function close() { overlay.remove(); }
+    function doSave() {
+      var name = field.value.trim();
+      close();
+      if (name === '' || name === t.label) { return; }
+      post('rename_scoped_token', { token_id: tokenId, label: name });
+    }
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', doSave);
+    field.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); doSave(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+    });
+    buttons.appendChild(cancel);
+    buttons.appendChild(save);
+    box.appendChild(title);
+    box.appendChild(desc);
+    box.appendChild(field);
+    box.appendChild(buttons);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    field.focus();
+    field.select();
   }
 
   // The one-time delivery dialog (ADR 0165): the secret lives only in this
@@ -1545,7 +1709,7 @@ _JS = r"""
   function submitScopedToken() {
     var ids = Object.keys(ui.stRules).filter(function (k) { return ui.stRules[k]; });
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
-    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools, allow_personal_data: !!ui.stPersonalData });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads });
   }
 
   // -------------------------------------------------------------------- //
@@ -1602,7 +1766,7 @@ _JS = r"""
       case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
-      case 'agents': return renderAgents(state);
+      case 'stats': return renderStats(state);
       case 'about': return renderAbout(state);
       default: return renderGeneral(state);
     }
@@ -1838,6 +2002,9 @@ _JS = r"""
   }
 
   window.__pfRender = render;
+  window.__pfShowError = function (message) {
+    if (pyState) { pyState.error = message; render(pyState); }
+  };
   window.__pfDebugHook = { ui: ui, render: render, TELEGRAM_STEP_COPY: TELEGRAM_STEP_COPY, onClick: null, onKeydown: null };
 
   // -------------------------------------------------------------------- //
@@ -1862,6 +2029,13 @@ _JS = r"""
       var fam = aaFamFilterEl.getAttribute('data-aa-family-filter');
       var famIdx = ui.aaFamilyFilter.indexOf(fam);
       if (famIdx === -1) { ui.aaFamilyFilter.push(fam); } else { ui.aaFamilyFilter.splice(famIdx, 1); }
+      render(pyState);
+      return;
+    }
+
+    if (e.target.closest('[data-show-ids-toggle]')) {
+      ui.showIds = !ui.showIds;
+      writeShowIds(ui.showIds);
       render(pyState);
       return;
     }
@@ -1971,8 +2145,11 @@ _JS = r"""
     var stToolEl = e.target.closest('[data-st-tool]');
     if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
     if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
+    if (e.target.closest('[data-st-personal-data-reads]')) { ui.stPersonalDataReads = !ui.stPersonalDataReads; render(pyState); return; }
     var stDupEl = e.target.closest('[data-st-duplicate]');
     if (stDupEl) { duplicateScopedToken(stDupEl.getAttribute('data-st-duplicate')); return; }
+    var stRenameEl = e.target.closest('[data-st-rename]');
+    if (stRenameEl) { renameScopedToken(stRenameEl.getAttribute('data-st-rename')); return; }
     if (e.target.closest('[data-st-clear]')) { clearScopedForm(); return; }
     if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
     if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }
@@ -2179,7 +2356,9 @@ _JS = r"""
 """
 
 
-_ALL_SECTIONS = ("general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "agents", "about")
+_ALL_SECTIONS = (
+    "general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "stats", "about",
+)
 
 # The four actions web/routes_settings.py's own bridge shim intercepts
 # client-side rather than forwarding to the generic dispatcher (that
@@ -2224,8 +2403,8 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     hidden rather than rendered empty; Audit Log is shown to every
     principal as a read-only list of their own recent decisions, its
     local-only export and log-level controls suppressed through
-    ``not_applicable_actions``; AI systems (ADR 0035 decision 3) is org-admin-only and
-    never shown in local mode; General and Privacy
+    ``not_applicable_actions``; Stats (ADR 0217) is
+    org-admin-only and never shown in local mode; General and Privacy
     Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
     split (every action either page
     can post is itself ``admin_only`` in ``ACTION_SCOPES``, so a non-admin
@@ -2235,9 +2414,8 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     if mode != ORG_MODE:
         return {
             "mode": LOCAL_MODE, "is_admin": False,
-            # The AI-system pin page is org-only -- local mode has no DCR
-            # registrations to pin (settings.yaml's agent_overrides: only relabels, ADR 0037).
-            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False},
+            # Stats counts an org server's principals; local mode has one user.
+            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "stats": False},
             "not_applicable_actions": [],
         }
     return {
@@ -2246,7 +2424,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
             # Org mode's clients connect with OAuth 2.1, not a local token
             # (ADR 0011), so the local "Connect an AI client" page is never shown.
             "general": True, "connectors": False, "ai_client": False, "scoped_tokens": False, "auto_accept": True,
-            "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
+            "privacy": is_admin, "audit": True, "stats": is_admin, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
     }
@@ -2255,7 +2433,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
     mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
-    scoped_tokens: dict[str, Any] | None = None,
+    scoped_tokens: dict[str, Any] | None = None, personal_transfer: bool = False,
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
@@ -2309,24 +2487,29 @@ def build_html(
     wiring, or the org page's own for the signed-in principal once the
     administrator has enabled the feature, ADR 0165) turns on the "Scoped
     tokens" section the same way.
+
+    ``personal_transfer`` draws Auto-accept's "Move your settings" card (export and import of
+    the person's own rules, web/personal_settings_shim.py); like ``mode`` it only reaches
+    ``window.__pfCapabilities``.
     """
     nonce = nonce or secrets.token_urlsafe(18)
-    state_json = json.dumps(state)
+    state_json = json_for_script(state)
     capabilities = _capabilities_for(mode, is_admin=is_admin)
     capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
     capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
-    caps_json = json.dumps(capabilities)
+    capabilities["personalTransfer"] = personal_transfer
+    caps_json = json_for_script(capabilities)
     ai_client_script = ""
     if capabilities["sections"]["ai_client"]:
-        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json.dumps(ai_client)};</script>'
+        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json_for_script(ai_client)};</script>'
     scoped_tokens_script = ""
     if capabilities["sections"]["scoped_tokens"]:
         # Rule sentences carry user-chosen values: no "</script>" may end the tag early.
-        scoped_json = json.dumps(scoped_tokens).replace("<", "\\u003c")
+        scoped_json = json_for_script(scoped_tokens)
         scoped_tokens_script = f'<script nonce="{nonce}">window.__pfScopedTokens = {scoped_json};</script>'
     section_script = ""
     if initial_section is not None:
-        section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
+        section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json_for_script(initial_section)};</script>'
     return (
         "<title>PrivacyFence Settings</title>"
         f'<style nonce="{nonce}">{DOCUMENT_CSS}{_CSS}</style>'

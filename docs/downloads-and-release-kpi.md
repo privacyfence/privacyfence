@@ -11,7 +11,7 @@ What a tag triggers, the channel scheme and the release checklist are in
 ## How a release reaches a user
 
 ```
-git tag vX.Y.Z  ──►  build.yml / publish-pypi.yml
+release.yml (tag vX.Y.Z)  ──►  build.yml / publish-pypi.yml
                           │
                           ├──► private Cloudflare R2: releases/<channel>/<version>/...
                           │         │
@@ -113,7 +113,7 @@ no Custom Domain.
 itself; only `finalize` moves `latest.json`, and only after verification passes. A release
 missing any mandatory installer fails `finalize` with `latest.json` untouched, so an incomplete
 release can sit in the bucket without becoming the one the Worker serves. `finalize-release`
-`needs: [build, build-windows, build-deb, sbom]`, so a failure in any of those leaves the previous
+`needs: [build, build-windows, build-deb, sbom, build-org-image]`, so a failure in any of those leaves the previous
 release as `latest`.
 
 Properties to know before changing any of it:
@@ -248,7 +248,8 @@ Neither stops a crawler that ignores `robots.txt` and `nofollow`; its `GET`s are
 **counts recorded before the `robots.txt` route was deployed may include crawler downloads**:
 there is no way to separate them afterwards, since nothing about the requester is stored.
 
-The write goes through `ctx.waitUntil()` and is best-effort: a D1 failure is logged and swallowed
+The write goes through `ctx.waitUntil()` and is best-effort: a D1 failure is logged (visible only in a live
+`wrangler tail`) and swallowed
 and never blocks the byte stream; an R2 miss returns 404 before any count.
 
 ### What is stored
@@ -271,6 +272,8 @@ CREATE TABLE download_counts (
 `day` is the UTC date. One row per key; a download increments it in place. No IP address, user
 ID, cookie ID, fingerprint, email, Cloudflare Ray ID or User-Agent is stored anywhere — the schema
 has no column for any of them.
+The Worker keeps no request logs either: Workers observability is off
+([ADR 0186](adr/0186-the-download-worker-keeps-no-request-logs.md)).
 
 ## The KPI
 

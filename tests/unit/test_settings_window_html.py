@@ -28,6 +28,8 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 from privacyfence.settings_window_html import build_html
 
 
@@ -149,15 +151,36 @@ class TestStateEmbedding:
         embedded = _extract_initial_state(html)
         assert embedded["error"] == "Gmail authentication failed: boom"
 
-    def test_html_special_characters_in_state_do_not_break_the_script_tag(self):
-        # json.dumps escapes "</script>" sequences by default only if they
-        # appear literally -- confirm a value containing one doesn't split
-        # the embedding <script> tag early.
+    HOSTILE = "</script><script>alert(1)</script>"
+
+    @pytest.mark.parametrize("embed", ["state", "ai_client", "initial_section", "scoped_rule"])
+    def test_html_special_characters_in_state_do_not_break_the_script_tag(self, embed):
+        # json.dumps leaves "</script>" literal, which would end the embedding
+        # <script> tag early: every embedded value must be escaped.
         state = _make_state()
-        state["general"]["org_installed_date"] = "</script><script>alert(1)</script>"
-        html = build_html(state)
-        embedded = _extract_initial_state(html)
-        assert embedded["general"]["org_installed_date"] == "</script><script>alert(1)</script>"
+        kwargs: dict = {}
+        if embed == "state":
+            state["general"]["org_installed_date"] = self.HOSTILE
+        elif embed == "ai_client":
+            kwargs["ai_client"] = {"mcp_url": self.HOSTILE}
+        elif embed == "initial_section":
+            kwargs["initial_section"] = self.HOSTILE
+        else:
+            data = json.loads(json.dumps(TestScopedTokensSection.DATA))
+            data["tokens"][0]["rules"][0]["sentence"] = self.HOSTILE
+            kwargs["scoped_tokens"] = data
+        html = build_html(state, **kwargs)
+        assert "</script><script>alert(1)" not in html
+        assert html.count("</script>") == html.count("<script")
+        if embed == "state":
+            assert _extract_initial_state(html)["general"]["org_installed_date"] == self.HOSTILE
+
+
+class TestOptionalValueField:
+    def test_value_input_is_offered_for_an_optional_value_group(self):
+        html = build_html(_make_state())
+        assert "group.needs_value || group.value_optional" in html
+        assert "Value, optional (comma-separated for more than one)" in html
 
 
 class TestToggleTemplate:
@@ -708,6 +731,14 @@ class TestScopedTokensSection:
         assert "field.value = '';" in html
         assert "innerHTML = secret" not in html
 
+    def test_each_token_shows_its_last_use_and_last_denial(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "pf-st-activity" in html
+        assert "'Never used'" in html
+        assert "'Last used ' + stamp(t.last_used_at)" in html
+        assert "Last denied" in html
+        assert "esc(scopedExpiryText(t)) + activityHtml + detail" in html
+
     def test_expiring_and_expired_tokens_are_flagged(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "Expires in ' + esc(t.days_left)" in html
@@ -733,9 +764,29 @@ class TestScopedTokensSection:
         assert "allow_personal_data: !!ui.stPersonalData" in html
         assert "personal data allowed" in html
 
+    def test_reads_checkbox_label_and_help_are_rendered(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "Let reads return personal data" in html
+        assert 'data-st-personal-data-reads="1"' in html
+        assert "Applies only to calls made with this token, and only to Gmail message and thread reads and Slack " in html
+        assert "reads that one of the token\\'s rules covers. The personal-data scan still runs" in html
+        assert "but the AI system receives the content." in html
+        assert "ui.stPersonalDataReads = !ui.stPersonalDataReads" in html
+
+    def test_reads_badge_is_rendered(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "if (t.allow_personal_data_reads)" in html
+        assert "personal data in reads allowed</span>" in html
+
+    def test_create_payload_carries_the_reads_flag(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "allow_personal_data_reads: !!ui.stPersonalDataReads" in html
+        assert "ui.stPersonalDataReads = !!t.allow_personal_data_reads;" in html
+        assert "ui.stPersonalDataReads = false;" in html
+
     def test_rules_show_their_resource_with_the_verbs_as_a_detail(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
-        assert "esc(r.title) +" in html
+        assert "withValuesHtml(r.title_parts, r.value_items, r.title)" in html
         assert "'allows ' + r.verbs.join(', ')" in html
         assert "Pick the tools below as well: a tool that needs approval works only where a selected rule covers it." in html
 
@@ -754,7 +805,14 @@ class TestScopedTokensSection:
     def test_a_missing_rule_is_shown_as_no_longer_existing(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "a rule that no longer exists" in html
-        assert "r.missing ? 'a rule that no longer exists' : esc(r.sentence)" in html
+        assert "r.missing ? 'a rule that no longer exists' : withValuesHtml(r.sentence_parts" in html
+
+    def test_resource_values_toggle_between_ids_and_names_on_both_pages(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-show-ids-toggle="1"' in html
+        assert "withValuesHtml(r.sentence_parts, r.value_items, r.sentence)" in html
+        assert "pf-val-invalid" in html
+        assert "Shown in red: not found, it may have been deleted." in html
 
     def test_a_token_can_be_duplicated_and_the_form_cleared(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
@@ -767,11 +825,26 @@ class TestScopedTokensSection:
         assert "The original only allowed part of them; check the tools below before creating it." in html
         assert "/^(.*) (\\d+)$/" in html
 
+    def test_a_token_can_be_renamed(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-rename="' in html
+        assert "aria-label=\"Rename ' + esc(t.label)" in html
+        assert "rename_scoped_token" in html
+
     def test_tools_follow_the_chosen_rules(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "data-st-other-tools" in html
         assert "Tools that need no rule, from other connectors (" in html
-        assert "Select a rule to see the tools it covers." in html
+        assert "Select a rule to see the tools it covers, or pick a tool that needs no rule." in html
+
+    def test_no_rule_selected_opens_the_tools_that_need_no_rule(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "'<details data-st-other-tools=\"1\"' + (anyRule ? '' : ' open')" in html
+        assert "'Tools that need no rule (') + otherTools.length" in html
+
+    def test_rule_selected_keeps_the_other_connectors_disclosure_closed(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "anyRule ? 'Tools that need no rule, from other connectors (' : " in html
 
 
 class TestOrgCapabilities:
@@ -790,13 +863,12 @@ class TestOrgCapabilities:
         caps = self._extract_capabilities(build_html(_make_state()))
         assert caps["mode"] == "local"
         assert caps["is_admin"] is False
-        # AI systems is org-only (no DCR registrations to pin locally), and
-        # Connect an AI client needs an /mcp URL the caller did not pass;
+        # Stats is org-only, and Connect an AI client needs an /mcp URL the caller did not pass;
         # every other section stays.
-        assert caps["sections"]["agents"] is False
+        assert caps["sections"]["stats"] is False
         assert caps["sections"]["ai_client"] is False
         assert caps["sections"]["scoped_tokens"] is False
-        assert all(v for k, v in caps["sections"].items() if k not in ("agents", "ai_client", "scoped_tokens"))
+        assert all(v for k, v in caps["sections"].items() if k not in ("stats", "ai_client", "scoped_tokens"))
         assert caps["not_applicable_actions"] == []
 
     def test_local_state_is_unaffected_by_capabilities(self):
@@ -837,9 +909,14 @@ class TestOrgCapabilities:
             assert caps["sections"]["audit"] is True
             assert {"export_audit_log", "set_log_level"} <= set(caps["not_applicable_actions"])
 
-    def test_ai_systems_page_is_org_admin_only(self):
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["agents"] is True
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["agents"] is False
+    def test_there_is_no_ai_systems_page(self):
+        assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]
+        assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]
+        assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="local"))["sections"]
+
+    def test_stats_page_is_org_admin_only(self):
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["stats"] is True
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["stats"] is False
 
     def test_not_applicable_actions_match_org_settings_scope(self):
         from privacyfence.web.org_settings_scope import NOT_APPLICABLE_ACTIONS
@@ -862,3 +939,34 @@ class TestOrgCapabilities:
         nav_fn_end = html_non_admin.index("function renderNotificationsDetailControl")
         nav_fn = html_non_admin[nav_fn_start:nav_fn_end]
         assert "CAPS.sections[key] === false" in nav_fn
+
+
+class TestPersonalTransferCard:
+    """"Move your settings" (Auto-accept) is drawn client-side only when the page is told the
+    routes behind it exist: the capability is the switch, the card text lives in the JS."""
+
+    @staticmethod
+    def _caps(html: str) -> dict:
+        match = re.search(r"window\.__pfCapabilities = (\{.*?\});</script>", html, re.DOTALL)
+        assert match
+        return json.loads(match.group(1))
+
+    @pytest.mark.parametrize("mode", ["local", "org"])
+    def test_capability_is_on_when_requested(self, mode):
+        html = build_html(_make_state(), mode=mode, is_admin=True, personal_transfer=True)
+        assert self._caps(html)["personalTransfer"] is True
+        assert "if (CAPS.personalTransfer)" in html
+        assert "Move your settings" in html
+        assert 'data-pf-personal-export="1"' in html
+        assert 'data-pf-personal-import="1"' in html
+        assert "Importing only adds; it never removes or narrows anything." in html
+
+    @pytest.mark.parametrize("mode", ["local", "org"])
+    def test_capability_is_off_by_default(self, mode):
+        html = build_html(_make_state(), mode=mode)
+        assert self._caps(html)["personalTransfer"] is False
+
+    def test_card_sits_between_the_subtitle_and_the_filter_bar(self):
+        html = build_html(_make_state(), personal_transfer=True)
+        body = html.split("function renderAutoAccept", 1)[1]
+        assert body.index("pf-page-subtitle") < body.index("CAPS.personalTransfer") < body.index("pf-aa-filterbar")

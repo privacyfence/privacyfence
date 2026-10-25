@@ -138,6 +138,11 @@ def _sender_domain(ctx: ReviewContext) -> Any:
     return [domain] if domain else NO_VALUE
 
 
+def _not_proposed(_ctx: ReviewContext) -> Any:
+    """A card cannot pick which label of the message should matter, so this scope is configured deliberately and never proposed off one gated call."""
+    return NO_VALUE
+
+
 def _slack_channel(ctx: ReviewContext) -> Any:
     channel_id = ctx.args.get("channel_id", "") or ctx.args.get("channel", "") or ""
     return [channel_id] if channel_id else NO_VALUE
@@ -182,6 +187,20 @@ def _jira_result_project_keys(ctx: ReviewContext) -> Any:
     items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
     keys = {k.rsplit("-", 1)[0] for item in items if "-" in (k := getattr(item, "key", "") or "")}
     return sorted(keys) or NO_VALUE
+
+
+def _assets_schema_ids(ctx: ReviewContext) -> Any:
+    """The schema id of the one object a read returns (the first, when ``raw_data`` is a list)."""
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    schema_id = str(getattr(items[0], "schema_id", "") or "") if items else ""
+    return [schema_id] if schema_id else NO_VALUE
+
+
+def _assets_result_schema_ids(ctx: ReviewContext) -> Any:
+    """Every schema present across a search's results -- ``approved_schema_ids_all_results``' value."""
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    ids = {s for item in items if (s := str(getattr(item, "schema_id", "") or ""))}
+    return sorted(ids) or NO_VALUE
 
 
 def _confluence_space_keys(ctx: ReviewContext) -> Any:
@@ -298,6 +317,8 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
         (Verb.READ, Verb.DOWNLOAD, Verb.MOVE), _sender_domain, "this sender domain",
     ),
     _scope("label_name_allowlist", "gmail.label", "gmail", (Verb.UPDATE,), _args_values("label_name"), "this label"),
+    # Archiving is allowed only when the message already carries the label, checked against its live labels.
+    _scope("label_match", "gmail.label", "gmail", (Verb.MOVE,), _not_proposed, "this label"),
     # Gmail drafting is unconditional (``always_allow`` under ``gmail.create_draft``), and
     # modelling it as an explicit "anything in Gmail" scope is the point -- an unconditional grant
     # that reads as unconditional. It is never widenable: a scope with no resource identity must not
@@ -345,6 +366,9 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     _scope("approved_project_keys_all_results", "jira.project", "jira", (Verb.SEARCH,), _jira_result_project_keys, "this project"),
     _scope("i_am_reporter", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm reporter", group="jira.my_issues/reporter"),
     _scope("i_am_assignee", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm assignee", group="jira.my_issues/assignee"),
+    # ── Assets ────────────────────────────────────────────────────────────────────────────────
+    _scope("approved_schema_ids", "assets.schema", "assets", (Verb.READ,), _assets_schema_ids, "this schema", excludes=("assets.read_tickets",)),
+    _scope("approved_schema_ids_all_results", "assets.schema", "assets", (Verb.SEARCH,), _assets_result_schema_ids, "this schema", excludes=("assets.read_tickets",)),
     # ── Confluence ────────────────────────────────────────────────────────────────────────────
     _scope(
         "approved_space_keys", "confluence.space", "confluence",
@@ -361,10 +385,11 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     #
     # Both Salesforce read tools share the ``read`` verb, and each has its own scope: a record read
     # is scoped by object type, a report run by report id. Neither scope can measure the other's
-    # operation key.
+    # operation key. The object-type scope also covers adding and updating records of that type,
+    # including the batch tools.
     _scope(
         "approved_object_types", "salesforce.object_type", "salesforce",
-        (Verb.READ, Verb.SEARCH), _salesforce_object_types, "this object type",
+        (Verb.READ, Verb.SEARCH, Verb.ADD, Verb.UPDATE), _salesforce_object_types, "this object type",
         excludes=("salesforce.run_report",),
     ),
     _scope(

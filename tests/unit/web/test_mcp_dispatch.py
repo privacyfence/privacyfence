@@ -15,6 +15,7 @@ already draws between itself and test_bridge_daemon_contract.py.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import time
 
@@ -29,6 +30,7 @@ from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.scoped_tokens import ScopedToken
+from privacyfence.web import mcp_dispatch
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
 from ...helpers import policy_rules
@@ -269,6 +271,46 @@ class TestCall:
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert len(connector.calls) == 1
 
+    async def test_an_identical_call_from_another_session_is_not_deduped(self):
+        connector = FakeConnector("gmail", result="r", delay=0.05)
+        dispatcher = _dispatcher({"gmail": connector})
+        await asyncio.gather(
+            dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}),
+            dispatcher.call("s2", "gmail", "gmail_tool", {"x": 1}),
+        )
+        assert len(connector.calls) == 2
+
+    async def test_an_unattended_session_never_gets_another_sessions_result(self):
+        connector = UnattendedAwareConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector}, unattended_sessions_enabled=True)
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        dispatcher.begin_unattended_session("s2", "why")
+        await dispatcher.call("s2", "gmail", "gmail_tool", {"x": 1})
+        assert connector.observed_unattended == [False, True]
+
+    async def test_cancelled_leader_does_not_poison_the_dedupe_key(self):
+        release = asyncio.Event()
+
+        class Waiting(FakeConnector):
+            async def call(self, tool, args):
+                self.calls.append((tool, args))
+                await release.wait()
+                return "r"
+
+        connector = Waiting("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        first = asyncio.create_task(dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert first.cancelled()
+        release.set()
+        assert await asyncio.wait_for(dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1}), 1) == "r"
+        assert len(connector.calls) == 2
+        assert dispatcher._inflight  # the completed second call is cached, the cancelled one left no stale key
+        assert all(fut.done() and not fut.cancelled() for fut, _ in dispatcher._inflight.values())
+
     async def test_a_pending_approval_result_is_never_cached_for_reuse(self):
         # A gated call that went pending (gate.gated_call raises
         # ApprovalPending, ADR 0093) comes back as its
@@ -470,14 +512,203 @@ class TestCheckPolicy:
         assert result == {
             "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
             "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
-            "pii_gate_may_apply": False,
+            "pii_gate_may_apply": False, "pii_gate": "none", "pii_gate_detail": "", "suggested_rules": [],
         }
+
+    @staticmethod
+    def _token(*, allow_personal_data: bool) -> ScopedToken:
+        return ScopedToken(
+            id="st-0123456789ab", label="sync", digest="", principal_id="local", principal_email="",
+            principal_display_name="", created_at=time.time(), expires_at=time.time() + 86400,
+            rule_ids=frozenset(), tools=frozenset(), allow_personal_data=allow_personal_data,
+        )
+
+    def _pii(self, connector: str, tool: str, token: ScopedToken | None = None) -> dict:
+        dispatcher = _dispatcher({connector: FakeConnector(connector)})
+        if token is None:
+            return dispatcher.check_policy(connector, tool, {})
+        with scoped_tokens.token_scope(token):
+            return dispatcher.check_policy(connector, tool, {})
+
+    def test_connector_computed_slack_args_are_not_passed_to_preflight(self, monkeypatch):
+        seen = {}
+
+        def fake_preflight(operation_key, args, my_email):
+            seen["args"] = args
+            return "unknown", "", "", "x"
+
+        monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        dispatcher.check_policy(
+            "slack", "slack_get_thread_replies",
+            {"channel_id": "D1", "is_one_to_one_dm": True, "own_user_id": "U_ME", "is_self_dm": True},
+        )
+        assert seen["args"] == {"channel_id": "D1"}
+
+    def test_member_conversation_args_are_not_passed_to_preflight(self, monkeypatch):
+        seen = {}
+
+        def fake_preflight(operation_key, args, my_email):
+            seen["args"] = args
+            return "unknown", "", "", "x"
+
+        monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        dispatcher.check_policy(
+            "slack", "slack_search_messages",
+            {"member_only": True, "is_member": True, "all_results_in_my_conversations": True},
+        )
+        assert seen["args"] == {"member_only": True}
+
+    def test_matching_queries_is_not_passed_to_preflight(self, monkeypatch):
+        seen = {}
+
+        def fake_preflight(operation_key, args, my_email):
+            seen["args"] = args
+            return "unknown", "", "", "x"
+
+        monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
+        dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
+        dispatcher.check_policy("gmail", "gmail_get_message", {"message_id": "m1", "matching_queries": ["in:inbox"]})
+        assert seen["args"] == {"message_id": "m1"}
+
+    def test_pii_gate_none_for_popup_tool_outside_the_upload_scan(self):
+        result = self._pii("grist", "grist_update_csv")
+        assert result["gate"] == "popup"
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("none", "")
+        assert result["pii_gate_may_apply"] is False
+
+    def test_pii_gate_applies_unscoped(self):
+        result = self._pii("salesforce", "salesforce_run_report")
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "this call is not made with a scoped token, so the personal-data scan always applies"
+        )
+        assert result["pii_gate_may_apply"] is True
+
+    def test_pii_gate_applies_when_allowance_does_not_cover_the_tool(self):
+        result = self._pii("salesforce", "salesforce_run_report", self._token(allow_personal_data=True))
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "the token's personal-data allowance does not cover salesforce_run_report, "
+            "so the personal-data scan applies"
+        )
+
+    def test_pii_gate_allowed_by_token(self):
+        result = self._pii("salesforce", "salesforce_export_report", self._token(allow_personal_data=True))
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("allowed_by_token", "")
+
+    def test_pii_gate_applies_when_token_lacks_the_flag(self):
+        result = self._pii("salesforce", "salesforce_export_report", self._token(allow_personal_data=False))
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "the token does not allow personal data, so the personal-data scan applies to salesforce_export_report"
+        )
+
+    def test_pii_gate_applies_for_revoked_scope(self):
+        result = self._pii("salesforce", "salesforce_export_report", scoped_tokens.REVOKED_SCOPE)
+        assert result["pii_gate"] == "applies"
+        assert "not made with a scoped token" in result["pii_gate_detail"]
+
+    def test_pii_gate_allowed_unless_inline_for_drive_download(self):
+        result = self._pii("drive", "drive_download_file", self._token(allow_personal_data=True))
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("allowed_unless_inline", "")
+
+    def test_pii_gate_popup_upload_tools(self):
+        token = self._token(allow_personal_data=True)
+        peek = self._pii("peek", "peek_upload_page", token)
+        assert peek["gate"] == "popup"
+        assert (peek["pii_gate"], peek["pii_gate_detail"]) == ("allowed_by_token", "")
+        assert peek["pii_gate_may_apply"] is False
+        upload = self._pii("drive", "drive_upload_file", token)
+        assert upload["pii_gate"] == "applies"
+        assert "does not cover drive_upload_file" in upload["pii_gate_detail"]
+
+    @staticmethod
+    def _reads_token(*, reads: bool, exports: bool = False) -> ScopedToken:
+        return dataclasses.replace(
+            TestCheckPolicy._token(allow_personal_data=exports), allow_personal_data_reads=reads,
+        )
+
+    def test_pii_gate_is_allowed_by_token_for_a_read_with_the_reads_flag(self):
+        result = self._pii("gmail", "gmail_get_message", self._reads_token(reads=True))
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("allowed_by_token", "")
+
+    def test_pii_gate_applies_for_a_read_without_the_reads_flag(self):
+        result = self._pii("slack", "slack_search_messages", self._reads_token(reads=False))
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "the token does not allow personal data in reads, "
+            "so the personal-data scan applies to slack_search_messages"
+        )
+
+    def test_pii_gate_for_a_read_ignores_the_exports_flag(self):
+        result = self._pii("gmail", "gmail_get_thread", self._reads_token(reads=False, exports=True))
+        assert result["pii_gate"] == "applies"
+        assert "in reads" in result["pii_gate_detail"]
+
+    def test_pii_scan_tool_sets_stay_in_step_with_the_gate_table(self):
+        from privacyfence.auto_accept import (
+            PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, UPLOAD_PII_SCAN_TOOLS,
+        )
+
+        for tool in PERSONAL_DATA_READ_TOOLS:
+            assert TOOL_TO_GATE[tool] == "review", tool
+        for tool in PERSONAL_DATA_RULE_TOOLS | UPLOAD_PII_SCAN_TOOLS:
+            assert TOOL_TO_GATE[tool] in ("review", "popup"), tool
+        for tool in UPLOAD_PII_SCAN_TOOLS:
+            assert TOOL_TO_GATE[tool] == "popup", tool
+
+    def test_covered_call_has_no_suggested_rules(self):
+        from privacyfence import auto_accept
+
+        auto_accept.set_policy_v2_store_rules(
+            policy_rules({"salesforce.run_report": [{"predicate": "approved_report_ids", "value": ["00O1"]}]})
+        )
+        dispatcher = _dispatcher({"salesforce": FakeConnector("salesforce")})
+        result = dispatcher.check_policy("salesforce", "salesforce_export_report", {"report_id": "00O1"})
+        assert result["verdict"] == "auto_accept"
+        assert result["suggested_rules"] == []
+
+    def test_uncovered_call_names_the_rule_that_would_cover_it(self):
+        dispatcher = _dispatcher({"salesforce": FakeConnector("salesforce")})
+        result = dispatcher.check_policy("salesforce", "salesforce_export_report", {"report_id": "00O1"})
+        assert result["verdict"] == "requires_review"
+        assert result["suggested_rules"]
+        assert result["suggested_rules"][0]["value_known"] is True
+        assert result["suggested_rules"][0]["value"] == ["00O1"]
+
+    def test_grace_window_match_still_names_the_rule_it_would_take(self, monkeypatch):
+        monkeypatch.setattr(
+            mcp_dispatch, "preflight_auto_accept",
+            lambda *_a, **_k: ("auto_accept", "session_temp_accept", "", "grace window"),
+        )
+        dispatcher = _dispatcher({"salesforce": FakeConnector("salesforce")})
+        result = dispatcher.check_policy("salesforce", "salesforce_export_report", {"report_id": "00O1"})
+        assert result["matched_rule"] == "session_temp_accept"
+        assert result["suggested_rules"][0]["value"] == ["00O1"]
 
     def test_never_calls_the_connector(self):
         connector = FakeConnector("gmail")
         dispatcher = _dispatcher({"gmail": connector})
         dispatcher.check_policy("gmail", "gmail_get_message", {})
         assert connector.calls == []
+
+    def test_slack_suggestions_never_call_the_connector(self):
+        connector = FakeConnector("slack")
+        dispatcher = _dispatcher({"slack": connector})
+        result = dispatcher.check_policy(
+            "slack", "slack_get_thread_replies", {"channel_id": "D1", "thread_ts": "1.2"},
+        )
+        assert connector.calls == []
+        assert "slack.direct_messages_to_me" in [s["group"] for s in result["suggested_rules"]]
+
+    def test_slack_membership_suggestion_ignores_an_agent_supplied_is_member(self):
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        result = dispatcher.check_policy(
+            "slack", "slack_get_channel_history", {"channel_id": "", "is_member": True},
+        )
+        assert "slack.my_conversations" not in [s["group"] for s in result["suggested_rules"]]
 
     def test_popup_tool_matching_args_only_rule_is_auto_accept(self):
         from privacyfence import auto_accept

@@ -6,6 +6,8 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-09-21 in `af
 release.yml and the three slash commands that drive P0's routing", merged in
 [#601](https://github.com/privacyfence/privacyfence/pull/601)).
 
+Amended by [ADR 0185](0185-a-release-tag-is-created-only-by-release-yml.md): `release.yml` is the only way to cut a release, and a tag ruleset enforces it.
+
 ## Context
 
 A release is a tag, not a commit: pushing a `v*` tag is what starts both `build.yml` and

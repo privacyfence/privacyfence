@@ -139,9 +139,16 @@ def compile_row(row: ScopeRow) -> list[PolicyRule]:
                 ))
         return rules
     if extra is not None:
-        operations = row.operations & _operations_for_verbs(row.scope, row.verbs)
-        if operations:
-            return [PolicyRule(id=row.id, predicate=extra.predicate, value=row.value, operations=operations)]
+        by_predicate: dict[str, list[Verb]] = {}
+        for verb in extra.verbs:
+            if verb in row.verbs:
+                by_predicate.setdefault(catalogue.extra_predicate_for(extra, verb), []).append(verb)
+        extra_rules: list[PolicyRule] = []
+        for predicate, predicate_verbs in by_predicate.items():
+            operations = row.operations & _operations_for_verbs(row.scope, predicate_verbs)
+            if operations:
+                extra_rules.append(PolicyRule(id=row.id, predicate=predicate, value=row.value, operations=operations))
+        return extra_rules
     return []
 
 
@@ -276,7 +283,7 @@ def scope_of_rule(rule: PolicyRule) -> tuple[str, Any] | None:
         )
         candidates.update(
             scope_id for scope_id, extra in catalogue.EXTRA_SCOPES.items()
-            if extra.predicate == rule.predicate and extra.connector in connectors
+            if rule.predicate in catalogue.extra_predicates(extra) and extra.connector in connectors
         )
     if len(candidates) != 1:
         return None

@@ -39,6 +39,7 @@ from .apps_script_client import AppsScriptClient
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
+    forget_removed_rules,
     notify_rules_changed,
     set_policy_v2_store_rules,
     set_rules_changed_listener,
@@ -56,6 +57,7 @@ from .policy import registry as policy_registry
 from .policy import scope_rows as policy_scope_rows
 from .policy import store as policy_store
 from .policy.engine import PolicyRule
+from .policy.value_format import RuleValueError
 from .principal import LOCAL_PRINCIPAL, current_principal
 from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
@@ -88,6 +90,7 @@ from .update_checker import (
 )
 from .webauthn_stepup import has_credentials as _has_webauthn_credentials
 from .webauthn_stepup import observe_step_up_requirement
+from .atlassian_oauth import assets_enabled, scopes_for
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .slack_client import authorize_interactive as slack_authorize_interactive
@@ -100,7 +103,7 @@ LICENSE_NAME = "Apache-2.0"
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
-    "slack", "jira", "confluence", "salesforce", "telegram", "grist", "peek",
+    "slack", "jira", "confluence", "assets", "salesforce", "telegram", "grist", "peek",
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
@@ -114,24 +117,17 @@ NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed
 GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks", "apps_script"}
 
 # Display names for connectors whose key isn't just its label lower-cased.
-_CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script"}
+_CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script", "assets": "Jira Assets"}
 
 
 def connector_label(cname: str) -> str:
     return _CONNECTOR_LABEL_OVERRIDES.get(cname, cname.capitalize())
 
-# Which section of the organization config bundle each connector depends on.
-# Jira and Confluence share one Atlassian OAuth grant. Telegram is not part
-# of the org bundle -- its app credentials are baked into the build (see
-# app_credentials.py) and checked separately.
-ORG_CONFIG_SERVICE: dict[str, str] = {
-    "gmail": "google", "drive": "google", "contacts": "google",
-    "calendar": "google", "tasks": "google", "apps_script": "google",
-    "slack": "slack",
-    "jira": "atlassian", "confluence": "atlassian",
-    "salesforce": "salesforce",
-}
-ORG_BUNDLE_SERVICES: list[str] = ["google", "slack", "salesforce", "atlassian"]
+# Which section of the organization config bundle each connector depends on (ADR 0196). Jira and
+# Confluence share one Atlassian OAuth grant. A connector whose section is absent is neither shown
+# nor usable.
+ORG_CONFIG_SERVICE: dict[str, str] = org_mode.CONNECTOR_ORG_SECTION
+ORG_BUNDLE_SERVICES: list[str] = ["google", "slack", "salesforce", "atlassian", "telegram", "grist", "peek"]
 
 # Categories individually toggleable under the PII Detection Gate, on top of
 # its own master enabled switch. Keys match pii_detector._OPTIONAL_CATEGORIES
@@ -357,14 +353,18 @@ def _run_async(work: Callable[[], Any], on_done: Callable[[bool, Any], None]) ->
     threading.Thread(target=_runner, daemon=True).start()
 
 
-def _parse_value_list(raw_text: str) -> list[str] | None:
-    """The Auto-accept page's "value" field (a comma-separated list of resource ids/keys/domains)
+def _parse_value_list(raw_text: str, group: str = "") -> list[str] | None:
+    """The Auto-accept page's "value" field (a comma-separated list of resource ids/keys/domains,
+    except a group in ``catalogue.SINGLE_VALUE_GROUPS``, whose whole text is one value)
     -> a v2 rule value, or ``None`` for a value-less scope's empty field. Every v2 identity/valued-
     attribute scope this page can write (``policy.propose.SCOPES_BY_GROUP`` plus the extra scopes --
     see ``_policy_scope_catalogue``) takes a plain list of strings; there is no int-valued scope in
     that catalogue the way v1's ``age_threshold_days``/``time_window_days`` condition rules were,
     since this page writes scopes, not conditions (see this module's own Auto-accept section
     docstring)."""
+    if group in policy_catalogue.SINGLE_VALUE_GROUPS:
+        whole = (raw_text or "").strip()
+        return [whole] if whole else None
     values = [v.strip() for v in (raw_text or "").split(",") if v.strip()]
     return values or None
 
@@ -481,7 +481,10 @@ def _rule_usage_map() -> dict[str, Any]:
     return AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
 
 
-def _rule_row(row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolved_value: str) -> dict[str, Any]:
+def _rule_row(
+    row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolved_value: str,
+    value_items: list[dict[str, Any]],
+) -> dict[str, Any]:
     """One stored scope row as the Auto-accept page's row. ``usage`` maps ids to rule usage; the
     row's count is summed over its own id and every ``former_ids`` entry (the v2 rules merged into
     it), and ``last_matched`` is the latest of them."""
@@ -496,6 +499,10 @@ def _rule_row(row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolve
     return {
         "id": row.id,
         "sentence": policy_describe.row_sentence(row, value_display=resolved_value),
+        # The sentence around the value and the value itself, so the page can show the value by id or
+        # by name and color an invalid one; "sentence" above stays the by-name rendering.
+        "sentence_parts": sentence_parts(row),
+        "value_items": value_items,
         "connector": connector,
         "connector_label": policy_describe.connector_label(connector) if connector else "",
         "scope": row.scope,
@@ -523,7 +530,7 @@ def _rule_row(row: policy_scope_rows.ScopeRow, usage: dict[str, Any], *, resolve
 
 def _auto_accept_state_from_rows(
     rows: list[policy_scope_rows.ScopeRow], usage_by_rule_id: dict[str, Any], *,
-    resolve_value: Callable[[policy_scope_rows.ScopeRow], str],
+    resolve_value: Callable[[policy_scope_rows.ScopeRow], str], resolver: ResourceNameResolver,
 ) -> dict[str, Any]:
     """The Auto-accept page's state, factored out of ``SettingsController.
     _auto_accept_state`` (ADR 0032) so web/routes_settings.py's own org-mode
@@ -533,7 +540,10 @@ def _auto_accept_state_from_rows(
     with a snapshot push, org's ``web/routes_settings.py`` ``_await_rule_names`` before the
     render, since org mode has no live push."""
     catalogue = _policy_scope_catalogue()
-    rule_rows = [_rule_row(row, usage_by_rule_id, resolved_value=resolve_value(row)) for row in rows]
+    rule_rows = [
+        _rule_row(row, usage_by_rule_id, resolved_value=resolve_value(row), value_items=row_value_items(row, resolver))
+        for row in rows
+    ]
     rule_rows.sort(key=lambda row: row["sentence"])
     connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
                          | {entry["connector"] for entry in catalogue})
@@ -558,6 +568,43 @@ def cached_rule_value(rule: PolicyRule, resolver: ResourceNameResolver) -> str:
     if rt is None:
         return ", ".join(str_values)
     return ", ".join(resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
+
+
+def row_value_items(row: policy_scope_rows.ScopeRow, resolver: ResourceNameResolver) -> list[dict[str, Any]]:
+    """A row's values as the pages' ID/name toggle needs them: one ``{id, short_id, name, status}``
+    per value. ``status`` is ``plain`` for a value that is not an opaque resource id (shown
+    as-is), ``resolved`` with a ``name``, ``invalid`` when a live lookup found no such resource (the
+    last-known ``name``, if any, is kept), or ``pending`` while no lookup has finished. Reads the
+    cache only -- no network call."""
+    compiled = policy_scope_rows.compile_row(row)
+    if compiled:
+        rt, str_values = rule_resource_ids(compiled[0])
+    else:
+        rt = None
+        values = row.value if isinstance(row.value, list) else ([row.value] if row.value else [])
+        str_values = [str(v) for v in values]
+    items = []
+    for value in str_values:
+        name = resolver.cached_name(rt, value) if rt is not None else None
+        if rt is None:
+            status = "plain"
+        elif resolver.is_invalid(rt, value):
+            status = "invalid"
+        else:
+            status = "resolved" if name else "pending"
+        items.append({"id": value, "short_id": _short_id(value) if rt is not None else value,
+                      "name": name, "status": status})
+    return items
+
+
+def sentence_parts(row: policy_scope_rows.ScopeRow) -> list[str] | None:
+    """The row's sentence split around its value, ``[before, after]``, so a page can put the value
+    -- by id or by name, colored by its status -- in between. ``None`` when the row has no value."""
+    if not row.value:
+        return None
+    marker = "\x00"
+    before, found, after = policy_describe.row_sentence(row, value_display=marker).partition(marker)
+    return [before, after] if found else None
 
 
 def cached_row_value(row: policy_scope_rows.ScopeRow, resolver: ResourceNameResolver) -> str:
@@ -1083,12 +1130,21 @@ class SettingsController:
 
         trust = org_bundle_signing.verify_and_maybe_pin(data, org_dir())
         if not trust.ok:
-            self.error = (
-                f"Refusing to install: organization config bundle failed signing-key "
-                f"verification ({trust.detail}). If a legitimate signing-key rotation is "
-                f"expected, an administrator must delete "
-                f"{org_bundle_signing.pinned_public_key_path(org_dir())} first."
-            )
+            if trust.remedy == "serial":
+                self.error = (
+                    f"Refusing to install: {trust.detail}. To deliberately go back to an older "
+                    f"bundle, an administrator must delete "
+                    f"{org_bundle_signing.pinned_serial_path(org_dir())} first."
+                )
+            elif trust.remedy == "none":
+                self.error = f"Refusing to install: {trust.detail}."
+            else:
+                self.error = (
+                    f"Refusing to install: organization config bundle failed signing-key "
+                    f"verification ({trust.detail}). If a legitimate signing-key rotation is "
+                    f"expected, an administrator must delete "
+                    f"{org_bundle_signing.pinned_public_key_path(org_dir())} first."
+                )
             return
         if data.get("mode") == "org" and not trust.signed:
             self.error = (
@@ -1109,6 +1165,7 @@ class SettingsController:
             self.error = f"Could not install organization config: {exc}"
             return
 
+        org_bundle_signing.record_accepted_serial(trust, org_dir())
         self.error = ""
         # The live connectors were built from the previous bundle's client
         # credentials and download settings; rebuild them now, or they keep
@@ -1233,17 +1290,28 @@ class SettingsController:
         called with connector == "telegram" from production JS. A stray
         call is a harmless no-op rather than an error."""
         org_config = self._org_config_or_empty()
+        if not self._org_allows(connector, org_config):
+            return self.snapshot()
         if connector in GOOGLE_CONNECTORS:
             self._authenticate_google(connector, org_config)
         elif connector == "slack":
             self._authenticate_slack(org_config)
         elif connector == "salesforce":
             self._authenticate_salesforce(org_config)
-        elif connector in ("jira", "confluence"):
+        elif connector in ("jira", "confluence", "assets"):
             self._authenticate_atlassian(org_config)
         elif connector == "grist":
             self._authenticate_grist(org_config)
         return self.snapshot()
+
+    def _org_allows(self, connector: str, org_config: dict[str, Any] | None = None) -> bool:
+        """False, with ``self.error`` set, when the organization config does not enable ``connector``."""
+        if org_config is None:
+            org_config = self._org_config_or_empty()
+        if connector in ORG_CONFIG_SERVICE and org_mode.connector_enabled_by_org(org_config, connector):
+            return True
+        self.error = f"{connector_label(connector)} isn't enabled in your organization config."
+        return False
 
     def _authenticate_google(self, cname: str, org_config: dict[str, Any]) -> None:
         client_config = _google_client_config(org_config)
@@ -1364,6 +1432,7 @@ class SettingsController:
         token_file = str(data_dir() / TOKEN_FILES["atlassian"])
         self._busy_connectors.add("jira")
         self._busy_connectors.add("confluence")
+        self._busy_connectors.add("assets")
 
         def pick_resource(resources: list[dict[str, Any]]) -> dict[str, Any]:
             # Runs on work()'s own background thread (see _run_async) --
@@ -1383,17 +1452,22 @@ class SettingsController:
             )
             return resources[idx] if idx is not None else resources[0]
 
+        cfg = self._load_config()
+        scopes = scopes_for(assets=assets_enabled(cfg, org_config))
+
         def work() -> dict[str, Any]:
             return atlassian_authorize_interactive(
                 client_id=atlassian_org["client_id"],
                 client_secret=atlassian_org.get("client_secret", ""),
                 token_file=token_file,
+                scopes=scopes,
                 pick_resource=pick_resource,
             )
 
         def done(ok: bool, result: Any) -> None:
             self._busy_connectors.discard("jira")
             self._busy_connectors.discard("confluence")
+            self._busy_connectors.discard("assets")
             if ok:
                 self.error = ""
                 self.refresh_connectors()
@@ -1421,6 +1495,8 @@ class SettingsController:
         return {"step": self._telegram_auth.get("step"), "error": self._telegram_auth.get("error", "")}
 
     def telegram_start_auth(self, phone: str) -> dict[str, Any]:
+        if not self._org_allows("telegram"):
+            return self.snapshot()
         creds = telegram_app_credentials()
         if not creds:
             self.error = "Telegram app credentials are missing from this build."
@@ -1559,6 +1635,8 @@ class SettingsController:
         }
 
     def peek_start_login(self, base_url: str = "") -> dict[str, Any]:
+        if not self._org_allows("peek"):
+            return self.snapshot()
         pinned, pinned_error = self._peek_pinned()
         if pinned_error:
             self._peek_auth = {"step": None, "error": pinned_error}
@@ -1674,6 +1752,8 @@ class SettingsController:
         }
 
     def grist_connect(self, api_key: str, server_url: str = "") -> dict[str, Any]:
+        if not self._org_allows("grist"):
+            return self.snapshot()
         if "grist" in self._busy_connectors:
             return self.snapshot()
         bundle, bundle_error = self._grist_bundle()
@@ -1742,7 +1822,11 @@ class SettingsController:
         verb_enums = _parse_verbs(verbs)
         if not verb_enums:
             return self.snapshot()
-        new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value), verb_enums)
+        try:
+            new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value, group), verb_enums)
+        except RuleValueError as exc:
+            self.error = str(exc)
+            return self.snapshot()
         if not new_rules:
             return self.snapshot()
         loaded = self._load_rows()
@@ -1752,7 +1836,31 @@ class SettingsController:
         rows, _ = policy_scope_rows.add_rules(existing, new_rules)
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(rows)
         self._save_and_reload_policy_v2(cfg)
+        self.error = ""
         return self.snapshot()
+
+    def policy_rows(self) -> "list[policy_scope_rows.ScopeRow]":
+        """The current auto-accept rows (after the token-aware upgrade); ``[]`` when the section
+        could not be upgraded. What the personal-settings export and import preview read."""
+        loaded = self._load_rows()
+        return [] if loaded is None else loaded[1]
+
+    def import_policy_rules(self, rules: list[PolicyRule]) -> bool:
+        """Merges already-compiled rules from an imported personal-settings file into the on-disk
+        rows, exactly as ``add_policy_rule`` does for a rule added in Settings: additive only,
+        written and hot-reloaded through ``_save_and_reload_policy_v2`` so the audit logger's policy
+        hash is refreshed and listeners are notified. Returns whether anything changed; writes
+        nothing when the rows could not be loaded or the merge changes none of them."""
+        loaded = self._load_rows()
+        if loaded is None:
+            return False
+        cfg, existing = loaded
+        rows, _ = policy_scope_rows.add_rules(existing, rules)
+        if rows == existing:
+            return False
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(rows)
+        self._save_and_reload_policy_v2(cfg)
+        return True
 
     def remove_policy_rule(self, rule_id: str) -> dict[str, Any]:
         """Removes the row with this stable id from the on-disk ``auto_accept:`` section entirely
@@ -1768,6 +1876,7 @@ class SettingsController:
             return self.snapshot()
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(remaining)
         self._save_and_reload_policy_v2(cfg)
+        forget_removed_rules([rule_id])
         return self.snapshot()
 
     def update_policy_rule(self, rule_id: str) -> dict[str, Any]:
@@ -1845,12 +1954,14 @@ class SettingsController:
         resource_names.py's TTL."""
         if client is None:
             return
-        missing = [rid for rid in resource_ids if rid and self._resolver.cached_name(rt, rid) is None]
+        missing = [rid for rid in resource_ids if rid and self._resolver.needs_resolve(rt, rid)]
         if not missing:
             return
 
         def work() -> bool:
-            return any(self._resolver.resolve(rt, resource_id, client) for resource_id in missing)
+            for resource_id in missing:
+                self._resolver.resolve(rt, resource_id, client)
+            return True  # a not-found outcome changes what the page shows too
 
         def done(ok: bool, resolved_something: Any) -> None:
             if ok and resolved_something:
@@ -1968,7 +2079,7 @@ class SettingsController:
         return {
             "error": self.error,
             "general": self._general_state(cfg),
-            "connectors": self._connectors_state(cfg, org_config),
+            "connectors": self._connectors_state(cfg, org_config, visible_only=True),
             "telegram_auth": self._telegram_auth_state(),
             "peek_auth": self._peek_auth_state(),
             **self._grist_snapshot_state(org_config),
@@ -2041,20 +2152,24 @@ class SettingsController:
             **step_up_scope_fields(self._step_up, LOCAL_PRINCIPAL),
         }
 
-    def _connectors_state(self, cfg: dict[str, Any], org_config: dict[str, Any]) -> list[dict[str, Any]]:
+    def _connectors_state(
+        self, cfg: dict[str, Any], org_config: dict[str, Any], *, visible_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """One row per connector. ``visible_only`` drops those the organization config does not
+        enable -- what the Connectors page lists; ``privacyfence_status`` keeps them, with
+        ``blocked_by`` saying why."""
         connectors_cfg: dict[str, dict] = cfg.get("connectors", {}) or {}
         rows = []
         for cname in ALL_CONNECTORS:
             connected = cname in self._connectors
             conn_cfg = connectors_cfg.get(cname, {})
-            enabled = conn_cfg.get("enabled", True)
+            enabled = assets_enabled(cfg, org_config) if cname == "assets" else conn_cfg.get("enabled", True)
             busy = cname in self._busy_connectors
-            if cname == "telegram":
+            has_org = org_mode.connector_enabled_by_org(org_config, cname)
+            if visible_only and not has_org:
+                continue
+            if cname == "telegram" and has_org:
                 has_org = telegram_app_credentials() is not None
-            elif cname in ("grist", "peek"):
-                has_org = True  # an API key or token needs no bundle in local mode
-            else:
-                has_org = bool(org_config.get(ORG_CONFIG_SERVICE[cname]))
 
             rows.append({
                 "key": cname,
@@ -2109,7 +2224,9 @@ class SettingsController:
         decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
         different principal's logger by the time this renders (org mode)."""
         rows = policy_scope_rows.rows_from_config(cfg)
-        return _auto_accept_state_from_rows(rows, _rule_usage_map(), resolve_value=self._resolved_rule_value)
+        return _auto_accept_state_from_rows(
+            rows, _rule_usage_map(), resolve_value=self._resolved_rule_value, resolver=self._resolver,
+        )
 
     def _resolved_rule_value(self, row: policy_scope_rows.ScopeRow) -> str:
         """A row's own value, as a comma-separated display string, resolving each id through the

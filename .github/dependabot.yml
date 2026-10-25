@@ -1,13 +1,14 @@
 version: 2
 
-# Five entries, matching the five places this repo declares a dependency version:
+# Six entries, matching the six places this repo declares a dependency version:
 # pyproject.toml (the daemon), mcpb/shim/package.json (the .mcpb shim),
 # cloudflare/downloads/package.json (the downloads.privacyfence.eu Worker,
 # docs/downloads-and-release-kpi.md), tests/integration/ai_clients/package.json
 # (the exact-pinned AI-client CLIs the T3 contract tests run), and the SHA-pinned `uses:`
 # lines in .github/workflows/*.yml themselves (see those files' own comments
-# on why they're pinned to a commit instead of a tag). A PR from any of
-# these five updates only the manifest/pin — it does not regenerate
+# on why they're pinned to a commit instead of a tag), and the digest-pinned base image in
+# deploy/docker/Dockerfile (the organization-mode Docker image). A PR from any of
+# these six updates only the manifest/pin — it does not regenerate
 # requirements/*.lock.txt, which is a derived file; the
 # `lockfile-freshness` job in dependency-audit.yml catches a merged bump
 # that leaves the lock file stale before it reaches main, and
@@ -69,3 +70,12 @@ updates:
     groups:
       ai-client-clis:
         patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directory: "/deploy/docker"
+    schedule:
+      interval: "weekly"
+    # Digest bumps only: moving off Python 3.12 is a deliberate change, like the .deb's runner (ADR 0203).
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

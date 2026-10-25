@@ -28,7 +28,7 @@ import time
 import yaml
 from dataclasses import dataclass, field
 from email.utils import parseaddr
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from .principal import PrincipalRegistry, current_principal
 from .policy.resource_registry import DRIVE_SANDBOX_WRITE_TARGETS
@@ -134,6 +134,10 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "salesforce_run_report":          "salesforce.run_report",
     "salesforce_export_report":       "salesforce.run_report",
     "salesforce_search":              "salesforce.search",
+    "salesforce_create_record":       "salesforce.create_record",
+    "salesforce_update_record":       "salesforce.update_record",
+    "salesforce_create_records":      "salesforce.create_records",
+    "salesforce_update_records":      "salesforce.update_records",
     "grist_get_records":              "grist.read_records",
     "grist_export_records":           "grist.read_records",
     "grist_export_sql":               "grist.read_records",
@@ -161,6 +165,11 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "jira_add_comment":               "jira.add_comment",
     "jira_update_issue":              "jira.update_issue",
     "jira_transition_issue":          "jira.transition_issue",
+    "assets_get_object":              "assets.read_object",
+    "assets_search_objects":          "assets.read_object",
+    "assets_get_related_objects":     "assets.read_object",
+    "assets_get_connected_tickets":   "assets.read_tickets",
+    "assets_export_objects":          "assets.read_object",
     "confluence_get_page":            "confluence.read_page",
     "confluence_get_page_by_title":   "confluence.read_page",
     "confluence_download_attachment": "confluence.download_attachment",
@@ -292,6 +301,10 @@ TOOL_TO_GATE: dict[str, str] = {
     "salesforce_run_report":           "review",
     "salesforce_export_report":        "review",
     "salesforce_search":               "review",
+    "salesforce_create_record":        "popup",
+    "salesforce_update_record":        "popup",
+    "salesforce_create_records":       "popup",
+    "salesforce_update_records":       "popup",
     # Jira
     "jira_list_projects":              "auto",
     "jira_search_issues":              "auto",
@@ -345,6 +358,15 @@ TOOL_TO_GATE: dict[str, str] = {
     "grist_add_columns":               "popup",
     "grist_import_csv":                "popup",
     "grist_update_csv":                "popup",
+    # Jira Assets
+    "assets_list_schemas":             "auto",
+    "assets_list_object_types":        "auto",
+    "assets_list_attributes":          "auto",
+    "assets_search_objects":           "review",
+    "assets_get_object":               "review",
+    "assets_get_related_objects":      "review",
+    "assets_get_connected_tickets":    "review",
+    "assets_export_objects":           "review",
     # Peek
     "peek_list_pages":                 "auto",
     "peek_get_comments":               "review",
@@ -364,9 +386,24 @@ PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
     "grist_export_sql",
     "salesforce_export_report",
     "jira_export_issues",
+    "assets_export_objects",
     "peek_upload_page",
     "drive_download_file",
 })
+
+# Reads whose content reaches the AI system by design, which a token's allow_personal_data_reads flag
+# may let through when one of the token's rules covers the call.
+PERSONAL_DATA_READ_TOOLS: frozenset[str] = frozenset({
+    "gmail_get_message",
+    "gmail_get_thread",
+    "slack_get_channel_history",
+    "slack_get_thread_replies",
+    "slack_search_messages",
+})
+
+# Popup-gate tools whose payload is scanned too (the gate's upload scan): drive_upload_file's can be
+# external content the model never read, peek_upload_page's is the page body.
+UPLOAD_PII_SCAN_TOOLS: frozenset[str] = frozenset({"drive_upload_file", "peek_upload_page"})
 
 @dataclass
 class ReviewContext:
@@ -377,6 +414,7 @@ class ReviewContext:
     my_email: str = ""
     my_domain: str = field(init=False)
     session_created_ids: set = field(default_factory=set)
+    my_account_id: str = ""
 
     def __post_init__(self):
         self.my_domain = self.my_email.split("@", 1)[-1] if "@" in self.my_email else ""
@@ -623,9 +661,26 @@ def add_policy_v2_rules(rules: "list[PolicyRule]") -> bool:
     return True
 
 
-def remove_policy_v2_rule(rule_id: str) -> bool:
-    """Remove the row with this stable id from the on-disk ``auto_accept:`` section entirely.
-    Returns whether anything was actually removed."""
+def forget_removed_rules(rule_ids: Iterable[str]) -> list[str]:
+    """Drop deleted rule ids from the current principal's scoped tokens (ADR 0198), so adding the
+    same scope again cannot restore the old access. The delete is already written when this runs,
+    so a failed token write is logged and never fails or undoes it. Returns the changed labels."""
+    from . import scoped_tokens
+
+    try:
+        labels = scoped_tokens.forget_rules(current_principal(), rule_ids)
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not drop removed auto-accept rule(s) from scoped tokens: %s", exc)
+        return []
+    if labels:
+        logger.info("Dropped removed auto-accept rule(s) from scoped token(s): %s", ", ".join(labels))
+    return labels
+
+
+def remove_policy_v2_rule(rule_id: str, *, forget_in_tokens: bool = True) -> bool:
+    """Remove the row with this stable id from the on-disk ``auto_accept:`` section entirely, and
+    from every scoped token that carried it unless ``forget_in_tokens`` is false (a caller that
+    re-adds the row and decides afterwards). Returns whether anything was actually removed."""
     from .policy import scope_rows
 
     state = _REGISTRY.get()
@@ -640,6 +695,8 @@ def remove_policy_v2_rule(rule_id: str) -> bool:
         if len(remaining) == len(existing):
             return False
         _write_rows_locked(state, cfg, remaining)
+    if forget_in_tokens:
+        forget_removed_rules([rule_id])
     notify_rules_changed()
     return True
 
@@ -737,7 +794,9 @@ def notify_rules_changed() -> None:
 
 
 __all__ = [
+    "PERSONAL_DATA_READ_TOOLS",
     "PERSONAL_DATA_RULE_TOOLS",
+    "UPLOAD_PII_SCAN_TOOLS",
     "ReviewContext",
     "TEMP_ACCEPT_ELIGIBLE_OPERATIONS",
     "TEMP_ACCEPT_TTL_SECONDS",
@@ -745,6 +804,7 @@ __all__ = [
     "TOOL_TO_OPERATION",
     "add_policy_v2_rules",
     "add_rules_changed_listener",
+    "forget_removed_rules",
     "get_policy_v2_rules",
     "get_policy_v2_store_rules",
     "init_config_path",

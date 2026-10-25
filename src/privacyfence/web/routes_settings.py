@@ -121,6 +121,7 @@ restart.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import inspect
@@ -132,7 +133,7 @@ import uuid
 from datetime import datetime, timezone
 from html import escape as _html_escape
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
@@ -148,21 +149,23 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
 from ..policy import scope_rows
 from ..policy import store as policy_store
+from ..policy.value_format import RuleValueError
 from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
 from ..scoped_tokens import (
     DEFAULT_DAYS, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, get_store,
 )
-from ..agent_identity import REGISTRY, entry_for_id, sanitize_client_string
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
-    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _relative_time, _rule_usage_map,
+    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _rule_usage_map,
     audit_rows, cached_row_value, rule_resource_ids,
 )
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
-from . import org_install_policy, org_session, step_up_decide
+from . import org_install_policy, org_session, org_stats, step_up_decide
+from .personal_settings_shim import personal_transfer_shim
+from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks, build_personal_routes
 from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
@@ -176,9 +179,6 @@ from .session_auth import check_origin as _origin_ok
 from .session_auth import human_session_required_json as _human_session_required_json
 from .session_auth import is_human_session as _is_human_session
 from .session_auth import unauthorized_html as _unauthorized_response
-
-if TYPE_CHECKING:
-    from .oauth_provider import OrgOAuthProvider
 
 logger = logging.getLogger(__name__)
 
@@ -203,8 +203,7 @@ MAX_ORG_CONFIG_BYTES = 1_000_000
 # ---------------------------------------------------------------------------- #
 
 # Projected from web/org_settings_scope.py's ACTION_SCOPES -- every action
-# naming LOCAL_MODE, which is every action there is except the two
-# org-only AI-system pin actions (ADR 0035 decision 3) (local mode's own dispatcher predates that
+# naming LOCAL_MODE, which is every action there is (local mode's own dispatcher predates that
 # module's mode split and was never gated by it). That module is now the primary declaration; this is the
 # view of it local mode's own dispatch below actually consults.
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
@@ -268,16 +267,6 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "toggle_gmail_signature",
 })
 
-# The org-only actions (ADR 0035 decision 3), classified the same
-# explicit way. Pinning a DCR client to an AI system creates attested
-# identity -- the only kind a rule may key on (ADR 0006 decision 3) -- and
-# unpinning takes it away, so both are sensitive: step-up gated in org mode
-# under ADR 0034. TestOrgOnlyActionsAreClassified fails the moment an
-# ORG_MODE-only ACTION_SCOPES entry lands without a matching entry here.
-_ORG_ONLY_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
-    "pin_agent_client", "unpin_agent_client",
-})
-
 # ---------------------------------------------------------------------------- #
 # _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS above only cover the generic
 # POST /api/settings/{action} dispatcher. A bespoke route such as
@@ -316,6 +305,12 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
     "/api/settings/scoped_tokens/create",
     "/api/settings/scoped_tokens/revoke",
     "/api/settings/scoped_tokens/revoke_all",
+    # A name is what the audit log shows for the token, so renaming goes
+    # through the same gates as creating and revoking.
+    "/api/settings/scoped_tokens/rename",
+    # Importing personal settings widens what is auto-accepted exactly as adding a rule does
+    # (merge-only, previewed, passkey bound to the file's hash).
+    "/api/settings/personal/import",
 })
 
 # Every other bespoke (non-generic-dispatch) route, and why it doesn't need
@@ -324,6 +319,8 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
 _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
     "/api/settings/quit_app": "its own confirmed=true gate -- doesn't change what gets gated",
     "/api/settings/audit_log/download": "a GET -- read-only export, no mutation",
+    "/api/settings/personal/preview": "parses an uploaded file and returns a preview; changes nothing",
+    "/api/settings/personal/export": "a GET -- read-only export, no mutation",
     "/api/settings/mcp_token/copy": (
         "puts the owner's own MCP token on the clipboard through the companion -- a token "
         "anything running as this user can already get over MINT MCP, and one that cannot "
@@ -353,12 +350,16 @@ class ScopedTokenWiring:
     all of it run for the owner. ``store_create`` returns the new token and
     its secret and raises ``ScopedTokenError`` with text meant for the
     person; ``store_revoke`` returns the token it removed, or ``None``;
+    ``store_rename`` takes the token id and the new name and returns the old
+    name and the renamed token (or ``None`` for an unknown id), raising
+    ``ScopedTokenError`` like ``store_create``;
     ``send_secret`` hands the secret to the companion, which puts it on the
     clipboard, so no response from this module ever carries it;
     ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
 
-    store_create: Callable[[str, int, list[str], list[str], bool], tuple[ScopedToken, str]]
+    store_create: Callable[[str, int, list[str], list[str], bool, bool], tuple[ScopedToken, str]]
     store_revoke: Callable[[str], ScopedToken | None]
+    store_rename: Callable[[str, str], tuple[str, ScopedToken] | None]
     store_revoke_all: Callable[[], int]
     send_secret: Callable[[str], tuple[bool, str]]
     page_data: Callable[[], dict[str, Any]]
@@ -378,15 +379,25 @@ def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
     allow_personal_data = payload.get("allow_personal_data", False)
     if not isinstance(allow_personal_data, bool):
         return None
+    allow_personal_data_reads = payload.get("allow_personal_data_reads", False)
+    if not isinstance(allow_personal_data_reads, bool):
+        return None
     return {
         "label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools),
-        "allow_personal_data": allow_personal_data,
+        "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
     }
 
 
 def _scoped_revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
     token_id = payload.get("token_id")
     return {"token_id": token_id} if isinstance(token_id, str) else None
+
+
+def _scoped_rename_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+    token_id, label = payload.get("token_id"), payload.get("label")
+    if isinstance(token_id, str) and isinstance(label, str):
+        return {"token_id": token_id, "label": label}
+    return None
 
 
 class _BadAction(Exception):
@@ -572,11 +583,11 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  var scopedRoutes = {create_scoped_token: ['create', orgPage ? 'Create this token? It is shown once "
         "and cannot be shown again.' : 'Create this token? It is copied to your "
         "clipboard once and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
-        "Clients using it stop working at once.'], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
+        "Clients using it stop working at once.'], rename_scoped_token: ['rename', null], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
         "scoped tokens?']};"
         "  var scopedAction = scopedRoutes.hasOwnProperty(action);"
         "  if (scopedAction) {"
-        "    if (!window.confirm(scopedRoutes[action][1])) { return; }"
+        "    if (scopedRoutes[action][1] && !window.confirm(scopedRoutes[action][1])) { return; }"
         "    url = '/api/settings/scoped_tokens/' + scopedRoutes[action][0]; rest.confirmed = true;"
         "  }"
         "  if (action === 'quit_app') {"
@@ -621,6 +632,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "    } else if (res.ok && scopedAction) { window.location.reload(); } "
         "else if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
         "else if (!res.ok && (tokenAction || scopedAction) && res.state && res.state.error) { window.alert(res.state.error); } "
+        "else if (!res.ok && res.state && typeof res.state.error === 'string' && window.__pfShowError) { window.__pfShowError(res.state.error); } "
         "else if (!res.ok) { console.error('PrivacyFence action failed:', action, res.state); } });"
         "}};"
         "})();</script>"
@@ -701,7 +713,7 @@ def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
     special-casing the other's default."""
     return (
         step_up is not None and step_up.enabled and step_up.require_passkey
-        and (action in _SENSITIVE_ACTIONS or action in _ORG_ONLY_SENSITIVE_ACTIONS)
+        and action in _SENSITIVE_ACTIONS
     )
 
 
@@ -827,7 +839,7 @@ def build_routes(
     ``require_human_session`` asks for one, and the passkey step-up whenever
     ``step_up.require_passkey`` is on.
 
-    ``scoped_tokens`` adds the "Scoped tokens" section's three routes
+    ``scoped_tokens`` adds the "Scoped tokens" section's four routes
     (ADR 0164): create, revoke and revoke all. Each takes the rotate
     route's gates -- an explicit confirmation, a human session where
     ``require_human_session`` asks for one, and the passkey step-up bound to
@@ -869,6 +881,7 @@ def build_routes(
             state, nonce=nonce, initial_section=initial_section,
             ai_client={"mcp_url": ai_client.mcp_url} if ai_client is not None else None,
             scoped_tokens=scoped_tokens.page_data() if scoped_tokens is not None else None,
+            personal_transfer=True,
         )
         csrf = request.cookies.get(_SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS: the same ceremony helpers web/
@@ -879,6 +892,7 @@ def build_routes(
         # exercised depends on config, not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         # Read off this request's own fresh snapshot, not the notifications_
         # enabled/detail closure args above -- those are only the daemon-
         # startup defaults (server.py's own initial config read), and the
@@ -1151,7 +1165,7 @@ def build_routes(
     async def _scoped_token_request(
         request: Request, action: str, what: str, fingerprint_body: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> tuple[dict[str, Any], dict[str, Any]] | Response:
-        """The gates the three scoped token routes share, in the rotate
+        """The gates the four scoped token routes share, in the rotate
         route's order. Returns the JSON body and the step-up fingerprint
         body, or the response that refuses the request."""
         if not _authenticated(request):
@@ -1202,7 +1216,7 @@ def build_routes(
         try:
             token, secret = await run_in_threadpool(
                 scoped_tokens.store_create, bound["label"], bound["days"], bound["rule_ids"], bound["tools"],
-                bound["allow_personal_data"],
+                bound["allow_personal_data"], bound["allow_personal_data_reads"],
             )
         except ScopedTokenError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1241,6 +1255,29 @@ def build_routes(
             _record_settings_audit(LOCAL_PRINCIPAL, f"Revoked scoped token '{revoked.label}' ({revoked.id})")
         return JSONResponse({"revoked": {"id": revoked.id}})
 
+    async def scoped_token_rename(request: Request) -> Response:
+        assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
+
+        gated = await _scoped_token_request(
+            request, "rename_scoped_token", "rename a scoped token", _scoped_rename_fingerprint_body,
+        )
+        if isinstance(gated, Response):
+            return gated
+        _payload, bound = gated
+        try:
+            result = await run_in_threadpool(scoped_tokens.store_rename, bound["token_id"], bound["label"])
+        except ScopedTokenError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if result is None:
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        old_label, renamed = result
+        if old_label != renamed.label:
+            with principal_scope(LOCAL_PRINCIPAL):
+                _record_settings_audit(
+                    LOCAL_PRINCIPAL, f"Renamed scoped token '{old_label}' to '{renamed.label}' ({renamed.id})",
+                )
+        return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
+
     async def scoped_token_revoke_all(request: Request) -> Response:
         assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
         gated = await _scoped_token_request(
@@ -1266,6 +1303,58 @@ def build_routes(
             headers={"Cache-Control": "no-store"},
         )
 
+    def _local_personal_hooks() -> PersonalSettingsHooks:
+        """Export/import of the person's own settings (web/personal_settings_routes.py), wired for
+        local mode: the one principal is ``LOCAL_PRINCIPAL``, rows go through the controller's own
+        writer so a hot-reload and the audit hash behave as for a rule added in Settings."""
+
+        def authenticate(request: Request) -> Principal | None:
+            return LOCAL_PRINCIPAL if _authenticated(request) else None
+
+        def check_mutation(request: Request, csrf: str | None) -> Response | None:
+            if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            if not _origin_ok(request):
+                return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+            if require_human_session and not _is_human_session(request, sessions):
+                body, status = _human_session_required_json("import personal settings")
+                return JSONResponse(body, status_code=status)
+            return None
+
+        def step_up_state() -> tuple[bool, str | None]:
+            if step_up is None:
+                return False, None
+            return step_up.enabled, step_up.scope
+
+        def step_up_gate(principal: Principal, fingerprint_body: dict[str, Any], assertion: object) -> Response | None:
+            if not _step_up_in_force():
+                return None
+            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
+            confirmed_step_up: StepUpConfig = step_up
+            return _verify_or_challenge(
+                principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+                subject_key=STEP_UP_SUBJECT_KEY,
+                fingerprint=_action_fingerprint(STEP_UP_SUBJECT_KEY, fingerprint_body), assertion=assertion,
+                challenges=challenges,
+                step_up_response=lambda: _settings_step_up_response(
+                    principal, STEP_UP_SUBJECT_KEY, fingerprint_body,
+                    step_up=confirmed_step_up, challenges=challenges,
+                ),
+            )
+
+        return PersonalSettingsHooks(
+            authenticate=authenticate,
+            check_mutation=check_mutation,
+            open_scope=principal_scope,
+            scope_error=lambda principal, exc: None,
+            read_rows=lambda: controller.policy_rows(),
+            merge_rules=lambda rules: controller.import_policy_rules(rules),
+            step_up_state=step_up_state,
+            step_up_gate=step_up_gate,
+            audit=_record_settings_audit,
+            mode="local",
+        )
+
     routes: list[BaseRoute] = [
         Route("/settings", settings_page),
         Route("/settings/connectors", settings_connectors_page),
@@ -1282,8 +1371,10 @@ def build_routes(
         routes += [
             Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
+            Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         ]
+    routes += build_personal_routes(_local_personal_hooks())
     routes.append(Route("/api/settings/{action}", settings_action, methods=["POST"]))
     for route in routes:
         # isinstance, not getattr: every entry above is a plain Route (never
@@ -1344,7 +1435,6 @@ _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
     "toggle_pii_detection", "toggle_pii_category",
     "set_default_policy", "set_category_policy",
-    "pin_agent_client", "unpin_agent_client",
     "set_step_up_scope",
 })
 
@@ -1356,12 +1446,12 @@ def build_org_routes(
     install_wide_settings_path: str = "",
     step_up: StepUpConfig,
     step_up_origin: str,
-    oauth_provider: OrgOAuthProvider | None = None,
     connector_registry: ConnectorRegistry | None = None,
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
-) -> list[Route]:
+    org_config: dict[str, Any] | None = None,
+) -> list[BaseRoute]:
     """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
     ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
     settings_window_html.build_html() local mode's own
@@ -1408,13 +1498,6 @@ def build_org_routes(
     than leaving a default that would silently leave org-mode settings
     writes ungated for a caller that forgets to pass it.
 
-    ``oauth_provider`` (ADR 0035 decision 3) backs the admin-only
-    "AI systems" page: its DCR registrations are what an admin pins to a
-    registry AI system (``pin_agent_client``/``unpin_agent_client``, both
-    admin-only and step-up gated), and its ``agent_pins`` store is where the
-    pins land. ``None`` (a caller with no OAuth server, this module's own
-    older tests) shows an empty page and rejects a pin with a 400.
-
     ``connector_registry`` lets the Auto-accept page show a rule's resource ids (a Drive folder, a
     task list, a Jira project, ...) by name, the way local mode's page does: an id with no cached
     name yet is resolved through *this principal's own* connectors (``ConnectorRegistry.get``),
@@ -1423,10 +1506,14 @@ def build_org_routes(
     whatever names are already cached and a shortened id otherwise, never a lookup.
 
     ``scoped_token_policy`` is what the administrator's org config bundle says about scoped
-    tokens (ADR 0165); ``None`` is "not enabled". The three scoped token routes are always
+    tokens (ADR 0165); ``None`` is "not enabled". The four scoped token routes are always
     mounted and answer 403 until it is enabled. ``scoped_token_store`` is the process-wide
     store unless a test passes its own; ``scoped_token_page_data`` builds the Settings
     section's data for the signed-in principal (``None``: the section is not drawn).
+
+    ``org_config`` is the installed org config bundle; the admin-only Stats page (ADR 0217,
+    web/org_stats.py) reads it to tell which connectors the org offers. ``None`` counts every
+    connector as not offered, so only those someone has connected are listed.
     """
     challenges = StepUpChallengeStore()
     token_policy = scoped_token_policy or ScopedTokenPolicy(enabled=False, max_days=DEFAULT_DAYS)
@@ -1492,8 +1579,8 @@ def build_org_routes(
         fail-closed ``"block"`` default for an unconfigured group --
         unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
         Auto-accept reads this principal's own on-disk rules; Audit Log
-        this principal's own recent decisions; AI systems (admin only,
-        ADR 0035 decision 3) the OAuth provider's registrations and pins. Sections
+        this principal's own recent decisions; Stats (admin only,
+        ADR 0217) install-wide counts from every principal's files on disk. Sections
         this mode never shows at all (Connectors) get an inert
         placeholder -- settings_window_html._capabilities_for is what
         actually keeps them from ever rendering, not the shape of a
@@ -1549,41 +1636,13 @@ def build_org_routes(
             "grist_auth": {"error": ""},
             "auto_accept": _auto_accept_state_from_rows(
                 rows, _rule_usage_map(), resolve_value=lambda row: cached_row_value(row, resolver),
+                resolver=resolver,
             ),
             "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
-            "agents": _agents_state() if principal.is_admin else {"clients": [], "stale_pins": [], "registry": []},
+            "stats": org_stats.collect(org_config or {}) if principal.is_admin else org_stats.empty(),
             "about": about,
         }
-
-    def _agents_state() -> dict[str, Any]:
-        """The admin's "AI systems" page: every current DCR registration with its
-        claimed name and pin, every pin whose registration the TTL prune removed (stale --
-        inert, shown so an admin can clear it; ADR 0035 decision 3), and the registry an admin
-        can pin to. ``client_name`` is the caller's own string: sanitized here, escaped by the
-        page."""
-        registry = [{"id": entry.agent_id, "name": entry.display_name} for entry in REGISTRY]
-        if oauth_provider is None:
-            return {"clients": [], "stale_pins": [], "registry": registry}
-        pins = oauth_provider.agent_pins.pins()
-        clients = []
-        for client in sorted(oauth_provider.list_clients(), key=lambda c: -c.last_used_at):
-            pin = pins.get(client.client_id)
-            entry = entry_for_id(pin.agent_id) if pin is not None else None
-            clients.append({
-                "client_id": client.client_id,
-                "client_name": sanitize_client_string(client.client_name),
-                "last_used": _relative_time(datetime.fromtimestamp(client.last_used_at, timezone.utc).isoformat()),
-                "pinned_agent_id": entry.agent_id if entry is not None else "",
-                "pinned_agent_name": entry.display_name if entry is not None else "",
-            })
-        live = {c["client_id"] for c in clients}
-        stale = []
-        for client_id, pin in sorted(pins.items()):
-            entry = entry_for_id(pin.agent_id)
-            if client_id not in live and entry is not None:
-                stale.append({"client_id": client_id, "agent_id": entry.agent_id, "agent_name": entry.display_name})
-        return {"clients": clients, "stale_pins": stale, "registry": registry}
 
     def _resolve_rule_names(principal: Principal, pending: list[tuple[Any, str]]) -> None:
         """Worker-thread half of ``_await_rule_names``: resolve each ``(resource type, id)``
@@ -1624,7 +1683,7 @@ def build_org_routes(
                 rt, resource_ids = rule_resource_ids(compiled[0]) if compiled else (None, [])
                 if rt is not None:
                     pending.extend(
-                        (rt, rid) for rid in resource_ids if rid and resolver.cached_name(rt, rid) is None
+                        (rt, rid) for rid in resource_ids if rid and resolver.needs_resolve(rt, rid)
                     )
         if not pending:
             return
@@ -1659,6 +1718,63 @@ def build_org_routes(
             "An administrator needs to update it; the server log names the file."
         )
 
+    @contextlib.contextmanager
+    def _open_personal_scope(principal: Principal) -> typing.Iterator[None]:
+        """``principal_scope`` plus the lazy settings load; a ``V1PolicyConfigError`` propagates
+        to ``_personal_scope_error``."""
+        with principal_scope(principal):
+            _ensure_principal_settings_loaded()
+            yield
+
+    def _personal_scope_error(principal: Principal, exc: Exception) -> Response | None:
+        if isinstance(exc, policy_store.V1PolicyConfigError):
+            return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
+        return None
+
+    def _personal_check_mutation(request: Request, csrf: str | None) -> Response | None:
+        if not org_session.check_csrf(request, csrf):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        return None
+
+    def _personal_step_up_gate(
+        principal: Principal, fingerprint_body: dict[str, Any], assertion: object,
+    ) -> Response | None:
+        if not (step_up is not None and step_up.enabled and step_up.require_passkey):
+            return None
+        confirmed_step_up: StepUpConfig = step_up
+        response = _verify_or_challenge(
+            principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+            subject_key=STEP_UP_SUBJECT_KEY,
+            fingerprint=_action_fingerprint(STEP_UP_SUBJECT_KEY, fingerprint_body), assertion=assertion,
+            challenges=challenges,
+            step_up_response=lambda: _settings_step_up_response(
+                principal, STEP_UP_SUBJECT_KEY, fingerprint_body,
+                step_up=confirmed_step_up, challenges=challenges,
+            ),
+        )
+        if response is not None:
+            with principal_scope(principal):
+                _record_settings_audit(
+                    principal,
+                    f"Step-up required for {STEP_UP_SUBJECT_KEY!r}, refused (principal={principal.id})",
+                )
+        return response
+
+    personal_hooks = PersonalSettingsHooks(
+        authenticate=_current_principal,
+        check_mutation=_personal_check_mutation,
+        open_scope=_open_personal_scope,
+        scope_error=_personal_scope_error,
+        read_rows=lambda: auto_accept.get_policy_rows(),
+        merge_rules=lambda rules: auto_accept.add_policy_v2_rules(rules),
+        step_up_state=lambda: (step_up.enabled, step_up.scope),
+        step_up_gate=_personal_step_up_gate,
+        audit=_record_settings_audit,
+        mode="org",
+    )
+
     def _org_scoped_token_data(principal: Principal) -> dict[str, Any] | None:
         if not token_policy.enabled or scoped_token_page_data is None:
             return None
@@ -1668,7 +1784,7 @@ def build_org_routes(
     async def _org_scoped_token_request(
         request: Request, action: str, fingerprint_body: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> tuple[Principal, dict[str, Any]] | Response:
-        """The gates the three org scoped token routes share (ADR 0165), in
+        """The gates the four org scoped token routes share (ADR 0165), in
         ``settings_action``'s order: session, CSRF, origin, the administrator's
         opt-in, confirmation, then the passkey step-up when the org requires
         one. Returns the principal and the step-up fingerprint body, or the
@@ -1726,6 +1842,7 @@ def build_org_routes(
                         principal, label=bound["label"], days=bound["days"], rule_ids=bound["rule_ids"],
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
+                        allow_personal_data_reads=bound["allow_personal_data_reads"],
                     ),
                 )
             except ScopedTokenError as exc:
@@ -1736,6 +1853,7 @@ def build_org_routes(
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
                 f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)"
                 + (", personal data allowed" if token.allow_personal_data else "")
+                + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
                 + f" (principal={principal.id})",
             )
         # The only place the secret ever leaves the server: this one answer.
@@ -1758,6 +1876,28 @@ def build_org_routes(
                 principal, f"Revoked scoped token '{token.label}' ({token.id}) (principal={principal.id})",
             )
         return JSONResponse({"revoked": {"id": token.id}})
+
+    async def scoped_token_rename(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "rename_scoped_token", _scoped_rename_fingerprint_body)
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        store = scoped_token_store or get_store()
+        try:
+            result = await run_in_threadpool(store.rename, principal, bound["token_id"], bound["label"])
+        except ScopedTokenError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if result is None:
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        old_label, renamed = result
+        if old_label != renamed.label:
+            with principal_scope(principal):
+                _record_settings_audit(
+                    principal,
+                    f"Renamed scoped token '{old_label}' to '{renamed.label}' ({renamed.id}) "
+                    f"(principal={principal.id})",
+                )
+        return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
 
     async def scoped_token_revoke_all(request: Request) -> Response:
         gated = await _org_scoped_token_request(request, "revoke_all_scoped_tokens", lambda payload: {})
@@ -1793,7 +1933,7 @@ def build_org_routes(
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
             mode=ORG_MODE, is_admin=principal.is_admin,
-            scoped_tokens=_org_scoped_token_data(principal),
+            scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
@@ -1802,6 +1942,7 @@ def build_org_routes(
         # StepUpConfig, not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         html = web_shell.wrap(
             body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
             nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal.email or principal.display_name or principal.id,
@@ -1865,8 +2006,11 @@ def build_org_routes(
             verb_enums = policy_catalogue.parse_verbs(body.get("verbs") or [])
             if not verb_enums:
                 return None
-            value = _parse_value_list(str(body.get("value") or ""))
-            new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            value = _parse_value_list(str(body.get("value") or ""), group)
+            try:
+                new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            except RuleValueError as exc:
+                raise org_install_policy.PolicyChangeRejected(str(exc)) from exc
             if not new_rules:
                 return None
             row_ids = auto_accept.policy_row_ids_for(new_rules)
@@ -1903,13 +2047,6 @@ def build_org_routes(
             )
         if action == "set_step_up_scope":
             return _set_step_up_scope(principal, body)
-        if action == "pin_agent_client":
-            return _pin_agent_client(principal, body)
-        if action == "unpin_agent_client":
-            client_id = str(body.get("client_id", ""))
-            if oauth_provider is None or not oauth_provider.agent_pins.unpin(client_id):
-                return None
-            return f"Unpinned OAuth client {client_id!r} from its AI system (admin={principal.id})"
         # The remaining four actions are all install-wide admin writes,
         # applied through org_install_policy.apply_change.
         if action in ("toggle_pii_detection", "toggle_pii_category"):
@@ -1930,28 +2067,6 @@ def build_org_routes(
         if after == before:
             return None
         return f"Step-up scope for this principal changed from {before!r} to {after!r} (principal={principal.id})"
-
-    def _pin_agent_client(principal: Principal, body: dict[str, Any]) -> str | None:
-        """Pin one *current* registration to a registry AI system. Both halves are validated
-        against server-side state, never taken on trust from the body: the ``client_id`` must
-        be a live registration (a pin names a registration, not a name) and the ``agent_id``
-        a registry entry. The audit line carries the registration's claimed name so a
-        reviewer can see what the admin was looking at when they pinned it."""
-        client_id = str(body.get("client_id", ""))
-        agent_id = str(body.get("agent_id", ""))
-        if oauth_provider is None or not oauth_provider.has_client(client_id):
-            raise org_install_policy.PolicyChangeRejected(f"no registered OAuth client {client_id!r}")
-        entry = entry_for_id(agent_id)
-        if entry is None:
-            raise org_install_policy.PolicyChangeRejected(f"{agent_id!r} is not a known AI system")
-        if oauth_provider.agent_pins.pinned_agent_id(client_id) == entry.agent_id:
-            return None
-        oauth_provider.agent_pins.pin(client_id, entry.agent_id, pinned_by=principal.id)
-        claimed = sanitize_client_string(oauth_provider.client_name(client_id))
-        return (
-            f"Pinned OAuth client {client_id!r} (registered as {claimed!r}) to AI system "
-            f"{entry.agent_id!r} (admin={principal.id})"
-        )
 
     async def settings_action(request: Request) -> Response:
         """The generic ``POST /api/settings/{action}`` dispatcher org
@@ -2011,6 +2126,8 @@ def build_org_routes(
         Route("/settings/privacy", privacy_page),
         Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
+        Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
+        *build_personal_routes(personal_hooks),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]

@@ -192,7 +192,7 @@ depends on where it came from:
 
 | Shown as | Meaning |
 |---|---|
-| The AI system's name and logo, with a **Verified** badge | Organization deployments only: an administrator pinned the OAuth client this request was made with to that AI system, on the **AI systems** settings page. The client could not have chosen this name itself |
+| The AI system's name and logo, with a **Verified** badge | Organization deployments only: the OAuth client this request was made with registered only with that AI system's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), with no administrator step. See [AI systems](org-mode-setup-guide.md#11-ai-systems) |
 | "Says it is …" with a **Not verified** badge | The name the AI system reported about itself, or a relabel set in `agent_overrides:`. PrivacyFence cannot confirm it |
 | "Unrecognised AI system", with the claimed name in quotes if one was sent | The name matches no known AI system, or none was sent |
 
@@ -304,7 +304,10 @@ one row per Drive folder or Gmail sender domain — as a sentence, with colour-c
 **Unblocks N tools** disclosure listing exactly which tools it covers, how often it has matched
 ("Matched 42x, last 3 days ago", or "Never matched"), **Edit verbs** and **✕ Remove**. You can
 filter by connector, verb family or text. **Add a rule** takes a scope, a value where the scope
-needs one (comma-separated for several), and the verbs to allow; adding verbs to a scope that
+needs one (comma-separated for several), and the verbs to allow; for a Drive folder, Slack
+channel, Jira project and the like the value must be the resource's id (not its name or title; label
+names and file types are the exceptions), and a value that is not shaped like an id is refused with
+a message saying what to enter; adding verbs to a scope that
 already has a rule extends that rule instead of creating a second one. **Edit verbs** switches
 verbs on or off for an existing rule: a verb you add covers all of its tools, a verb you remove
 stops covering its tools, and a verb the rule already had keeps exactly the tools it had. Rules
@@ -363,6 +366,10 @@ auto_accept:
 - `id` is derived from the predicate, value and conditions, so the same rule always has the same
   id — the audit log and the Auto-accept page's match counts use it.
 
+To move your rules to another install, use **Export…** and **Import…** on Settings > Auto-accept.
+The file carries your always-allow rules and your step-up level only, and import only adds. See
+[Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
+
 Prefer the three surfaces above to hand-editing: they validate the rule and mint its id. A
 hand-edited entry that is malformed, or names an unknown predicate or condition, never matches
 anything. A `settings.yaml` that still has an `auto_accept_rules:` or `auto_accept_grants:` section
@@ -387,21 +394,25 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Gmail sender domain | attribute | domains | `trusted_sender_domain` | the sender's domain is one of these or a subdomain of one |
 | Gmail recipient | identity | — | `to_is_myself`, `i_am_sole_recipient` | every `to` address is yours (`to_is_myself`); you are the message's only recipient (`i_am_sole_recipient`) |
 | Gmail recipient domain | attribute | domains | `approved_recipient_domain` | every recipient is in one of these domains |
-| Gmail label | identity | label names | `label_match`, `label_name_allowlist` | the message carries one of the labels; the label being applied or removed is one of these |
+| Gmail label | identity | label names | `label_match`, `label_name_allowlist` | the message carries one of the labels, compared by name with its live labels (this lets a rule allow archiving); the label being applied or removed is one of these |
+| Gmail query | attribute | one Gmail search expression | `gmail.query` | Gmail's own search, run against the message when it is read, finds it; for a thread, every message matches. A per-message operator such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it |
 | Gmail / Calendar — anything | attribute | — | `always_allow` | always (unconditional) |
 | Gmail — anything | attribute | — | `gmail.anything` | always (used for Gmail filters) |
 | Slack channel | identity | channel or user ids | `approved_channel`, `approved_channel_all_results`, `approved_recipient`, `send_to_myself` | the channel is one of these; for a search, every result is in one of them; `send_to_myself` takes no ids and holds only for your DM with yourself |
-| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is your DM with yourself (a DM with anyone else, or one PrivacyFence could not confirm as yours, never matches); a group DM; every result is from a public channel |
+| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is your DM with yourself (a DM with anyone else, or one PrivacyFence could not confirm as yours, never matches); every group DM; every result is from a public channel |
+| Slack mentions of me | attribute | — | `slack.mentions_of_me`, `slack.mentions_of_me_all_results` | search: every result @-mentions you; read: a thread in which at least one message does |
+| Slack conversations I'm a member of | attribute | channel ids to exclude (optional) | `slack.my_conversations`, `slack.my_conversations_all_results` | you are a member of the conversation now (checked with Slack on each call) and it is not excluded; for a search made with `member_only`, every result is from such a conversation |
+| Slack direct messages to me | attribute | — | `slack.direct_messages_to_me` | the channel is a one-to-one DM |
 | Slack — anything | attribute | — | `slack.anything` | always (used for creating group chats) |
 | Telegram chat | identity | chat ids | `approved_chats`, `approved_chats_all_results` | the chat is one of these; for a search, every result is in one of them |
 | Calendar | identity | calendar ids | `personal_calendar` | the call's calendar is one of these |
 | Calendar events I organize | attribute | — | `i_am_organizer` | you are the event's organizer |
 | Tasks list | identity | task list ids | `approved_task_list` | the list is one of these; for a move, both lists are |
 | Jira project | identity | project keys | `approved_project_keys`, `approved_project_keys_all_results` | the project (or the issue key's project) is one of these; for a search, every result is in one of them |
-| Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | you are the reporter; you are the assignee |
+| Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | your Atlassian account is the reporter; your Atlassian account is the assignee (compared by account id, never by a name or email; [ADR 0199](adr/0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md)) |
 | Confluence space | identity | space keys | `approved_space_keys` | the page's space is one of these |
-| Confluence pages I wrote | attribute | — | `i_am_author` | you are the page's author |
-| Salesforce object type | attribute | object names | `approved_object_types` | every requested object type is one of these |
+| Confluence pages I wrote | attribute | — | `i_am_author` | your Atlassian account is the page's author (compared by account id) |
+| Salesforce object type | attribute | object names | `approved_object_types` | every requested or written object type is one of these |
 | Salesforce report | identity | report ids | `approved_report_ids` | the report is one of these |
 | Contacts label | identity | label names | `label_name_allowlist` | the label being applied or removed is one of these |
 | Apps Script project | identity | script ids | `apps_script.project` | the script is one of these |
@@ -410,7 +421,9 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
-A Grist document rule, an approved-report rule and a Jira project search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) for the same document, report or project; the PII gate still applies to them unless the call is made with a scoped token that allows personal data (below).
+A rule whose match depends on the fetched message (a Gmail label used to archive, a Gmail query, Slack mentions, a one-to-one DM) gives `unknown` from `privacyfence_check_policy`, which decides from the call's arguments and never fetches. The gate still applies the rule when the call is made.
+
+A Grist document rule, an approved-report rule, a Jira project search rule and a Jira Assets schema search rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`) for the same document, report, project or schema; the PII gate still applies to them unless the call is made with a scoped token that allows personal data (below).
 
 **Peek page.** A Peek page rule names page slugs and is set only in Settings; the card offers no "Always allow" button for Peek. *Read* covers `peek_get_comments` and `peek_get_stats` for those pages, and *add* covers `peek_upload_page` with one of those slugs, which publishes a new version. It never covers a new page, a visibility change, a rename or a delete.
 
@@ -420,11 +433,15 @@ The [PII check](#the-pii-check) keeps personal data out of the AI system's conte
 
 | Scope | The token then lets through |
 |---|---|
-| Grist document, Salesforce report, Jira project | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues` |
+| Grist document, Salesforce report, Jira project, Jira Assets schema | `grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects` |
 | Peek page | `peek_upload_page` with the page's slug |
 | Drive folder | `drive_download_file`, when the file is saved or handed over through a one-time link |
 
 **Personal data and scoped tokens.** The permission belongs to the [scoped token](connect-claude-code.md#scoped-tokens), not to a rule. On the **New token** form in **Settings → Scoped tokens**, tick **Let exports, downloads and page uploads carry personal data**. It applies only to calls made with that token, covers all of the token's rules, and is shown as "personal data allowed" in the token list. A matching call then runs without a card or a second confirmation even when the scan finds personal data, in an unattended session too, but only for the tools above and only when one of the token's rules matches. A call made without a token (an ordinary Claude session) always stops for review when personal data is found. A Drive download whose content comes back inside the tool result (an organization install returns a small file inline) keeps the check even with the box ticked. Every other tool still scans. The box exists only in Settings, behind your passkey: `privacyfence_propose_policy_change` cannot set it. The audit log records the call as auto-accepted by the rule, with the categories found; on an organization install, creating the token is audited as "personal data allowed". Rules saved before this change that allowed personal data were converted when you upgraded: the scoped tokens that used such a rule now carry the box. See [ADR 0173](adr/0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md), [ADR 0157](adr/0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) and [ADR 0158](adr/0158-peek-rules-name-pages-and-cover-only-new-versions.md).
+
+**Personal data in reads.** A second checkbox, **Let reads return personal data**, lets the token's reads of Gmail messages and threads and of Slack channel history, thread replies and search (`gmail_get_message`, `gmail_get_thread`, `slack_get_channel_history`, `slack_get_thread_replies`, `slack_search_messages`) return content that holds personal data, when one of the token's rules covers the call. It is independent of the first box, applies only to calls made with that token, and is shown as "personal data in reads allowed" in the token list. The scan still runs: the audit log records the call as auto-accepted with the categories found. A read made without a token, or with a token that lacks the box, is still stopped (a card for an ordinary session, a denial for a token). See [ADR 0219](adr/0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md).
+
+`privacyfence_check_policy` reports per call whether the personal-data scan applies to it and whether the caller's token lifts it (`pii_gate`, `pii_gate_detail`); `privacyfence-sync preflight` uses this to warn per step.
 
 ### Conditions
 

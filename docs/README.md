@@ -13,7 +13,7 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   approval, and troubleshooting shared by every platform.
 - [`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md),
   [`install-linux.md`](install-linux.md) — install, first start, troubleshoot, uninstall. One page
-  per platform; connecting an AI client is under "AI agent setup" below.
+  per platform.
 - [`platform-support.md`](platform-support.md) — supported OS versions and architectures, where
   PrivacyFence keeps its data, logs, and start/stop commands.
 - [`connecting-a-service.md`](connecting-a-service.md) — connecting Gmail, Slack and the other
@@ -35,6 +35,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 
 - [`org-mode-setup-guide.md`](org-mode-setup-guide.md) — deploy PrivacyFence centrally for an
   organization, including claude.ai as a client.
+- [`org-mode-docker.md`](org-mode-docker.md) — run the organization deployment as containers: the
+  published image, a tested Compose file with Caddy, upgrades, backups and verifying the image.
 - [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up
   authentication, privilege separation, audit integrity, and what PrivacyFence does not claim.
 
@@ -47,7 +49,7 @@ bundle:
   Contacts, Tasks and Apps Script
 - [`slack-setup.md`](slack-setup.md)
 - [`salesforce-setup.md`](salesforce-setup.md)
-- [`atlassian-setup.md`](atlassian-setup.md) — Jira and Confluence
+- [`atlassian-setup.md`](atlassian-setup.md) — Jira, Confluence and Jira Assets
 - [`telegram-setup.md`](telegram-setup.md)
 - [`grist-setup.md`](grist-setup.md)
 - [`peek-setup.md`](peek-setup.md)
@@ -58,7 +60,8 @@ Connecting each AI client, in local mode and in an organization deployment:
 
 - [`connect-claude-desktop.md`](connect-claude-desktop.md) — Claude Desktop, through the extension
   or as a custom connector
-- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code
+- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code, over HTTP with your own token
+  or through OAuth sign-in to an organization deployment
 - [`connect-claude-ai.md`](connect-claude-ai.md) — claude.ai, through an organization deployment
 - [`connect-chatgpt.md`](connect-chatgpt.md) — ChatGPT desktop on your own computer, and ChatGPT
   (Developer Mode) through an organization deployment

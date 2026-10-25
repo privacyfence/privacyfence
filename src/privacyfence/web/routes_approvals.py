@@ -33,8 +33,8 @@ pattern web/routes_security.py's own ``build_routes()`` already uses for
   local mode has nothing to fall back to), not incidental duplication; see
   ADR 0066.
 - ``bridge_shim`` -- the org variant additionally handles a ``428``'s
-  ``idp_stepup_url`` and a ``403``'s ``enroll_url`` in the injected JS; kept
-  as ``_bridge_shim``/``_org_bridge_shim`` for the same reason.
+  ``idp_stepup_url`` (a button that POSTs to it) and a ``403``'s
+  ``enroll_url`` in the injected JS; kept as ``_bridge_shim``/``_org_bridge_shim`` for the same reason.
 - ``render_list_page`` -- local's carries the step-up enrollment banner and
   the notifications-detail dial; org's carries the signed-in principal's
   label and subscribes to ``/api/approvals/stream`` for live updates (org mode
@@ -73,7 +73,7 @@ takes the human-session half for local mode, the same way it already does
 for an ordinary approving decision.
 
 **Org-only IdP step-up** (``_StepUpAuthAttemptStore``,
-``GET /api/approvals/{id}/stepup/idp``, ``GET /oauth/stepup/callback``) has
+``POST /api/approvals/{id}/stepup/idp``, ``GET /oauth/stepup/callback``) has
 no local-mode analogue at all -- local has no IdP to re-authenticate
 against -- so it stays a small separate module,
 web/routes_org_stepup.py, mounted only by ``_build_org_app`` alongside this
@@ -95,6 +95,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -228,10 +229,9 @@ def _org_step_up_response(
             {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
         )
     if not step_up.require_passkey:
-        choice_q = "" if choice is None else str(int(choice))
-        body["idp_stepup_url"] = (
-            f"/api/approvals/{quote(approval_id)}/stepup/idp?result={quote(result)}&choice={quote(choice_q)}"
-        )
+        # No query string: the card POSTs result/choice/csrf itself, so a
+        # link can never start the step-up (web/routes_org_stepup.py).
+        body["idp_stepup_url"] = f"/api/approvals/{quote(approval_id)}/stepup/idp"
     return JSONResponse(body, status_code=428)
 
 
@@ -282,6 +282,24 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
         f"return fetch({decide_url!r}, {{method:'POST', credentials:'same-origin',"
         "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
         "}"
+        "function pfIdpStepUp(url, payload){"
+        "return fetch(url, {method:'POST', credentials:'same-origin',"
+        "headers:{'Content-Type':'application/json'},"
+        "body: JSON.stringify({result: payload.result, choice: payload.choice == null ? null : payload.choice,"
+        f" csrf: {csrf!r}}})}}).then(function(r){{"
+        "if (!r.ok) { throw new Error('step-up refused'); }"
+        "return r.json();"
+        "}).then(function(data){"
+        "window.location.assign(data.redirect);"
+        f"}}).catch(function(){{ document.body.innerHTML = {_FAILED_MESSAGE!r}; }});"
+        "}"
+        "function pfIdpStepUpCard(url, payload){"
+        "document.body.innerHTML = 'This approval needs extra verification. "
+        "<button type=\"button\" id=\"pf-idp-stepup\">Verify by signing in again</button>';"
+        "document.getElementById('pf-idp-stepup').addEventListener('click', function(){"
+        "pfIdpStepUp(url, payload);"
+        "});"
+        "}"
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
         f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
         "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
@@ -326,7 +344,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
     ``window.webkit.messageHandlers.pf.postMessage`` swap, plus the two
     branches org mode's own ``_org_step_up_response``/``decide()`` responses
     need that local mode's never send: a ``428``'s ``idp_stepup_url``
-    fallback link, and a ``403``'s ``enroll_url``
+    fallback button (it POSTs to that URL), and a ``403``'s ``enroll_url``
     (``step_up.require_passkey``). ``stepup_options_url`` is unused by the JS
     below directly (a ``428`` body already carries fresh options inline) but
     is threaded through so a future retry-without-a-body variant has
@@ -347,6 +365,24 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         f"return fetch({decide_url!r}, {{method:'POST', credentials:'same-origin',"
         "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
         "}"
+        "function pfIdpStepUp(url, payload){"
+        "return fetch(url, {method:'POST', credentials:'same-origin',"
+        "headers:{'Content-Type':'application/json'},"
+        "body: JSON.stringify({result: payload.result, choice: payload.choice == null ? null : payload.choice,"
+        f" csrf: {csrf!r}}})}}).then(function(r){{"
+        "if (!r.ok) { throw new Error('step-up refused'); }"
+        "return r.json();"
+        "}).then(function(data){"
+        "window.location.assign(data.redirect);"
+        f"}}).catch(function(){{ document.body.innerHTML = {_FAILED_MESSAGE!r}; }});"
+        "}"
+        "function pfIdpStepUpCard(url, payload){"
+        "document.body.innerHTML = 'This approval needs extra verification. "
+        "<button type=\"button\" id=\"pf-idp-stepup\">Verify by signing in again</button>';"
+        "document.getElementById('pf-idp-stepup').addEventListener('click', function(){"
+        "pfIdpStepUp(url, payload);"
+        "});"
+        "}"
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
         f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
         "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
@@ -360,8 +396,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         "          return pfDecide(retryBody);"
         "        }).catch(function(err){"
         "          if (data.idp_stepup_url) {"
-        "            document.body.innerHTML = 'This approval needs extra verification. "
-        "<a href=\"' + data.idp_stepup_url + '\">Verify by signing in again</a>';"
+        "            pfIdpStepUpCard(data.idp_stepup_url, payload);"
         "          } else {"
         f"            document.body.innerHTML = {_FAILED_MESSAGE!r} + ' (' + err.message + ')';"
         "          }"
@@ -369,8 +404,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         "        });"
         "      }"
         "      if (data.idp_stepup_url) {"
-        "        document.body.innerHTML = 'This approval needs extra verification. "
-        "<a href=\"' + data.idp_stepup_url + '\">Verify by signing in again</a>';"
+        "        pfIdpStepUpCard(data.idp_stepup_url, payload);"
         "        return null;"
         "      }"
         f"      document.body.innerHTML = {_FAILED_MESSAGE!r};"
@@ -548,6 +582,10 @@ def _build_route_list(
             # executor's worker count, that's routine, not exceptional --
             # _inject_shim below assumes a real document, so serve a
             # placeholder instead of letting that raise into a 500.
+            logger.info(
+                "Approval %s (%s) not rendered yet, %.1fs after it was registered -- served the placeholder",
+                card.id, card.kind, time.time() - card.created_at,
+            )
             return HTMLResponse(
                 web_shell.plain_page(
                     "<h1>Preparing this request</h1>"

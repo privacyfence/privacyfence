@@ -36,6 +36,34 @@ The command-line options of `privacyfence-app` are at the end of this page
   only the `auto_accept` section is used. Keys marked *local mode only* have no effect on an
   organization server.
 
+### Exporting and importing personal settings
+
+**Settings > Auto-accept > Export…** writes `privacyfence-personal-settings.json` (UTF-8 JSON, at most
+256 KiB and 500 rules to import); **Import…** reads one back. It works in both modes and in every
+direction. Only the person's own `auto_accept` rules and step-up level move.
+
+| Key | Meaning |
+|---|---|
+| `format` | Always `privacyfence-personal-settings` |
+| `format_version` | `1`; a newer version is refused |
+| `exported_at` | UTC ISO-8601 time of the export |
+| `source` | `mode` (`local` or `org`) and the PrivacyFence `version` |
+| `auto_accept` | `version: 3` and the `rules` rows, without their former ids; custom rules are left out |
+| `step_up` | `scope`: the person's own step-up scope, or `null` |
+| `not_portable` | Informational list of what does not move; import ignores it |
+
+Import previews before it changes anything and gives each rule a status:
+
+| Status | Meaning |
+|---|---|
+| `add` | A new rule |
+| `extend` | Adds tools to a rule you already have |
+| `present` | Already covered; nothing to do |
+| `skip` | Not imported, with the reason shown (custom rule, unknown tool, cannot be applied by this version) |
+
+Import never removes or narrows anything. See
+[Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
+
 ### Earlier policy sections
 
 A `settings.yaml` that contains an `auto_accept_rules` or `auto_accept_grants` section (even an
@@ -101,6 +129,8 @@ and the other is not, the daemon logs a warning at start.
 | `gmail.append_signature_to_drafts` | bool | `false` | `false` | Append your Gmail signature (the one Gmail stores for the sending address) to drafts. Each draft tool's `include_signature` argument overrides it per call. The signature is shown on the card. **Settings > Privacy Filter**. |
 | `salesforce.report_max_pages` | int | `50` | `50` | Most report runs one paged `salesforce_run_report` read or one `salesforce_export_report` export may use (each page is one run and counts against the org's report-run limits). A read that needs more fails. |
 | `connectors.<name>.enabled` | bool | `true` | not set | `false` turns a connector off. `<name>` is one of `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`, `telegram`, `grist`, `peek`. Written by **Disable**/**Enable** on **Settings > Connectors**. A connector also needs its organization config and a sign-in before it runs. |
+| `connectors.assets.enabled` | bool | `false` | not set | `true` turns Jira Assets on and makes the Atlassian sign-in ask for the Assets scopes; an explicit value wins over the bundle's `atlassian.assets` flag, which is the default when this key is absent (see [Atlassian setup](atlassian-setup.md#jira-assets)). Sign in again after switching it on. |
+| `connectors.assets.workspace_id` | string | none | not set | The site's Assets workspace id (a UUID); wins over the bundle's `atlassian.assets_workspace_id`. Jira Assets needs one of the two, since PrivacyFence cannot look the id up itself (see [Atlassian setup](atlassian-setup.md#jira-assets)). |
 
 ### PII detection
 
@@ -169,7 +199,7 @@ or empty `auto_accept` section means nothing auto-accepts.
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download tool delivers in local mode; it also caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`) write. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
+| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download tool delivers in local mode; it also caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
 
 ### Passkey step-up (local mode)
 
@@ -248,7 +278,12 @@ How the daemon treats the file:
 | `--salesforce-consumer-key`, `--salesforce-consumer-secret` | none | `salesforce.consumer_key`, `salesforce.consumer_secret` | Give both or neither. |
 | `--salesforce-login-url URL` | `https://login.salesforce.com` | `salesforce.login_url` | `https://test.salesforce.com` for a sandbox. |
 | `--atlassian-client-id`, `--atlassian-client-secret` | none | `atlassian.client_id`, `atlassian.client_secret` | Jira and Confluence. Give both or neither. |
+| `--atlassian-assets` | off | `atlassian.assets` | Request the Jira Assets scopes at Atlassian sign-in; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
+| `--atlassian-assets-workspace-id ID` | none | `atlassian.assets_workspace_id` | The site's Assets workspace id, the `workspaceId` at `https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace`; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--peek-base-url URL` | none | `peek.base_url` | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
+| `--enable-telegram` | off | `telegram.enabled` | Offer Telegram. Its app credentials ship in the build, so the section is only a switch. Without it Telegram is neither listed nor usable ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). |
+| `--enable-peek` | off | `peek.enabled` | Offer Peek without pinning a server (local mode). `--peek-base-url` implies it. |
+| `--enable-grist` | off | `grist.enabled` | Offer Grist with an API key and no pinned server (local mode). `--grist-server-url` implies it. |
 | `--grist-server-url URL` | none | `grist.server_url` | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
@@ -263,8 +298,8 @@ How the daemon treats the file:
 | `--server-trusted-proxy IP` | none | `server.trusted_proxies` | Repeatable. `X-Forwarded-For`/`X-Forwarded-Proto` are honoured only from these addresses. |
 | `--idp-issuer URL` | none | `idp.issuer` | OIDC issuer; `<issuer>/.well-known/openid-configuration` must be reachable. |
 | `--idp-client-id ID`, `--idp-client-secret SECRET` | none | `idp.client_id`, `idp.client_secret` | PrivacyFence's client registration at the identity provider. |
-| `--idp-admin-group-claim CLAIM` | none (nobody is admin) | `idp.admin_group_claim` | ID-token claim that marks administrators. |
-| `--idp-admin-group-value VALUE` | none | `idp.admin_group_values` | Repeatable. A value of that claim that makes someone an administrator. |
+| `--idp-admin-group-claim CLAIM` | none (nobody is admin) | `idp.admin_group_claim` | ID-token claim that marks administrators, for example `email`, `groups` or `roles`. It must be in the ID token; which one works depends on the identity provider, see [Who is an admin](org-mode-setup-guide.md#who-is-an-admin). |
+| `--idp-admin-group-value VALUE` | none | `idp.admin_group_values` | Repeatable. A value of that claim that makes someone an administrator. Matched exactly and case-sensitively. |
 | `--idp-step-up-acr-value ACR` | none | `idp.step_up_acr_values` | Repeatable. `acr_values` to request when step-up falls back to signing in again at the identity provider; without it, plain re-authentication. |
 | `--authz-allowed-domain DOMAIN` | none (any domain) | `authz.allowed_domains` | Repeatable. Admit only people whose email is at one of these domains. |
 | `--authz-groups-claim CLAIM` | none | `authz.groups_claim` | ID-token claim checked against `--authz-required-group`. |
@@ -277,7 +312,8 @@ How the daemon treats the file:
 | `--downloads-inline-max-bytes BYTES` | not written (`100000`) | `download_delivery.inline_max_bytes` | A download comes back inside the tool result when the whole result, the base64-encoded file included, is at most this many bytes (a file of about 75 KB at the default); otherwise it gets a one-time link. The default fits claude.ai's and Claude Desktop's tool-result limit ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)); raise it only if every client your organization uses accepts larger results. `0` sends every download through a one-time link. |
 | `--downloads-link-ttl-seconds SECONDS` | not written (`300`) | `download_delivery.link_ttl_seconds` | How long a one-time download link can be claimed. Must be above 0. |
 | `--downloads-disable-staging` | not written (staging on) | `download_delivery.allow_disk_staging: false` | Refuse a download too large to return inline instead of staging it (encrypted) for a link. |
-| `--agent-links` / `--no-agent-links` | not written (on) | `download_delivery.agent_links` | On: a staged download is a link the AI system can fetch itself (`/mcp-files/fetch/…`), if it can reach this host: claude.ai needs it on **Settings → Capabilities → Domain allowlist** ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)). Off: only a signed-in browser can fetch it (`/downloads/…`). |
+| `--exports` / `--no-exports` | not written (on) | `download_delivery.allow_exports` | Off: the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`) are left out of the tool list and refused, so no export file is staged on the server ([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md)). |
+| `--agent-links` / `--no-agent-links` | not written (on) | `download_delivery.agent_links` | On: a staged download is a link the AI system can fetch itself (`/mcp-files/fetch/…`), if it can reach this host: claude.ai needs it on its domain allowlist, which a claude.ai Owner or admin sets under **Admin settings → Capabilities** ([Connect claude.ai](connect-claude-ai.md#files), [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)). Off: only a signed-in browser can fetch it (`/downloads/…`). |
 | `--web-push` / `--no-web-push` | not written (on) | `web_push.enabled` | On: a person who allows notifications gets a count-only push ("N approvals pending") through their browser's push service when an approval is waiting. Off: nothing is pushed and no page offers it. See [ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md). |
 | `--enable-audit-forwarding` / `--disable-audit-forwarding` | not written (off) | `audit_forwarding.enabled` | Forward every audit entry to a syslog server or an HTTPS endpoint as well. The local audit log stays the authoritative record. |
 | `--audit-forwarding-kind {syslog,http}` | not written (`syslog`) | `audit_forwarding.kind` | |
@@ -288,6 +324,7 @@ How the daemon treats the file:
 | `--audit-forwarding-http-bearer-token-env VAR` | none | `audit_forwarding.http.bearer_token_env` | Name of an environment variable the daemon reads a bearer token from when sending. The token itself is never in the bundle. |
 | `--generate-signing-key PATH` | | | Write a new Ed25519 private key to `PATH` (mode `0600`), print its public key, and exit without building a bundle. Keep the key; losing it means installs that pinned it cannot accept a new bundle until the pin is deleted by hand. |
 | `--sign-key PATH` | none | `signing_public_key`, `signature` | Sign the bundle. Required with `--mode org`; recommended otherwise. |
+| `--serial N` | current Unix time | `serial` | Serial signed into the bundle; needs `--sign-key`. Installs refuse a bundle whose serial is lower than the highest they have accepted. |
 
 The organization-only options (`--server-*`, `--idp-*`, `--authz-*`, `--step-up-*`,
 `--downloads-*`, `--agent-links`, `--web-push`, `--audit-forwarding-*`) are refused unless the bundle is in
@@ -326,9 +363,26 @@ options below are for running it by hand.
 | `--grist-oauth` | The same for Grist, when the organization config carries a Grist OAuth app. With an API key, use **Settings > Connectors** instead. |
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
 | `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
+| `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (`local` in local mode, or the principal id the audit log and the org Settings page show) and exit. Run it as the account the daemon runs as. |
 
 The sign-in options are for an install that is not privilege-separated (a source checkout or a
 `pip`/`pipx` install). On a packaged install the daemon refuses to run as your account, so they
 fail; connect services from **Settings > Connectors** instead (see
 [Connecting a service](connecting-a-service.md)). They need the organization config bundle
 installed first, except `--telegram-setup` and `--peek-login` (the latter asks for the Peek server address when the bundle names none).
+
+### privacyfence-companion
+
+The companion app's own command. The packaged installs start it for you. `--action`, `--serve` and
+`--launch` are mutually exclusive.
+
+| Option | What it does |
+|---|---|
+| (no option) | Run the tray (Windows) or menu-bar (macOS) companion. Linux has no tray, so there `--action` or `--serve` is required. |
+| `--launch` | Open Approvals, starting the tray or menu-bar companion first if none is running. This is what clicking the app icon or the Start Menu entry runs ([ADR 0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md)). |
+| `--serve` | Run only the companion's control channel, with no tray or menu, and stay up, so a separated daemon can hand this session a sign-in link to open. A separated Linux install's autostart entry runs this. |
+| `--action open-approvals` / `open-settings` | Open Approvals / Settings and exit. |
+| `--action copy-mcp-token` | Copy this account's AI client token to the clipboard ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md)). |
+| `--action recovery-code` | Ask the daemon for a new one-time passkey recovery code and show it in a dialog. |
+| `--action service-status`, `service-start`, `service-restart`, `service-stop` | Report on, start, restart or stop the background service; the last three ask for an administrator's password. |
+| `--action quit` | Ask the daemon to shut down, as Settings' Quit button does (only when the install allows quitting). |

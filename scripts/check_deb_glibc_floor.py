@@ -4,7 +4,7 @@
 The ``.deb`` ships a PyInstaller bundle: the Python interpreter and every extension module are
 inside it, so the one system library the package really depends on is glibc, at whatever version
 the build host's toolchain linked against. That version is not chosen anywhere -- it moves when
-``build.yml``'s ``ubuntu-latest`` runner image does -- so ``debian/control`` states it as
+``build.yml``'s ``build-deb`` runner image does (pinned to ``ubuntu-24.04``, ADR 0203) -- so ``debian/control`` states it as
 ``libc6 (>= X)`` and this script, run by ``scripts/build_deb.sh`` on the staged package tree,
 refuses a bundle that references a ``GLIBC_`` symbol version newer than ``X``. Without it, a runner
 image bump would silently raise the real floor while the package still claimed the old one, and

@@ -13,6 +13,7 @@ privilege separation protects, see
 | macOS (arm64) | `scripts/build_dmg.sh` | `dist/PrivacyFence-<version>.dmg` | `PrivacyFence.pkg` and `PrivacyFence.mcpb`, nothing else |
 | Windows (x64) | `scripts/build_installer.ps1` → `installer/privacyfence.iss` | `dist/PrivacyFence-<version>-setup.exe` | PyInstaller onedir, the `.mcpb`, the separation script and its task template |
 | Debian/Ubuntu (amd64) | `scripts/build_deb.sh` | `dist/privacyfence_<debversion>_amd64.deb` | PyInstaller onedir under `/opt/privacyfence`, wrappers, separation tool and templates |
+| Linux org mode (amd64, arm64) | `scripts/build_org_image.sh` → `deploy/docker/Dockerfile` | `ghcr.io/privacyfence/privacyfence-org:<version>` | the release wheel and `requirements/runtime.lock.txt` in a venv on `python:3.12-slim` |
 | Any (Python) | `publish-pypi.yml` | sdist + wheel | the `privacyfence` package |
 
 Every build reads its version from the installed package metadata
@@ -102,10 +103,11 @@ attempts); any other signing failure returns on the first attempt.
 ### Install (`installer/macos/pkg/postinstall`)
 
 The `.pkg` postinstall runs as root with no login session. It resolves the human from the console
-owner (`stat -f '%Su' /dev/console`; `root`/`loginwindow`/empty count as nobody), runs
-`/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh enable
---auto [--user <console user>] --app /Applications/PrivacyFenceApp.app`, then `daemon
-ensure-running`. It always exits 0: a failed `enable` is logged (`/var/log/install.log`), and the
+owner (`stat -f '%Su' /dev/console`; `root`/`loginwindow`/empty count as nobody). It skips set-up
+unless every file in the installed bundle is owned by root, then runs the pkg's own copy of
+`macos_privilege_separation.sh` (carried in the pkg's Scripts directory with the two plist
+templates, not the copy inside the app bundle) as `enable --auto [--user <console user>] --app
+/Applications/PrivacyFenceApp.app`, then `daemon ensure-running` ([ADR 0184](adr/0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md)). It always exits 0: a failed `enable` is logged (`/var/log/install.log`), and the
 daemon's own admin-password prompt (`privilege_separation.maybe_auto_enable_macos()`) re-offers it
 on every start that finds a packaged install unseparated. Re-running the `.pkg` over a running
 install is the upgrade path: `enable` re-stages the image and bootouts/bootstraps the LaunchDaemon
@@ -243,8 +245,9 @@ Installed files: `/opt/privacyfence/` (the bundle), `/usr/bin/privacyfence-app` 
 Applications-menu entry, `/usr/sbin/privacyfence-privilege-separation` (renamed
 `scripts/linux_privilege_separation.sh`), its templates under
 `/usr/share/privacyfence/installer/linux/`, the polkit action
-`eu.privacyfence.daemon-control.policy` (lets the companion run `daemon start`/`stop`/`restart`
-through `pkexec`), icons, and lintian overrides. No autostart entry ships in the package.
+`eu.privacyfence.daemon-control.policy` (two actions, `eu.privacyfence.daemon-control` for `daemon …`
+and `eu.privacyfence.enable-for-user` for `enable …`, selected by the first argument; under `pkexec`
+the script accepts only an argument allow-list, [ADR 0183](adr/0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md)), icons, and lintian overrides. No autostart entry ships in the package.
 
 ### Maintainer scripts
 
@@ -324,6 +327,24 @@ a release.
 shows either missing, switch the build steps to
 `apt-get update && apt-get install -y --no-install-recommends python3 python3-venv`,
 `python3 -m venv /opt/privacyfence` and `/opt/privacyfence/bin/pip install privacyfence`.
+
+## Organization Docker image
+
+`scripts/build_org_image.sh --platform linux/amd64|linux/arm64 --tag NAME:TAG` builds the
+organization-mode image ([`org-mode-docker.md`](org-mode-docker.md)). It requires exactly one
+`dist/privacyfence-*.whl`, stages it with `deploy/docker/Dockerfile`, the entrypoint, the health check
+and `requirements/runtime.lock.txt` into `build/org-image/`, and runs `docker buildx build` on that
+directory. The image installs the hash-pinned lock, then the wheel with `--no-deps`.
+
+- `build.yml`'s `build-org-image` job builds and tests the image on a native runner per architecture
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`) and saves it as the `org-image-<arch>` workflow artifact; it
+  never pushes. `publish-org-image.yml` pushes those tested bytes on a stable tag.
+  `tests.yml`'s `org-docker-image` is the per-PR amd64 leg.
+- The stop signal is `SIGINT`: the daemon installs no SIGTERM handler, so as PID 1 it would ignore the
+  default and `docker stop` would wait out its timeout.
+- The entrypoint refuses to start (exit 78) when no organization bundle is installed, rather than
+  starting local mode on the container's unreachable loopback.
+- The base image is pinned by digest; Dependabot's `docker` entry bumps the digest within Python 3.12.
 
 ## CI
 

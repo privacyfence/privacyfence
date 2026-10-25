@@ -12,7 +12,9 @@ bridge writer call.
 ``EXTRA_SCOPES`` covers the operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
 tools, which had no predicate at all, Grist's seven operation keys (scoped by document), Peek's page tools, and Gmail's two filter tools and
-Slack's group-chat tool, which have no resource identity to scope to. The Settings page and the bridge tool configure them
+Slack's group-chat tool, which have no resource identity to scope to, and Slack's two read scopes for
+mentions of the signed-in user and one-to-one DMs, and the scope for conversations the signed-in user
+is a member of. The Settings page and the bridge tool configure them
 the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing
 -- rather than reactively, off one gated call's own popup.
 """
@@ -21,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from . import describe, propose, registry, store
+from . import describe, propose, registry, store, value_format
 from .engine import PolicyRule
 from .registry import Verb
 
@@ -44,6 +46,24 @@ class PolicyExtraScope:
     # Operation keys the registry derivation over-reaches for this scope, removed by
     # ``extra_operations_for``.
     excludes: frozenset[str] = frozenset()
+    # Per verb, the predicate a rule for that verb uses when it is not ``predicate``. Read and
+    # search share the ``slack.read_messages`` operation key and the engine matches on operation
+    # keys, so the predicate is the only place a rule can say which of the two it allows.
+    verb_predicates: tuple[tuple[Verb, str], ...] = ()
+    # A value may be given but is not required (``needs_value`` stays False): Settings and the
+    # bridge tool offer the field, a blank one means no value.
+    value_optional: bool = False
+
+
+def extra_predicate_for(extra: PolicyExtraScope, verb: Verb) -> str:
+    """The predicate a rule for ``verb`` uses on ``extra``: its ``verb_predicates`` entry, or
+    ``extra.predicate``."""
+    return dict(extra.verb_predicates).get(verb, extra.predicate)
+
+
+def extra_predicates(extra: PolicyExtraScope) -> frozenset[str]:
+    """``extra.predicate`` and every predicate in ``extra.verb_predicates``."""
+    return frozenset({extra.predicate, *(p for _, p in extra.verb_predicates)})
 
 
 EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
@@ -73,7 +93,35 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         label="Slack — group chats (unconditional)", needs_value=False, value_hint="",
         excludes=frozenset({"slack.send_message"}),
     ),
+    "slack.mentions_of_me": PolicyExtraScope(
+        predicate="slack.mentions_of_me", connector="slack",
+        verbs=(Verb.READ, Verb.SEARCH),
+        label="Slack — mentions of me", needs_value=False, value_hint="",
+        verb_predicates=((Verb.SEARCH, "slack.mentions_of_me_all_results"),),
+    ),
+    "slack.direct_messages_to_me": PolicyExtraScope(
+        predicate="slack.direct_messages_to_me", connector="slack",
+        verbs=(Verb.READ,),
+        label="Slack — direct messages to me", needs_value=False, value_hint="",
+    ),
+    "slack.my_conversations": PolicyExtraScope(
+        predicate="slack.my_conversations", connector="slack",
+        verbs=(Verb.READ, Verb.SEARCH),
+        label="Slack — conversations I'm a member of", needs_value=False,
+        value_hint="C0123456789, G0123456789 (optional: never covered)",
+        verb_predicates=((Verb.SEARCH, "slack.my_conversations_all_results"),),
+        value_optional=True,
+    ),
+    "gmail.query": PolicyExtraScope(
+        predicate="gmail.query", connector="gmail",
+        verbs=(Verb.READ, Verb.DOWNLOAD),
+        label="Gmail — query", needs_value=True,
+        value_hint='in:inbox -category:promotions -label:"Proposed SPAM"',
+    ),
 }
+
+# Groups whose value is one expression, not a comma-separated list: commas belong to the value.
+SINGLE_VALUE_GROUPS: frozenset[str] = frozenset({"gmail.query"})
 
 # Ids retired when the nine verbs landed. `rules_for_catalogue_entry` resolves one before anything
 # else, so older bridge calls keep working.
@@ -146,6 +194,7 @@ def scope_catalogue() -> list[dict[str, Any]]:
             "needs_value": propose.scope_needs_value(first),
             "value_hint": VALUE_HINTS.get(first.predicate, ""),
             "verbs": [v.value for v in verbs],
+            "value_optional": False,
         })
     for group_id, extra in EXTRA_SCOPES.items():
         entries.append({
@@ -155,6 +204,7 @@ def scope_catalogue() -> list[dict[str, Any]]:
             "needs_value": extra.needs_value,
             "value_hint": extra.value_hint,
             "verbs": [v.value for v in extra.verbs],
+            "value_optional": extra.value_optional,
         })
     entries.sort(key=lambda e: (e["connector"], e["label"]))
     return entries
@@ -181,7 +231,7 @@ def parse_verbs(verbs: Any) -> list[Verb]:
 
 
 def rules_for_catalogue_entry(
-    group: str, value: list[str] | None, verbs: list[Verb],
+    group: str, value: Any, verbs: list[Verb],
 ) -> list[PolicyRule]:
     """The ``PolicyRule``s an "add a rule" submission (``group``/``value``/``verbs``) compiles to,
     or ``[]`` for an unrecognized group, a group none of the requested verbs govern, or (for the one
@@ -202,22 +252,31 @@ def rules_for_catalogue_entry(
     return _compile_catalogue_rules(group, value, verbs)
 
 
-def _compile_catalogue_rules(group: str, value: list[str] | None, verbs: list[Verb]) -> list[PolicyRule]:
+def _compile_catalogue_rules(group: str, value: Any, verbs: list[Verb]) -> list[PolicyRule]:
     extra = EXTRA_SCOPES.get(group)
+    if extra is None and group not in propose.SCOPES_BY_GROUP:
+        return []
+    predicates = (
+        set(extra_predicates(extra)) if extra is not None
+        else {scope.predicate for scope in propose.SCOPES_BY_GROUP[group]}
+    )
+    value = value_format.normalise_rule_value(predicates, value)
     if extra is not None:
         allowed_verbs = [v for v in verbs if v in extra.verbs]
         if not allowed_verbs or (extra.needs_value and not value):
             return []
-        operations: frozenset[str] = frozenset().union(
-            *(extra_operations_for(extra, v) for v in allowed_verbs)
-        )
-        if not operations:
-            return []
-        return store.merge_rules([
-            PolicyRule(id=extra.predicate, predicate=extra.predicate, value=value, operations=operations),
-        ])
-    if group not in propose.SCOPES_BY_GROUP:
-        return []
+        by_predicate: dict[str, list[Verb]] = {}
+        for verb in extra.verbs:
+            if verb in allowed_verbs:
+                by_predicate.setdefault(extra_predicate_for(extra, verb), []).append(verb)
+        built: list[PolicyRule] = []
+        for predicate, predicate_verbs in by_predicate.items():
+            operations: frozenset[str] = frozenset().union(
+                *(extra_operations_for(extra, v) for v in predicate_verbs)
+            )
+            if operations:
+                built.append(PolicyRule(id=predicate, predicate=predicate, value=value, operations=operations))
+        return store.merge_rules(built) if built else []
     return propose.rules_for_scope_group(group, value, verbs)
 
 
@@ -225,8 +284,11 @@ __all__ = [
     "EXTRA_SCOPES",
     "GROUP_ALIASES",
     "VALUE_HINTS",
+    "SINGLE_VALUE_GROUPS",
     "PolicyExtraScope",
     "extra_operations_for",
+    "extra_predicate_for",
+    "extra_predicates",
     "parse_verbs",
     "rules_for_catalogue_entry",
     "scope_catalogue",

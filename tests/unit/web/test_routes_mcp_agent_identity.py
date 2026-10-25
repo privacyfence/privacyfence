@@ -24,7 +24,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
-from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity, scoped_tokens
+from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity, paths, scoped_tokens
 from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, current_agent
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -93,13 +93,13 @@ def _dispatcher(connector: Connector) -> McpDispatcher:
 
 @contextlib.asynccontextmanager
 async def _session(
-    dispatcher, *, client_name: str | None, verifier=None, client_names=None, overrides=None, pinned_agents=None,
+    dispatcher, *, client_name: str | None, verifier=None, client_names=None, overrides=None, attested_agents=None,
 ):
     """A live, initialized ClientSession whose handshake claims ``client_name`` (None: the SDK's
     own default clientInfo)."""
     app, session_manager = build_mcp_asgi_app(
         dispatcher, token=None if verifier else TOKEN, verifier=verifier, client_names=client_names,
-        overrides=overrides, pinned_agents=pinned_agents,
+        overrides=overrides, attested_agents=attested_agents,
     )
     info = types.Implementation(name=client_name, version="9.9") if client_name is not None else None
     async with mcp_lifespan(session_manager):
@@ -275,12 +275,12 @@ class TestOrgModeCapture:
         )
         assert agent == ["unknown:Some Client", "Some Client", "", "client_info"]
 
-    async def test_a_pin_still_wins_over_a_recognised_handshake_name(self, tmp_path, monkeypatch):
+    async def test_an_attestation_still_wins_over_a_recognised_handshake_name(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
         await provider.register_client(_dcr_client("dcr-1", "Some Client"))
         agent = await _agent_of_call(
             client_name="cursor-vscode", verifier=_OrgVerifier("dcr-1"), client_names=provider.client_name,
-            pinned_agents=lambda client_id: "chatgpt" if client_id == "dcr-1" else None,
+            attested_agents=lambda client_id: "chatgpt" if client_id == "dcr-1" else None,
         )
         assert agent == ["chatgpt", "ChatGPT", "9.9", "oauth_client"]
 
@@ -469,14 +469,16 @@ class _ScopedVerifier(TokenVerifier):
 
 
 class TestScopedTokenIdentity:
-    async def test_a_scoped_call_is_attested_as_the_token(self, monkeypatch, audit_dir):
-        scoped_tokens.set_store(_OneTokenStore(_SCOPED))
+    async def test_a_scoped_call_is_attested_as_the_token(self, monkeypatch, audit_dir, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        store = _OneTokenStore(_SCOPED)
+        scoped_tokens.set_store(store)
         _install_rule(monkeypatch)
 
-        # The token outranks whatever the client claims, and an org admin's pin too.
+        # The token outranks whatever the client claims, and a redirect-URI attestation too.
         async with _session(
             _dispatcher(GatedConnector()), client_name="Claude", verifier=_ScopedVerifier(),
-            pinned_agents=lambda client_id: "claude-code",
+            attested_agents=lambda client_id: "claude-code",
         ) as session:
             result = await session.call_tool("echo_say", {"message": "hi"})
 
@@ -486,3 +488,4 @@ class TestScopedTokenIdentity:
         assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
             f"scoped-token:{_SCOPED.id}", "sales-sync", "", "override",
         )
+        assert store._activity["local"][_SCOPED.id].last_used_at is not None

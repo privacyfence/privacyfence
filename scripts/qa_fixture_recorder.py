@@ -30,7 +30,7 @@ this imports the same ``privacyfence`` package and third-party clients
 
     .venv/bin/python scripts/qa_fixture_recorder.py --lifecycle [connector ...]
         For each write-capable connector that supports it (calendar,
-        confluence, grist, jira, peek, tasks -- see the comment above LIFECYCLE_CHECKS
+        confluence, grist, jira, peek, salesforce, tasks -- see the comment above LIFECYCLE_CHECKS
         below for why the other connectors aren't included), creates a
         fresh, uniquely-tagged QA object, reads it back, updates it, reads
         it back again, then deletes it and confirms the deletion actually
@@ -54,11 +54,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import copy
 import datetime
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -75,6 +77,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from privacyfence import daemon_main  # noqa: E402
 from privacyfence.app_credentials import telegram_app_credentials  # noqa: E402
 from privacyfence import grist_auth  # noqa: E402
+from privacyfence.assets_client import AssetsClient, AssetsClientError  # noqa: E402
 from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientError  # noqa: E402
 from privacyfence.grist_client import GristAccessDenied, GristClient, GristClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
@@ -309,15 +312,55 @@ def deidentify_structural_fields(value: Any, _id_map: dict[Any, str] | None = No
 # already committed. Applied as a connector-specific pass, before the
 # generic redact() runs, since the QA seed thread is sent to yourself, so
 # both From and To carry your real address.
+# Message-ID carries the sending host (<random@mail.gmail.com>), which the
+# email-address redaction above does not reach.
+_REDACTED_MESSAGE_ID = "<qa-placeholder-message-id@example.com>"
 _SENSITIVE_GMAIL_HEADERS = {"from", "to", "cc", "bcc", "reply-to", "sender", "delivered-to", "return-path"}
+
+
+_EMAIL_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+# Gmail's quote attribution ("On <date> <Display Name> <addr> wrote:") carries the sender's display
+# name, which the email-address redaction does not reach.
+_QUOTE_ATTRIBUTION = re.compile(r"\bOn [^\n]{0,200}? wrote:")
+_REDACTED_ATTRIBUTION = "On QA Placeholder wrote:"
+
+
+def _redact_text(text: str) -> str:
+    return _QUOTE_ATTRIBUTION.sub(_REDACTED_ATTRIBUTION, _EMAIL_IN_TEXT.sub(_REDACTED_EMAIL, text))
+
+
+def _redact_part_bodies(part: dict[str, Any]) -> None:
+    """Replace email addresses quoted inside a reply's body parts (``body.data`` is base64url)."""
+    body = part.get("body")
+    if isinstance(body, dict) and isinstance(body.get("data"), str):
+        padded = body["data"] + "=" * (-len(body["data"]) % 4)
+        try:
+            text = base64.urlsafe_b64decode(padded).decode("utf-8")
+        except ValueError:
+            text = None
+        if text is not None:
+            redacted = _redact_text(text).encode("utf-8")
+            body["data"] = base64.urlsafe_b64encode(redacted).decode("ascii").rstrip("=")
+            body["size"] = len(redacted)
+    for sub_part in part.get("parts") or []:
+        if isinstance(sub_part, dict):
+            _redact_part_bodies(sub_part)
 
 
 def redact_gmail_message(raw: dict[str, Any]) -> dict[str, Any]:
     raw = copy.deepcopy(raw)
+    if isinstance(raw.get("snippet"), str):
+        raw["snippet"] = _redact_text(raw["snippet"])
+    if isinstance(raw.get("payload"), dict):
+        _redact_part_bodies(raw["payload"])
     headers = ((raw.get("payload") or {}).get("headers")) or []
     for header in headers:
         if isinstance(header, dict) and str(header.get("name", "")).lower() in _SENSITIVE_GMAIL_HEADERS:
             header["value"] = _REDACTED_EMAIL
+        elif isinstance(header, dict) and str(header.get("name", "")).lower() in ("message-id", "references", "in-reply-to"):
+            header["value"] = _REDACTED_MESSAGE_ID
     return raw
 
 
@@ -411,6 +454,28 @@ _REDACTED_JIRA_USER_URL = (
 )
 
 
+_REDACTED_JIRA_ENTITY_ID = "qa-placeholder-entity-id"
+_JIRA_ENTITY_ID_KEYS = ("entityId", "uuid")
+
+
+def _redact_jira_entity_ids(value: Any) -> Any:
+    """Replace the site-unique entity ids (a project's entityId, and the
+    identical uuid beside it) wherever they sit in the structure."""
+    if isinstance(value, dict):
+        return {
+            k: _REDACTED_JIRA_ENTITY_ID if k in _JIRA_ENTITY_ID_KEYS and isinstance(v, str)
+            else _redact_jira_entity_ids(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_jira_entity_ids(v) for v in value]
+    return value
+
+
+def redact_jira_projects(raw: list[Any]) -> list[Any]:
+    return _redact_jira_entity_ids(copy.deepcopy(raw))
+
+
 def redact_jira_issue(raw: dict[str, Any]) -> dict[str, Any]:
     """Jira's creator/reporter/assignee objects carry the real accountId a
     second time, URL-encoded inside their own "self" link
@@ -421,7 +486,7 @@ def redact_jira_issue(raw: dict[str, Any]) -> dict[str, Any]:
     addressed indirectly through a sibling field, found by checking a real
     recorded fixture, not assumed safe.
     """
-    raw = copy.deepcopy(raw)
+    raw = _redact_jira_entity_ids(copy.deepcopy(raw))
     fields = raw.get("fields")
     if not isinstance(fields, dict):
         return raw
@@ -812,6 +877,11 @@ def _build_jira_client() -> JiraClient:
     return JiraClient(config=config, token_file=token_path)
 
 
+def _build_assets_client() -> AssetsClient:
+    config, token_path = _load_atlassian_config()
+    return AssetsClient(config=config, token_file=token_path)
+
+
 def check_confluence(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("confluence") or {}
     space_key = cfg.get("space_key", "PFQA")
@@ -974,7 +1044,9 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         note = "found" if ok else f"project key {project_key!r} not in list_projects() result"
         raw = None
         if record and ok and isinstance(cap.captured, list):
-            raw = deidentify_structural_fields(redact([p for p in cap.captured if p.get("key") == project_key]))
+            raw = deidentify_structural_fields(
+                redact(redact_jira_projects([p for p in cap.captured if p.get("key") == project_key]))
+            )
         results.append(CheckResult("jira", "list_projects", project_key, ok, note, raw, "list_projects.json"))
     except JiraClientError as exc:
         results.append(CheckResult("jira", "list_projects", project_key, False, str(exc)))
@@ -1037,6 +1109,147 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
                                    f"{len(fields)} field(s)" if fields else "no fields returned"))
     except JiraClientError as exc:
         results.append(CheckResult("jira", "list_fields", project_key, False, str(exc)))
+
+    return results
+
+
+# Jira Assets ids are digit strings that the client joins on (an attribute value's
+# objectTypeAttributeId finds its definition) and validates (_check_id accepts digits only).
+# deidentify_structural_fields() would turn `id` into a non-digit placeholder and leave the same
+# id under the other keys, breaking both; Assets payloads also carry UUIDs (workspaceId, globalId,
+# URLs). check_assets therefore uses _deidentify_assets for all three of its recorded payloads.
+# A reference attribute's definition carries its target type twice, as referenceObjectTypeId and as
+# referenceObjectType.id; both must come out as the same digits.
+_ASSETS_ID_KEYS = frozenset({
+    "id", "objecttypeattributeid", "objectschemaid", "objecttypeid", "parentobjecttypeid", "objectid",
+    "referenceobjecttypeid",
+})
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_REDACTED_UUID = "qa-placeholder-uuid"
+
+
+def _numeric_assets_ids(raw: Any) -> tuple[Any, dict[str, str]]:
+    """Rewrite every Assets id value to consecutive digit strings ("1", "2", ...) in order of
+    first appearance, the same real id getting the same digits under every id key. Returns the
+    payload and the identity map of the digits issued (pass it to deidentify_structural_fields
+    as ``_id_map`` so those digits survive that pass)."""
+    issued: dict[str, str] = {}
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            for k, v in value.items():
+                if k.lower() in _ASSETS_ID_KEYS and isinstance(v, (str, int)) and not isinstance(v, bool) and v != "":
+                    real = str(v)
+                    if real not in issued:
+                        issued[real] = str(len(issued) + 1)
+                    out[k] = issued[real]
+                else:
+                    out[k] = walk(v)
+            return out
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    numbered = walk(raw)
+    return numbered, {digits: digits for digits in issued.values()}
+
+
+def _redact_assets_identifiers(raw: Any) -> Any:
+    """Replace every UUID inside any string value with a non-UUID-shaped placeholder."""
+    if isinstance(raw, dict):
+        return {k: _redact_assets_identifiers(v) for k, v in raw.items()}
+    if isinstance(raw, list):
+        return [_redact_assets_identifiers(v) for v in raw]
+    if isinstance(raw, str):
+        return _UUID_RE.sub(_REDACTED_UUID, raw)
+    return raw
+
+
+def _deidentify_assets(raw: Any) -> Any:
+    numbered, id_map = _numeric_assets_ids(redact(raw))
+    # The UUID scrub runs last: before the id map it would collapse distinct UUID-valued ids.
+    return _redact_assets_identifiers(deidentify_structural_fields(numbered, id_map))
+
+
+def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
+    cfg = manifest.get("assets") or {}
+    schema_key = cfg.get("schema_key", "PFQA")
+    seed_object_key = cfg.get("seed_object_key", "")
+    seed_object_label = cfg.get("seed_object_label", f"PrivacyFence QA seed contract {QATEST_TAG}")
+
+    results: list[CheckResult] = []
+    try:
+        client = _build_assets_client()
+        # Resolve the workspace id first so its lookup is not among the captured calls.
+        client.check_connection()
+    except AssetsClientError as exc:
+        return [CheckResult("assets", "list_schemas", schema_key, False, str(exc))]
+
+    # list_schemas -- only ever recorded filtered to the one QA schema.
+    schema_id = ""
+    try:
+        with RawCapture(client) as cap:
+            schemas = client.list_schemas()
+        match = next((s for s in schemas if s.key == schema_key), None)
+        ok = match is not None
+        note = "found" if ok else f"schema key {schema_key!r} not in list_schemas() result"
+        if match is not None:
+            schema_id = match.id
+        raw = None
+        if record and ok and isinstance(cap.captured, dict):
+            kept = [v for v in cap.captured.get("values") or [] if v.get("objectSchemaKey") == schema_key]
+            raw = _deidentify_assets({**cap.captured, "values": kept})
+        results.append(CheckResult("assets", "list_schemas", schema_key, ok, note, raw, "list_schemas.json"))
+    except AssetsClientError as exc:
+        results.append(CheckResult("assets", "list_schemas", schema_key, False, str(exc)))
+    if not schema_id:
+        return results
+
+    # get_object -- the seed object, by key if the manifest has it, else by label inside the QA schema.
+    try:
+        lookup = (
+            f'Key = "{seed_object_key}"' if seed_object_key
+            else f'objectSchemaId = {schema_id} AND Label = "{seed_object_label}"'
+        )
+        found = client.search_objects(lookup, max_results=1)
+        if not found:
+            raise AssetsClientError(f"no object found matching {lookup!r}")
+        with RawCapture(client) as cap:
+            obj = client.get_object(found[0].id)
+        tagged = QATEST_TAG in obj.label
+        complete = bool(obj.id and obj.key and obj.label and obj.type_name)
+        ok = tagged and complete
+        if not tagged:
+            note = f"fetched object label {obj.label!r} does not carry {QATEST_TAG} -- refusing to record"
+        elif not complete:
+            note = "missing field(s) -- id/key/label/type not all present"
+        else:
+            note = "id, key, label, type all present"
+        raw = None
+        if record and ok and len(cap.calls) >= 2:
+            raw = _deidentify_assets({"object": cap.calls[0], "attributes": cap.calls[1]})
+        results.append(CheckResult("assets", "get_object", seed_object_label, ok, note, raw, "get_object.json"))
+    except AssetsClientError as exc:
+        results.append(CheckResult("assets", "get_object", seed_object_label, False, str(exc)))
+
+    # aql_search -- the first page of the QA schema's objects; every one must be QA content.
+    aql = f"objectSchemaId = {schema_id}"
+    try:
+        with RawCapture(client) as cap:
+            objects = client.search_objects(aql, max_results=5)
+        untagged = [o.key for o in objects if QATEST_TAG not in o.label]
+        ok = bool(objects) and not untagged
+        if not objects:
+            note = f"AQL {aql!r} matched no object"
+        elif untagged:
+            note = f"object(s) {untagged} do not carry {QATEST_TAG} -- refusing to record"
+        else:
+            note = f"{len(objects)} object(s), all tagged {QATEST_TAG}"
+        raw = _deidentify_assets(cap.captured) if (record and ok and cap.captured) else None
+        results.append(CheckResult("assets", "aql_search", aql, ok, note, raw, "aql_search.json"))
+    except AssetsClientError as exc:
+        results.append(CheckResult("assets", "aql_search", aql, False, str(exc)))
 
     return results
 
@@ -1470,6 +1683,26 @@ def _build_gmail_client() -> GmailClient:
     return GmailClient(client_config=client_config, token_file=token_path)
 
 
+def _check_gmail_messages_matching(client: GmailClient, seed_message_id: str, rfc822_id: str) -> CheckResult:
+    """Check-only (no fixture file): Gmail's own search finds the seed message by its Message-ID
+    for ``in:anywhere`` and not for a label that does not exist, which is what a Gmail query rule
+    relies on."""
+    if not rfc822_id:
+        return CheckResult("gmail", "messages_matching", seed_message_id, False, "seed message has no Message-ID header")
+    pairs = [(seed_message_id, rfc822_id)]
+    try:
+        found = client.messages_matching("in:anywhere", pairs)
+        missed = client.messages_matching("label:privacyfence-qa-no-such-label", pairs)
+    except GmailClientError as exc:
+        return CheckResult("gmail", "messages_matching", seed_message_id, False, str(exc))
+    ok = found == {seed_message_id} and not missed
+    note = (
+        "in:anywhere found the seed message, a missing label did not" if ok
+        else "Gmail search did not return the seed message for in:anywhere, or returned it for a missing label"
+    )
+    return CheckResult("gmail", "messages_matching", seed_message_id, ok, note)
+
+
 def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("gmail") or {}
     seed_message_id = cfg.get("seed_message_id", "")
@@ -1506,6 +1739,8 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         if record and ok and isinstance(cap.captured, dict):
             raw = deidentify_structural_fields(redact(redact_gmail_message(cap.captured)))
         results.append(CheckResult("gmail", "get_message", seed_message_id, ok, note, raw, "get_message.json"))
+        if tagged:
+            results.append(_check_gmail_messages_matching(client, seed_message_id, message.rfc822_id))
     except GmailClientError as exc:
         results.append(CheckResult("gmail", "get_message", seed_message_id, False, str(exc)))
 
@@ -1830,6 +2065,21 @@ def _build_slack_client() -> SlackClient:
     return SlackClient(token.get("access_token", ""))
 
 
+def _check_slack_membership(client: SlackClient, method: str, target: str, conversation_id: str) -> CheckResult:
+    try:
+        member = client.resolve_is_member(conversation_id)
+        ids = client.my_conversation_ids()
+    except (SlackClientError, TypeError) as exc:
+        return CheckResult("slack", method, target, False, str(exc))
+    listed = ids is not None and conversation_id in ids
+    ok = member and listed
+    note = (
+        "conversations.info and users.conversations agree" if ok
+        else f"is_member={member}, listed by users.conversations={listed}"
+    )
+    return CheckResult("slack", method, target, ok, note)
+
+
 def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # No new seed artifact needed -- connector-qa.md's "Seed: Slack" already has
     # you create the privacyfence-qa-control channel with a durable,
@@ -1887,6 +2137,14 @@ def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         results.append(CheckResult("slack", "get_thread_replies", target, ok, note, raw, "get_thread_replies.json"))
     except SlackClientError as exc:
         results.append(CheckResult("slack", "get_thread_replies", target, False, str(exc)))
+
+    # After the try/except so a failing thread check does not skip it. Neither check records a
+    # fixture: they prove Slack answers the membership questions the connector relies on.
+    if channel_id:
+        results.append(_check_slack_membership(client, "conversation_membership", target, channel_id))
+    group_dm_id = cfg.get("group_dm_id", "")
+    if group_dm_id:
+        results.append(_check_slack_membership(client, "group_dm_membership", group_dm_id, group_dm_id))
 
     return results
 
@@ -2003,6 +2261,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
     "slack": check_slack,
     "telegram": check_telegram,
     "peek": check_peek,
+    "assets": check_assets,
 }
 
 # Static manifest of the tests/fixtures/live/<connector>/*.json file(s) each
@@ -2031,6 +2290,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "slack": ("get_thread_replies.json",),
     "telegram": ("get_messages.json",),
     "peek": ("list_pages.json", "get_comments.json"),
+    "assets": ("list_schemas.json", "get_object.json", "aql_search.json"),
 }
 
 # In-module consistency check, not just the deferred one in
@@ -2047,7 +2307,8 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 # ---------------------------------------------------------------------------- #
 # Bounded lifecycle tests -- create a fresh, uniquely-tagged QA object, read it back,
 # update it, read it back again, then (calendar/jira/tasks only -- see
-# lifecycle_confluence's own docstring for why Confluence is the exception)
+# lifecycle_confluence's own docstring for why Confluence is the exception,
+# and lifecycle_salesforce's for Salesforce, which never deletes)
 # delete it and confirm the deletion actually took. Unlike CONNECTOR_CHECKS
 # above (which only ever reads a durable, hand-created seed artifact), this
 # proves something neither --check nor --record can: that a real provider
@@ -2058,7 +2319,9 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #
 # Scoped to only the connectors whose PrivacyFence client exposes a full
 # create/get/update triple:
-#   - calendar, confluence, grist, jira, peek, tasks
+#   - calendar, confluence, grist, jira, peek, salesforce, tasks
+#     (grist and salesforce never delete: neither client has a delete, so their
+#     tagged QA objects accumulate until someone removes them by hand)
 # Deliberately excludes the rest of CONNECTOR_CHECKS's connectors, checked
 # against each *_client.py before writing this rather than assumed:
 #   - contacts -- ContactsClient.create_contact()'s own docstring says
@@ -2083,9 +2346,9 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #     overwriting the very artifact check_apps_script() reads, which is
 #     exactly what this section's "never touch anything but what this run
 #     just created" rule exists to prevent.
-#   - salesforce, telegram -- SalesforceClient and the QA Telegram flow are
-#     read-only from PrivacyFence's side (see CONNECTOR_CHECKS above); there
-#     is nothing to create in the first place.
+#   - telegram -- the QA Telegram flow is read-only from PrivacyFence's side
+#     (see CONNECTOR_CHECKS above); there is nothing to create in the first
+#     place.
 #
 # confluence_client.py/jira_client.py/tasks_client.py still expose no
 # delete_*() method, and no connectors/*.py registers a delete tool for
@@ -2614,6 +2877,54 @@ def lifecycle_peek(manifest: dict[str, Any]) -> LifecycleResult:
     return LifecycleResult("peek", ok, note, cleanup_ok)
 
 
+def lifecycle_salesforce(manifest: dict[str, Any]) -> LifecycleResult:
+    """Verifies create/get/update, batch create/find and batch update on one object type.
+
+    Never deletes: SalesforceClient has no delete (records are never removed through
+    PrivacyFence), so the tagged records this creates accumulate in the org and need
+    occasional manual cleanup there, like lifecycle_grist's rows.
+    """
+    cfg = manifest.get("salesforce") or {}
+    object_type = cfg.get("lifecycle_object_type", "Task")
+    name_field = cfg.get("lifecycle_name_field", "Subject")
+    note_field = cfg.get("lifecycle_note_field", "Description")
+    client = _build_salesforce_client()
+    suffix = uuid.uuid4().hex[:8]
+    name = f"{LIFECYCLE_TAG} salesforce {suffix}"
+
+    try:
+        fields = {f.name: f for f in client.describe_fields(object_type)}
+        name_meta = fields.get(name_field)
+        if name_meta is None or not name_meta.createable:
+            raise SalesforceClientError(f"{object_type}.{name_field} is not a createable field")
+        record_id = client.create_record(object_type, {
+            name_field: name, note_field: "created by qa_fixture_recorder.py --lifecycle",
+        })
+        fetched = client.get_record(object_type, record_id)
+        if fetched.fields.get(name_field) != name:
+            raise SalesforceClientError("get after create did not return the created record")
+        client.update_record(object_type, record_id, {note_field: "updated"})
+        refetched = client.get_record(object_type, record_id)
+        if refetched.fields.get(note_field) != "updated":
+            raise SalesforceClientError("get after update did not reflect the new note")
+
+        names = [f"{name} a", f"{name} b"]
+        ids = client.create_records(object_type, [{name_field: n} for n in names])
+        if len(ids) != 2:
+            raise SalesforceClientError(f"create_records returned {len(ids)} id(s), expected 2")
+        rows = client.find_records(object_type, "Id", ids, [name_field, note_field])
+        if sorted(str(r.get(name_field)) for r in rows) != names:
+            raise SalesforceClientError("find after batch create did not return the two records")
+        client.update_records(object_type, [{"Id": i, note_field: "batch updated"} for i in ids])
+        rows = client.find_records(object_type, "Id", ids, [name_field, note_field])
+        if len(rows) != 2 or any(r.get(note_field) != "batch updated" for r in rows):
+            raise SalesforceClientError("find after batch update did not reflect the new note")
+        ok, note = True, "create, get, update, batch create, find, batch update all verified"
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
+        ok, note = False, str(exc)
+    return LifecycleResult("salesforce", ok, note, cleanup_ok=None)
+
+
 def lifecycle_tasks(manifest: dict[str, Any]) -> LifecycleResult:
     cfg = manifest.get("tasks") or {}
     task_list_id = cfg.get("task_list_id", "")
@@ -2686,6 +2997,7 @@ LIFECYCLE_CHECKS: dict[str, Callable[[dict[str, Any]], LifecycleResult]] = {
     "grist": lifecycle_grist,
     "jira": lifecycle_jira,
     "peek": lifecycle_peek,
+    "salesforce": lifecycle_salesforce,
     "tasks": lifecycle_tasks,
 }
 

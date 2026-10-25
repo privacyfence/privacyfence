@@ -102,7 +102,7 @@ organization mode.
 Instead of its own credential, a client can hold a **scoped token** created in Settings: a named
 bearer token with an expiry and a list of the rules and tools it may use. It sees only those tools,
 and a call it makes is auto-accepted only through one of those rules; otherwise it is denied at
-once, with no approval card. Revoking it affects no other client. In organization mode the
+once, with no approval card. A box on the token lets covered Gmail and Slack reads return personal data, which the scan still reports in the audit log. Revoking it affects no other client. In organization mode the
 administrator must turn the feature on. See [Scoped tokens](security-and-compliance.md#scoped-tokens).
 
 ### What the AI system is told
@@ -115,9 +115,10 @@ disable or re-enable a service in Settings, connected clients are told to refres
 
 The tool list holds one tool per enabled, signed-in connector tool, plus the eight `privacyfence_*`
 tools below. Each connector tool carries MCP annotations that say what it does: a read is
-read-only and idempotent; a write is neither. Only the two tools that delete something,
-`calendar_delete_event` (an event) and `drive_sheets_delete_dimensions` (rows or columns of a
-spreadsheet), are marked destructive; an overwrite is a write, not a deletion.
+read-only and idempotent; a write is neither. Only the three tools that delete something,
+`calendar_delete_event` (an event), `drive_sheets_delete_dimensions` (rows or columns of a
+spreadsheet) and `peek_delete_page` (a Peek page with its comments and visit history), are marked
+destructive; an overwrite is a write, not a deletion.
 
 These annotations are always true. PrivacyFence is a privacy tool and does not tell an AI system
 anything false, so there is no setting, header or extension that advertises a write as read-only.
@@ -178,7 +179,7 @@ connector tools, each carries its real MCP annotations.
 | Tool | What it does | Required arguments | Annotations |
 |---|---|---|---|
 | `privacyfence_status` | Reports the mode, whether setup is complete, and each connector's state (`enabled`, `authenticated`, `blocked_by`: `no_org_config`, `not_authenticated` or a short reason), plus what to tell you next. It never returns a sign-in link: in local mode it tells the AI system to send you to the companion's **Open Settings**; in organization mode, to your administrator. | `reason` | read-only, idempotent |
-| `privacyfence_check_policy` | Predicts whether a specific call would auto-accept (`auto_accept`), needs a human (`requires_review`), or depends on content it cannot see yet (`unknown`), and names the rule that would match. Makes no call and has no side effects. For `review` tools it always reports that the PII check may still apply. | `connector`, `tool`, `reason` (plus `args`) | read-only, idempotent |
+| `privacyfence_check_policy` | Predicts whether a specific call would auto-accept (`auto_accept`), needs a human (`requires_review`), or depends on content it cannot see yet (`unknown`), and names the rule that would match. When a call would not auto-accept, `suggested_rules` lists the rules that would cover it (scope, value and verb), derived from the call's own arguments; a value of `null` means it is whatever the call reaches at run time. A value of `[]` means the rule takes none (the Slack rules for mentions of you, your conversations and one-to-one DMs), and `requires_args` names arguments the call must also pass (`member_only` for a search under the conversations rule); Slack is not asked. Scoped tokens get it too. Makes no call and has no side effects. `pii_gate_may_apply` is true for `review` tools. `pii_gate` says whether the PII scan of real content can still stop the call: `none` (it never reaches the scan), `allowed_by_token` (the caller's scoped token lifts it), `allowed_unless_inline` (a Drive download, lifted unless the file comes back inside the result) or `applies`; `pii_gate_detail` says why. | `connector`, `tool`, `reason` (plus `args`) | read-only, idempotent |
 | `privacyfence_list_policy` | Lists every auto-accept rule (id, a readable sentence, verbs, the tools it covers) and the scope catalogue that `privacyfence_propose_policy_change` accepts. | `reason` | read-only, idempotent |
 | `privacyfence_propose_policy_change` | Proposes adding, updating or removing a rule. Always opens a confirmation on Approvals that you must accept, and needs the same passkey step-up as changing a rule in Settings. Refused in an unattended session. | `operation` (`add`, `update`, `remove`), `reason` | not read-only, non-destructive, idempotent |
 | `privacyfence_await_approval` | Waits for one or more pending approvals and reports each one's status (`pending`, `approved`, `denied`, `expired`, `unknown`), never content; a denial's intent and note, when you gave them, come under `denial_feedback` (see [When you deny a call](tools-reference.md#when-you-deny-a-call)). Waits at most 120 seconds per call (default 30). | `approval_ids` | read-only, idempotent |
@@ -205,7 +206,7 @@ client ([ADR 0007](adr/0007-local-file-bridge.md),
   credential; up to 50 MB, valid for 10 minutes, single use), then passes the returned `upload_id`
   to the tool (`drive_upload_file`'s `upload_id`, or `"upload:<upload_id>"` in `attachments`). For
   a download, the tool returns a one-time link instead of writing to `destination_dir`.
-- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write a file to `destination_dir` and return only counts and a hash. On an organization-managed install nothing is saved: the result carries a one-time download link instead, unless the organization turned off `download_delivery.allow_disk_staging`
+- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write a file to `destination_dir` and return only counts and a hash. On an organization-managed install nothing is saved: the result carries a one-time download link instead, unless the organization turned off `download_delivery.allow_disk_staging`; an organization can also turn the export tools off entirely with `download_delivery.allow_exports: false` ([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md))
   ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
 - **An install that is not privilege-separated** (a source checkout, a `pip`/`pipx` install): the
   daemon runs as you and reads and writes the file itself.
@@ -230,13 +231,14 @@ you decide.
 
 Several AI systems can share one PrivacyFence. Each card and each audit-log entry names the AI
 system that made the request, and says how far that name can be trusted
-([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)).
+([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md),
+[ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md)).
 The audit log records four fields: `agent_id`, `agent_name`, `agent_version` and `agent_source`.
 
 | `agent_source` | Trust | Recorded when |
 |---|---|---|
-| `oauth_client` | attested | Organization mode only: an administrator has pinned the AI system's OAuth client to a known AI system on the **AI systems** settings page. This is the only attested source. |
-| `client_info` | claimed | The name the client itself sent: the MCP handshake's `clientInfo.name`, an unpinned OAuth client's registered name, or a local `agent_overrides` relabel. |
+| `oauth_client` | attested | Organization mode only: the OAuth client registered only with a vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), so its tokens were obtained by that vendor. No administrator step; see [AI systems](org-mode-setup-guide.md#11-ai-systems). This is the only attested source. |
+| `client_info` | claimed | The name the client itself sent: the MCP handshake's `clientInfo.name`, an OAuth client's registered name, or a local `agent_overrides` relabel. |
 | `""` (empty) | unknown | No usable name. Recorded as unknown, never guessed. |
 
 A call made with a [scoped token](security-and-compliance.md#scoped-tokens) is recorded as the

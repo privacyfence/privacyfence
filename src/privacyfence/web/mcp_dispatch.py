@@ -20,9 +20,12 @@ from typing import Any, Callable, Hashable
 
 from ..approvals import ApprovalPending, PendingApprovalRegistry
 from ..audit_log import AuditEntry, current_week, get_audit_logger, released_request_scope
-from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_rows
+from ..auto_accept import (
+    PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
+)
 from .. import local_files
 from ..connector import Connector
+from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
 from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
@@ -30,15 +33,17 @@ from ..policy import describe as policy_describe
 from ..policy import propose as policy_propose
 from ..policy import scope_rows
 from ..policy import registry as policy_registry
+from ..policy.suggest import suggested_rules
 from ..principal import current_principal
-from ..scoped_tokens import current_token_scope
+from ..scoped_tokens import REVOKED_SCOPE, current_token_scope
 
 logger = logging.getLogger(__name__)
 
-# Args the Slack connector computes itself (from Slack's own answer) before gated_call. An agent
+# Args a connector computes itself (from the service's own answer) before gated_call. An agent
 # asking check_policy could otherwise supply them and be told a call would auto-accept when the
 # real call, which recomputes them, would not.
-_CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm"})
+_CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm", "is_one_to_one_dm", "own_user_id", "matching_queries",
+                                    "is_member", "all_results_in_my_conversations"})
 
 
 def _policy_rule_row(row) -> dict:
@@ -65,6 +70,27 @@ def _policy_rule_row(row) -> dict:
         "conditions": [[name, value] for name, value in row.conditions],
         "covered_tools": sorted({tool for rule in compiled for tool in policy_describe.covered_tools(rule)}),
     }
+
+
+def _pii_gate(gate: str, tool: str) -> tuple[str, str]:
+    """Whether the personal-data scan can still stop a call to ``tool``, and whether the caller's
+    scoped token lifts it (ADR 0216). Returns ``(pii_gate, pii_gate_detail)``."""
+    if gate == "auto" or (gate == "popup" and tool not in UPLOAD_PII_SCAN_TOOLS):
+        return "none", ""
+    scope = current_token_scope()
+    if scope is None or scope is REVOKED_SCOPE:
+        return "applies", "this call is not made with a scoped token, so the personal-data scan always applies"
+    if tool in PERSONAL_DATA_READ_TOOLS:
+        if scope.allow_personal_data_reads:
+            return "allowed_by_token", ""
+        return "applies", f"the token does not allow personal data in reads, so the personal-data scan applies to {tool}"
+    if not scope.allow_personal_data:
+        return "applies", f"the token does not allow personal data, so the personal-data scan applies to {tool}"
+    if tool not in PERSONAL_DATA_RULE_TOOLS:
+        return "applies", f"the token's personal-data allowance does not cover {tool}, so the personal-data scan applies"
+    if tool == "drive_download_file":
+        return "allowed_unless_inline", ""
+    return "allowed_by_token", ""
 
 
 class McpDispatcher:
@@ -227,7 +253,7 @@ class McpDispatcher:
         scope_id = scope.id if scope is not None else ""
         now = time.time()
         self._prune_stale(now)
-        key = self._dedupe_key(principal_id, scope_id, connector_name, tool, args)
+        key = self._dedupe_key(principal_id, scope_id, session_key, current_agent().id, connector_name, tool, args)
         entry = self._inflight.get(key)
         if entry is not None:
             existing, recorded_at = entry
@@ -304,8 +330,16 @@ class McpDispatcher:
             del self._inflight[key]
 
     @staticmethod
-    def _dedupe_key(principal_id: str, scope_id: str, connector_name: str, tool: str, args: dict) -> str:
-        return f"{principal_id}:{scope_id}:{connector_name}:{tool}:{json.dumps(args, sort_keys=True, default=str)}"
+    def _dedupe_key(
+        principal_id: str, scope_id: str, session_key: Hashable, agent_id: str,
+        connector_name: str, tool: str, args: dict,
+    ) -> str:
+        # The retry dedupe is for one client retrying its own call; it never crosses MCP sessions
+        # (a second session's identical call must run itself, e.g. under its own unattended flag).
+        return (
+            f"{principal_id}:{scope_id}:{session_key}:{agent_id}:{connector_name}:{tool}:"
+            f"{json.dumps(args, sort_keys=True, default=str)}"
+        )
 
     @staticmethod
     def _is_read_only(connector: Connector, tool: str) -> bool:
@@ -328,10 +362,11 @@ class McpDispatcher:
             raise ValueError(f"Unknown tool: {tool!r}")
 
         if gate == "auto":
-            result = {
+            result: dict[str, Any] = {
                 "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
                 "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
-                "pii_gate_may_apply": False,
+                "pii_gate_may_apply": False, "pii_gate": "none", "pii_gate_detail": "",
+                "suggested_rules": [],
             }
         else:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
@@ -350,7 +385,16 @@ class McpDispatcher:
                 "gate": gate, "verdict": verdict, "matched_rule": matched_rule or None,
                 "matched_rule_id": matched_rule_id or None,
                 "reason": reason, "pii_gate_may_apply": gate == "review",
+                # A grace-window match covers only this file for a while; a standing rule is still owed.
+                "suggested_rules": (
+                    []
+                    if verdict == "auto_accept" and matched_rule != "session_temp_accept"
+                    else suggested_rules(tool, agent_args, my_email)
+                ),
             }
+
+        if gate != "auto":
+            result["pii_gate"], result["pii_gate_detail"] = _pii_gate(gate, tool)
 
         self._audit_policy_check(connector_name, tool, result, claude_reason)
         return result

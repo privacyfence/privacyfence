@@ -88,6 +88,17 @@ described in [connecting-a-service.md](connecting-a-service.md).
 After that, PrivacyFence refreshes the access token by itself: when Salesforce reports an expired
 session, it refreshes once and retries the call.
 
+## Creating and updating records
+
+The `api` scope covers writes, so connecting needs nothing more. What a user can change is decided
+by their own Salesforce profile and permission sets.
+
+Every write shows an approval card. A batch of up to 200 records of one object type is all or none,
+and nothing deletes. An update card shows each field's current and new value.
+
+An object-type rule covers creating and updating records only when it has the add and update verbs;
+add them with Edit verbs on Settings → Auto-accept.
+
 ## Reading large reports
 
 Salesforce returns at most 2,000 detail rows for one run of a report. To read more, pass `page_by`

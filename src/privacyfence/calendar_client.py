@@ -647,6 +647,12 @@ class CalendarClient:
         elif all_attendees:
             body["attendees"] = [{"email": e} for e in all_attendees]
         kwargs: dict[str, Any] = {"calendarId": calendar_id, "body": body}
+        if all_attendees:
+            # The Calendar API's default for insert is to NOT email guests --
+            # the event just lands on their calendars. An invite with people
+            # on it has to notify them (the user approved exactly that list
+            # in the popup). Rooms are resources and never emailed.
+            kwargs["sendUpdates"] = "all"
         if add_google_meet:
             body["conferenceData"] = {
                 "createRequest": {

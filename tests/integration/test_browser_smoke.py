@@ -83,7 +83,7 @@ from privacyfence.web.state_stream import call_soon_threadsafe  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode  # noqa: E402
 
-pytestmark = pytest.mark.timeout(60)
+pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
 
 ISSUER = "https://idp.example.com"
 
@@ -287,7 +287,6 @@ def _running_org_server(tmp_path, monkeypatch, *, push: bool = False):
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"),
     )
-    monkeypatch.setattr("privacyfence.web.oauth_provider.pins_file_path", lambda: tmp_path / "agent_pins.json")
     port = _free_port()
     issuer_url = f"http://localhost:{port}"
     idp = _idp()
@@ -298,7 +297,7 @@ def _running_org_server(tmp_path, monkeypatch, *, push: bool = False):
         # step_up.enabled doesn't need to be True for this suite -- only
         # /security (webauthn_stepup.py's enrollment ceremony) is under
         # test here, not the write-approval step-up gate itself.
-        org_config={"step_up": {"enabled": True}, "slack": dict(_SLACK_ORG_CONFIG)},
+        org_config={"step_up": {"enabled": True}, "slack": dict(_SLACK_ORG_CONFIG), "telegram": {"enabled": True}},
         # A registry mounts /connect (web/routes_connect.py), and the Slack section above
         # gives it one configured service to offer, so the phone-layout tests measure a real
         # connections page rather than a 404. No test here connects anything.
@@ -2498,7 +2497,7 @@ class TestOrgModeWebAuthnUi:
 
 
 @pytest.fixture
-def local_server_with_settings(pf_home):
+def local_server_with_settings(pf_home, monkeypatch):
     """``local_server`` above never passes ``controller=``, so ``/settings``
     (web/server.py's own ``WebServer.__init__`` docstring: ``controller=
     None`` mounts nothing there) 404s for every existing test in this file
@@ -2510,6 +2509,8 @@ def local_server_with_settings(pf_home):
     config_path = pf_home / ".privacyfence" / "settings.yaml"
     config_path.write_text("{}\n", encoding="utf-8")
     controller = SettingsController(str(config_path), connectors=[], connector_host=None)
+    # Connectors are listed only when the org config enables them (ADR 0196).
+    monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"slack": {"client_id": "s"}})
     port = _free_port()
     server = WebServer(web_ui, host="localhost", port=port, controller=controller)
     server.start()
@@ -2518,6 +2519,68 @@ def local_server_with_settings(pf_home):
         yield server, web_ui
     finally:
         server.stop()
+
+
+class TestHostileContentStaysText:
+    """The two pages that rebuild their DOM from a pushed state (``/approvals`` and
+    ``/settings``) write it with ``innerHTML`` through a JS ``esc()``. Nothing else
+    exercises that function in a browser, so a regression there is invisible to every
+    Python-side escaping test: these push markup-shaped strings through the live
+    re-render and look at the DOM."""
+
+    def test_list_rerender_escapes_row_fields(self, page, local_server):
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_gated_card(
+            web_ui, gate_kind="popup", dedupe_key="xss", summary="<img src=x id=pfxss>",
+            tool="gmail_create_draft", tool_name="<img src=x id=pfxss2>",
+        )
+        thread_b = card_b = None
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-approval-id="{card_a.id}"]')
+            thread_b, card_b = _register_gated_card(
+                web_ui, gate_kind="popup", dedupe_key="xss-2", summary="second",
+                tool="gmail_add_label", tool_name="Add Gmail Label",
+            )
+            page.wait_for_function("() => document.querySelectorAll('[data-approval-id]').length === 2")
+            assert page.locator("#pfxss").count() == 0
+            assert page.locator("#pfxss2").count() == 0
+            row_text = page.locator(f'[data-approval-id="{card_a.id}"]').inner_text()
+            assert "<img" in row_text
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread is not None and thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_settings_rerender_escapes_state(self, page, local_server_with_settings):
+        server, _web_ui = local_server_with_settings
+        controller = server.controller
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_selector(".pf-navitem")
+        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
+        page.evaluate(
+            "() => { var render = window.__pfRender; window.__pfRenders = 0;"
+            " window.__pfRender = function (s) { window.__pfRenders++; return render(s); }; }"
+        )
+        real_snapshot = controller.snapshot
+
+        def hostile_snapshot():
+            state = real_snapshot()
+            state["general"]["org_installed"] = True
+            state["general"]["org_installed_date"] = "<b id=pfxss3>x</b>"
+            return state
+
+        controller.snapshot = hostile_snapshot
+        try:
+            call_soon_threadsafe(controller._push_snapshot)
+            page.wait_for_function("() => window.__pfRenders > 0")
+            assert page.locator("#pfxss3").count() == 0
+            assert "Installed <b id=pfxss3>x</b>" in page.locator("#app").inner_text()
+        finally:
+            controller.snapshot = real_snapshot
 
 
 class TestSettingsPageRendering:
@@ -2596,16 +2659,9 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "AI systems", "About"]
+        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "Stats", "About"]
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "org-settings-admin")
-
-        # The admin's AI-system pin page (ADR 0035) renders (no client has
-        # registered with this fixture's provider, so it lists none).
-        page.locator('.pf-navitem[data-nav="agents"]').click()
-        page.wait_for_selector(".pf-agents-list")
-        assert page.get_by_text("Registered clients").is_visible()
-        self._screenshot(page, "org-settings-admin-agents")
 
         page.goto(f"{server.base_url}/settings/privacy")
         page.wait_for_load_state("load")
@@ -2780,7 +2836,7 @@ def phone_page(browser, request):
     ctx.close()
 
 
-_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "about")
+_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "stats", "about")
 _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 
