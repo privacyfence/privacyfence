@@ -103,8 +103,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Jira Assets](#jira-assets) | 8 | 3 | 5 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| [Miro](#miro) | 3 | 3 | 0 | 0 |
-| **Total** | **159** | **57** | **35** | **67** |
+| [Miro](#miro) | 6 | 3 | 3 | 0 |
+| **Total** | **162** | **57** | **38** | **67** |
 
 ## Gmail
 
@@ -339,3 +339,6 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `miro_get_board` | read | `auto` | Get one Miro board's name, team, dates and link. |
 | `miro_list_boards` | read | `auto` | List the Miro boards this account can open in the connected Miro team, optionally only those matching a search text. |
 | `miro_list_tags` | read | `auto` | List the tags defined on one Miro board. |
+| `miro_get_items` | read | `review` | Read specific items of one Miro board by their ids. |
+| `miro_list_connectors` | read | `review` | Read the connector lines on one Miro board and the ids of the items each one joins. |
+| `miro_list_items` | read | `review` | Read the items on one Miro board, optionally only one type of item or only the items inside one frame. |

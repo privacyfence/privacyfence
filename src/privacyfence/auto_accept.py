@@ -154,6 +154,9 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "peek_add_comment":               "peek.add_comment",
     "peek_rename_page":               "peek.rename_page",
     "peek_delete_page":               "peek.delete_page",
+    "miro_list_items":                "miro.list_items",
+    "miro_get_items":                 "miro.get_items",
+    "miro_list_connectors":           "miro.list_connectors",
     "contacts_update":                "contacts.edit",
     "contacts_create":                "contacts.create",
     "contacts_add_label":             "contacts.add_label",
@@ -380,6 +383,9 @@ TOOL_TO_GATE: dict[str, str] = {
     "miro_list_boards":                "auto",
     "miro_get_board":                  "auto",
     "miro_list_tags":                  "auto",
+    "miro_list_items":                 "review",
+    "miro_get_items":                  "review",
+    "miro_list_connectors":            "review",
 }
 
 # The tools a scoped token's allow_personal_data flag applies to (ADR 0173): each one's result carries no
