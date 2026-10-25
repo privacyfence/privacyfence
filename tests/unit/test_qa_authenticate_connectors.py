@@ -22,8 +22,13 @@ def test_resolve_steps_default_is_full_phase_a_order():
     steps = qa_auth.resolve_steps(None)
     assert [s.connector for s in steps] == [
         "gmail", "drive", "calendar", "contacts", "tasks", "apps_script",
-        "slack", "atlassian", "salesforce",
+        "slack", "atlassian", "salesforce", "miro",
     ]
+
+
+def test_miro_step_runs_the_miro_oauth_flag_and_only_miro_selects_it():
+    steps = qa_auth.resolve_steps(["miro"])
+    assert [(s.connector, s.flag) for s in steps] == [("miro", "--miro-oauth")]
 
 
 def test_resolve_steps_group_name_expands_to_its_connectors():

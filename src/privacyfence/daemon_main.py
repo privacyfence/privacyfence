@@ -142,6 +142,7 @@ from .connectors.drive import DriveConnector
 from .connectors.gmail import GmailConnector
 from .connectors.grist import GristConnector
 from .connectors.jira import JiraConnector
+from .connectors.miro import MiroConnector
 from .connectors.salesforce import SalesforceConnector
 from .connectors.slack import SlackConnector
 from .connectors.tasks import TasksConnector
@@ -166,6 +167,11 @@ from .grist_auth import load_token_file as load_grist_token
 from .grist_auth import resolve_credential as grist_resolve_credential
 from .grist_client import GristClient
 from .jira_client import JiraClient, JiraClientError
+from .miro_auth import MiroClientError, MiroTokenProvider
+from .miro_auth import authorize_interactive as miro_authorize_interactive
+from .miro_auth import bundle_settings as miro_bundle_settings
+from .miro_auth import load_token_file as load_miro_token
+from .miro_client import MiroClient
 from .salesforce_client import DEFAULT_REPORT_MAX_PAGES, SalesforceClient, SalesforceClientError
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .salesforce_client import load_token_file as load_salesforce_token
@@ -201,6 +207,7 @@ TOKEN_FILES: dict[str, str] = {
     "slack": "credentials/slack_token.json",
     "salesforce": "credentials/salesforce_token.json",
     "grist": "credentials/grist_token.json",
+    "miro": "credentials/miro_token.json",
     "atlassian": "credentials/atlassian_token.json",
     "telegram": "credentials/telegram.session",
     "peek": "credentials/peek_token.json",
@@ -1715,6 +1722,21 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.warning("Grist connector disabled: %s", exc)
             failures["grist"] = _classify_connector_failure(exc)
 
+    # Miro
+    if enabled("miro"):
+        try:
+            if not org_mode.connector_enabled_by_org(org_config, "miro"):
+                raise MiroClientError("Miro organization config not installed")
+            miro_config = miro_bundle_settings(org_config.get("miro") or {})
+            token_path = _resolve_path(TOKEN_FILES["miro"])
+            provider = MiroTokenProvider(miro_config, token_path, load_miro_token(token_path))
+            miro_client = MiroClient(provider)
+            miro_client.check_connection()
+            connectors.append(MiroConnector(miro_client))
+        except MiroClientError as exc:
+            logger.warning("Miro connector disabled: %s", exc)
+            failures["miro"] = _classify_connector_failure(exc)
+
     return connectors, failures
 
 
@@ -1901,6 +1923,17 @@ def run_grist_oauth(org_config: dict[str, Any]) -> int:
         return 1
     host = urlparse(str(record.get("server_url") or bundle.oauth.server_url)).netloc
     print(f"Grist OAuth complete. Signed in to {host}.")
+    return 0
+
+
+def run_miro_oauth(org_config: dict[str, Any]) -> int:
+    try:
+        miro_config = miro_bundle_settings(org_config.get("miro") or {})
+        record = miro_authorize_interactive(miro_config, _resolve_path(TOKEN_FILES["miro"]))
+    except MiroClientError as exc:
+        print(f"Miro OAuth setup failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Miro OAuth complete. Signed in to the Miro team {record.get('team_id')}.")
     return 0
 
 
@@ -2332,6 +2365,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--salesforce-oauth", action="store_true")
     parser.add_argument("--atlassian-oauth", action="store_true")
     parser.add_argument("--grist-oauth", action="store_true")
+    parser.add_argument("--miro-oauth", action="store_true")
     parser.add_argument("--telegram-setup", action="store_true")
     parser.add_argument(
         "--peek-login", action="store_true",
@@ -2463,6 +2497,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.calendar_oauth or args.tasks_oauth or args.apps_script_oauth
         or args.slack_oauth
         or args.salesforce_oauth or args.atlassian_oauth or args.grist_oauth
+        or args.miro_oauth
         or args.telegram_setup or args.peek_login
     )
 
@@ -2496,6 +2531,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_atlassian_oauth(org_config, config)
             if args.grist_oauth:
                 return run_grist_oauth(org_config)
+            if args.miro_oauth:
+                return run_miro_oauth(org_config)
             if args.telegram_setup:
                 return run_telegram_setup()
             if args.peek_login:
