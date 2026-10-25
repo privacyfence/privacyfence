@@ -1432,7 +1432,8 @@ _JS = r"""
     var status = scopedToolStatus(name, coverage);
     return '<div class="pf-chip pf-st-tool' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
       (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
-      esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
+      // One wrapper span, as in the rule chips: the chip is inline-flex, which would drop the space before the meta span.
+      '<span>' + esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></span></div>';
   }
 
   function renderScopedTokens() {
