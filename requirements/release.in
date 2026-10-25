@@ -9,7 +9,7 @@ setuptools>=61.0
 wheel
 setuptools_scm>=8
 build>=1.2
-boto3>=1.34
+boto3>=1.43.117
 cyclonedx-bom>=4.0
-uv>=0.4
+uv>=0.13.5
 pip-audit>=2.7
