@@ -1,8 +1,8 @@
 # Connecting a service
 
 A **connector** is PrivacyFence's link to one of your accounts: Gmail, Drive, Calendar, Contacts,
-Tasks, Apps Script, Slack, Jira, Confluence, Salesforce, Grist, Miro, Peek or Telegram. Connecting one takes two
-steps, done by different people:
+Tasks, Apps Script, Slack, Jira, Confluence, Salesforce, Grist, Miro, Peek or Telegram. Connecting
+one takes two steps, done by different people:
 
 1. **An administrator registers an app with the provider once** and packages its credentials into
    an organization config bundle (`org_config.json`). Each provider has its own guide — see
