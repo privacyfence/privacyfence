@@ -103,7 +103,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Jira Assets](#jira-assets) | 8 | 3 | 5 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **156** | **54** | **35** | **67** |
+| [Miro](#miro) | 3 | 3 | 0 | 0 |
+| **Total** | **159** | **57** | **35** | **67** |
 
 ## Gmail
 
@@ -330,3 +331,11 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `peek_rename_page` | write | `popup` | Rename a Peek page; its link may change to match the new name, and old links keep redirecting to it in browsers. |
 | `peek_set_visibility` | write | `popup` | Change who can open a Peek page: anyone with the link, anyone with the link and a password, or signed-in Peek accounts only. |
 | `peek_upload_page` | write | `popup` | Publish an HTML page on Peek, or a new version of one of your pages, and get its share link. |
+
+## Miro
+
+| Tool | Direction | Gate | What it does |
+|---|---|---|---|
+| `miro_get_board` | read | `auto` | Get one Miro board's name, team, dates and link. |
+| `miro_list_boards` | read | `auto` | List the Miro boards this account can open in the connected Miro team, optionally only those matching a search text. |
+| `miro_list_tags` | read | `auto` | List the tags defined on one Miro board. |
