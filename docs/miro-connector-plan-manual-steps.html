@@ -179,7 +179,7 @@ unset MIRO_CODE</pre>
         <h3>3. Run the Miro write probe on the lifecycle board</h3>
         <div class="meta"><span class="pill">mb3-miro-write-probe</span><span>about 5 min · within the hour after task 2</span></div>
       </div>
-      <p class="why">No CI run can try Miro writes against a feature branch: the runner only runs workflows as they are on <code>main</code>, and the weekly live check tests <code>main</code>'s code. So the three write behaviours the plan relies on are tried here by hand before anything is built on them. They are creating a frame, a shape fill color from Miro's documented list, and taking an item out of a frame with <code>{"parent": null}</code>, which Miro doesn't document. The probe uses the access token task 2 just saved, which lasts one hour. It never refreshes it, so the token file stays valid.</p>
+      <p class="why">No CI run can try Miro writes against a feature branch: the runner only runs workflows as they are on <code>main</code>, and the weekly live check tests <code>main</code>'s code. So the three write behaviours the plan relies on are tried here by hand before anything is built on them. They are creating a frame, a shape fill color from Miro's documented list, and moving items into and out of a frame. Miro doesn't document taking an item out: it answers 200 to <code>{"parent": null}</code> and changes nothing, so the plan sends <code>{"parent": {"id": ""}}</code>, which this probe checks. The probe uses the access token task 2 just saved, which lasts one hour. It never refreshes it, so the token file stays valid.</p>
       <ol class="steps">
         <li><label><input type="checkbox" id="mb3-1"><span class="step-body">In the same runner shell, run the probe. It asks for the lifecycle board's id and touches only that board:
           <div class="codehead"><span>runner shell</span><button class="copy" type="button" data-copy="code-probe">Copy</button></div>
@@ -197,6 +197,9 @@ def call(method, path, body=None):
             return r.status, json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         return e.code, e.read()[:300].decode("utf-8", "replace")
+def parent_of(i):
+    s, g = call("GET", "/items/" + i)
+    return (g.get("parent") or {}).get("id") if isinstance(g, dict) else f"HTTP {s} {g}"
 s, f = call("POST", "/frames", {"data": {"title": "[QATEST] probe frame", "format": "custom", "type": "freeform"},
                                 "position": {"x": 4000, "y": 0}, "geometry": {"width": 800, "height": 600}})
 if s &gt;= 300: raise SystemExit(f"frame refused: HTTP {s} {f}")
@@ -214,16 +217,17 @@ shape = next(i for i in items if i["type"] == "shape")
 s, sh = call("GET", "/shapes/" + shape["id"])
 kept = s &lt; 300 and (sh.get("style") or {}).get("fillColor", "").lower() == "#fff9b1"
 print("fill color accepted" if kept else f"fill color NOT kept: HTTP {s} {sh}")
-s, r = call("PATCH", "/items/" + sticky["id"], {"parent": None})
-print("PATCH parent null: HTTP", s, "" if s &lt; 300 else r)
-s, g = call("GET", "/items/" + sticky["id"])
-parent = (g.get("parent") or {}).get("id") if isinstance(g, dict) else g
-print("move-out works" if s &lt; 300 and not parent else f"move-out NOT supported (parent {parent})")
+s, r = call("PATCH", "/items/" + shape["id"], {"parent": {"id": f["id"]}, "position": {"x": 100, "y": 300}})
+print("move-in PATCH: HTTP", s, "" if s &lt; 300 else r)
+print("move-in works" if parent_of(shape["id"]) == f["id"] else f"move-in NOT applied (parent {parent_of(shape['id'])})")
+s, r = call("PATCH", "/items/" + sticky["id"], {"parent": {"id": ""}})
+print("move-out PATCH: HTTP", s, "" if s &lt; 300 else r)
+print("move-out works" if not parent_of(sticky["id"]) else f"move-out NOT applied (parent {parent_of(sticky['id'])})")
 EOF</pre>
-          <span class="see">It prints <code>frame created …</code>, <code>bulk created 2 items</code>, <code>fill color accepted</code>, the PATCH status and a move-out line. An HTTP 401 means the hour has passed: repeat task 2's steps 6 and 7 for a fresh token, then run this again.</span></span></label></li>
-        <li><label><input type="checkbox" id="mb3-2"><span class="step-body">In Miro, open the lifecycle board and check that the probe frame, sticky note and yellow shape are there. Leave them, or delete them by hand.</span></label></li>
+          <span class="see">It prints <code>frame created …</code>, <code>bulk created 2 items</code>, <code>fill color accepted</code>, <code>move-in works</code> and <code>move-out works</code>, with the two PATCH statuses in between. An HTTP 401 means the hour has passed: repeat task 2's steps 6 and 7 for a fresh token, then run this again.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb3-2"><span class="step-body">In Miro, open the lifecycle board and check that the probe frame holds the yellow shape and the probe sticky note sits outside it. Leave them, or delete them by hand.</span></label></li>
       </ol>
-      <p class="done-when"><strong>Done when:</strong> the probe printed <code>frame created</code>, <code>bulk created 2 items</code> and <code>fill color accepted</code>. The last line is expected to be <code>move-out NOT supported</code>: on 2026-10-25 Miro answered 200 and kept the parent, and the plan now refuses taking an item out of a frame. If any of the first three lines failed, or the probe stopped with "refused", do not confirm this task. Paste its output to the planning session instead. Then tell the <code>/implement</code> session that all three before-steps are done.</p>
+      <p class="done-when"><strong>Done when:</strong> the probe printed <code>frame created</code>, <code>bulk created 2 items</code>, <code>fill color accepted</code>, <code>move-in works</code> and <code>move-out works</code>. If any line says something else, or the probe stopped with "refused", do not confirm this task. Paste its output to the planning session instead: the plan has to be revised before <code>/implement</code> starts. (Done once on 2026-10-25, with all five lines confirmed.) Then tell the <code>/implement</code> session that all three before-steps are done.</p>
     </article>
   </section>
 
@@ -247,14 +251,14 @@ EOF</pre>
         <li><label><input type="checkbox" id="ma1-5"><span class="step-body">Ask it to read the items on the QA board, then only the items inside <code>QaFrame [QATEST]</code>, then two items by id, then the connector lines.<span class="see">Each shows a review card with Board, Team and a table of items or lines, with text and no HTML tags. Release each.</span></span></label></li>
         <li><label><input type="checkbox" id="ma1-6"><span class="step-body">On the lifecycle board, ask it to add in one request: a yellow sticky note inside <code>QaLifecycleFrame [QATEST]</code>, a card with a due date, a text, a circle shape and a new frame.<span class="see">One approval card lists all five in a table (Type, Text, Position, Size, Frame, Color) and says "New items are added to the board." Approve, and see them on the board.</span></span></label></li>
         <li><label><input type="checkbox" id="ma1-7"><span class="step-body">Ask it to connect the new sticky note to the card with a captioned line.<span class="see">The card names both ends by type and text. Approve, and see the line.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-8"><span class="step-body">Ask it to change the sticky note's text and color and move the card into the new frame. Then ask it to take the sticky note out of its frame.<span class="see">The first request shows one card with an Item / Field / Current / New table; approve and check the board, where the card now sits inside the frame. The second fails before any card with "Miro's API cannot take an item out of a frame. Move it out in Miro."</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-8"><span class="step-body">Ask it to change the sticky note's text and color, move the card into the new frame, and take the sticky note out of its frame.<span class="see">One card with an Item / Field / Current / New table. Approve and check the board: the card is inside the new frame and the sticky note is outside any frame.</span></span></label></li>
         <li><label><input type="checkbox" id="ma1-9"><span class="step-body">Ask it to rename the lifecycle board, then rename it back. Deny one more write request and see the client report the denial.</span></label></li>
         <li><label><input type="checkbox" id="ma1-13"><span class="step-body">Ask it to read the items of the QA board, giving the board's full link instead of its id.<span class="see">It fails before any card with "Not a Miro board id: … Use the id from miro_list_boards, or the part of the board's address after /app/board/."</span></span></label></li>
         <li><label><input type="checkbox" id="ma1-10"><span class="step-body">In <strong>Settings → Auto-accept</strong>, try a <strong>Miro — board</strong> rule with the board's full link: it is refused with a message asking for the id. Add it with the QA board's id and the verb <strong>read</strong>. Read its items again.<span class="see">No card this time. Reading the lifecycle board still shows a card, and no Miro card ever offered "Always allow".</span></span></label></li>
         <li><label><input type="checkbox" id="ma1-11"><span class="step-body">In Miro, remove the app from the team (<strong>team settings → Apps</strong>, or <a href="https://miro.com/app/settings/user-profile/apps" target="_blank" rel="noopener">Your apps</a>). Ask the client to read the QA board's items again.<span class="see">It fails with "Your Miro sign-in has expired or was revoked…" or "Miro refused the sign-in (HTTP 401)…". <strong>Authenticate…</strong> again restores it.</span></span></label></li>
         <li><label><input type="checkbox" id="ma1-12"><span class="step-body">Delete the items this check added on the lifecycle board by hand in Miro. The connector can't delete anything.</span></label></li>
       </ol>
-      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste one line, for example <code>ma1 local mode: PASS (sign-in, 3 auto, 4 review cards, batch of 5, connector, updates incl. move into a frame, move-out refused, board rename, link refused, rule, revoke)</code>, or <code>FAIL at step N: what you saw</code>.</p>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste one line, for example <code>ma1 local mode: PASS (sign-in, 3 auto, 4 review cards, batch of 5, connector, updates incl. moves into and out of a frame, board rename, link refused, rule, revoke)</code>, or <code>FAIL at step N: what you saw</code>.</p>
     </article>
 
     <article class="task" data-task="ma2">
@@ -280,10 +284,10 @@ EOF</pre>
         <h3>6. Check the Miro lifecycle row on main after the merge</h3>
         <div class="meta"><span class="pill">ma3-lifecycle-on-main</span><span>about 10 min · after the feature PR merges</span></div>
       </div>
-      <p class="why">The lifecycle (add, change, move into a frame on the lifecycle board) runs only in <code>connector-live-check.yml</code>, which checks <code>main</code>'s code. This is the first time it runs through PrivacyFence's own Miro client.</p>
+      <p class="why">The lifecycle (add, change, move into and out of a frame on the lifecycle board) runs only in <code>connector-live-check.yml</code>, which checks <code>main</code>'s code. This is the first time it runs through PrivacyFence's own Miro client.</p>
       <ol class="steps">
         <li><label><input type="checkbox" id="ma3-1"><span class="step-body">After the merge, open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/connector-live-check.yml" target="_blank" rel="noopener">connector-live-check.yml</a> and click <strong>Run workflow</strong> on <code>main</code>, or wait for Monday's scheduled run.<span class="see">It may queue behind another live-check or record run. That is expected.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma3-2"><span class="step-body">In the run's <strong>Run qa_fixture_recorder.py --lifecycle</strong> step, or its <code>connector-live-check-report</code> artifact, find the <code>miro</code> row.<span class="see">It passes. On the lifecycle board you see a new <code>[QATEST]</code> sticky note inside <code>QaLifecycleFrame [QATEST]</code> with text ending in "updated", and a new frame holding a yellow shape.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma3-2"><span class="step-body">In the run's <strong>Run qa_fixture_recorder.py --lifecycle</strong> step, or its <code>connector-live-check-report</code> artifact, find the <code>miro</code> row.<span class="see">It passes. On the lifecycle board you see a new <code>[QATEST]</code> sticky note outside any frame with text ending in "updated", and a new frame holding a yellow shape.</span></span></label></li>
       </ol>
       <p class="report"><strong>Report back:</strong> <code>ma3 lifecycle on main: PASS (run URL)</code>, or <code>FAIL: the row's note</code>. A failure here is a bug to fix on <code>main</code> in a new PR.</p>
     </article>
