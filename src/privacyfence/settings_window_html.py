@@ -1486,8 +1486,9 @@ _JS = r"""
       var allows = r.verbs.length ? 'allows ' + r.verbs.join(', ') : '';
       html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
         esc(withValuesText(r.title_parts, r.value_items, r.title) + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' +
-        withValuesHtml(r.title_parts, r.value_items, r.title) +
-        (allows ? ' <span class="pf-st-meta">· ' + esc(allows) + '</span>' : '') + '</div>';
+        // One wrapper span: the chip is inline-flex, which would drop the spaces between its text and value spans.
+        '<span>' + withValuesHtml(r.title_parts, r.value_items, r.title) +
+        (allows ? ' <span class="pf-st-meta">· ' + esc(allows) + '</span>' : '') + '</span></div>';
     });
     html += '</div>';
     var coverage = scopedToolCoverage();
