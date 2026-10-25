@@ -56,6 +56,7 @@ CONNECTOR_TITLES: dict[str, str] = {
     "assets": "Jira Assets",
     "grist": "Grist",
     "peek": "Peek",
+    "miro": "Miro",
 }
 
 # Short names for the summary table, same keys.
@@ -74,6 +75,7 @@ CONNECTOR_SHORT: dict[str, str] = {
     "assets": "Jira Assets",
     "grist": "Grist",
     "peek": "Peek",
+    "miro": "Miro",
 }
 
 GATE_ORDER: tuple[str, ...] = ("auto", "review", "popup")

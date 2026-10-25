@@ -376,6 +376,10 @@ TOOL_TO_GATE: dict[str, str] = {
     "peek_add_comment":                "popup",
     "peek_rename_page":                "popup",
     "peek_delete_page":                "popup",
+    # Miro
+    "miro_list_boards":                "auto",
+    "miro_get_board":                  "auto",
+    "miro_list_tags":                  "auto",
 }
 
 # The tools a scoped token's allow_personal_data flag applies to (ADR 0173): each one's result carries no

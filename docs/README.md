@@ -53,6 +53,7 @@ bundle:
 - [`telegram-setup.md`](telegram-setup.md)
 - [`grist-setup.md`](grist-setup.md)
 - [`peek-setup.md`](peek-setup.md)
+- [`miro-setup.md`](miro-setup.md)
 
 ### AI agent setup
 
