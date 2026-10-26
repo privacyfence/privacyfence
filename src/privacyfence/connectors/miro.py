@@ -552,7 +552,6 @@ class MiroConnector(Connector):
             my_email="",
             args={"board_id": board_id},
         )
-        has_frames = any(s["type"] == "frame" for s in specs)
         frame_ids: list[str] = []
         created_frames: list[MiroItem] = []
         created_rest: list[MiroItem] = []
@@ -567,8 +566,6 @@ class MiroConnector(Connector):
                 created_rest = await asyncio.to_thread(self._client.create_items, board_id, rest)
         except MiroClientError as exc:
             logger.warning("Miro request failed: %s", exc)
-            if not has_frames:
-                raise RuntimeError(str(exc)) from exc
             raise RuntimeError(
                 f"{exc} Frames created before the error: {', '.join(frame_ids) or 'none'}."
             ) from exc

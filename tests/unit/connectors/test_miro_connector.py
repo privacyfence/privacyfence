@@ -608,7 +608,7 @@ class TestCreateItems:
                 "items": items_json({"type": "frame"}, {"type": "sticky_note"}),
             })
 
-    async def test_a_bulk_failure_without_frames_is_a_plain_error(self, gated_call_spy):
+    async def test_a_bulk_failure_without_frames_says_none_were_created(self, gated_call_spy):
         connector, client = make_writer()
         client.create_items.side_effect = MiroClientError("Miro refused.")
 
@@ -617,7 +617,7 @@ class TestCreateItems:
                 "board_id": BOARD_ID, "items": items_json({"type": "sticky_note"}),
             })
 
-        assert str(excinfo.value) == "Miro refused."
+        assert str(excinfo.value) == "Miro refused. Frames created before the error: none."
 
     async def test_the_card_shows_what_will_be_added(self, gated_call_spy):
         connector, _client = make_writer(FRAME)
