@@ -164,7 +164,6 @@ from .auto_accept import (
     ReviewContext,
     add_policy_v2_rules,
     add_rules_changed_listener,
-    forget_removed_rules,
     get_policy_rows,
     get_policy_v2_store_rules,
     is_temp_accepted,
@@ -1650,11 +1649,9 @@ async def propose_policy_change(
         changed = remove_policy_v2_rule(rule_id)
         affected_ids = [rule_id]
     else:
-        removed = remove_policy_v2_rule(rule_id, forget_in_tokens=False) if operation == "update" else False
+        removed = remove_policy_v2_rule(rule_id) if operation == "update" else False
         row_ids = policy_row_ids_for(new_rules)
         added = add_policy_v2_rules(new_rules)
-        if operation == "update" and rule_id not in row_ids:
-            forget_removed_rules([rule_id])
         changed = removed or added
         affected_ids = row_ids
 

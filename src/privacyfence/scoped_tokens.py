@@ -24,12 +24,13 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
 
 from . import auto_accept, paths, secure_files
 from .principal import Principal
 
 if TYPE_CHECKING:
+    from .policy.engine import PolicyRule
     from .policy.scope_rows import V2Migration
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,59 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
     )
 
 
+_LEGACY_KEYS = ("rule_ids", "rule_limits", "limits_split_verbs")
+
+
+@dataclass(frozen=True)
+class OwnedEntry:
+    entry: dict[str, Any]
+    newly_flagged: bool  # allow_personal_data newly set (ADR 0173's transfer from a v2 rule)
+    copied: int  # rule ids that named a rule and were copied
+    missing: int  # rule ids that named no rule any more, or whose limit left nothing
+
+
+def owned_entry(
+    raw: Any, compiled: Sequence["PolicyRule"], personal_data_ids: frozenset[str] = frozenset(),
+) -> OwnedEntry | None:
+    """A legacy token entry (``rule_ids``, no ``rules``) with its own copy of each rule it named,
+    narrowed to its ``rule_limits``; ``None`` for an entry that already holds its rules. Raises
+    ``KeyError``, ``TypeError`` or ``ValueError`` for an entry that cannot be read."""
+    from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+
+    if not isinstance(raw, dict):
+        raise TypeError("not a token entry")
+    if "rules" in raw:
+        return None
+    ids = raw["rule_ids"]
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise TypeError("rule_ids must be a list of strings")
+    limits = _limits_from_json(raw.get("rule_limits", {}))
+    if raw.get("limits_split_verbs") is not True:
+        limits = _with_limit_successors(limits)
+    rows: list[Any] = []
+    copied = missing = 0
+    for rid in sorted(set(ids)):
+        matching = [r for r in compiled if r.id == rid]
+        limit = limits.get(rid)
+        if limit is not None:
+            matching = [
+                replace(r, operations=frozenset(op for op in r.operations if (r.predicate, op) in limit))
+                for r in matching
+            ]
+            matching = [r for r in matching if r.operations]
+        if not matching:
+            missing += 1
+            continue
+        rows.extend(scope_rows.rows_for_rules(matching, rid))
+        copied += 1
+    entry = {k: v for k, v in raw.items() if k not in _LEGACY_KEYS}
+    entry["rules"] = [scope_rows.row_to_dict(row) for row in rows]
+    newly_flagged = raw.get("allow_personal_data") is not True and bool(set(ids) & personal_data_ids)
+    if newly_flagged:
+        entry["allow_personal_data"] = True
+    return OwnedEntry(entry, newly_flagged, copied, missing)
+
+
 def _migrated(token: ScopedToken, migration: "V2Migration") -> tuple[ScopedToken, bool]:
     """``token`` re-pointed at the migration's rows, and whether its personal-data flag was newly
     set. Returns ``token`` itself when nothing needs changing, so a second run is a no-op."""
@@ -301,47 +355,6 @@ def migrate_token_file(path: Path, migration: "V2Migration") -> list[str]:
         if newly_flagged:
             labels.append(new.label)
     if changed:
-        secure_files.atomic_write_json(path, {"version": 1, "tokens": out})
-    return labels
-
-
-def _without_rules(token: ScopedToken, rule_ids: frozenset[str]) -> ScopedToken:
-    """``token`` minus ``rule_ids`` and their limits; ``token`` itself when it carries none of them.
-    A token left with no rules and no tools stays: it is not revoked."""
-    if not (token.rule_ids & rule_ids) and not any(k in rule_ids for k in token.rule_limits):
-        return token
-    return replace(
-        token,
-        rule_ids=token.rule_ids - rule_ids,
-        rule_limits={k: v for k, v in token.rule_limits.items() if k not in rule_ids},
-    )
-
-
-def forget_rules_in_file(path: Path, rule_ids: Iterable[str]) -> list[str]:
-    """Drop ``rule_ids`` from every token in ``path``; return the labels of the tokens that changed.
-    A missing or unreadable file is left alone, and entries that cannot be read are kept as they
-    are. Raises ``OSError`` if the write fails."""
-    gone = frozenset(rule_ids)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        entries = list(data["tokens"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return []
-    labels: list[str] = []
-    out: list[Any] = []
-    for raw in entries:
-        try:
-            token = _from_json("", raw)
-        except (KeyError, TypeError, ValueError):
-            out.append(raw)
-            continue
-        new = _without_rules(token, gone)
-        if new is token:
-            out.append(raw)
-            continue
-        out.append(_to_json(new))
-        labels.append(new.label)
-    if labels:
         secure_files.atomic_write_json(path, {"version": 1, "tokens": out})
     return labels
 
@@ -555,23 +568,6 @@ class ScopedTokenStore:
                 self._write(principal)
             return labels
 
-    def forget_rules(self, principal: Principal, rule_ids: Iterable[str]) -> list[str]:
-        """``forget_rules_in_file`` for a live store: under the lock, on the freshly read tokens."""
-        gone = frozenset(rule_ids)
-        with self._lock:
-            self._refresh(principal)
-            labels: list[str] = []
-            tokens: list[ScopedToken] = []
-            for token in self._tokens[principal.id]:
-                new = _without_rules(token, gone)
-                if new is not token:
-                    labels.append(new.label)
-                tokens.append(new)
-            if labels:
-                self._tokens[principal.id] = tokens
-                self._write(principal)
-            return labels
-
     def find(self, secret: str, now: float | None = None) -> ScopedToken | None:
         if not secret.startswith(TOKEN_PREFIX):
             return None
@@ -683,18 +679,6 @@ def migrate_tokens(principal: Principal, migration: "V2Migration") -> list[str]:
     if store is not None:
         return store.apply_migration(principal, migration)
     return migrate_token_file(paths.authority_dir(principal) / STORE_FILE_NAME, migration)
-
-
-def forget_rules(principal: Principal, rule_ids: Iterable[str]) -> list[str]:
-    """Drop deleted rules from ``principal``'s tokens through the live store when one is set, else
-    straight in the file. Returns the labels of the tokens that changed."""
-    gone = frozenset(rule_ids)
-    if not gone:
-        return []
-    store = current_store()
-    if store is not None:
-        return store.forget_rules(principal, gone)
-    return forget_rules_in_file(paths.authority_dir(principal) / STORE_FILE_NAME, gone)
 
 
 def set_store(store: ScopedTokenStore | None) -> None:

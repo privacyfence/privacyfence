@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from . import catalogue, describe, outdated, propose, registry, store
 from .catalogue import PolicyExtraScope
@@ -373,6 +373,28 @@ def add_rules(rows: list[ScopeRow], rules: list[PolicyRule]) -> tuple[list[Scope
     return new_rows, list(dict.fromkeys(touched))
 
 
+def _quads(rules: Iterable[PolicyRule]) -> frozenset[tuple[str, str, str, str]]:
+    return frozenset(
+        (r.predicate, repr(r.conditions), repr(store._sortable(r.value)), op)
+        for r in rules for op in r.operations
+    )
+
+
+def rows_for_rules(rules: Sequence[PolicyRule], row_id: str) -> list[ScopeRow]:
+    """Rows that compile to exactly ``rules`` -- the same predicates, conditions, values and
+    operations -- all carrying ``row_id``: the rows ``add_rules`` builds when they compile back
+    to exactly that, else one custom row per rule. ``[]`` for no rules. A scoped token's own copy
+    of a rule is built with it (ADR 0236)."""
+    rules = [r for r in rules if r.operations]
+    if not rules:
+        return []
+    merged, _ = add_rules([], rules)
+    candidate = [dataclasses.replace(row, id=row_id, former_ids=()) for row in merged]
+    if _quads(compile_rows(candidate)) == _quads(rules):
+        return candidate
+    return [_custom_row(rule, row_id) for rule in rules]
+
+
 def remove_row(rows: list[ScopeRow], row_id: str) -> list[ScopeRow]:
     """``rows`` without the row with this id."""
     return [row for row in rows if row.id != row_id]
@@ -499,6 +521,7 @@ __all__ = [
     "row_from_dict",
     "row_id_for",
     "row_to_dict",
+    "rows_for_rules",
     "rows_from_config",
     "rows_from_section",
     "rows_to_config",

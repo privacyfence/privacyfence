@@ -2373,7 +2373,7 @@ class TestPolicyRuleRows:
         assert reread is not None
         return reread
 
-    def test_remove_drops_the_id_from_a_token_that_carried_it(self, controller):
+    def test_remove_leaves_scoped_tokens_alone(self, controller):
         controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
         controller.add_policy_rule("drive.folder", "FOLDER2", ["read"])
         keep = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
@@ -2382,20 +2382,7 @@ class TestPolicyRuleRows:
 
         controller.remove_policy_rule(drop)
 
-        assert self._reread(token).rule_ids == {keep}
-
-    def test_adding_the_same_scope_again_does_not_restore_the_token_access(self, controller):
-        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
-        rule_id = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
-        token = self._seed_token([rule_id])
-
-        controller.remove_policy_rule(rule_id)
-        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
-
-        assert scope_rows.row_id_for("drive.folder", ["FOLDER1"]) == rule_id
-        reread = self._reread(token)
-        assert reread.rule_ids == frozenset()
-        assert gate_module._rules_in_scope(reread) == []
+        assert self._reread(token).rule_ids == {keep, drop}
 
     def test_update_fills_missing_on_row(self, controller):
         controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])

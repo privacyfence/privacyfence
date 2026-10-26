@@ -94,7 +94,7 @@ class TestCreateValidation:
         with pytest.raises(ScopedTokenError, match="^Choose at least one tool for the token.$"):
             _create(_store(), rule_ids=[], tools=[])
 
-    def test_tools_without_rules_are_allowed(self):
+    def test_tools_with_no_rules_are_allowed(self):
         token, _ = _create(_store(), rule_ids=[])
         assert token.rule_ids == frozenset()
 
@@ -667,146 +667,98 @@ def _stamp(tmp_path):
     return st.st_mtime_ns, st.st_ino
 
 
-class TestForgetRules:
-    def test_drops_the_id_and_its_limit_and_keeps_the_rest(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1", "r-2")
-        store_ = _store()
-        _, secret = _create(
-            store_, label="job", rule_ids=["r-1", "r-2"], tools=[TOOL, "gmail_get_message"],
-            allow_personal_data=True,
+class TestOwnedEntry:
+    """``owned_entry``: a legacy token entry becomes one holding its own copy of its rules (ADR 0236)."""
+
+    @staticmethod
+    def _rule(rule_id="r-1", predicate="approved_folder", operations=("drive.read_file_contents",), value=("F1",)):
+        return PolicyRule(
+            id=rule_id, predicate=predicate, value=list(value), operations=frozenset(operations),
         )
-        _add_limit(tmp_path, "job", "r-1", [["approved_folder", "drive.download_file"]])
-        _add_limit(tmp_path, "job", "r-2", [["approved_folder", "drive.write_file"]])
-        store_.load()
 
-        labels = store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"])
+    @staticmethod
+    def _raw(rule_ids, **extra):
+        return {"id": "st-1", "label": "job", "rule_ids": rule_ids, "tools": [], **extra}
 
-        assert labels == ["job"]
-        token = store_.find(secret, NOW)
-        assert token is not None
-        assert token.rule_ids == {"r-2"}
-        assert token.rule_limits == {"r-2": frozenset({("approved_folder", "drive.write_file")})}
-        assert token.tools == {TOOL, "gmail_get_message"}
-        assert token.allow_personal_data is True
-        assert _tokens(tmp_path)["job"]["rule_ids"] == ["r-2"]
+    def test_an_entry_with_rules_gives_none(self):
+        assert scoped_tokens.owned_entry({"id": "st-1", "rules": []}, [self._rule()]) is None
 
-    def test_returns_only_the_labels_that_changed_in_file_order(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1", "r-2")
-        store_ = _store()
-        _create(store_, label="b", rule_ids=["r-1"])
-        _create(store_, label="plain", rule_ids=["r-2"])
-        _create(store_, label="a", rule_ids=["r-1", "r-2"])
+    def test_rule_ids_are_copied_as_rows_with_their_own_ids(self):
+        row = scope_rows.ScopeRow(
+            id="r-1", scope="drive.folder", value=["F1"], verbs=frozenset({Verb.READ}),
+            operations=scope_rows.implied_operations("drive.folder", [Verb.READ]),
+        )
+        compiled = scope_rows.compile_row(row)
 
-        assert store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["b", "a"]
+        owned = scoped_tokens.owned_entry(self._raw(["r-1"]), compiled)
 
-    def test_no_write_when_nothing_matches(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1")
-        store_ = _store()
-        _create(store_, label="job", rule_ids=["r-1"])
-        before = _stamp(tmp_path)
+        assert owned.copied == 1 and owned.missing == 0 and owned.newly_flagged is False
+        assert owned.entry["rules"] == [scope_rows.row_to_dict(row)]
 
-        assert store_.forget_rules(LOCAL_PRINCIPAL, ["r-unknown"]) == []
-        assert _stamp(tmp_path) == before
+    def test_a_rule_limit_narrows_the_copy_to_its_pairs(self):
+        rule = self._rule(operations=("drive.read_file_contents", "drive.download_file"))
+        raw = self._raw(
+            ["r-1"], rule_limits={"r-1": [["approved_folder", "drive.download_file"]]}, limits_split_verbs=True,
+        )
 
-    def test_a_token_left_with_nothing_stays(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1")
-        store_ = _store()
-        token, secret = _create(store_, label="job", rule_ids=["r-1"], tools=[])
+        owned = scoped_tokens.owned_entry(raw, [rule])
 
-        assert store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["job"]
-        kept = store_.find(secret, NOW)
-        assert kept is not None and kept.id == token.id
-        assert kept.rule_ids == frozenset() and kept.tools == frozenset()
+        rows = [scope_rows.row_from_dict(d) for d in owned.entry["rules"]]
+        assert {op for r in scope_rows.compile_rows(rows) for op in r.operations} == {"drive.download_file"}
 
-    def test_the_change_survives_a_fresh_load(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1", "r-2")
-        store_ = _store()
-        _create(store_, label="job", rule_ids=["r-1", "r-2"])
-        store_.forget_rules(LOCAL_PRINCIPAL, ["r-1"])
+    def test_an_id_with_no_compiled_rule_is_missing_and_adds_no_row(self):
+        owned = scoped_tokens.owned_entry(self._raw(["r-gone", "r-1"]), [self._rule()])
 
-        fresh = _store()
-        fresh.load()
-        (token,) = fresh.tokens_for(LOCAL_PRINCIPAL)
-        assert token.rule_ids == {"r-2"}
+        assert (owned.copied, owned.missing) == (1, 1)
+        assert {d["id"] for d in owned.entry["rules"]} == {"r-1"}
 
-    def test_refreshes_before_changing(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1")
-        one, two = _store(), _store()
-        _create(one, label="t1", rule_ids=["r-1"])
-        _create(two, label="t2", rule_ids=["r-1"])  # a write one has not seen yet
+    def test_a_limit_that_leaves_nothing_counts_as_missing(self):
+        raw = self._raw(["r-1"], rule_limits={"r-1": [["approved_folder", "drive.other"]]}, limits_split_verbs=True)
 
-        assert one.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["t1", "t2"]
+        owned = scoped_tokens.owned_entry(raw, [self._rule()])
 
-    def test_file_variant_keeps_an_unreadable_entry_and_changes_the_rest(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1")
-        _create(_store(), label="job", rule_ids=["r-1"])
-        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
-        data["tokens"].append({"id": "broken"})
-        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        assert (owned.copied, owned.missing) == (0, 1)
+        assert owned.entry["rules"] == []
 
-        assert scoped_tokens.forget_rules_in_file(_file(tmp_path), ["r-1"]) == ["job"]
+    def test_a_token_without_limits_split_verbs_gets_the_limit_successor(self):
+        rule = PolicyRule(
+            id="m1", predicate="slack.mentions_of_me_all_results", value=None,
+            operations=frozenset({"slack.read_messages"}),
+        )
+        raw = self._raw(["m1"], rule_limits={"m1": [list(MENTIONS_PAIR)]})
 
-        written = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]
-        assert written[0]["rule_ids"] == []
-        assert written[1] == {"id": "broken"}
+        old = scoped_tokens.owned_entry(raw, [rule])
+        split = scoped_tokens.owned_entry({**raw, "limits_split_verbs": True}, [rule])
 
-    def test_file_variant_writes_nothing_when_nothing_matches(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1")
-        _create(_store(), label="job", rule_ids=["r-1"])
-        before = _stamp(tmp_path)
+        assert old.copied == 1
+        assert split.copied == 0 and split.missing == 1
 
-        assert scoped_tokens.forget_rules_in_file(_file(tmp_path), ["r-other"]) == []
-        assert _stamp(tmp_path) == before
+    def test_personal_data_ids_set_the_flag_and_newly_flagged(self):
+        owned = scoped_tokens.owned_entry(self._raw(["r-1"]), [self._rule()], frozenset({"r-1"}))
 
-    def test_file_variant_leaves_a_missing_or_unreadable_file_alone(self, tmp_path):
-        missing = tmp_path / "nowhere" / STORE_FILE_NAME
-        assert scoped_tokens.forget_rules_in_file(missing, ["r-1"]) == []
-        assert not missing.exists()
-        broken = tmp_path / STORE_FILE_NAME
-        broken.write_text("{not json", encoding="utf-8")
-        assert scoped_tokens.forget_rules_in_file(broken, ["r-1"]) == []
-        assert broken.read_text(encoding="utf-8") == "{not json"
+        assert owned.newly_flagged is True
+        assert owned.entry["allow_personal_data"] is True
 
-    def test_module_function_uses_the_file_when_no_store_is_set(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1")
-        _create(_store(), label="job", rule_ids=["r-1"])
-        scoped_tokens.set_store(None)
+    def test_an_entry_that_already_has_the_flag_is_not_newly_flagged(self):
+        raw = self._raw(["r-1"], allow_personal_data=True)
 
-        def _boom(*_a, **_k):
-            raise AssertionError("the store must not be used")
+        owned = scoped_tokens.owned_entry(raw, [self._rule()], frozenset({"r-1"}))
 
-        monkeypatch.setattr(ScopedTokenStore, "forget_rules", _boom)
+        assert owned.newly_flagged is False
+        assert owned.entry["allow_personal_data"] is True
 
-        assert scoped_tokens.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["job"]
-        assert _tokens(tmp_path)["job"]["rule_ids"] == []
+    def test_the_output_entry_has_none_of_the_legacy_keys(self):
+        raw = self._raw(["r-1"], rule_limits={}, limits_split_verbs=True)
 
-    def test_module_function_uses_the_live_store_when_set(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-1")
-        live = _store()
-        _create(live, label="job", rule_ids=["r-1"])
+        owned = scoped_tokens.owned_entry(raw, [self._rule()])
 
-        def _boom(*_a, **_k):
-            raise AssertionError("the file must not be edited behind the store")
+        assert not set(scoped_tokens._LEGACY_KEYS) & set(owned.entry)
+        assert owned.entry["label"] == "job"
 
-        monkeypatch.setattr(scoped_tokens, "forget_rules_in_file", _boom)
-        scoped_tokens.set_store(live)
-        try:
-            assert scoped_tokens.forget_rules(LOCAL_PRINCIPAL, ["r-1"]) == ["job"]
-        finally:
-            scoped_tokens.set_store(None)
-        assert _tokens(tmp_path)["job"]["rule_ids"] == []
-
-    def test_module_function_with_no_ids_touches_nothing(self, monkeypatch):
-        def _boom(*_a, **_k):
-            raise AssertionError("nothing to do")
-
-        monkeypatch.setattr(ScopedTokenStore, "forget_rules", _boom)
-        monkeypatch.setattr(scoped_tokens, "forget_rules_in_file", _boom)
-        scoped_tokens.set_store(_store())
-        try:
-            assert scoped_tokens.forget_rules(LOCAL_PRINCIPAL, []) == []
-        finally:
-            scoped_tokens.set_store(None)
+    @pytest.mark.parametrize("raw", ["nope", {"id": "st-1"}, {"id": "st-1", "rule_ids": "r-1"}, {"rule_ids": [1]}])
+    def test_an_unreadable_entry_raises(self, raw):
+        with pytest.raises((KeyError, TypeError, ValueError)):
+            scoped_tokens.owned_entry(raw, [self._rule()])
 
 
 def _activity_file(tmp_path):

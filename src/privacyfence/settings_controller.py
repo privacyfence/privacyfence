@@ -39,7 +39,6 @@ from .apps_script_client import AppsScriptClient
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
-    forget_removed_rules,
     notify_rules_changed,
     set_policy_v2_store_rules,
     set_rules_changed_listener,
@@ -1905,7 +1904,6 @@ class SettingsController:
             return self.snapshot()
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_scope_rows.rows_to_config(remaining)
         self._save_and_reload_policy_v2(cfg)
-        forget_removed_rules([rule_id])
         return self.snapshot()
 
     def update_policy_rule(self, rule_id: str) -> dict[str, Any]:
