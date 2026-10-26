@@ -302,7 +302,7 @@ class TestAutoAcceptTemplate:
         assert "Enter at least two ids, separated by a comma." in html
         assert "pf-aa-pair-hint" in html
         # The invalid state disables the button and the submit path refuses too.
-        assert "pairHint && pairHint.invalid ? ' aria-disabled=\"true\"'" in html
+        assert "aaHint && aaHint.invalid ? ' aria-disabled=\"true\"'" in html
         assert "if (submitHint && submitHint.invalid) return;" in html
 
     def test_the_move_pair_rule_names_exactly_drive_folder_and_tasks_list(self):
@@ -679,7 +679,8 @@ class TestScopedTokensSection:
         "tokens": [
             {"id": "st-1", "label": "sales-sync", "created_at": 0, "expires_at": 1798675200, "days_left": 5,
              "expiring_soon": True, "expired": False,
-             "rules": [{"id": "r1", "sentence": "Allow reads </script><b>x</b>"}, {"id": "r2", "missing": True}],
+             "rules": [{"id": "r1", "title": "Gmail — anything", "sentence": "Allow reads </script><b>x</b>",
+                        "tools": ["gmail_get_message"]}],
              "tools": ["gmail_get_message"]},
             {"id": "st-2", "label": "old", "created_at": 0, "expires_at": 1, "days_left": 0,
              "expiring_soon": False, "expired": True, "rules": [], "tools": []},
@@ -688,6 +689,11 @@ class TestScopedTokensSection:
                    "tools": ["gmail_get_message", "gmail_list_messages"]}],
         "tools": [{"connector": "gmail", "tools": ["gmail_get_message", "gmail_list_messages"]}],
         "auto_tools": ["gmail_list_messages"],
+        "scope_groups": [
+            {"id": "gmail.label", "label": "Gmail — label </script><i>g</i>", "connector": "gmail", "needs_value": True,
+             "value_optional": False, "value_hint": "Label </script><u>h</u>", "verbs": ["read", "update"],
+             "verb_tools": {"read": ["gmail_get_message"], "update": ["gmail_modify_message"]}},
+        ],
     }
 
     def _caps(self, html: str) -> dict:
@@ -788,7 +794,6 @@ class TestScopedTokensSection:
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "withValuesHtml(r.title_parts, r.value_items, r.title)" in html
         assert "'allows ' + r.verbs.join(', ')" in html
-        assert "Pick the tools below as well: a tool that needs approval works only where a selected rule covers it." in html
 
     def test_each_tool_shows_whether_a_selected_rule_covers_it(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
@@ -802,10 +807,50 @@ class TestScopedTokensSection:
         assert 'data-st-uncovered="1">No selected rule covers' in html
         assert "will be denied. Select a rule that covers" in html
 
-    def test_a_missing_rule_is_shown_as_no_longer_existing(self):
+    def test_no_notice_for_a_missing_or_limited_rule(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
-        assert "a rule that no longer exists" in html
-        assert "r.missing ? 'a rule that no longer exists' : withValuesHtml(r.sentence_parts" in html
+        assert "a rule that no longer exists" not in html
+        assert "limited to" not in html
+        assert "data-st-dup-missing" not in html
+        assert "data-st-dup-limited" not in html
+
+    def test_the_rules_block_has_its_hint_sub_titles_and_button(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert ("Rules belong to this token only: they never auto-accept anything for your other AI clients, ' +\n"
+                "      'and changing or deleting an Auto-accept rule later does not change the token. ' +\n"
+                "      'A tool that needs approval works only where one of the token\\'s rules covers it.") in html
+        assert "New rule for this token" in html
+        assert "Copy from my Auto-accept rules" in html
+        assert "From ' + esc(dupOf.label)" in html
+        assert "Add rule to token" in html
+        assert "A copy: later changes to the Auto-accept rule do not reach the token." in html
+        assert "You have no Auto-accept rules to copy." in html
+        for attr in ("data-st-new-group", "data-st-new-value", "data-st-new-verb", "data-st-new-add",
+                     "data-st-new-remove", "data-st-new-list", "data-st-dup-rule"):
+            assert attr in html
+
+    def test_the_form_says_so_when_no_scope_group_is_offered(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "No connector is enabled, so there is no scope to make a rule for." in html
+
+    def test_the_create_request_carries_rule_requests_not_rule_ids(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "rule_ids" not in html
+        assert "{kind: 'new', group: nr.group, value: nr.value, verbs: nr.verbs}" in html
+        assert "{kind: 'copy', rule_id: id}" in html
+        assert "{kind: 'duplicate', token_id: ui.stDuplicateOf, rule_id: r.id}" in html
+        assert "rules: rules, tools: tools" in html
+
+    def test_the_pair_hint_is_shared_with_the_auto_accept_page(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "function pairHint(group, checkedVerbs, value)" in html
+        assert "return pairHint(group, ui.aaCheckedVerbs, ui.aaValue);" in html
+        assert "pairHint(newGroup, ui.stNewVerbs, ui.stNewValue)" in html
+
+    def test_scope_group_labels_and_value_hints_are_escaped(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "</script><i>g</i>" not in html
+        assert "</script><u>h</u>" not in html
 
     def test_resource_values_toggle_between_ids_and_names_on_both_pages(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
@@ -820,9 +865,6 @@ class TestScopedTokensSection:
         assert "aria-label=\"Duplicate ' + esc(t.label)" in html
         assert "data-st-clear" in html
         assert ">Clear form</div>" in html
-        assert "of this token\\'s rules no longer exist and were left out." in html
-        assert "The new token gets these rules as they are now. " in html
-        assert "The original only allowed part of them; check the tools below before creating it." in html
         assert "/^(.*) (\\d+)$/" in html
 
     def test_a_token_can_be_renamed(self):

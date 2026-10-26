@@ -30,12 +30,15 @@ DATA = {
     "tokens": [
         {"id": "st-1", "label": "Daily sync", "created_at": 0, "expires_at": 30 * DAY, "days_left": 20,
          "expiring_soon": False, "expired": False,
-         "rules": [{"id": "r-gmail", "sentence": "Gmail: allow read"},
-                   {"id": "r-drive", "sentence": "Drive: allow read"}],
+         "rules": [{"id": "r-gmail", "title": "Gmail - anything", "sentence": "Gmail: allow read",
+                    "tools": ["gmail_get_message"]},
+                   {"id": "r-drive", "title": "Drive - anything", "sentence": "Drive: allow read",
+                    "tools": ["drive_get_file_content"]}],
          "tools": ["gmail_get_message", "tasks_list_tasks"], "allow_personal_data": True},
         {"id": "st-2", "label": "Daily sync 2", "created_at": 0, "expires_at": 500 * DAY, "days_left": 0,
          "expiring_soon": False, "expired": True,
-         "rules": [{"id": "r-gmail", "sentence": "Gmail: allow read"}],
+         "rules": [{"id": "r-gmail", "title": "Gmail - anything", "sentence": "Gmail: allow read",
+                    "tools": ["gmail_get_message"]}],
          "tools": ["gmail_get_message"], "allow_personal_data": False},
     ],
     "rules": [
@@ -46,6 +49,14 @@ DATA = {
     ],
     "tools": [{"connector": c, "tools": t} for c, t in TOOLS.items()],
     "auto_tools": ["gmail_list_messages", "drive_list_files", "tasks_list_tasks"],
+    "scope_groups": [
+        {"id": "drive.folder", "label": "Drive - folder", "connector": "drive", "needs_value": True,
+         "value_optional": False, "value_hint": "folder-id", "verbs": ["read", "move"],
+         "verb_tools": {"read": ["drive_get_file_content"], "move": ["drive_move_file"]}},
+        {"id": "gmail.anything", "label": "Gmail - anything", "connector": "gmail", "needs_value": False,
+         "value_optional": False, "value_hint": "", "verbs": ["read", "send"],
+         "verb_tools": {"read": ["gmail_get_message"], "send": ["gmail_send_message"]}},
+    ],
 }
 
 
@@ -91,8 +102,10 @@ def test_duplicate_prefills_the_form(page):
     _duplicate(page, "Daily sync")
     assert page.input_value("[data-st-label]") == "Daily sync 3"
     assert page.input_value("[data-st-days]") == "30"
-    rules = page.eval_on_selector_all('[data-st-rule][aria-checked="true"]', "els => els.map(e => e.getAttribute('data-st-rule'))")
+    rules = page.eval_on_selector_all('[data-st-dup-rule][aria-checked="true"]', "els => els.map(e => e.getAttribute('data-st-dup-rule'))")
     assert sorted(rules) == ["r-drive", "r-gmail"]
+    assert page.query_selector('[data-st-rule][aria-checked="true"]') is None
+    assert page.inner_text(".pf-st-form").count("From Daily sync") == 1
     assert _ticked(page) == ["gmail_get_message", "tasks_list_tasks"]
     assert page.get_attribute("[data-st-personal-data]", "aria-checked") == "true"
     assert page.evaluate("document.activeElement.hasAttribute('data-st-label')")
@@ -167,6 +180,7 @@ def test_clear_form_resets(page):
     assert _ticked(page) == []
     assert page.get_attribute("[data-st-personal-data]", "aria-checked") == "false"
     assert page.query_selector("[data-st-clear]") is None
+    assert page.query_selector("[data-st-dup-rule]") is None
     assert page.query_selector("[data-st-dup-missing]") is None
 
 
@@ -202,3 +216,93 @@ def test_cancel_escape_and_an_unchanged_name_post_nothing(page):
         close()
         assert page.locator(".pf-modal").count() == 0
         assert page.evaluate("window.__posted") == []
+
+
+def _posted_rules(page):
+    page.click("[data-st-create]")
+    [posted] = page.evaluate("window.__posted")
+    assert posted["action"] == "create_scoped_token"
+    return posted["rules"]
+
+
+def _add_button_disabled(page):
+    return page.get_attribute("[data-st-new-add]", "aria-disabled") == "true"
+
+
+def test_new_rule_is_sent_with_the_create_request(page):
+    _capture_posts(page)
+    page.fill("[data-st-label]", "triage")
+    page.select_option("[data-st-new-group]", "drive.folder")
+    page.fill("[data-st-new-value]", "f1, f2")
+    page.click('[data-st-new-verb="read"]')
+    page.click("[data-st-new-add]")
+    assert page.inner_text("[data-st-new-list]").startswith("Drive - folder: f1, f2 \u00b7 allows read")
+    assert _posted_rules(page) == [{"kind": "new", "group": "drive.folder", "value": "f1, f2", "verbs": ["read"]}]
+
+
+def test_add_works_when_the_verb_is_ticked_before_the_value_is_typed(page):
+    _capture_posts(page)
+    page.select_option("[data-st-new-group]", "drive.folder")
+    page.click('[data-st-new-verb="read"]')
+    assert _add_button_disabled(page)
+    page.type("[data-st-new-value]", "f1", delay=20)
+    assert not _add_button_disabled(page)
+    assert page.input_value("[data-st-new-value]") == "f1"
+    page.click("[data-st-new-add]")
+    assert page.input_value("[data-st-new-value]") == ""
+    assert _posted_rules(page) == [{"kind": "new", "group": "drive.folder", "value": "f1", "verbs": ["read"]}]
+
+
+def test_a_move_needs_two_ids_before_it_can_be_added(page):
+    page.select_option("[data-st-new-group]", "drive.folder")
+    page.click('[data-st-new-verb="move"]')
+    page.fill("[data-st-new-value]", "f1")
+    assert _add_button_disabled(page)
+    page.fill("[data-st-new-value]", "f1, f2")
+    assert not _add_button_disabled(page)
+
+
+def test_copied_rule_is_sent_as_copy(page):
+    _capture_posts(page)
+    page.fill("[data-st-label]", "triage")
+    _select_rule(page, "r-gmail")
+    assert _posted_rules(page) == [{"kind": "copy", "rule_id": "r-gmail"}]
+
+
+def test_duplicated_rule_is_sent_as_duplicate(page):
+    _capture_posts(page)
+    _duplicate(page, "Daily sync")
+    page.click('[data-st-dup-rule="r-drive"]')
+    assert _posted_rules(page) == [{"kind": "duplicate", "token_id": "st-1", "rule_id": "r-gmail"}]
+
+
+def test_new_rule_tools_are_listed(page):
+    page.select_option("[data-st-new-group]", "gmail.anything")
+    page.click('[data-st-new-verb="read"]')
+    page.click('[data-st-new-verb="send"]')
+    page.click("[data-st-new-add]")
+    assert page.query_selector("[data-st-no-rule-hint]") is None
+    assert _shown(page) == ["gmail_get_message", "gmail_list_messages", "gmail_send_message"]
+    page.click("[data-st-add-covered]")
+    assert _ticked(page) == ["gmail_get_message", "gmail_send_message"]
+
+
+def test_removed_new_rule_is_not_sent(page):
+    _capture_posts(page)
+    page.fill("[data-st-label]", "triage")
+    page.select_option("[data-st-new-group]", "gmail.anything")
+    page.click('[data-st-new-verb="read"]')
+    page.click("[data-st-new-add]")
+    page.click('[data-st-new-remove="0"]')
+    assert page.query_selector("[data-st-new-list]") is None
+    assert _posted_rules(page) == []
+
+
+def test_add_is_disabled_without_a_verb(page):
+    page.select_option("[data-st-new-group]", "gmail.anything")
+    assert _add_button_disabled(page)
+    assert page.get_attribute("[data-st-new-add]", "tabindex") is None
+    page.click('[data-st-new-verb="read"]')
+    assert not _add_button_disabled(page)
+    page.click('[data-st-new-verb="read"]')
+    assert _add_button_disabled(page)
