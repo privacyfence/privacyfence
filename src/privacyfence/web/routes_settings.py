@@ -1235,7 +1235,7 @@ def build_routes(
             _record_settings_audit(
                 LOCAL_PRINCIPAL,
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
-                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)",
+                f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)",
             )
         return JSONResponse({"created": {"id": token.id, "label": token.label, "expires_at": token.expires_at}})
 
@@ -1851,7 +1851,7 @@ def build_org_routes(
             _record_settings_audit(
                 principal,
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
-                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)"
+                f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)"
                 + (", personal data allowed" if token.allow_personal_data else "")
                 + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
                 + f" (principal={principal.id})",

@@ -60,6 +60,7 @@ from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import scope_rows
+from privacyfence.policy.engine import PolicyRule
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
@@ -979,18 +980,23 @@ class TestRemoveRule:
         rules = _catalogue_rules("gmail.sender", "read")
         _seed(tmp_path, monkeypatch, "alice", rules=rules)
         _seed(tmp_path, monkeypatch, "bob", rules=rules)
+        other = PolicyRule(
+            id="r-other", predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}),
+        )
+        token_rules = [*rules, other]
+        held = tuple(row for rule in token_rules for row in scope_rows.rows_for_rules([rule], rule.id))
         files = {}
         for principal in (ALICE, BOB):
             token = scoped_tokens.ScopedToken(
                 id="st-000000000000", label="sync", digest="d", principal_id=principal.id,
                 principal_email=principal.email, principal_display_name=principal.display_name,
-                created_at=0.0, expires_at=1e12, rule_ids=frozenset({rules[0].id, "r-other"}),
-                tools=frozenset({"gmail_get_message"}),
+                created_at=0.0, expires_at=1e12, tools=frozenset({"gmail_get_message"}), rules=held,
             )
             files[principal.id] = paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
             secure_files.atomic_write_json(
-                files[principal.id], {"version": 1, "tokens": [scoped_tokens._to_json(token)]},
+                files[principal.id], {"version": 2, "tokens": [scoped_tokens._to_json(token)]},
             )
+        before = {pid: path.read_bytes() for pid, path in files.items()}
         app, sessions = _app()
         client = _client(app)
         csrf = _signed_in(client, sessions, ALICE)
@@ -998,11 +1004,10 @@ class TestRemoveRule:
         r = _post_action(client, "remove_policy_rule", {"rule_id": rules[0].id}, csrf)
         assert r.status_code == 200
 
-        carried = {
-            pid: json.loads(path.read_text(encoding="utf-8"))["tokens"][0]["rule_ids"]
-            for pid, path in files.items()
-        }
-        assert carried == {pid: sorted([rules[0].id, "r-other"]) for pid in files}
+        assert {pid: path.read_bytes() for pid, path in files.items()} == before
+        carried = {pid: json.loads(raw)["tokens"][0]["rules"] for pid, raw in before.items()}
+        assert carried == {pid: [scope_rows.row_to_dict(row) for row in held] for pid in files}
+        assert {row["id"] for row in carried["alice"]} == {rules[0].id, "r-other"}
 
     def test_removes_exactly_that_rule_and_nothing_else(self, tmp_path, monkeypatch):
         sender_rule = _catalogue_rules("gmail.sender", "read")[0]
@@ -1706,7 +1711,8 @@ class TestScopedTokenRoutes:
         assert (principal.id, principal.email, principal.display_name) == ("alice", "alice@example.com", "Alice")
         assert principal.is_admin is False
         scope = mcp_auth.scope_from_access_token(access)
-        assert scope is not None and scope.rule_ids == {rule.id} and scope.tools == {"gmail_get_message"}
+        assert scope is not None and scope.tools == {"gmail_get_message"}
+        assert scope.compiled_rules() == [rule]  # its own copy of the rule
         # A rule the person does not have is refused, not silently dropped.
         bad = self._post(client, "create", {**self.BODY, "label": "other", "rule_ids": ["nope"], "confirmed": True}, csrf)
         assert bad.status_code == 400

@@ -56,19 +56,24 @@ from ..helpers import make_ctx, policy_rules
 
 @pytest.fixture(autouse=True)
 def _isolated_data_dir(tmp_path, monkeypatch):
-    """Deleting a rule also edits the principal's scoped-token file (ADR 0198); keep it out of the checkout."""
+    """Where a seeded scoped-token file lives; keep it out of the checkout."""
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
 
-def _seed_token(rule_ids, *, label="sync"):
-    """A scoped token carrying ``rule_ids`` in the local principal's token file, with a live store on it."""
+def _seed_token(row_ids, *, label="sync"):
+    """A scoped token holding its own row for each of ``row_ids``, in the local principal's token
+    file, with a live store on it."""
+    rules = [
+        PolicyRule(id=row_id, predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}))
+        for row_id in row_ids
+    ]
     token = scoped_tokens.ScopedToken(
         id="st-000000000000", label=label, digest="d", principal_id=LOCAL_PRINCIPAL.id, principal_email="",
-        principal_display_name="", created_at=0.0, expires_at=1e12,
-        rule_ids=frozenset(rule_ids), tools=frozenset({"gmail_get_message"}),
+        principal_display_name="", created_at=0.0, expires_at=1e12, tools=frozenset({"gmail_get_message"}),
+        rules=tuple(row for rule in rules for row in scope_rows.rows_for_rules([rule], rule.id)),
     )
     path = paths.authority_dir(LOCAL_PRINCIPAL) / scoped_tokens.STORE_FILE_NAME
-    secure_files.atomic_write_json(path, {"version": 1, "tokens": [scoped_tokens._to_json(token)]})
+    secure_files.atomic_write_json(path, {"version": 2, "tokens": [scoped_tokens._to_json(token)]})
     store = scoped_tokens.ScopedTokenStore(lambda: [LOCAL_PRINCIPAL])
     store.load()
     scoped_tokens.set_store(store)
@@ -76,9 +81,11 @@ def _seed_token(rule_ids, *, label="sync"):
 
 
 def _carried_rule_ids(token):
+    """The row ids ``token`` still holds, after checking its rows are unchanged."""
     reread = scoped_tokens.get_store().get(token.principal_id, token.id)
     assert reread is not None
-    return reread.rule_ids
+    assert reread.rules == token.rules
+    return {row.id for row in reread.rules}
 
 
 # --------------------------------------------------------------------------- #

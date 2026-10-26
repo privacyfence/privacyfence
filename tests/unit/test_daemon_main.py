@@ -2489,6 +2489,62 @@ class TestScopeRowsUpgrade:
 
         assert not (tmp_path / "users" / "bob" / "authority" / "config" / "settings.yaml").exists()
 
+    @staticmethod
+    def _legacy_token(authority, rule_ids):
+        """A token entry as a version before ADR 0236 wrote it: rule ids, no rules of its own."""
+        from privacyfence.scoped_tokens import STORE_FILE_NAME
+
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / STORE_FILE_NAME).write_text(json.dumps({"version": 1, "tokens": [{
+            "id": "st-old", "label": "old", "digest": "d", "principal_email": "", "principal_display_name": "",
+            "created_at": 0.0, "expires_at": 1e12, "rule_ids": list(rule_ids), "tools": ["gmail_list_messages"],
+        }]}))
+        return authority / STORE_FILE_NAME
+
+    def test_load_config_gives_a_legacy_token_its_own_rules(self, tmp_path):
+        from privacyfence.policy import scope_rows
+        from privacyfence.policy.registry import Verb
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        row = scope_rows.ScopeRow(
+            id="r-folder", scope="drive.folder", value=["V1"], verbs=frozenset({Verb.READ}),
+            operations=scope_rows.implied_operations("drive.folder", [Verb.READ]),
+        )
+        path = tmp_path / "settings.yaml"
+        path.write_text(yaml.safe_dump({"auto_accept": scope_rows.rows_to_config([row])}))
+        token_file = self._legacy_token(tmp_path / "authority", ["r-folder"])
+
+        daemon_main.load_config(str(path), principal=LOCAL_PRINCIPAL)
+
+        (entry,) = json.loads(token_file.read_text())["tokens"]
+        assert entry["rules"] == [scope_rows.row_to_dict(row)]
+        assert daemon_main._deferred_warnings == [
+            "Scoped token 'old' now holds its own copy of 1 rule(s); 0 rule(s) it named no longer existed",
+        ]
+
+    def test_upgrade_all_principals_converts_a_token_of_a_principal_without_a_settings_file(self, tmp_path):
+        token_file = self._legacy_token(tmp_path / "users" / "bob" / "authority", ["r-gone"])
+
+        daemon_main._upgrade_all_principals()
+
+        (entry,) = json.loads(token_file.read_text())["tokens"]
+        assert entry["rules"] == [] and "rule_ids" not in entry
+        assert "Scoped token 'old' now holds its own copy of 0 rule(s); 1 rule(s) it named no longer existed" in (
+            daemon_main._deferred_warnings
+        )
+
+    def test_upgrade_all_principals_converts_a_principal_with_v3_rules(self, tmp_path):
+        from privacyfence.policy import scope_rows
+
+        alice_cfg = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
+        alice_cfg.parent.mkdir(parents=True)
+        alice_cfg.write_text(yaml.safe_dump({"auto_accept": scope_rows.rows_to_config([])}))
+        token_file = self._legacy_token(tmp_path / "users" / "alice" / "authority", ["r-gone"])
+
+        daemon_main._upgrade_all_principals()
+
+        assert json.loads(token_file.read_text())["tokens"][0]["rules"] == []
+
     def test_fresh_install_seed_is_already_version_3(self, tmp_path, caplog):
         from privacyfence.principal import LOCAL_PRINCIPAL
 

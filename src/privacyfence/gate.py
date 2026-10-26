@@ -142,7 +142,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import dataclasses
 import functools
 import json
 import logging
@@ -725,25 +724,11 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
 
 
 def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]:
-    """Every cached rule for an unscoped call; only the token's own rules under a scoped token
-    (ADR 0164). A rule id the token keeps but the person has since removed or changed simply
-    matches nothing. A rule with a ``rule_limits`` entry keeps only the operations that entry lists
-    (so verbs added to a row later never widen the token), and is dropped when none are left."""
-    rules = get_policy_v2_store_rules()
+    """Every cached rule for an unscoped call; under a scoped token only the token's own rules
+    (ADR 0164, ADR 0236), never the person's Auto-accept rules."""
     if scope is None:
-        return rules
-    scoped: list[policy_engine.PolicyRule] = []
-    for rule in rules:
-        if rule.id not in scope.rule_ids:
-            continue
-        limit = scope.rule_limits.get(rule.id)
-        if limit is not None:
-            operations = frozenset(op for op in rule.operations if (rule.predicate, op) in limit)
-            if not operations:
-                continue
-            rule = dataclasses.replace(rule, operations=operations)
-        scoped.append(rule)
-    return scoped
+        return get_policy_v2_store_rules()
+    return scope.compiled_rules()
 
 
 def rule_values(predicate: str, operation_key: str) -> list[str]:

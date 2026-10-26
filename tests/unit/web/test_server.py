@@ -2221,14 +2221,17 @@ class TestScopedTokenWiring:
         assert [group["connector"] for group in data["tools"]] == ["drive", "gmail"]
         assert "gmail_list_messages" in data["tools"][1]["tools"]
 
+        # The token's rules are its own rows (ADR 0236): deleting the Auto-accept rule changes nothing.
+        before = wiring.page_data()["tokens"][0]["rules"]
         monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
         monkeypatch.setattr("privacyfence.auto_accept.get_policy_rows", lambda: [])
-        assert wiring.page_data()["tokens"][0]["rules"] == [{"id": rule.id, "missing": True}]
+        assert wiring.page_data()["tokens"][0]["rules"] == before
 
 
-def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
-    """A token carries the pairs its rule had when it was made; a row extended afterwards is wider
-    than that limit, and the token list says which tools the token is still limited to."""
+def test_a_tokens_rules_come_from_its_own_rows(tmp_path, monkeypatch):
+    """Each of a token's rules is drawn from the token's own row (ADR 0236), named like the
+    Auto-accept page names a row; widening the person's row afterwards does not change it, and
+    there is no "missing" or "limited_to" key any more."""
     from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
     from privacyfence.policy import catalogue as policy_catalogue
     from privacyfence.policy.registry import Verb
@@ -2244,24 +2247,27 @@ def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
     policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
 
     def page():
-        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
-        return {t["label"]: t["rules"][0] for t in data["tokens"]}
+        return scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
 
     with principal_scope(alice):
         auto_accept.init_config_path(str(config_path))
         auto_accept.add_policy_v2_rules(policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.READ]))
-        store.create(alice, label="before", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
-        assert "limited_to" not in page()["before"]
+        (row,) = auto_accept.get_policy_rows()
+        store.create(alice, label="sync", days=30, rule_ids=[row.id], tools=[], policy=policy)
+        before = page()
 
         auto_accept.add_policy_v2_rules(
             policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.DOWNLOAD])
         )
-        store.create(alice, label="after", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
-        entries = page()
+        after = page()
 
-    assert "drive_download_file" not in entries["before"]["limited_to"]
-    assert entries["before"]["limited_to"]
-    assert "limited_to" not in entries["after"]
+    (entry,) = before["tokens"][0]["rules"]
+    assert entry == before["rules"][0]  # named the way the Auto-accept page names the row
+    assert entry["id"] == row.id and entry["title"] and entry["sentence"]
+    assert not {"missing", "limited_to"} & set(entry)
+    assert "drive_download_file" in after["rules"][0]["tools"]
+    assert after["tokens"][0]["rules"] == [entry]
+    assert "drive_download_file" not in entry["tools"]
 
 
 def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypatch):

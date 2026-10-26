@@ -2353,15 +2353,16 @@ class TestPolicyRuleRows:
         assert [r.id for r in scope_rows.rows_from_config(controller._load_config())] == [keep]
 
     @staticmethod
-    def _seed_token(rule_ids):
+    def _seed_token(rows):
+        """A scoped token holding its own copy of ``rows``, with a live store on its file."""
         token = scoped_tokens.ScopedToken(
             id="st-000000000000", label="sync", digest="d", principal_id="local", principal_email="",
-            principal_display_name="", created_at=0.0, expires_at=1e12,
-            rule_ids=frozenset(rule_ids), tools=frozenset({"drive_download_file"}),
+            principal_display_name="", created_at=0.0, expires_at=1e12, tools=frozenset({"drive_download_file"}),
+            rules=tuple(rows),
         )
         principal = current_principal()
         path = paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
-        secure_files.atomic_write_json(path, {"version": 1, "tokens": [scoped_tokens._to_json(token)]})
+        secure_files.atomic_write_json(path, {"version": 2, "tokens": [scoped_tokens._to_json(token)]})
         store = scoped_tokens.ScopedTokenStore(lambda: [principal])
         store.load()
         scoped_tokens.set_store(store)
@@ -2378,11 +2379,12 @@ class TestPolicyRuleRows:
         controller.add_policy_rule("drive.folder", "FOLDER2", ["read"])
         keep = scope_rows.row_id_for("drive.folder", ["FOLDER1"])
         drop = scope_rows.row_id_for("drive.folder", ["FOLDER2"])
-        token = self._seed_token([keep, drop])
+        token = self._seed_token(scope_rows.rows_from_config(controller._load_config()))
+        assert {row.id for row in token.rules} == {keep, drop}
 
         controller.remove_policy_rule(drop)
 
-        assert self._reread(token).rule_ids == {keep, drop}
+        assert self._reread(token).rules == token.rules
 
     def test_update_fills_missing_on_row(self, controller):
         controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
@@ -2540,20 +2542,23 @@ class TestUpdatePolicyRule:
         (rule,) = policy_store.compile_rules_from_config(controller._load_config())
         assert rule.operations == stale.operations
 
-    def test_a_token_scoped_to_the_rule_still_has_it_after_the_update(self, controller):
+    def test_update_rule_does_not_reach_a_token_copy(self, controller):
         stale = self._stale_grist_rule(controller)
+        (stale_row,) = scope_rows.rows_from_config(controller._load_config())
         token = scoped_tokens.ScopedToken(
             id="st-000000000000", label="sync", digest="d", principal_id="local", principal_email="",
             principal_display_name="", created_at=0.0, expires_at=1e12,
-            rule_ids=frozenset({stale.id}), tools=frozenset({"grist_import_csv"}),
+            tools=frozenset({"grist_import_csv"}), rules=(stale_row,),
         )
-        assert "grist.import_csv" not in {op for r in gate_module._rules_in_scope(token) for op in r.operations}
+        before = gate_module._rules_in_scope(token)
+        assert "grist.import_csv" not in {op for r in before for op in r.operations}
 
         controller.update_policy_rule(stale.id)
 
-        (in_scope,) = gate_module._rules_in_scope(token)
-        assert in_scope.id == stale.id
-        assert "grist.import_csv" in in_scope.operations
+        (updated,) = policy_store.compile_rules_from_config(controller._load_config())
+        assert updated.id == stale.id and "grist.import_csv" in updated.operations
+        assert token.rules == (stale_row,)
+        assert gate_module._rules_in_scope(token) == before
 
 
 class TestSetPolicyRuleVerbs:

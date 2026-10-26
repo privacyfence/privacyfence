@@ -24,6 +24,7 @@ from privacyfence.assets_client import (
     AssetsTicket,
 )
 from privacyfence.audit_log import current_week, init_audit_logger
+from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.connectors import assets as assets_module
@@ -995,7 +996,7 @@ class TestExportAutoAccept:
         return scoped_tokens.ScopedToken(
             id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
             principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
-            rule_ids=frozenset({rule.id}), tools=frozenset({"assets_export_objects"}),
+            rules=tuple(scope_rows.rows_for_rules([rule], rule.id)), tools=frozenset({"assets_export_objects"}),
             allow_personal_data=allow_personal_data,
         )
 

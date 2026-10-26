@@ -102,7 +102,6 @@ from ..org_identity import IdpConfig
 from ..policy import describe
 from ..policy import scope_rows
 from ..policy import propose as policy_propose
-from ..policy.registry import TOOL_REGISTRY
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
 from ..resource_names import get_resolver
@@ -323,33 +322,6 @@ def _scoped_rule_entry(
     }
 
 
-def _limited_tools(row: scope_rows.ScopeRow, limit: frozenset[tuple[str, str]]) -> list[str]:
-    """The tools of ``row`` whose ``(predicate, operation)`` pair is in a token's ``limit``."""
-    return sorted({
-        entry.tool
-        for rule in scope_rows.compile_row(row)
-        for entry in TOOL_REGISTRY.values()
-        if entry.operation in rule.operations and entry.verb is not None
-        and entry.tool in describe.covered_tools(rule) and (rule.predicate, entry.operation) in limit
-    })
-
-
-def _token_rule_entry(
-    token: ScopedToken, rule_id: str, rows: dict[str, scope_rows.ScopeRow], rules: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    if rule_id not in rules:
-        return {"id": rule_id, "missing": True}
-    entry = {
-        "id": rule_id, "title": rules[rule_id]["title"],
-        **{key: rules[rule_id][key] for key in ("sentence", "sentence_parts", "value_items")},
-    }
-    limit = token.rule_limits.get(rule_id)
-    # A token's limit is narrower than the row when some of the row's pairs are not in it.
-    if limit is not None and scope_rows.pairs_of(rows.values(), rule_id) - limit:
-        entry["limited_to"] = _limited_tools(rows[rule_id], limit)
-    return entry
-
-
 def scoped_token_page_data(
     principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
 ) -> dict[str, Any]:
@@ -365,12 +337,21 @@ def scoped_token_page_data(
     shows separately; ``auto_tools`` are the tools that need no rule at all.
     """
     now = time.time()
+    store = scoped_tokens.get_store()
+    own_tokens = store.tokens_for(principal)
     with principal_scope(principal):
         resolver = get_resolver()
-        rows = {row.id: row for row in auto_accept.get_policy_rows()}
-        rules = {
-            row.id: _scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver))
-            for row in rows.values()
+        rules = [
+            _scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver))
+            for row in auto_accept.get_policy_rows()
+        ]
+        # A token's rules are its own rows (ADR 0236), named the way the Auto-accept page names them.
+        token_rules = {
+            token.id: [
+                _scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver))
+                for row in token.rules
+            ]
+            for token in own_tokens
         }
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
@@ -378,9 +359,8 @@ def scoped_token_page_data(
         if connector in connector_names:
             by_connector.setdefault(connector, []).append(name)
     tokens = []
-    store = scoped_tokens.get_store()
     activity = store.activity_for(principal)
-    for token in store.tokens_for(principal):
+    for token in own_tokens:
         seen = activity.get(token.id, scoped_tokens.TokenActivity())
         expired = token.expired(now)
         days_left = token.days_left(now)
@@ -388,7 +368,7 @@ def scoped_token_page_data(
             "id": token.id, "label": token.label, "created_at": token.created_at,
             "expires_at": token.expires_at, "days_left": days_left,
             "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
-            "rules": [_token_rule_entry(token, rule_id, rows, rules) for rule_id in sorted(token.rule_ids)],
+            "rules": token_rules[token.id],
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
             "allow_personal_data_reads": token.allow_personal_data_reads,
@@ -397,7 +377,7 @@ def scoped_token_page_data(
         })
     return {
         "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
-        "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": list(rules.values()),
+        "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
         "auto_tools": sorted(
             name for name, gate in auto_accept.TOOL_TO_GATE.items()
             if gate == "auto" and name.split("_", 1)[0] in connector_names

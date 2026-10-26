@@ -1,5 +1,5 @@
-"""Scoped AI client tokens (ADR 0164): named, expiring credentials that carry a
-subset of the person's auto-accept rules and tools.
+"""Scoped AI client tokens (ADR 0164, ADR 0236): named, expiring credentials that carry their own
+auto-accept rules and a set of tools.
 
 Only the sha256 of a token's secret is stored (ADR 0072's rule for secrets at
 rest); the secret is returned once, by ``create``. The store has no web
@@ -31,7 +31,7 @@ from .principal import Principal
 
 if TYPE_CHECKING:
     from .policy.engine import PolicyRule
-    from .policy.scope_rows import V2Migration
+    from .policy.scope_rows import ScopeRow
 
 logger = logging.getLogger(__name__)
 
@@ -71,16 +71,20 @@ class ScopedToken:
     principal_display_name: str
     created_at: float
     expires_at: float
-    rule_ids: frozenset[str]
     tools: frozenset[str]
     allow_personal_data: bool = False  # ADR 0173: exports, downloads and page uploads may carry personal data
     allow_personal_data_reads: bool = False  # Gmail message/thread and Slack reads may carry personal data
-    # Per rule id the token carries: the (predicate, operation) pairs that may auto-accept under it
-    # for this token. A rule id with no entry is used whole (a token never upgraded).
-    rule_limits: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict, hash=False)
-    # True for a token whose limits were recorded after scopes gave each verb its own predicate
-    # (ADR 0228); only a token without it gets ``_LIMIT_PAIR_SUCCESSORS`` applied on read.
-    limits_split_verbs: bool = False
+    # The token's own rules (ADR 0236), in the auto_accept: row format.
+    rules: tuple["ScopeRow", ...] = field(default=(), hash=False)
+    # The stored entry of a token written before tokens held their own rules, kept as read until it
+    # is converted (``own_legacy_rules``); such a token has no rules meanwhile.
+    legacy_raw: dict[str, Any] | None = field(default=None, compare=False, hash=False, repr=False)
+
+    def compiled_rules(self) -> list["PolicyRule"]:
+        """The engine rules of the token's own rows (``scope_rows.compile_rows``)."""
+        from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+
+        return scope_rows.compile_rows(self.rules)
 
     def days_left(self, now: float) -> int:
         return max(0, math.ceil((self.expires_at - now) / _SECONDS_PER_DAY))
@@ -142,7 +146,6 @@ REVOKED_SCOPE = ScopedToken(
     principal_display_name="",
     created_at=0,
     expires_at=0,
-    rule_ids=frozenset(),
     tools=frozenset(),
 )
 
@@ -180,6 +183,11 @@ def policy_from_org_config(org_config: dict, *, org_mode: bool) -> ScopedTokenPo
 
 
 def _to_json(token: ScopedToken) -> dict[str, Any]:
+    from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+
+    if token.legacy_raw is not None:
+        # Kept as read (only the label can change), so the entry stays convertible at the next start.
+        return {**token.legacy_raw, "label": token.label}
     data: dict[str, Any] = {
         "id": token.id,
         "label": token.label,
@@ -188,17 +196,13 @@ def _to_json(token: ScopedToken) -> dict[str, Any]:
         "principal_display_name": token.principal_display_name,
         "created_at": token.created_at,
         "expires_at": token.expires_at,
-        "rule_ids": sorted(token.rule_ids),
         "tools": sorted(token.tools),
     }
     if token.allow_personal_data:
         data["allow_personal_data"] = True
     if token.allow_personal_data_reads:
         data["allow_personal_data_reads"] = True
-    if token.rule_limits:
-        data["rule_limits"] = {rid: sorted([p, o] for p, o in pairs) for rid, pairs in sorted(token.rule_limits.items())}
-    if token.limits_split_verbs:
-        data["limits_split_verbs"] = True
+    data["rules"] = [scope_rows.row_to_dict(row) for row in token.rules]
     return data
 
 
@@ -229,8 +233,26 @@ def _limits_from_json(raw: Any) -> dict[str, frozenset[tuple[str, str]]]:
 
 
 def _from_json(principal_id: str, raw: Any) -> ScopedToken:
-    split_verbs = raw.get("limits_split_verbs", False) is True
-    limits = _limits_from_json(raw.get("rule_limits", {}))
+    """A token from its stored entry. An entry with ``rules`` holds its own rows; a row that cannot
+    be read is left out (fail-closed: it only narrows the token). A legacy entry (``rule_ids``, no
+    ``rules``) loads with no rules and keeps its entry in ``legacy_raw`` until it is converted."""
+    from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+
+    rows: list[ScopeRow] = []
+    legacy_raw: dict[str, Any] | None = None
+    if "rules" in raw:
+        if not isinstance(raw["rules"], list):
+            raise TypeError("rules must be a list")
+        for item in raw["rules"]:
+            row = scope_rows.row_from_dict(item)
+            if row is None:
+                logger.warning("Scoped token %s: skipping a rule that cannot be read", raw["id"])
+                continue
+            rows.append(row)
+    else:
+        if not isinstance(raw["rule_ids"], list):
+            raise TypeError("rule_ids must be a list")
+        legacy_raw = dict(raw)
     return ScopedToken(
         id=str(raw["id"]),
         label=str(raw["label"]),
@@ -240,12 +262,11 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         principal_display_name=str(raw["principal_display_name"]),
         created_at=float(raw["created_at"]),
         expires_at=float(raw["expires_at"]),
-        rule_ids=frozenset(str(r) for r in raw["rule_ids"]),
         tools=frozenset(str(t) for t in raw["tools"]),
         allow_personal_data=raw.get("allow_personal_data", False) is True,
         allow_personal_data_reads=raw.get("allow_personal_data_reads", False) is True,
-        rule_limits=limits if split_verbs else _with_limit_successors(limits),
-        limits_split_verbs=split_verbs,
+        rules=tuple(rows),
+        legacy_raw=legacy_raw,
     )
 
 
@@ -302,60 +323,49 @@ def owned_entry(
     return OwnedEntry(entry, newly_flagged, copied, missing)
 
 
-def _migrated(token: ScopedToken, migration: "V2Migration") -> tuple[ScopedToken, bool]:
-    """``token`` re-pointed at the migration's rows, and whether its personal-data flag was newly
-    set. Returns ``token`` itself when nothing needs changing, so a second run is a no-op."""
-    rule_ids = set(token.rule_ids)
-    limits = dict(token.rule_limits)
-    flag = token.allow_personal_data
-    newly_flagged = not flag and bool(token.rule_ids & migration.personal_data_ids)
-    if newly_flagged:
-        flag = True
-    for row_id, members in migration.members.items():
-        carried = members & token.rule_ids
-        if not carried:
-            continue
-        rule_ids -= carried
-        rule_ids.add(row_id)
-        for old in carried:
-            limits.pop(old, None)
-        limits[row_id] = frozenset().union(*(migration.member_pairs.get(m, frozenset()) for m in carried))
-    for rid in rule_ids:
-        # A custom row keeps its old id, and so is in member_pairs but not id_map.
-        if rid not in limits and rid not in migration.id_map and rid in migration.member_pairs:
-            limits[rid] = migration.member_pairs[rid]
-    result = replace(token, rule_ids=frozenset(rule_ids), rule_limits=limits, allow_personal_data=flag)
-    return (token, False) if result == token else (result, newly_flagged)
-
-
-def migrate_token_file(path: Path, migration: "V2Migration") -> list[str]:
-    """Re-point the tokens in ``path`` at the migration's rows; return the labels of tokens whose
-    ``allow_personal_data`` this set. Idempotent; a missing or unreadable file is left alone.
-    Entries that cannot be read are kept as they are. Raises ``OSError`` if the write fails."""
+def own_rules_in_file(
+    path: Path,
+    compiled: Callable[[], Sequence["PolicyRule"]],
+    personal_data_ids: frozenset[str] = frozenset(),
+    *,
+    log: Callable[[str], None] = logger.warning,
+) -> list[str]:
+    """Give each legacy entry in ``path`` its own copy of the rules it names (``owned_entry``);
+    return the labels of entries whose ``allow_personal_data`` this set. ``compiled`` is called
+    only when a legacy entry exists. Idempotent; a missing or unreadable file is left alone, and
+    an entry that cannot be read is kept as it is. Raises ``OSError`` if the write fails."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         entries = list(data["tokens"])
     except (OSError, ValueError, KeyError, TypeError):
         return []
+    if all(isinstance(raw, dict) and "rules" in raw for raw in entries):
+        return []
+    rules = compiled()
     labels: list[str] = []
     changed = False
     out: list[Any] = []
     for raw in entries:
         try:
-            token = _from_json("", raw)
+            owned = owned_entry(raw, rules, personal_data_ids)
         except (KeyError, TypeError, ValueError):
+            log(f"Keeping an unreadable scoped token entry as it is ({path})")
             out.append(raw)
             continue
-        new, newly_flagged = _migrated(token, migration)
-        if new is token:
+        if owned is None:
             out.append(raw)
             continue
         changed = True
-        out.append(_to_json(new))
-        if newly_flagged:
-            labels.append(new.label)
+        out.append(owned.entry)
+        label = owned.entry.get("label")
+        log(
+            f"Scoped token {label!r} now holds its own copy of {owned.copied} rule(s); "
+            f"{owned.missing} rule(s) it named no longer existed"
+        )
+        if owned.newly_flagged:
+            labels.append(str(label))
     if changed:
-        secure_files.atomic_write_json(path, {"version": 1, "tokens": out})
+        secure_files.atomic_write_json(path, {"version": 2, "tokens": out})
     return labels
 
 
@@ -404,6 +414,13 @@ class ScopedTokenStore:
             except (OSError, ValueError, KeyError, TypeError):
                 logger.warning("Skipping an unreadable scoped token file for %s", principal.id)
                 tokens = []
+        for token in tokens:
+            if token.legacy_raw is not None:
+                logger.warning(
+                    "Scoped token %s was created before tokens held their own rules; it allows no "
+                    "rule-covered call until PrivacyFence converts it at the next start",
+                    token.id,
+                )
         for old in self._tokens.get(principal.id, []):
             self._index.pop(old.digest, None)
         self._principals[principal.id] = principal
@@ -420,7 +437,7 @@ class ScopedTokenStore:
     def _write(self, principal: Principal) -> None:
         secure_files.atomic_write_json(
             self._path(principal),
-            {"version": 1, "tokens": [_to_json(t) for t in self._tokens[principal.id]]},
+            {"version": 2, "tokens": [_to_json(t) for t in self._tokens[principal.id]]},
         )
         self._stamps[principal.id] = self._stamp(principal)
 
@@ -456,6 +473,9 @@ class ScopedTokenStore:
             raise ScopedTokenError(_LABEL_MESSAGE)
         rules = frozenset(rule_ids)
         tool_set = frozenset(tools)
+        # Read before the store lock: get_policy_rows takes the Auto-accept write lock, and
+        # ensure_scope_rows takes that lock and then this one.
+        own_rows = {row.id: row for row in auto_accept.get_policy_rows()} if rules else {}
         with self._lock:
             self._refresh(principal)
             existing = self._tokens[principal.id]
@@ -468,16 +488,10 @@ class ScopedTokenStore:
             for name in sorted(tool_set):
                 if name not in auto_accept.TOOL_TO_GATE:
                     raise ScopedTokenError(f"{name} is not a PrivacyFence tool.")
-            compiled = auto_accept.get_policy_v2_store_rules()
-            known_rules = {rule.id for rule in compiled}
-            if not rules <= known_rules:
+            if not rules <= own_rows.keys():
                 raise ScopedTokenError("One of the chosen rules no longer exists; reload the page.")
             if len(existing) >= MAX_TOKENS_PER_PRINCIPAL:
                 raise ScopedTokenError(f"You have {MAX_TOKENS_PER_PRINCIPAL} tokens already; revoke one first.")
-            limits = {
-                rid: frozenset((r.predicate, op) for r in compiled if r.id == rid for op in r.operations)
-                for rid in rules
-            }
             created = time.time() if now is None else now
             secret = mint_secret()
             token = ScopedToken(
@@ -489,12 +503,10 @@ class ScopedTokenStore:
                 principal_display_name=principal.display_name,
                 created_at=created,
                 expires_at=created + days * _SECONDS_PER_DAY,
-                rule_ids=rules,
                 tools=tool_set,
                 allow_personal_data=allow_personal_data,
                 allow_personal_data_reads=allow_personal_data_reads,
-                rule_limits=limits,
-                limits_split_verbs=True,
+                rules=tuple(replace(own_rows[rid], former_ids=()) for rid in sorted(rules)),
             )
             self._tokens[principal.id] = [*existing, token]
             self._write(principal)
@@ -550,22 +562,50 @@ class ScopedTokenStore:
             self._write(principal)
             return len(removed)
 
-    def apply_migration(self, principal: Principal, migration: "V2Migration") -> list[str]:
-        """``migrate_token_file`` for a live store: under the lock, on the freshly read tokens."""
+    def own_legacy_rules(
+        self,
+        principal: Principal,
+        compiled: Callable[[], Sequence["PolicyRule"]],
+        personal_data_ids: frozenset[str] = frozenset(),
+        *,
+        log: Callable[[str], None] = logger.warning,
+    ) -> list[str]:
+        """``own_rules_in_file`` for a live store: under the lock, on the freshly read tokens."""
         with self._lock:
             self._refresh(principal)
+            if not any(t.legacy_raw is not None for t in self._tokens[principal.id]):
+                return []
+            rules = compiled()
             labels: list[str] = []
-            changed = False
+            converted: list[tuple[ScopedToken, OwnedEntry]] = []
             tokens: list[ScopedToken] = []
             for token in self._tokens[principal.id]:
-                new, newly_flagged = _migrated(token, migration)
-                changed = changed or new is not token
+                if token.legacy_raw is None:
+                    tokens.append(token)
+                    continue
+                try:
+                    owned = owned_entry({**token.legacy_raw, "label": token.label}, rules, personal_data_ids)
+                    if owned is None:  # pragma: no cover - a token with legacy_raw has no "rules" key
+                        tokens.append(token)
+                        continue
+                    new = _from_json(principal.id, owned.entry)
+                except (KeyError, TypeError, ValueError):
+                    log(f"Keeping an unreadable scoped token entry as it is ({principal.id})")
+                    tokens.append(token)
+                    continue
                 tokens.append(new)
-                if newly_flagged:
+                converted.append((new, owned))
+            if not converted:
+                return []
+            self._tokens[principal.id] = tokens
+            self._write(principal)
+            for new, owned in converted:
+                log(
+                    f"Scoped token {new.label!r} now holds its own copy of {owned.copied} rule(s); "
+                    f"{owned.missing} rule(s) it named no longer existed"
+                )
+                if owned.newly_flagged:
                     labels.append(new.label)
-            if changed:
-                self._tokens[principal.id] = tokens
-                self._write(principal)
             return labels
 
     def find(self, secret: str, now: float | None = None) -> ScopedToken | None:
@@ -672,13 +712,22 @@ def current_store() -> ScopedTokenStore | None:
     return _STORE
 
 
-def migrate_tokens(principal: Principal, migration: "V2Migration") -> list[str]:
-    """Re-point ``principal``'s tokens through the live store when one is set (so its lock and
-    in-memory copy stay consistent), else straight in the file."""
+def own_legacy_rules(
+    principal: Principal,
+    compiled: Callable[[], Sequence["PolicyRule"]],
+    personal_data_ids: frozenset[str] = frozenset(),
+    *,
+    log: Callable[[str], None] = logger.warning,
+) -> list[str]:
+    """Convert ``principal``'s legacy tokens through the live store when one is set (so its lock
+    and in-memory copy stay consistent), else straight in the file. Raises ``ValueError`` for a
+    principal id that cannot name a directory, and ``OSError`` when the write fails."""
     store = current_store()
     if store is not None:
-        return store.apply_migration(principal, migration)
-    return migrate_token_file(paths.authority_dir(principal) / STORE_FILE_NAME, migration)
+        return store.own_legacy_rules(principal, compiled, personal_data_ids, log=log)
+    return own_rules_in_file(
+        paths.authority_dir(principal) / STORE_FILE_NAME, compiled, personal_data_ids, log=log,
+    )
 
 
 def set_store(store: ScopedTokenStore | None) -> None:

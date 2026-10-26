@@ -5,12 +5,11 @@ import dataclasses
 import json
 import os
 import sys
-from types import SimpleNamespace
 
 import pytest
 
 from privacyfence import auto_accept, paths, scoped_tokens
-from privacyfence.policy import scope_rows, store
+from privacyfence.policy import scope_rows
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import Verb
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
@@ -26,10 +25,18 @@ from privacyfence.scoped_tokens import (
     TokenActivity,
 )
 
-RULES = [
-    SimpleNamespace(id="rule-a", predicate="pred-a", operations=frozenset({"op.read", "op.write"})),
-    SimpleNamespace(id="rule-b", predicate="pred-b", operations=frozenset({"op.read"})),
-    SimpleNamespace(id="rule-b", predicate="pred-b2", operations=frozenset({"op.search"})),
+def _row(rule_id, predicate, operations, value=None):
+    """The one row ``rows_for_rules`` makes of a single rule (a custom row for these predicates)."""
+    (row,) = scope_rows.rows_for_rules(
+        [PolicyRule(id=rule_id, predicate=predicate, value=value, operations=frozenset(operations))], rule_id,
+    )
+    return row
+
+
+# The person's Auto-accept rows, as ``auto_accept.get_policy_rows`` gives them.
+ROWS = [
+    _row("rule-a", "pred-a", {"op.read", "op.write"}),
+    _row("rule-b", "pred-b", {"op.read"}),
 ]
 ENABLED = ScopedTokenPolicy(enabled=True, max_days=365)
 NOW = 1_000_000.0
@@ -39,7 +46,7 @@ TOOL = "gmail_list_messages"
 @pytest.fixture(autouse=True)
 def _data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: list(RULES))
+    monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: list(ROWS))
 
 
 def _store(*principals: Principal) -> ScopedTokenStore:
@@ -96,7 +103,7 @@ class TestCreateValidation:
 
     def test_tools_with_no_rules_are_allowed(self):
         token, _ = _create(_store(), rule_ids=[])
-        assert token.rule_ids == frozenset()
+        assert token.rules == ()
 
     def test_unknown_tool(self):
         with pytest.raises(ScopedTokenError, match="^nope is not a PrivacyFence tool.$"):
@@ -173,7 +180,7 @@ class TestStore:
         assert renamed.label == "b"
         found = store.find(secret, NOW)
         assert found == renamed
-        for attr in ("digest", "id", "expires_at", "rule_ids", "tools", "allow_personal_data", "rule_limits"):
+        for attr in ("digest", "id", "expires_at", "rules", "tools", "allow_personal_data"):
             assert getattr(found, attr) == getattr(token, attr)
         assert _store().tokens_for(LOCAL_PRINCIPAL)[0].label == "b"
 
@@ -351,12 +358,10 @@ class TestAllowPersonalDataReads:
         assert (exports.allow_personal_data, exports.allow_personal_data_reads) == (True, False)
         assert (reads.allow_personal_data, reads.allow_personal_data_reads) == (False, True)
 
-    def test_migration_keeps_the_flag(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-narrow")
-        _create(_store(), label="reads", rule_ids=["r-narrow"], allow_personal_data_reads=True)
-        migration = scope_rows.migrate_v2([NARROW])
+    def test_conversion_keeps_the_flag(self, tmp_path):
+        _write_entries(tmp_path, [_legacy("reads", allow_personal_data_reads=True)])
 
-        scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+        scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE])
 
         assert _tokens(tmp_path)["reads"]["allow_personal_data_reads"] is True
 
@@ -388,7 +393,8 @@ class TestToken:
         assert token.expired(token.expires_at - 1) is False
 
     def test_revoked_scope_allows_nothing(self):
-        assert REVOKED_SCOPE.rule_ids == frozenset() and REVOKED_SCOPE.tools == frozenset()
+        assert REVOKED_SCOPE.rules == () and REVOKED_SCOPE.tools == frozenset()
+        assert REVOKED_SCOPE.compiled_rules() == []
         assert REVOKED_SCOPE.expired(NOW)
 
 
@@ -404,267 +410,296 @@ def test_token_scope_sets_and_resets_the_context():
     scoped_tokens.token_scope(token).__exit__(None, None, None)  # exit without enter is a no-op
 
 
-class TestRuleLimits:
-    def test_create_records_limits_for_every_rule(self):
-        token, _ = _create(_store(), rule_ids=["rule-a", "rule-b"])
-        assert token.rule_limits == {
-            "rule-a": {("pred-a", "op.read"), ("pred-a", "op.write")},
-            "rule-b": {("pred-b", "op.read"), ("pred-b2", "op.search")},
-        }
-
-    def test_rule_limits_round_trip(self, tmp_path):
-        token, _ = _create(_store(), rule_ids=["rule-a"])
-        raw = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"][0]
-        assert raw["rule_limits"] == {"rule-a": [["pred-a", "op.read"], ["pred-a", "op.write"]]}
-        restarted = _store()
-        restarted.load()
-        assert restarted.get("local", token.id).rule_limits == token.rule_limits
-
-    @pytest.mark.parametrize("bad", ["x", {"rule-a": "x"}, {"rule-a": [["only-one"]]}, {"rule-a": [["p", 1]]}, {"rule-a": [{}]}])
-    def test_malformed_rule_limits_skips_the_token(self, tmp_path, bad):
-        token, secret = _create(_store())
-        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
-        data["tokens"][0]["rule_limits"] = bad
-        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
-        restarted = _store()
-        restarted.load()
-        assert restarted.get("local", token.id) is None
-        assert restarted.find(secret, now=NOW) is None
-
-
 MENTIONS_PAIR = ["slack.mentions_of_me", "slack.read_messages"]
-MENTIONS_SUCCESSOR = ("slack.mentions_of_me_all_results", "slack.read_messages")
 
 
-def _rewrite_limits(tmp_path, token_id, limits, split_verbs):
-    data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
-    (entry,) = [t for t in data["tokens"] if t["id"] == token_id]
-    entry["rule_limits"] = limits
-    entry.pop("limits_split_verbs", None)
-    if split_verbs:
-        entry["limits_split_verbs"] = True
-    _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
-    restarted = _store()
-    restarted.load()
-    return restarted.get("local", token_id)
-
-
-class TestLimitSuccessors:
-    def test_an_old_token_limit_gets_the_limit_successor(self, tmp_path):
-        token, _ = _create(_store())
-        reread = _rewrite_limits(tmp_path, token.id, {"rule-a": [MENTIONS_PAIR]}, split_verbs=False)
-        assert reread.rule_limits["rule-a"] == {tuple(MENTIONS_PAIR), MENTIONS_SUCCESSOR}
-
-    def test_a_split_verbs_token_limit_is_read_unchanged(self, tmp_path):
-        token, _ = _create(_store())
-        reread = _rewrite_limits(tmp_path, token.id, {"rule-a": [MENTIONS_PAIR]}, split_verbs=True)
-        assert reread.rule_limits["rule-a"] == {tuple(MENTIONS_PAIR)}
-
-    def test_a_limit_without_the_pair_is_unchanged(self, tmp_path):
-        token, _ = _create(_store())
-        reread = _rewrite_limits(tmp_path, token.id, {"rule-a": [["pred-a", "op.read"]]}, split_verbs=False)
-        assert reread.rule_limits["rule-a"] == {("pred-a", "op.read")}
-
-    def test_a_created_token_round_trips_with_limits_split_verbs(self, tmp_path):
-        token, _ = _create(_store())
-        assert token.limits_split_verbs is True
-        raw = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"][0]
-        assert raw["limits_split_verbs"] is True
-        restarted = _store()
-        restarted.load()
-        assert restarted.get("local", token.id).limits_split_verbs is True
-
-    def test_a_new_read_only_token_does_not_gain_search_later(self, monkeypatch):
-        from privacyfence import gate
-        from privacyfence.policy import catalogue
-
-        row = scope_rows.ScopeRow(
-            id="m1", scope="slack.mentions_of_me", value=None, verbs=frozenset({Verb.READ}),
-            operations=frozenset({"slack.read_messages"}),
-        )
-        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: scope_rows.compile_row(row))
-        token, _ = _create(_store(), rule_ids=["m1"])
-        widened = dataclasses.replace(row, verbs=frozenset({Verb.READ, Verb.SEARCH}))
-        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: scope_rows.compile_row(widened))
-        assert {r.predicate for r in scope_rows.compile_row(widened)} == catalogue.extra_predicates(
-            catalogue.EXTRA_SCOPES["slack.mentions_of_me"])
-        predicates = {r.predicate for r in gate._rules_in_scope(token)}
-        assert predicates == {"slack.mentions_of_me"}
-
-
-def _raw(rule_id, predicate, operations, flagged=False):
-    data = store.rule_to_dict(PolicyRule(
-        id=rule_id, predicate=predicate, value=["F1"], operations=frozenset(operations),
-    ))
-    if flagged:
-        data["allow_personal_data"] = True
-    return data
-
-
-NARROW = _raw("r-narrow", "approved_folder", ["drive.download_file"])
-FLAGGED = _raw("r-flagged", "approved_folder", ["drive.read_file_contents", "drive.download_file"], flagged=True)
-
-
-def _known(monkeypatch, *ids):
-    monkeypatch.setattr(
-        auto_accept, "get_policy_v2_store_rules",
-        lambda: [SimpleNamespace(id=i, predicate="approved_folder", operations=frozenset({"x"})) for i in ids],
-    )
+def _stamp(tmp_path):
+    st = _file(tmp_path).stat()
+    return st.st_mtime_ns, st.st_ino
 
 
 def _tokens(tmp_path):
     return {t["label"]: t for t in json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]}
 
 
-class TestMigrateTokenFile:
-    def test_migrate_token_file_replaces_old_ids(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-narrow", "r-flagged", "r-other")
-        store_ = _store()
-        _create(store_, label="narrow", rule_ids=["r-narrow", "r-other"])
-        migration = scope_rows.migrate_v2([NARROW, FLAGGED])
-        (row,) = migration.rows
+# A rule of the person's that a legacy token names by id.
+_RULE = PolicyRule(
+    id="r-1", predicate="gmail.anything", value=None, operations=frozenset({"gmail.list_messages"}),
+)
 
-        labels = scoped_tokens.migrate_token_file(_file(tmp_path), migration)
 
-        assert labels == []
-        entry = _tokens(tmp_path)["narrow"]
-        assert entry["rule_ids"] == sorted([row.id, "r-other"])
-        assert entry["rule_limits"][row.id] == [["approved_folder", "drive.download_file"]]
-        assert "allow_personal_data" not in entry
+def _legacy(label, rule_ids=("r-1",), secret="", **extra):
+    """A token entry as a version before ADR 0236 wrote it: rule ids, no rules."""
+    return {
+        "id": f"st-{label}", "label": label, "digest": scoped_tokens._digest(secret or label),
+        "principal_email": "", "principal_display_name": "", "created_at": NOW, "expires_at": NOW + 86400,
+        "rule_ids": list(rule_ids), "tools": [TOOL], **extra,
+    }
 
-    def test_migrate_token_file_is_idempotent(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-narrow", "r-flagged")
-        _create(_store(), label="a", rule_ids=["r-narrow"])
-        _create(_store(), label="b", rule_ids=["r-flagged"])
-        migration = scope_rows.migrate_v2([NARROW, FLAGGED])
 
-        first = scoped_tokens.migrate_token_file(_file(tmp_path), migration)
-        written = _file(tmp_path).read_bytes()
-        second = scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+def _write_entries(tmp_path, entries, version=1):
+    _file(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    _file(tmp_path).write_text(json.dumps({"version": version, "tokens": entries}), encoding="utf-8")
 
-        assert first == ["b"]
-        assert second == []
-        assert _file(tmp_path).read_bytes() == written
 
-    def test_partial_reference_records_narrow_limits(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-narrow", "r-flagged")
-        _create(_store(), label="narrow", rule_ids=["r-narrow"])
-        _create(_store(), label="both", rule_ids=["r-narrow", "r-flagged"])
-        migration = scope_rows.migrate_v2([NARROW, FLAGGED])
-        (row,) = migration.rows
+class TestTokenRows:
+    """A token stores its own rows, in the auto_accept: row format (ADR 0236)."""
 
-        scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+    def test_a_created_token_entry_has_rows_and_no_rule_ids(self, tmp_path):
+        token, _ = _create(_store(), rule_ids=["rule-a"])
 
-        tokens = _tokens(tmp_path)
-        assert tokens["narrow"]["rule_limits"] == {row.id: [["approved_folder", "drive.download_file"]]}
-        assert tokens["both"]["rule_limits"] == {row.id: [
-            ["approved_folder", "drive.download_file"], ["approved_folder", "drive.read_file_contents"],
-        ]}
-        assert row.verbs and len(scope_rows.pairs_of(migration.rows, row.id)) >= 2
+        (entry,) = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]
 
-    def test_custom_row_reference_gets_its_own_limit(self, tmp_path, monkeypatch):
-        odd = _raw("r-odd", "approved_folder", ["drive.write_file"])
-        fine = _raw("r-fine", "approved_folder", ["drive.read_file_contents"])
-        _known(monkeypatch, "r-odd")
-        _create(_store(), label="odd", rule_ids=["r-odd"])
+        assert entry["rules"] == [scope_rows.row_to_dict(ROWS[0])]
+        assert not set(scoped_tokens._LEGACY_KEYS) & set(entry)
+        assert token.rules == (ROWS[0],)
+
+    def test_a_copied_row_drops_its_former_ids(self, monkeypatch):
+        renamed = dataclasses.replace(ROWS[0], former_ids=("old-id",))
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [renamed])
+
+        token, _ = _create(_store(), rule_ids=["rule-a"])
+
+        assert token.rules == (dataclasses.replace(renamed, former_ids=()),)
+
+    def test_the_file_has_version_2(self, tmp_path):
+        _create(_store())
+
+        assert json.loads(_file(tmp_path).read_text(encoding="utf-8"))["version"] == 2
+
+    def test_a_token_without_rules_does_not_read_the_auto_accept_rows(self, monkeypatch):
+        def unavailable():
+            raise AssertionError("read the Auto-accept rows")
+
+        monkeypatch.setattr(auto_accept, "get_policy_rows", unavailable)
+
+        token, _ = _create(_store(), rule_ids=[])
+
+        assert token.rules == ()
+
+    def test_a_row_that_cannot_be_read_is_dropped_and_the_token_still_loads(self, tmp_path, caplog):
+        token, secret = _create(_store(), rule_ids=["rule-a", "rule-b"])
         data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
-        del data["tokens"][0]["rule_limits"]  # a token written before limits existed
+        data["tokens"][0]["rules"][0]["scope"] = "retired.scope"
         _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
-        migration = scope_rows.migrate_v2([odd, fine])
 
-        scoped_tokens.migrate_token_file(_file(tmp_path), migration)
+        restarted = _store()
+        restarted.load()
 
-        entry = _tokens(tmp_path)["odd"]
-        assert entry["rule_ids"] == ["r-odd"]
-        assert entry["rule_limits"] == {"r-odd": [["approved_folder", "drive.write_file"]]}
+        assert restarted.find(secret, NOW).rules == (ROWS[1],)
+        assert f"Scoped token {token.id}: skipping a rule that cannot be read" in caplog.text
 
-    def test_flag_transfer_returns_labels(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-narrow", "r-flagged")
-        _create(_store(), label="plain", rule_ids=["r-narrow"])
-        _create(_store(), label="pii", rule_ids=["r-flagged"])
-        _create(_store(), label="already", rule_ids=["r-flagged"], allow_personal_data=True)
+    def test_a_rules_value_that_is_not_a_list_skips_the_token(self, tmp_path):
+        token, _ = _create(_store())
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        data["tokens"][0]["rules"] = {"rule-a": True}
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
 
-        labels = scoped_tokens.migrate_token_file(_file(tmp_path), scope_rows.migrate_v2([NARROW, FLAGGED]))
+        restarted = _store()
+        restarted.load()
+
+        assert restarted.get("local", token.id) is None
+
+    def test_a_legacy_entry_loads_with_no_rules_and_round_trips(self, tmp_path, caplog):
+        entry = _legacy("old", rule_limits={"r-1": [["gmail.anything", "gmail.list_messages"]]})
+        _write_entries(tmp_path, [entry])
+        store_ = _store()
+        store_.load()
+        (token,) = store_.tokens_for(LOCAL_PRINCIPAL)
+
+        assert token.rules == () and token.compiled_rules() == []
+        assert token.legacy_raw == entry
+        assert "st-old was created before tokens held their own rules" in caplog.text
+        assert scoped_tokens._to_json(token) == entry
+        store_.rename(LOCAL_PRINCIPAL, token.id, "renamed")
+        assert _tokens(tmp_path)["renamed"] == {**entry, "label": "renamed"}
+
+    def test_a_legacy_entry_with_rule_ids_that_are_not_a_list_is_skipped(self, tmp_path):
+        _write_entries(tmp_path, [{**_legacy("old"), "rule_ids": "r-1"}])
+        store_ = _store()
+        store_.load()
+
+        assert store_.tokens_for(LOCAL_PRINCIPAL) == []
+
+    def test_compiled_rules_of_a_copied_row_equal_its_compile_row(self):
+        row = scope_rows.ScopeRow(
+            id="r-folder", scope="drive.folder", value=["F1"], verbs=frozenset({Verb.READ}),
+            operations=scope_rows.implied_operations("drive.folder", [Verb.READ]),
+        )
+        token, _ = _create(_store(), rule_ids=[])
+
+        assert dataclasses.replace(token, rules=(row,)).compiled_rules() == scope_rows.compile_row(row)
+
+
+class TestOwnLegacyRules:
+    """Converting legacy tokens at start-up: each gets its own copy of the rules it named (ADR 0236)."""
+
+    def test_the_file_variant_converts_a_legacy_entry_and_is_idempotent(self, tmp_path):
+        _write_entries(tmp_path, [_legacy("old", rule_ids=["r-1", "r-gone"])])
+
+        assert scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE]) == []
+
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        assert data["version"] == 2
+        (entry,) = data["tokens"]
+        assert entry["rules"] == [scope_rows.row_to_dict(r) for r in scope_rows.rows_for_rules([_RULE], "r-1")]
+        assert not set(scoped_tokens._LEGACY_KEYS) & set(entry)
+        stamp = _stamp(tmp_path)
+        assert scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE]) == []
+        assert _stamp(tmp_path) == stamp
+
+    def test_the_conversion_message_reaches_log(self, tmp_path):
+        _write_entries(tmp_path, [_legacy("old", rule_ids=["r-1", "r-gone"])])
+        messages = []
+
+        scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE], log=messages.append)
+
+        assert messages == [
+            "Scoped token 'old' now holds its own copy of 1 rule(s); 1 rule(s) it named no longer existed",
+        ]
+
+    def test_unreadable_entries_are_kept_and_reported(self, tmp_path):
+        _write_entries(tmp_path, [{"id": "broken"}, "nope", _legacy("old")])
+        messages = []
+
+        scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE], log=messages.append)
+
+        tokens = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]
+        assert tokens[:2] == [{"id": "broken"}, "nope"]
+        assert "rules" in tokens[2]
+        unreadable = f"Keeping an unreadable scoped token entry as it is ({_file(tmp_path)})"
+        assert messages[:2] == [unreadable, unreadable]
+
+    @pytest.mark.parametrize("limits", ["x", {"r-1": "x"}, {"r-1": [["only-one"]]}, {"r-1": [["p", 1]]}])
+    def test_a_file_with_only_unreadable_legacy_entries_is_not_rewritten(self, tmp_path, limits):
+        _write_entries(tmp_path, [_legacy("old", rule_limits=limits)])
+        stamp = _stamp(tmp_path)
+        messages = []
+
+        assert scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE], log=messages.append) == []
+
+        assert _stamp(tmp_path) == stamp
+        assert messages == [f"Keeping an unreadable scoped token entry as it is ({_file(tmp_path)})"]
+
+    def test_a_current_entry_is_kept_as_it_is(self, tmp_path):
+        _create(_store(), label="new", rule_ids=["rule-a"])
+        current = _tokens(tmp_path)["new"]
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        data["tokens"].append(_legacy("old"))
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+
+        scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE])
+
+        assert _tokens(tmp_path)["new"] == current
+
+    def test_a_missing_or_unreadable_file_returns_nothing(self, tmp_path):
+        path = tmp_path / "nowhere" / STORE_FILE_NAME
+        assert scoped_tokens.own_rules_in_file(path, lambda: [_RULE]) == []
+        assert not path.exists()
+        path = tmp_path / STORE_FILE_NAME
+        path.write_text("{not json", encoding="utf-8")
+        assert scoped_tokens.own_rules_in_file(path, lambda: [_RULE]) == []
+        assert path.read_text(encoding="utf-8") == "{not json"
+
+    def test_compiled_is_not_called_when_no_token_is_legacy(self, tmp_path):
+        _create(_store())
+        stamp = _stamp(tmp_path)
+
+        def never():
+            raise AssertionError("compiled was called")
+
+        assert scoped_tokens.own_rules_in_file(_file(tmp_path), never) == []
+        assert _store().own_legacy_rules(LOCAL_PRINCIPAL, never) == []
+        assert _stamp(tmp_path) == stamp
+
+    def test_newly_flagged_labels_are_returned(self, tmp_path):
+        _write_entries(tmp_path, [
+            _legacy("plain", rule_ids=["r-2"]), _legacy("pii"), _legacy("already", allow_personal_data=True),
+        ])
+
+        labels = scoped_tokens.own_rules_in_file(_file(tmp_path), lambda: [_RULE], frozenset({"r-1"}))
 
         assert labels == ["pii"]
         tokens = _tokens(tmp_path)
         assert tokens["pii"]["allow_personal_data"] is True
         assert "allow_personal_data" not in tokens["plain"]
 
-    def test_missing_file_is_left_alone(self, tmp_path):
-        path = tmp_path / "nowhere" / STORE_FILE_NAME
-        assert scoped_tokens.migrate_token_file(path, scope_rows.migrate_v2([NARROW])) == []
-        assert not path.exists()
-        path = tmp_path / STORE_FILE_NAME
-        path.write_text("{not json", encoding="utf-8")
-        assert scoped_tokens.migrate_token_file(path, scope_rows.migrate_v2([NARROW])) == []
-        assert path.read_text(encoding="utf-8") == "{not json"
+    def test_the_store_variant_converts_and_the_token_auto_accepts_through_its_own_row(self, tmp_path):
+        from privacyfence import gate
 
-    def test_malformed_entry_is_kept_untouched(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-narrow")
-        _create(_store(), label="ok", rule_ids=["r-narrow"])
-        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
-        data["tokens"].append({"id": "broken"})
-        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        _write_entries(tmp_path, [_legacy("old", secret=TOKEN_PREFIX + "s3cret")])
+        store_ = _store()
+        store_.load()
+        current, _ = _create(store_, label="current", rule_ids=["rule-b"])
+        assert store_.find(TOKEN_PREFIX + "s3cret", NOW).rules == ()
+        messages = []
 
-        scoped_tokens.migrate_token_file(_file(tmp_path), scope_rows.migrate_v2([NARROW]))
+        labels = store_.own_legacy_rules(LOCAL_PRINCIPAL, lambda: [_RULE], frozenset({"r-1"}), log=messages.append)
 
-        assert json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"][1] == {"id": "broken"}
+        assert labels == ["old"]
+        assert messages == [
+            "Scoped token 'old' now holds its own copy of 1 rule(s); 0 rule(s) it named no longer existed",
+        ]
+        token = store_.find(TOKEN_PREFIX + "s3cret", NOW)
+        assert token.legacy_raw is None and token.allow_personal_data is True
+        assert gate._rules_in_scope(token) == [_RULE]
+        assert json.loads(_file(tmp_path).read_text(encoding="utf-8"))["version"] == 2
+        assert store_.get("local", current.id) == current  # a current token is kept as it is
+        assert store_.own_legacy_rules(LOCAL_PRINCIPAL, lambda: [_RULE]) == []  # idempotent
 
-    def test_apply_migration_holds_the_lock_and_refreshes(self, tmp_path, monkeypatch):
-        a1 = _raw("r-a1", "approved_folder", ["drive.read_file_contents"])
-        a2 = _raw("r-a2", "approved_folder", ["drive.download_file"], flagged=True)
-        b = _raw("r-b", "approved_folder", ["drive.read_file_contents"])
-        b["value"] = ["F2"]
-        m1, m2 = scope_rows.migrate_v2([a1, a2]), scope_rows.migrate_v2([b])
-        _known(monkeypatch, "r-a1", "r-b", "r-c")
+    def test_the_store_variant_refreshes_and_holds_the_lock(self, tmp_path):
         one, two = _store(), _store()  # two handles on one file, like two processes
-        _create(one, label="t1", rule_ids=["r-a1"])
-        _create(two, label="t2", rule_ids=["r-b"])  # reads t1 from disk, writes both
+        one.load()
+        _write_entries(tmp_path, [_legacy("old")])
+        seen = []
 
-        assert one.apply_migration(LOCAL_PRINCIPAL, m1) == []  # refreshes: sees t2 too
-        _create(one, label="t3", rule_ids=["r-c"])
-        assert two.apply_migration(LOCAL_PRINCIPAL, m2) == []
-        assert two.apply_migration(LOCAL_PRINCIPAL, m2) == []  # idempotent through the store
+        def compiled():
+            seen.append(one._lock.locked())
+            return [_RULE]
 
-        fresh = _store()
-        fresh.load()
-        by_label = {t.label: t for t in fresh.tokens_for(LOCAL_PRINCIPAL)}
-        assert set(by_label) == {"t1", "t2", "t3"}
-        assert by_label["t1"].rule_ids == {m1.rows[0].id}
-        assert by_label["t2"].rule_ids == {m2.rows[0].id}
-        assert by_label["t3"].rule_ids == {"r-c"}
+        one.own_legacy_rules(LOCAL_PRINCIPAL, compiled)
 
-    def test_migrate_tokens_uses_the_live_store_when_set(self, tmp_path, monkeypatch):
-        _known(monkeypatch, "r-narrow")
-        live = _store()
+        assert seen == [True]
+        (token,) = two.tokens_for(LOCAL_PRINCIPAL)
+        assert token.compiled_rules() == [_RULE]
+
+    def test_the_store_variant_keeps_a_token_it_cannot_convert(self, tmp_path):
+        _write_entries(tmp_path, [_legacy("old", rule_limits={"r-1": [["gmail.anything", "gmail.list_messages"]]})])
+        store_ = _store()
+        store_.load()
+        (token,) = store_.tokens_for(LOCAL_PRINCIPAL)
+        _write_entries(tmp_path, [_legacy("old", rule_limits="broken")])  # unreadable limits
+        store_._tokens["local"] = [dataclasses.replace(token, legacy_raw=_legacy("old", rule_limits="broken"))]
+        store_._stamps["local"] = _stamp(tmp_path)
+        stamp = _stamp(tmp_path)
+        messages = []
+
+        assert store_.own_legacy_rules(LOCAL_PRINCIPAL, lambda: [_RULE], log=messages.append) == []
+
+        assert messages == ["Keeping an unreadable scoped token entry as it is (local)"]
+        assert _stamp(tmp_path) == stamp
+        assert store_.tokens_for(LOCAL_PRINCIPAL)[0].legacy_raw is not None
+
+    def test_the_module_function_uses_the_live_store_when_set(self, tmp_path, monkeypatch):
+        _write_entries(tmp_path, [_legacy("old")])
         scoped_tokens.set_store(None)
-        assert scoped_tokens.current_store() is None
-        _create(live, label="a", rule_ids=["r-narrow"])
-        migration = scope_rows.migrate_v2([NARROW])
-        scoped_tokens.migrate_tokens(LOCAL_PRINCIPAL, migration)  # no store: edits the file
-        assert _tokens(tmp_path)["a"]["rule_ids"] == [migration.rows[0].id]
+        assert scoped_tokens.own_legacy_rules(LOCAL_PRINCIPAL, lambda: [_RULE]) == []  # no store: edits the file
+        assert "rules" in _tokens(tmp_path)["old"]
 
+        live = _store()
         scoped_tokens.set_store(live)
         try:
-            assert scoped_tokens.current_store() is live
-            monkeypatch.setattr(live, "apply_migration", lambda p, m: ["via-store"])
-            assert scoped_tokens.migrate_tokens(LOCAL_PRINCIPAL, migration) == ["via-store"]
+            monkeypatch.setattr(live, "own_legacy_rules", lambda p, c, ids, *, log: ["via-store"])
+            assert scoped_tokens.own_legacy_rules(LOCAL_PRINCIPAL, lambda: [_RULE]) == ["via-store"]
         finally:
             scoped_tokens.set_store(None)
 
+    def test_a_principal_with_no_token_file_writes_nothing(self, tmp_path):
+        alice = Principal(id="alice")
 
-def _add_limit(tmp_path, label, rule_id, pairs):
-    data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
-    for entry in data["tokens"]:
-        if entry["label"] == label:
-            entry.setdefault("rule_limits", {})[rule_id] = pairs
-    _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
-
-
-def _stamp(tmp_path):
-    st = _file(tmp_path).stat()
-    return st.st_mtime_ns, st.st_ino
+        assert scoped_tokens.own_legacy_rules(alice, lambda: [_RULE]) == []
+        assert _store(alice).own_legacy_rules(alice, lambda: [_RULE]) == []
+        assert not (paths.authority_dir(alice) / STORE_FILE_NAME).exists()
 
 
 class TestOwnedEntry:
