@@ -69,7 +69,7 @@ class FakeConnector(Connector):
 _SCOPE = ScopedToken(
     id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
     principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
-    rule_ids=frozenset(), tools=frozenset({"gmail_tool"}),
+    tools=frozenset({"gmail_tool"}),
 )
 
 
@@ -520,7 +520,7 @@ class TestCheckPolicy:
         return ScopedToken(
             id="st-0123456789ab", label="sync", digest="", principal_id="local", principal_email="",
             principal_display_name="", created_at=time.time(), expires_at=time.time() + 86400,
-            rule_ids=frozenset(), tools=frozenset(), allow_personal_data=allow_personal_data,
+            tools=frozenset(), allow_personal_data=allow_personal_data,
         )
 
     def _pii(self, connector: str, tool: str, token: ScopedToken | None = None) -> dict:
@@ -733,6 +733,23 @@ class TestCheckPolicy:
             "slack", "slack_send_message", {"channel_id": "D0OTHER", "text": "hi", "is_self_dm": True},
         )
         assert result["verdict"] == "requires_review"
+
+    def test_check_policy_under_a_token_predicts_from_the_token_rows(self):
+        from privacyfence import auto_accept
+        from privacyfence.policy import scope_rows
+
+        (rule,) = policy_rules({"gmail.create_draft": [{"predicate": "to_is_myself"}]})
+        auto_accept.set_policy_v2_store_rules([])
+        token = dataclasses.replace(_SCOPE, rules=tuple(scope_rows.rows_for_rules([rule], rule.id)))
+        dispatcher = _dispatcher({"gmail": FakeConnector("gmail", my_email="me@example.com")})
+        args = {"to": "me@example.com", "subject": "x", "body": "y"}
+
+        with scoped_tokens.token_scope(token):
+            result = dispatcher.check_policy("gmail", "gmail_create_draft", args)
+
+        assert (result["verdict"], result["matched_rule_id"]) == ("auto_accept", rule.id)
+        # Not vacuous: no rule of the person's covers the call.
+        assert dispatcher.check_policy("gmail", "gmail_create_draft", args)["verdict"] == "requires_review"
 
     def test_matched_rule_id_is_none_when_no_rule_configured_at_all(self):
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})

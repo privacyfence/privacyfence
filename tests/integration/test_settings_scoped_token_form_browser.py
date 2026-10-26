@@ -31,8 +31,7 @@ DATA = {
         {"id": "st-1", "label": "Daily sync", "created_at": 0, "expires_at": 30 * DAY, "days_left": 20,
          "expiring_soon": False, "expired": False,
          "rules": [{"id": "r-gmail", "sentence": "Gmail: allow read"},
-                   {"id": "r-gone", "missing": True},
-                   {"id": "r-drive", "sentence": "Drive: allow read", "limited_to": ["drive_get_file_content"]}],
+                   {"id": "r-drive", "sentence": "Drive: allow read"}],
          "tools": ["gmail_get_message", "tasks_list_tasks"], "allow_personal_data": True},
         {"id": "st-2", "label": "Daily sync 2", "created_at": 0, "expires_at": 500 * DAY, "days_left": 0,
          "expiring_soon": False, "expired": True,
@@ -97,8 +96,6 @@ def test_duplicate_prefills_the_form(page):
     assert _ticked(page) == ["gmail_get_message", "tasks_list_tasks"]
     assert page.get_attribute("[data-st-personal-data]", "aria-checked") == "true"
     assert page.evaluate("document.activeElement.hasAttribute('data-st-label')")
-    text = page.inner_text("[data-st-dup-limited]")
-    assert "The original only allowed part of them" in text
 
 
 def test_duplicate_of_expired_token_is_offered(page):
@@ -108,11 +105,6 @@ def test_duplicate_of_expired_token_is_offered(page):
     assert page.input_value("[data-st-days]") == "365"
     assert _ticked(page) == ["gmail_get_message"]
     assert page.query_selector("[data-st-dup-missing]") is None
-
-
-def test_missing_rule_is_left_out_with_notice(page):
-    _duplicate(page, "Daily sync")
-    assert "1 of this token's rules no longer exist and were left out." in page.inner_text("[data-st-dup-missing]")
 
 
 def test_tools_follow_the_selected_rules(page):

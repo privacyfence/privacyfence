@@ -31,6 +31,8 @@ from privacyfence import local_files, scoped_tokens
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
+from privacyfence.policy import scope_rows
+from privacyfence.policy.engine import PolicyRule
 from privacyfence.scoped_tokens import ScopedToken, ScopedTokenStore
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.mcp_tools import META_TOOL_NAMES
@@ -620,7 +622,13 @@ def _scoped_token(*, days: float = 42.5) -> ScopedToken:
     return ScopedToken(
         id="st-0123456789ab", label="sales-sync", digest="", principal_id=LOCAL_PRINCIPAL.id,
         principal_email="", principal_display_name="", created_at=time.time(),
-        expires_at=time.time() + days * 86400, rule_ids=frozenset({"r-1", "r-2"}),
+        expires_at=time.time() + days * 86400,
+        rules=tuple(
+            row for rid in ("r-1", "r-2")
+            for row in scope_rows.rows_for_rules([PolicyRule(
+                id=rid, predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}),
+            )], rid)
+        ),
         tools=frozenset({"echo_say", "gmail_list_messages"}),
     )
 

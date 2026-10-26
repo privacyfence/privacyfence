@@ -420,27 +420,32 @@ def load_config(config_path: str, *, principal: Principal | None = None) -> dict
     _drop_converted_v1_sections(config, resolved)
     if principal is not None:
         policy_upgrade.ensure_scope_rows(config, resolved, principal, log=_deferred_warnings.append)
+        policy_upgrade.ensure_token_rules(config, principal, log=_deferred_warnings.append)
     policy_store.reject_v1_sections(config, resolved)
     return config
 
 
 def _upgrade_all_principals() -> None:
     """Convert every principal's ``auto_accept:`` section to version 3 before the scoped token
-    store is built, so no scoped request is served with a token that still names a v2 rule id.
-    A principal without a settings file is skipped; the local principal is a no-op here after
-    ``main``'s own ``load_config``."""
+    store is built, so no scoped request is served with a token that still names a v2 rule id,
+    then give each principal's tokens written before tokens held their own rules their own copy
+    (ADR 0236). A principal without a settings file has no rules, so its old tokens get none; the
+    local principal is a no-op here after ``main``'s own ``load_config``."""
     from .web.mcp_auth import scoped_token_principals
 
     for principal in scoped_token_principals():
         with principal_scope(principal):
             resolved = _resolve_authority_path("config/settings.yaml")
             if not os.path.exists(resolved):
+                # No rules to copy: the principal's legacy tokens get none, and stop warning.
+                policy_upgrade.ensure_token_rules({}, principal, log=_deferred_warnings.append)
                 continue
             with open(resolved, encoding="utf-8") as fh:
                 config = yaml.safe_load(fh) or {}
             if not isinstance(config, dict):
                 continue
             policy_upgrade.ensure_scope_rows(config, resolved, principal, log=_deferred_warnings.append)
+            policy_upgrade.ensure_token_rules(config, principal, log=_deferred_warnings.append)
 
 
 def load_org_config() -> dict[str, Any]:

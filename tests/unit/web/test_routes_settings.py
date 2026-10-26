@@ -1493,12 +1493,19 @@ class TestAiClientTokenRoutes:
 
 
 def _scoped_token(token_id: str = "st-0123456789ab", label: str = "sales-sync"):
+    from privacyfence.policy import scope_rows
+    from privacyfence.policy.engine import PolicyRule
     from privacyfence.scoped_tokens import ScopedToken
 
+    rules = [
+        PolicyRule(id=rid, predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}))
+        for rid in ("r1", "r2")
+    ]
     return ScopedToken(
         id=token_id, label=label, digest="d" * 64, principal_id=LOCAL_PRINCIPAL.id, principal_email="",
-        principal_display_name="", created_at=1.0, expires_at=2.0, rule_ids=frozenset({"r1", "r2"}),
+        principal_display_name="", created_at=1.0, expires_at=2.0,
         tools=frozenset({"gmail_list_messages", "drive_list_files", "tasks_list_tasks"}),
+        rules=tuple(row for rule in rules for row in scope_rows.rows_for_rules([rule], rule.id)),
     )
 
 
