@@ -12,11 +12,12 @@ from .recipe import Recipe, ToolStep
 _SESSION_TEMP = "session_temp_accept"
 _NO_SUGGESTION_KEY = (
     "NEEDS A RULE: this PrivacyFence does not suggest one; update it, or run once with --attended "
-    "and use the card's Always allow"
+    "and use the card's Always allow (a scoped token needs the rule on the token itself)"
 )
 _NO_SUGGESTION = (
-    "NEEDS A RULE: PrivacyFence suggests no rule for this call; add one in Settings -> Auto-accept, "
-    "or run once with --attended"
+    "NEEDS A RULE: PrivacyFence suggests no rule for this call; "
+    "add one to the recipe's scoped token in Settings -> Scoped tokens "
+    "(or in Settings -> Auto-accept for an attended run), or run once with --attended"
 )
 
 

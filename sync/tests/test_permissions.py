@@ -125,7 +125,7 @@ async def test_needs_rule_without_suggested_rules_key(write_recipe: RecipeWriter
 
 async def test_needs_rule_with_empty_suggestions(write_recipe: RecipeWriter) -> None:
     out = await run(write_recipe, [step()], checked({**REVIEW, "suggested_rules": []}))
-    assert "PrivacyFence suggests no rule for this call; add one in Settings -> Auto-accept" in out
+    assert "add one to the recipe's scoped token in Settings -> Scoped tokens (or in Settings -> Auto-accept for an attended run)" in out
 
 
 async def test_unknown_with_dropped_args_even_when_requires_review(write_recipe: RecipeWriter) -> None:
