@@ -1536,7 +1536,7 @@ class TestScopedTokenRoutes:
     org gates, the one-time secret and the token working on /mcp as its owner."""
 
     ENABLED = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30)
-    BODY = {"label": "sales-sync", "days": 7, "rule_ids": [], "tools": ["gmail_get_message"]}
+    BODY = {"label": "sales-sync", "days": 7, "rules": [], "tools": ["gmail_get_message"]}
 
     @staticmethod
     def _store(*principals: Principal) -> scoped_tokens.ScopedTokenStore:
@@ -1573,7 +1573,7 @@ class TestScopedTokenRoutes:
         assert store.tokens_for(ALICE) == []
         # The route's text is the store's own.
         with pytest.raises(scoped_tokens.ScopedTokenError) as excinfo:
-            store.create(ALICE, label="x", days=1, rule_ids=[], tools=["gmail_get_message"],
+            store.create(ALICE, label="x", days=1, rules=[], tools=["gmail_get_message"],
                          policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90))
         assert str(excinfo.value) == ros._SCOPED_TOKENS_DISABLED
         # Not signed in: 401, whatever the policy.
@@ -1702,7 +1702,7 @@ class TestScopedTokenRoutes:
         client, csrf, store = self._setup(tmp_path, monkeypatch, rules=[rule])
         scoped_tokens.set_store(store)
 
-        body = {**self.BODY, "rule_ids": [rule.id], "confirmed": True}
+        body = {**self.BODY, "rules": [{"kind": "copy", "rule_id": rule.id}], "confirmed": True}
         secret = self._post(client, "create", body, csrf).json()["secret"]
 
         access = asyncio.run(mcp_auth.ScopedTokenVerifier().verify_token(secret))
@@ -1714,8 +1714,27 @@ class TestScopedTokenRoutes:
         assert scope is not None and scope.tools == {"gmail_get_message"}
         assert scope.compiled_rules() == [rule]  # its own copy of the rule
         # A rule the person does not have is refused, not silently dropped.
-        bad = self._post(client, "create", {**self.BODY, "label": "other", "rule_ids": ["nope"], "confirmed": True}, csrf)
+        bad = self._post(client, "create", {**self.BODY, "label": "other", "rules": [{"kind": "copy", "rule_id": "nope"}], "confirmed": True}, csrf)
         assert bad.status_code == 400
+
+    def test_a_new_rule_request_creates_a_token_with_that_rule(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        new = {"kind": "new", "group": "gmail.sender", "value": "a@example.com", "verbs": ["read"]}
+
+        r = self._post(client, "create", {**self.BODY, "rules": [new], "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        (token,) = store.tokens_for(ALICE)
+        assert len(token.rules) == 1 and token.rules[0].scope == "gmail.sender"
+
+    def test_a_body_with_rule_ids_and_no_rules_is_refused(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        body = {k: v for k, v in self.BODY.items() if k != "rules"}
+
+        r = self._post(client, "create", {**body, "rule_ids": [], "confirmed": True}, csrf)
+
+        assert r.status_code == 400
+        assert store.tokens_for(ALICE) == []
 
     def test_days_over_the_admin_cap_are_refused(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
@@ -1732,7 +1751,7 @@ class TestScopedTokenRoutes:
         for label in ("one", "two", "three"):
             assert self._post(client, "create", {**self.BODY, "label": label, "confirmed": True}, csrf).status_code == 200
         bob_token, _secret = store.create(
-            BOB, label="bobs", days=5, rule_ids=[], tools=["gmail_get_message"], policy=self.ENABLED,
+            BOB, label="bobs", days=5, rules=[], tools=["gmail_get_message"], policy=self.ENABLED,
         )
         one = next(t for t in store.tokens_for(ALICE) if t.label == "one")
 
@@ -1760,7 +1779,7 @@ class TestScopedTokenRoutes:
         for label in ("one", "two"):
             assert self._post(client, "create", {**self.BODY, "label": label, "confirmed": True}, csrf).status_code == 200
         bob_token, _secret = store.create(
-            BOB, label="bobs", days=5, rule_ids=[], tools=["gmail_get_message"], policy=self.ENABLED,
+            BOB, label="bobs", days=5, rules=[], tools=["gmail_get_message"], policy=self.ENABLED,
         )
         one = next(t for t in store.tokens_for(ALICE) if t.label == "one")
 

@@ -266,6 +266,7 @@ _POLICY_EXTRA_SCOPES = policy_catalogue.EXTRA_SCOPES
 _policy_scope_catalogue = policy_catalogue.scope_catalogue
 _parse_verbs = policy_catalogue.parse_verbs
 _rules_for_catalogue_entry = policy_catalogue.rules_for_catalogue_entry
+_parse_value_list = policy_catalogue.parse_value_list
 
 
 # ---------------------------------------------------------------------------- #
@@ -350,22 +351,6 @@ def _run_async(work: Callable[[], Any], on_done: Callable[[bool, Any], None]) ->
             call_on_main(on_done, False, exc)
 
     threading.Thread(target=_runner, daemon=True).start()
-
-
-def _parse_value_list(raw_text: str, group: str = "") -> list[str] | None:
-    """The Auto-accept page's "value" field (a comma-separated list of resource ids/keys/domains,
-    except a group in ``catalogue.SINGLE_VALUE_GROUPS``, whose whole text is one value)
-    -> a v2 rule value, or ``None`` for a value-less scope's empty field. Every v2 identity/valued-
-    attribute scope this page can write (``policy.propose.SCOPES_BY_GROUP`` plus the extra scopes --
-    see ``_policy_scope_catalogue``) takes a plain list of strings; there is no int-valued scope in
-    that catalogue the way v1's ``age_threshold_days``/``time_window_days`` condition rules were,
-    since this page writes scopes, not conditions (see this module's own Auto-accept section
-    docstring)."""
-    if group in policy_catalogue.SINGLE_VALUE_GROUPS:
-        whole = (raw_text or "").strip()
-        return [whole] if whole else None
-    values = [v.strip() for v in (raw_text or "").split(",") if v.strip()]
-    return values or None
 
 
 def _relative_time(timestamp: str) -> str:

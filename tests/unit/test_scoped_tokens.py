@@ -53,8 +53,12 @@ def _store(*principals: Principal) -> ScopedTokenStore:
     return ScopedTokenStore(lambda: list(principals or [LOCAL_PRINCIPAL]))
 
 
+def _copy(*rule_ids):
+    return [{"kind": "copy", "rule_id": rule_id} for rule_id in rule_ids]
+
+
 def _create(store, principal=LOCAL_PRINCIPAL, **overrides):
-    args = dict(label="sales-sync", days=90, rule_ids=["rule-a"], tools=[TOOL], policy=ENABLED, now=NOW)
+    args = dict(label="sales-sync", days=90, rules=_copy("rule-a"), tools=[TOOL], policy=ENABLED, now=NOW)
     args.update(overrides)
     return store.create(principal, **args)
 
@@ -99,10 +103,10 @@ class TestCreateValidation:
 
     def test_no_rule_and_no_tool(self):
         with pytest.raises(ScopedTokenError, match="^Choose at least one tool for the token.$"):
-            _create(_store(), rule_ids=[], tools=[])
+            _create(_store(), rules=[], tools=[])
 
     def test_tools_with_no_rules_are_allowed(self):
-        token, _ = _create(_store(), rule_ids=[])
+        token, _ = _create(_store(), rules=[])
         assert token.rules == ()
 
     def test_unknown_tool(self):
@@ -111,7 +115,7 @@ class TestCreateValidation:
 
     def test_unknown_rule(self):
         with pytest.raises(ScopedTokenError) as err:
-            _create(_store(), rule_ids=["rule-gone"])
+            _create(_store(), rules=_copy("rule-gone"))
         assert str(err.value) == "One of the chosen rules no longer exists; reload the page."
 
     def test_too_many_tokens(self):
@@ -446,7 +450,7 @@ class TestTokenRows:
     """A token stores its own rows, in the auto_accept: row format (ADR 0236)."""
 
     def test_a_created_token_entry_has_rows_and_no_rule_ids(self, tmp_path):
-        token, _ = _create(_store(), rule_ids=["rule-a"])
+        token, _ = _create(_store(), rules=_copy("rule-a"))
 
         (entry,) = json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]
 
@@ -458,7 +462,7 @@ class TestTokenRows:
         renamed = dataclasses.replace(ROWS[0], former_ids=("old-id",))
         monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [renamed])
 
-        token, _ = _create(_store(), rule_ids=["rule-a"])
+        token, _ = _create(_store(), rules=_copy("rule-a"))
 
         assert token.rules == (dataclasses.replace(renamed, former_ids=()),)
 
@@ -473,12 +477,12 @@ class TestTokenRows:
 
         monkeypatch.setattr(auto_accept, "get_policy_rows", unavailable)
 
-        token, _ = _create(_store(), rule_ids=[])
+        token, _ = _create(_store(), rules=[])
 
         assert token.rules == ()
 
     def test_a_row_that_cannot_be_read_is_dropped_and_the_token_still_loads(self, tmp_path, caplog):
-        token, secret = _create(_store(), rule_ids=["rule-a", "rule-b"])
+        token, secret = _create(_store(), rules=_copy("rule-a", "rule-b"))
         data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
         data["tokens"][0]["rules"][0]["scope"] = "retired.scope"
         _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
@@ -526,7 +530,7 @@ class TestTokenRows:
             id="r-folder", scope="drive.folder", value=["F1"], verbs=frozenset({Verb.READ}),
             operations=scope_rows.implied_operations("drive.folder", [Verb.READ]),
         )
-        token, _ = _create(_store(), rule_ids=[])
+        token, _ = _create(_store(), rules=[])
 
         assert dataclasses.replace(token, rules=(row,)).compiled_rules() == scope_rows.compile_row(row)
 
@@ -582,7 +586,7 @@ class TestOwnLegacyRules:
         assert messages == [f"Keeping an unreadable scoped token entry as it is ({_file(tmp_path)})"]
 
     def test_a_current_entry_is_kept_as_it_is(self, tmp_path):
-        _create(_store(), label="new", rule_ids=["rule-a"])
+        _create(_store(), label="new", rules=_copy("rule-a"))
         current = _tokens(tmp_path)["new"]
         data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
         data["tokens"].append(_legacy("old"))
@@ -630,7 +634,7 @@ class TestOwnLegacyRules:
         _write_entries(tmp_path, [_legacy("old", secret=TOKEN_PREFIX + "s3cret")])
         store_ = _store()
         store_.load()
-        current, _ = _create(store_, label="current", rule_ids=["rule-b"])
+        current, _ = _create(store_, label="current", rules=_copy("rule-b"))
         assert store_.find(TOKEN_PREFIX + "s3cret", NOW).rules == ()
         messages = []
 
@@ -929,3 +933,161 @@ class TestTokenActivity:
         token = scoped_tokens.replace(_create(store)[0], principal_id="../x")
         store.note_use(token, now=NOW)
         assert f"Could not record scoped token activity for {token.id}" in caplog.text
+
+
+def _new(group="drive.folder", value="f1", verbs=("read",)):
+    return {"kind": "new", "group": group, "value": value, "verbs": list(verbs)}
+
+
+class TestRuleRequests:
+    """The create request's ``rules``: new, copied and duplicated rules (ADR 0236)."""
+
+    def test_normalise_sorts_dedupes_and_sorts_verbs(self):
+        raw = [
+            {"kind": "copy", "rule_id": "b"}, _new(verbs=("write", "read", "read")),
+            {"kind": "copy", "rule_id": "a"}, {"kind": "copy", "rule_id": "b"},
+            {"kind": "duplicate", "token_id": "st-1", "rule_id": "r"},
+        ]
+
+        result = scoped_tokens.normalise_rule_requests(raw)
+
+        assert result == sorted(
+            [
+                {"kind": "copy", "rule_id": "a"}, {"kind": "copy", "rule_id": "b"}, _new(verbs=("read", "write")),
+                {"kind": "duplicate", "token_id": "st-1", "rule_id": "r"},
+            ],
+            key=lambda e: json.dumps(e, sort_keys=True),
+        )
+
+    def test_normalise_gives_one_result_for_any_order(self):
+        a, b = {"kind": "copy", "rule_id": "a"}, _new()
+        assert scoped_tokens.normalise_rule_requests([a, b]) == scoped_tokens.normalise_rule_requests([b, a])
+
+    @pytest.mark.parametrize("raw", [
+        "nope", {"kind": "copy"}, None, ["copy"],
+        [{"kind": "other", "rule_id": "a"}],
+        [{"rule_id": "a"}],
+        [{"kind": "copy", "rule_id": "a", "extra": 1}],
+        [{"kind": "copy"}],
+        [{"kind": "copy", "rule_id": 1}],
+        [{"kind": "new", "group": "g", "value": "v", "verbs": "read"}],
+        [{"kind": "new", "group": "g", "value": "v", "verbs": [1]}],
+        [{"kind": "new", "group": "g", "value": 1, "verbs": []}],
+        [{"kind": "duplicate", "rule_id": "r"}],
+    ])
+    def test_normalise_refuses_a_malformed_request(self, raw):
+        assert scoped_tokens.normalise_rule_requests(raw) is None
+
+    def test_normalise_accepts_no_rules(self):
+        assert scoped_tokens.normalise_rule_requests([]) == []
+
+    def test_a_new_request_builds_the_row_add_rules_would(self):
+        from privacyfence.policy import catalogue
+
+        token, _ = _create(_store(), rules=[_new()])
+
+        expected, _ = scope_rows.add_rules(
+            [], catalogue.rules_for_catalogue_entry("drive.folder", ["f1"], [Verb.READ]),
+        )
+        assert token.rules == tuple(expected)
+
+    def test_a_bad_value_raises_the_value_error_text(self):
+        with pytest.raises(ScopedTokenError) as err:
+            _create(_store(), rules=[_new(group="gmail.query", value="(unbalanced")])
+        assert str(err.value) == "The Gmail query has unbalanced parentheses or quotes."
+
+    @pytest.mark.parametrize("request_", [
+        _new(verbs=()), _new(group="nope.group"), _new(value=""),
+    ])
+    def test_an_incomplete_new_rule_raises(self, request_):
+        with pytest.raises(ScopedTokenError) as err:
+            _create(_store(), rules=[request_])
+        assert str(err.value) == (
+            "A new rule needs a scope, at least one of its verbs, and a value if the scope takes one."
+        )
+
+    def test_a_copy_copies_the_row_exactly_with_its_narrower_operations(self, monkeypatch):
+        narrow = dataclasses.replace(ROWS[0], operations=frozenset({"op.read"}))
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [narrow])
+
+        token, _ = _create(_store(), rules=_copy("rule-a"))
+
+        assert token.rules == (narrow,)
+
+    def test_a_duplicate_copies_another_tokens_row_exactly(self):
+        store = _store()
+        source, _ = _create(store, label="source", rules=_copy("rule-a"))
+
+        token, _ = _create(
+            store, label="copy-of-source",
+            rules=[{"kind": "duplicate", "token_id": source.id, "rule_id": "rule-a"}],
+        )
+
+        assert token.rules == source.rules
+
+    @pytest.mark.parametrize("request_", [
+        {"kind": "copy", "rule_id": "rule-gone"},
+        {"kind": "duplicate", "token_id": "st-none", "rule_id": "rule-a"},
+    ])
+    def test_a_missing_copy_or_duplicate_raises(self, request_):
+        with pytest.raises(ScopedTokenError) as err:
+            _create(_store(), rules=[request_])
+        assert str(err.value) == "One of the chosen rules no longer exists; reload the page."
+
+    def test_a_duplicate_of_a_row_the_token_lacks_raises(self):
+        store = _store()
+        source, _ = _create(store, label="source", rules=_copy("rule-a"))
+        with pytest.raises(ScopedTokenError, match="no longer exists"):
+            _create(store, label="x", rules=[{"kind": "duplicate", "token_id": source.id, "rule_id": "rule-b"}])
+
+    def test_fifty_one_requests_raise(self):
+        with pytest.raises(ScopedTokenError) as err:
+            _create(_store(), rules=[_new(value=f"f{i}") for i in range(51)])
+        assert str(err.value) == "A token has at most 50 rules."
+
+    def test_fifty_requests_are_allowed(self):
+        token, _ = _create(_store(), rules=[_new(value=f"f{i}") for i in range(50)])
+        assert len(token.rules) == 50
+
+    def test_a_new_rule_for_the_scope_of_a_copy_merges_into_one_row(self, monkeypatch):
+        from privacyfence.policy import catalogue
+
+        (folder,) = scope_rows.add_rules(
+            [], catalogue.rules_for_catalogue_entry("drive.folder", ["f1"], [Verb.READ]),
+        )[0]
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [folder])
+
+        token, _ = _create(_store(), rules=[*_copy(folder.id), _new(verbs=("read", "download"))])
+
+        (merged,) = token.rules
+        assert merged.id == folder.id and Verb.DOWNLOAD in merged.verbs
+
+    def test_a_bad_value_is_reported_before_a_duplicate_label(self):
+        store = _store()
+        _create(store)
+        with pytest.raises(ScopedTokenError, match="unbalanced"):
+            _create(store, rules=[_new(group="gmail.query", value="(unbalanced")])
+
+    def test_the_auto_accept_rows_are_not_read_while_the_store_lock_is_held(self, monkeypatch):
+        store = _store()
+        seen = []
+
+        def rows():
+            seen.append(store._lock.locked())
+            return list(ROWS)
+
+        monkeypatch.setattr(auto_accept, "get_policy_rows", rows)
+
+        _create(store, rules=_copy("rule-a"))
+
+        assert seen == [False]
+
+    def test_the_auto_accept_rows_are_not_read_without_a_copy(self, monkeypatch):
+        def unavailable():
+            raise AssertionError("read the Auto-accept rows")
+
+        monkeypatch.setattr(auto_accept, "get_policy_rows", unavailable)
+
+        token, _ = _create(_store(), rules=[_new()])
+
+        assert len(token.rules) == 1

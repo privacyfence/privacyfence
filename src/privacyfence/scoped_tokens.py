@@ -40,6 +40,7 @@ DEFAULT_DAYS = 90
 LOCAL_MAX_DAYS = 365
 WARN_DAYS = 14
 MAX_TOKENS_PER_PRINCIPAL = 50
+MAX_RULES_PER_TOKEN = 50
 LABEL_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}\Z")
 STORE_FILE_NAME = "scoped_tokens.json"
 ACTIVITY_FILE_NAME = "scoped_token_activity.json"
@@ -374,6 +375,39 @@ def own_rules_in_file(
 _Stamp = tuple[int, int] | None
 
 
+_RULE_REQUEST_SHAPES: dict[str, dict[str, type]] = {
+    "new": {"group": str, "value": str, "verbs": list},
+    "copy": {"rule_id": str},
+    "duplicate": {"token_id": str, "rule_id": str},
+}
+
+
+def normalise_rule_requests(raw: Any) -> list[dict[str, Any]] | None:
+    """The create body's ``rules`` in one canonical order, or ``None`` for a malformed list (ADR 0236).
+
+    Each item is a ``new``, ``copy`` or ``duplicate`` request with exactly that kind's keys. Verbs
+    are sorted, duplicate requests dropped, and the list sorted, so the same rules always give the
+    same step-up fingerprint."""
+    if not isinstance(raw, list):
+        return None
+    keyed: dict[str, dict[str, Any]] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        shape = _RULE_REQUEST_SHAPES.get(item.get("kind"))  # type: ignore[arg-type]
+        if shape is None or set(item) != {"kind", *shape}:
+            return None
+        if not all(isinstance(item[key], kind) for key, kind in shape.items()):
+            return None
+        entry = dict(item)
+        if item["kind"] == "new":
+            if not all(isinstance(verb, str) for verb in item["verbs"]):
+                return None
+            entry["verbs"] = sorted(set(item["verbs"]))
+        keyed[json.dumps(entry, sort_keys=True)] = entry
+    return [keyed[key] for key in sorted(keyed)]
+
+
 class ScopedTokenStore:
     def __init__(self, principal_dirs: Callable[[], Iterable[Principal]]) -> None:
         self._principal_dirs = principal_dirs
@@ -457,13 +491,19 @@ class ScopedTokenStore:
         *,
         label: str,
         days: int,
-        rule_ids: Iterable[str],
+        rules: Sequence[dict[str, Any]],
         tools: Iterable[str],
         policy: ScopedTokenPolicy,
         allow_personal_data: bool = False,
         allow_personal_data_reads: bool = False,
         now: float | None = None,
     ) -> tuple[ScopedToken, str]:
+        """Create a token holding its own rules, built from ``rules`` (``normalise_rule_requests``'s
+        output): a ``new`` rule, a ``copy`` of one of the person's Auto-accept rows, or a
+        ``duplicate`` of a row of one of their tokens (ADR 0236)."""
+        from .policy import catalogue, scope_rows
+        from .policy.value_format import RuleValueError
+
         if not policy.enabled:
             raise ScopedTokenError(
                 "Scoped tokens are not enabled on this install. "
@@ -471,11 +511,32 @@ class ScopedTokenStore:
             )
         if not LABEL_RE.match(label):
             raise ScopedTokenError(_LABEL_MESSAGE)
-        rules = frozenset(rule_ids)
+        if len(rules) > MAX_RULES_PER_TOKEN:
+            raise ScopedTokenError(f"A token has at most {MAX_RULES_PER_TOKEN} rules.")
         tool_set = frozenset(tools)
         # Read before the store lock: get_policy_rows takes the Auto-accept write lock, and
         # ensure_scope_rows takes that lock and then this one.
-        own_rows = {row.id: row for row in auto_accept.get_policy_rows()} if rules else {}
+        own_rows = (
+            {row.id: row for row in auto_accept.get_policy_rows()}
+            if any(entry["kind"] == "copy" for entry in rules) else {}
+        )
+        new_rules: list[PolicyRule] = []
+        for entry in rules:
+            if entry["kind"] != "new":
+                continue
+            try:
+                value = catalogue.parse_value_list(entry["value"], entry["group"])
+                built = catalogue.rules_for_catalogue_entry(
+                    entry["group"], value, catalogue.parse_verbs(entry["verbs"]),
+                )
+            except RuleValueError as exc:
+                raise ScopedTokenError(str(exc)) from exc
+            takes_value = any(g["id"] == entry["group"] and g["needs_value"] for g in catalogue.scope_catalogue())
+            if not built or (takes_value and value is None):
+                raise ScopedTokenError(
+                    "A new rule needs a scope, at least one of its verbs, and a value if the scope takes one."
+                )
+            new_rules.extend(built)
         with self._lock:
             self._refresh(principal)
             existing = self._tokens[principal.id]
@@ -488,10 +549,22 @@ class ScopedTokenStore:
             for name in sorted(tool_set):
                 if name not in auto_accept.TOOL_TO_GATE:
                     raise ScopedTokenError(f"{name} is not a PrivacyFence tool.")
-            if not rules <= own_rows.keys():
-                raise ScopedTokenError("One of the chosen rules no longer exists; reload the page.")
+            base_rows: list[ScopeRow] = []
+            for entry in rules:
+                if entry["kind"] == "new":
+                    continue
+                if entry["kind"] == "copy":
+                    base = own_rows.get(entry["rule_id"])
+                else:
+                    source = next((t for t in existing if t.id == entry["token_id"]), None)
+                    base = next((r for r in source.rules if r.id == entry["rule_id"]), None) if source else None
+                if base is None:
+                    raise ScopedTokenError("One of the chosen rules no longer exists; reload the page.")
+                if all(row.id != base.id for row in base_rows):
+                    base_rows.append(replace(base, former_ids=()))
             if len(existing) >= MAX_TOKENS_PER_PRINCIPAL:
                 raise ScopedTokenError(f"You have {MAX_TOKENS_PER_PRINCIPAL} tokens already; revoke one first.")
+            token_rows, _ = scope_rows.add_rules(base_rows, new_rules)
             created = time.time() if now is None else now
             secret = mint_secret()
             token = ScopedToken(
@@ -506,7 +579,7 @@ class ScopedTokenStore:
                 tools=tool_set,
                 allow_personal_data=allow_personal_data,
                 allow_personal_data_reads=allow_personal_data_reads,
-                rules=tuple(replace(own_rows[rid], former_ids=()) for rid in sorted(rules)),
+                rules=tuple(token_rows),
             )
             self._tokens[principal.id] = [*existing, token]
             self._write(principal)
