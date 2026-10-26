@@ -98,7 +98,7 @@ Remove `rule_ids`, `rule_limits` and `limits_split_verbs`. After `tools`, the fi
 ```python
 allow_personal_data: bool = False
 allow_personal_data_reads: bool = False
-# The token's own rules (ADR 0234), in the auto_accept: row format.
+# The token's own rules (ADR 0236), in the auto_accept: row format.
 rules: tuple["ScopeRow", ...] = field(default=(), hash=False)
 # The stored entry of a token written before tokens held their own rules, kept as read until it
 # is converted (``own_legacy_rules``); such a token has no rules meanwhile.
@@ -150,7 +150,7 @@ def rows_for_rules(rules: Sequence[PolicyRule], row_id: str) -> list[ScopeRow]:
     """Rows that compile to exactly ``rules`` -- the same predicates, conditions, values and
     operations -- all carrying ``row_id``: the rows ``add_rules`` builds when they compile back
     to exactly that, else one custom row per rule. ``[]`` for no rules. A scoped token's own copy
-    of a rule is built with it (ADR 0234)."""
+    of a rule is built with it (ADR 0236)."""
 ```
 
 Implementation:
@@ -275,7 +275,7 @@ In `policy_upgrade.py`:
   ```python
   def ensure_token_rules(cfg, principal, *, log=logger.warning):
       """Give ``principal``'s scoped tokens written before tokens held their own rules a copy of
-      the rules they name, from ``cfg``'s version-3 rows (ADR 0234). Start-up only
+      the rules they name, from ``cfg``'s version-3 rows (ADR 0236). Start-up only
       (``daemon_main``), after ``ensure_scope_rows``; nothing is done while the section is still
       version 2, whose own conversion handles the tokens."""
       if _v2_rules(cfg.get("auto_accept")) is not None:
@@ -288,7 +288,7 @@ In `policy_upgrade.py`:
           log(f"{principal.id}: could not give scoped tokens their own copy of their rules: {exc}")
   ```
 - Add one paragraph to the module docstring: "A scoped token holds its own copy of its rules in
-  the same row format (ADR 0234). A later change to that format that needs a rewrite on disk must
+  the same row format (ADR 0236). A later change to that format that needs a rewrite on disk must
   rewrite each token's `rules` too, the way `own_legacy_rules` converts a token's old rule ids."
 
 In `daemon_main.py`:
@@ -309,7 +309,7 @@ In `daemon_main.py`:
 ```python
 def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]:
     """Every cached rule for an unscoped call; under a scoped token only the token's own rules
-    (ADR 0164, ADR 0234), never the person's Auto-accept rules."""
+    (ADR 0164, ADR 0236), never the person's Auto-accept rules."""
     if scope is None:
         return get_policy_v2_store_rules()
     return scope.compiled_rules()
@@ -347,7 +347,7 @@ In `AuditLogger.rule_usage`, skip an entry whose
 then counts only the calls its rules really let through. A copied token rule keeps the row's id,
 and its calls would otherwise count for the person's rule. Add one sentence to the docstring:
 "Calls made with a scoped token are left out: they match the token's own rules, never the
-person's (ADR 0234)."
+person's (ADR 0236)."
 
 ### D10. Creating a token from rule requests
 
@@ -537,7 +537,7 @@ it now predicts from the token's rows alone.
 
 ## ADRs
 
-- **ADR 0234: a scoped token holds its own rules.** A token stores its own copy of its rules in
+- **ADR 0236: a scoped token holds its own rules.** A token stores its own copy of its rules in
   the `auto_accept:` row format and never consults the person's Auto-accept rules. Rules are
   authored on the New token form or copied from an Auto-accept rule. Existing tokens are converted
   once at start-up with their limits applied. Deleting an Auto-accept rule no longer touches
@@ -552,8 +552,8 @@ it now predicts from the token's rows alone.
     needs no entry for tokens).
 
   It supersedes ADR 0198.
-  (Use the next free number in `docs/adr/` when the last phase runs. If 0234 is taken by then, use
-  the next one and use it consistently.)
+  (0234 and 0235 are reserved for the parallel `plan/slack-read-state` plan. If 0236 is taken
+  when the last phase runs, use the next free number and use it consistently.)
 
 ## Manual steps
 
@@ -624,7 +624,7 @@ verify_after_merge:
   - python3 scripts/mypy_strict_modules.py
 final_checks:
   - docs/token-owned-rules-plan.md and docs/token-owned-rules-plan-manual-steps.html are deleted and `grep -rn "token-owned-rules-plan" --include=*.md --include=*.html --include=*.py .` prints nothing
-  - docs/adr/0234-a-scoped-token-holds-its-own-rules.md (or the number the last phase used) exists with Status Accepted, and docs/adr/README.md's index lists it; 0164, 0166, 0172, 0173, 0220 and 0228 say "Amended by" it and 0198 says "Superseded by" it, in both the ADR Status lines and the index
+  - docs/adr/0236-a-scoped-token-holds-its-own-rules.md (or the number the last phase used) exists with Status Accepted, and docs/adr/README.md's index lists it; 0164, 0166, 0172, 0173, 0220 and 0228 say "Amended by" it and 0198 says "Superseded by" it, in both the ADR Status lines and the index
   - CHANGELOG.md has the entry under "## [Unreleased]" and no new version heading
   - grep -rn "rule_limits\|forget_rules\|forget_removed_rules\|migrate_tokens\|pairs_of\|member_pairs" src/privacyfence matches only scoped_tokens.py's _LEGACY_KEYS, _limits_from_json and owned_entry; grep -rn "rule_ids" src/privacyfence matches only those, scoped_tokens.py's _from_json legacy branch, and the propose result's rule_ids (gate.py's return value and web/mcp_tools.py's description)
 phases:
@@ -792,7 +792,7 @@ phases:
       1. src/privacyfence/scoped_tokens.py:
          a. `ScopedToken`: remove `rule_ids`, `rule_limits` and `limits_split_verbs`, and add
             `rules`, `legacy_raw` and `compiled_rules()`, exactly as D2 says. Change the module
-            docstring's first sentence to "Scoped AI client tokens (ADR 0164, ADR 0234): named,
+            docstring's first sentence to "Scoped AI client tokens (ADR 0164, ADR 0236): named,
             expiring credentials that carry their own auto-accept rules and a set of tools."
          b. `_to_json` and `_from_json` as D3 says. `_write` writes `"version": 2`. Add the
             legacy-token warning to `_reload` (D3).
@@ -1182,11 +1182,11 @@ phases:
       - grep -n "add one to the recipe's scoped token in Settings -> Scoped tokens" sync/src/privacyfence_sync/permissions.py matches
 
   - id: p6-retire-plan
-    title: ADR 0234, reference docs, changelog, delete the plan, dispatch a build
+    title: ADR 0236, reference docs, changelog, delete the plan, dispatch a build
     depends_on: [p1-exact-copies-and-no-pruning, p2-tokens-hold-rows, p3-create-from-rule-requests, p3b-usage-stats-and-dead-code, p4-new-token-form, p5-sync-wording]
     complexity: M
     touches:
-      - docs/adr/0234-a-scoped-token-holds-its-own-rules.md
+      - docs/adr/0236-a-scoped-token-holds-its-own-rules.md
       - docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md
       - docs/adr/0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md
       - docs/adr/0172-one-stored-auto-accept-rule-per-scope.md
@@ -1209,9 +1209,11 @@ phases:
       and ADRs", and this plan's Design and ADRs sections. Write the ADR from this plan, and never
       link the plan document from it.
 
-      1. Run `ls docs/adr` and take the next free number: 0234 unless another branch took it, in
-         which case use that number everywhere below and in the file name.
-         Write docs/adr/0234-a-scoped-token-holds-its-own-rules.md from the template:
+      1. Use ADR number 0236; 0234 and 0235 are reserved for the parallel
+         `plan/slack-read-state` plan, so never take them even if `docs/adr/` has no such files
+         yet. Run `ls docs/adr`; only if 0236 is already taken, take the next free number after it
+         and use that everywhere below and in the file name.
+         Write docs/adr/0236-a-scoped-token-holds-its-own-rules.md from the template:
          - **Status:** `Accepted — <today>. Implemented.`, then "Amends ADR 0164, ADR 0166, ADR
            0172, ADR 0173, ADR 0220 and ADR 0228. Supersedes ADR 0198."
          - **Context:** the coupling, and the user's two cases: a `privacyfence-sync` job with no
@@ -1245,13 +1247,13 @@ phases:
          - **Related:** the ADRs and the source files.
       2. Change the Status lines only, never an ADR's body:
          - For 0164, 0166, 0172, 0173, 0220 and 0228, add "Amended by
-           [ADR 0234](0234-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of
+           [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of
            its rules."
          - For 0198, change the status to "Superseded by
-           [ADR 0234](0234-a-scoped-token-holds-its-own-rules.md)."
-         - In docs/adr/README.md, add the 0234 index row, and update the status column of those
+           [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md)."
+         - In docs/adr/README.md, add the 0236 index row, and update the status column of those
            seven rows the same way.
-      3. Reference docs. Describe today's behaviour, and link ADR 0234 for the why:
+      3. Reference docs. Describe today's behaviour, and link ADR 0236 for the why:
          - docs/connect-claude-code.md, both "### Scoped tokens" sections (local and organization
            mode):
            - say that the rules are the token's own (new or copied);
@@ -1289,9 +1291,9 @@ phases:
          `build.yml` (workflow_dispatch, no inputs) on your pushed branch. Put the run URL in your
          final report as `build_run: <url>`; the maintainer installs from it for the manual checks.
     acceptance:
-      - test -f docs/adr/0234-a-scoped-token-holds-its-own-rules.md (or the number used), and grep -n "^Accepted" in it matches
-      - grep -n "0234" docs/adr/README.md matches the index row and the 0164, 0166, 0172, 0173, 0198, 0220 and 0228 rows
-      - grep -n "Superseded by \[ADR 0234\]" docs/adr/0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md matches
+      - test -f docs/adr/0236-a-scoped-token-holds-its-own-rules.md (or the number used), and grep -n "^Accepted" in it matches
+      - grep -n "0236" docs/adr/README.md matches the index row and the 0164, 0166, 0172, 0173, 0198, 0220 and 0228 rows
+      - grep -n "Superseded by \[ADR 0236\]" docs/adr/0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md matches
       - grep -rn "edit a rule first and then create the token\|removes it from every scoped token" docs prints nothing outside docs/adr/
       - awk '/^## \[Unreleased\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md | grep -n "A scoped token holds its own rules" matches
       - grep -rn "token-owned-rules-plan" . prints nothing
