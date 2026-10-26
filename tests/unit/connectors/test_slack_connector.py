@@ -55,6 +55,7 @@ def make_connector(my_email="me@example.com"):
     # Default to "not a member, no read marker" so args and read_state carry plain values.
     client.conversation_state.return_value = SlackConversationState()
     client.last_read_markers.return_value = {}
+    client.thread_last_read_markers.return_value = {}
     client.my_conversation_ids.return_value = frozenset()
     client.own_user_id.return_value = ""
     # Default to "not resolvable" so tests that don't care about participant-name
@@ -111,7 +112,8 @@ SLACK_SIBLINGS = {
     "slack_list_group_chats": ("slack_list_dms", "slack_create_group_chat"),
     "slack_get_channel_history": ("slack_get_thread_replies", "slack_search_messages"),
     "slack_get_thread_replies": ("slack_get_channel_history", "slack_resolve_permalink"),
-    "slack_search_messages": ("slack_get_channel_history",),
+    "slack_search_messages": ("slack_get_channel_history", "slack_get_read_state"),
+    "slack_get_read_state": ("slack_search_messages",),
     "slack_resolve_permalink": ("slack_get_thread_replies",),
     "slack_create_group_chat": ("slack_send_message",),
     "slack_send_message": ("slack_create_group_chat",),
@@ -224,6 +226,95 @@ class TestResolvePermalink:
 
         with pytest.raises(RuntimeError, match="Not a recognizable Slack message permalink"):
             await connector.call("slack_resolve_permalink", {"url": "nope"})
+
+
+class TestGetReadState:
+    MARKER = "1720000000.000500"
+    BEFORE = "1720000000.000100"
+    AFTER = "1720000000.000900"
+
+    async def test_mixed_entries_use_the_right_marker_in_request_order(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.last_read_markers.return_value = {"C1": self.MARKER}
+        client.thread_last_read_markers.return_value = {("C2", "T1"): self.MARKER}
+
+        result = await connector.call("slack_get_read_state", {
+            "messages": f"C1:{self.AFTER}, C2:{self.BEFORE}:T1,C1:{self.BEFORE}, C2:{self.AFTER}:T1",
+        })
+
+        assert result == [
+            {"channel_id": "C1", "ts": self.AFTER, "thread_ts": "", "read_state": "unread"},
+            {"channel_id": "C2", "ts": self.BEFORE, "thread_ts": "T1", "read_state": "read"},
+            {"channel_id": "C1", "ts": self.BEFORE, "thread_ts": "", "read_state": "read"},
+            {"channel_id": "C2", "ts": self.AFTER, "thread_ts": "T1", "read_state": "unread"},
+        ]
+        client.last_read_markers.assert_called_once_with(["C1", "C1"])
+        client.thread_last_read_markers.assert_called_once_with([("C2", "T1")])
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(entries) == 1
+        assert '"decision": "auto_accepted"' in entries[0]
+        assert '"tool": "slack_get_read_state"' in entries[0]
+        assert "2 unread" in entries[0]
+
+    async def test_missing_marker_is_unknown(self):
+        connector, _ = make_connector()
+
+        result = await connector.call("slack_get_read_state", {"messages": f"C1:{self.AFTER},C2:{self.AFTER}:T1"})
+
+        assert [r["read_state"] for r in result] == ["unknown", "unknown"]
+
+    async def test_duplicate_entry_is_checked_once(self):
+        connector, client = make_connector()
+        client.last_read_markers.return_value = {"C1": self.MARKER}
+
+        result = await connector.call("slack_get_read_state", {"messages": f"C1:{self.AFTER},C1:{self.AFTER}"})
+
+        assert len(result) == 1
+        client.last_read_markers.assert_called_once_with(["C1"])
+
+    async def test_thread_ts_equal_to_ts_is_top_level(self):
+        connector, client = make_connector()
+        client.last_read_markers.return_value = {"C1": self.MARKER}
+
+        result = await connector.call("slack_get_read_state", {"messages": f"C1:{self.AFTER}:{self.AFTER}"})
+
+        assert result == [{"channel_id": "C1", "ts": self.AFTER, "thread_ts": "", "read_state": "unread"}]
+        client.thread_last_read_markers.assert_called_once_with([])
+
+    @pytest.mark.parametrize("messages, message", [
+        ("C1", "channel_id:ts or channel_id:ts:thread_ts entries; got C1"),
+        ("C1:1:2:3", "got C1:1:2:3"),
+        (":1", "got :1"),
+        ("C1:", "got C1:"),
+        ("", "takes 1 to 20 messages"),
+        (" , ", "takes 1 to 20 messages"),
+        (",".join(f"C1:{i}" for i in range(21)), "takes 1 to 20 messages"),
+        ("C1:1:T1,C1:2:T2,C1:3:T3,C1:4:T4", "takes at most 3 distinct threads per call"),
+    ])
+    async def test_invalid_input_raises_before_any_slack_call(self, messages, message):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match=message):
+            await connector.call("slack_get_read_state", {"messages": messages})
+
+        client.last_read_markers.assert_not_called()
+        client.thread_last_read_markers.assert_not_called()
+
+    async def test_twenty_messages_are_accepted(self):
+        connector, _ = make_connector()
+
+        result = await connector.call("slack_get_read_state", {"messages": ",".join(f"C1:{i}" for i in range(20))})
+
+        assert len(result) == 20
+
+    async def test_three_threads_are_accepted(self):
+        connector, _ = make_connector()
+
+        result = await connector.call("slack_get_read_state", {"messages": "C1:1:T1,C1:2:T2,C1:3:T3"})
+
+        assert len(result) == 3
 
 
 class TestRefreshUserCache:
@@ -1241,6 +1332,7 @@ class TestEveryToolIsAudited:
             arg_overrides={
                 "slack_create_group_chat": {"participants": "U1,U2"},
                 "slack_search_messages": {"query": "budget"},
+                "slack_get_read_state": {"messages": "C1:1700000000.000100"},
             },
         )
 

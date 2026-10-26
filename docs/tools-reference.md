@@ -95,7 +95,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Google Contacts](#google-contacts) | 7 | 3 | 0 | 4 |
 | [Google Tasks](#google-tasks) | 8 | 3 | 0 | 5 |
 | [Apps Script](#apps-script) | 4 | 1 | 2 | 1 |
-| [Slack](#slack) | 11 | 6 | 3 | 2 |
+| [Slack](#slack) | 12 | 7 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
 | [Salesforce](#salesforce) | 9 | 1 | 4 | 4 |
 | [Jira](#jira) | 13 | 6 | 3 | 4 |
@@ -104,7 +104,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
-| **Total** | **166** | **57** | **38** | **71** |
+| **Total** | **167** | **58** | **38** | **71** |
 
 ## Gmail
 
@@ -219,6 +219,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
+| `slack_get_read_state` | read | `auto` | Get your own Slack read state for a few specific messages you already have, without reading them again. |
 | `slack_list_channels` | read | `auto` | List Slack channels visible to the user (id, name, privacy, topic, purpose, member count). |
 | `slack_list_dms` | read | `auto` | List 1:1 direct-message conversations visible to the user (id, other participant). |
 | `slack_list_group_chats` | read | `auto` | List group-DM conversations visible to the user (id, name, participants). |

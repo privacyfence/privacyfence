@@ -76,6 +76,9 @@ _CURSOR_DESCRIPTION = (
     "Opaque cursor from a previous result's next_cursor; empty starts at the newest messages."
 )
 
+_READ_STATE_MAX_MESSAGES = 20
+_READ_STATE_MAX_THREADS = 3
+
 
 def _message_page_result(
     filtered: list[dict[str, Any]], has_more: bool, next_cursor: str
@@ -419,6 +422,37 @@ class SlackConnector(Connector):
                 read_only=True,
             ),
             ToolSpec(
+                name="slack_get_read_state",
+                description=(
+                    "Get your own Slack read state for a few specific messages you already have, "
+                    "without reading them again. Use it sparingly, only for messages whose read "
+                    "state matters (for example the ones you are about to report as new), not for "
+                    "every search result: each distinct conversation costs one Slack request and "
+                    "each distinct thread one rate-limited conversations.replies request (about a "
+                    "minute each on an app distributed outside the Slack Marketplace). Returns a "
+                    "list of {channel_id, ts, thread_ts, read_state}, one per distinct requested "
+                    "message in request order, where read_state is 'unread', 'read' or 'unknown' "
+                    "(a thread you do not follow, or no marker). Prefer it over "
+                    "slack_search_messages' read_state=true for more than a few conversations. "
+                    "Returns no message text. Auto-approved."
+                ),
+                params=[
+                    ToolParam(
+                        "messages", "str",
+                        description=(
+                            "Comma-separated messages to check, 1 to 20, each channel_id:ts for a "
+                            "top-level message or channel_id:ts:thread_ts for a reply in a thread, "
+                            "from a message's channel_id, ts and thread_ts fields in "
+                            "slack_search_messages, slack_get_channel_history or "
+                            "slack_get_thread_replies. At most 3 distinct threads. A repeated entry "
+                            "is checked once."
+                        ),
+                    ),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
                 name="slack_create_group_chat",
                 description=(
                     "Create (or reopen the existing) group-DM conversation with the given "
@@ -494,6 +528,8 @@ class SlackConnector(Connector):
             return await self._get_thread_replies(**args)
         if tool == "slack_search_messages":
             return await self._search_messages(**args)
+        if tool == "slack_get_read_state":
+            return await self._get_read_state(**args)
         if tool == "slack_create_group_chat":
             return await self._create_group_chat(**args)
         if tool == "slack_send_message":
@@ -571,6 +607,54 @@ class SlackConnector(Connector):
             "slack_resolve_permalink", "Resolve Slack Permalink",
             f"Resolve permalink -> {result['channel_name'] or result['channel_id']}",
             result["channel_id"], t0,
+        )
+        return result
+
+    async def _get_read_state(self, messages: str) -> Any:
+        entries: list[tuple[str, str, str]] = []
+        for item in (part.strip() for part in messages.split(",")):
+            if not item:
+                continue
+            parts = item.split(":")
+            if len(parts) not in (2, 3) or not parts[0] or not parts[1]:
+                raise ValueError(
+                    "slack_get_read_state takes channel_id:ts or channel_id:ts:thread_ts "
+                    f"entries; got {item}"
+                )
+            thread_ts = parts[2] if len(parts) == 3 else ""
+            entries.append((parts[0], parts[1], "" if thread_ts == parts[1] else thread_ts))
+        entries = list(dict.fromkeys(entries))
+        if not entries or len(entries) > _READ_STATE_MAX_MESSAGES:
+            raise ValueError(f"slack_get_read_state takes 1 to {_READ_STATE_MAX_MESSAGES} messages")
+        threads = list(dict.fromkeys((c, t) for c, _, t in entries if t))
+        if len(threads) > _READ_STATE_MAX_THREADS:
+            raise ValueError(
+                f"slack_get_read_state takes at most {_READ_STATE_MAX_THREADS} distinct threads per call"
+            )
+        t0 = time.time()
+        markers = await self._fetch(
+            self._slack.last_read_markers, [c for c, _, t in entries if not t]
+        )
+        thread_markers = await self._fetch(self._slack.thread_last_read_markers, threads)
+        result = [
+            {
+                "channel_id": channel_id,
+                "ts": ts,
+                "thread_ts": thread_ts,
+                "read_state": message_read_state(
+                    ts,
+                    thread_markers.get((channel_id, thread_ts), "")
+                    if thread_ts
+                    else markers.get(channel_id, ""),
+                ),
+            }
+            for channel_id, ts, thread_ts in entries
+        ]
+        unread = sum(1 for r in result if r["read_state"] == "unread")
+        self._auto_audit(
+            "slack_get_read_state", "Get Slack Read State",
+            f"Read state of {len(result)} message(s), {unread} unread",
+            ",".join(dict.fromkeys(e[0] for e in entries)), t0,
         )
         return result
 
