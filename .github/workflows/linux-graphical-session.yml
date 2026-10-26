@@ -56,7 +56,9 @@ jobs:
   graphical-session:
     # A real VM (systemd as PID 1), not a container -- required by this
     # test module's own skip conditions (see its docstring).
-    runs-on: ubuntu-latest
+    # Pinned, not `ubuntu-latest`: this job builds the .deb, whose bundle links the build
+    # host's glibc and so sets its floor (ADR 0203) -- the same pin build.yml's build-deb has.
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
