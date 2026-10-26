@@ -168,7 +168,7 @@ jobs:
         with:
           fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
@@ -260,7 +260,7 @@ jobs:
         # rather than a one-off tag -- that's the branch pypa itself
         # recommends following for v1.x, and Dependabot bumps this SHA the
         # same way it bumps any other action pin (see .github/dependabot.yml).
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2 (release/v1)
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2 (release/v1)
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true   # lets a rerun after a partial failure succeed
@@ -289,7 +289,7 @@ jobs:
       - name: Publish to PyPI
         # See the TestPyPI job's "Publish to TestPyPI" step above for why
         # this is pinned to release/v1's tip rather than a one-off tag.
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2 (release/v1)
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2 (release/v1)
         with:
           skip-existing: true
 
@@ -310,7 +310,7 @@ jobs:
           path: dist/
 
       - name: Publish privacyfence-sync to TestPyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2 (release/v1)
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2 (release/v1)
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
@@ -329,7 +329,7 @@ jobs:
           path: dist/
 
       - name: Publish privacyfence-sync to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2 (release/v1)
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2 (release/v1)
         with:
           skip-existing: true
 
