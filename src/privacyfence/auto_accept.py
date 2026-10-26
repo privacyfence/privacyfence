@@ -28,7 +28,7 @@ import time
 import yaml
 from dataclasses import dataclass, field
 from email.utils import parseaddr
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .principal import PrincipalRegistry, current_principal
 from .policy.resource_registry import DRIVE_SANDBOX_WRITE_TARGETS
@@ -679,26 +679,9 @@ def add_policy_v2_rules(rules: "list[PolicyRule]") -> bool:
     return True
 
 
-def forget_removed_rules(rule_ids: Iterable[str]) -> list[str]:
-    """Drop deleted rule ids from the current principal's scoped tokens (ADR 0198), so adding the
-    same scope again cannot restore the old access. The delete is already written when this runs,
-    so a failed token write is logged and never fails or undoes it. Returns the changed labels."""
-    from . import scoped_tokens
-
-    try:
-        labels = scoped_tokens.forget_rules(current_principal(), rule_ids)
-    except (OSError, ValueError) as exc:
-        logger.warning("Could not drop removed auto-accept rule(s) from scoped tokens: %s", exc)
-        return []
-    if labels:
-        logger.info("Dropped removed auto-accept rule(s) from scoped token(s): %s", ", ".join(labels))
-    return labels
-
-
-def remove_policy_v2_rule(rule_id: str, *, forget_in_tokens: bool = True) -> bool:
-    """Remove the row with this stable id from the on-disk ``auto_accept:`` section entirely, and
-    from every scoped token that carried it unless ``forget_in_tokens`` is false (a caller that
-    re-adds the row and decides afterwards). Returns whether anything was actually removed."""
+def remove_policy_v2_rule(rule_id: str) -> bool:
+    """Remove the row with this stable id from the on-disk ``auto_accept:`` section entirely.
+    Returns whether anything was actually removed."""
     from .policy import scope_rows
 
     state = _REGISTRY.get()
@@ -713,8 +696,6 @@ def remove_policy_v2_rule(rule_id: str, *, forget_in_tokens: bool = True) -> boo
         if len(remaining) == len(existing):
             return False
         _write_rows_locked(state, cfg, remaining)
-    if forget_in_tokens:
-        forget_removed_rules([rule_id])
     notify_rules_changed()
     return True
 
@@ -822,7 +803,6 @@ __all__ = [
     "TOOL_TO_OPERATION",
     "add_policy_v2_rules",
     "add_rules_changed_listener",
-    "forget_removed_rules",
     "get_policy_v2_rules",
     "get_policy_v2_store_rules",
     "init_config_path",

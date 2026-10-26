@@ -370,7 +370,7 @@ class TestRulesChangedListener:
         init_config_path(str(config_path))
         assert remove_policy_v2_rule("no-such-rule") is False
 
-    def test_remove_policy_v2_rule_drops_the_id_from_a_token_that_carried_it(self, tmp_path):
+    def test_remove_policy_v2_rule_leaves_scoped_tokens_alone(self, tmp_path):
         config_path = tmp_path / "settings.yaml"
         config_path.write_text(yaml.dump({}), encoding="utf-8")
         init_config_path(str(config_path))
@@ -380,76 +380,13 @@ class TestRulesChangedListener:
         )
         (rule_id,) = auto_accept.policy_row_ids_for([rule])
         add_policy_v2_rules([rule])
-        token, _ = _seed_token([rule_id, "r-other"])
+        token, path = _seed_token([rule_id, "r-other"])
+        before = path.read_bytes()
 
         assert remove_policy_v2_rule(rule_id) is True
 
-        assert _carried_rule_ids(token) == {"r-other"}
-
-    def test_removing_an_unknown_id_leaves_the_token_file_alone(self, tmp_path):
-        config_path = tmp_path / "settings.yaml"
-        config_path.write_text(yaml.dump({}), encoding="utf-8")
-        init_config_path(str(config_path))
-        token, path = _seed_token(["r-other"])
-        before = (path.stat().st_mtime_ns, path.stat().st_ino)
-
-        assert remove_policy_v2_rule("no-such-rule") is False
-
-        assert (path.stat().st_mtime_ns, path.stat().st_ino) == before
-        assert _carried_rule_ids(token) == {"r-other"}
-
-    def test_forget_in_tokens_false_leaves_tokens_alone(self, tmp_path):
-        config_path = tmp_path / "settings.yaml"
-        config_path.write_text(yaml.dump({}), encoding="utf-8")
-        init_config_path(str(config_path))
-        rule = PolicyRule(
-            id="i_am_sender", predicate="i_am_sender", value=None,
-            operations=frozenset({"gmail.read_message"}),
-        )
-        (rule_id,) = auto_accept.policy_row_ids_for([rule])
-        add_policy_v2_rules([rule])
-        token, _ = _seed_token([rule_id])
-
-        assert remove_policy_v2_rule(rule_id, forget_in_tokens=False) is True
-
-        assert _carried_rule_ids(token) == {rule_id}
-
-    def test_a_failing_token_write_does_not_undo_the_delete(self, tmp_path, monkeypatch, caplog):
-        config_path = tmp_path / "settings.yaml"
-        config_path.write_text(yaml.dump({}), encoding="utf-8")
-        init_config_path(str(config_path))
-        rule = PolicyRule(
-            id="i_am_sender", predicate="i_am_sender", value=None,
-            operations=frozenset({"gmail.read_message"}),
-        )
-        (rule_id,) = auto_accept.policy_row_ids_for([rule])
-        add_policy_v2_rules([rule])
-
-        def _fail(*_a, **_k):
-            raise OSError("disk full")
-
-        monkeypatch.setattr(scoped_tokens, "forget_rules", _fail)
-
-        assert remove_policy_v2_rule(rule_id) is True
-
-        assert auto_accept.get_policy_rows() == []
-        assert "Could not drop removed auto-accept rule(s) from scoped tokens: disk full" in caplog.text
-
-    def test_forget_removed_rules_survives_an_unsafe_principal_id(self, monkeypatch):
-        def _unsafe(*_a, **_k):
-            raise ValueError("unsafe principal id")
-
-        monkeypatch.setattr(scoped_tokens, "forget_rules", _unsafe)
-
-        assert auto_accept.forget_removed_rules(["r-gone"]) == []
-
-    def test_forget_removed_rules_logs_the_changed_labels(self, caplog):
-        _seed_token(["r-gone"], label="nightly")
-        caplog.set_level("INFO", logger=auto_accept.logger.name)
-
-        assert auto_accept.forget_removed_rules(["r-gone"]) == ["nightly"]
-
-        assert "Dropped removed auto-accept rule(s) from scoped token(s): nightly" in caplog.text
+        assert path.read_bytes() == before
+        assert _carried_rule_ids(token) == {rule_id, "r-other"}
 
     def test_update_policy_v2_rule_adds_the_missing_operations_and_fires_listener(self, tmp_path):
         config_path = tmp_path / "settings.yaml"

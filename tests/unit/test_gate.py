@@ -1347,7 +1347,7 @@ class TestProposePolicyChange:
         rules = auto_accept.get_policy_v2_rules()
         assert [r.value for r in rules] == [["folder2"]]
 
-    async def test_update_to_another_folder_drops_the_old_id_from_a_token(self, audit_dir):
+    async def test_update_leaves_scoped_tokens_alone(self, audit_dir):
         add_result = await gate.propose_policy_change(
             operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
         )
@@ -1359,24 +1359,9 @@ class TestProposePolicyChange:
             group="drive.folder", value=["folder2"], verbs=["read"],
         )
 
-        assert self._carried(token) == {"r-other"}
+        assert self._carried(token) == {old_id, "r-other"}
 
-    async def test_update_of_only_the_verbs_keeps_the_id_in_a_token(self, audit_dir):
-        add_result = await gate.propose_policy_change(
-            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
-        )
-        old_id = add_result["rule_ids"][0]
-        token = self._seed_token([old_id])
-
-        update_result = await gate.propose_policy_change(
-            operation="update", reason="Also download.", rule_id=old_id,
-            group="drive.folder", value=["folder1"], verbs=["read", "download"],
-        )
-
-        assert update_result["rule_ids"] == [old_id]
-        assert self._carried(token) == {old_id}
-
-    async def test_remove_drops_the_id_from_a_token(self, audit_dir):
+    async def test_remove_leaves_scoped_tokens_alone(self, audit_dir):
         add_result = await gate.propose_policy_change(
             operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
         )
@@ -1385,7 +1370,7 @@ class TestProposePolicyChange:
 
         await gate.propose_policy_change(operation="remove", reason="Cleaning up.", rule_id=rule_id)
 
-        assert self._carried(token) == {"r-other"}
+        assert self._carried(token) == {rule_id, "r-other"}
 
     async def test_update_with_an_unknown_rule_id_raises_before_any_popup(self, monkeypatch):
         popup_calls = []

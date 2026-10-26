@@ -7,6 +7,7 @@ decided, or keeps the rules it cannot merge as custom rows under their old ids.
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -643,3 +644,108 @@ def test_gmail_label_row_with_update_and_move_compiles_to_two_rules():
 def test_gmail_label_row_with_only_update_has_no_label_match_rule():
     row = _row("gmail.label", ["Proposed Archive"], {Verb.UPDATE})
     assert {r.predicate for r in scope_rows.compile_row(row)} == {"label_name_allowlist"}
+
+
+# ── rows_for_rules (ADR 0236) ──────────
+
+# One valid value per catalogue group; None for a group that takes no value.
+SAMPLE_VALUES = {
+    "apps_script.project": ["1A2b3C"],
+    "assets.schema": ["12"],
+    "calendar.anything/no_external_attendees": None,
+    "calendar.anything/not_private": None,
+    "calendar.calendar": ["primary"],
+    "calendar.organized_by_me": None,
+    "confluence.authored_by_me": None,
+    "confluence.space": ["TEAM"],
+    "contacts.label": ["Newsletters"],
+    "drive.folder": ["1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"],
+    "drive.owned_by_me": None,
+    "gmail.anything": None,
+    "gmail.filters": None,
+    "gmail.label": ["Newsletters"],
+    "gmail.query": ["in:inbox"],
+    "gmail.sender": None,
+    "gmail.sender_domain": ["example.com"],
+    "grist.document": ["8CAN8gKdxY7z"],
+    "jira.my_issues/assignee": None,
+    "jira.my_issues/reporter": None,
+    "jira.project": ["MYPROJ"],
+    "miro.board": ["uXjVOD6LSME="],
+    "peek.page": ["team-dashboard"],
+    "salesforce.object_type": ["Account"],
+    "salesforce.report": ["00O000000000001"],
+    "slack.channel_kind/self_dm": None,
+    "slack.channel_kind/group_dm": None,
+    "slack.channel": ["C0123456789"],
+    "slack.my_conversations": None,
+    "slack.direct_messages_to_me": None,
+    "slack.group_chats": None,
+    "slack.mentions_of_me": None,
+    "tasks.list": ["MDAwMDAwMDAwMDAwMDAwMDAwMDA6MDow"],
+    "telegram.chat": ["123456789"],
+}
+
+
+class TestRowsForRules:
+    def test_no_rules_gives_no_rows(self):
+        assert scope_rows.rows_for_rules([], "r-1") == []
+        assert scope_rows.rows_for_rules([_rule(operations=())], "r-1") == []
+
+    def test_a_scoped_row_round_trips(self):
+        rules = _v2("drive.folder", [FOLDER], [Verb.READ])
+        (row,), _ = scope_rows.add_rules([], rules)
+        compiled = scope_rows.compile_row(row)
+
+        rows = scope_rows.rows_for_rules(compiled, row.id)
+
+        assert rows == [dataclasses.replace(row, former_ids=())]
+
+    def test_narrowed_rules_keep_only_their_operations(self):
+        rules = _v2("drive.folder", [FOLDER], [Verb.READ, Verb.DOWNLOAD])
+        (row,), _ = scope_rows.add_rules([], rules)
+        compiled = scope_rows.compile_row(row)
+        dropped = sorted(compiled[0].operations)[0]
+        narrowed = [dataclasses.replace(compiled[0], operations=compiled[0].operations - {dropped}), *compiled[1:]]
+        narrowed = [r for r in narrowed if r.operations]
+
+        rows = scope_rows.rows_for_rules(narrowed, row.id)
+
+        assert scope_rows._quads(scope_rows.compile_rows(rows)) == scope_rows._quads(narrowed)
+        assert dropped not in {op for r in scope_rows.compile_rows(rows) for op in r.operations}
+
+    def test_an_unknown_predicate_becomes_a_custom_row_with_the_given_id(self):
+        rule = PolicyRule(
+            id="r-in", predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}),
+        )
+
+        rows = scope_rows.rows_for_rules([rule], "r-in")
+
+        assert len(rows) == 1
+        assert rows[0].scope is None
+        assert rows[0].id == "r-in"
+        assert scope_rows.compile_rows(rows) == [rule]
+
+    def test_the_sample_values_cover_every_catalogue_group(self):
+        assert set(SAMPLE_VALUES) == {entry["id"] for entry in catalogue.scope_catalogue()}
+        assert len(SAMPLE_VALUES) == len(catalogue.scope_catalogue())
+
+    @pytest.mark.parametrize("entry", catalogue.scope_catalogue(), ids=lambda e: e["id"])
+    def test_every_catalogue_group_round_trips(self, entry):
+        rules = catalogue.rules_for_catalogue_entry(
+            entry["id"], SAMPLE_VALUES[entry["id"]], catalogue.parse_verbs(entry["verbs"]),
+        )
+        assert rules
+
+        def check(candidates):
+            rows = scope_rows.rows_for_rules(candidates, "r-1")
+            assert rows
+            assert {row.id for row in rows} == {"r-1"}
+            assert scope_rows._quads(scope_rows.compile_rows(rows)) == scope_rows._quads(candidates)
+            for row in rows:
+                assert scope_rows.row_from_dict(json.loads(json.dumps(scope_rows.row_to_dict(row)))) == row
+
+        check(rules)
+        first = rules[0]
+        narrowed = dataclasses.replace(first, operations=frozenset(sorted(first.operations)[1:]))
+        check([narrowed, *rules[1:]] if narrowed.operations else rules[1:] or rules)

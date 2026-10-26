@@ -975,7 +975,7 @@ class TestRemoveRule:
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == []
 
-    def test_drops_the_rule_from_that_principals_tokens_only(self, tmp_path, monkeypatch):
+    def test_leaves_scoped_tokens_alone(self, tmp_path, monkeypatch):
         rules = _catalogue_rules("gmail.sender", "read")
         _seed(tmp_path, monkeypatch, "alice", rules=rules)
         _seed(tmp_path, monkeypatch, "bob", rules=rules)
@@ -1002,7 +1002,7 @@ class TestRemoveRule:
             pid: json.loads(path.read_text(encoding="utf-8"))["tokens"][0]["rule_ids"]
             for pid, path in files.items()
         }
-        assert carried == {"alice": ["r-other"], "bob": sorted([rules[0].id, "r-other"])}
+        assert carried == {pid: sorted([rules[0].id, "r-other"]) for pid in files}
 
     def test_removes_exactly_that_rule_and_nothing_else(self, tmp_path, monkeypatch):
         sender_rule = _catalogue_rules("gmail.sender", "read")[0]
