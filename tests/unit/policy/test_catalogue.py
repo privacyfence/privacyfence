@@ -61,6 +61,17 @@ class TestParseVerbs:
         assert catalogue.parse_verbs(None) == []
 
 
+class TestParseValueList:
+    def test_parse_value_list_splits_on_commas(self):
+        assert catalogue.parse_value_list(" a, b ,, c ", "drive.folder") == ["a", "b", "c"]
+        assert catalogue.parse_value_list("  ", "drive.folder") is None
+        assert catalogue.parse_value_list("", "") is None
+
+    def test_parse_value_list_keeps_a_single_value_group_whole(self):
+        assert catalogue.parse_value_list("from:a, b", "gmail.query") == ["from:a, b"]
+        assert catalogue.parse_value_list("  ", "gmail.query") is None
+
+
 class TestRulesForCatalogueEntry:
     def test_a_title_instead_of_an_id_raises(self):
         with pytest.raises(RuleValueError, match="not a Slack ID"):

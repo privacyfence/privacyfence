@@ -4376,7 +4376,7 @@ class TestRevokeScopedTokens:
         policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30)
         monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
         for label in ("one", "two"):
-            made.create(alice, label=label, days=5, rule_ids=[], tools=["gmail_get_message"], policy=policy)
+            made.create(alice, label=label, days=5, rules=[], tools=["gmail_get_message"], policy=policy)
         return made, alice
 
     def test_revoke_scoped_tokens_revokes_and_reports_the_count(self, store, tmp_path, capsys):

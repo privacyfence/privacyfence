@@ -99,9 +99,11 @@ from .. import __version__, auto_accept, latency, paths, privilege_separation, s
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
+from ..policy import catalogue as policy_catalogue
 from ..policy import describe
 from ..policy import scope_rows
 from ..policy import propose as policy_propose
+from ..policy.registry import Verb
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
 from ..resource_names import get_resolver
@@ -322,6 +324,27 @@ def _scoped_rule_entry(
     }
 
 
+def _tool_connector(name: str, connector_names: set[str]) -> str | None:
+    """The enabled connector a tool belongs to: the longest connector name the tool name starts
+    with, so ``apps_script_*`` tools are not filed under a connector called ``apps``."""
+    matches = [c for c in connector_names if name.startswith(c + "_")]
+    return max(matches, key=len) if matches else None
+
+
+def _verb_tools(group_id: str, verbs: list[str]) -> dict[str, list[str]]:
+    """For each verb of a scope group, the tools a rule of that group and verb covers (the New
+    token form's coverage preview)."""
+    tools: dict[str, list[str]] = {}
+    for name in verbs:
+        verb = Verb(name)
+        row = scope_rows.ScopeRow(
+            id="", scope=group_id, value=None, verbs=frozenset({verb}),
+            operations=scope_rows.implied_operations(group_id, [verb]),
+        )
+        tools[name] = sorted({t for rule in scope_rows.compile_row(row) for t in describe.covered_tools(rule)})
+    return tools
+
+
 def scoped_token_page_data(
     principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
 ) -> dict[str, Any]:
@@ -355,8 +378,8 @@ def scoped_token_page_data(
         }
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
-        connector = name.split("_", 1)[0]
-        if connector in connector_names:
+        connector = _tool_connector(name, connector_names)
+        if connector is not None:
             by_connector.setdefault(connector, []).append(name)
     tokens = []
     activity = store.activity_for(principal)
@@ -380,9 +403,13 @@ def scoped_token_page_data(
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
         "auto_tools": sorted(
             name for name, gate in auto_accept.TOOL_TO_GATE.items()
-            if gate == "auto" and name.split("_", 1)[0] in connector_names
+            if gate == "auto" and _tool_connector(name, connector_names) is not None
         ),
         "tools": [{"connector": connector, "tools": names} for connector, names in sorted(by_connector.items())],
+        "scope_groups": [
+            {**entry, "verb_tools": _verb_tools(entry["id"], entry["verbs"])}
+            for entry in policy_catalogue.scope_catalogue() if entry["connector"] in connector_names
+        ],
     }
 
 
@@ -396,12 +423,12 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
     policy = scoped_tokens.policy_from_org_config({}, org_mode=False)
 
     def _create(
-        label: str, days: int, rule_ids: list[str], tools: list[str], allow_personal_data: bool,
+        label: str, days: int, rules: list[dict[str, Any]], tools: list[str], allow_personal_data: bool,
         allow_personal_data_reads: bool,
     ) -> tuple[ScopedToken, str]:
         with principal_scope(LOCAL_PRINCIPAL):
             return scoped_tokens.get_store().create(
-                LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=tools, policy=policy,
+                LOCAL_PRINCIPAL, label=label, days=days, rules=rules, tools=tools, policy=policy,
                 allow_personal_data=allow_personal_data, allow_personal_data_reads=allow_personal_data_reads,
             )
 
