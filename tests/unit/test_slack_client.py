@@ -36,12 +36,14 @@ from privacyfence.slack_client import (
     SlackChannel,
     SlackClient,
     SlackClientError,
+    SlackConversationState,
     SlackDirectMessage,
     SlackFile,
     SlackGroupChat,
     SlackUser,
     authorize_interactive,
     load_token_file,
+    message_read_state,
 )
 from slack_sdk.errors import SlackApiError
 
@@ -418,6 +420,15 @@ class TestParseMessage:
         assert msg.text == "hello"
         assert msg.reply_count == 3
         assert msg.files == [SlackFile(id="F1", name="a.png", title="", mimetype="", size=0)]
+
+    def test_last_read_is_parsed_from_the_raw_message(self):
+        client = make_client(MagicMock())
+        raw = {"user": "", "text": "t", "ts": "1697030400.000100", "last_read": "1697030400.000200"}
+        assert client._parse_message(raw, "C1", "general").last_read == "1697030400.000200"
+
+    def test_missing_last_read_is_empty(self):
+        client = make_client(MagicMock())
+        assert client._parse_message({"text": "t", "ts": "1.0"}, "C1", "general").last_read == ""
 
     def test_bot_message_uses_bot_id_as_user_id(self):
         client = make_client(MagicMock())
@@ -1622,6 +1633,29 @@ class TestSearchMessages:
         web_client.search_messages.return_value = {"messages": {"matches": list(matches)}}
         return web_client
 
+    def test_permalink_thread_ts_marks_a_reply(self):
+        match = {
+            **self._match("reply", 60),
+            "permalink": "https://acme.slack.com/archives/C1/p1?thread_ts=1700000000.000100&cid=C1",
+        }
+        results = make_client(self._web_client(match)).search_messages("", minutes=60)
+        assert results[0].thread_ts == "1700000000.000100"
+
+    def test_permalink_thread_ts_equal_to_own_ts_is_a_root(self):
+        match = self._match("root", 60)
+        match["permalink"] = f"https://acme.slack.com/archives/C1/p1?thread_ts={match['ts']}"
+        results = make_client(self._web_client(match)).search_messages("", minutes=60)
+        assert results[0].thread_ts == ""
+
+    def test_raw_thread_ts_wins_over_the_permalink(self):
+        match = {
+            **self._match("reply", 60),
+            "thread_ts": "1700000000.000500",
+            "permalink": "https://acme.slack.com/archives/C1/p1?thread_ts=1700000000.000100",
+        }
+        results = make_client(self._web_client(match)).search_messages("", minutes=60)
+        assert results[0].thread_ts == "1700000000.000500"
+
     def test_minutes_alone_is_enough(self):
         web_client = self._web_client()
         make_client(web_client).search_messages("", minutes=60)
@@ -2738,6 +2772,176 @@ class TestResolveIsMember:
         assert client.resolve_is_one_to_one_dm("D1") is True
         assert client.resolve_is_self_dm("D1") is False
         web_client.conversations_info.assert_not_called()
+
+
+class TestConversationState:
+    @staticmethod
+    def _client(channel):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": channel}
+        return make_client(web_client), web_client
+
+    def test_returns_membership_and_last_read(self):
+        client, _ = self._client({"is_member": True, "last_read": "1700000000.000100"})
+        assert client.conversation_state("C1") == SlackConversationState(
+            is_member=True, last_read="1700000000.000100"
+        )
+
+    def test_missing_last_read_is_empty(self):
+        client, _ = self._client({"is_member": True})
+        assert client.conversation_state("C1").last_read == ""
+
+    def test_one_to_one_dm_is_a_member(self):
+        client, _ = self._client({"is_im": True, "user": "U2", "last_read": "5.0"})
+        assert client.conversation_state("D1") == SlackConversationState(is_member=True, last_read="5.0")
+
+    def test_api_error_gives_an_empty_state(self):
+        web_client = MagicMock()
+        web_client.conversations_info.side_effect = slack_error("channel_not_found")
+        assert make_client(web_client).conversation_state("C1") == SlackConversationState()
+
+    def test_unexpected_response_gives_an_empty_state(self):
+        client, _ = self._client("not a dict")
+        assert client.conversation_state("C1") == SlackConversationState()
+
+    def test_empty_id_makes_no_api_call(self):
+        web_client = MagicMock()
+        assert make_client(web_client).conversation_state("") == SlackConversationState()
+        web_client.conversations_info.assert_not_called()
+
+    def test_is_never_cached(self):
+        client, web_client = self._client({"is_member": True, "last_read": "1.0"})
+        client.conversation_state("C1")
+        client.conversation_state("C1")
+        assert web_client.conversations_info.call_count == 2
+
+    def test_fills_the_channel_type_caches(self):
+        client, web_client = self._client({"is_im": True, "user": "U2", "is_mpim": False})
+        web_client.auth_test.return_value = {"user_id": "U_ME"}
+        client.conversation_state("D1")
+        web_client.conversations_info.reset_mock()
+        assert client.resolve_is_group_dm("D1") is False
+        assert client.resolve_is_one_to_one_dm("D1") is True
+        assert client.resolve_is_self_dm("D1") is False
+        web_client.conversations_info.assert_not_called()
+
+
+class TestLastReadMarkers:
+    def test_dedupes_ids_and_maps_each_to_its_marker(self):
+        web_client = MagicMock()
+        web_client.conversations_info.side_effect = lambda channel: {
+            "channel": {"last_read": f"{channel[1:]}.0"}
+        }
+        client = make_client(web_client)
+        assert client.last_read_markers(["C1", "C2", "C1", ""]) == {"C1": "1.0", "C2": "2.0"}
+        assert web_client.conversations_info.call_count == 2
+
+    def test_empty_list_makes_no_call(self):
+        web_client = MagicMock()
+        assert make_client(web_client).last_read_markers([]) == {}
+        web_client.conversations_info.assert_not_called()
+
+    def test_a_failed_lookup_maps_to_an_empty_marker(self):
+        web_client = MagicMock()
+        web_client.conversations_info.side_effect = slack_error("channel_not_found")
+        assert make_client(web_client).last_read_markers(["C1"]) == {"C1": ""}
+
+
+class TestThreadLastRead:
+    def test_reads_the_parents_last_read_from_the_live_fixture(self):
+        path = LIVE_FIXTURES_DIR / "get_thread_replies.json"
+        if not path.exists():
+            pytest.skip(f"{path} not recorded yet")
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        parent = raw["messages"][0]
+        web_client = MagicMock()
+        web_client.conversations_replies.return_value = raw
+        client = make_client(web_client)
+        marker = client.thread_last_read("C1", parent["ts"])
+        assert marker == parent["last_read"]
+        assert marker
+
+    def test_makes_one_call_with_limit_one(self):
+        web_client = MagicMock()
+        web_client.conversations_replies.return_value = {
+            "messages": [{"ts": "1.0", "last_read": "2.0"}]
+        }
+        make_client(web_client).thread_last_read("C1", "1.0")
+        web_client.conversations_replies.assert_called_once_with(channel="C1", ts="1.0", limit=1)
+
+    def test_no_parent_is_empty(self):
+        web_client = MagicMock()
+        web_client.conversations_replies.return_value = {"messages": [{"ts": "9.0", "last_read": "2.0"}]}
+        assert make_client(web_client).thread_last_read("C1", "1.0") == ""
+
+    def test_parent_without_last_read_is_empty(self):
+        web_client = MagicMock()
+        web_client.conversations_replies.return_value = {"messages": [{"ts": "1.0"}]}
+        assert make_client(web_client).thread_last_read("C1", "1.0") == ""
+
+    def test_api_error_is_empty(self):
+        web_client = MagicMock()
+        web_client.conversations_replies.side_effect = slack_error("ratelimited")
+        assert make_client(web_client).thread_last_read("C1", "1.0") == ""
+
+    def test_empty_argument_makes_no_call(self):
+        web_client = MagicMock()
+        client = make_client(web_client)
+        assert client.thread_last_read("", "1.0") == ""
+        assert client.thread_last_read("C1", "") == ""
+        web_client.conversations_replies.assert_not_called()
+
+    def test_markers_dedupe_threads(self):
+        web_client = MagicMock()
+        web_client.conversations_replies.side_effect = lambda channel, ts, limit: {
+            "messages": [{"ts": ts, "last_read": f"{ts}1"}]
+        }
+        client = make_client(web_client)
+        result = client.thread_last_read_markers([("C1", "1.0"), ("C1", "2.0"), ("C1", "1.0")])
+        assert result == {("C1", "1.0"): "1.01", ("C1", "2.0"): "2.01"}
+        assert web_client.conversations_replies.call_count == 2
+
+    def test_markers_empty_list_makes_no_call(self):
+        web_client = MagicMock()
+        assert make_client(web_client).thread_last_read_markers([]) == {}
+        web_client.conversations_replies.assert_not_called()
+
+
+class TestMessageReadState:
+    def test_own_message_is_read(self):
+        assert message_read_state("5.0", "1.0", own=True) == "read"
+
+    def test_own_wins_over_missing_marker(self):
+        assert message_read_state("", "", own=True) == "read"
+
+    @pytest.mark.parametrize("ts,marker", [("", "1.0"), ("1.0", ""), ("", "")])
+    def test_empty_ts_or_marker_is_unknown(self, ts, marker):
+        assert message_read_state(ts, marker) == "unknown"
+
+    def test_after_the_marker_is_unread(self):
+        assert message_read_state("1700000002.000000", "1700000001.000000") == "unread"
+
+    def test_equal_to_the_marker_is_read(self):
+        assert message_read_state("1700000001.000000", "1700000001.000000") == "read"
+
+    def test_before_the_marker_is_read(self):
+        assert message_read_state("1700000000.000000", "1700000001.000000") == "read"
+
+    def test_never_read_marker_makes_everything_unread(self):
+        assert message_read_state("1700000000.000100", "0000000000.000000") == "unread"
+
+    def test_non_numeric_marker_is_unknown(self):
+        assert message_read_state("1700000000.000100", "not-a-ts") == "unknown"
+
+    def test_non_numeric_ts_is_unknown(self):
+        assert message_read_state("nope", "1700000000.000100") == "unknown"
+
+    def test_non_str_marker_is_unknown(self):
+        assert message_read_state("1700000000.000100", None) == "unknown"  # type: ignore[arg-type]
+
+    def test_same_second_pair_is_ordered_exactly(self):
+        assert message_read_state("1700000000.000100", "1700000000.000099") == "unread"
+        assert message_read_state("1700000000.000099", "1700000000.000100") == "read"
 
 
 class TestMyConversationIds:
