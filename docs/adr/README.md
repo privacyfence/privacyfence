@@ -255,16 +255,16 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted; amended by 0207 |
 | [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
-| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198 |
+| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236 |
 | [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072 |
-| [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148; amended by 0174 |
+| [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148; amended by 0174, 0236 |
 | [0167](0167-a-card-number-must-have-a-length-its-first-digit-allows.md) | A card number must have a length its first digit allows | Accepted |
 | [0168](0168-earlier-drive-file-versions-are-read-under-the-file-read-rule.md) | Earlier Drive file versions are read under the file-read rule | Accepted |
 | [0169](0169-a-stable-branch-follows-the-latest-stable-release-for-the-plugin-marketplace.md) | A `stable` branch follows the latest stable release for the plugin marketplace | Accepted |
 | [0170](0170-a-drive-copy-is-its-own-verb-governed-by-the-move-folder-scope.md) | A Drive copy is its own verb, governed by the move folder scope | Accepted; amended by 0171 |
 | [0171](0171-auto-accept-rules-use-nine-verbs.md) | Auto-accept rules use nine verbs | Accepted; amends 0170 |
-| [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074; amended by 0198 |
-| [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164; amended by 0219 |
+| [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074; amended by 0198, 0236 |
+| [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164; amended by 0219, 0236 |
 | [0174](0174-a-rules-verbs-are-edited-in-place.md) | A rule's verbs are edited in place | Accepted; amends 0166 |
 | [0175](0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md) | An approval is bound to the whole request and to what its card showed | Accepted; amends 0073 |
 | [0176](0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md) | A chain-less audit line is accepted only before the first chained line | Accepted; amends 0071 |
@@ -289,7 +289,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0195](0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md) | Importing personal settings is merge-only, previewed, and step-up gated on the file hash | Accepted |
 | [0196](0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md) | Every connector is offered only when the organization config has its section; Telegram, Peek and Grist take a bare `enabled` switch | Accepted |
 | [0197](0197-an-organization-can-turn-the-export-tools-off.md) | An organization can turn the export tools off | Accepted |
-| [0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md) | Deleting an auto-accept rule removes it from scoped tokens | Accepted; amends 0164, 0172 |
+| [0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md) | Deleting an auto-accept rule removes it from scoped tokens | Superseded by 0236; amends 0164, 0172 |
 | [0199](0199-jira-and-confluence-mine-rules-compare-atlassian-account-ids.md) | Jira and Confluence "mine" rules compare Atlassian account ids, never names or emails | Accepted |
 | [0200](0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md) | An organization bundle carries a signed serial, and an older one is refused | Accepted; amends 0016 |
 | [0201](0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md) | The website's security headers are set by Cloudflare and checked from the repository | Accepted; amends 0053 |
@@ -311,7 +311,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0217](0217-the-org-admin-stats-page-shows-counts-only.md) | The organization admin's Stats page shows counts only | Accepted |
 | [0218](0218-a-gmail-label-rule-can-allow-archiving-a-message-that-carries-the-label.md) | A Gmail label rule can allow archiving a message that carries the label | Accepted; relates to 0172, 0204 |
 | [0219](0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md) | A scoped token can let email and Slack reads return personal data | Accepted; amends 0173 |
-| [0220](0220-a-routines-rule-profile-is-a-scoped-token.md) | A routine's rule profile is a scoped token | Accepted; relates to 0164, 0015 |
+| [0220](0220-a-routines-rule-profile-is-a-scoped-token.md) | A routine's rule profile is a scoped token | Accepted; relates to 0164, 0015; amended by 0236 |
 | [0221](0221-slack-rules-cover-mentions-of-the-signed-in-user.md) | Slack rules cover mentions of the signed-in user | Accepted; relates to 0172; amended by 0228 |
 | [0222](0222-a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time.md) | A Gmail query rule is evaluated by Gmail against the message at call time | Accepted; relates to 0172, 0204 |
 | [0223](0223-recent-slack-activity-is-read-through-time-sorted-search.md) | Recent Slack activity is read through a time-sorted search | Accepted |
@@ -319,9 +319,10 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0225](0225-the-admin-ai-system-pin-is-removed.md) | The admin AI-system pin is removed | Accepted; supersedes 0035 decision 3 |
 | [0226](0226-a-slack-rule-can-cover-the-conversations-the-user-is-a-member-of.md) | A Slack rule can cover the conversations the signed-in user is a member of, checked live on each call | Accepted; relates to 0172, 0221 |
 | [0227](0227-member-only-slack-search-drops-other-conversations-before-the-gate.md) | Member-only Slack search drops results from other conversations before the gate, on the agent's request | Accepted; relates to 0221, 0223 |
-| [0228](0228-an-extra-scope-can-give-each-verb-its-own-predicate.md) | An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with | Accepted; amends 0221 |
+| [0228](0228-an-extra-scope-can-give-each-verb-its-own-predicate.md) | An extra scope can give each verb its own predicate, so a rule allows only the verbs it was saved with | Accepted; amends 0221; amended by 0236 |
 | [0229](0229-check-policy-suggests-the-slack-rules-that-take-no-value.md) | `privacyfence_check_policy` suggests the Slack rules that take no value, from the call's own arguments | Accepted; amends 0204; relates to 0221, 0226, 0228 |
 | [0230](0230-miro-connects-only-by-oauth-with-an-expiring-token-app-in-the-bundle.md) | Miro connects only by OAuth, with an expiring-token app that the organization bundle carries | Accepted; relates to 0142, 0196 |
 | [0231](0231-the-miro-connector-reads-adds-and-changes-and-never-deletes.md) | The Miro connector reads, adds and changes, and never deletes | Accepted; relates to 0089, 0145 |
 | [0232](0232-miro-rules-are-per-board-and-set-from-settings-not-the-card.md) | Miro auto-accept rules are per board and are set on Settings, never from the approval card | Accepted; relates to 0077, 0144, 0204, 0228 |
 | [0233](0233-a-miro-write-covers-a-batch-of-up-to-twenty-under-one-card.md) | A Miro write covers a batch of up to twenty items or connector lines under one approval card | Accepted; relates to 0231 |
+| [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198 |

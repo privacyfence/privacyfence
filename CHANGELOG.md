@@ -43,6 +43,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **A scoped token holds its own rules.** On the New token form you add rules for that
+  token, or copy one of your Auto-accept rules. They never auto-accept anything for your
+  other AI clients, and changing or deleting an Auto-accept rule no longer changes a token.
+  Existing tokens get their own copy of the rules they used the first time PrivacyFence
+  starts after the upgrade. An older version cannot read tokens saved by this one: they stop
+  working there, and that version's next token change deletes them.
+
 ### Fixed
 
 - **`privacyfence_check_policy` no longer cites a rule that cannot cover the tool.** Tools that share an operation (Slack search and channel history both read messages) made a read-only rule, such as "Slack – my conversations: allow read", turn a search's verdict into `unknown` and appear among the rules the call depends on, although the search is always denied under it. The check now considers only rules whose covered tools include the tool asked about.

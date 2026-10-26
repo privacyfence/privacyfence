@@ -5,6 +5,7 @@
 Accepted — 2026-10-13. Implemented.
 Amends ADR 0074. A scoped rule's id is now derived from its scope and value, not from a predicate, value and conditions.
 Amended by [ADR 0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md): a deleted rule's id is dropped from every scoped token.
+Amended by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of its rules.
 
 ## Context
 

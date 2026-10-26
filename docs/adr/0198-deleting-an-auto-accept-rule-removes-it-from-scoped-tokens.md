@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted — 2026-10-17. Implemented.
+Superseded by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md).
+Was: Accepted — 2026-10-17. Implemented.
 Amends ADR 0164 and ADR 0172. A deleted rule no longer simply stops matching: its id is also dropped from every scoped token that carried it.
 
 ## Context

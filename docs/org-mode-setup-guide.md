@@ -346,7 +346,7 @@ purpose, stop the daemon and delete `org/org_config_serial.txt`; delete it toget
 | `--step-up-rp-name NAME` | `PrivacyFence` | The name shown in the operating system's passkey prompt. |
 | `--idp-step-up-acr-value ACR` | none | `acr_values` sent when step-up asks the identity provider for a fresh sign-in (repeatable). Without it, the request uses `prompt=login` and `max_age=0` only. |
 | `--enable-unattended-sessions` / `--disable-unattended-sessions` | off | Let an AI client declare a scheduled, unattended run (`privacyfence_begin_unattended_session`). The declaration is advisory and grants nothing by itself; see [how it works](how-it-works.md). |
-| `--enable-scoped-tokens` / `--disable-scoped-tokens` | off | Let each person create scoped tokens in Settings: named bearer tokens for `/mcp` limited to chosen rules and tools, deny-only, shown once. Written as `scoped_tokens.enabled`. A scoped token lives until it expires unless revoked, so when someone leaves, run `privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`. |
+| `--enable-scoped-tokens` / `--disable-scoped-tokens` | off | Let each person create scoped tokens in Settings: named bearer tokens for `/mcp` with their own rules and a chosen list of tools, deny-only, shown once. Written as `scoped_tokens.enabled`. A scoped token lives until it expires unless revoked, so when someone leaves, run `privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`. |
 | `--scoped-token-max-days N` | 90 | The longest a scoped token may last, 1-365 days. Written as `scoped_tokens.max_days`. |
 | `--downloads-inline-max-bytes BYTES` | `100000` | A file is returned inside the tool result when the whole result, base64 included, fits this size (a file of about 75 KB by default). `0` sends every file through a download link ([section 13](#13-file-delivery)). |
 | `--downloads-link-ttl-seconds SECONDS` | `300` | How long a download link stays valid. |
@@ -1030,7 +1030,7 @@ a scheduler on a server, the administrator needs to do one thing and leave one t
 
 - **Enable scoped tokens** with `--enable-scoped-tokens` (see the table in
   [Build the bundle](#build-the-bundle)). Each person then creates, in Settings, a named token
-  limited to the rules and tools one recipe needs. A scoped token does not need
+  with its own rules and the tools one recipe needs. A scoped token does not need
   `--enable-unattended-sessions`.
 - **Leave `download_delivery.agent_links` on.** It is on by default, and `privacyfence-sync` needs
   it to receive a file; with `--no-agent-links`, steps that receive a file fail.
