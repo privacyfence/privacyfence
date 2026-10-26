@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-22. Implemented: `PolicyExtraScope.verb_predicates`.
 Amends ADR 0221.
+Amended by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of its rules.
 
 ## Context
 

@@ -224,15 +224,18 @@ marked used and removes every passkey enrolled for you, so you can enroll a new 
 A scoped token is a bearer credential for `/mcp` that a person creates in Settings, in both modes,
 for one client or job. It has a name, an expiry (90 days by default) and a scope.
 
-- **What a scope limits.** The tools the client sees and may call, and the auto-accept rules a call
-  may use. A call that no rule of the token auto-accepts is denied at once (`denied_scoped_token` in
+- **What a scope limits.** The tools the client sees and may call, and the token's own rules. The
+  rules are a copy kept on the token (added on the New token form or copied from an Auto-accept
+  rule) and a scoped call never consults the person's Auto-accept rules
+  ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)). A call that no rule of the token auto-accepts is denied at once (`denied_scoped_token` in
   the audit log). Nothing outside the scope can be reached.
 - **Deny-only.** A scoped call never gets an approval card and never leaves a pending approval, and
   the temporary "Allow once" window does not apply to it. It cannot change rules, read the full
   rule list or wait for an approval.
 - **Stored as a hash.** The secret is `pfst_` plus random characters; only its SHA-256 is kept, in
   `scoped_tokens.json` under `authority/`. A malformed file fails closed: the tokens stop working.
-  It is accepted only on `/mcp`.
+  It is accepted only on `/mcp`. An older version cannot read a token file written by this one: the
+  tokens stop working there, and its next token change deletes them.
 - **Attested agent.** The audit log records the call as the agent `scoped-token:<id>`, named after
   the token, with source `override`. It is attested because a person created the credential, and it
   outranks a redirect-URI attestation for that call
@@ -244,13 +247,13 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   is denied for a token, when personal data is found
   ([ADR 0173](adr/0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md),
   [ADR 0219](adr/0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md)).
-- **One token per routine.** A token keeps the operations its rules had when it was created, so edit a
-  rule's verbs first and then create the token
-  ([ADR 0220](adr/0220-a-routines-rule-profile-is-a-scoped-token.md)).
-- **Deleting a rule.** A token's rules cannot be edited, with one exception: removing a rule in
-  Settings, or through `privacyfence_propose_policy_change`, also removes it from every scoped token
-  that carried it. The token's secret, other rules and tools stay, and adding the same rule again
-  does not restore it ([ADR 0198](adr/0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md)).
+- **One token per routine.** Give each routine its own token with its own rules, so a rule for one
+  routine never reaches another routine or your interactive clients
+  ([ADR 0220](adr/0220-a-routines-rule-profile-is-a-scoped-token.md),
+  [ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)).
+- **Deleting a rule.** A token's rules cannot be edited. Deleting or changing an Auto-accept rule,
+  in Settings or through `privacyfence_propose_policy_change`, does not change any token; revoke
+  the token to take its access away ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)).
 - **Local mode** copies the secret to the clipboard through the companion once. **Organization
   mode** shows it once in the browser, and only after the administrator turns scoped tokens on
   (`scoped_tokens.enabled`) and sets the longest lifetime (`scoped_tokens.max_days`).

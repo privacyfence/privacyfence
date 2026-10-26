@@ -302,7 +302,8 @@ the ["Always allow" per-tool reference](always-allow-rules-reference.md).
 **From Settings — Auto-accept.** **Settings → Auto-accept** lists one rule per scope — for example
 one row per Drive folder or Gmail sender domain — as a sentence, with colour-coded verb chips, an
 **Unblocks N tools** disclosure listing exactly which tools it covers, how often it has matched
-("Matched 42x, last 3 days ago", or "Never matched"), **Edit verbs** and **✕ Remove**. You can
+("Matched 42x, last 3 days ago", or "Never matched"), **Edit verbs** and **✕ Remove**. Calls made with a scoped
+token are not counted here: they match the token's own rules. You can
 filter by connector, verb family or text. **Add a rule** takes a scope, a value where the scope
 needs one (comma-separated for several), and the verbs to allow; for a Drive folder, Slack
 channel, Jira project and the like the value must be the resource's id (not its name or title; label
@@ -320,8 +321,9 @@ A rule keeps the tools it covered when you saved it. When a release adds a tool 
 verb the rule already has (for example `grist_import_csv` under a Grist document rule that allows
 *add*), the rule's row says "These verbs also cover tools this rule doesn't allow yet:" and names
 them, and the call is denied until you click **Update rule** and confirm. That adds only those
-tools, keeps the rule and anything that refers to it (scoped tokens, the audit log) unchanged, and
-asks for the passkey like adding a rule. Nothing widens a rule on its own at startup, upgrade or
+tools, keeps the rule and anything that refers to it (the audit log) unchanged, and
+asks for the passkey like adding a rule. A scoped token's own rules have no Update rule button:
+create a new token, or Duplicate it. Nothing widens a rule on its own at startup, upgrade or
 load; the first start after the one-rule-per-scope change merges your existing rules into one row
 per scope without adding any tool, and keeps the old file as `settings.yaml.pre-scope-rules.bak`.
 See [ADR 0166](adr/0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md),
