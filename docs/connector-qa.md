@@ -121,7 +121,8 @@ Items the checks delete go to Drive's trash, which Google purges after 30 days.
       `slack.channel_id` (blank to resolve by name) and `slack.seed_thread_ts` (blank to scan the
       channel's last 200 messages for `[QATEST]`).
 - [ ] Optionally set `slack.group_dm_id`: the id of a group DM the QA account is in. It enables the
-      group-DM membership check; without it that check is skipped.
+      group-DM membership and read-marker checks; without it those checks are skipped. The 1:1 DM
+      read-marker check uses the QA account's first DM and is skipped when it has none.
 
 The recorder reads that thread with `get_thread_replies` and checks that the thread starter
 carries `[QATEST]` and has text and a user id.
@@ -378,7 +379,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 |---|---|---|---|
 | `gmail` | **`seed_message_id`** | `get_message.json`, `list_send_as.json` | — |
 | `drive` | `folder_name`, `folder_id` | `get_file_metadata.json` | — |
-| `slack` | `channel_name`, `channel_id`, `seed_thread_ts`, `group_dm_id` | `get_thread_replies.json`; checks `conversation_membership` and `group_dm_membership` (no fixture) | — |
+| `slack` | `channel_name`, `channel_id`, `seed_thread_ts`, `group_dm_id` | `get_thread_replies.json`; checks `conversation_membership`, `group_dm_membership`, `conversation_read_marker`, `group_dm_read_marker` and `dm_read_marker` (no fixture) | — |
 | `calendar` | **`calendar_id`**, `seed_event_title`, `seed_event_id` | `get_event.json` | creates, updates and deletes one event and one two-instance recurring series on `calendar_id` |
 | `contacts` | `seed_contact_display_name`, `seed_contact_resource_name` | `get_contact.json` | — |
 | `tasks` | **`task_list_id`**, **`seed_task_id`** | `get_task.json` | creates, updates and deletes one task in `task_list_id` |
