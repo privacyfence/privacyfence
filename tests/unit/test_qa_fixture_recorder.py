@@ -2578,7 +2578,7 @@ class TestFixturePresence:
             for connector, filenames in recorder.EXPECTED_FIXTURES.items()
             for filename in filenames
         }
-        assert on_disk <= expected, f"fixture files no manifest entry names: {sorted(on_disk - expected)}"
+        assert on_disk == expected
 
 
 # ---------------------------------------------------------------------------- #
