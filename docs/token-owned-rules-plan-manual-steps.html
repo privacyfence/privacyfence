@@ -1,0 +1,116 @@
+<title>Token-owned rules checks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow reading column; each check is a numbered procedure with ticks. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1b2230; --muted: #5a6474;
+  --line: #d9dee6; --accent: #2f5fb3; --ok: #22794a; --code-bg: #eef1f6;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #9aa5b5;
+  --line: #2c3442; --accent: #86a8ec; --ok: #6cc596; --code-bg: #232b37; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #9aa5b5;
+  --line: #2c3442; --accent: #86a8ec; --ok: #6cc596; --code-bg: #232b37; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 46rem; margin: 0 auto; padding-block: 32px 64px; display: flex; flex-direction: column; gap: 28px; }
+h1 { font-size: 1.6rem; font-weight: 600; margin: 0; text-wrap: balance; }
+h2 { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+h3 { font-size: 1.1rem; font-weight: 600; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 65ch; }
+.lead { color: var(--muted); }
+section.part { display: flex; flex-direction: column; gap: 14px; }
+article { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.85rem; color: var(--muted); }
+.meta code { font-family: var(--mono); font-size: 0.82rem; }
+ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: s; }
+ol.steps li { counter-increment: s; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+ol.steps label { display: grid; grid-template-columns: 1.6rem 1fr; gap: 8px; cursor: pointer; min-width: 0; }
+ol.steps label::before { content: counter(s) "."; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+input[type=checkbox] { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+li.done label span { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { display: block; color: var(--muted); font-size: 0.9rem; margin-top: 2px; }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+.report { border-top: 1px dashed var(--line); padding-top: 12px; font-size: 0.92rem; }
+.report pre { font-family: var(--mono); font-size: 0.85rem; background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+.none { color: var(--muted); font-style: italic; }
+.progress { font-size: 0.85rem; color: var(--ok); font-variant-numeric: tabular-nums; }
+</style>
+
+<main>
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h1>Token-owned rules: checks on your install</h1>
+    <p class="lead">Two checks for the change that makes each scoped token hold its own rules. CI covers the code; these cover a real install, a real token and a real AI client.</p>
+    <span class="progress" id="progress" aria-live="polite"></span>
+  </header>
+
+  <section class="part">
+    <h2>Before implementation</h2>
+    <p class="none">Nothing to do. You can run <code>/implement</code> right away.</p>
+  </section>
+
+  <section class="part">
+    <h2>After implementation</h2>
+
+    <article id="ma1">
+      <h3>1 · An existing token keeps working after the upgrade</h3>
+      <div class="meta"><span><code>ma1-existing-token-survives-upgrade</code></span><span>About 10 minutes</span></div>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><label for="ma1-1"><span>Before upgrading, open <b>Settings → Scoped tokens</b> and write down, for one token you really use (a <code>privacyfence-sync</code> recipe or your Claude Code routine), its name and the rules shown under <b>Rules and tools</b>.</span></label></li>
+        <li><input type="checkbox" id="ma1-2"><label for="ma1-2"><span>Open the PR for <code>feature/token-owned-rules</code>, find the <code>build.yml</code> run its last phase dispatched (<code>build_run:</code> in the phase report), and install the package for your platform from that run's artifacts, the same way you install a release.<span class="see">All builds: <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml" target="_blank" rel="noopener">github.com/privacyfence/privacyfence/actions/workflows/build.yml</a></span></span></label></li>
+        <li><input type="checkbox" id="ma1-3"><label for="ma1-3"><span>Start PrivacyFence. Open <b>Settings → Scoped tokens</b>.<span class="see">You should see the same token with the same rules. No rule should read "a rule that no longer exists" (that text is gone). Rules that pointed at an Auto-accept rule you had deleted earlier are now simply left out.</span></span></label></li>
+        <li><input type="checkbox" id="ma1-4"><label for="ma1-4"><span>Run the job once as it normally runs: <code>privacyfence-sync run &lt;recipe&gt;</code> with its usual token, or trigger the routine.<span class="see">It should finish as it did before, with no new denials.</span></span></label></li>
+        <li><input type="checkbox" id="ma1-5"><label for="ma1-5"><span>In <b>Settings → Audit</b>, open that run's entries.<span class="see">Calls show the agent <code>scoped-token:&lt;id&gt;</code> and decision <code>auto_accepted</code>, as before.</span></span></label></li>
+      </ol>
+      <div class="report">Paste into the PR:
+        <pre>ma1: pass | fail — &lt;token name&gt;, &lt;n&gt; rules before, &lt;n&gt; after; run result: &lt;ok / which step was denied&gt;</pre>
+      </div>
+    </article>
+
+    <article id="ma2">
+      <h3>2 · A token's own rule never reaches an ordinary session</h3>
+      <div class="meta"><span><code>ma2-token-only-rule-stays-in-the-token</code></span><span>About 10 minutes</span></div>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma2-1"><label for="ma2-1"><span>Pick one read call that has no Auto-accept rule today, for example reading one Drive folder you never auto-accept. Check in <b>Settings → Auto-accept</b> that no rule covers it.</span></label></li>
+        <li><input type="checkbox" id="ma2-2"><label for="ma2-2"><span>In <b>Settings → Scoped tokens → New token</b>, name it <code>ma2-check</code>, set <b>Days valid</b> to 1, and under <b>New rule for this token</b> pick the scope (for example <b>Drive — folder</b>), type the id, tick <b>read</b> and click <b>Add rule to token</b>.</span></label></li>
+        <li><input type="checkbox" id="ma2-3"><label for="ma2-3"><span>Click <b>Add the tools these rules cover</b>, then <b>Create token</b> and confirm with your passkey.<span class="see">Local mode copies the token to your clipboard; organization mode shows it once. Paste it straight into the client's secret setting, never into a chat or a file in a repository.</span></span></label></li>
+        <li><input type="checkbox" id="ma2-4"><label for="ma2-4"><span>Use the token from a client that sends a Bearer header, for example <code>PRIVACYFENCE_TOKEN=… privacyfence-sync preflight &lt;recipe&gt;</code> for a recipe that reads that folder, or your Claude Code routine's <code>/mcp</code> setting.<span class="see">The read is covered, with no card.</span></span></label></li>
+        <li><input type="checkbox" id="ma2-5"><label for="ma2-5"><span>In an ordinary Claude session (your own sign-in, not the token), make the same read.<span class="see">You get an approval card. The token's rule did not reach it.</span></span></label></li>
+        <li><input type="checkbox" id="ma2-6"><label for="ma2-6"><span>Back in <b>Settings → Scoped tokens</b>, <b>Revoke</b> <code>ma2-check</code>.</span></label></li>
+      </ol>
+      <div class="report">Paste into the PR:
+        <pre>ma2: pass | fail — token call: &lt;covered / denied&gt;; ordinary session: &lt;card / auto-accepted&gt;</pre>
+      </div>
+    </article>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY = 'pf-token-owned-rules-checks';
+  var saved = {};
+  try { saved = JSON.parse(window.localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type=checkbox]'));
+  var progress = document.getElementById('progress');
+  function paint() {
+    var done = 0;
+    boxes.forEach(function (b) { b.closest('li').classList.toggle('done', b.checked); if (b.checked) done += 1; });
+    progress.textContent = done + ' of ' + boxes.length + ' steps done';
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!saved[b.id];
+    b.addEventListener('change', function () {
+      saved[b.id] = b.checked;
+      try { window.localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* per-viewer convenience only */ }
+      paint();
+    });
+  });
+  paint();
+})();
+</script>
