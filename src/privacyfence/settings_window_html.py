@@ -2476,6 +2476,7 @@ _JS = r"""
       submitAddPolicyRule();
       return;
     }
+    if (el.hasAttribute('data-st-new-value')) { addNewScopedRule(); return; }
     if (el.hasAttribute('data-grist-field')) { submitGristModal(); return; }
     if (el.hasAttribute('data-peek-field')) { submitPeekModal('peek_start_login'); return; }
     if (el.hasAttribute('data-telegram-field')) {

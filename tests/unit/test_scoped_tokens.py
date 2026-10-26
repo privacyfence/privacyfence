@@ -534,6 +534,22 @@ class TestTokenRows:
 
         assert dataclasses.replace(token, rules=(row,)).compiled_rules() == scope_rows.compile_row(row)
 
+    def test_compiled_rules_are_computed_once_per_token(self, monkeypatch):
+        calls = []
+        real = scope_rows.compile_rows
+        monkeypatch.setattr(scope_rows, "compile_rows", lambda rows: calls.append(rows) or real(rows))
+        token, _ = _create(_store(), rules=_copy("rule-a"))
+
+        assert token.compiled_rules() is token.compiled_rules()
+        assert len(calls) == 1
+
+    def test_a_replaced_token_does_not_reuse_the_cached_rules(self):
+        token, _ = _create(_store(), rules=_copy("rule-a"))
+        assert token.compiled_rules()
+
+        assert dataclasses.replace(token, rules=()).compiled_rules() == []
+        assert token.compiled_rules()
+
 
 class TestOwnLegacyRules:
     """Converting legacy tokens at start-up: each gets its own copy of the rules it named (ADR 0236)."""
@@ -1039,6 +1055,14 @@ class TestRuleRequests:
         source, _ = _create(store, label="source", rules=_copy("rule-a"))
         with pytest.raises(ScopedTokenError, match="no longer exists"):
             _create(store, label="x", rules=[{"kind": "duplicate", "token_id": source.id, "rule_id": "rule-b"}])
+
+    def test_a_duplicate_naming_another_principals_token_raises(self):
+        store = _store(Principal(id="alice", email="a@example.com", display_name="Alice"))
+        other = Principal(id="alice", email="a@example.com", display_name="Alice")
+        source, _ = _create(store, principal=other, label="theirs", rules=_copy("rule-a"))
+        with pytest.raises(ScopedTokenError) as err:
+            _create(store, label="mine", rules=[{"kind": "duplicate", "token_id": source.id, "rule_id": "rule-a"}])
+        assert str(err.value) == "One of the chosen rules no longer exists; reload the page."
 
     def test_fifty_one_requests_raise(self):
         with pytest.raises(ScopedTokenError) as err:

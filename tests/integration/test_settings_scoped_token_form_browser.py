@@ -253,6 +253,15 @@ def test_add_works_when_the_verb_is_ticked_before_the_value_is_typed(page):
     assert _posted_rules(page) == [{"kind": "new", "group": "drive.folder", "value": "f1", "verbs": ["read"]}]
 
 
+def test_enter_in_the_value_field_adds_the_rule(page):
+    page.select_option("[data-st-new-group]", "drive.folder")
+    page.click('[data-st-new-verb="read"]')
+    page.fill("[data-st-new-value]", "f1")
+    page.press("[data-st-new-value]", "Enter")
+    assert page.inner_text("[data-st-new-list]").startswith("Drive - folder: f1")
+    assert page.input_value("[data-st-new-value]") == ""
+
+
 def test_a_move_needs_two_ids_before_it_can_be_added(page):
     page.select_option("[data-st-new-group]", "drive.folder")
     page.click('[data-st-new-verb="move"]')

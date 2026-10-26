@@ -46,7 +46,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **A scoped token holds its own rules.** On the New token form you add rules for that
-  token, or copy one of your Auto-accept rules. They never auto-accept anything for your
+  token, or copy one of your Auto-accept rules (Enter in the value field adds a new rule). They never auto-accept anything for your
   other AI clients, and changing or deleting an Auto-accept rule no longer changes a token.
   Existing tokens get their own copy of the rules they used the first time PrivacyFence
   starts after the upgrade. An older version cannot read tokens saved by this one: they stop

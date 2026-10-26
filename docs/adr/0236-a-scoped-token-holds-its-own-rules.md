@@ -45,7 +45,8 @@ the verbs a token may use (ADR 0166, ADR 0228).
 - **Scoped-token calls are left out of the Auto-accept usage counts** ("Matched Nx"), because a
   copied row keeps the id of the rule it was copied from and would otherwise count for it.
 - **The create request carries `rules`**: each entry is `new` (a scope, a value and verbs, built
-  as the Auto-accept page's Add rule builds them), `copy` (an exact copy of one of the person's
+  as the Auto-accept page's Add rule builds them; a blank value for a scope that takes one is
+  refused, so it cannot become an "any resource" rule), `copy` (an exact copy of one of the person's
   Auto-accept rows) or `duplicate` (an exact copy of a row of one of the person's tokens). The
   request is normalised and sorted, so the step-up fingerprint covers every rule request. At most
   50 rules per token. Exact copies are built by `scope_rows.rows_for_rules`.
