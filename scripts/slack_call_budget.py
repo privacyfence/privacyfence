@@ -238,6 +238,8 @@ def main() -> int:
          lambda c: c.search_messages(minutes=60, count=20, only_channels=c.my_conversation_ids())),
         ("resolve_is_member()",
          lambda c: c.resolve_is_member("C0001")),
+        ("conversation_state()",
+         lambda c: c.conversation_state("C0001")),
         ("slack_list_channels(participant=…)",
          lambda c: c.list_channels(participant="User 7", max_results=100)),
         ("slack_list_dms()",
@@ -248,6 +250,9 @@ def main() -> int:
          lambda c: c.get_channel_history("C0001", limit=50)),
         ("slack_get_thread_replies()",
          lambda c: c.get_thread_replies("C0001", "1700000000.0001")),
+        ("slack_get_read_state(20 messages, 3 threads)",
+         lambda c: (c.last_read_markers([f"C{i:04d}" for i in range(15)]),
+                    c.thread_last_read_markers([("C0001", f"170000000{i}.0001") for i in range(3)]))),
     ]
 
     print(f"\nWorkspace: {args.users} users, {args.channels} channels, "
