@@ -43,6 +43,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`privacyfence_check_policy` no longer cites a rule that cannot cover the tool.** Tools that share an operation (Slack search and channel history both read messages) made a read-only rule, such as "Slack – my conversations: allow read", turn a search's verdict into `unknown` and appear among the rules the call depends on, although the search is always denied under it. The check now considers only rules whose covered tools include the tool asked about.
+- **The personal-data refusal names every allowance a scoped token has.** It said a token could lift the personal-data check only for exports, downloads and page uploads; it now also names Gmail message and thread reads and Slack channel, thread and search reads, which "Let reads return personal data" covers.
+
 ## [6.9.1] — 2026-10-26
 
 ### Added

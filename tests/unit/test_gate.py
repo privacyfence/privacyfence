@@ -1146,6 +1146,40 @@ class TestPreflightAutoAccept:
         assert verdict == "unknown"
         assert matched_rule_id == ""
 
+    def test_rule_that_cannot_cover_the_tool_is_not_cited(self):
+        # A read-only "conversations I'm a member of" rule shares slack.read_messages with
+        # slack_search_messages but can never accept the search, so it must not make the search's
+        # verdict "unknown" (the gate denies it at run time).
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-mine-read", predicate="slack.my_conversations", value=None,
+                operations=frozenset({"slack.read_messages"}),
+            ),
+        ])
+        verdict, _rule, _id, reason = gate.preflight_auto_accept(
+            "slack.read_messages", {"member_only": True}, tool="slack_search_messages",
+        )
+        assert verdict == "requires_review"
+        assert "r-mine-read" not in reason
+        verdict, _rule, _id, reason = gate.preflight_auto_accept(
+            "slack.read_messages", {"channel_id": "C1"}, tool="slack_get_channel_history",
+        )
+        assert verdict == "unknown"
+        assert "r-mine-read" in reason
+
+    def test_search_rule_on_the_shared_key_is_still_cited_for_the_search(self):
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-mine-search", predicate="slack.my_conversations_all_results", value=None,
+                operations=frozenset({"slack.read_messages"}),
+            ),
+        ])
+        verdict, _rule, _id, reason = gate.preflight_auto_accept(
+            "slack.read_messages", {"member_only": True}, tool="slack_search_messages",
+        )
+        assert verdict == "unknown"
+        assert "r-mine-search" in reason
+
 
 class TestProposePolicyChange:
     """gate.propose_policy_change() -- the MCP bridge writer for the auto_accept: section."""
@@ -2277,9 +2311,11 @@ class TestPersonalDataReads:
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
 
         with scoped_tokens.token_scope(self._token(rule, "gmail_get_thread", reads=False)):
-            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+            with pytest.raises(gate.GateDeniedError, match="scoped token") as denied:
                 await self._thread()
 
+        # The denial names the reads allowance, not only the exports one.
+        assert "Gmail message and thread reads" in str(denied.value)
         assert popups == []
         assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
 
