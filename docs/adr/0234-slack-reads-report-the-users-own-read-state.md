@@ -29,7 +29,7 @@ call, and it costs a request per conversation to add one before the approval car
   is `read`. Slack's "never read" marker (`0000000000.000000`) makes every message unread.
 - **`slack_get_channel_history` and `slack_get_thread_replies` always return `read_state`.** The
   marker comes from the `conversations.info` response the read already makes
-  (`SlackClient.conversation_state`, which `resolve_is_member` now wraps), and for a thread reply
+  (`SlackClient.conversation_state`, which `resolve_is_member` wraps), and for a thread reply
   from the parent's `last_read`. No extra Slack request. A reply page without its parent, or a
   thread the user does not follow, reads `unknown`.
 - **`slack_search_messages` returns it only with `read_state=true`.** That costs one
