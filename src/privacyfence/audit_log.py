@@ -984,7 +984,8 @@ class AuditLogger:
         "never matched" line, keyed by rule id because a rule name can repeat (ADR 0074): ``{rule_id:
         {"count": int, "last_matched": <ISO-8601 timestamp string>}}``, built from every ``"auto_accepted"`` decision this
         install has ever recorded whose ``rule_id`` resolved to a real row (see AuditEntry.
-        rule_id's own docstring for when that's empty).
+        rule_id's own docstring for when that's empty). Calls made with a scoped token are left
+        out: they match the token's own rules, never the person's (ADR 0236).
 
         Scans every week file, not just the two ``recent_entries()`` keeps warm -- staleness is a
         lifetime question ("has this rule matched even once since it was created?"), not a
@@ -1011,6 +1012,8 @@ class AuditLogger:
                         continue
                     rule_id = data.get("rule_id") or ""
                     if not rule_id or data.get("decision") != "auto_accepted":
+                        continue
+                    if str(data.get("agent_id") or "").startswith("scoped-token:"):
                         continue
                     timestamp = data.get("timestamp") or ""
                     entry = usage.setdefault(rule_id, {"count": 0, "last_matched": ""})

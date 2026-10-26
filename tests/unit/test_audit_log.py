@@ -472,6 +472,17 @@ class TestRuleUsage:
         logger.record(make_entry(decision="approved", rule_id="r-1"))
         assert logger.rule_usage() == {}
 
+    def test_rule_usage_leaves_out_scoped_token_calls(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", agent_id="scoped-token:st-1",
+                                  timestamp="2026-07-06T12:00:00+00:00"))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", agent_id="claude-code",
+                                  timestamp="2026-07-07T12:00:00+00:00"))
+
+        usage = logger.rule_usage()["r-1"]
+        assert usage["count"] == 1
+        assert usage["last_matched"] == "2026-07-07T12:00:00+00:00"
+
     def test_scans_every_week_file_not_just_the_recent_ones(self, tmp_path):
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="auto_accepted", rule_id="r-1", week="2020-W01",
