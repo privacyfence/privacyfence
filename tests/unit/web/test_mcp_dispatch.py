@@ -533,7 +533,7 @@ class TestCheckPolicy:
     def test_connector_computed_slack_args_are_not_passed_to_preflight(self, monkeypatch):
         seen = {}
 
-        def fake_preflight(operation_key, args, my_email):
+        def fake_preflight(operation_key, args, my_email, tool=""):
             seen["args"] = args
             return "unknown", "", "", "x"
 
@@ -548,7 +548,7 @@ class TestCheckPolicy:
     def test_member_conversation_args_are_not_passed_to_preflight(self, monkeypatch):
         seen = {}
 
-        def fake_preflight(operation_key, args, my_email):
+        def fake_preflight(operation_key, args, my_email, tool=""):
             seen["args"] = args
             return "unknown", "", "", "x"
 
@@ -563,7 +563,7 @@ class TestCheckPolicy:
     def test_matching_queries_is_not_passed_to_preflight(self, monkeypatch):
         seen = {}
 
-        def fake_preflight(operation_key, args, my_email):
+        def fake_preflight(operation_key, args, my_email, tool=""):
             seen["args"] = args
             return "unknown", "", "", "x"
 

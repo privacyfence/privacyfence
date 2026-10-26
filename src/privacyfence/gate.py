@@ -792,17 +792,27 @@ def _personal_data_rule(
         return None
 
 
-def preflight_auto_accept(operation_key: str, args: dict, my_email: str = "") -> tuple[str, str, str, str]:
+def preflight_auto_accept(
+    operation_key: str, args: dict, my_email: str = "", tool: str = "",
+) -> tuple[str, str, str, str]:
     """Preflight counterpart of ``_evaluate_auto_accept`` above, backing
     ``privacyfence_check_policy``'s own prediction. Returns ``(verdict, matched_rule,
     matched_rule_id, reason)`` -- ``matched_rule``/``matched_rule_id`` are the same value here for
     the same reason ``_evaluate_auto_accept`` above returns them equal. Under a scoped token it
     predicts from the token's rules alone, without the temp-accept window, as that function does.
+
+    With ``tool`` set, a rule whose ``covered_tools`` leave ``tool`` out is not considered: tools
+    can share an operation key (``slack_search_messages`` and ``slack_get_channel_history`` are both
+    ``slack.read_messages``), and a read-only rule on that key can never accept the search, so it
+    must not make the verdict ``unknown`` or be cited as a rule the call depends on.
     """
     scope = current_token_scope()
+    rules = _rules_in_scope(scope)
+    if tool:
+        rules = [rule for rule in rules if tool in policy_describe.covered_tools(rule)]
     try:
         verdict, rule_id, reason = policy_engine.preflight(
-            _rules_in_scope(scope), operation_key, args, my_email=my_email,
+            rules, operation_key, args, my_email=my_email,
             is_temp_accepted=is_temp_accepted if scope is None else None,
         )
     except Exception:
@@ -1692,11 +1702,12 @@ def _pii_denial_text(who: str, pii_categories: list[str]) -> str:
     """The refusal text when the PII scan, not a missing rule, stopped a call that cannot get a
     human's confirmation. Names the categories found (never the matched text), so a rule that does
     cover the call is not blamed, and says which tools a scoped token's personal-data allowance
-    can lift this for (ADR 0157, 0173)."""
+    can lift this for (ADR 0157, 0173, and ``allow_personal_data_reads`` for reads)."""
     return (
         f"Request denied: {who} and the result holds personal data ({', '.join(sorted(set(pii_categories)))}), "
         "which needs a person's confirmation even when a rule covers the call. A scoped token's "
-        "personal-data allowance lifts this only for exports, downloads and page uploads."
+        "personal-data allowances lift this only for Gmail message and thread reads, Slack channel, "
+        "thread and search reads, exports, downloads and page uploads."
     )
 
 
