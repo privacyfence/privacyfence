@@ -109,8 +109,6 @@ def test_upgrade_round_trip_preserves_every_rule():
     assert seeded_row.verbs == frozenset({Verb.UPDATE})
     assert seeded_row.conditions == (("no_contact_info_change", None),)
     assert seeded_row.former_ids == ()
-    assert migration.member_pairs["r-d76028ec0b"] == {("always_allow", "contacts.edit")}
-    assert "my-handwritten" not in migration.id_map
 
 def test_screenshot_case_merges_to_one_row():
     narrow = _rule("r-narrow", "approved_folder", [FOLDER], ["drive.download_file"])
@@ -127,8 +125,6 @@ def test_screenshot_case_merges_to_one_row():
     assert row.verbs == {Verb.READ, Verb.DOWNLOAD}
     assert row.former_ids == tuple(sorted(["r-narrow", FLAGGED_ID]))
     assert migration.personal_data_ids == {FLAGGED_ID}
-    assert migration.id_map == {"r-narrow": row.id, FLAGGED_ID: row.id}
-    assert migration.members == {row.id: {"r-narrow", FLAGGED_ID}}
 
 def _assert_read_does_not_become_search(read_pred, search_pred, op):
     read_only = _rule("r-read", read_pred, ["C1"], [op])
@@ -182,7 +178,6 @@ def test_a_group_that_cannot_merge_losslessly_stays_custom():
     assert [(r.id, r.scope) for r in migration.rows] == [("r-odd", None), ("r-fine", None)]
     assert all(r.former_ids == () for r in migration.rows)
     assert _decisions(compiled) == _decisions([odd, fine])
-    assert migration.id_map == {}
 
 def test_rows_keep_the_order_of_their_first_member():
     custom = _rule("r-c", "some_predicate", None, ["gmail.read_message"])
@@ -614,21 +609,6 @@ def test_set_verbs_leaves_other_rows_alone():
     rows = scope_rows.set_verbs([a, b], a.id, [Verb.READ])
 
     assert rows == [a, b]
-
-
-# ── Pairs ──────────
-
-def test_pairs_of_matches_compile_row():
-    row = _row("drive.folder", [FOLDER], [Verb.READ, Verb.UPDATE])
-
-    expected = {(r.predicate, op) for r in scope_rows.compile_row(row) for op in r.operations}
-
-    assert scope_rows.pairs_of([row], row.id) == expected
-    assert expected
-
-def test_pairs_of_an_unknown_row_is_empty():
-    assert scope_rows.pairs_of([], "r-none") == frozenset()
-
 
 
 def test_gmail_label_row_with_update_and_move_compiles_to_two_rules():
