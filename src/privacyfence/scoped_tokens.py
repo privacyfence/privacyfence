@@ -81,11 +81,19 @@ class ScopedToken:
     # is converted (``own_legacy_rules``); such a token has no rules meanwhile.
     legacy_raw: dict[str, Any] | None = field(default=None, compare=False, hash=False, repr=False)
 
-    def compiled_rules(self) -> list["PolicyRule"]:
-        """The engine rules of the token's own rows (``scope_rows.compile_rows``)."""
-        from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+    # Compiled once per instance; ``dataclasses.replace`` does not copy an ``init=False`` field, so a
+    # token with other rules starts with no cache.
+    _compiled: list["PolicyRule"] | None = field(default=None, init=False, compare=False, hash=False, repr=False)
 
-        return scope_rows.compile_rows(self.rules)
+    def compiled_rules(self) -> list["PolicyRule"]:
+        """The engine rules of the token's own rows (``scope_rows.compile_rows``), compiled once."""
+        compiled = self._compiled
+        if compiled is None:
+            from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+
+            compiled = scope_rows.compile_rows(self.rules)
+            object.__setattr__(self, "_compiled", compiled)
+        return compiled
 
     def days_left(self, now: float) -> int:
         return max(0, math.ceil((self.expires_at - now) / _SECONDS_PER_DAY))

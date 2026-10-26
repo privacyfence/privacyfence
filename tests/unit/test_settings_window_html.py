@@ -294,6 +294,10 @@ class TestAutoAcceptTemplate:
         assert "data-aa-verb-toggle" in html
         assert "data-aa-add" in html
 
+    def test_enter_in_the_new_token_value_field_adds_the_rule(self):
+        html = build_html(_make_state())
+        assert "if (el.hasAttribute('data-st-new-value')) { addNewScopedRule(); return; }" in html
+
     def test_move_needs_two_ids_hint_and_block(self):
         html = build_html(_make_state())
         assert "function aaPairHint(group)" in html
