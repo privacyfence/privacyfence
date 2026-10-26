@@ -50,6 +50,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Rule chips on the scoped tokens page keep the space before the resource name.** A chip such as "Peek — page my-page" showed the name run into the word before it.
+- **Tool chips on the scoped tokens page keep the space before their status.** A chip such as "grist_list_tables · no rule needed" ran the tool name into the status text.
 
 ## [6.8.2] — 2026-10-25
 
