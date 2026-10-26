@@ -1082,6 +1082,22 @@ class TestPreflightAutoAccept:
         )
         assert verdict != "auto_accept"
 
+    def test_stored_miro_board_rule_auto_accepts_only_that_board(self):
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-miro", predicate="miro.board", value=["uXjVOD6LSME="],
+                operations=frozenset({"miro.list_items"}),
+            ),
+        ])
+        verdict, matched_rule, _id, _reason = gate.preflight_auto_accept(
+            "miro.list_items", {"board_id": "uXjVOD6LSME="},
+        )
+        assert (verdict, matched_rule) == ("auto_accept", "r-miro")
+        verdict, _rule, _id, _reason = gate.preflight_auto_accept(
+            "miro.list_items", {"board_id": "o9J_kzZb3Xg="},
+        )
+        assert verdict != "auto_accept"
+
     def test_stored_peek_page_rule_covers_a_new_version_only(self):
         auto_accept.set_policy_v2_store_rules([
             PolicyRule(

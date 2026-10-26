@@ -1,0 +1,77 @@
+{
+  "createdAt": "2026-10-25T18:02:04Z",
+  "createdBy": {
+    "id": "qa-placeholder-account-id",
+    "name": "QA Placeholder",
+    "type": "user"
+  },
+  "currentUserMembership": {
+    "id": "qa-placeholder-id-3",
+    "name": "QA Placeholder",
+    "role": "owner",
+    "type": "board_member"
+  },
+  "description": "",
+  "id": "qa-placeholder-id-1",
+  "lastOpenedAt": "2026-10-25T18:26:14Z",
+  "lastOpenedBy": {
+    "id": "qa-placeholder-account-id",
+    "name": "QA Placeholder",
+    "type": "user"
+  },
+  "links": {
+    "related": "https://example.com/qa-placeholder",
+    "self": "https://example.com/qa-placeholder"
+  },
+  "modifiedAt": "2026-10-25T18:04:37Z",
+  "modifiedBy": {
+    "id": "qa-placeholder-account-id",
+    "name": "QA Placeholder",
+    "type": "user"
+  },
+  "name": "PrivacyFence QA [QATEST]",
+  "organization": {
+    "id": "qa-placeholder-id-2",
+    "type": "organization"
+  },
+  "owner": {
+    "id": "qa-placeholder-account-id",
+    "name": "QA Placeholder",
+    "type": "user"
+  },
+  "permissionsPolicy": {
+    "collaborationToolsStartAccess": "all_editors",
+    "copyAccess": "team_editors",
+    "copyAccessLevel": "team_editors",
+    "sharingAccess": "team_members_with_editing_rights"
+  },
+  "policy": {
+    "permissionsPolicy": {
+      "collaborationToolsStartAccess": "all_editors",
+      "copyAccess": "team_editors",
+      "copyAccessLevel": "team_editors",
+      "sharingAccess": "team_members_with_editing_rights"
+    },
+    "sharingPolicy": {
+      "access": "private",
+      "accessPasswordRequired": false,
+      "inviteToAccountAndBoardLinkAccess": "no_access",
+      "organizationAccess": "private",
+      "teamAccess": "private"
+    }
+  },
+  "sharingPolicy": {
+    "access": "private",
+    "accessPasswordRequired": false,
+    "inviteToAccountAndBoardLinkAccess": "no_access",
+    "organizationAccess": "private",
+    "teamAccess": "private"
+  },
+  "team": {
+    "id": "qa-placeholder-id-4",
+    "name": "qa-placeholder-team",
+    "type": "team"
+  },
+  "type": "board",
+  "viewLink": "https://example.com/qa-placeholder"
+}

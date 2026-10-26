@@ -71,7 +71,7 @@ from .policy.resource_registry import (
 from .resource_names import ResourceNameResolver, get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
 from .step_up_config import LiveStepUpConfig, StepUpConfig, set_personal_scope, step_up_scope_fields
-from . import grist_auth, telegram_auth
+from . import grist_auth, miro_auth, telegram_auth
 from . import policy_upgrade
 from .peek_client import (
     PeekClientError,
@@ -103,7 +103,7 @@ LICENSE_NAME = "Apache-2.0"
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
-    "slack", "jira", "confluence", "assets", "salesforce", "telegram", "grist", "peek",
+    "slack", "jira", "confluence", "assets", "salesforce", "telegram", "grist", "peek", "miro",
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
@@ -127,7 +127,7 @@ def connector_label(cname: str) -> str:
 # Confluence share one Atlassian OAuth grant. A connector whose section is absent is neither shown
 # nor usable.
 ORG_CONFIG_SERVICE: dict[str, str] = org_mode.CONNECTOR_ORG_SECTION
-ORG_BUNDLE_SERVICES: list[str] = ["google", "slack", "salesforce", "atlassian", "telegram", "grist", "peek"]
+ORG_BUNDLE_SERVICES: list[str] = ["google", "slack", "salesforce", "atlassian", "telegram", "grist", "peek", "miro"]
 
 # Categories individually toggleable under the PII Detection Gate, on top of
 # its own master enabled switch. Keys match pii_detector._OPTIONAL_CATEGORIES
@@ -1302,6 +1302,8 @@ class SettingsController:
             self._authenticate_atlassian(org_config)
         elif connector == "grist":
             self._authenticate_grist(org_config)
+        elif connector == "miro":
+            self._authenticate_miro(org_config)
         return self.snapshot()
 
     def _org_allows(self, connector: str, org_config: dict[str, Any] | None = None) -> bool:
@@ -1391,6 +1393,33 @@ class SettingsController:
                 self.refresh_connectors()
             else:
                 self.error = f"Salesforce authentication failed: {result}"
+                self._push_snapshot()
+
+        _run_async(work, done)
+
+    def _authenticate_miro(self, org_config: dict[str, Any]) -> None:
+        if not org_config.get("miro"):
+            self.error = "Miro organization config isn't installed yet."
+            return
+        try:
+            miro_config = miro_auth.bundle_settings(org_config["miro"])
+        except miro_auth.MiroClientError as exc:
+            self.error = f"Miro organization config is not usable: {exc}"
+            return
+        from .daemon_main import TOKEN_FILES
+        token_file = str(data_dir() / TOKEN_FILES["miro"])
+        self._busy_connectors.add("miro")
+
+        def work() -> dict[str, Any]:
+            return miro_auth.authorize_interactive(miro_config, token_file)
+
+        def done(ok: bool, result: Any) -> None:
+            self._busy_connectors.discard("miro")
+            if ok:
+                self.error = ""
+                self.refresh_connectors()
+            else:
+                self.error = f"Miro authentication failed: {result}"
                 self._push_snapshot()
 
         _run_async(work, done)

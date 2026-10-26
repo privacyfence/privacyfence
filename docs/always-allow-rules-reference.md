@@ -102,6 +102,14 @@ the request on the card, once.
 | `jira_get_issue` | this project, if I'm reporter, if I'm assignee |
 | `jira_search_issues_with_fields` | this project |
 
+### Miro
+
+| Tool | Always allow buttons |
+|---|---|
+| `miro_get_items` |  |
+| `miro_list_connectors` |  |
+| `miro_list_items` |  |
+
 ### Peek
 
 | Tool | Always allow buttons |
@@ -233,6 +241,15 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `jira_create_issue` | this project |
 | `jira_transition_issue` | this project |
 | `jira_update_issue` | this project |
+
+### Miro
+
+| Tool | Always allow buttons |
+|---|---|
+| `miro_create_connectors` |  |
+| `miro_create_items` |  |
+| `miro_update_board` |  |
+| `miro_update_items` |  |
 
 ### Peek
 

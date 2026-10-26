@@ -197,8 +197,8 @@ def _canonical(page: str) -> str:
     return re.search(r'<link rel="canonical" href="([^"]+)"', page)[1]
 
 
-def test_there_are_fourteen_second_level_pages():
-    assert len(SECOND_LEVEL) == 14
+def test_there_are_fifteen_second_level_pages():
+    assert len(SECOND_LEVEL) == 15
 
 
 @pytest.mark.parametrize("path", SECOND_LEVEL)

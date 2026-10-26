@@ -63,7 +63,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell
+from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
 from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
@@ -92,7 +92,7 @@ GOOGLE_SCOPES: dict[str, list[str]] = {
 }
 GOOGLE_SERVICES = frozenset(GOOGLE_SCOPES)
 ATLASSIAN_SERVICES = frozenset({"jira", "confluence"})
-OAUTH_SERVICES = GOOGLE_SERVICES | ATLASSIAN_SERVICES | frozenset({"slack", "salesforce", "grist"})
+OAUTH_SERVICES = GOOGLE_SERVICES | ATLASSIAN_SERVICES | frozenset({"slack", "salesforce", "grist", "miro"})
 
 # service -> the shared-OAuth-grant identity jira/confluence collapse into
 # (one Atlassian app, one token). Doubles as both the daemon_main.TOKEN_FILES
@@ -101,18 +101,18 @@ OAUTH_SERVICES = GOOGLE_SERVICES | ATLASSIAN_SERVICES | frozenset({"slack", "sal
 # since Atlassian's OAuth 2.0 (3LO) apps accept only one registered callback
 # URL, unlike Slack/Salesforce/Google (docs/atlassian-setup.md).
 _GRANT_KEY: dict[str, str] = {s: s for s in GOOGLE_SERVICES}
-_GRANT_KEY.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "jira": "atlassian", "confluence": "atlassian"})
+_GRANT_KEY.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "miro": "miro", "jira": "atlassian", "confluence": "atlassian"})
 
 SERVICE_LABELS: dict[str, str] = {
     "gmail": "Gmail", "drive": "Drive", "calendar": "Calendar", "contacts": "Contacts", "tasks": "Tasks",
     "apps_script": "Apps Script",
-    "slack": "Slack", "salesforce": "Salesforce", "grist": "Grist", "jira": "Jira", "confluence": "Confluence", "telegram": "Telegram",
+    "slack": "Slack", "salesforce": "Salesforce", "grist": "Grist", "miro": "Miro", "jira": "Jira", "confluence": "Confluence", "telegram": "Telegram",
     "peek": "Peek",
 }
 
 # service -> org_config.json section name.
 _ORG_CONFIG_SECTION: dict[str, str] = {s: "google" for s in GOOGLE_SERVICES}
-_ORG_CONFIG_SECTION.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "jira": "atlassian", "confluence": "atlassian"})
+_ORG_CONFIG_SECTION.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "miro": "miro", "jira": "atlassian", "confluence": "atlassian"})
 
 
 def _token_files() -> dict[str, str]:
@@ -370,6 +370,13 @@ def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri:
         url = grist_auth.build_authorize_url(endpoints, bundle.oauth.client_id, redirect_uri, state, challenge)
         return url, verifier
 
+    if service == "miro":
+        try:
+            cfg = miro_auth.bundle_settings(org_config.get("miro") or {})
+        except miro_auth.MiroClientError as exc:
+            raise _NotConfigured(service) from exc
+        return miro_auth.build_authorize_url(cfg.client_id, redirect_uri, state), ""
+
     if service in ATLASSIAN_SERVICES:
         atlassian_org = org_config.get("atlassian") or {}
         if not atlassian_org.get("client_id"):
@@ -422,6 +429,15 @@ def _exchange_and_save(
         endpoints = grist_auth.discover(bundle.oauth.auth_server_url, bundle.oauth.server_url)
         record = grist_auth.exchange_code(bundle.oauth, endpoints, code, redirect_uri, code_verifier)
         grist_auth.save_token_file(token_file, record)
+        return
+
+    if service == "miro":
+        try:
+            cfg = miro_auth.bundle_settings(org_config.get("miro") or {})
+        except miro_auth.MiroClientError as exc:
+            raise _NotConfigured(service) from exc
+        record = miro_auth.exchange_code(cfg, code, redirect_uri)
+        miro_auth.save_token_file(token_file, record)
         return
 
     if service in ATLASSIAN_SERVICES:
@@ -1024,7 +1040,7 @@ def _render_connect_page(
         for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script") if offered(s)
     )
     other_rows = "".join(
-        _service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence") if offered(s)
+        _service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence", "miro") if offered(s)
     )
     if offered("assets") and atlassian_oauth.assets_enabled({}, org_config):
         other_rows += _assets_row_html(principal, org_config)

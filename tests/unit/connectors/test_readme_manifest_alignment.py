@@ -33,13 +33,14 @@ from privacyfence.connectors.jira import JiraConnector
 from privacyfence.connectors.salesforce import SalesforceConnector
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.tasks import TasksConnector
+from privacyfence.connectors.miro import MiroConnector
 from privacyfence.connectors.peek import PeekConnector
 from privacyfence.connectors.telegram import TelegramConnector
 
 CONNECTOR_CLASSES = [
     GmailConnector, DriveConnector, SlackConnector, CalendarConnector,
     ContactsConnector, SalesforceConnector, JiraConnector, ConfluenceConnector,
-    TasksConnector, TelegramConnector, AppsScriptConnector, GristConnector, PeekConnector, AssetsConnector,
+    TasksConnector, TelegramConnector, AppsScriptConnector, GristConnector, PeekConnector, AssetsConnector, MiroConnector,
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

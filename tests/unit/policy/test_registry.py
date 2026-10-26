@@ -25,9 +25,9 @@ from privacyfence.policy.registry import (
     operation_verbs,
 )
 
-# The thirteen operation keys no grant capability in the resource-type manifest (GRANT_RESOURCE_TYPES)
+# The twenty operation keys no grant capability in the resource-type manifest (GRANT_RESOURCE_TYPES)
 # reaches. They are governable all the same: policy/catalogue.py's EXTRA_SCOPES (apps_script.project,
-# gmail.filters, slack.group_chats, grist.document) configures them from Settings and
+# gmail.filters, slack.group_chats, grist.document, miro.board) configures them from Settings and
 # privacyfence_propose_policy_change, and the approval popup never proposes a rule for them (ADR 0077).
 _GRANT_MANIFEST_UNREACHABLE_OPERATIONS = frozenset({
     "apps_script.read_content",
@@ -43,6 +43,13 @@ _GRANT_MANIFEST_UNREACHABLE_OPERATIONS = frozenset({
     "grist.add_columns",
     "grist.import_csv",
     "grist.update_csv",
+    "miro.list_items",
+    "miro.get_items",
+    "miro.list_connectors",
+    "miro.create_items",
+    "miro.create_connectors",
+    "miro.update_items",
+    "miro.update_board",
 })
 
 # Operation keys shared by tools that perform two different verbs. Migrating a v1 rule keyed on
@@ -279,6 +286,13 @@ _VERB_MATRIX: dict[str, Verb] = {
     "peek_add_comment": Verb.UPDATE,
     "peek_rename_page": Verb.UPDATE,
     "peek_delete_page": Verb.DELETE,
+    "miro_list_items": Verb.READ,
+    "miro_get_items": Verb.READ,
+    "miro_list_connectors": Verb.READ,
+    "miro_create_items": Verb.ADD,
+    "miro_create_connectors": Verb.ADD,
+    "miro_update_items": Verb.UPDATE,
+    "miro_update_board": Verb.UPDATE,
     "telegram_search_messages": Verb.SEARCH,
     "telegram_send_message": Verb.SEND,
     "tasks_create_task": Verb.ADD,
@@ -293,5 +307,5 @@ _VERB_MATRIX: dict[str, Verb] = {
 
 
 def test_tool_to_verb_matches_the_verb_matrix():
-    assert len(_VERB_MATRIX) == 102
+    assert len(_VERB_MATRIX) == 109
     assert TOOL_TO_VERB == _VERB_MATRIX

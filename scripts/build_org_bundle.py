@@ -69,6 +69,7 @@ _CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
     "salesforce": ("salesforce",),
     "atlassian": ("atlassian",),
     "grist": ("grist",),
+    "miro": ("miro",),
 }
 
 # Mirrors assets_client.WORKSPACE_ID_RE; this script stays standard-library only.
@@ -293,6 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Where Grist's sign-in discovery document is served, when the server itself does not serve it "
              "(only with the client id and secret). Default: the server URL.",
     )
+
+    miro = parser.add_argument_group("Miro")
+    miro.add_argument("--miro-client-id", help="The Miro app people sign in with; give the client id and secret together.")
+    miro.add_argument("--miro-client-secret")
 
     peek = parser.add_argument_group("Peek")
     peek.add_argument(
@@ -701,6 +706,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.enable_grist:
         bundle["grist"] = {"enabled": True}
 
+    if args.miro_client_id or args.miro_client_secret:
+        if not (args.miro_client_id and args.miro_client_secret):
+            raise SystemExit("--miro-client-id and --miro-client-secret must be given together.")
+        bundle["miro"] = {"client_id": args.miro_client_id, "client_secret": args.miro_client_secret}
+
     if args.peek_base_url:
         bundle["peek"] = {"base_url": _peek_url(args.peek_base_url)}
     elif args.enable_peek:
@@ -895,7 +905,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         bundle["audit_forwarding"] = forwarding_section
 
-    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "peek", "telegram") if k in bundle]
+    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "miro", "peek", "telegram") if k in bundle]
     if (
         not services and "unattended_sessions" not in bundle and "scoped_tokens" not in bundle
         and "mode" not in bundle

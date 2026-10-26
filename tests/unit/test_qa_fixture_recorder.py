@@ -45,6 +45,7 @@ import qa_fixture_recorder as recorder  # noqa: E402
 
 from privacyfence.confluence_client import ConfluenceClient  # noqa: E402
 from privacyfence.grist_client import GristAccessDenied, GristClient, GristClientError  # noqa: E402
+from privacyfence.miro_client import MiroClient, MiroClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient  # noqa: E402
 from privacyfence.salesforce_client import SalesforceClient  # noqa: E402
 from privacyfence.gmail_client import GmailClient  # noqa: E402
@@ -3662,6 +3663,258 @@ class TestLifecycleGrist:
 
     def test_registered_for_lifecycle(self):
         assert recorder.LIFECYCLE_CHECKS["grist"] is recorder.lifecycle_grist
+
+
+# ---------------------------------------------------------------------------- #
+# Miro
+# ---------------------------------------------------------------------------- #
+
+_MIRO_BOARD = "uXjVOD6LSME="
+_MIRO_LIFE = "uLifeBoard1="
+_MIRO_BOARD_Q = "uXjVOD6LSME%3D"
+_MIRO_LIFE_Q = "uLifeBoard1%3D"
+_MIRO_FRAME = "3458764549483493001"
+_MIRO_PERSON = {"id": "3458764500000000001", "type": "user", "name": "Real Person"}
+
+
+class _FakeMiroApi:
+    """In-memory Miro REST: answers MiroClient._request by method and path."""
+
+    def __init__(self, *, sticky_content="<p>[QATEST] one</p>", board_name="PrivacyFence QA [QATEST]",
+                 frames=True, connectors=True, tags=("QATEST",), fail_on=None):
+        self.sticky_content = sticky_content
+        self.board_name = board_name
+        self.frames = frames
+        self.connectors = connectors
+        self.tags = tags
+        self.fail_on = fail_on
+        self.paths: list[str] = []
+        self.items: dict[str, dict] = {}
+        self.next_id = 3458764549483493100
+
+    def _new(self, body, kind):
+        self.next_id += 1
+        item = {"id": str(self.next_id), "type": kind, **body}
+        self.items[item["id"]] = item
+        return item
+
+    def __call__(self, method, path, *, params=None, json_body=None):
+        self.paths.append(path)
+        if self.fail_on and self.fail_on(method, path, json_body):
+            raise MiroClientError("Miro refused the request (HTTP 500).")
+        if path in (f"/v2/boards/{_MIRO_BOARD_Q}", f"/v2/boards/{_MIRO_LIFE_Q}"):
+            return {
+                "id": _MIRO_BOARD, "name": self.board_name, "viewLink": "https://miro.com/app/board/x=",
+                "team": {"id": "t1", "name": "Real Team"}, "owner": dict(_MIRO_PERSON),
+                "createdBy": dict(_MIRO_PERSON), "modifiedBy": dict(_MIRO_PERSON),
+                "lastOpenedBy": dict(_MIRO_PERSON),
+                "currentUserMembership": {**_MIRO_PERSON, "type": "board_member", "role": "owner"},
+                "links": {"self": f"https://api.miro.com/v2/boards/{_MIRO_BOARD_Q}",
+                          "related": f"https://api.miro.com/v2/boards/{_MIRO_BOARD_Q}/members?limit=20&offset=0"},
+            }
+        if path.endswith("/tags"):
+            return {"data": [{"id": "9", "title": t, "fillColor": "red"} for t in self.tags], "total": len(self.tags)}
+        if path.endswith("/connectors") and method == "GET":
+            rows = [{"id": "5", "startItem": {"id": "1"}, "endItem": {"id": "2"}, "shape": "straight"}]
+            return {"data": rows if self.connectors else []}
+        if path.endswith("/items") and method == "GET":
+            if (params or {}).get("type") == "frame":
+                return {"data": [self.items.get(_MIRO_FRAME) or {
+                    "id": _MIRO_FRAME, "type": "frame", "data": {"title": "QaLifecycleFrame [QATEST]"},
+                }]}
+            data = [{
+                "id": "1", "type": "sticky_note", "data": {"content": self.sticky_content},
+                "createdBy": dict(_MIRO_PERSON), "modifiedBy": dict(_MIRO_PERSON),
+                "parent": {"id": _MIRO_FRAME},
+            }]
+            if self.frames:
+                data.append({"id": _MIRO_FRAME, "type": "frame", "data": {"title": "QaFrame [QATEST]"},
+                             "createdBy": dict(_MIRO_PERSON)})
+            return {"data": data}
+        if path.endswith("/items/bulk"):
+            return {"data": [self._new(b, b["type"]) for b in json_body]}
+        if path.endswith("/frames") and method == "POST":
+            return self._new(json_body, "frame")
+        if method == "PATCH" and "/items/" in path:
+            item = self.items[path.rsplit("/", 1)[1]]
+            item["parent"] = {"id": json_body["parent"]["id"]} if json_body["parent"]["id"] else None
+            return {}
+        if method == "PATCH":
+            item = self.items[path.rsplit("/", 1)[1]]
+            item["data"] = {**item["data"], **json_body["data"]}
+            return {}
+        if method == "GET":
+            kind, item_id = path.rsplit("/", 2)[-2:]
+            return self.items[item_id]
+        raise AssertionError(f"unexpected {method} {path}")
+
+
+def _miro_client(api):
+    client = MiroClient(SimpleNamespace(access_token=lambda **kw: "t"))
+    client._request = api
+    return client
+
+
+class TestCheckMiro:
+    MANIFEST = {"miro": {"board_id": _MIRO_BOARD}}
+
+    def _run(self, monkeypatch, api, *, record=True, manifest=None):
+        monkeypatch.setattr(recorder, "_build_miro_client", lambda: _miro_client(api))
+        return recorder.check_miro(record=record, manifest=manifest or self.MANIFEST)
+
+    def test_missing_board_id_fails_without_a_client(self, monkeypatch):
+        monkeypatch.setattr(recorder, "_build_miro_client", lambda: pytest.fail("no client expected"))
+
+        results = recorder.check_miro(record=True, manifest={})
+
+        assert [(r.ok, r.note) for r in results] == [(False, "miro.board_id missing from qa_environment.yaml")]
+
+    def test_records_four_fixtures(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi())
+
+        assert [(r.method, r.ok, r.fixture_relpath) for r in results] == [
+            ("get_board", True, "get_board.json"),
+            ("list_items", True, "list_items.json"),
+            ("list_connectors", True, "list_connectors.json"),
+            ("list_tags", True, "list_tags.json"),
+        ]
+        assert all(r.raw is not None for r in results)
+
+    def test_check_mode_records_nothing(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi(), record=False)
+
+        assert all(r.ok for r in results)
+        assert all(r.raw is None for r in results)
+
+    def test_untagged_sticky_note_refuses_to_record(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi(sticky_content="<p>a real customer</p>"))
+
+        list_items = results[1]
+        assert not list_items.ok and list_items.raw is None
+        assert "refusing to record" in list_items.note
+
+    def test_board_without_a_frame_fails(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi(frames=False))
+
+        assert not results[1].ok and results[1].raw is None and "no frame" in results[1].note
+
+    def test_untagged_board_name_refuses_to_record(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi(board_name="Q3 roadmap"))
+
+        assert not results[0].ok and results[0].raw is None
+
+    def test_no_connector_line_and_no_qatest_tag_fail(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi(connectors=False, tags=("other",)))
+
+        assert not results[2].ok and not results[3].ok
+
+    def test_client_error_is_reported(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi(fail_on=lambda m, p, b: p.endswith("/tags")))
+
+        assert not results[3].ok and "HTTP 500" in results[3].note
+
+    def test_fixtures_carry_no_person_team_or_real_ids(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeMiroApi())
+
+        text = json.dumps([r.raw for r in results])
+        assert "Real Person" not in text
+        assert "Real Team" not in text
+        assert _MIRO_PERSON["id"] not in text
+        assert _MIRO_FRAME not in text
+        assert "miro.com" not in text
+        assert _MIRO_BOARD_Q not in text
+        board = results[0].raw
+        assert board["lastOpenedBy"]["name"] == recorder._REDACTED_NAME
+        assert board["currentUserMembership"]["name"] == recorder._REDACTED_NAME
+        assert board["currentUserMembership"]["role"] == "owner"
+        assert board["links"]["related"] == recorder._REDACTED_STRUCTURAL_URL
+        for key in ("owner", "createdBy", "modifiedBy"):
+            assert board[key]["name"] == recorder._REDACTED_NAME
+            assert board[key]["id"] == recorder._REDACTED_ACCOUNT_ID
+        items = results[1].raw["data"]
+        assert items[0]["createdBy"] == {
+            "id": recorder._REDACTED_ACCOUNT_ID, "name": recorder._REDACTED_NAME, "type": "user",
+        }
+        assert items[0]["modifiedBy"]["name"] == recorder._REDACTED_NAME
+
+    def test_registered_for_check(self):
+        assert recorder.CONNECTOR_CHECKS["miro"] is recorder.check_miro
+        assert "list_tags.json" in recorder.EXPECTED_FIXTURES["miro"]
+
+
+class TestLifecycleMiro:
+    MANIFEST = {"miro": {"board_id": _MIRO_BOARD, "lifecycle_board_id": _MIRO_LIFE}}
+
+    def _run(self, monkeypatch, api, manifest=None):
+        monkeypatch.setattr(recorder, "_build_miro_client", lambda: _miro_client(api))
+        return recorder.lifecycle_miro(manifest or self.MANIFEST)
+
+    def test_all_steps_ok(self, monkeypatch):
+        api = _FakeMiroApi()
+
+        result = self._run(monkeypatch, api)
+
+        assert (result.connector, result.ok, result.cleanup_ok) == ("miro", True, None), result.note
+        sticky = next(i for i in api.items.values() if i["type"] == "sticky_note")
+        shape = next(i for i in api.items.values() if i["type"] == "shape")
+        frame = next(i for i in api.items.values() if i["type"] == "frame")
+        assert sticky["data"]["content"].startswith(recorder.LIFECYCLE_TAG)
+        assert sticky["data"]["content"].endswith(" updated")
+        assert sticky["parent"] is None
+        assert shape["parent"] == {"id": frame["id"]}
+        assert shape["style"] == {"fillColor": "#fff9b1"}
+        assert frame["data"]["title"].startswith(recorder.LIFECYCLE_TAG)
+
+    def test_never_touches_the_seed_board(self, monkeypatch):
+        api = _FakeMiroApi()
+
+        self._run(monkeypatch, api)
+
+        assert api.paths and all(f"/v2/boards/{_MIRO_LIFE_Q}" in p for p in api.paths)
+
+    def test_missing_lifecycle_board_fails_without_a_client(self, monkeypatch):
+        monkeypatch.setattr(recorder, "_build_miro_client", lambda: pytest.fail("no client expected"))
+
+        result = recorder.lifecycle_miro({"miro": {"board_id": _MIRO_BOARD}})
+
+        assert not result.ok and "lifecycle_board_id" in result.note
+
+    def test_set_parent_error_fails_and_names_the_step(self, monkeypatch):
+        api = _FakeMiroApi(fail_on=lambda m, p, b: m == "PATCH" and "/items/" in p)
+
+        result = self._run(monkeypatch, api)
+
+        assert not result.ok and result.note.startswith("set_parent into a frame:")
+
+    def test_ignored_move_out_fails(self, monkeypatch):
+        original = _FakeMiroApi()
+
+        def ignore_null_parent(method, path, **kw):
+            if method == "PATCH" and "/items/" in path and kw["json_body"]["parent"]["id"] == "":
+                return {}
+            return original(method, path, **kw)
+
+        monkeypatch.setattr(recorder, "_build_miro_client", lambda: _miro_client(ignore_null_parent))
+
+        result = recorder.lifecycle_miro(self.MANIFEST)
+
+        assert not result.ok and result.note.startswith("set_parent out of a frame:")
+
+    def test_missing_frame_fails(self, monkeypatch):
+        api = _FakeMiroApi()
+        api.fail_on = None
+        original = api.__call__
+        monkeypatch.setattr(
+            recorder, "_build_miro_client",
+            lambda: _miro_client(lambda m, p, **kw: {"data": []} if p.endswith("/items") else original(m, p, **kw)),
+        )
+
+        result = recorder.lifecycle_miro(self.MANIFEST)
+
+        assert not result.ok and "QaLifecycleFrame" in result.note
+
+    def test_registered_for_lifecycle(self):
+        assert recorder.LIFECYCLE_CHECKS["miro"] is recorder.lifecycle_miro
 
 
 class TestLifecycleSalesforce:

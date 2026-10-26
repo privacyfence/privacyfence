@@ -35,6 +35,7 @@ Use dedicated accounts that share nothing with a personal or production identity
 | Atlassian | A free Jira + Confluence Cloud site | One OAuth app covers both products. |
 | Salesforce | A Developer Edition org | Use `--salesforce-login-url https://login.salesforce.com` when building the bundle. |
 | Grist | A getgrist.com account holding nothing real | The runner connects with that account's personal API key, in `credentials/grist_token.json` written by hand as `{"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "…"}` with mode 600. There is no bundle section. |
+| Miro | A free Miro account holding nothing real, with a Developer team and the QA app | The runner's `credentials/miro_token.json` was obtained by hand once with the form-body token exchange, is refreshed by the runner, and is rotated with `scripts/qa_authenticate_connectors.py --only miro`. The QA app's client id and secret are the `miro` section of the QA bundle. |
 | Peek | A QA account on a QA Peek server | The fork's Docker image, `ghcr.io/andras-tkcs/peek:main`, runs on the self-hosted runner's host, bound to `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`. The recorder reaches it as `http://localhost:7700`, so no TLS is involved. The runner's token is in `credentials/peek_token.json`, written by hand as `{"base_url": "http://localhost:7700", "token": "…"}` with mode 600; take the token from `peek login --host http://localhost:7700` through an SSH tunnel. There is no bundle section. |
 | Telegram | Your own account | No dedicated account; `privacyfence-app --telegram-setup` signs in with a phone number and code. |
 
@@ -305,6 +306,28 @@ every run.
 | Approved project | `approved_project_keys` | `[PFQA]` | `jira.read_issue` |
 | Own issues | `i_am_reporter` / `i_am_assignee` | — | `jira.read_issue` |
 
+### Seed: Miro
+
+- [ ] In the Miro QA account, create the board `PrivacyFence QA [QATEST]`, with these on it:
+      a frame `QaFrame [QATEST]` holding two sticky notes, one more sticky note outside the frame,
+      a connector line between two of the sticky notes, and a tag titled `QATEST`. Every sticky
+      note's text carries `[QATEST]`.
+- [ ] Create the board `PrivacyFence QA lifecycle [QATEST]` with a frame titled exactly
+      `QaLifecycleFrame [QATEST]`. `--lifecycle` writes only there.
+- [ ] Keep each board under 50 items: the recorder reads one page of 50.
+- [ ] Set `miro.board_id` and `miro.lifecycle_board_id` to the board ids (the part after
+      `/app/board/` in the address, ending in `=`; a board link is refused). `miro.board_id` is
+      required.
+
+| Optional rule | Predicate | Value | Operations |
+|---|---|---|---|
+| Approved board | `miro.board` | the seed board id | `miro.list_items` |
+
+`--lifecycle` runs on `main`'s code only. On `miro.lifecycle_board_id` it creates a sticky note in
+`QaLifecycleFrame [QATEST]`, a shape and a frame, updates the sticky note, reads each back, and moves
+the shape into the new frame and the sticky note out of its frame. The client has no delete, so the
+`[QATEST-LIFECYCLE]` items accumulate and are cleaned by hand there.
+
 ### Seed: Jira Assets
 
 - [ ] Create an Assets schema with key exactly `PFQA`, holding the object types Account, Contract
@@ -364,6 +387,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 | `peek` | **`page_slug`** | `list_pages.json`, `get_comments.json` | uploads, publishes, renames, comments on and deletes one page |
 | `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id`, `lifecycle_object_type`, `lifecycle_name_field`, `lifecycle_note_field` | `list_reports.json`, `run_report_page.json`, `get_record.json` | creates and updates one Task (`lifecycle_object_type`), then two more in one batch; never deletes them |
 | `grist` | **`doc_id`**, `table_id`, `lifecycle_table_id` | `list_documents.json`, `list_columns.json`, `get_records.json` | adds and updates one row in `lifecycle_table_id`; never deletes it |
+| `miro` | **`board_id`**, `lifecycle_board_id` | `get_board.json`, `list_items.json`, `list_connectors.json`, `list_tags.json` | creates a sticky note, a shape and a frame on `lifecycle_board_id`, updates the sticky note and moves items into and out of frames; never deletes them |
 | `jira` | `project_key`, `seed_issue_summary`, `seed_issue_key` | `list_projects.json`, `get_issue.json` | creates, updates and deletes one issue in `project_key` |
 | `confluence` | `space_key`, `seed_page_title`, `seed_page_id` | `list_spaces.json`, `get_page.json` | creates and updates one page in `space_key`; never deletes it |
 
@@ -385,7 +409,7 @@ Confluence) and Salesforce, in that order. Each step opens a browser tab for con
 | Option | Effect |
 |---|---|
 | `--org-config PATH` | Installs `PATH` as `org/org_config.json` first, backing up an existing file as `org_config.json.bak.<UTC timestamp>`. |
-| `--only NAME ...` | Runs only these groups (`google`, `slack`, `atlassian`, `salesforce`) or connectors (`gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `atlassian`, `salesforce`). |
+| `--only NAME ...` | Runs only these groups (`google`, `slack`, `atlassian`, `salesforce`) or connectors (`gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `atlassian`, `salesforce`, `miro`). |
 | `--continue-on-error` | Runs every requested step instead of stopping at the first failure. |
 | `--config PATH` | Settings file passed through to the daemon. Default: `config/settings.yaml`. |
 
@@ -413,9 +437,9 @@ Always use the project venv; the recorder imports the same third-party clients a
 - `--record` makes the same calls, redacts identity fields (`redact()` and the connector-specific
   passes), de-identifies structural ids and URLs (`deidentify_structural_fields()`), and writes
   `tests/fixtures/live/<connector>/<method>.json` for every result that passed.
-- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira`, `peek`, `salesforce` and `tasks` only (the comment above
+- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira`, `miro`, `peek`, `salesforce` and `tasks` only (the comment above
   `LIFECYCLE_CHECKS` says why the others are excluded) and never writes a fixture. A cleanup that
-  ran but left the object behind fails the run. Confluence, Grist and Salesforce have no cleanup step.
+  ran but left the object behind fails the run. Confluence, Grist, Miro and Salesforce have no cleanup step. The Miro lifecycle runs on `main`'s code only.
 
 With no connector named, every connector implemented for the mode runs. `--report-file PATH` also
 saves the report; `-v`/`--verbose` turns on DEBUG logging on stderr. The exit status is non-zero
@@ -711,6 +735,19 @@ For each representative read, list, search, create, update, send or upload tool:
   prompts.
 - **Listing.** `grist_list_documents` lists the QA documents. Where the server refuses it under
   OAuth, the tool answers with that refusal message.
+
+### Miro checks
+
+- **Sign-in.** Signing in from Settings succeeds and the connector shows the team.
+- **Review cards.** `miro_list_items`, `miro_get_items` and `miro_list_connectors` on the seed board
+  prompt for review.
+- **Popup cards.** `miro_create_items`, `miro_create_connectors`, `miro_update_items` and
+  `miro_update_board` show a popup card with its table (new items, or old → new values).
+- **Batch.** `miro_create_items` with 20 items shows all 20 on the card and creates them.
+- **Approved board.** With the `miro.board` rule from Settings (see [Seed: Miro](#seed-miro)), a
+  read of that board passes without a card; another board prompts.
+- **Board link.** A board link is refused as a `board_id` and as a rule value.
+- **Other team.** A board in another team answers 403, and the tool says so.
 
 ### Peek checks
 

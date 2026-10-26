@@ -11,8 +11,8 @@ asserts the join is exact). In particular:
   are the operation groups the old per-operation rule tables and the grant model had no way to
   configure at all. They get a verb and a scope subject here like every other governed tool, which
   is what makes them configurable: `policy/catalogue.py` offers `apps_script.project` (read),
-  `gmail.filters` (restructure), `slack.group_chats` (send) and `grist.document` (read, add,
-  update, restructure), and the catalogue's write-time
+  `gmail.filters` (restructure), `slack.group_chats` (send), `grist.document` (read, add,
+  update, restructure) and `miro.board` (read, add, update), and the catalogue's write-time
   validation keeps a rule naming a verb its scope cannot govern from being stored under any of them.
 - Three operation keys are shared by tools that perform two different verbs:
   `calendar.create_modify_event` (add vs. update), `slack.read_messages` and
@@ -217,6 +217,13 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "peek_add_comment": Verb.UPDATE,
     "peek_rename_page": Verb.UPDATE,
     "peek_delete_page": Verb.DELETE,
+    "miro_list_items": Verb.READ,
+    "miro_get_items": Verb.READ,
+    "miro_list_connectors": Verb.READ,
+    "miro_create_items": Verb.ADD,
+    "miro_create_connectors": Verb.ADD,
+    "miro_update_items": Verb.UPDATE,
+    "miro_update_board": Verb.UPDATE,
     "telegram_search_messages": Verb.SEARCH,
     "telegram_send_message": Verb.SEND,
     "tasks_create_task": Verb.ADD,

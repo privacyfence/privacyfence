@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Miro connector.** List boards and tags, read a board's items and connector lines after review, and add or change sticky notes, cards, texts, shapes, frames and connector lines with approval, up to 20 at a time. Sign in with Authenticate… in Settings or on the connections page, with the Miro app your organization registered. Nothing is deleted.
+
 ### Fixed
 
 - **Rule chips on the scoped tokens page keep the space before the resource name.** A chip such as "Peek — page my-page" showed the name run into the word before it.

@@ -1,0 +1,169 @@
+{
+  "data": [
+    {
+      "createdAt": "2026-10-25T18:02:41Z",
+      "createdBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "data": {
+        "format": "custom",
+        "showContent": true,
+        "title": "QaFrame [QATEST]",
+        "type": "unknown"
+      },
+      "geometry": {
+        "height": 412.1033211831352,
+        "width": 618.4695858098069
+      },
+      "id": "qa-placeholder-id-1",
+      "links": {
+        "related": "https://example.com/qa-placeholder",
+        "self": "https://example.com/qa-placeholder"
+      },
+      "modifiedAt": "2026-10-25T18:03:06Z",
+      "modifiedBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "position": {
+        "origin": "center",
+        "relativeTo": "canvas_center",
+        "x": -255.710159732541,
+        "y": -46.9505740388187
+      },
+      "style": {
+        "fillColor": "#ffffff"
+      },
+      "type": "frame"
+    },
+    {
+      "createdAt": "2026-10-25T18:03:12Z",
+      "createdBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "data": {
+        "content": "<p>PrivacyFence QA seed [QATEST]</p>",
+        "shape": "square"
+      },
+      "geometry": {
+        "height": 184.7434780200874,
+        "width": 161.24540406139207
+      },
+      "id": "qa-placeholder-id-3",
+      "links": {
+        "self": "https://example.com/qa-placeholder"
+      },
+      "modifiedAt": "2026-10-25T18:03:33Z",
+      "modifiedBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "parent": {
+        "id": "qa-placeholder-id-1",
+        "links": {
+          "self": "https://example.com/qa-placeholder"
+        }
+      },
+      "position": {
+        "origin": "center",
+        "relativeTo": "parent_top_left",
+        "x": 134.6799325046485,
+        "y": 163.34981047832605
+      },
+      "style": {
+        "fillColor": "dark_blue",
+        "textAlign": "center",
+        "textAlignVertical": "middle"
+      },
+      "type": "sticky_note"
+    },
+    {
+      "createdAt": "2026-10-25T18:03:36Z",
+      "createdBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "data": {
+        "content": "<p>PrivacyFence QA second [QATEST]</p>",
+        "shape": "square"
+      },
+      "geometry": {
+        "height": 152.7062524512678,
+        "width": 133.28308876229076
+      },
+      "id": "qa-placeholder-id-4",
+      "links": {
+        "self": "https://example.com/qa-placeholder"
+      },
+      "modifiedAt": "2026-10-25T18:04:12Z",
+      "modifiedBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "parent": {
+        "id": "qa-placeholder-id-1",
+        "links": {
+          "self": "https://example.com/qa-placeholder"
+        }
+      },
+      "position": {
+        "origin": "center",
+        "relativeTo": "parent_top_left",
+        "x": 309.23479290490343,
+        "y": 301.6708437151732
+      },
+      "style": {
+        "fillColor": "light_pink",
+        "textAlign": "center",
+        "textAlignVertical": "middle"
+      },
+      "type": "sticky_note"
+    },
+    {
+      "createdAt": "2026-10-25T18:03:52Z",
+      "createdBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "data": {
+        "content": "<p>PrivacyFence QA outside [QATEST]</p>",
+        "shape": "square"
+      },
+      "geometry": {
+        "height": 299.6677483690742,
+        "width": 261.5521137080955
+      },
+      "id": "qa-placeholder-id-5",
+      "links": {
+        "self": "https://example.com/qa-placeholder"
+      },
+      "modifiedAt": "2026-10-25T18:03:54Z",
+      "modifiedBy": {
+        "id": "qa-placeholder-account-id",
+        "name": "QA Placeholder",
+        "type": "user"
+      },
+      "position": {
+        "origin": "center",
+        "relativeTo": "canvas_center",
+        "x": 355.32270615925063,
+        "y": 4.801285204553778
+      },
+      "style": {
+        "fillColor": "yellow",
+        "textAlign": "center",
+        "textAlignVertical": "middle"
+      },
+      "type": "sticky_note"
+    }
+  ]
+}

@@ -86,4 +86,5 @@ HIDDEN_IMPORTS = [
     "privacyfence.connectors.apps_script",
     "privacyfence.connectors.grist",
     "privacyfence.connectors.peek",
+    "privacyfence.connectors.miro",
 ]
