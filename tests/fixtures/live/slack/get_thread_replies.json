@@ -19,7 +19,7 @@
           "type": "rich_text"
         }
       ],
-      "client_msg_id": "qa-placeholder-uuid",
+      "client_msg_id": "8746acc5-895a-4e31-9601-899d32a00a39",
       "edited": {
         "ts": "1700000002.000100",
         "user": "U00QAPLACEHOLDER"
@@ -58,7 +58,7 @@
           "type": "rich_text"
         }
       ],
-      "client_msg_id": "qa-placeholder-uuid",
+      "client_msg_id": "4c5fbafb-543f-48ed-9d94-e3f0614809b9",
       "parent_user_id": "U00QAPLACEHOLDER",
       "team": "qa-placeholder-id-3",
       "text": "PrivacyFence QA seed reply [QATEST]. No real information.",
