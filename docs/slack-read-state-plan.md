@@ -2,6 +2,8 @@
 
 ## Goal
 
+There is no GitHub issue for this; the request came from the maintainer directly.
+
 A scheduled Slack triage routine reads Slack by time. Its main path is `slack_search_messages`: a
 member-only sweep (`minutes`, `member_only=true`, `count=100`, empty `query`, split in halves when
 exactly 100 come back) and a mentions search for the user's own id over the same window. It reads
@@ -86,10 +88,10 @@ The rules, in order:
 1. If `own` is true, return `"read"`.
 2. If `ts` or `last_read` is empty, return `"unknown"`.
 3. Compare as `decimal.Decimal(ts) > decimal.Decimal(last_read)`. If true, return `"unread"`;
-   otherwise `"read"`. On `decimal.InvalidOperation`, return `"unknown"`.
+   otherwise `"read"`. On `decimal.InvalidOperation` or `TypeError`, return `"unknown"`.
 
-Use `Decimal`, not `float`: Slack timestamps have six decimal places, and a float can misorder two
-messages in the same second. Slack's "never read" marker, `"0000000000.000000"`, makes every
+Use `Decimal`, not `float`: the comparison is exact, and a value that is not a Slack timestamp
+raises `InvalidOperation` instead of parsing as something else. Slack's "never read" marker, `"0000000000.000000"`, makes every
 message unread, which is correct.
 
 ### D2. Conversation state (client)
@@ -164,6 +166,8 @@ message whose read state was not computed keeps today's exact eight keys.
   `m.read_state = message_read_state(m.id, state.last_read, own=bool(own) and m.user_id == own)`.
 
   The channel marker covers every message in `conversations.history`, including thread broadcasts.
+  In search, a broadcast has `thread_ts != ts` and so reads `"unknown"` under the reply rule. That is
+  intended: search cannot tell a broadcast from a plain reply, and `"unknown"` is the safe answer.
 
 `_get_thread_replies`:
 
@@ -244,8 +248,9 @@ ToolSpec(
         "reading them again. Use it sparingly, only for messages whose read state matters (for "
         "example the ones you are about to report as new), not for every search result: each "
         "distinct conversation costs one Slack request and each distinct thread one rate-limited "
-        "conversations.replies request. Returns a list of {channel_id, ts, thread_ts, read_state}, "
-        "one per requested message in request order, where read_state is 'unread', 'read' or "
+        "conversations.replies request (about a minute each on an app distributed outside the "
+        "Slack Marketplace). Returns a list of {channel_id, ts, thread_ts, read_state}, "
+        "one per distinct requested message in request order, where read_state is 'unread', 'read' or "
         "'unknown' (a thread you do not follow, or no marker). Prefer it over "
         "slack_search_messages' read_state=true for more than a few conversations. Returns no "
         "message text. Auto-approved."
@@ -257,7 +262,7 @@ ToolSpec(
                 "Comma-separated messages to check, 1 to 20, each channel_id:ts for a top-level "
                 "message or channel_id:ts:thread_ts for a reply in a thread, from a message's "
                 "channel_id, ts and thread_ts fields in slack_search_messages, "
-                "slack_get_channel_history or slack_get_thread_replies. At most 5 distinct threads. "
+                "slack_get_channel_history or slack_get_thread_replies. At most 3 distinct threads. "
                 "A repeated entry is checked once."
             ),
         ),
@@ -274,9 +279,9 @@ other tools are dispatched.
 The module constants, beside `_CURSOR_DESCRIPTION`:
 
 - `_READ_STATE_MAX_MESSAGES = 20`
-- `_READ_STATE_MAX_THREADS = 5`
+- `_READ_STATE_MAX_THREADS = 3`
 
-`async def _get_read_state(self, messages: str) -> Any`, in an `# Auto (no gate)` position next to
+`async def _get_read_state(self, messages: str) -> Any`, in the `# Auto` banner group, right after
 `_resolve_permalink`:
 
 1. Parse before any Slack call: split on `,`, strip each item and drop empty items.
@@ -289,7 +294,7 @@ The module constants, beside `_CURSOR_DESCRIPTION`:
 3. Deduplicate, keeping order. Zero entries, or more than `_READ_STATE_MAX_MESSAGES`, raises
    `ValueError("slack_get_read_state takes 1 to 20 messages")`.
 4. More than `_READ_STATE_MAX_THREADS` distinct `(channel_id, thread_ts)` pairs with a non-empty
-   thread raises `ValueError("slack_get_read_state takes at most 5 distinct threads per call")`.
+   thread raises `ValueError("slack_get_read_state takes at most 3 distinct threads per call")`.
 5. `t0 = time.time()`.
 6. Get `markers` from `last_read_markers` over the channel ids of the entries with no thread, and
    `thread_markers` from `thread_last_read_markers` over the distinct threads. Both go through
@@ -299,8 +304,9 @@ The module constants, beside `_CURSOR_DESCRIPTION`:
      `markers.get(channel_id, "")`.
    - Call `message_read_state(ts, marker)` with no `own`: the tool does not know the author.
    - Append `{"channel_id": ..., "ts": ..., "thread_ts": ..., "read_state": ...}`.
-8. Call `self._auto_audit("slack_get_read_state", "Get Slack Read State", f"Read state of {n} message(s)", f"{u} unread", t0)`,
-   where `u` is the count of `"unread"` results, and return the list.
+8. Call `self._auto_audit("slack_get_read_state", "Get Slack Read State", f"Read state of {n} message(s), {u} unread", ",".join(dict.fromkeys(e[0] for e in entries)), t0)`,
+   where `n` is the number of distinct entries, `u` the count of `"unread"` results, and the
+   sender is the distinct channel ids. Return the list.
 
 `auto_accept.TOOL_TO_GATE` gains `"slack_get_read_state": "auto",` next to `slack_resolve_permalink`.
 `SLACK_SIBLINGS` in the connector tests gains `"slack_get_read_state": ("slack_search_messages",)`.
@@ -323,7 +329,11 @@ It calls `client.conversation_state(conversation_id)`.
   `_check_slack_membership`.
 
 `check_slack` appends it right after each membership check: `"conversation_read_marker"` for the
-channel, and `"group_dm_read_marker"` for `group_dm_id`. It records no fixture. This check is what
+channel, and `"group_dm_read_marker"` for `group_dm_id`. After those, it also checks one 1:1 DM, the
+type the routine's fallback reads: it calls `client.list_dms(max_results=1)` and, if that returns a
+DM, appends `_check_slack_read_marker(client, "dm_read_marker", dm.id, dm.id)`. A `SlackClientError`
+from `list_dms` appends a not-ok `dm_read_marker` result whose note is the exception text, and an
+empty list appends nothing. None of these record a fixture. This check is what
 proves, on real Slack, the assumption D2 rests on: that `conversations.info` reports `last_read` to
 a user token for channels and group DMs.
 
@@ -343,9 +353,16 @@ a user token for channels and group DMs.
 - **Caching markers between calls.** A marker moves whenever the user reads, and the routine's
   halving re-searches would see stale state. `conversation_state` stays live, like membership
   (ADR 0226).
-- **Making `slack_get_read_state` review-gated.** It returns no content, only state about ids the
-  agent already holds, which is the same sensitivity as the auto listing tools. A card per check
-  would defeat the targeted use it exists for.
+- **Making `slack_get_read_state` review-gated.** It returns no content. It is not quite as harmless
+  as the listing tools, though: it accepts any `channel_id:ts` the agent makes up, so with 20 probes
+  a call the agent can narrow down the user's read marker, and with it when the user last read a
+  conversation. That is behavioural metadata about the user's own reading, inside conversations the
+  user can see; the audit log records every call. A card per check would defeat the targeted use the
+  tool exists for, so it stays auto-approved, and ADR 0235 says this plainly in its Consequences.
+- **More than 3 thread lookups per call.** `conversations.replies` is 1/min on an app distributed
+  outside the Marketplace, and the SDK's rate-limit retry (`_RATE_LIMIT_MAX_RETRY_COUNT = 3`) holds
+  the call while it waits. Three threads keep the worst case near three minutes. ADR 0235 records
+  this, and the tool description warns about it.
 - **Showing read state on the approval card.** It is not message content, and the card's columns
   are covered by preview-minimisation tests. No reviewer asked for it.
 
@@ -356,7 +373,7 @@ a user token for channels and group DMs.
   they already make. Search does only on request (`read_state`), and judges thread replies as
   unknown. Listings are unchanged. Relates to ADR 0226 and ADR 0227.
 - **0235**: A separate, auto-approved `slack_get_read_state` tool checks the read state of at most
-  20 named messages (at most 5 threads), so the agent asks only about the messages that matter.
+  20 named messages (at most 3 threads), so the agent asks only about the messages that matter.
   Relates to ADR 0234.
 
 Before writing them, re-check `docs/adr/` for the next free numbers. If a parallel branch has taken
@@ -371,7 +388,7 @@ by the last phase (`ci.dispatchable`).
 
 - **`conversations.info` does not return `last_read` for some conversation type on a user token.**
   Unit tests cannot see this. D7's live check does. If the dispatched run reports
-  `conversation_read_marker` or `group_dm_read_marker` not ok, the phase stops with
+  `conversation_read_marker`, `group_dm_read_marker` or `dm_read_marker` not ok, the phase stops with
   `status=blocked` and reports the note. Affected messages would read `"unknown"`, which is safe but
   less useful.
 - **Real search matches already carry `thread_ts`.** Then D3's permalink fallback never runs. That
@@ -383,11 +400,10 @@ by the last phase (`ci.dispatchable`).
 - **A description lands over 1024 characters.** D5 gives exact text that was measured.
   `tests/helpers.py`'s `assert_tool_definitions_complete` is the check. If D5's text fails a
   wording rule there, stop with `status=blocked` rather than rewording freely.
-- **The tool-list tables.** If adding `slack_get_read_state` fails a table test other than
-  `TOOL_TO_GATE` and `docs/tools-reference.md` (for example `policy/registry.py`'s
-  `TOOL_REGISTRY`), add the auto entry the failing test names, following `slack_resolve_permalink`'s
-  entry exactly. If it asks for an operation key or a verb, stop with `status=blocked`: an auto tool
-  should need neither.
+- **The tool-list tables.** `TOOL_TO_GATE` and the generated `docs/tools-reference.md` are the only
+  tables an auto Slack tool needs; `policy/registry.py`'s `TOOL_REGISTRY` is built from
+  `TOOL_TO_GATE`. If a test asks for an operation key or a verb for `slack_get_read_state`, stop
+  with `status=blocked`: an auto tool should need neither.
 
 ## Implementation manifest
 
@@ -430,8 +446,8 @@ phases:
       7. Tests in tests/unit/test_slack_client.py:
          - a new `class TestMessageReadState` covering own -> read, empty ts or marker -> unknown,
            ts after/equal/before the marker, "0000000000.000000" -> unread, a non-numeric marker
-           -> unknown, and a same-second pair ("1700000000.000100" vs "1700000000.000099") that a
-           float would misorder;
+           -> unknown, a non-str marker (None) -> unknown, and a same-second pair 1e-6 apart
+           ("1700000000.000100" vs "1700000000.000099") ordered correctly;
          - `class TestConversationState`: last_read is returned, a missing last_read gives "", an
            error gives SlackConversationState(), and the caches are filled exactly as
            TestResolveIsMember already asserts;
@@ -439,7 +455,8 @@ phases:
            calls) and an empty list makes no call;
          - `class TestThreadLastRead`: it reads the parent's last_read from a
            conversations_replies response (reuse the live fixture
-           tests/fixtures/live/slack/get_thread_replies.json as TestLiveFixtureParsing does), it
+           tests/fixtures/live/slack/get_thread_replies.json as TestLiveFixtureParsing does, and
+           compare with raw["messages"][0]["last_read"], not a hard-coded value), it
            passes limit=1, there is no parent -> "", SlackApiError -> "";
          - in TestParseMessage, last_read is parsed from the raw message;
          - in TestSearchMessages, a match with no thread_ts and a permalink carrying
@@ -448,10 +465,10 @@ phases:
       8. In scripts/slack_call_budget.py's `cases`, add
          ("conversation_state()", lambda c: c.conversation_state("C0001")) after the
          resolve_is_member row, and
-         ("slack_get_read_state(20 messages, 5 threads)", lambda c: (c.last_read_markers([f"C{i:04d}" for i in range(15)]), c.thread_last_read_markers([("C0001", f"170000000{i}.0001") for i in range(5)])))
-         at the end. Run `python3 scripts/slack_call_budget.py` and confirm it exits 0. If the fake
-         web client in that script has no conversations_replies handler, add one that returns
-         {"messages": [], "has_more": False}, following the existing conversations_history handler.
+         ("slack_get_read_state(20 messages, 3 threads)", lambda c: (c.last_read_markers([f"C{i:04d}" for i in range(15)]), c.thread_last_read_markers([("C0001", f"170000000{i}.0001") for i in range(3)])))
+         at the end. Run `python3 scripts/slack_call_budget.py` and
+         `python3 scripts/slack_call_budget.py --distributed` and confirm both exit 0 (its fake
+         web client already handles conversations_replies).
       9. Run `ruff check .` and `python3 -m mypy src/privacyfence`.
       Stop with status=blocked if TestResolveIsMember needs changes to pass after step 4: the
       wrapper must be behaviour-identical.
@@ -459,7 +476,7 @@ phases:
       - python3 -m pytest tests/unit/test_slack_client.py -q passes
       - python3 -m pytest tests/unit/test_slack_client.py -q -k "TestMessageReadState or TestConversationState or TestLastReadMarkers or TestThreadLastRead" selects at least 15 tests, all passing
       - grep -n "def conversation_state\|def last_read_markers\|def thread_last_read\b\|def thread_last_read_markers\|def message_read_state" src/privacyfence/slack_client.py prints 5 lines
-      - python3 scripts/slack_call_budget.py exits 0
+      - python3 scripts/slack_call_budget.py exits 0, and python3 scripts/slack_call_budget.py --distributed exits 0
       - ruff check . and python3 -m mypy src/privacyfence pass
   - id: p2-connector-read-state
     title: History, thread and opt-in search reads return read_state
@@ -484,9 +501,15 @@ phases:
       4. tool_specs(): apply the three D5 description changes and add the read_state ToolParam to
          slack_search_messages before reason.
       5. tests/unit/connectors/test_slack_connector.py:
-         - In make_connector, add `client.conversation_state.return_value = SlackConversationState()`
-           and `client.last_read_markers.return_value = {}` (import SlackConversationState from
-           privacyfence.slack_client).
+         - In make_connector, replace `client.resolve_is_member.return_value = False` and its
+           comment with `client.conversation_state.return_value = SlackConversationState()`
+           (comment: "Default to 'not a member, no read marker' so args and read_state carry
+           plain values."), and add `client.last_read_markers.return_value = {}` (import
+           SlackConversationState from privacyfence.slack_client).
+         - test_preview_and_gate (~line 314) asserts raw_data equals
+           [make_message(text="a" * 100)]; the read_state is now set in place, so make it
+           [make_message(text="a" * 100, read_state="unknown")]. Fix any other raw_data
+           equality the same way.
          - Change the tests at lines ~921, ~926, ~934, ~1018, ~1027 and ~1036 that set or assert
            client.resolve_is_member to use client.conversation_state with
            SlackConversationState(is_member=...). The ordering test at ~934 keeps its order
@@ -502,13 +525,15 @@ phases:
            - search with read_state=true: a top-level message judged by its channel's marker, a
              reply (thread_ts != ts) unknown, last_read_markers called once with the result
              channel ids, and gated_call args["read_state"] is True;
-           - the preview of all three tools is unchanged (assert the preview keys equal today's).
+           - the preview is unchanged: set(preview) == {"Channel"} for history and thread without
+             minutes, and for search with query="x", read_state=true,
+             set(preview) == {"Query", "Since"}.
          - Update any test that pins slack_search_messages' args dict to include
            "read_state": False.
       6. Run `python3 scripts/generate_tools_reference.py` (the search first sentence changed) and
          commit docs/tools-reference.md.
-      7. CHANGELOG.md, under `## [Unreleased]`, add a `### Added` heading if there is none, and this line:
-         `- **Slack reads say what you have not read yet.** Channel history and thread reads mark each message unread, read or unknown against your own Slack read marker; a search does too when the agent asks for it with read_state, which costs one Slack request per conversation in the results.`
+      7. CHANGELOG.md, under `## [Unreleased]`, add a `### Added` heading above the existing `### Fixed` (create it if it is missing), and this line:
+         `- **Slack reads say what you have not read yet.** Channel history and thread reads mark each message unread, read or unknown against your own Slack read marker; a search does too when the agent asks for it with read_state, which costs one Slack request per conversation in the results. Search results now carry the thread_ts of a reply in a thread.`
       8. Run ruff check . and python3 -m mypy src/privacyfence.
       Stop with status=blocked if a tests/unit/policy/ test fails because of the new search arg (the plan's Risks).
     acceptance:
@@ -525,33 +550,33 @@ phases:
       - src/privacyfence/connectors/slack.py
       - tests/unit/connectors/test_slack_connector.py
       - src/privacyfence/auto_accept.py
-      - src/privacyfence/policy/registry.py
       - docs/tools-reference.md
       - CHANGELOG.md
     brief: |
       Read docs/slack-read-state-plan.md section Design D6 first; it holds the exact ToolSpec,
-      error strings, caps and the audit call.
+      error strings, caps and the audit call. Pattern to copy for an auto Slack tool:
+      slack_resolve_permalink, added in commit fda669c7 (`git show fda669c7`).
       1. In src/privacyfence/connectors/slack.py add _READ_STATE_MAX_MESSAGES and
          _READ_STATE_MAX_THREADS, the ToolSpec (after slack_search_messages), the dispatch line in
          call(), and _get_read_state next to _resolve_permalink, all as D6 says.
       2. src/privacyfence/auto_accept.py: add "slack_get_read_state": "auto" to TOOL_TO_GATE next
          to slack_resolve_permalink, aligned like its neighbours.
-      3. Only if a table test fails asking for it, add the auto entry it names in
-         src/privacyfence/policy/registry.py, mirroring slack_resolve_permalink's (see the plan's
-         Risks; an operation key or a verb means stop with status=blocked).
+      3. policy/registry.py needs no change: TOOL_REGISTRY is built from TOOL_TO_GATE
+         (tests/unit/policy/test_registry.py). If a test asks for an operation key or a verb for
+         the new tool, stop with status=blocked.
       4. tests/unit/connectors/test_slack_connector.py:
          - update SLACK_SIBLINGS per D6;
          - add `class TestGetReadState`: it never calls gated_call (the gated_call_spy stays
            empty) and writes one audit entry (copy TestResolvePermalink's audit assertion
            pattern); mixed top-level and thread entries map to the right marker and keep request
            order; a duplicate entry is checked once; channel_id:ts:ts is treated as top-level;
-           the ValueError texts for a malformed item, 0 entries, 21 entries and 6 distinct
+           the ValueError texts for a malformed item, 0 entries, 21 entries and 4 distinct
            threads, each raised with client.last_read_markers and
            client.thread_last_read_markers not called;
          - give make_connector `client.thread_last_read_markers.return_value = {}`;
-         - make sure assert_all_tools_leave_an_audit_trail (TestEveryToolIsAudited) covers the new
-           tool; add an arg_overrides entry {"messages": "C1:1700000000.000100"} if
-           build_stub_args' default value does not parse.
+         - in TestEveryToolIsAudited's arg_overrides dict, add
+           "slack_get_read_state": {"messages": "C1:1700000000.000100"} (build_stub_args passes
+           "stub", which does not parse).
       5. Run `python3 scripts/generate_tools_reference.py` and commit docs/tools-reference.md.
       6. CHANGELOG.md under `## [Unreleased]` → `### Added`, add:
          `- **slack_get_read_state.** A new Slack tool returns whether up to 20 specific messages are unread, read or unknown, without reading them again, so an agent checks only the messages that matter instead of every search result. Auto-approved; it returns no message text.`
@@ -571,6 +596,7 @@ phases:
       - tests/unit/test_qa_fixture_recorder.py
       - tests/fixtures/live/slack/**
       - docs/slack-setup.md
+      - docs/connector-qa.md
       - docs/adr/0234-*.md
       - docs/adr/0235-*.md
       - docs/adr/README.md
@@ -584,8 +610,10 @@ phases:
          (default "1700000000.000100") and monkeypatch client.conversation_state to return
          SlackConversationState(is_member=member, last_read=last_read). Add tests: ok when a
          marker is reported; not ok with note "conversations.info reported no last_read" when
-         last_read=""; group_dm_read_marker runs only when group_dm_id is set. Update any test
-         that counts check_slack's results.
+         last_read=""; group_dm_read_marker runs only when group_dm_id is set; dm_read_marker
+         uses the first id list_dms(max_results=1) returns (monkeypatch client.list_dms), is
+         absent when list_dms returns [], and is not ok with the error text when list_dms raises
+         SlackClientError. Update any test that counts check_slack's results.
       3. docs/slack-setup.md:
          - In the rate-limit table, change the conversations.info "Used for" cell to "channel type,
            membership and your read marker", and the conversations.replies row's cell to
@@ -593,13 +621,23 @@ phases:
          - In the routine steps, add to step 1: "Add `read_state` true only when the run needs
            read state for most results: it costs one `conversations.info` request per
            conversation in the results. Otherwise call `slack_get_read_state` afterwards for the
-           few messages that matter (at most 20, at most 5 threads)." Add to step 2: "Its
+           few messages that matter (at most 20, at most 3 threads)." Add to step 2: "Its
            replies come back with `read_state` from the thread's own marker."
          - Add a short `## Read state` section after the routine steps, saying: what
            unread/read/unknown mean (against your own Slack read marker; your own messages are
            read); that a thread reply in search results is unknown, and why (Slack tracks threads
            separately); and which tools return it. Link ADR 0234 and ADR 0235.
          Describe current behaviour only, with no history wording (tests/unit/test_docs_no_history.py).
+      3a. docs/connector-qa.md:
+         - In the recorder table's `slack` row (around line 381), replace
+           "checks `conversation_membership` and `group_dm_membership` (no fixture)" with
+           "checks `conversation_membership`, `group_dm_membership`, `conversation_read_marker`,
+           `group_dm_read_marker` and `dm_read_marker` (no fixture)".
+         - In the `slack.group_dm_id` checklist item (around line 123), replace "It enables the
+           group-DM membership check; without it that check is skipped." with "It enables the
+           group-DM membership and read-marker checks; without it those checks are skipped."
+           Then add one sentence after it: "The 1:1 DM read-marker check uses the QA account's
+           first DM and is skipped when it has none."
       4. Write docs/adr/0234-slack-reads-report-the-users-own-read-state.md and
          docs/adr/0235-a-separate-auto-approved-tool-checks-the-read-state-of-named-messages.md
          from the template in docs/adr/README.md. Use Status "Accepted — <today>. Implemented."
@@ -618,8 +656,8 @@ phases:
          Review that diff for account identifiers, tenant URLs or private content before keeping
          it (docs/connector-qa.md, "Reviewing recorded fixtures"). Put the run URL and its
          check_slack lines in your final report.
-      Stop with status=blocked and report the note if conversation_read_marker or
-      group_dm_read_marker is not ok in that run.
+      Stop with status=blocked and report the note if conversation_read_marker,
+      group_dm_read_marker or dm_read_marker is not ok in that run.
     acceptance:
       - python3 -m pytest tests/unit/test_qa_fixture_recorder.py tests/unit/test_docs_no_history.py tests/unit/test_code_no_history.py -q passes
       - test ! -e docs/slack-read-state-plan.md
