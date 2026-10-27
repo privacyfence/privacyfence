@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from privacyfence import paths, secure_files, update_checker, whats_new
+from privacyfence import __version__, paths, secure_files, update_checker, whats_new
 from privacyfence.principal import Principal
 from privacyfence.whats_new import ReleaseNotes
 from privacyfence.whats_new import state_path as REAL_STATE_PATH
@@ -342,6 +342,4 @@ def test_load_changelog_parses_the_repositorys_changelog():
 
 
 def test_running_version_is_the_package_version():
-    import privacyfence
-
-    assert whats_new.running_version() == privacyfence.__version__
+    assert whats_new.running_version() == __version__
