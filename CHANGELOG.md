@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Grist API keys for everyone, in organization mode.** With a self-hosted Grist, the Grist provisioner and `--grist-auto-provision`, each person who signs in and has a Grist account gets their Grist connection set up for them; a key they paste on /connect still wins, an existing Grist key is reused rather than replaced, and `privacyfence-app --grist-release` deletes the key PrivacyFence was given when someone leaves.
 - **Choose who can open a restricted Peek page.** peek_grant_access and peek_revoke_access (each with an approval card), peek_list_grants and peek_list_versions; comments say whether a signed-in account wrote them, and peek_add_comment can target a version.
 
 ### Fixed
