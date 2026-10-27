@@ -9,6 +9,7 @@ server, and redirects are never followed. Requests are faked at the
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 import sys
@@ -23,6 +24,8 @@ from privacyfence.peek_client import (
     PeekClient,
     PeekClientError,
     PeekComment,
+    PeekGrant,
+    PeekVersion,
     bundle_base_url,
     load_token_file,
     normalize_base_url,
@@ -30,6 +33,7 @@ from privacyfence.peek_client import (
     resolve_server,
     save_token_file,
     start_device_login,
+    validate_grant,
     validate_slug,
 )
 
@@ -188,14 +192,43 @@ class TestSendErrors:
         )
         assert err.status == 404
 
-    def test_404_renamed(self, monkeypatch, client):
+    def test_404_is_page_not_found_even_with_renamed_text(self, monkeypatch, client):
         err = self._error(monkeypatch, client, FakeResponse(404, {"error": "page was renamed; use slug new-1"}))
-        assert str(err) == "Peek says this page was renamed; its slug is now new-1. Use that slug."
+        assert str(err).startswith("Peek found no such page (HTTP 404).")
+        assert "new-1" not in str(err)
         assert err.status == 404
 
-    def test_404_renamed_with_malformed_slug_is_the_plain_404(self, monkeypatch, client):
-        err = self._error(monkeypatch, client, FakeResponse(404, {"error": "page was renamed; use slug ../x"}))
-        assert str(err).startswith("Peek found no such page (HTTP 404).")
+    @pytest.mark.parametrize(
+        "status, body, detail",
+        [
+            (403, {"error": "not owner"}, "not owner"),
+            (404, {"error": "version not found"}, "version not found"),
+            (409, {"error": "slug taken"}, "slug taken"),
+            (500, {"error": "x" * 300}, "x" * 200),
+            (500, None, "no detail"),
+        ],
+    )
+    def test_error_carries_detail(self, monkeypatch, client, status, body, detail):
+        err = self._error(monkeypatch, client, FakeResponse(status, body))
+        assert err.detail == detail
+        assert err.status == status
+
+    def test_error_without_an_answer_has_no_detail(self, monkeypatch, client):
+        err = self._error(monkeypatch, client, requests.ConnectionError("boom"))
+        assert err.detail == ""
+
+    def test_429(self, monkeypatch, client):
+        err = self._error(monkeypatch, client, FakeResponse(429, {"error": "too many comments, slow down"}))
+        assert str(err) == (
+            "Peek is limiting how fast these requests can be made (HTTP 429). Wait a minute, then try again."
+        )
+        assert err.status == 429
+        assert err.detail == "too many comments, slow down"
+
+    def test_415(self, monkeypatch, client):
+        err = self._error(monkeypatch, client, FakeResponse(415, {"error": "file does not look like HTML"}))
+        assert str(err) == "Peek refused the file (HTTP 415): file does not look like HTML"
+        assert err.status == 415
 
     def test_500_detail_is_cut_to_200(self, monkeypatch, client):
         err = self._error(monkeypatch, client, FakeResponse(500, {"error": "x" * 300}))
@@ -657,6 +690,165 @@ class TestAddComment:
         Recorder(monkeypatch, FakeResponse(403, {"error": "not owner"}))
         with pytest.raises(PeekClientError, match="HTTP 403"):
             client.add_comment("p1", "hello", "", "")
+
+
+class TestVerified:
+    @pytest.mark.parametrize("extra, expected", [({"verified": True}, True), ({"verified": False}, False), ({}, False)])
+    def test_parsed(self, monkeypatch, client, extra, expected):
+        Recorder(monkeypatch, ok([comment_json(1, 10, **extra)]))
+        assert client.get_comments("p1")[0].verified is expected
+
+    @pytest.mark.parametrize("value", ["true", 1, None])
+    def test_only_json_true_counts(self, monkeypatch, client, value):
+        Recorder(monkeypatch, ok([comment_json(1, 10, verified=value)]))
+        assert client.get_comments("p1")[0].verified is False
+
+    def test_add_comment_result_carries_it(self, monkeypatch, client):
+        Recorder(monkeypatch, ok({"id": 9, "author": "qa", "body": "b", "created_at": 60, "verified": True}))
+        assert client.add_comment("p1", "b", "", "").verified is True
+
+
+class TestListVersions:
+    def test_sorted_newest_first_with_iso_times(self, monkeypatch, client):
+        rec = Recorder(monkeypatch, ok([
+            {"version": 1, "size": 10, "created_at": 10, "url": f"{BASE}/p/p1/v/1"},
+            {"version": 3, "size": 30, "created_at": 30, "url": f"{BASE}/p/p1/v/3"},
+            {"version": 2, "size": 20, "created_at": 20, "url": f"{BASE}/p/p1/v/2"},
+        ]))
+        versions = client.list_versions("p1")
+        assert [v.version for v in versions] == [3, 2, 1]
+        assert versions[0] == PeekVersion(3, 30, "1970-01-01T00:00:30Z", f"{BASE}/p/p1/v/3")
+        call = rec.calls[0]
+        assert (call["method"], call["url"]) == ("GET", f"{BASE}/api/uploads/p1/versions")
+        assert auth_of(call) == f"Bearer {TOKEN}"
+
+    def test_non_list_answer_is_rejected(self, monkeypatch, client):
+        Recorder(monkeypatch, ok({"a": 1}))
+        with pytest.raises(PeekClientError, match="something unexpected"):
+            client.list_versions("p1")
+
+
+class TestGrants:
+    def test_list_sorted_by_kind_then_email(self, monkeypatch, client):
+        rec = Recorder(monkeypatch, ok([
+            {"id": 1, "kind": "user", "email": "b@x.io", "created_at": 10},
+            {"id": 2, "kind": "group", "email": "z@x.io", "created_at": 20},
+            {"id": 3, "kind": "user", "email": "a@x.io", "created_at": 30},
+        ]))
+        grants = client.list_grants("p1")
+        assert [(g.kind, g.email) for g in grants] == [("group", "z@x.io"), ("user", "a@x.io"), ("user", "b@x.io")]
+        assert grants[0] == PeekGrant("group", "z@x.io", "1970-01-01T00:00:20Z")
+        assert (rec.calls[0]["method"], rec.calls[0]["url"]) == ("GET", f"{BASE}/api/uploads/p1/grants")
+
+    @pytest.mark.parametrize("notified", [True, False])
+    def test_add_body_and_notified(self, monkeypatch, client, notified):
+        rec = Recorder(monkeypatch, ok({"id": 1, "kind": "user", "email": "alice@example.com", "notified": notified}))
+        assert client.add_grant("p1", "user", " Alice@Example.com ") is notified
+        call = rec.calls[0]
+        assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/uploads/p1/grants")
+        assert call["json"] == {"kind": "user", "email": "alice@example.com"}
+
+    def test_remove_body(self, monkeypatch, client):
+        rec = Recorder(monkeypatch, ok({"removed": True}))
+        assert client.remove_grant("p1", "group", "Team@Example.com") is None
+        call = rec.calls[0]
+        assert (call["method"], call["url"]) == ("DELETE", f"{BASE}/api/uploads/p1/grants")
+        assert call["json"] == {"kind": "group", "email": "team@example.com"}
+
+    def test_remove_grant_not_found(self, monkeypatch, client):
+        Recorder(monkeypatch, FakeResponse(404, {"error": "grant not found"}))
+        with pytest.raises(PeekClientError) as exc:
+            client.remove_grant("p1", "user", "a@b.co")
+        assert str(exc.value) == (
+            "Peek has no such grant on this page (HTTP 404). Call peek_list_grants to see who has access."
+        )
+        assert (exc.value.status, exc.value.detail) == (404, "grant not found")
+
+    def test_remove_other_404_is_the_plain_404(self, monkeypatch, client):
+        Recorder(monkeypatch, FakeResponse(404, {"error": "not found"}))
+        with pytest.raises(PeekClientError, match="Peek found no such page"):
+            client.remove_grant("p1", "user", "a@b.co")
+
+    @pytest.mark.parametrize("call", [
+        lambda c: c.add_grant("p1", "group", "team@example.com"),
+        lambda c: c.remove_grant("p1", "group", "team@example.com"),
+    ])
+    def test_group_lookup_message(self, monkeypatch, client, call):
+        Recorder(monkeypatch, FakeResponse(400, {"error": "group grants need Google settings"}))
+        with pytest.raises(PeekClientError) as exc:
+            call(client)
+        assert str(exc.value) == (
+            "This Peek server cannot check Google group membership, so it does not accept group grants. "
+            "Grant access to people one by one, or ask the Peek admin to set up group lookup."
+        )
+        assert exc.value.status == 400
+
+    @pytest.mark.parametrize("call", [
+        lambda c: c.add_grant("p1", "user", "a@b.co"),
+        lambda c: c.remove_grant("p1", "user", "a@b.co"),
+    ])
+    def test_other_errors_pass_through(self, monkeypatch, client, call):
+        Recorder(monkeypatch, FakeResponse(400, {"error": "invalid email"}))
+        with pytest.raises(PeekClientError, match=r"HTTP 400\): invalid email"):
+            call(client)
+
+    @pytest.mark.parametrize("call", [
+        lambda c: c.list_versions("../x"),
+        lambda c: c.list_grants("../x"),
+        lambda c: c.add_grant("../x", "user", "a@b.co"),
+        lambda c: c.remove_grant("../x", "user", "a@b.co"),
+    ])
+    def test_bad_slug_rejected_before_any_request(self, monkeypatch, client, call):
+        rec = Recorder(monkeypatch, ok({}))
+        with pytest.raises(PeekClientError, match="Not a Peek page slug"):
+            call(client)
+        assert rec.calls == []
+
+    @pytest.mark.parametrize("call", [
+        lambda c: c.add_grant("p1", "team", "a@b.co"),
+        lambda c: c.remove_grant("p1", "user", "nobody"),
+    ])
+    def test_bad_grant_rejected_before_any_request(self, monkeypatch, client, call):
+        rec = Recorder(monkeypatch, ok({}))
+        with pytest.raises(PeekClientError):
+            call(client)
+        assert rec.calls == []
+
+    def test_no_log_line_contains_an_email(self, monkeypatch, client, caplog):
+        email = "secret.person@example.com"
+        Recorder(monkeypatch, ok([{"kind": "user", "email": email, "created_at": 1}]))
+        with caplog.at_level(logging.DEBUG, logger="privacyfence.peek_client"):
+            client.list_grants("p1")
+            Recorder(monkeypatch, ok({"notified": True}))
+            client.add_grant("p1", "user", email)
+            Recorder(monkeypatch, ok({"removed": True}))
+            client.remove_grant("p1", "user", email)
+        assert caplog.records
+        assert "@" not in caplog.text and email not in caplog.text
+
+
+class TestValidateGrant:
+    def test_normalizes(self):
+        assert validate_grant("user", "Alice@Example.com ") == ("user", "alice@example.com")
+        assert validate_grant("group", "team@example.com") == ("group", "team@example.com")
+
+    @pytest.mark.parametrize(
+        "email", ["a@b@c", "nobody", "a b@c.d", "a,b@c.d", "<a@b.c>", "a@" + "b" * 253, ""]
+    )
+    def test_refused(self, email):
+        with pytest.raises(PeekClientError) as exc:
+            validate_grant("user", email)
+        assert str(exc.value) == "Enter one email address, such as alice@example.com."
+
+    def test_254_characters_pass(self):
+        email = "a@" + "b" * 252
+        assert len(email) == 254
+        assert validate_grant("user", email) == ("user", email)
+
+    def test_unknown_kind(self):
+        with pytest.raises(PeekClientError) as exc:
+            validate_grant("team", "a@b.co")
+        assert str(exc.value) == "kind must be user or group."
 
 
 class TestSlugGuards:
