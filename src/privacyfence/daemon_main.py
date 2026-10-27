@@ -98,6 +98,7 @@ from . import (
     audit_forwarding,
     org_bundle_signing,
     org_mode,
+    peek_provisioning,
     policy_upgrade,
     privilege_separation,
     step_up_config,
@@ -176,7 +177,7 @@ from .salesforce_client import DEFAULT_REPORT_MAX_PAGES, SalesforceClient, Sales
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .salesforce_client import load_token_file as load_salesforce_token
 from .slack_client import SlackClient, SlackClientError
-from .peek_client import PeekClient, PeekClientError
+from .peek_client import PeekClient, PeekClientError, PeekProvisioningClient
 from .peek_client import bundle_base_url as peek_bundle_base_url
 from .peek_client import load_token_file as load_peek_token
 from .peek_client import normalize_base_url as peek_normalize_base_url
@@ -1156,6 +1157,9 @@ def _start_org_web_server(
     from .web_approval_ui import init_web_approval_ui
 
     server_config = org_mode.ServerConfig.from_org_config(org_config)
+    # Validated here so a broken "peek"."auto_provision" refuses startup; peek_provisioning.start
+    # parses it again below.
+    org_mode.PeekProvisioningConfig.from_org_config(org_config)
     idp = IdpConfig.from_org_config(org_config)
     if idp is None:
         raise org_mode.ConfigurationError(
@@ -1208,6 +1212,9 @@ def _start_org_web_server(
         return connectors
 
     connector_registry = ConnectorRegistry(factory=_connectors_for_principal)
+    # Does nothing unless "peek"."auto_provision" is on and the provisioning key is set. A fresh
+    # token for a person drops their cached connectors so the next request sees it.
+    peek_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
 
     # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't
@@ -2348,6 +2355,54 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --peek-release
+# ---------------------------------------------------------------------------- #
+
+def run_peek_release(principal_id: str) -> int:
+    """The administrator's way to take back the Peek token PrivacyFence minted
+    for one person and stop renewing it, for when they have left. Runs as the
+    account that owns the data (``main`` dispatches it after the runtime
+    identity check) in its own process, so it neither reaches a running
+    daemon's connector registry nor needs one: the daemon sees the deleted
+    token file on its next request. The Peek account stays. A person who
+    signs in again is provisioned again, so remove them from the identity
+    provider first.
+    """
+    known = (
+        safe_principal_id(principal_id) == principal_id
+        and principal_id != LOCAL_PRINCIPAL_ID
+        and (data_dir() / "users" / principal_id).is_dir()
+    )
+    if not known:
+        print("No such account.", file=sys.stderr)
+        return 1
+    try:
+        config = org_mode.PeekProvisioningConfig.from_org_config(load_org_config())
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if not config.enabled:
+        print("Peek auto-provisioning is not enabled in the organization config.", file=sys.stderr)
+        return 1
+    key = os.environ.get(config.key_env, "").strip()
+    if not key:
+        print(f"Set {config.key_env} to the Peek provisioning key first.", file=sys.stderr)
+        return 1
+    try:
+        had_link = PeekProvisioningClient(config.base_url, key).release_account(principal_id)
+    except PeekClientError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    peek_provisioning.release(principal_id)
+    message = f"Released the Peek connection of {principal_id}. The Peek account stays."
+    message += (
+        " PrivacyFence's token for it is revoked." if had_link else " Peek had no provisioned token for it."
+    )
+    print(message)
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # Argument parsing
 # ---------------------------------------------------------------------------- #
 
@@ -2407,6 +2462,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Revoke every scoped token the account PRINCIPAL_ID holds ('local' in local mode, or the "
             "principal id the audit log and the org Settings page show) and exit. Run it as the "
             "account the daemon runs as."
+        ),
+    )
+    parser.add_argument(
+        "--peek-release", metavar="PRINCIPAL_ID", default=None,
+        help=(
+            "Revoke the Peek token PrivacyFence minted for the account PRINCIPAL_ID, stop renewing it, "
+            "and exit. The Peek account and its pages stay. Needs the provisioning key in the environment."
         ),
     )
     # How the Windows Service Control Manager starts the
@@ -2496,6 +2558,8 @@ def main(argv: list[str] | None = None) -> int:
     # must run as the account that owns it.
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
+    if args.peek_release is not None:
+        return run_peek_release(args.peek_release)
 
     oauth_flag = (
         args.gmail_oauth or args.drive_oauth or args.contacts_oauth
