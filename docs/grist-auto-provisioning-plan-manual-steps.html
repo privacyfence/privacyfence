@@ -77,7 +77,7 @@
   <header class="intro">
     <div class="eyebrow">PrivacyFence · plan/grist-auto-provisioning</div>
     <h1>Grist auto-provisioning: the steps only you can do</h1>
-    <p>Two plans share this page. The <strong>Grist provisioner</strong> is a new service in its own repository; it needs one step before its build starts. <strong>PrivacyFence</strong> needs nothing before its build, because every phase tests against fakes. Once both are built, the five checks under <em>After implementation</em> prove the whole chain on your real Grist and Google set-up.</p>
+    <p>Two plans share this page. The <strong>Grist provisioner</strong> is a new service in its own repository; it needs one step before its build starts. <strong>PrivacyFence</strong>'s phases test against fakes, but its last phase deletes the provisioner's plan from the PrivacyFence repository, so item 1 (which copies that plan into the new repository) comes first for both. Once both are built, the five checks under <em>After implementation</em> prove the whole chain on your real Grist and Google set-up.</p>
     <p class="see">Never paste a key into a chat, the plan or this page. Each step says where a key goes.</p>
     <div class="progress"><div class="bar" aria-hidden="true"><span id="bar"></span></div><span id="count">0 of 0 steps done</span></div>
     <button class="reset" type="button" id="reset">Clear all ticks</button>
@@ -87,7 +87,7 @@
     <div class="part-head">
       <div class="eyebrow">Before implementation</div>
       <h2>Before the provisioner's build starts</h2>
-      <p class="see">PrivacyFence's own <code>/implement</code> needs nothing from this part.</p>
+      <p class="see">Both <code>/implement</code> runs wait for this item: PrivacyFence's as <code>mb1-companion-plan</code>, the provisioner's as <code>mb1-repo</code>.</p>
     </div>
 
     <article class="item" id="mb1-repo">
@@ -120,9 +120,10 @@
       <div class="item-body">
         <ol class="steps">
           <li><input type="checkbox" id="ma1-1"><div class="step"><span class="what">On the Grist host, back up Grist's <code>/persist</code> volume (it holds <code>home.sqlite3</code>, where the provisioner will write keys).</span></div></li>
-          <li><input type="checkbox" id="ma1-2"><div class="step"><span class="what">Add the provisioner to Grist's compose file, as in the provisioner's README. It must share Grist's persist volume and run on the same host. Use the same <code>GRIST_ADMIN_EMAIL</code> and <code>GRIST_DEFAULT_EMAIL</code> values as your Grist service:</span>
+          <li><input type="checkbox" id="ma1-2"><div class="step"><span class="what">Add the provisioner to Grist's compose file, as in the provisioner's README. It must share Grist's persist volume and run on the same host. Use the same <code>GRIST_ADMIN_EMAIL</code> and <code>GRIST_DEFAULT_EMAIL</code> values as your Grist service (at least one is required), and run it as Grist's <code>grist</code> user so it can write the database:</span>
 <pre>  grist-provisioner:
     image: ghcr.io/privacyfence/grist-provisioner:&lt;version&gt;
+    user: "&lt;uid&gt;:&lt;gid&gt;"   # from: docker compose exec grist id grist
     volumes:
       - &lt;grist persist volume&gt;:/persist
       - grist-provisioner-data:/data

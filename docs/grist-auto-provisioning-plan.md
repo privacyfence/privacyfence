@@ -24,17 +24,17 @@ The provisioner lives in a **new repository**, as the user decided. Its build is
 ## Current state
 
 - **Grist bundle section.**
-  - `grist_auth.bundle_settings` (`src/privacyfence/grist_auth.py:113-136`) reads `grist.server_url` and the optional OAuth `client_id`/`client_secret`. In org mode it raises `GristClientError("Grist organization config not installed")` without a server.
-  - `grist_auth.normalize_server_url` (`:72-95`) enforces https (http only for loopback) and rejects a user name, password, query, fragment or an `/api` path segment.
+  - `grist_auth.bundle_settings` (`src/privacyfence/grist_auth.py:122-145`) reads `grist.server_url` and the optional OAuth `client_id`/`client_secret`. In org mode it raises `GristClientError("Grist organization config not installed")` without a server.
+  - `grist_auth.normalize_server_url` (`:75-98`) enforces https (http only for loopback) and rejects a user name, password, query, fragment or an `/api` path segment.
   - The builder writes the section at `scripts/build_org_bundle.py:688-707`. `:705` assigns `bundle["grist"] = grist_section`, which replaces the whole section. `_grist_url` (`:79-99`) mirrors `normalize_server_url`.
   - The Grist argument group starts at `:284`. The `--web-push` mode check is at `:840-843`; `--mode local` strips org-only sections at `:765-773`.
   - `tests/unit/test_docs_configuration_reference.py` requires every builder option in `docs/configuration-reference.md`. The Grist rows are at `:286-289`; the daemon option table is at `:357-368` (`--grist-oauth` at `:364`).
 - **Org config classes.** `WebPushConfig` (`src/privacyfence/org_mode.py:491-514`) is the pattern for strict validation; `__all__` is at `:538-559`. `org_mode.py` imports neither `re` nor `grist_auth` today. `grist_auth` does not import `org_mode`, so there is no import cycle.
 - **Grist credential file.** `credentials/grist_token.json` (`TOKEN_FILES`, `src/privacyfence/daemon_main.py:209`).
-  - `grist_auth.save_token_file` (`:149-151`) is the one write site (`tests/unit/test_systemic_gate_invariants.py:190`).
-  - `save_api_key` (`:154-158`) writes `{"auth": "api_key", "server_url", "api_key"}`.
-  - `load_token_file` (`:161-181`) checks `_REQUIRED_KEYS` and returns the record with `server_url` normalised.
-  - `resolve_credential` (`:192-212`) pairs an `api_key` record with the pinned server.
+  - `grist_auth.save_token_file` (`:157-159`) is the one write site (`tests/unit/test_systemic_gate_invariants.py:190`).
+  - `save_api_key` (`:162-166`) writes `{"auth": "api_key", "server_url", "api_key"}`.
+  - `load_token_file` (`:169-189`) checks `_REQUIRED_KEYS` and returns the record with `server_url` normalised.
+  - `resolve_credential` (`:212-232`) pairs an `api_key` record with the pinned server.
   - The connector is built at `daemon_main.py:1711-1728`.
 - **`/connect`.**
   - `grist_connect` (`src/privacyfence/web/routes_connect.py:745-776`) checks a pasted key with `GristClient.check_connection` and saves it with `save_api_key` at `:766-768`. Then it calls `connector_registry.evict(principal.id)`.
@@ -147,16 +147,16 @@ New flags, with these help texts:
 | `--grist-auto-provision` / `--no-grist-auto-provision` | `argparse.BooleanOptionalAction`, `default=None` | `Give each person a Grist API key at sign-in through the Grist provisioner and connect it for them (organization mode, API keys only; needs --grist-server-url, --grist-provisioner-url and the provisioning key in the daemon's environment).` |
 | `--grist-provisioner-url URL` | | `The Grist provisioner service PrivacyFence calls (https://; http:// only for localhost).` |
 | `--grist-provisioning-key-env NAME` | | `The environment variable the daemon reads the Grist provisioning key from (default PRIVACYFENCE_GRIST_PROVISIONING_KEY).` |
-| `--grist-trust-unverified-email` | `store_true` | `Provision people whose ID token does not say email_verified (only for identity providers that issue only verified, organization-owned addresses).` |
+| `--grist-trust-unverified-email` | `store_true` | `Provision people whose ID token does not say email_verified (only for identity providers that issue only verified, organization-owned addresses). Give it again on every --grist-auto-provision rebuild; leaving it out turns it off.` |
 
 Rules:
 
 - **Keep the section on a rebuild.** At `:697-705`, before `bundle["grist"] = grist_section`, carry over the old `auto_provision`: `previous = bundle.get("grist")`; if it is a dict and has `"auto_provision"`, set `grist_section["auto_provision"] = previous["auto_provision"]`. A `--merge --grist-server-url NEW` therefore keeps it.
 - **Where the checks go.** Next to the `--web-push` check (`:840-843`), after `bundle["mode"]` is known. Let `existing = bundle.get("grist", {}).get("auto_provision")`, or `{}` when that is not a dict. When `args.grist_auto_provision is not None`, check these in order:
   1. `bundle.get("mode") != "org"` → `SystemExit("--grist-auto-provision/--no-grist-auto-provision require --mode org (or --merge against an existing org-mode bundle).")`
-  2. No `bundle.get("grist", {}).get("server_url")` → `SystemExit("--grist-auto-provision requires --grist-server-url (or --merge against a bundle that has one).")`
-  3. `bundle["grist"].get("client_id")` → `SystemExit("--grist-auto-provision works only with API keys; it cannot be combined with --grist-client-id.")`
-  4. `args.grist_auto_provision` is false → set `bundle["grist"]["auto_provision"] = {"enabled": False}` and stop here.
+  2. `args.grist_auto_provision` is false → set `bundle.setdefault("grist", {})["auto_provision"] = {"enabled": False}` and stop here. Turning it off never needs a server or refuses an OAuth app.
+  3. No `bundle.get("grist", {}).get("server_url")` → `SystemExit("--grist-auto-provision requires --grist-server-url (or --merge against a bundle that has one).")`
+  4. `bundle["grist"].get("client_id")` → `SystemExit("--grist-auto-provision works only with API keys; it cannot be combined with --grist-client-id.")`
   5. `url = args.grist_provisioner_url or existing.get("provisioner_url")`. If empty → `SystemExit("--grist-auto-provision requires --grist-provisioner-url.")`
   6. Otherwise set `bundle["grist"]["auto_provision"] = {"enabled": True, "provisioner_url": _grist_url(url), "key_env": args.grist_provisioning_key_env or existing.get("key_env") or _DEFAULT_GRIST_PROVISIONING_KEY_ENV, "trust_unverified_email": args.grist_trust_unverified_email}`.
 - **Companion flags alone.** When `args.grist_auto_provision is None` but `--grist-provisioner-url`, `--grist-provisioning-key-env` or `--grist-trust-unverified-email` is given → `SystemExit("--grist-provisioner-url, --grist-provisioning-key-env and --grist-trust-unverified-email go with --grist-auto-provision.")`
@@ -266,11 +266,12 @@ class GristProvisionerClient:
 **State file.** `users/<id>/credentials/grist_provisioning.json`, written with `secure_files.atomic_write_json`:
 
 ```json
-{"email": "a@x.com", "display_name": "Alice", "status": "provisioned", "detail": "", "last_sign_in": 1767225600, "updated_at": 1767225600}
+{"email": "a@x.com", "status": "provisioned", "detail": "", "last_sign_in": 1767225600, "updated_at": 1767225600}
 ```
 
 | Status | Meaning |
 |---|---|
+| `pending` | A sign-in queued this person; the worker has not finished yet. |
 | `provisioned` | PrivacyFence holds a managed key that the provisioner created. |
 | `adopted` | PrivacyFence holds the person's own Grist key. It is never revoked by PrivacyFence. |
 | `user_connected` | The key the person pasted on `/connect` is kept. The provisioner is not called. |
@@ -282,12 +283,15 @@ class GristProvisionerClient:
 | `released` | `--grist-release` ran. The email is cleared. |
 | `error` | Anything else. `detail` holds the `GristProvisionerClientError` message. |
 
-**Per-principal lock.** `principal_lock(principal_id: str) -> threading.Lock` returns one lock per id, kept in a module dict `_LOCKS` that a module lock guards. `routes_connect.grist_connect` saves the pasted key inside `with grist_provisioning.principal_lock(principal.id):`.
+**Per-principal lock.** `principal_lock(principal_id: str) -> threading.Lock` returns one lock per id, kept in a module dict `_LOCKS` that a module lock guards. `routes_connect.grist_connect` saves the pasted key inside `with grist_provisioning.principal_lock(principal.id):`. The lock is never held across a provisioner call, and never taken twice in a nested way.
 
-**`provision_principal(principal_id: str, email: str, display_name: str, *, client: GristProvisionerClient, config: GristProvisioningConfig, on_change: Callable[[str], None], now: float) -> str`**
+**State writes.** Every change to the state file goes through one helper, `_update_state(principal_id: str, *, now: float, **fields: Any) -> dict[str, Any]`. Under `principal_lock(principal_id)` it reads the file (an unreadable or missing file counts as `{}`), applies `fields`, sets `updated_at = int(now)`, writes it with `secure_files.atomic_write_json`, and returns the new state. `_read_state(principal_id) -> dict[str, Any]` reads it the same way without writing. No other code writes the file, so a sign-in and the worker never lose each other's fields.
 
-It writes the state file with the email, display name, status and detail, keeping `last_sign_in` as stored, and returns the status. "A usable manual file" below means: `load_token_file` succeeds, `auth == "api_key"`, `token_source(record) == "manual"` and `record["server_url"] == config.server_url`. "A usable provisioned file" is the same with `token_source == "provisioned"`.
+**`provision_principal(principal_id: str, *, client: GristProvisionerClient, config: GristProvisioningConfig, on_change: Callable[[str], None], now: float) -> str`**
 
+It reads the email from the state file, writes `status` and `detail` through `_update_state` (leaving `email` and `last_sign_in` alone), and returns the status. "A usable manual file" below means: `load_token_file` succeeds, `auth == "api_key"`, `token_source(record) == "manual"` and `record["server_url"] == config.server_url`. "A usable provisioned file" is the same with `token_source == "provisioned"`.
+
+0. `state = _read_state(principal_id)`. If `state["status"] == "released"`, return `released` at once: `--grist-release` ran after this person was queued, and the worker must not provision them again. `email = state.get("email", "")`.
 1. If `email` is empty → `no_email`.
 2. Under `principal_lock(principal_id)`, read `paths.user_dir(Principal(id=principal_id)) / TOKEN_FILE`. If it is a usable manual file → `user_connected`, and the provisioner is not called.
 3. `account = client.upsert_account(principal_id, email)`.
@@ -329,16 +333,16 @@ class GristProvisioner:
 ```
 
 - **`request`** never blocks.
-  1. Under a state lock it writes the state file: `email`, `display_name`, `last_sign_in = clock()`, and the status `no_email` when `principal.email` is empty, or `unverified_email` when `email_verified` is false and `config.trust_unverified_email` is false. In those two cases it stops there.
+  1. Through `_update_state` it writes `email = principal.email`, `last_sign_in = int(clock())`, `detail = ""`, and a status: `no_email` when `principal.email` is empty; `unverified_email` when `email_verified` is false and `config.trust_unverified_email` is false; otherwise `pending`. In the first two cases it stops there. (A sign-in after `--grist-release` thereby replaces `released` with `pending`, so the person is provisioned again.)
   2. Otherwise it enqueues `principal.id`, unless the id is already in the `_queued` set, which a lock guards.
   3. When the queue is full (`queue.Queue(maxsize=QUEUE_MAX)`, `put_nowait`), it logs the warning `Grist provisioning queue is full; %s waits for the next sweep or sign-in` with the id.
 - **`process_next(timeout)`**
   1. It takes one id, waiting up to `timeout`, and returns `False` if none came.
-  2. It removes the id from `_queued` and reads that person's state file for the email and display name.
+  2. It removes the id from `_queued`.
   3. It calls `provision_principal(..., now=clock())`, then `stop_event.wait(PACE_SECONDS)`, and returns `True`.
 
   It is the only caller of `provision_principal`. Its body is wrapped in `except Exception` → `logger.warning("Grist provisioning worker error: %s", exc)`.
-- **`sweep_once`** only enqueues; it never calls the provisioner itself. Its candidates are every `users/<id>/` with a safe id (as in `web/mcp_auth.py:208-220`) whose state status is `provisioned`, `adopted`, `error` or `no_account`, and whose `last_sign_in` is within `INACTIVE_AFTER_SECONDS` of `clock()`. It returns how many it enqueued.
+- **`sweep_once`** only enqueues; it never calls the provisioner itself. Its candidates are every `users/<id>/` with a safe id (as in `web/mcp_auth.py:208-220`) whose state status is `pending`, `provisioned`, `adopted`, `error` or `no_account`, and whose `last_sign_in` is within `INACTIVE_AFTER_SECONDS` of `clock()`. It returns how many it enqueued.
 - **`start`** starts two threads, both with `daemon=True`:
   - `grist-provisioning` loops `process_next(1.0)` until `stop_event` is set.
   - `grist-provisioning-sweep` first calls `check()` on its **own** `GristProvisionerClient`. On success it logs info `Grist provisioning ready at %s (%d accounts managed)`; on `GristProvisionerClientError` it logs warning `Grist provisioning check failed: %s`. Then it loops `sweep_once()` and `stop_event.wait(SWEEP_INTERVAL_SECONDS)` until the event is set, with each pass wrapped in `except Exception` → warning `Grist provisioning sweep failed (will retry): %s`.
@@ -359,7 +363,7 @@ def release(principal_id: str) -> None
   2. `key = os.environ.get(config.key_env, "").strip()`. When it is empty, log warning `Grist auto-provisioning is on, but %s is not set; people connect Grist by hand on /connect.` (the variable name) and return `None`.
   3. Otherwise build the worker's client and the provisioner, call its `start()`, set `_INSTANCE` and return it.
 - **`notify_sign_in`.** It does nothing when `_INSTANCE is None`. Otherwise it calls `_INSTANCE.request(...)` inside `try`/`except Exception` → `logger.warning("Grist provisioning could not take the sign-in of %s: %s", principal.id, exc)`. It never raises.
-- **`release`.** Under `principal_lock`, it deletes the token file when it is provisioned, managed or adopted; a manual file stays. Then it writes status `released` with `email: ""` and `detail: ""`.
+- **`release`.** First it writes status `released` with `email: ""` and `detail: ""` through `_update_state`. Then, under `principal_lock`, it deletes the token file when it is provisioned (managed or adopted); a manual file stays. `run_grist_release` calls it **before** the provisioner call, so a worker already holding this person sees `released` in step 0 and stops.
 
 ### Wiring
 
@@ -367,15 +371,15 @@ def release(principal_id: str) -> None
   - Call `org_mode.GristProvisioningConfig.from_org_config(org_config)` next to the other `from_org_config` calls (`:1158-1159`), so a broken section refuses startup.
   - Right after `connector_registry = ConnectorRegistry(...)` (`:1210`), call `grist_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)`.
   - Local mode never calls it.
-- **`routes_org_identity.login_callback`.** After `session_id = sessions.create(principal)` (`:227`), outside the `try` block, call `grist_provisioning.notify_sign_in(principal, email_verified=grist_provisioning.email_verified_claim(claims))`. If a `peek_provisioning.notify_sign_in` call is already there, put this one right after it.
-- **`OrgOAuthProvider.handle_idp_callback`.** Make the same call after `org_identity.check_authz_policy(...)` (`:476`), so people who only use an AI client are provisioned too.
+- **`routes_org_identity.login_callback`.** After `session_id = sessions.create(principal)` (`:227`), outside the `try` block, call `await asyncio.to_thread(grist_provisioning.notify_sign_in, principal, email_verified=grist_provisioning.email_verified_claim(claims))`. It writes a file, so it never runs on the event loop (docs/coding-and-testing-guidelines.md §1.7). If a `peek_provisioning.notify_sign_in` call is already there, put this one right after it.
+- **`OrgOAuthProvider.handle_idp_callback`.** Make the same `await asyncio.to_thread(...)` call after `org_identity.check_authz_policy(...)` (`:476`), so people who only use an AI client are provisioned too.
 - **`routes_connect.grist_connect`.** Wrap its `save_api_key` call (`:766-768`) in `with grist_provisioning.principal_lock(principal.id):`.
 - **`--grist-release PRINCIPAL_ID`.** Add it next to `--revoke-scoped-tokens`, with help `Release the Grist key PrivacyFence holds for the account PRINCIPAL_ID: the provisioner deletes it in Grist if it created it, PrivacyFence forgets it, and the daemon exits. Needs the provisioning key in the environment.` It dispatches to `run_grist_release(principal_id) -> int`. Every message goes to stderr except the success line.
   1. If `safe_principal_id(principal_id) != principal_id`, or `principal_id == "local"`, or `data_dir()/"users"/principal_id` is not a directory → `No such account.`, return 1.
   2. `config = GristProvisioningConfig.from_org_config(load_org_config())`. On `ConfigurationError`, print it and return 1. When it is not enabled → `Grist auto-provisioning is not enabled in the organization config.`, return 1.
   3. When `os.environ.get(config.key_env, "").strip()` is empty → `Set {key_env} to the Grist provisioning key first.`, return 1.
-  4. `result = GristProvisionerClient(config.provisioner_url, key).release_account(principal_id)`. On `GristProvisionerClientError`, print it and return 1.
-  5. Call `grist_provisioning.release(principal_id)`.
+  4. Call `grist_provisioning.release(principal_id)`.
+  5. `result = GristProvisionerClient(config.provisioner_url, key).release_account(principal_id)`. On `GristProvisionerClientError` as `exc`, print `{exc} PrivacyFence has already forgotten the key; run --grist-release again to delete it in Grist.` and return 1.
   6. Print to stdout `Released the Grist connection of {principal_id}.`, followed by one of these, and return 0:
 
      | Result | Added text |
@@ -404,11 +408,13 @@ def release(principal_id: str) -> None
 
 ## ADRs
 
-The next three free numbers when the retirement phase runs (0242-0244 if the Peek plan's 0239-0241 have landed, else 0239-0241):
+Five ADRs, one decision each, taking the next five free numbers when the retirement phase runs (0242-0246 if the Peek plan's 0239-0241 have landed, else 0239-0243). Each index row says "Accepted; relates to 0142, 0143", as 0230 does, so ADRs 0142 and 0143 themselves are not edited.
 
-- *PrivacyFence gets Grist API keys from a Grist-side provisioner with a scoped key, and only ever calls it.* It covers the provisioner in Grist's zone, the key in an environment variable named by the bundle, API-key setups only, and the rejected forward-auth, SCIM, service-account and boot-key options. It extends ADR 0142 and ADR 0143.
-- *A pasted Grist key wins; an existing Grist key is adopted and never revoked by PrivacyFence.* It covers the `source` and `managed` markers in `grist_token.json`, `key_id`, and the per-principal lock shared with `/connect`.
-- *Grist provisioning needs a verified email, and a managed key expires 90 days after it was last issued.* It covers `email_verified`, `trust_unverified_email`, the stored email, renewal 30 days ahead, and the sweep stopping 90 days after the last sign-in.
+1. *Grist API keys come from a Grist-side provisioner with a scoped key, and PrivacyFence only ever calls it.* The provisioner in Grist's zone, the key in an environment variable named by the bundle, API-key set-ups only, and the rejected forward-auth, SCIM, service-account and boot-key options.
+2. *A Grist key the person pasted on /connect wins over provisioning.* The `source` marker in `grist_token.json` and the per-principal lock shared with `/connect`.
+3. *An existing Grist key is adopted and never revoked by PrivacyFence.* One key per person in Grist, the `managed` marker, `key_id`, and why replacing a key was rejected.
+4. *Grist provisioning needs a verified email.* `email_verified`, `trust_unverified_email`, and the stored email kept for renewal.
+5. *A managed Grist key expires 90 days after it was last issued.* Renewal 30 days ahead, the sweep stopping 90 days after the last sign-in, and therefore a managed key living at most about 150 days after the last sign-in (a renewal near day 60 lasts to about day 150); `--grist-release` for anything sooner.
 
 ## Manual steps
 
@@ -438,6 +444,11 @@ feature_branch: feature/grist-auto-provisioning
 max_parallel: 2
 manual_steps_artifact: https://claude.ai/artifact/5RVxf9Zhi94bU37gLqBcLS
 manual_steps_source: docs/grist-auto-provisioning-plan-manual-steps.html
+manual_before:
+  - id: mb1-companion-plan
+    title: Create privacyfence/grist-provisioner and copy the companion plan there (step-by-step page, item 1)
+    why: Phase p6 deletes docs/grist-provisioner-companion-plan.md from this repository; it must exist in the provisioner repository first, or it is lost.
+    done_when: docs/grist-provisioner-plan.md exists on branch plan/grist-provisioner in privacyfence/grist-provisioner
 manual_after:
   - id: ma1-provisioner
     title: Deploy the Grist provisioner next to Grist (companion plan) and create a provisioning key
@@ -459,9 +470,9 @@ verify_after_merge:
   - python3 -m pytest tests/unit/test_grist_provisioning.py tests/unit/test_daemon_main.py tests/unit/web/test_routes_connect.py tests/unit/web/test_routes_org_identity.py tests/unit/web/test_oauth_provider.py -q
 final_checks:
   - docs/grist-auto-provisioning-plan.md, docs/grist-auto-provisioning-plan-manual-steps.html and docs/grist-provisioner-companion-plan.md are deleted and nothing links to them
-  - the three Grist provisioning ADRs exist, are Accepted, and are rows in docs/adr/README.md
+  - the five Grist provisioning ADRs exist, are Accepted, and are rows in docs/adr/README.md
   - CHANGELOG.md has the Grist auto-provisioning entry under "## [Unreleased]" and no new version heading
-  - the PR description says the companion plan was moved to the provisioner repository (or that the user still has to move it)
+  - the PR description links the companion plan in privacyfence/grist-provisioner (manual_before mb1-companion-plan)
 phases:
   - id: p1-config
     title: GristProvisioningConfig and the bundle builder flags
@@ -541,7 +552,7 @@ phases:
     brief: |
       Must-read docs as in p1. Read this plan's Design sections "The provisioner's wire contract", "The credential file (grist_auth)" and "src/privacyfence/grist_provisioner_api.py", and "Risks".
       1. src/privacyfence/grist_auth.py:
-         - Change save_api_key (:154-158) and load_token_file (:161-181) exactly as Design says, and add token_source and key_id (add `import hashlib`).
+         - Change save_api_key (:162-166) and load_token_file (:169-189) exactly as Design says, and add token_source and key_id (add `import hashlib`).
          - save_token_file stays the one write site, and a manual file stays byte-identical.
       2. Create src/privacyfence/grist_provisioner_api.py with GristProvisionerClientError, GristProvisionedAccount, GristIssuedKey, GristRelease and GristProvisionerClient. Use the signatures, paths, bodies, parsing rules, error messages and log line in Design, verbatim. Model the request plumbing on peek_client._send (src/privacyfence/peek_client.py:112): its own requests.Session, no redirects, a 30 s timeout.
       3. Tests.
@@ -597,7 +608,8 @@ phases:
       1. Create src/privacyfence/grist_provisioning.py with exactly what Design describes:
          - the constants and the state file;
          - principal_lock;
-         - provision_principal, with steps 1-6 and its error table;
+         - _update_state and _read_state;
+         - provision_principal, with steps 0-6 and its error table;
          - GristProvisioner, with request, process_next, sweep_once and start;
          - _INSTANCE, start, notify_sign_in, email_verified_claim and release.
          Rules:
@@ -605,13 +617,15 @@ phases:
          - Every thread has daemon=True and exits once stop_event is set.
          - Only process_next calls provision_principal.
       2. tests/conftest.py _reset() (:90-145): add `grist_provisioning._INSTANCE = None` and `grist_provisioning._LOCKS.clear()`. Add grist_provisioning to the import list at :27-46.
-      3. scripts/check_coverage_floor.py: add the floor "src/privacyfence/grist_provisioning.py": 100.0 and "src/privacyfence/grist_provisioner_api.py": 100.0, in the file's existing sorted style.
+      3. scripts/check_coverage_floor.py: add "src/privacyfence/grist_provisioning.py": 100.0 and "src/privacyfence/grist_provisioner_api.py": 100.0 in the "# Org-config fail-closed load path." group, right after the daemon_main.py line.
       4. Tests in tests/unit/test_grist_provisioning.py.
          Setup:
          - Use tmp_path as the data dir: monkeypatch paths.data_dir as tests/unit/test_principal_isolation.py does.
          - A FakeProvisionerClient records calls and can be set to raise GristProvisionerClientError(..., status=..., detail=...). No network.
          Tests:
          - test_no_email_writes_no_email
+         - test_released_status_skips_provisioning (state released → returns released, the fake records no call)
+         - test_update_state_keeps_other_fields_and_sets_updated_at
          - test_manual_file_for_same_server_is_kept_and_provisioner_not_called
          - test_manual_file_for_other_server_is_replaced
          - test_new_key_is_issued_saved_managed_and_evicted (source provisioned, managed true and expires_at in the file; on_change called once; status provisioned)
@@ -631,7 +645,8 @@ phases:
          - test_request_unverified_email_is_not_queued
          - test_request_unverified_email_is_queued_when_trusted
          - test_request_no_email_is_not_queued
-         - test_request_records_last_sign_in
+         - test_request_records_last_sign_in_and_sets_pending
+         - test_sign_in_after_release_sets_pending_and_provisions
          - test_request_is_deduplicated_while_queued
          - test_full_queue_drops_with_warning
          - test_process_next_returns_false_on_empty_queue
@@ -669,8 +684,8 @@ phases:
     brief: |
       Must-read docs as in p1. Read this plan's Design section "Wiring", and "Risks" (the Peek-plan overlap).
       1. In daemon_main._start_org_web_server (src/privacyfence/daemon_main.py:1109-1265), add the validation and the start call exactly as Design says.
-      2. In web/routes_org_identity.py login_callback, add the notify_sign_in call after sessions.create (:227), outside the try block at :213-224.
-      3. In web/oauth_provider.py handle_idp_callback, add the notify_sign_in call after check_authz_policy (:476).
+      2. In web/routes_org_identity.py login_callback, add the `await asyncio.to_thread(grist_provisioning.notify_sign_in, ...)` call after sessions.create (:227), outside the try block at :213-224, exactly as Design says.
+      3. In web/oauth_provider.py handle_idp_callback, add the same `await asyncio.to_thread(...)` call after check_authz_policy (:476).
       4. In daemon_main:
          - Add --grist-release next to --revoke-scoped-tokens (:2405), and dispatch it next to :2497.
          - Implement run_grist_release exactly as Design steps 1-6 say, with the messages verbatim and on the streams given.
@@ -690,10 +705,10 @@ phases:
              - test_revoked_message
              - test_own_key_message
              - test_no_link_message
-             - test_client_error_exits_1
-             - test_release_called (grist_provisioning.release is called with the id)
+             - test_client_error_exits_1 (the message ends with "run --grist-release again to delete it in Grist.")
+             - test_release_runs_before_the_provisioner_call (record the call order)
          - tests/unit/web/test_routes_org_identity.py:
-           - test_login_callback_calls_grist_notify_sign_in_with_email_verified
+           - test_login_callback_calls_grist_notify_sign_in_with_email_verified (monkeypatch asyncio.to_thread with a recorder and assert it received grist_provisioning.notify_sign_in)
            - test_failed_login_callback_does_not_call_grist_notify_sign_in
          - tests/unit/web/test_oauth_provider.py:
            - test_handle_idp_callback_calls_grist_notify_sign_in
@@ -735,8 +750,8 @@ phases:
          - managed keys versus adopted keys: Grist has one key per person, an existing key is adopted and never deleted by PrivacyFence, and regenerating or removing the key in Grist disconnects PrivacyFence until the next sign-in;
          - that the install admin is never provisioned and connects by hand;
          - that people without a Grist account are provisioned once Grist has one (first sign-in to Grist, or a share);
-         - managed keys expire 90 days after they were last issued and are renewed while the person signs in;
-         - --grist-release and "remove them from the identity provider first";
+         - managed keys expire 90 days after they were last issued and are renewed 30 days ahead while the person signs in, so a managed key lives at most about 150 days after the last sign-in; --grist-release for anything sooner;
+         - --grist-release and "remove them from the identity provider first"; and that a running daemon keeps a person's Grist connector in memory until it is rebuilt, so restart the daemon after --grist-release when the key was adopted (a deleted managed key stops working in Grist at once);
          - what each product does when the other is down.
          Add to "## Troubleshooting" every new message in Design, each with its fix: the startup warnings, the ready and check-failed lines, the GristProvisionerClient errors, the --grist-release messages and the queue-full warning. Add the new bundle flags to "## Build and distribute the bundle".
       4. docs/org-mode-setup-guide.md:
@@ -760,25 +775,27 @@ phases:
     depends_on: [p4-wiring, p5-connect-and-docs]
     complexity: S
     touches:
-      - docs/adr/*grist*provision*.md
+      - docs/adr/*grist*.md
       - docs/adr/README.md
       - CHANGELOG.md
       - docs/grist-auto-provisioning-plan.md
       - docs/grist-auto-provisioning-plan-manual-steps.html
       - docs/grist-provisioner-companion-plan.md
     brief: |
-      Read docs/adr/README.md (template, rules, one decision per ADR). Take the next three free ADR numbers on this branch as it stands.
-      1. Write the three ADRs from this plan's ADRs section, each with Status Accepted, named:
-         - docs/adr/NNNN-grist-api-keys-come-from-a-grist-side-provisioner-with-a-scoped-key.md
-         - docs/adr/NNNN-a-pasted-grist-key-wins-and-an-existing-grist-key-is-adopted.md
-         - docs/adr/NNNN-grist-provisioning-needs-a-verified-email-and-managed-keys-expire-after-90-days.md
+      Read docs/adr/README.md (template, rules, one decision per ADR). Take the next five free ADR numbers on this branch as it stands.
+      1. Write the five ADRs from this plan's ADRs section, in that order, each with Status Accepted, named:
+         - docs/adr/NNNN-grist-api-keys-come-from-a-grist-side-provisioner.md
+         - docs/adr/NNNN-a-pasted-grist-key-wins-over-provisioning.md
+         - docs/adr/NNNN-an-existing-grist-key-is-adopted-and-never-revoked.md
+         - docs/adr/NNNN-grist-provisioning-needs-a-verified-email.md
+         - docs/adr/NNNN-a-managed-grist-key-expires-90-days-after-it-was-issued.md
          Each has these sections:
          - Context: ADR 0142, ADR 0143, the free edition with no OAuth apps, one key per person in Grist, and Grist in its own zone;
          - Decision;
          - Consequences;
          - the matching rejected alternatives from Design "Rejected alternatives".
          Link source files (src/privacyfence/grist_provisioning.py, grist_provisioner_api.py, grist_auth.py, org_mode.py), never this plan.
-      2. Add the three rows to docs/adr/README.md in the existing format.
+      2. Add the five rows to docs/adr/README.md in the existing format, each with status "Accepted; relates to 0142, 0143". Do not edit ADRs 0142 or 0143.
       3. CHANGELOG.md: under "## [Unreleased]", add "### Added" (or reuse it if present) with one entry in the file's bold-lead style:
          "- **Grist API keys for everyone, in organization mode.** With a self-hosted Grist, the Grist provisioner and `--grist-auto-provision`, each person who signs in and has a Grist account gets their Grist connection set up for them; a key they paste on /connect still wins, an existing Grist key is reused rather than replaced, and `privacyfence-app --grist-release` deletes the key PrivacyFence was given when someone leaves."
          Never add a version heading.
@@ -787,7 +804,7 @@ phases:
     acceptance:
       - test ! -e docs/grist-auto-provisioning-plan.md && test ! -e docs/grist-auto-provisioning-plan-manual-steps.html && test ! -e docs/grist-provisioner-companion-plan.md
       - grep -rn "grist-auto-provisioning-plan\|grist-provisioner-companion-plan" docs src README.md CHANGELOG.md prints nothing
-      - ls docs/adr/*-grist-api-keys-come-from-a-grist-side-provisioner-with-a-scoped-key.md docs/adr/*-a-pasted-grist-key-wins-and-an-existing-grist-key-is-adopted.md docs/adr/*-grist-provisioning-needs-a-verified-email-and-managed-keys-expire-after-90-days.md lists three files
-      - grep -c "grist-api-keys-come-from\|a-pasted-grist-key-wins\|grist-provisioning-needs-a-verified-email" docs/adr/README.md prints 3
+      - ls docs/adr/*-grist-api-keys-come-from-a-grist-side-provisioner.md docs/adr/*-a-pasted-grist-key-wins-over-provisioning.md docs/adr/*-an-existing-grist-key-is-adopted-and-never-revoked.md docs/adr/*-grist-provisioning-needs-a-verified-email.md docs/adr/*-a-managed-grist-key-expires-90-days-after-it-was-issued.md lists five files
+      - grep -c "grist-api-keys-come-from-a-grist-side-provisioner\|a-pasted-grist-key-wins-over-provisioning\|an-existing-grist-key-is-adopted\|grist-provisioning-needs-a-verified-email\|a-managed-grist-key-expires" docs/adr/README.md prints 5
       - python3 -m pytest tests/unit -q passes
 ```
