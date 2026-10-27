@@ -1,4 +1,4 @@
-# Plan: split the organization config, add an Admin page, and ship built-in OAuth apps
+# Plan: PrivacyFence 7 — split the organization config, an Admin page, built-in OAuth apps and a Docker trial
 
 ## Goal
 
@@ -40,6 +40,14 @@ After this plan:
   OAuth redirect relay at `https://oauth.privacyfence.eu`. It forwards a provider's redirect only to
   a server that has proven it controls its own domain. Desktop installs use the built-in apps
   directly through their fixed loopback redirects.
+
+- **The Docker image starts in organization mode on its own.** With no bundle and no IdP it runs
+  as a single-administrator trial on `http://localhost`. Sign-in uses a one-time setup code from the
+  container log, then a passkey. Built-in apps reach it through the relay's loopback forwarding.
+  `mode` and the server address can also come from environment variables.
+- **Desktop (local) mode is deprecated.** 7.x says so in the daemon log, in `privacyfence_status`,
+  on every local page and once from the companion. 8.x removes it, in a separate plan written after
+  7.0 ships. The release is cut as 7.0.0 by the maintainer after this plan's PR merges.
 
 An organization that wants its own app for a provider puts the credentials in the bundle, as today.
 The Admin page shows, for each service, which app is in use and how to switch.
@@ -112,7 +120,7 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
   Observability is off (ADR 0186).
 - **Privacy page.** `website/privacy/index.html:26-27` and `:45-54` say the policy covers only the
   site and `downloads.privacyfence.eu`, and that the software "sends nothing to the project".
-- **ADR numbers.** The highest accepted ADR is 0238, so this plan takes 0239 to 0243.
+- **ADR numbers.** The highest accepted ADR is 0238, so this plan takes 0239 to 0245.
 - **Operational sections and their parsers.** Each takes the whole org config dict:
   - `download_delivery`: `org_mode.DownloadDeliveryConfig.from_org_config`
   - `audit_forwarding`: `org_mode.AuditForwardingConfig.from_org_config`
@@ -785,6 +793,173 @@ p5 extends it to patch `relay_client.relay_token_path` (a function returning
 `paths.org_dir() / "relay_token.txt"`) to `tmp_path / "relay_token.txt"`. Tests that need built-in
 apps patch `builtin_app` themselves.
 
+### D9. Mode and server from the environment, and the Docker image starts in org mode
+
+**`mode` may come from the environment.** `org_mode.resolve_mode(org_config)` decides the mode in
+this order:
+
+1. When `org_config` has `"mode"`, that value, validated as today.
+2. Otherwise the environment variable `PRIVACYFENCE_MODE`, which must be `local` or `org`. Any other
+   value raises `ConfigurationError("PRIVACYFENCE_MODE must be \"local\" or \"org\", got <v>")`.
+3. Otherwise `"local"`.
+
+When both the bundle and the variable are set and they differ, it raises
+`ConfigurationError("org_config.json says \"mode\": \"<a>\" but PRIVACYFENCE_MODE says \"<b>\"; remove one of them")`.
+
+Because `load_org_config`'s "org mode needs a signed bundle" check calls `resolve_mode`, a bundle
+without `mode` under `PRIVACYFENCE_MODE=org` must still be signed.
+
+**`server` may come from the environment.** `ServerConfig.from_org_config` fills each value the
+bundle's `server` section does not set:
+
+- `bind_host` from `PRIVACYFENCE_BIND_HOST`;
+- `port` from `PRIVACYFENCE_PORT` (an integer from 1 to 65535);
+- `issuer_url` from `PRIVACYFENCE_ISSUER_URL`.
+
+The bundle always wins over the environment. In trial mode (below) a missing `issuer_url` defaults
+to `http://localhost:<port>`.
+
+**Trial mode.**
+
+- `org_mode.is_trial(org_config) -> bool` returns `resolve_mode(org_config) == "org" and not
+  org_config.get("idp")`.
+- In trial mode, `_start_org_web_server` no longer raises "org mode requires an \"idp\" section".
+  Instead it requires the issuer URL's scheme to be `http` and its hostname to be `localhost` or
+  `127.0.0.1`. Otherwise it raises `ConfigurationError("Organization mode without an identity
+  provider is a trial and runs only at http://localhost or http://127.0.0.1. Add an \"idp\"
+  section to org_config.json to serve any other address.")`.
+- A trial needs no bundle at all. Built-in apps and the admin config supply everything else.
+- At every trial start, `daemon_main` logs at WARNING `Trial mode: a single administrator, no
+  identity provider. For evaluation on this computer only.`
+
+**The Docker image.**
+
+- `deploy/docker/Dockerfile` adds `ENV PRIVACYFENCE_MODE=org PRIVACYFENCE_BIND_HOST=0.0.0.0` to
+  its existing `ENV` block.
+- `deploy/docker/docker-entrypoint.sh` no longer exits 78 when there is no bundle. Without one, it
+  prints `No organization bundle: starting a trial at http://localhost:8765 (docs/org-mode-docker.md, "Try it on this computer").`
+  to stderr, then `exec`s as before.
+- The trial command, documented in `docs/org-mode-docker.md`, is
+  `docker run --rm -p 127.0.0.1:8765:8765 -v pf-data:/var/lib/privacyfence-org/.privacyfence ghcr.io/privacyfence/privacyfence-org:latest`.
+  The `127.0.0.1:` publish keeps the trial unreachable from the network. The image cannot check
+  this, and the docs say so plainly.
+- `tests/integration/test_org_docker_image.py` covers the image. A phase that changes the image
+  dispatches `build.yml` (in `ci.dispatchable`) to run it, because the container cannot build
+  images.
+
+**The relay on localhost.** This amends the D5 contract.
+
+- A loopback host is `localhost` or `127.0.0.1` with an optional port. It needs no registration and
+  no domain proof.
+- **Worker:** `GET /callback/:grant` with a state whose host part is loopback returns a 302 to
+  `http://<host>/oauth/callback/<grant>?<query>` without consulting the registry. The browser
+  performs that redirect, so the code reaches only the machine the person is using, the same trust
+  as a desktop install's loopback redirect.
+- **Worker:** `POST /register` with a loopback host still answers 400 `host_not_public`.
+- **`relay_client`:**
+  - `register` refuses a loopback issuer without calling the Worker. Its "https with no path"
+    check is relaxed to "https with no path, or http on a loopback host".
+  - `_tick` treats a loopback issuer as not needing registration.
+  - `routes_connect.start` skips the "registration has not succeeded" refusal for a loopback
+    issuer.
+  - The Admin page's relay status line says `Relay registration: not needed on localhost.`
+
+### D10. Trial sign-in: a setup code, then a passkey
+
+**Module `src/privacyfence/web/trial_auth.py`.** It is mounted instead of
+`routes_org_identity.build_routes` when `org_mode.is_trial(org_config)`.
+
+- **The principal.** `TRIAL_PRINCIPAL = Principal(id="trial-admin", email="admin@localhost",
+  display_name="Trial administrator", is_admin=True)`.
+- **The setup code.**
+  - At startup, when `webauthn_stepup.has_credentials(TRIAL_PRINCIPAL)` is false, the daemon
+    generates `secrets.token_hex(4).upper()` formatted `XXXX-XXXX`. It keeps the code in memory only
+    and logs it at WARNING: `Trial setup code: <code>. Open http://localhost:<port>/login to set up
+    your passkey.`
+  - Five wrong codes invalidate it until the next start. The log line for that is `Trial setup code
+    used up after 5 wrong attempts; restart PrivacyFence for a new one.`
+  - Once a passkey is enrolled, the code is discarded and setup is refused.
+- **`GET /login?next=<path>`:**
+  - With no passkey enrolled, a form: "Setup code" input, button "Continue".
+  - Otherwise, a "Sign in with your passkey" button that runs the WebAuthn get ceremony.
+  - `next` is cleaned with `routes_org_identity._safe_next_path`.
+  - The page uses `web_shell.wrap` with no nav and the CSP nonce helper.
+- **`POST /login/setup`** (form: `code`, `next`):
+  - It is origin-checked with `org_session.check_origin`. There is no session yet, so it is bound
+    instead by a short-lived `pf_trial_setup` cookie set by `GET /login`: a random value, HttpOnly,
+    SameSite=Strict, 10-minute max-age, echoed as a hidden field and compared in constant time.
+  - It compares the code with `secrets.compare_digest`.
+  - On success it creates an org session for `TRIAL_PRINCIPAL` with `org_session`'s existing
+    creation and cookie helpers, as `routes_org_identity.login_callback` does, and redirects to
+    `/security`. The passkey page already prompts enrollment there.
+  - On failure it re-renders the form with `That code is not right.`, or after the fifth failure
+    `The setup code is used up. Restart PrivacyFence to get a new one.`
+- **`POST /login/passkey/options` and `POST /login/passkey/verify`** use
+  `webauthn_stepup.begin_assertion` and `verify_assertion` for `TRIAL_PRINCIPAL`, with `rp_id` taken
+  from the issuer host. Bind them with the same cookie pattern, and keep the challenge in a
+  `StepUpChallengeStore`-like single-use store keyed by that cookie. On success they create the
+  session and return `{"redirect": next}`.
+- **`GET /logout`** behaves as today's org logout.
+- **MCP clients through the OAuth server.**
+  - `OrgOAuthProvider` gets `trial: bool`, and `idp` may be `None` when `trial` is true.
+  - `authorize` then records the pending authorization as today but returns
+    `/login?next=/oauth/trial/continue%3Fstate%3D<own_state>`.
+  - The new route `GET /oauth/trial/continue?state=` needs a trial session for `TRIAL_PRINCIPAL`
+    and calls `provider.handle_trial_continue(state=..., principal=...)`.
+  - To support it, split `handle_idp_callback` into:
+    - `_pop_pending(state)`;
+    - the IdP-specific claims step;
+    - `_finish_for_principal(pending, principal) -> str`, which holds today's consent check and
+      code minting, unchanged.
+
+    `handle_trial_continue` = `_pop_pending` + `_finish_for_principal`. This makes consent (ADR
+    0177) apply to trial clients unchanged.
+- **Step-up and approvals** work as on any org server; `TRIAL_PRINCIPAL`'s passkey is the step-up
+  passkey.
+- **Lost passkey.** Recovery is to stop the container and delete
+  `users/trial-admin/authority/webauthn_credentials.json`, or the exact path
+  `webauthn_stepup._credentials_path(TRIAL_PRINCIPAL)` resolves to in the volume. The next start
+  prints a new code. This goes in the docs.
+- **Audit.** Sign-in successes and failures are audit-logged like `routes_org_identity`'s, with
+  decisions `trial_setup_signin`, `trial_setup_refused`, `trial_passkey_signin` and
+  `trial_passkey_refused`. A refusal never records the code typed.
+
+### D11. Local mode is deprecated in 7.x
+
+- **The text.** One constant, `org_mode.LOCAL_MODE_DEPRECATION`: `Desktop mode is deprecated and
+  will be removed in PrivacyFence 8. Move to an organization server, or try the Docker image on
+  this computer: https://privacyfence.eu/docs/moving-to-organization-mode/`
+- **Daemon log.** `run_app` logs it at WARNING at every local-mode start.
+- **`privacyfence_status`.** `mcp_dispatch`'s status result (`web/mcp_dispatch.py:511-537`) gains
+  `"deprecation": LOCAL_MODE_DEPRECATION` in local mode and `null` in org mode. The tool
+  description in `web/mcp_tools.py:257` adds "deprecation (local mode: a notice to relay to the
+  human once)". Regenerate `docs/tools-reference.md` with `scripts/generate_tools_reference.py` if
+  a test pins it.
+- **Web banner.** `web_shell.wrap` gains a keyword `deprecation_html: str = ""`.
+  - When it is non-empty, the page shows its own strip, `<div class="pf-shell-deprecation"
+    role="note">…</div>`, above `banner_html`. The strip is not dismissible and is styled like the
+    existing notice strip.
+  - Every local-mode page passes the text as a link. These are the `wrap` call sites whose
+    `nav_items` is the local `_NAV_ITEMS`; grep `web_shell.wrap(` and the local routes in
+    `routes_settings`, `routes_approvals`, `routes_security` and `routes_admin`.
+  - Org pages pass nothing.
+- **Companion.** Once per OS user, when the tray (`companion._run_tray`) or `--serve` starts after
+  the upgrade, the companion shows the text through `icon.notify(...)`, or `_notify_send` under
+  `--serve`.
+  - The "shown" marker lives at a stdlib-computed per-user path,
+    `companion._notice_state_path()`:
+    - macOS: `~/Library/Application Support/PrivacyFence Companion/notices.json`
+    - Windows: `%APPDATA%\PrivacyFence Companion\notices.json`
+    - Linux: `${XDG_STATE_HOME:-~/.local/state}/privacyfence-companion/notices.json`
+  - The marker is the JSON `{"local_mode_deprecated_7": true}`, written atomically. A failure to
+    read or write it means the notice shows again next time and is never an error.
+- **Docs.** p13 adds `docs/moving-to-organization-mode.md` (moving to a server or the Docker image,
+  bringing rules along per the existing "Moving a person from a desktop install" section) and marks
+  the install guides as deprecated.
+- **Changelog.** The changelog says so under a breaking-changes note.
+- **Release.** The release itself is cut as 7.0.0 by the maintainer after merge, per
+  `docs/releasing.md`. No phase tags anything.
+
 ## ADRs
 
 - **0239** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -809,7 +984,14 @@ apps patch `builtin_app` themselves.
   Stats lives); relates to 0033.
 - **0243** — Org servers use the built-in apps through the PrivacyFence-hosted redirect relay at
   `oauth.privacyfence.eu`. It forwards only to hosts that proved control of their domain, keeps no
-  logs, lists registrations publicly, and maintainers can revoke a host. Relates to 0011, 0186.
+  logs, lists registrations publicly, and maintainers can revoke a host. It forwards to a loopback
+  host without registration. Relates to 0011, 0186.
+- **0244** — `mode` and the server address may come from environment variables. Organization mode
+  without an IdP is a single-administrator trial, allowed only on `http://localhost` or
+  `127.0.0.1`, signed in with a one-time setup code and then a passkey. The Docker image starts in
+  organization mode. Relates to 0011, 0177, 0213.
+- **0245** — Local (desktop) mode is deprecated in 7.x, announced in the log, status, pages and
+  companion, and is to be removed in 8.x. Relates to 0002, 0003.
 
 ## Manual steps
 
@@ -825,8 +1007,18 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - (ma2) Deploy the relay from the branch and connect through it from an org server.
   - (ma3) Upgrade an org server with an old-style bundle, then use the Admin page and check that
     Settings looks the same for an admin and a normal user.
+  - (ma4) Run the branch's Docker image as a localhost trial: setup code, passkey, a connector
+    through the relay, and an MCP client signing in. Check that a desktop install shows the
+    deprecation notices.
 
 ## Risks and open questions
+
+- **Trial-mode safety relies on the port publish.** Inside the container the daemon binds
+  `0.0.0.0`. Only `-p 127.0.0.1:8765:8765` keeps it off the network, and the image cannot verify
+  that. The issuer must be loopback and the account needs a passkey, so a reachable trial still
+  needs the setup code from the container log. ADR 0244 and the Docker docs say this plainly.
+- **Trial sign-in is new authentication code.** p16 runs on Opus for that reason (see its
+  `worker_model_reason`).
 
 - **Desktop installs lose bundle enforcement of the offered services.** An IT-distributed bundle
   used to decide which services a desktop install offers. After the import, the install owner
@@ -883,13 +1075,16 @@ manual_after:
 - id: ma3-upgrade-and-admin-page
   title: Upgrade an org server that has an old-style bundle, check the one-time import, use the Admin page, and compare Settings for an admin and a normal user
   why: checks the migration and the admin path end to end, with step-up, on a real deployment
+- id: ma4-docker-trial-and-deprecation
+  title: Run the branch's Docker image as a localhost trial (setup code, passkey, a connector through the relay, an MCP client), and check a desktop install's deprecation notices
+  why: the trial's browser ceremonies, the real relay and a real MCP client cannot run in CI
 verify_after_merge:
 - python3 -m mypy src/privacyfence
 - python3 scripts/mypy_strict_modules.py
 - test ! -d cloudflare/oauth-relay || (cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test)
 final_checks:
 - docs/builtin-oauth-apps-plan.md and docs/builtin-oauth-apps-plan-manual-steps.html are deleted, and grep -rn "builtin-oauth-apps-plan" --exclude-dir=.git . finds nothing
-- ADRs 0239-0243 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0016, 0196 and 0217 carry one new Status line each; ADR 0040 is unchanged
+- ADRs 0239-0245 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0016, 0196 and 0217 carry one new Status line each; ADR 0040 is unchanged
 - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
 - cd cloudflare/oauth-relay && npm ci && npm test && npm run typecheck && npm run dry-run passes
 phases:
@@ -1055,7 +1250,7 @@ phases:
   - tests/unit/test_daemon_main.py
   - tests/conftest.py
   - scripts/check_coverage_floor.py
-  brief: |
+  brief: |-
     Read "Design → D5": the contract, the host rules and "Org server side". Also read D8. The Worker is p11; here everything that talks to it is mocked.
     1. Guard grep: `grep -rnE "dict\(org_config\)|\{\*\*org_config|deepcopy\(org_config" src/privacyfence/daemon_main.py src/privacyfence/web`. The reviewer found none. If a copy of the org config is handed to routes_connect, build_org_routes, build_connectors or another long-lived object, stop with status=blocked and name it: refresh_in_place relies on one shared dict.
     2. Create src/privacyfence/relay_client.py per D5. It contains relay_token_path, well_known_token, valid_relay_host, public_host, register, status, request_check, _tick, start_registration_loop and reset_for_tests. Keep the module state in a small dataclass guarded by a threading.Lock, and never log the token.
@@ -1088,6 +1283,8 @@ phases:
        - tests/unit/test_daemon_main.py: _start_org_web_server starts the registration loop. Monkeypatch relay_client.start_registration_loop and assert it was called with the shared org_config object (`is`).
     8. scripts/check_coverage_floor.py: add "src/privacyfence/relay_client.py" to MODULE_FLOORS at 100.
     9. Run ruff check . and python3 -m pytest tests/unit -q.
+
+    10. Also implement D9's "The relay on localhost" rules on this side: register refuses a loopback issuer without calling the Worker and accepts http only on a loopback host; _tick treats a loopback issuer as not needing registration; start() skips the registration refusal for a loopback issuer. Test each in the files above.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/web/test_routes_connect.py -q -k TestRelay passes and selects at least 6 tests
@@ -1322,7 +1519,7 @@ phases:
   - .github/workflows/dependency-audit.yml
   - .github/dependabot.yml
   - .claude/toolkit.yaml
-  brief: |
+  brief: |-
     Read "Design → D5": the contract, the host rules and "The Worker". Routes, codes, texts and headers are all there.
     1. Create cloudflare/oauth-relay/:
        - Copy cloudflare/downloads' package.json, renamed privacyfence-oauth-relay, with the same scripts, devDependencies and overrides.
@@ -1357,15 +1554,134 @@ phases:
     Stop conditions:
     - If the vitest workers pool version pinned in cloudflare/downloads cannot run a SQLite Durable Object (an error naming new_sqlite_classes or ctx.storage.sql), stop with status=blocked. Do not switch to D1: D1 needs a dashboard-provisioned id this plan does not have.
     - If vi.spyOn(globalThis, "fetch") does not intercept the Worker's outbound fetch in the pool, stop with status=blocked.
+
+    Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
   - grep -n "enabled = false" cloudflare/oauth-relay/wrangler.toml matches
   - grep -n "cloudflare/oauth-relay" .claude/toolkit.yaml .github/workflows/dependency-audit.yml .github/dependabot.yml matches in all three
-- id: p12-adrs
-  title: ADRs 0239-0243 and the status lines on the ADRs they amend
+- id: p15-mode-from-env-and-trial
+  title: Mode and server address from the environment, trial mode on localhost, and a Docker image that starts in org mode
   depends_on:
+  - p7-admin-routes
+  complexity: M
+  touches:
+  - src/privacyfence/org_mode.py
+  - tests/unit/test_org_mode.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  - tests/conftest.py
+  - deploy/docker/Dockerfile
+  - deploy/docker/docker-entrypoint.sh
+  - tests/integration/test_org_docker_image.py
+  brief: |-
+    Read "Design → D9", except "The relay on localhost", which p5 and p11 already did. The trial sign-in is p16; this phase makes a trial start, with routes_org_identity still mounted.
+    1. org_mode.py: resolve_mode's environment order and conflict error, the ServerConfig environment fallbacks, and is_trial, exactly per D9.
+    2. tests/conftest.py: add an autouse fixture that runs monkeypatch.delenv(name, raising=False) for PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL, so a developer's environment never leaks into tests.
+    3. daemon_main.py _start_org_web_server: in trial mode, replace the "requires an idp section" raise with D9's loopback check and message. Pass idp=None through, and do not mount routes_org_identity or the IdP step-up routes when idp is None (p16 mounts the trial routes). Log D9's trial warning in run_app.
+       - Stop condition: if something other than routes_org_identity, routes_org_stepup and OrgOAuthProvider dereferences idp, so a trial cannot start, stop with status=blocked and list the call sites. Read web/server.py's org assembly and OrgAuth first.
+    4. deploy/docker/Dockerfile and docker-entrypoint.sh per D9. tests/integration/test_org_docker_image.py: add a test that the image without a bundle starts, answers the healthcheck, and logs the trial line. Copy the existing tests' container-run helper.
+    5. Tests:
+       - tests/unit/test_org_mode.py: resolve_mode with bundle only, env only, neither, both equal, both different, and an invalid env value; each ServerConfig env fallback, with the bundle winning; is_trial.
+       - tests/unit/test_daemon_main.py: an unsigned bundle without mode under PRIVACYFENCE_MODE=org is refused by load_org_config; a trial with issuer http://localhost:8765 builds the org app (monkeypatch the server start as the existing org tests do); a trial with issuer https://pf.example.com raises D9's message.
+    6. Run ruff check . and python3 -m pytest tests/unit -q.
+    7. Push the phase branch, then dispatch build.yml on it (ci.dispatchable; this container cannot build images) and check that the build-org-image job's image tests pass, including the new one.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - python3 -m pytest tests/unit/test_org_mode.py -q -k "resolve_mode or is_trial or env" passes and selects at least 9 tests
+  - the dispatched build.yml run's build-org-image job passes
+  - ruff check . passes
+- id: p16-trial-sign-in
+  title: Trial sign-in with a setup code and a passkey, for the browser and for MCP clients
+  depends_on:
+  - p15-mode-from-env-and-trial
+  complexity: M
+  worker_model: opus
+  worker_model_reason: This phase replaces the identity provider with its own sign-in (a one-time code, a session cookie and a WebAuthn assertion) and changes the OAuth server's authorize path; a mistake is an authentication bypass that tests may not reveal.
+  touches:
+  - src/privacyfence/web/trial_auth.py
+  - tests/unit/web/test_trial_auth.py
+  - src/privacyfence/web/oauth_provider.py
+  - tests/unit/web/test_oauth_provider.py
+  - src/privacyfence/web/routes_mcp.py
+  - tests/unit/web/test_routes_mcp.py
+  - src/privacyfence/web/server.py
+  - tests/unit/web/test_server_org_mode.py
+  - src/privacyfence/daemon_main.py
+  brief: |-
+    Read "Design → D10" in full, and ADR 0177 (consent) and ADR 0178 (finish in the starting session).
+    1. web/oauth_provider.py: split handle_idp_callback into _pop_pending, the claims step and _finish_for_principal, with no behaviour change. The existing tests in tests/unit/web/test_oauth_provider.py must pass unchanged before you go on. Then add trial: bool and an optional idp, the trial authorize return value, and handle_trial_continue, per D10.
+    2. Create web/trial_auth.py per D10: the setup code (generation, attempt counter, discard after enrollment), the cookie-bound GET /login, POST /login/setup, POST /login/passkey/options, POST /login/passkey/verify and GET /logout, and the audit decisions. Use org_session's existing session-creation and cookie helpers; read routes_org_identity.login_callback for how a session is created and the cookie set, and do the same.
+    3. GET /oauth/trial/continue goes with the other OAuth routes. Find where routes_mcp.py mounts /oauth/idp/callback and add it next to that, mounted only in trial mode.
+    4. web/server.py and daemon_main.py: in trial mode, mount trial_auth's routes where routes_org_identity's would be, construct OrgOAuthProvider with trial=True, and generate and log the setup code at startup per D10.
+    5. tests/unit/web/test_trial_auth.py:
+       - The code is logged once and never appears in any response or audit summary.
+       - A right code gives a session for trial-admin and redirects to /security.
+       - A wrong code gives the message; the fifth wrong code uses the code up, and even the right code is then refused.
+       - A missing or mismatched pf_trial_setup cookie is refused, as is a foreign Origin.
+       - After enrollment the setup form is gone and POST /login/setup is refused.
+       - The passkey options and verify flow: monkeypatch webauthn_stepup.verify_assertion to succeed or fail, giving a session or a refusal.
+       - next is sanitized: //evil.example is refused.
+       - Each audit decision is recorded.
+    6. tests/unit/web/test_oauth_provider.py and test_routes_mcp.py:
+       - A trial authorize returns the /login?next=/oauth/trial/continue... URL.
+       - /oauth/trial/continue without a session goes to /login, with a session finishes through consent exactly like the IdP path (copy the IdP-path consent tests), and refuses a state that is unknown or expired.
+       - A non-trial server has no /oauth/trial/continue route.
+    7. tests/unit/web/test_server_org_mode.py: in trial mode /login is the trial page and /oauth/idp/login-callback does not exist.
+    8. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
+    Stop condition: if session creation in routes_org_identity cannot be reused without copying private code that carries security checks (for example session fixation handling), stop with status=blocked and describe what would have to be duplicated.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - python3 -m pytest tests/unit/web/test_trial_auth.py -q --cov=privacyfence.web.trial_auth --cov-branch --cov-report=term-missing passes and reports 100%
+  - python3 -m pytest tests/unit/web/test_oauth_provider.py -q passes
+  - ruff check . passes
+- id: p17-local-mode-deprecation
+  title: 'Local mode shows that it is deprecated: the log, privacyfence_status, a page strip and a one-time companion notice'
+  depends_on:
+  - p16-trial-sign-in
   - p9b-admin-org-sections-ui
+  complexity: M
+  touches:
+  - src/privacyfence/org_mode.py
+  - src/privacyfence/daemon_main.py
+  - src/privacyfence/web/mcp_dispatch.py
+  - src/privacyfence/web/mcp_tools.py
+  - docs/tools-reference.md
+  - src/privacyfence/web_shell.py
+  - src/privacyfence/web/routes_settings.py
+  - src/privacyfence/web/routes_approvals.py
+  - src/privacyfence/web/routes_security.py
+  - src/privacyfence/web/routes_admin.py
+  - src/privacyfence/companion.py
+  - tests/unit/test_org_mode.py
+  - tests/unit/test_daemon_main.py
+  - tests/unit/web/test_mcp_dispatch.py
+  - tests/unit/test_web_shell.py
+  - tests/unit/test_companion.py
+  - tests/unit/web/test_routes_settings.py
+  brief: |-
+    Read "Design → D11".
+    1. org_mode.py: add LOCAL_MODE_DEPRECATION with the exact text. daemon_main.run_app logs it at WARNING in local mode.
+    2. web/mcp_dispatch.py: add the "deprecation" field to the status result. web/mcp_tools.py: extend the privacyfence_status description per D11. If a test pins docs/tools-reference.md to the generator's output, run python3 scripts/generate_tools_reference.py and commit the result.
+    3. web_shell.py: add the deprecation_html keyword and strip per D11, styled with the existing notice strip's CSS. Pass it from every local-mode wrap call site: grep `web_shell.wrap(` and `wrap(` in src/privacyfence/web; the local sites are those using the default or local nav items.
+    4. companion.py: add _notice_state_path() and the one-time notice in _run_tray (after the icon starts, on the UI thread, as _notify does) and in _run_serve (_notify_send), per D11.
+    5. Tests:
+       - test_org_mode.py: the constant contains "PrivacyFence 8".
+       - test_daemon_main.py: local start logs it, org start does not.
+       - test_mcp_dispatch.py: local status has deprecation equal to the constant; org status has null.
+       - test_web_shell.py: the strip renders with deprecation_html and not without it.
+       - test_routes_settings.py: the local /settings page contains the strip.
+       - test_companion.py, with monkeypatched paths: the notice shows once and writes the marker; a second start does not show it; an unwritable path still shows it and raises nothing.
+    6. Run ruff check . and python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - grep -n "LOCAL_MODE_DEPRECATION" src/privacyfence/org_mode.py src/privacyfence/web/mcp_dispatch.py src/privacyfence/daemon_main.py matches in each
+  - ruff check . passes
+- id: p12-adrs
+  title: ADRs 0239-0245 and the status lines on the ADRs they amend
+  depends_on:
+  - p17-local-mode-deprecation
   - p10-bundle-tooling
   - p11-relay-worker
   complexity: M
@@ -1375,13 +1691,15 @@ phases:
   - docs/adr/0241-operational-settings-live-in-a-daemon-written-admin-config.md
   - docs/adr/0242-administration-is-a-separate-admin-page.md
   - docs/adr/0243-org-servers-use-built-in-apps-through-a-domain-verified-relay.md
+  - docs/adr/0244-organization-mode-can-start-from-the-environment-and-run-as-a-localhost-trial.md
+  - docs/adr/0245-local-mode-is-deprecated-in-7-and-removed-in-8.md
   - docs/adr/README.md
   - docs/adr/0016-org-config-bundle-hash-log-and-signing.md
   - docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md
   - docs/adr/0217-the-org-admin-stats-page-shows-counts-only.md
   brief: |-
-    1. Check `ls docs/adr | tail -3` first. If 0239-0243 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
-    2. Write the five ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
+    1. Check `ls docs/adr | tail -3` first. If 0239-0245 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
+    2. Write the seven ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
        - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, Design D1-D8, "Accepted risks" and "Risks".
        - Alternatives to record:
          - 0239: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
@@ -1389,20 +1707,24 @@ phases:
          - 0241: refuse to start with legacy keys; keep them as read-only defaults alongside the admin config; keep switches in the bundle for desktop installs.
          - 0242: keep admin sections inside Settings.
          - 0243: no relay; a maintainer-approved list of servers; forwarding to any server that asks.
+         - 0244: a trial that still needs an IdP; signing in to the trial with Google through the relay; a fixed password.
+         - 0245: dropping local mode in 7 without a deprecation release; keeping local mode indefinitely.
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
        - 0016: "Amended by [0240](...): the signature no longer covers operational settings."
        - 0196: "Amended by [0240](...) and [0241](...)."
        - 0217: "Amended by [0242](...): the Stats section is on the Admin page."
-    4. docs/adr/README.md: add five index rows in the existing format:
+    4. docs/adr/README.md: add seven index rows in the existing format:
        - 0239: "Accepted; relates to 0040"
        - 0240: "Accepted; amends 0016, 0196"
        - 0241: "Accepted; amends 0196; relates to 0034, 0068, 0070, 0200"
        - 0242: "Accepted; amends 0217; relates to 0033"
        - 0243: "Accepted; relates to 0011, 0186"
+       - 0244: "Accepted; relates to 0011, 0177, 0213"
+       - 0245: "Accepted; relates to 0002, 0003"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md lists five files (or the renumbered five)
+  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md lists seven files (or the renumbered seven)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -1422,8 +1744,13 @@ phases:
        - "Who may sign in", §10 (install-wide policy), §12 (step-up, including "stricter only from the page; relax by editing org/admin_config.json and restarting"), "Notifications on a phone", §13 (file delivery), audit forwarding and scoped tokens: each now points to the matching Admin page section and says which changes need a restart.
        - A new "Admin page" subsection: who sees it, the sections, step-up.
        - §15 Troubleshooting: rows for the relay errors (proof_failed, host_not_public, revoked, too_soon, the issuer_url message, and the relay's 400 text from D5) and for the "are ignored" warning.
-    2. org-mode-docker.md: outbound HTTPS to oauth.privacyfence.eu when using built-in apps; admin_config.json lives in the data volume and is part of the backup; the bundle is credentials-only.
-    3. configuration-reference.md: org_config.json's remaining keys (D2); org/admin_config.json (D3 schema; written by the Admin page; hand-edit only to relax step-up, then restart); org/relay_token.txt; the PRIVACYFENCE_BUILTIN_APPS development variable and its JSON shape.
+    2. org-mode-docker.md:
+       - Outbound HTTPS to oauth.privacyfence.eu when using built-in apps.
+       - admin_config.json lives in the data volume and is part of the backup.
+       - The bundle is credentials-only.
+       - A new first section, "Try it on this computer": the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from the trial to a real server (an idp section and a public address).
+       - The PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL variables.
+    3. configuration-reference.md: the D9 environment variables and their precedence; org_config.json's remaining keys (D2); org/admin_config.json (D3 schema; written by the Admin page; hand-edit only to relax step-up, then restart); org/relay_token.txt; the PRIVACYFENCE_BUILTIN_APPS development variable and its JSON shape.
     4. Run the docs tests below and ruff check ..
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
@@ -1447,6 +1774,11 @@ phases:
   - docs/peek-setup.md
   - docs/telegram-setup.md
   - docs/security-and-compliance.md
+  - docs/moving-to-organization-mode.md
+  - docs/install-macos.md
+  - docs/install-windows.md
+  - docs/install-linux.md
+  - docs/README.md
   - CHANGELOG.md
   brief: |-
     Reference docs describe today's behaviour and link the ADRs p12 wrote.
@@ -1471,14 +1803,24 @@ phases:
        - Built-in secrets are public in effect (0239).
        - What the relay sees and does not see (0243).
        - The admin config's settings.yaml-level trust, and that signing now covers only startup settings and credentials (0240, 0241).
-    5. CHANGELOG.md under "## [Unreleased]":
+    5. Create docs/moving-to-organization-mode.md, the page LOCAL_MODE_DEPRECATION links to (privacyfence.eu/docs/moving-to-organization-mode/):
+       - why desktop mode goes away in 8 (ADR 0245);
+       - the two ways forward: the Docker trial on this computer (link org-mode-docker.md "Try it on this computer") and an organization server (org-mode-setup-guide.md);
+       - bringing rules along (link org-mode-setup-guide.md "Moving a person from a desktop install").
+       Add it to docs/README.md's index in the existing format. Add a one-paragraph deprecation note at the top of install-macos.md, install-windows.md and install-linux.md linking to it, and to getting-started.md's "Local or organization deployment".
+       If the website docs build has a list of published docs, find where test_website_docs_pages.py reads it; if that list needs the new page, add it there.
+    6. CHANGELOG.md under "## [Unreleased]":
        - one entry each for: built-in apps; the Admin page and personal-only Settings; the org config split with the one-time import (naming the moved build_org_bundle.py flags and sync_room_directory.py's --output); and organization servers using built-in apps through the relay;
-       - a "Removed" or "Changed" note that build_org_bundle.py refuses the moved flags.
+       - a "Removed" or "Changed" note that build_org_bundle.py refuses the moved flags;
+       - the Docker localhost trial and the environment variables;
+       - "Deprecated: desktop (local) mode, to be removed in PrivacyFence 8";
+       - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
-    6. Run the docs tests below and ruff check ..
+    7. Run the docs tests below and ruff check ..
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - grep -n "Admin page" docs/connecting-a-service.md docs/slack-setup.md docs/grist-setup.md matches in each
+  - grep -n "moving-to-organization-mode" docs/README.md docs/install-macos.md docs/install-windows.md docs/install-linux.md matches in each
   - git diff origin/main -- CHANGELOG.md | grep -c "^+## \[" prints 0
 - id: p13c-website
   title: Website pages and privacy policy
