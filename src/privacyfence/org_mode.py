@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from .grist_auth import GristClientError, normalize_server_url
 from .peek_client import PeekClientError, normalize_base_url
 
 Mode = Literal["local", "org"]
@@ -517,6 +518,7 @@ class WebPushConfig:
         return WebPushConfig(enabled=enabled)
 
 
+DEFAULT_GRIST_PROVISIONING_KEY_ENV = "PRIVACYFENCE_GRIST_PROVISIONING_KEY"
 DEFAULT_PEEK_PROVISIONING_KEY_ENV = "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
 _ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]{0,127}")
 
@@ -577,6 +579,78 @@ class PeekProvisioningConfig:
         )
 
 
+@dataclass(frozen=True)
+class GristProvisioningConfig:
+    """Whether org mode registers a Grist API key for each person at sign-in through the Grist
+    provisioner, a small service next to Grist.
+
+    Lives in ``org_config.json``'s ``grist.auto_provision`` section and is written by
+    ``scripts/build_org_bundle.py --grist-auto-provision``. The provisioning key itself is never in
+    the bundle: the daemon reads it from the environment variable ``key_env`` names, as it does
+    for ``http_bearer_token_env``. ``provisioner_url`` and ``server_url`` are normalised and set
+    only when enabled. Local mode never provisions.
+    """
+
+    enabled: bool = False
+    key_env: str = DEFAULT_GRIST_PROVISIONING_KEY_ENV
+    trust_unverified_email: bool = False
+    provisioner_url: str = ""
+    server_url: str = ""
+
+    @staticmethod
+    def from_org_config(org_config: dict[str, Any]) -> "GristProvisioningConfig":
+        grist = org_config.get("grist")
+        grist = grist if isinstance(grist, dict) else {}
+        raw = grist.get("auto_provision")
+        if not isinstance(raw, dict):
+            return GristProvisioningConfig()
+        for key in ("enabled", "trust_unverified_email"):
+            value = raw.get(key, False)
+            if not isinstance(value, bool):
+                raise ConfigurationError(
+                    f"org_config.json's \"grist\".\"auto_provision\".\"{key}\" must be true or false, got {value!r}"
+                )
+        key_env = raw.get("key_env", DEFAULT_GRIST_PROVISIONING_KEY_ENV)
+        if not isinstance(key_env, str) or not _ENV_NAME_RE.fullmatch(key_env):
+            raise ConfigurationError(
+                f"org_config.json's \"grist\".\"auto_provision\".\"key_env\" must be an environment "
+                f"variable name, got {key_env!r}"
+            )
+        if not raw.get("enabled", False):
+            return GristProvisioningConfig(enabled=False)
+        if resolve_mode(org_config) != "org":
+            raise ConfigurationError("org_config.json's \"grist\".\"auto_provision\" needs \"mode\": \"org\"")
+        server_url = grist.get("server_url") or ""
+        if not server_url:
+            raise ConfigurationError(
+                "org_config.json's \"grist\".\"auto_provision\" needs \"grist\".\"server_url\""
+            )
+        if grist.get("client_id"):
+            raise ConfigurationError(
+                "org_config.json's \"grist\".\"auto_provision\" works only with API keys; "
+                "remove the Grist OAuth app or turn auto-provisioning off"
+            )
+        provisioner_url = raw.get("provisioner_url") or ""
+        if not provisioner_url:
+            raise ConfigurationError(
+                "org_config.json's \"grist\".\"auto_provision\" needs \"provisioner_url\""
+            )
+        try:
+            server_url = normalize_server_url(server_url)
+        except GristClientError as exc:
+            raise ConfigurationError(f"org_config.json's \"grist\".\"server_url\" is not usable: {exc}") from exc
+        try:
+            provisioner_url = normalize_server_url(provisioner_url)
+        except GristClientError as exc:
+            raise ConfigurationError(
+                f"org_config.json's \"grist\".\"auto_provision\".\"provisioner_url\" is not usable: {exc}"
+            ) from exc
+        return GristProvisioningConfig(
+            enabled=True, key_env=key_env, trust_unverified_email=raw.get("trust_unverified_email", False),
+            provisioner_url=provisioner_url, server_url=server_url,
+        )
+
+
 # Which org_config.json section switches each connector on (ADR 0196). A connector with no
 # non-empty section is not offered at all, whatever else is in place: Google's six share one
 # section, Jira, Confluence and Jira Assets share Atlassian's. Telegram, Peek and Grist carry
@@ -608,11 +682,13 @@ __all__ = [
     "DEFAULT_INLINE_MAX_BYTES",
     "DEFAULT_LINK_TTL_SECONDS",
     "DEFAULT_MODE",
+    "DEFAULT_GRIST_PROVISIONING_KEY_ENV",
     "DEFAULT_PEEK_PROVISIONING_KEY_ENV",
     "DEFAULT_SYSLOG_PORT",
     "DEFAULT_SYSLOG_PROTOCOL",
     "DownloadDeliveryConfig",
     "Mode",
+    "GristProvisioningConfig",
     "PeekProvisioningConfig",
     "connector_enabled_by_org",
     "ServerConfig",

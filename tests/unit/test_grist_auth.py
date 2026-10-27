@@ -498,6 +498,72 @@ class TestTokenFile:
             assert json.load(fh) == {"auth": "api_key", "server_url": SERVER, "api_key": API_KEY}
         assert grist_auth.load_token_file(path) == key_record()
 
+    def test_manual_api_key_file_is_unchanged(self, tmp_path):
+        path = str(tmp_path / "grist_token.json")
+        grist_auth.save_api_key(path, SERVER, API_KEY)
+        with open(path, encoding="utf-8") as fh:
+            assert set(json.load(fh)) == {"auth", "server_url", "api_key"}
+
+    def test_provisioned_file_round_trips(self, tmp_path):
+        path = str(tmp_path / "grist_token.json")
+        grist_auth.save_api_key(path, SERVER, API_KEY, source="provisioned", managed=True, expires_at=1800000000)
+        with open(path, encoding="utf-8") as fh:
+            assert json.load(fh) == {
+                **key_record(), "source": "provisioned", "managed": True, "expires_at": 1800000000,
+            }
+        assert grist_auth.load_token_file(path)["managed"] is True
+
+    @pytest.mark.parametrize("extra", [
+        {"source": "other", "managed": False, "expires_at": 0},
+        {"source": "provisioned", "managed": "yes", "expires_at": 0},
+        {"source": "provisioned", "expires_at": 0},
+        {"source": "provisioned", "managed": False, "expires_at": True},
+        {"source": "provisioned", "managed": False, "expires_at": 1.5},
+        {"source": "provisioned", "managed": False},
+    ])
+    def test_malformed_source_marker_is_unreadable(self, tmp_path, extra):
+        path = tmp_path / "t.json"
+        path.write_text(json.dumps({**key_record(), **extra}), encoding="utf-8")
+        with pytest.raises(GristClientError) as err:
+            grist_auth.load_token_file(str(path))
+        assert str(err.value) == self.UNREADABLE
+
+    def test_unknown_source_is_unreadable(self, tmp_path):
+        path = tmp_path / "t.json"
+        path.write_text(
+            json.dumps({**key_record(), "source": "other", "managed": False, "expires_at": 0}), encoding="utf-8"
+        )
+        with pytest.raises(GristClientError, match="could not be read"):
+            grist_auth.load_token_file(str(path))
+
+    def test_provisioned_non_bool_managed_is_unreadable(self, tmp_path):
+        path = tmp_path / "t.json"
+        path.write_text(
+            json.dumps({**key_record(), "source": "provisioned", "managed": 1, "expires_at": 0}), encoding="utf-8"
+        )
+        with pytest.raises(GristClientError, match="could not be read"):
+            grist_auth.load_token_file(str(path))
+
+    def test_provisioned_bool_expires_at_is_unreadable(self, tmp_path):
+        path = tmp_path / "t.json"
+        path.write_text(
+            json.dumps({**key_record(), "source": "provisioned", "managed": True, "expires_at": False}),
+            encoding="utf-8",
+        )
+        with pytest.raises(GristClientError, match="could not be read"):
+            grist_auth.load_token_file(str(path))
+
+    def test_token_source(self):
+        assert grist_auth.token_source(key_record()) == "manual"
+        assert grist_auth.token_source({**key_record(), "source": "provisioned"}) == "provisioned"
+        assert grist_auth.token_source({"auth": "oauth"}) == "manual"
+
+    def test_key_id_is_sha256_prefix(self):
+        import hashlib
+
+        assert grist_auth.key_id("abc") == hashlib.sha256(b"abc").hexdigest()[:12]
+        assert len(grist_auth.key_id(API_KEY)) == 12
+
     def test_save_api_key_refuses_a_bad_server(self, tmp_path):
         with pytest.raises(GristClientError):
             grist_auth.save_api_key(str(tmp_path / "t.json"), "http://grist.example.com", API_KEY)

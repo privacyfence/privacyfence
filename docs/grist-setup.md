@@ -29,6 +29,69 @@ The key acts as you: it has your access to every document you can open, and Gris
 scopes for it. PrivacyFence sends it only to the server it was entered for, stores it in a file
 only your account can read, and never logs it.
 
+## Automatic API keys (organization mode)
+
+An organization that runs its own Grist (grist-core, which has no OAuth apps) can have
+PrivacyFence connect each person's Grist account at sign-in, with no clicks. When a person signs in
+to PrivacyFence with a verified email and already has a Grist account, PrivacyFence registers a
+Grist API key for that account. This needs the **Grist provisioner**, a small service you run next
+to Grist, in Grist's network zone
+([`privacyfence/grist-provisioner`](https://github.com/privacyfence/grist-provisioner), see its
+README). The provisioner sets or reads the person's key directly in Grist's database. PrivacyFence
+calls the provisioner with a scoped provisioning key; the provisioner never connects to
+PrivacyFence.
+
+**Store the provisioning key in the daemon's environment**, never in the bundle. The default name is
+`PRIVACYFENCE_GRIST_PROVISIONING_KEY`; `--grist-provisioning-key-env NAME` picks another. On a
+systemd install put `NAME=gristprov_…` in the unit's `EnvironmentFile` (mode `0600`, owned by
+root). With Docker, put it in `privacyfence.env` next to `compose.yaml`.
+
+**Turn it on** in the bundle:
+
+```bash
+python3 scripts/build_org_bundle.py --mode org \
+  --grist-server-url https://grist.example.com \
+  --grist-auto-provision \
+  --grist-provisioner-url https://grist-provisioner.example.com \
+  -o org_config.json --merge
+```
+
+`--no-grist-auto-provision` turns it off again. It works only without a Grist OAuth app
+(`--grist-client-id`), and rebuilding with `--merge` keeps the setting.
+
+**Verified email.** Only a person whose ID token says `email_verified` is `true` is provisioned.
+Google always sends it. `--grist-trust-unverified-email` is for identity providers that never send
+the claim but issue only verified, organization-owned addresses; it is safe only then, because
+otherwise anyone who can set their own email at the provider could get another person's Grist key.
+Give the flag again on every `--grist-auto-provision` rebuild; leaving it out turns it off.
+
+**What a person gets.**
+
+- A key pasted on the connections page always wins; provisioning leaves it alone.
+- Grist allows one API key per person. With no key in Grist, the provisioner creates a *managed*
+  key. If the person already made a key, it is *adopted*: PrivacyFence uses it and never deletes it,
+  because the person's own scripts use it. Regenerating or removing the key in Grist disconnects
+  PrivacyFence until the next sweep (within six hours) or sign-in.
+- The Grist install admin is never provisioned and connects by hand.
+- A person with no Grist account is provisioned once Grist has one: after their first sign-in to
+  Grist, or when someone shares a document with their address.
+- A managed key expires 90 days after it was last issued and is renewed 30 days ahead while the
+  person keeps signing in. So a managed key lives at most about 180 days after the last sign-in; use
+  `--grist-release` for anything sooner.
+
+**Release a person.** `privacyfence-app --grist-release PRINCIPAL_ID` (in Docker: `docker compose
+exec privacyfence privacyfence-app --grist-release PRINCIPAL_ID`) makes the provisioner delete the key in
+Grist if it created it, and PrivacyFence forgets it. It needs the provisioning key in the
+environment. A person who signs in again is provisioned again, so remove them from the identity
+provider first. A running daemon keeps a person's Grist connector in memory until it is rebuilt, so
+restart the daemon after `--grist-release` when the key was adopted (a deleted managed key stops
+working in Grist at once). Running `--grist-release` again for the same person is safe, for example
+when the daemon log says a key issued during a release could not be undone.
+
+**When one is down.** PrivacyFence sign-in never waits on Grist or the provisioner; an outage only
+delays provisioning, which a background sweep retries every six hours. Grist keeps its own users,
+sign-in and keys, so Grist works the same without PrivacyFence.
+
 ## Register an OAuth app
 
 For administrators, in Grist's paid editions.
@@ -68,6 +131,10 @@ python3 scripts/build_org_bundle.py \
   --grist-client-secret abcdef0123456789 \
   -o org_config.json --merge
 ```
+
+Organization mode also takes `--grist-auto-provision` / `--no-grist-auto-provision`,
+`--grist-provisioner-url URL`, `--grist-provisioning-key-env NAME` and `--grist-trust-unverified-email`
+(see [Automatic API keys](#automatic-api-keys-organization-mode)).
 
 `--merge` adds Grist to an existing `org_config.json`. A bundle with only `--grist-server-url`
 pins the server for API keys; organization mode needs at least that. Without a `grist` section, in
@@ -232,3 +299,50 @@ network.
 
 **`Grist's sign-in settings at <host> are not usable.`** — check the Grist server address, and
 the sign-in server if set, in the organization config.
+
+**`Grist auto-provisioning is on, but <NAME> is not set; people connect Grist by hand on /connect.`**
+(daemon log, at startup) — the provisioning key is missing from the daemon's environment. Set it
+and restart.
+
+**`Grist provisioning ready at <host> (<n> accounts managed)`** — the startup check passed.
+
+**`Grist provisioning check failed: <error>`** — the startup check could not use the provisioner;
+the error text says why (see the next entries). Provisioning retries at each sweep.
+
+**`Could not reach the Grist provisioner at <host>: <error type>`** — check
+`--grist-provisioner-url`, the network and that the provisioner is running.
+
+**`The Grist provisioner answered with a redirect (HTTP 30x).`**, **`This server is not a Grist
+provisioner (HTTP 404).`** — `--grist-provisioner-url` is not the provisioner's address.
+
+**`The Grist provisioner refused the provisioning key (HTTP 401).`** — the key in the daemon's
+environment is wrong or revoked. Create a new one in the provisioner and restart.
+
+**`Grist has no account for this person yet (HTTP 404).`** — the person has not signed in to Grist
+and no document is shared with them. Provisioning retries at each sweep and at their next sign-in.
+
+**`The Grist provisioner has no link for this person (HTTP 404).`** — sign in again; PrivacyFence
+links the account first.
+
+**`The Grist provisioner refused this account (HTTP 403): <detail>`** — the account's email domain
+is not allowed, or the Grist account is disabled. Fix it in the provisioner or in Grist.
+
+**`The Grist provisioner refused this account (HTTP 409): <detail>`** — the account is the Grist
+install admin (connect it by hand), or is linked to another PrivacyFence id or email.
+
+**`The Grist provisioner answered with an error (HTTP 5xx).`**, **`The Grist provisioner answered
+with something unexpected.`**, **`The Grist provisioner refused the request (HTTP 4xx): <detail>`**
+— see the provisioner's log.
+
+**`Grist provisioning queue is full; <id> waits for the next sweep or sign-in`** — many people
+signed in at once; the sweep picks the rest up.
+
+**`Grist provisioning for <id> failed: <error>`** — one person failed; the text after the colon is
+one of the messages above. The sweep retries.
+
+**`No such account.`**, **`Grist auto-provisioning is not enabled in the organization config.`**,
+**`Set <NAME> to the Grist provisioning key first.`** — `--grist-release` messages: check the id,
+the bundle and the environment.
+
+**`… PrivacyFence has already forgotten the key; run --grist-release again to delete it in
+Grist.`** — the provisioner could not be reached for the release. Run the command again.

@@ -235,7 +235,7 @@ the connector's console must list it exactly.
 | Slack | `https://pf.acme.example.com/oauth/callback/slack` | `--slack-client-id`, `--slack-client-secret` | [Slack setup](slack-setup.md) |
 | Salesforce | `https://pf.acme.example.com/oauth/callback/salesforce` | `--salesforce-consumer-key`, `--salesforce-consumer-secret`, `--salesforce-login-url` | [Salesforce setup](salesforce-setup.md) |
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `--atlassian-client-id`, `--atlassian-client-secret` | [Atlassian setup](atlassian-setup.md) |
-| Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |
+| Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url`, or automatic API keys with `--grist-auto-provision` ([Grist setup](grist-setup.md#automatic-api-keys-organization-mode)) | [Grist setup](grist-setup.md) |
 | Miro | `https://pf.acme.example.com/oauth/callback/miro` | `--miro-client-id`, `--miro-client-secret` | [Miro setup](miro-setup.md) |
 | Peek | none (device sign-in, or automatic accounts with `--peek-auto-provision`) | `--peek-base-url` | [Peek setup](peek-setup.md), [automatic accounts](peek-setup.md#automatic-accounts-organization-mode) |
 | Telegram | none | `--enable-telegram` | [Telegram setup](telegram-setup.md) |
@@ -339,6 +339,10 @@ purpose, stop the daemon and delete `org/org_config_serial.txt`; delete it toget
 | `--grist-server-url URL` | none | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
+| `--grist-auto-provision` / `--no-grist-auto-provision` | off | Give each person a Grist API key at sign-in through the Grist provisioner and connect it for them (organization mode, API keys only; needs `--grist-server-url`, `--grist-provisioner-url` and the provisioning key in the daemon's environment). |
+| `--grist-provisioner-url URL` | none | The Grist provisioner service PrivacyFence calls (`https://`; `http://` only for localhost). |
+| `--grist-provisioning-key-env NAME` | `PRIVACYFENCE_GRIST_PROVISIONING_KEY` | The environment variable the daemon reads the Grist provisioning key from. |
+| `--grist-trust-unverified-email` | off | Provision people whose ID token does not say `email_verified` (only for identity providers that issue only verified, organization-owned addresses). Give it again on every `--grist-auto-provision` rebuild; leaving it out turns it off. |
 | `--miro-client-id`, `--miro-client-secret` | none | The Miro app people sign in with. Give both or neither. |
 | `--peek-base-url URL` | none | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
 | `--peek-auto-provision` / `--no-peek-auto-provision` | off | Create a Peek account for each person at sign-in and connect it for them. Organization mode; needs `--peek-base-url` and the Peek provisioning key in the daemon's environment. |
@@ -660,7 +664,7 @@ ExecStart=/opt/privacyfence/venv/bin/privacyfence-app
 Restart=on-failure
 RestartSec=5
 UMask=0077
-# For --audit-forwarding-http-bearer-token-env and the Peek provisioning key; the file holds NAME=value lines, mode 0600, owned by root.
+# For --audit-forwarding-http-bearer-token-env and the Peek and Grist provisioning keys; the file holds NAME=value lines, mode 0600, owned by root.
 # EnvironmentFile=/etc/privacyfence-org.env
 
 # Filesystem: read-only everywhere except the data directory.
@@ -1065,6 +1069,7 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 | `deployment_id` | The install's ID, stamped on every audit entry. |
 | `users/<principal>/credentials/` | Each person's connector tokens. |
 | `users/<principal>/credentials/peek_provisioning.json` | Peek auto-provisioning state and the person's email, for token renewal. |
+| `users/<principal>/credentials/grist_provisioning.json` | Grist auto-provisioning state and the person's email, for key renewal. |
 | `users/<principal>/authority/config/settings.yaml` | Each person's always-allow rules. |
 | `users/<principal>/authority/webauthn_credentials.json`, `webauthn_recovery_code.json`, `step_up_state.json` | Each person's passkeys and recovery code. |
 | `users/<principal>/logs/audit/` | Each person's audit log and its chain key. |

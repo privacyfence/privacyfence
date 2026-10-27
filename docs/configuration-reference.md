@@ -290,6 +290,10 @@ How the daemon treats the file:
 | `--grist-server-url URL` | none | `grist.server_url` | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
+| `--grist-auto-provision` / `--no-grist-auto-provision` | not written (off) | `grist.auto_provision.enabled` | Give each person a Grist API key at sign-in through the Grist provisioner and connect it for them (organization mode, API keys only; needs `--grist-server-url`, `--grist-provisioner-url` and the provisioning key in the daemon's environment). |
+| `--grist-provisioner-url URL` | none | `grist.auto_provision.provisioner_url` | The Grist provisioner service PrivacyFence calls (https://; http:// only for localhost). |
+| `--grist-provisioning-key-env NAME` | `PRIVACYFENCE_GRIST_PROVISIONING_KEY` | `grist.auto_provision.key_env` | The environment variable the daemon reads the Grist provisioning key from (default `PRIVACYFENCE_GRIST_PROVISIONING_KEY`). |
+| `--grist-trust-unverified-email` | off | `grist.auto_provision.trust_unverified_email` | Provision people whose ID token does not say `email_verified` (only for identity providers that issue only verified, organization-owned addresses). Give it again on every `--grist-auto-provision` rebuild; leaving it out turns it off. |
 | `--miro-client-id`, `--miro-client-secret` | none | `miro.client_id`, `miro.client_secret` | The Miro app people sign in with. Give both or neither. |
 | `--enable-unattended-sessions` / `--disable-unattended-sessions` | not written (off) | `unattended_sessions.enabled` | Allow `privacyfence_begin_unattended_session`. See [How PrivacyFence works](how-it-works.md#unattended-sessions). Applies in both modes. |
 | `--enable-scoped-tokens` / `--disable-scoped-tokens` | not written (off) | `scoped_tokens.enabled` | Let each person create scoped AI client tokens in Settings (organization mode; local mode always allows them). Off unless set. Each token is named, expires, has its own rules and a chosen list of tools and is deny-only; see [Scoped tokens](security-and-compliance.md#scoped-tokens). |
@@ -370,6 +374,7 @@ options below are for running it by hand.
 | `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
 | `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (`local` in local mode, or the principal id the audit log and the org Settings page show) and exit. Run it as the account the daemon runs as. |
 | `--peek-release PRINCIPAL_ID` | Revoke the Peek token PrivacyFence minted for that account, stop renewing it, and exit. The Peek account stays. Needs the Peek provisioning key in the environment; run it as the account the daemon runs as. |
+| `--grist-release PRINCIPAL_ID` | Release the Grist key PrivacyFence holds for that account: the provisioner deletes it in Grist if it created it, and PrivacyFence forgets it. Then the daemon exits. Needs the Grist provisioning key in the environment; run it as the account the daemon runs as. |
 
 The sign-in options are for an install that is not privilege-separated (a source checkout or a
 `pip`/`pipx` install). On a packaged install the daemon refuses to run as your account, so they

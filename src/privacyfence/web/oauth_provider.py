@@ -83,7 +83,7 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
-from .. import org_identity, peek_provisioning, scoped_tokens
+from .. import grist_provisioning, org_identity, peek_provisioning, scoped_tokens
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..principal import Principal
@@ -475,6 +475,10 @@ class OrgOAuthProvider:
         # call in a catch-all that logs and returns a generic failure.
         org_identity.check_authz_policy(principal, claims, self._policy)
         peek_provisioning.notify_sign_in(principal, email_verified=peek_provisioning.email_verified_claim(claims))
+        await asyncio.to_thread(
+            grist_provisioning.notify_sign_in, principal,
+            email_verified=grist_provisioning.email_verified_claim(claims),
+        )
 
         if self._consents.has(principal, pending.client_id, str(pending.params.redirect_uri)):
             return self._issue_code(pending.client_id, principal, pending.params)

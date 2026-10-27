@@ -335,3 +335,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0241](0241-privacyfence-provisions-peek-accounts-with-a-scoped-key-and-only-calls-peek.md) | PrivacyFence provisions Peek accounts with a scoped key and only ever calls Peek | Accepted; extends 0151, 0152 |
 | [0242](0242-a-persons-own-peek-sign-in-wins-over-provisioning.md) | A person's own Peek sign-in wins over provisioning | Accepted; relates to 0151, 0241 |
 | [0243](0243-peek-provisioning-needs-a-verified-email-and-stops-renewing-after-90-days.md) | Peek provisioning needs a verified email and stops renewing after 90 days | Accepted; relates to 0241, 0242 |
+| [0244](0244-grist-api-keys-come-from-a-grist-side-provisioner.md) | Grist API keys come from a Grist-side provisioner that PrivacyFence only calls | Accepted; relates to 0142, 0143 |
+| [0245](0245-a-pasted-grist-key-wins-over-provisioning.md) | A Grist key the person pasted on /connect wins over provisioning | Accepted; relates to 0142, 0143 |
+| [0246](0246-an-existing-grist-key-is-adopted-and-never-revoked.md) | An existing Grist key is adopted and never revoked by PrivacyFence | Accepted; relates to 0142, 0143 |
+| [0247](0247-grist-provisioning-needs-a-verified-email.md) | Grist provisioning needs a verified email | Accepted; relates to 0142, 0143 |
+| [0248](0248-a-managed-grist-key-expires-90-days-after-it-was-issued.md) | A managed Grist key expires 90 days after it was issued | Accepted; relates to 0142, 0143 |

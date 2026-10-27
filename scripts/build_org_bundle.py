@@ -76,6 +76,10 @@ _CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
 WORKSPACE_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
+# Mirrors org_mode.DEFAULT_GRIST_PROVISIONING_KEY_ENV; this script stays standard-library only.
+_DEFAULT_GRIST_PROVISIONING_KEY_ENV = "PRIVACYFENCE_GRIST_PROVISIONING_KEY"
+
+
 def _grist_url(value: str) -> str:
     """Validate one Grist address and strip its trailing ``/`` (mirrors ``grist_auth.normalize_server_url``;
     this script stays standard-library only)."""
@@ -297,6 +301,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--grist-auth-server-url", metavar="URL",
         help="Where Grist's sign-in discovery document is served, when the server itself does not serve it "
              "(only with the client id and secret). Default: the server URL.",
+    )
+    grist.add_argument(
+        "--grist-auto-provision", action=argparse.BooleanOptionalAction, default=None,
+        help="Give each person a Grist API key at sign-in through the Grist provisioner and connect it for them "
+             "(organization mode, API keys only; needs --grist-server-url, --grist-provisioner-url and the "
+             "provisioning key in the daemon's environment).",
+    )
+    grist.add_argument(
+        "--grist-provisioner-url", metavar="URL",
+        help="The Grist provisioner service PrivacyFence calls (https://; http:// only for localhost).",
+    )
+    grist.add_argument(
+        "--grist-provisioning-key-env", metavar="NAME",
+        help="The environment variable the daemon reads the Grist provisioning key from "
+             "(default PRIVACYFENCE_GRIST_PROVISIONING_KEY).",
+    )
+    grist.add_argument(
+        "--grist-trust-unverified-email", action="store_true",
+        help="Provision people whose ID token does not say email_verified (only for identity providers that "
+             "issue only verified, organization-owned addresses). Give it again on every --grist-auto-provision "
+             "rebuild; leaving it out turns it off.",
     )
 
     miro = parser.add_argument_group("Miro")
@@ -721,6 +746,9 @@ def main(argv: list[str] | None = None) -> int:
                 grist_section["auth_server_url"] = _grist_url(args.grist_auth_server_url)
         elif args.grist_auth_server_url:
             raise SystemExit("--grist-auth-server-url needs --grist-client-id and --grist-client-secret.")
+        previous = bundle.get("grist")
+        if isinstance(previous, dict) and "auto_provision" in previous:
+            grist_section["auto_provision"] = previous["auto_provision"]
         bundle["grist"] = grist_section
     elif args.enable_grist:
         bundle["grist"] = {"enabled": True}
@@ -794,6 +822,8 @@ def main(argv: list[str] | None = None) -> int:
         bundle.pop("web_push", None)
         if isinstance(bundle.get("peek"), dict):
             bundle["peek"].pop("auto_provision", None)
+        if isinstance(bundle.get("grist"), dict):
+            bundle["grist"].pop("auto_provision", None)
     elif any([
         args.server_issuer_url, args.idp_issuer, args.idp_client_id, args.idp_client_secret,
         args.server_tls_cert, args.server_tls_key, args.server_trusted_proxies, args.idp_step_up_acr_values,
@@ -882,6 +912,45 @@ def main(argv: list[str] | None = None) -> int:
         }
     elif args.peek_provisioning_key_env or args.peek_trust_unverified_email:
         raise SystemExit("--peek-provisioning-key-env and --peek-trust-unverified-email go with --peek-auto-provision.")
+    if args.grist_auto_provision is not None:
+        if bundle.get("mode") != "org":
+            raise SystemExit(
+                "--grist-auto-provision/--no-grist-auto-provision require --mode org (or --merge against an "
+                "existing org-mode bundle)."
+            )
+        existing = (bundle.get("grist") or {}).get("auto_provision")
+        existing = existing if isinstance(existing, dict) else {}
+        if not args.grist_auto_provision:
+            # Only where Grist is already configured: a bare grist section would offer Grist with no server.
+            if isinstance(bundle.get("grist"), dict) and bundle["grist"]:
+                bundle["grist"]["auto_provision"] = {"enabled": False}
+        else:
+            grist_bundle = bundle.get("grist") or {}
+            if not grist_bundle.get("server_url"):
+                raise SystemExit(
+                    "--grist-auto-provision requires --grist-server-url (or --merge against a bundle that has one)."
+                )
+            if grist_bundle.get("client_id"):
+                raise SystemExit(
+                    "--grist-auto-provision works only with API keys; it cannot be combined with --grist-client-id."
+                )
+            provisioner_url = args.grist_provisioner_url or existing.get("provisioner_url")
+            if not provisioner_url:
+                raise SystemExit("--grist-auto-provision requires --grist-provisioner-url.")
+            grist_bundle["auto_provision"] = {
+                "enabled": True,
+                "provisioner_url": _grist_url(provisioner_url),
+                "key_env": (
+                    args.grist_provisioning_key_env or existing.get("key_env")
+                    or _DEFAULT_GRIST_PROVISIONING_KEY_ENV
+                ),
+                "trust_unverified_email": args.grist_trust_unverified_email,
+            }
+    elif args.grist_provisioner_url or args.grist_provisioning_key_env or args.grist_trust_unverified_email:
+        raise SystemExit(
+            "--grist-provisioner-url, --grist-provisioning-key-env and --grist-trust-unverified-email go with "
+            "--grist-auto-provision."
+        )
 
     if args.authz_allowed_domains or args.authz_groups_claim or args.authz_required_groups:
         if bundle.get("mode") != "org":

@@ -265,6 +265,10 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   When Peek auto-provisioning is on, also remove the person from the identity provider and run
   `privacyfence-app --peek-release PRINCIPAL_ID`, which revokes the Peek token PrivacyFence minted for
   them and stops renewing it ([Peek setup](peek-setup.md#automatic-accounts-organization-mode)).
+  When Grist auto-provisioning is on, offboarding also includes
+  `privacyfence-app --grist-release PRINCIPAL_ID`, after removing the person from the identity
+  provider. It deletes a key the provisioner created; a key the person made in Grist was adopted
+  and stays in Grist, so delete it there or disable the account.
 
 ## Privilege separation
 

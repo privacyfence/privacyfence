@@ -2321,6 +2321,46 @@ class TestOrgModeConnectorRegistry:
         from privacyfence.connector_registry import ConnectorRegistry
         assert isinstance(result.org.connector_registry, ConnectorRegistry)
 
+    _GRIST_AUTO = {
+        "server_url": "https://grist.example.com",
+        "auto_provision": {"enabled": True, "provisioner_url": "https://prov.example.com"},
+    }
+
+    def test_org_server_starts_grist_provisioner_with_registry_evict(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        seen: dict = {}
+        monkeypatch.setattr(
+            daemon_main.grist_provisioning, "start",
+            lambda org_config, *, on_change, stop_event: seen.update(
+                org_config=org_config, on_change=on_change, stop_event=stop_event,
+            ),
+        )
+        org_config = self._org_config(grist=self._GRIST_AUTO)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=org_config,
+        )
+
+        assert seen["org_config"] is org_config
+        assert seen["stop_event"] is daemon_main._shutdown_event
+        # The registry's own evict, so a new key reaches the person's next call.
+        assert seen["on_change"].__self__ is result.org.connector_registry
+        assert seen["on_change"].__func__.__name__ == "evict"
+
+    def test_org_server_refuses_broken_grist_auto_provision(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            daemon_main.grist_provisioning, "start", lambda *a, **kw: pytest.fail("started"),
+        )
+        org_config = self._org_config(grist={"auto_provision": {"enabled": "yes"}})
+
+        with pytest.raises(daemon_main.org_mode.ConfigurationError, match="auto_provision"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=org_config,
+            )
+
     def test_org_auth_carries_the_org_config_bundle(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         org_config = self._org_config()
@@ -4586,6 +4626,148 @@ class TestRevokeScopedTokens:
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
         assert daemon_main.run_revoke_scoped_tokens("local") == 0
         assert capsys.readouterr().out == "Revoked 0 scoped token(s) for local.\n"
+
+
+class TestGristRelease:
+    """``privacyfence-app --grist-release PRINCIPAL_ID``."""
+
+    KEY_ENV = "PRIVACYFENCE_GRIST_PROVISIONING_KEY"
+
+    @pytest.fixture
+    def env(self, tmp_path, monkeypatch):
+        from privacyfence import grist_provisioner_api, grist_provisioning, paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "alice").mkdir(parents=True)
+        monkeypatch.setenv(self.KEY_ENV, "prov-key")
+        org_config = {
+            "mode": "org",
+            "grist": {
+                "server_url": "https://grist.example.com",
+                "auto_provision": {"enabled": True, "provisioner_url": "https://prov.example.com"},
+            },
+        }
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: org_config)
+
+        class FakeClient:
+            result = grist_provisioner_api.GristRelease(released=True, revoked=True)
+            error: Exception | None = None
+            built_with: tuple = ()
+            released: list[str] = []
+
+            def __init__(self, base_url, key):
+                FakeClient.built_with = (base_url, key)
+
+            def release_account(self, external_id):
+                FakeClient.released.append(external_id)
+                if FakeClient.error is not None:
+                    raise FakeClient.error
+                return FakeClient.result
+
+        FakeClient.released = []
+        FakeClient.error = None
+        monkeypatch.setattr(grist_provisioner_api, "GristProvisionerClient", FakeClient)
+        monkeypatch.setattr(grist_provisioning, "release", lambda pid: None)
+        return FakeClient, org_config
+
+    def test_unknown_account(self, env, capsys):
+        client, _ = env
+        for principal_id in ("nobody", "../escape", ""):
+            assert daemon_main.run_grist_release(principal_id) == 1
+        captured = capsys.readouterr()
+        assert captured.err.count("No such account.") == 3
+        assert captured.out == ""
+        assert client.released == []
+
+    def test_local_is_refused(self, env, tmp_path, capsys):
+        (tmp_path / "users" / "local").mkdir(parents=True)
+        assert daemon_main.run_grist_release("local") == 1
+        assert "No such account." in capsys.readouterr().err
+
+    def test_configuration_error_is_printed(self, env, monkeypatch, capsys):
+        def _broken():
+            raise daemon_main.org_mode.ConfigurationError("org_config.json is broken")
+
+        monkeypatch.setattr(daemon_main, "load_org_config", _broken)
+        assert daemon_main.run_grist_release("alice") == 1
+        assert "org_config.json is broken" in capsys.readouterr().err
+
+    def test_not_enabled(self, env, monkeypatch, capsys):
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        assert daemon_main.run_grist_release("alice") == 1
+        assert capsys.readouterr().err == "Grist auto-provisioning is not enabled in the organization config.\n"
+
+    def test_missing_key(self, env, monkeypatch, capsys):
+        monkeypatch.setenv(self.KEY_ENV, "  ")
+        assert daemon_main.run_grist_release("alice") == 1
+        assert capsys.readouterr().err == f"Set {self.KEY_ENV} to the Grist provisioning key first.\n"
+        assert env[0].released == []
+
+    def test_revoked_message(self, env, capsys):
+        client, _ = env
+        assert daemon_main.run_grist_release("alice") == 0
+        captured = capsys.readouterr()
+        assert captured.out == (
+            "Released the Grist connection of alice. The Grist API key PrivacyFence was given is deleted in Grist.\n"
+        )
+        assert captured.err == ""
+        assert client.built_with == ("https://prov.example.com", "prov-key")
+        assert client.released == ["alice"]
+
+    def test_own_key_message(self, env, capsys):
+        from privacyfence.grist_provisioner_api import GristRelease
+
+        env[0].result = GristRelease(released=True, revoked=False)
+        assert daemon_main.run_grist_release("alice") == 0
+        assert capsys.readouterr().out == (
+            "Released the Grist connection of alice. Its Grist API key was the person's own, or was already "
+            "replaced, and stays; delete it in Grist or disable the account there.\n"
+        )
+
+    def test_no_link_message(self, env, capsys):
+        from privacyfence.grist_provisioner_api import GristRelease
+
+        env[0].result = GristRelease(released=False, revoked=False)
+        assert daemon_main.run_grist_release("alice") == 0
+        assert capsys.readouterr().out == (
+            "Released the Grist connection of alice. The Grist provisioner had no link for it.\n"
+        )
+
+    def test_client_error_exits_1(self, env, capsys):
+        from privacyfence.grist_provisioner_api import GristProvisionerClientError
+
+        env[0].error = GristProvisionerClientError("The Grist provisioner is unreachable.")
+        assert daemon_main.run_grist_release("alice") == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err.startswith("The Grist provisioner is unreachable.")
+        assert captured.err.rstrip().endswith("run --grist-release again to delete it in Grist.")
+
+    def test_release_runs_before_the_provisioner_call(self, env, monkeypatch):
+        from privacyfence import grist_provisioning
+
+        client, _ = env
+        order: list[str] = []
+        monkeypatch.setattr(grist_provisioning, "release", lambda pid: order.append(f"release {pid}"))
+        original = client.release_account
+        monkeypatch.setattr(
+            client, "release_account", lambda self, external_id: order.append("provisioner") or original(self, external_id),
+        )
+
+        assert daemon_main.run_grist_release("alice") == 0
+        assert order == ["release alice", "provisioner"]
+
+    def test_runs_after_the_runtime_identity_check(self, monkeypatch):
+        from privacyfence import privilege_separation
+
+        calls: list[str] = []
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_grist_release", lambda pid: calls.append(pid) or 0)
+
+        assert daemon_main.main(["--grist-release", "alice"]) == 0
+        assert calls == ["identity", "alice"]
 
 
 class TestLoadOrgConfigSerial:
