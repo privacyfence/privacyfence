@@ -129,6 +129,18 @@ def provision_principal(
     return status
 
 
+def _undo_issue(principal_id: str, client: GristProvisionerClient) -> None:
+    try:
+        client.release_account(principal_id)
+    except GristProvisionerClientError as exc:
+        logger.warning(
+            "Grist provisioning for %s: a key issued during a release could not be undone (%s); "
+            "run --grist-release again",
+            principal_id,
+            exc,
+        )
+
+
 def _provision(
     principal_id: str,
     *,
@@ -174,9 +186,10 @@ def _provision(
             issued = client.issue_key(principal_id)
             managed = issued.managed
             with principal_lock(principal_id):
-                if _released(principal_id):
-                    return "released", ""
-                if _usable(token_path, config.server_url, "manual") is not None:
+                lost_release = _released(principal_id)
+                if lost_release:
+                    saved = False
+                elif _usable(token_path, config.server_url, "manual") is not None:
                     saved = False
                 else:
                     save_api_key(
@@ -188,6 +201,10 @@ def _provision(
                         expires_at=issued.expires_at,
                     )
                     saved = True
+            if lost_release:
+                # The release finished before this key was issued; undo the issue so no key outlives it.
+                _undo_issue(principal_id, client)
+                return "released", ""
             if not saved:
                 return done("user_connected")
             on_change(principal_id)

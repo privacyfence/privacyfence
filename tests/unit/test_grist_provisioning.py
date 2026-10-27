@@ -57,6 +57,7 @@ class FakeClient:
         self.issue_error: GristProvisionerClientError | None = None
         self.on_issue: Any = None
         self.check_result: int | GristProvisionerClientError = 3
+        self.release_error: GristProvisionerClientError | None = None
 
     def upsert_account(self, external_id: str, email: str) -> GristProvisionedAccount:
         self.calls.append(("upsert", external_id, email))
@@ -71,6 +72,11 @@ class FakeClient:
         if self.issue_error:
             raise self.issue_error
         return self.key
+
+    def release_account(self, external_id: str) -> Any:
+        self.calls.append(("release", external_id))
+        if self.release_error:
+            raise self.release_error
 
     def check(self) -> int:
         self.calls.append(("check",))
@@ -344,6 +350,15 @@ class TestProvisionPrincipal:
         assert run(client, changes) == "released"
         assert not token_path().exists() and changes == []
         assert state_of()["status"] == "released"
+        assert ("release", "alice") in client.calls
+
+    def test_a_key_issued_during_a_release_is_undone_or_reported(self, data, client, changes, caplog):
+        write_state()
+        client.on_issue = lambda: write_state(status="released", email="")
+        client.release_error = GristProvisionerClientError("Broken.", status=500)
+        assert run(client, changes) == "released"
+        assert "run --grist-release again" in caplog.text
+        assert KEY not in caplog.text and EMAIL not in caplog.text
 
     def test_unreadable_or_foreign_token_files_are_not_usable(self, data, client, changes):
         write_state()

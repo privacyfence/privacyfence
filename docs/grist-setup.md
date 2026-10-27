@@ -85,7 +85,8 @@ Grist if it created it, and PrivacyFence forgets it. It needs the provisioning k
 environment. A person who signs in again is provisioned again, so remove them from the identity
 provider first. A running daemon keeps a person's Grist connector in memory until it is rebuilt, so
 restart the daemon after `--grist-release` when the key was adopted (a deleted managed key stops
-working in Grist at once).
+working in Grist at once). Running `--grist-release` again for the same person is safe, for example
+when the daemon log says a key issued during a release could not be undone.
 
 **When one is down.** PrivacyFence sign-in never waits on Grist or the provisioner; an outage only
 delays provisioning, which a background sweep retries every six hours. Grist keeps its own users,

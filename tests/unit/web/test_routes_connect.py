@@ -977,6 +977,18 @@ class TestGristBox:
         assert "Your organization connected your Grist account automatically." in box
         assert "Connected to https://grist.example.com." in box
 
+    def test_a_key_file_that_cannot_be_read_still_renders_the_box(self, monkeypatch):
+        record = {"auth": "api_key", "server_url": _GRIST_SERVER, "api_key": "k"}
+
+        def unreadable(_path):
+            raise rc.grist_auth.GristClientError("unreadable")
+
+        monkeypatch.setattr(rc, "_is_connected", lambda *a, **k: True)
+        monkeypatch.setattr(rc.grist_auth, "load_token_file", unreadable)
+        box = _grist_box(_grist_page({"server_url": _GRIST_SERVER}, token_record=record))
+        assert "Connected to https://grist.example.com." in box
+        assert "connected your Grist account automatically" not in box
+
     def test_a_manual_key_does_not_show_the_automatic_connection_line(self):
         record = {"auth": "api_key", "server_url": _GRIST_SERVER, "api_key": "k"}
         box = _grist_box(_grist_page({"server_url": _GRIST_SERVER}, token_record=record))
