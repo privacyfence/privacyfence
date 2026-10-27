@@ -172,6 +172,16 @@ def test_image_metadata():
     assert labels["org.opencontainers.image.version"]
 
 
+def test_the_image_bundles_the_changelog():
+    result = _docker(
+        "run", "--rm", "--entrypoint", "python", IMAGE, "-c",
+        "import pathlib, privacyfence; "
+        "p = pathlib.Path(privacyfence.__file__).parent / 'resources' / 'CHANGELOG.md'; "
+        "print(p.is_file() and p.stat().st_size > 0)",
+    )
+    assert result.stdout.strip() == "True"
+
+
 def test_refuses_to_start_without_a_bundle(volume):
     result = _docker("run", "--rm", "-v", f"{volume}:{DATA_DIR}", IMAGE, check=False)
     assert result.returncode == 78, result.stderr
