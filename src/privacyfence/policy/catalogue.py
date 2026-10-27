@@ -81,6 +81,7 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         predicate="peek.page", connector="peek",
         verbs=(Verb.READ, Verb.ADD),
         label="Peek — page", needs_value=True, value_hint="team-dashboard…page-slug",
+        excludes=frozenset({"peek.read_grants", "peek.grant_access", "peek.revoke_access"}),
     ),
     "miro.board": PolicyExtraScope(
         predicate="miro.board", connector="miro",

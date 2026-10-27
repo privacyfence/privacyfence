@@ -3012,6 +3012,9 @@ def lifecycle_jira(manifest: dict[str, Any]) -> LifecycleResult:
     return LifecycleResult("jira", ok, note, cleanup_ok)
 
 
+QA_GRANTEE = "qa-grantee@example.invalid"
+
+
 def lifecycle_peek(manifest: dict[str, Any]) -> LifecycleResult:
     client = _build_peek_client()
     suffix = uuid.uuid4().hex[:8]
@@ -3023,14 +3026,24 @@ def lifecycle_peek(manifest: dict[str, Any]) -> LifecycleResult:
     ok, note, cleanup_ok = False, "", None
     try:
         body = f"<!doctype html><html><body><p id=\"qa\">{LIFECYCLE_TAG} created by qa_fixture_recorder.py --lifecycle</p></body></html>"
-        uploaded = client.upload_page(body.encode("utf-8"), name, "private", "")
+        uploaded = client.upload_page(body.encode("utf-8"), name, "signed-in")
         slug = uploaded.slug
         if not slug:
             raise PeekClientError("upload_page returned no slug")
-        if uploaded.visibility != "private":
-            raise PeekClientError(f"upload_page returned visibility {uploaded.visibility!r}, expected 'private'")
-        if client.set_visibility(slug, "public", "") != "public":
+        if uploaded.visibility != "signed-in":
+            raise PeekClientError(f"upload_page returned visibility {uploaded.visibility!r}, expected 'signed-in'")
+        if client.set_visibility(slug, "public").visibility != "public":
             raise PeekClientError("set_visibility did not report public")
+        versions = client.list_versions(slug)
+        if [v.version for v in versions] != [1]:
+            raise PeekClientError(f"list_versions returned {[v.version for v in versions]!r}, expected only version 1")
+        # The page is public here, so Peek sends the grantee no email.
+        client.add_grant(slug, "user", QA_GRANTEE)
+        if not any(g.kind == "user" and g.email == QA_GRANTEE for g in client.list_grants(slug)):
+            raise PeekClientError("list_grants did not show the grant that add_grant made")
+        client.remove_grant(slug, "user", QA_GRANTEE)
+        if client.list_grants(slug):
+            raise PeekClientError("list_grants is not empty after remove_grant")
         page = client.get_page(slug)
         if page.visibility != "public":
             raise PeekClientError(f"list_pages after set_visibility shows {page.visibility!r}, expected 'public'")
@@ -3051,7 +3064,9 @@ def lifecycle_peek(manifest: dict[str, Any]) -> LifecycleResult:
             raise PeekClientError(
                 f"comment author {match.author!r} is not the QA account's name {page.owner!r} (posted id {posted.id})"
             )
-        ok, note = True, "upload, set_visibility, rename, add_comment, get_comments all verified"
+        if match.verified is not True:
+            raise PeekClientError("the QA account's comment did not come back with verified true")
+        ok, note = True, "upload, set_visibility, versions, grants, rename, add_comment, get_comments all verified"
     except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
         ok, note = False, str(exc)
     finally:
