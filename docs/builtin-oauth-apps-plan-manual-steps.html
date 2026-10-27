@@ -123,6 +123,20 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
       <li>Uploading a room directory needs a passkey, because room names reach the AI client.</li>
     </ul>
 
+    <h3>Starting a new organization server</h3>
+    <ol class="flow">
+      <li><div><strong>DNS.</strong> Point a name such as <code>pf.acme.example.com</code> at a host with Docker.</div></li>
+      <li><div><strong>One app at your identity provider.</strong> Register an OIDC app in Google Workspace, Entra ID or Okta with three redirect URIs: <code>/oauth/idp/callback</code>, <code>/oauth/idp/login-callback</code> and <code>/oauth/stepup/callback</code> on your name. This is the only app you register. Connectors use the built-in apps.</div></li>
+      <li><div><strong>An env file.</strong> Copy <code>privacyfence.env.example</code> to <code>privacyfence.env</code> and fill it in:<pre>PRIVACYFENCE_ISSUER_URL=https://pf.acme.example.com
+PRIVACYFENCE_IDP_ISSUER=https://accounts.google.com
+PRIVACYFENCE_IDP_CLIENT_ID=…
+PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret
+PRIVACYFENCE_ADMIN_EMAILS=alice@acme.example.com</pre>Put the client secret in a Docker secret file, so it doesn't show in <code>docker inspect</code>. Set <code>PF_HOSTNAME</code> in <code>.env</code> for Caddy.</div></li>
+      <li><div><strong>Start.</strong> Run <code>docker compose up -d</code>. Caddy gets the TLS certificate, and the image starts in organization mode. There is no bundle to build or sign.</div></li>
+      <li><div><strong>Turn services on.</strong> Sign in as the admin email, open <strong>Admin → Services</strong>, and offer the services you want. The server registers itself with the relay, and people can connect at <code>/connect</code>.</div></li>
+    </ol>
+    <p class="see">You still need a signed <code>org_bundle.json</code> if you want your own connector apps, or a configuration nobody can change without your signing key. A bundle wins over the environment. Admins by email need an IdP that sends <code>email_verified</code>; with Entra ID, use the group claim instead.</p>
+
     <h3>Upgrading an existing server from 6.x</h3>
     <ol class="flow">
       <li><div>Install 7 and restart. You don't need to change anything first.</div></li>
@@ -304,7 +318,7 @@ curl -s  'https://oauth.privacyfence.eu/callback/slack?state=unregistered.exampl
     <div class="meta"><span>ma2-org-relay-signin</span><span>about 1–1.5 hours</span></div>
     <ol class="steps">
       <li><label><input type="checkbox" id="ma2-1"></label><div>Make sure step 4 is done: <code>curl -sI https://oauth.privacyfence.eu/health</code> answers 200. Also make sure the test server is reachable from the internet over HTTPS at <code>https://&lt;its host&gt;/.well-known/privacyfence-relay</code>, with no IP allow-list blocking Cloudflare.</div></li>
-      <li><label><input type="checkbox" id="ma2-2"></label><div>On a test org server with a public HTTPS hostname, install the branch's wheel. Put a JSON file with the seven apps' IDs and secrets on that server only, mode 0600, owned by the service account, and point <code>PRIVACYFENCE_BUILTIN_APPS</code> at it in the service's environment file. The format is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/builtin-oauth-apps/docs/configuration-reference.md">configuration-reference.md</a>. Use a signed bundle with <code>mode</code>, <code>server</code> and <code>idp</code> only, and no connector sections.</div></li>
+      <li><label><input type="checkbox" id="ma2-2"></label><div>Set up a test org server with a public HTTPS hostname, exactly as "Starting a new organization server" above describes: the branch's image from the build.yml run (or its wheel), <code>privacyfence.env</code> with the IdP and your admin email, and <strong>no bundle</strong>. The built-in app credentials are baked into the branch's image. If you run the wheel instead, put a JSON file with the seven apps' IDs and secrets on that server only (mode 0600, owned by the service account) and point <code>PRIVACYFENCE_BUILTIN_APPS</code> at it. The format is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/builtin-oauth-apps/docs/configuration-reference.md">configuration-reference.md</a>.</div></li>
       <li><label><input type="checkbox" id="ma2-3"></label><div>Restart the server. On a new server the built-in services start off, so sign in as an IdP admin, open <strong>Admin → Services</strong> and offer Google, Slack, Salesforce, Atlassian and Miro, approving the passkey prompts. Within a minute, <code>https://oauth.privacyfence.eu/registrations</code> should list your server's host. As an IdP admin, the <strong>Admin</strong> page's Services section should say "Relay registration: registered".</div></li>
       <li><label><input type="checkbox" id="ma2-4"></label><div>As a normal user, open <code>/connect</code> and connect Gmail, Slack, Salesforce, Jira and Miro. The browser should pass briefly through <code>oauth.privacyfence.eu</code> and land back on <code>/connect</code> showing Connected.</div></li>
       <li><label><input type="checkbox" id="ma2-5"></label><div>Check revocation. Run <code>curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H "Content-Type: application/json" -d '{"host":"&lt;your host&gt;"}' https://oauth.privacyfence.eu/admin/revoke</code>. Starting a new Slack connect should now stop on the relay's "not registered" page. Removing a revoked host is not supported, so use a throwaway hostname for this step, or do it last.</div></li>
