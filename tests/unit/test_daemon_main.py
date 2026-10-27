@@ -2511,7 +2511,7 @@ class TestPeekRelease:
         captured = capsys.readouterr()
         assert captured.err == "Peek refused the provisioning key (HTTP 401).\n"
         assert captured.out == ""
-        assert env.released == []
+        assert env.released == ["alice"]
 
     def test_release_called(self, env):
         assert daemon_main.run_peek_release("alice") == 0

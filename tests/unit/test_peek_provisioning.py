@@ -268,6 +268,12 @@ class TestRequest:
         state = _state()
         assert (state["last_sign_in"], state["email"], state["display_name"]) == (NOW, "a@x.com", "Alice")
 
+    def test_request_survives_a_non_numeric_last_sign_in_in_the_state_file(self, client, data_dir):
+        _write_state(data_dir, "alice", "provisioned", "never")
+        p = _provisioner(client)
+        p.request(Principal(id="alice", email="a@x.com"), email_verified=True)
+        assert _state()["last_sign_in"] == NOW
+
     def test_request_is_deduplicated_while_queued(self, client):
         p = _provisioner(client)
         who = Principal(id="alice", email="a@x.com")

@@ -71,7 +71,7 @@ def _write_state(principal_id: str, **changes: Any) -> None:
             "display_name": str(state.get("display_name", "")),
             "status": str(state.get("status", _STATUS_PENDING)),
             "detail": str(state.get("detail", "")),
-            "last_sign_in": int(state.get("last_sign_in", 0) or 0),
+            "last_sign_in": state["last_sign_in"] if isinstance(state.get("last_sign_in"), int) else 0,
             "updated_at": now,
         }
         record.update(changes)

@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from .peek_client import PeekClientError, bundle_base_url
+from .peek_client import PeekClientError, normalize_base_url
 
 Mode = Literal["local", "org"]
 
@@ -568,7 +568,7 @@ class PeekProvisioningConfig:
         if not peek.get("base_url"):
             raise ConfigurationError("org_config.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\"")
         try:
-            base_url = bundle_base_url(peek, org_mode=True)
+            base_url = normalize_base_url(str(peek["base_url"]))
         except PeekClientError as exc:
             raise ConfigurationError(f"org_config.json's \"peek\".\"base_url\" is not usable: {exc}") from exc
         return PeekProvisioningConfig(

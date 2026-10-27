@@ -2363,8 +2363,9 @@ def run_peek_release(principal_id: str) -> int:
     for one person and stop renewing it, for when they have left. Runs as the
     account that owns the data (``main`` dispatches it after the runtime
     identity check) in its own process, so it neither reaches a running
-    daemon's connector registry nor needs one: the daemon sees the deleted
-    token file on its next request. The Peek account stays. A person who
+    daemon's connector registry nor needs one: a daemon keeps its cached
+    connector, and so the revoked token, until it is evicted, and Peek
+    refuses the token meanwhile. The Peek account stays. A person who
     signs in again is provisioned again, so remove them from the identity
     provider first.
     """
@@ -2388,12 +2389,15 @@ def run_peek_release(principal_id: str) -> int:
     if not key:
         print(f"Set {config.key_env} to the Peek provisioning key first.", file=sys.stderr)
         return 1
+    # Local state first: it stops a running daemon's worker from re-linking and
+    # minting between the two steps. A failed revoke is repeated by running the
+    # command again.
+    peek_provisioning.release(principal_id)
     try:
         had_link = PeekProvisioningClient(config.base_url, key).release_account(principal_id)
     except PeekClientError as exc:
         print(exc, file=sys.stderr)
         return 1
-    peek_provisioning.release(principal_id)
     message = f"Released the Peek connection of {principal_id}. The Peek account stays."
     message += (
         " PrivacyFence's token for it is revoked." if had_link else " Peek had no provisioned token for it."

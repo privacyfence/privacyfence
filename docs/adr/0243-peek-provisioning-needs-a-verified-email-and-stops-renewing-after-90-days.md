@@ -21,7 +21,8 @@ left without a release. Peek's account model is described at
 2. The email is stored in `credentials/peek_provisioning.json` so the sweep can renew without a
    sign-in.
 3. Tokens last 90 days and are renewed 30 days ahead. Renewal stops for anyone not seen within 90
-   days, so their token lapses at most 90 days later.
+   days, so their token lapses up to about 150 days after their last sign-in (renewed just inside
+   the 90 days, it lives another 90).
 
 See `src/privacyfence/peek_provisioning.py` and `src/privacyfence/org_mode.py`.
 

@@ -76,7 +76,8 @@ that your organization connected the account automatically.
 **Renewal.** Tokens last 90 days and are renewed in the background when 30 days or fewer are left, for
 as long as the person has signed in to PrivacyFence within the last 90 days. PrivacyFence keeps the
 person's email in `users/<id>/credentials/peek_provisioning.json` for this. Someone who stops signing
-in loses the Peek token when it expires, at most 90 days later.
+in loses the Peek token when it expires, up to about 150 days after their last sign-in (a token
+renewed just inside the 90 days lives another 90).
 
 **When someone leaves.** Remove them from the identity provider first, then run
 `privacyfence-app --peek-release PRINCIPAL_ID` (with the provisioning key in the environment). It
