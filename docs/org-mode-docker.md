@@ -169,6 +169,10 @@ Wait for the `Org mode active -- MCP-over-HTTP at https://...` line, then go on 
 For `--audit-forwarding-http-bearer-token-env NAME`, put `NAME=token` in `privacyfence.env` next to
 `compose.yaml`, mode `0600`. The file is optional. Never put the token in the bundle.
 
+For Peek auto-provisioning ([Peek setup](peek-setup.md#automatic-accounts-organization-mode)), put
+`PRIVACYFENCE_PEEK_PROVISIONING_KEY=peekprov_…` (or the name you gave `--peek-provisioning-key-env`) in the
+same file. Never put the key in the bundle.
+
 ## Upgrade
 
 Change `PRIVACYFENCE_IMAGE_TAG` in `.env`, then:
@@ -204,6 +208,7 @@ Run them in the running container, for the same fixed-address reason as above:
 
 ```bash
 docker compose exec privacyfence privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID
+docker compose exec privacyfence privacyfence-app --peek-release PRINCIPAL_ID
 ```
 
 ## Verify the image
