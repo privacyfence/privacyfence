@@ -139,7 +139,7 @@ cd cloudflare/oauth-relay &amp;&amp; npm ci
 CLOUDFLARE_ACCOUNT_ID=326657b4f70af041996d60fd6b8f83fa npx wrangler deploy
 printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <code>curl -sI https://oauth.privacyfence.eu/health</code> should answer <code>200</code>. Once the PR merges, the deploy workflow takes over.</div></li>
       <li><label><input type="checkbox" id="ma2-2"></label><div>On a test org server with a public HTTPS hostname, install the branch's wheel. Put a JSON file with the seven apps' IDs and secrets on that server only, mode 0600, owned by the service account, and point <code>PRIVACYFENCE_BUILTIN_APPS</code> at it in the service's environment file. The format is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/builtin-oauth-apps/docs/configuration-reference.md">configuration-reference.md</a>. Use a signed bundle with <code>mode</code>, <code>server</code> and <code>idp</code> only, and no connector sections.</div></li>
-      <li><label><input type="checkbox" id="ma2-3"></label><div>Restart the server. Within a minute, <code>https://oauth.privacyfence.eu/registrations</code> should list your server's host. As an IdP admin, Settings → <strong>Apps</strong> should say "Relay registration: registered".</div></li>
+      <li><label><input type="checkbox" id="ma2-3"></label><div>Restart the server. Within a minute, <code>https://oauth.privacyfence.eu/registrations</code> should list your server's host. As an IdP admin, the <strong>Admin</strong> page's Services section should say "Relay registration: registered".</div></li>
       <li><label><input type="checkbox" id="ma2-4"></label><div>As a normal user, open <code>/connect</code> and connect Gmail, Slack, Salesforce, Jira and Miro. The browser should pass briefly through <code>oauth.privacyfence.eu</code> and land back on <code>/connect</code> showing Connected.</div></li>
       <li><label><input type="checkbox" id="ma2-5"></label><div>Check revocation. Run <code>curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H "Content-Type: application/json" -d '{"host":"&lt;your host&gt;"}' https://oauth.privacyfence.eu/admin/revoke</code>. Starting a new Slack connect should now stop on the relay's "not registered" page. Removing a revoked host is not supported, so use a throwaway hostname for this step, or do it last.</div></li>
     </ol>
@@ -147,15 +147,17 @@ printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <co
   </section>
 
   <section class="item" id="ma3">
-    <h3>6. Replace an app and withdraw a service</h3>
-    <div class="meta"><span>ma3-override-and-withdraw</span><span>about 30 minutes</span></div>
+    <h3>6. Upgrade an org server, then use the Admin page</h3>
+    <div class="meta"><span>ma3-upgrade-and-admin-page</span><span>about 45 minutes</span></div>
     <ol class="steps">
-      <li><label><input type="checkbox" id="ma3-1"></label><div>On the desktop install from item 4, open Settings → <strong>Apps</strong>. Turn Miro off: step-up should ask for your passkey only when turning a service <em>on</em>, and Miro should disappear from Connectors.</div></li>
-      <li><label><input type="checkbox" id="ma3-2"></label><div>Enter a Slack app of your own (an app you registered per slack-setup.md, not the built-in one) under "Use your own app". Approve the passkey prompt. The row should read "Uses your organization's own app (client …)", and reconnecting Slack should show your app's name on Slack's consent screen. Reload the page and check that the secret never reappears in the form.</div></li>
-      <li><label><input type="checkbox" id="ma3-3"></label><div>Choose "Use the built-in app" and check the row goes back to "Uses the built-in PrivacyFence app".</div></li>
-      <li><label><input type="checkbox" id="ma3-4"></label><div>Repeat the Miro withdraw and the Slack override on the org server as an IdP admin. Sign in as a non-admin and confirm there is no Apps section.</div></li>
+      <li><label><input type="checkbox" id="ma3-1"></label><div>On a second test org server running the current release, use an old-style bundle that carries <code>authz</code>, <code>web_push</code> and connector sections for Slack and Google only. Then upgrade it to the branch's wheel and restart. The log should say <code>Imported … settings from org_config.json into org/admin_config.json</code>. The Admin page should show Slack and Google offered and everything else off, with your sign-in restrictions filled in.</div></li>
+      <li><label><input type="checkbox" id="ma3-2"></label><div>Restart again. The log should now warn that <code>org_config.json carries settings that are now managed on the Admin page and are ignored</code>, naming <code>authz</code> and <code>web_push</code>.</div></li>
+      <li><label><input type="checkbox" id="ma3-3"></label><div>As an IdP admin, open <strong>Admin</strong>. Offer Miro: it asks for your passkey, and Miro appears on <code>/connect</code> without a restart. Withdraw Slack: no passkey, and Slack disappears from <code>/connect</code>.</div></li>
+      <li><label><input type="checkbox" id="ma3-4"></label><div>Change the inline download limit under File delivery. The page should say "Restart PrivacyFence for these changes to take effect: File delivery". Try to turn step-up's <em>require passkey</em> off: the page should not offer it.</div></li>
+      <li><label><input type="checkbox" id="ma3-5"></label><div>Compare <strong>Settings</strong> as the admin and as a normal user. Both should show the same sections, with no Privacy or Stats. As the normal user there is no Admin item in the header, and opening <code>/admin</code> says "Only administrators can open this page."</div></li>
+      <li><label><input type="checkbox" id="ma3-6"></label><div>On the desktop install from item 4, open <strong>Admin</strong>, withdraw Miro and check it disappears from Settings → Connectors. Then upload a <code>rooms.json</code> from <code>scripts/sync_room_directory.py --output rooms.json</code>, or skip this step if you have no Workspace room directory.</div></li>
     </ol>
-    <p class="done-when"><strong>Report back:</strong> paste <code>ma3: withdraw ok, override ok, revert ok, org admin ok, non-admin hidden ok</code> into the PR.</p>
+    <p class="done-when"><strong>Report back:</strong> paste <code>ma3: import ok, ignored-warning ok, live offer/withdraw ok, restart notice ok, settings same ok, desktop ok</code> into the PR.</p>
   </section>
 </div>
 
