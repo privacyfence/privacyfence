@@ -1,7 +1,7 @@
 """Peek connector: the HTML pages an account shares through a Peek server.
 
 The connector holds a ``PeekClient`` bound to one server (ADR 0152). Nothing
-here logs, audits or previews a Peek token, a page password, page content or a
+here logs, audits or previews a Peek token, page content or a
 comment body.
 """
 from __future__ import annotations
@@ -19,11 +19,11 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
 from ..peek_client import (
-    PASSWORD_MAX_BYTES,
+    PASSWORDS_REMOVED,
     UPLOAD_MAX_BYTES,
-    VISIBILITIES,
     PeekClient,
     PeekClientError,
+    normalize_visibility,
     validate_slug,
 )
 from ..preview_dates import format_preview_datetime
@@ -39,16 +39,8 @@ _SLUG = ToolParam(
 )
 
 _VISIBILITY_DESC = (
-    "Who can open the page: public (anyone with the link), password (anyone with the link and "
-    "the password) or private (signed-in Peek accounts only)."
-)
-
-_PASSWORD = ToolParam(
-    "password", "str", required=False, default="",
-    description=(
-        "The page password, 1 to 72 bytes. Required with password visibility and empty "
-        "otherwise. It goes to Peek and is never shown on the approval card."
-    ),
+    "Who can open the page: public (anyone with the link), signed-in (anyone signed in to Peek) "
+    "or restricted (only you, Peek admins and the people or groups granted access)."
 )
 
 _REASON = ToolParam(
@@ -98,10 +90,11 @@ class PeekConnector(Connector):
                     "Read the reviewers' comments on one Peek page, with what each comment is "
                     "anchored to. Comments belong to one version of the page: the latest unless "
                     "you give version. Returns {slug, name, version, comments: [{id, author, "
-                    "body, anchor_kind, selector, element_text, created_at, version}]}, where "
-                    "version is the one read. Use peek_get_stats to see how often the page was opened and "
-                    "peek_add_comment to reply. "
-                    "Requires user approval."
+                    "verified, body, anchor_kind, selector, element_text, created_at, "
+                    "version}]}, where version is the one read and verified is true when a "
+                    "signed-in Peek account wrote the comment and false when a viewer typed the "
+                    "author name. Use peek_get_stats to see how often the page was opened and "
+                    "peek_add_comment to reply. Requires user approval."
                 ),
                 params=[
                     _SLUG,
@@ -134,8 +127,9 @@ class PeekConnector(Connector):
                     "Publish an HTML page on Peek, or a new version of one of your pages, and "
                     "get its share link. Give the page as html, local_path or upload_id. Give "
                     "slug to replace what an existing page's link shows with this new version; "
-                    "its visibility stays as it is. A new page is private unless you choose "
-                    "otherwise. Returns {slug, url, visibility, version, version_url}. Use "
+                    "its visibility stays as it is. A new page is restricted unless you choose "
+                    "otherwise: only you, Peek admins and the people granted access can open it. "
+                    "Returns {slug, url, visibility, version, version_url}. Use "
                     "peek_set_visibility to change who can open a page later. Requires user "
                     "approval."
                 ),
@@ -180,16 +174,8 @@ class PeekConnector(Connector):
                     ToolParam(
                         "visibility", "str", required=False, default="",
                         description=(
-                            _VISIBILITY_DESC + " Empty means private for a new page; leave it "
+                            _VISIBILITY_DESC + " Empty means restricted for a new page; leave it "
                             "empty with slug."
-                        ),
-                    ),
-                    ToolParam(
-                        "password", "str", required=False, default="",
-                        description=(
-                            "The page password, 1 to 72 bytes. Required with password "
-                            "visibility and empty otherwise (always empty with slug). It goes "
-                            "to Peek and is never shown on the approval card."
                         ),
                     ),
                     _REASON,
@@ -199,15 +185,15 @@ class PeekConnector(Connector):
             ToolSpec(
                 name="peek_set_visibility",
                 description=(
-                    "Change who can open a Peek page: anyone with the link, anyone with the link "
-                    "and a password, or signed-in Peek accounts only. Pages restricted to named "
-                    "people are managed in Peek's dashboard. Returns {slug, visibility}. Use "
-                    "peek_upload_page to publish a new version. Requires user approval."
+                    "Change who can open a Peek page: anyone with the link, anyone signed in to "
+                    "Peek, or only the people granted access (restricted). Returns {slug, "
+                    "visibility, notified}, where notified says whether Peek emailed the people "
+                    "granted access. Use peek_upload_page to publish a new version. Requires "
+                    "user approval."
                 ),
                 params=[
                     _SLUG,
                     ToolParam("visibility", "str", required=True, description=_VISIBILITY_DESC),
-                    _PASSWORD,
                     _REASON,
                 ],
                 read_only=False,
@@ -215,18 +201,18 @@ class PeekConnector(Connector):
             ToolSpec(
                 name="peek_add_comment",
                 description=(
-                    "Post a comment on a Peek page under your own Peek account name. It goes on "
-                    "the page's latest version. Copy selector and element_text from a comment "
-                    "returned by peek_get_comments to reply at the same spot. Returns {slug, "
-                    "version, comment: {id, author, body, anchor_kind, selector, element_text, "
-                    "created_at}}. Use peek_get_comments to read the existing comments. "
-                    "Requires user approval."
+                    "Post a comment on a Peek page under your own Peek account name, on the "
+                    "latest version or the one you give. Copy selector and element_text from a "
+                    "comment returned by peek_get_comments to reply at the same spot. Returns "
+                    "{slug, version, comment: {id, author, verified, body, anchor_kind, selector, "
+                    "element_text, created_at}}. Use peek_get_comments to read the existing "
+                    "comments. Requires user approval."
                 ),
                 params=[
                     _SLUG,
                     ToolParam(
                         "body", "str", required=True,
-                        description="The comment text, 1 to 4000 characters.",
+                        description="The comment text, 1 to 4000 bytes (UTF-8).",
                     ),
                     ToolParam(
                         "selector", "str", required=False, default="",
@@ -239,9 +225,16 @@ class PeekConnector(Connector):
                     ToolParam(
                         "element_text", "str", required=False, default="",
                         description=(
-                            "Quoted text to anchor the comment to, up to 200 characters, copied "
+                            "Quoted text to anchor the comment to, up to 200 bytes (UTF-8), copied "
                             "from a comment's element_text. Needs selector. Empty anchors to the "
                             "element, or the page."
+                        ),
+                    ),
+                    ToolParam(
+                        "version", "int", required=False, default=0,
+                        description=(
+                            "Version number to comment on, from peek_list_versions; 0, the "
+                            "default, means the latest."
                         ),
                     ),
                     _REASON,
@@ -341,10 +334,11 @@ class PeekConnector(Connector):
             for c in comments
         ]
         table = {
-            "headers": ["Author", "Date", "Anchored to", "Comment"],
+            "headers": ["Author", "Signed in", "Date", "Anchored to", "Comment"],
             "rows": [
                 [
                     c.author,
+                    "yes" if c.verified else "no",
                     format_preview_datetime(c.created_at),
                     _anchor_text(c.anchor_kind, c.selector, c.element_text),
                     c.body,
@@ -442,6 +436,7 @@ class PeekConnector(Connector):
         visibility: str = "",
         password: str = "",
     ) -> Any:
+        _refuse_password(password)
         sources = (bool(html.strip()), bool(local_path.strip()), bool(upload_id.strip()))
         if sum(sources) != 1:
             raise ValueError("peek_upload_page: give exactly one of html, local_path and upload_id.")
@@ -452,14 +447,13 @@ class PeekConnector(Connector):
             )
         if slug:
             _check_slug(slug)
-            if visibility or password:
+            if visibility:
                 raise ValueError(
-                    "A new version keeps the page's visibility. Leave visibility and "
-                    "password empty, or change them with peek_set_visibility."
+                    "A new version keeps the page's visibility. Leave visibility empty, "
+                    "or change it with peek_set_visibility."
                 )
         else:
-            visibility = visibility or "private"
-            _check_visibility(visibility, password)
+            visibility = _check_visibility(visibility or "restricted")
 
         if html.strip():
             data = html.encode("utf-8")
@@ -491,6 +485,8 @@ class PeekConnector(Connector):
             or (os.path.basename(local_path.strip()) if local_path.strip() else "")
             or "page.html"
         )
+        if not 1 <= len(name) <= 200:
+            raise ValueError("name must be 1 to 200 characters.")
         size = f"{len(data):,} bytes"
         if slug:
             page = await self._fetch(self._client.get_page, slug)
@@ -513,8 +509,6 @@ class PeekConnector(Connector):
                 "Visibility": visibility,
                 "Size": size,
             }
-            if visibility == "password":
-                preview["Password"] = "Set (not shown)"  # nosec B105  # card wording, not a credential
         details = (
             (html_to_text.html_to_text(text) or "(the page has no visible text)")
             + "\n\n--- HTML source (everything that is published) ---\n"
@@ -539,27 +533,26 @@ class PeekConnector(Connector):
         # ADR 0102: the upload slot is consumed only now, once the gate has passed.
         local_files.commit_uploads()
         result = await self._fetch(
-            self._client.upload_page, data, name, visibility, password, slug=slug,
+            self._client.upload_page, data, name, visibility, slug=slug,
         )
         return asdict(result)
 
     async def _set_visibility(self, slug: str, visibility: str, password: str = "") -> Any:
+        _refuse_password(password)
         _check_slug(slug)
-        _check_visibility(visibility, password)
+        visibility = _check_visibility(visibility)
         page = await self._fetch(self._client.get_page, slug)
-        if page.visibility == "restricted":
-            raise ValueError(
-                "This page is restricted to people granted access in Peek. Change who can "
-                "open it in Peek's dashboard (Access)."
+        details = f"Who can open {page.url} changes from {page.visibility} to {visibility}."
+        if visibility == "restricted" and page.visibility != "restricted":
+            details += (
+                "\n\nOnly you, Peek admins and the people granted access can open it. "
+                "Peek emails the link to everyone already granted access."
             )
-        preview = {
-            "Server": self._client.host,
-            "Page": page.name,
-            "Link": page.url,
-            "Visibility": f"{page.visibility} \u2192 {visibility}",
-        }
-        if visibility == "password":
-            preview["Password"] = "Set (not shown)"  # nosec B105  # card wording, not a credential
+        elif page.visibility == "restricted" and visibility != "restricted":
+            details += (
+                "\n\nThe page is no longer limited to the people granted access. Their grants "
+                "stay and apply again if the page is restricted later."
+            )
         await gated_call(
             connector=self.name,
             tool="peek_set_visibility",
@@ -569,30 +562,36 @@ class PeekConnector(Connector):
             raw_data={"slug": slug, "visibility": visibility},
             filtered_data=None,
             gate="popup",
-            preview=preview,
-            details_text=(
-                f"Who can open {page.url} changes from {page.visibility} to {visibility}."
-            ),
+            preview={
+                "Server": self._client.host,
+                "Page": page.name,
+                "Link": page.url,
+                "Visibility": f"{page.visibility} \u2192 {visibility}",
+            },
+            details_text=details,
             args={"slug": slug, "visibility": visibility},
         )
-        new_visibility = await self._fetch(
-            self._client.set_visibility, slug, visibility, password,
-        )
-        return {"slug": slug, "visibility": new_visibility}
+        res = await self._fetch(self._client.set_visibility, slug, visibility)
+        return {"slug": slug, "visibility": res.visibility, "notified": res.notified}
 
     async def _add_comment(
-        self, slug: str, body: str, selector: str = "", element_text: str = "",
+        self, slug: str, body: str, selector: str = "", element_text: str = "", version: int = 0,
     ) -> Any:
         _check_slug(slug)
-        if not body.strip() or len(body) > 4000:
-            raise ValueError("body must be 1 to 4000 characters.")
-        if len(selector) > 500:
-            raise ValueError("selector must be 500 characters or fewer.")
-        if len(element_text) > 200:
-            raise ValueError("element_text must be 200 characters or fewer.")
+        if not 1 <= _utf8_len(body) <= 4000:
+            raise ValueError("body must be 1 to 4000 bytes (UTF-8).")
+        if _utf8_len(selector) > 500:
+            raise ValueError("selector must be 500 bytes or fewer (UTF-8).")
+        if _utf8_len(element_text) > 200:
+            raise ValueError("element_text must be 200 bytes or fewer (UTF-8).")
         if element_text and not selector:
             raise ValueError("element_text needs a selector.")
+        if version < 0:
+            raise ValueError("version must be 0 (the latest) or a version number.")
         page = await self._fetch(self._client.get_page, slug)
+        if version > page.version:
+            raise ValueError(f"This page's latest version is {page.version}.")
+        shown = version or page.version
         excerpt = body[:80] + ("\u2026" if len(body) > 80 else "")
         kind = "text" if element_text else "element" if selector else "page"
         await gated_call(
@@ -608,19 +607,22 @@ class PeekConnector(Connector):
                 "Server": self._client.host,
                 "Page": page.name,
                 "Link": page.url,
-                "Version": str(page.version),
+                "Version": str(shown),
                 "Anchored to": _anchor_text(kind, selector, element_text),
             },
             details_text=body,
             args={"slug": slug},
         )
-        comment = await self._fetch(self._client.add_comment, slug, body, selector, element_text)
+        comment = await self._fetch(
+            self._client.add_comment, slug, body, selector, element_text, version,
+        )
         return {
             "slug": slug,
-            "version": page.version,
+            "version": shown,
             "comment": {
                 "id": comment.id,
                 "author": comment.author,
+                "verified": comment.verified,
                 "body": comment.body,
                 "anchor_kind": comment.anchor_kind,
                 "selector": comment.selector,
@@ -724,18 +726,21 @@ def _check_slug(slug: str) -> None:
         raise ValueError(str(exc)) from exc
 
 
-def _check_visibility(visibility: str, password: str) -> None:
-    if visibility not in VISIBILITIES:
-        raise ValueError("visibility must be public, password or private.")
-    if visibility == "password":
-        if not password:
-            raise ValueError("A password is required when visibility is password.")
-        if len(password.encode("utf-8")) > PASSWORD_MAX_BYTES:
-            raise ValueError("password must be 72 bytes or fewer.")
-        if password != password.strip():
-            raise ValueError("password must not start or end with a space.")
-    elif password:
-        raise ValueError("password must be empty unless visibility is password.")
+def _check_visibility(visibility: str) -> str:
+    try:
+        return normalize_visibility(visibility)
+    except PeekClientError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _refuse_password(password: str) -> None:
+    # A client that still sends a password must not publish a page it thinks is protected.
+    if password:
+        raise ValueError(PASSWORDS_REMOVED)
+
+
+def _utf8_len(value: str) -> int:
+    return len(value.strip().encode("utf-8"))
 
 
 def _anchor_text(anchor_kind: str, selector: str, element_text: str) -> str:

@@ -2,10 +2,9 @@
 
 A Peek token is only ever sent to the server it was issued for (ADR 0152):
 the credential file records that server, every request goes to it, and
-redirects are never followed. Nothing here logs a token, a device code, a
-page password, page content, a comment body or an
-email address of a grant; log lines carry the host and
-counts only.
+redirects are never followed. Nothing here logs a token, a device code,
+page content, a comment body or an email address of a grant; log lines
+carry the host and counts only.
 """
 
 from __future__ import annotations
@@ -27,8 +26,7 @@ from . import secure_files
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 30
-VISIBILITIES = ("public", "password", "private")
-PASSWORD_MAX_BYTES = 72
+VISIBILITIES = ("public", "signed-in", "restricted")
 # PrivacyFence's own ceiling on a page it reads; the server's own max_upload
 # (2 MiB by default) still applies.
 UPLOAD_MAX_BYTES = 10 * 1024 * 1024
@@ -442,13 +440,27 @@ def _grant(item: Any) -> PeekGrant:
     return PeekGrant(kind=_str(d, "kind"), email=_str(d, "email"), created_at=_iso(d, "created_at"))
 
 
-def _check_visibility(visibility: str, password: str) -> None:
-    if visibility not in VISIBILITIES:
-        raise PeekClientError("visibility must be public, password or private.")
-    if (visibility == "password") != bool(password) or len(password.encode("utf-8")) > PASSWORD_MAX_BYTES:
-        raise PeekClientError("A password of 1 to 72 bytes goes with password visibility, and only with it.")
-    if password != password.strip():
-        raise PeekClientError("A Peek password cannot start or end with a space.")
+PASSWORDS_REMOVED = (
+    "Peek no longer has page passwords. Use restricted, then grant access to people with peek_grant_access."
+)
+
+
+def normalize_visibility(value: str) -> str:
+    """Peek's visibility for ``value``: ``private`` is Peek's old name for ``signed-in``."""
+    value = value.strip()
+    if value == "private":
+        return "signed-in"
+    if value == 'password':
+        raise PeekClientError(PASSWORDS_REMOVED)
+    if value not in VISIBILITIES:
+        raise PeekClientError("visibility must be public, signed-in or restricted.")
+    return value
+
+
+@dataclass(frozen=True)
+class PeekVisibilityResult:
+    visibility: str
+    notified: bool
 
 
 # --- client ----------------------------------------------------------------------------
@@ -528,19 +540,14 @@ class PeekClient:
             recent=visits,
         )
 
-    def upload_page(
-        self, data: bytes, name: str, visibility: str, password: str, slug: str = ""
-    ) -> PeekUploadResult:
+    def upload_page(self, data: bytes, name: str, visibility: str, slug: str = "") -> PeekUploadResult:
         if slug:
             validate_slug(slug)
-            if visibility or password:
+            if visibility:
                 raise PeekClientError("A new version keeps the page's visibility; change it with set_visibility.")
             form = {"slug": slug}
         else:
-            _check_visibility(visibility, password)
-            form = {"visibility": visibility}
-            if visibility == "password":
-                form["password"] = password
+            form = {"visibility": normalize_visibility(visibility)}
         result = _as_dict(
             self._request("POST", "/api/upload", files={"file": (name, data, "text/html")}, data=form)
         )
@@ -552,15 +559,14 @@ class PeekClient:
             version_url=_str(result, "version_url"),
         )
 
-    def set_visibility(self, slug: str, visibility: str, password: str) -> str:
+    def set_visibility(self, slug: str, visibility: str) -> PeekVisibilityResult:
         validate_slug(slug)
-        _check_visibility(visibility, password)
         result = _as_dict(
             self._request(
-                "POST", f"/api/uploads/{slug}/visibility", json={"visibility": visibility, "password": password}
+                "POST", f"/api/uploads/{slug}/visibility", json={"visibility": normalize_visibility(visibility)}
             )
         )
-        return _str(result, "visibility")
+        return PeekVisibilityResult(visibility=_str(result, "visibility"), notified=_bool(result, "notified"))
 
     def delete_page(self, slug: str) -> None:
         validate_slug(slug)
@@ -573,12 +579,23 @@ class PeekClient:
         result = _as_dict(self._request("POST", f"/api/uploads/{slug}/name", json={"name": name}))
         return PeekRenameResult(slug=_str(result, "slug"), url=_str(result, "url"), name=_str(result, "name"))
 
-    def add_comment(self, slug: str, body: str, selector: str, element_text: str) -> PeekComment:
+    def add_comment(
+        self, slug: str, body: str, selector: str, element_text: str, version: int = 0
+    ) -> PeekComment:
         validate_slug(slug)
         payload = {"body": body, "selector": selector, "element_text": element_text}
+        kwargs: dict[str, Any] = {"json": payload}
+        if version > 0:
+            kwargs["params"] = {"v": str(version)}
         try:
-            result = self._request("POST", f"/api/uploads/{slug}/account-comments", json=payload)
+            result = self._request("POST", f"/api/uploads/{slug}/account-comments", **kwargs)
         except PeekClientError as exc:
+            if version > 0 and exc.status == 404 and exc.detail == "version not found":
+                raise PeekClientError(
+                    f"Peek has no version {version} of this page (HTTP 404). Retention may have removed it.",
+                    status=404,
+                    detail=exc.detail,
+                ) from exc
             if exc.status in (404, 405):
                 raise PeekClientError(
                     "This Peek server does not accept comments from PrivacyFence: "

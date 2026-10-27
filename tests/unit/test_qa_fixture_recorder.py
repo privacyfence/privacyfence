@@ -4114,7 +4114,7 @@ def _peek_client(pages, comments):
 
 _PEEK_PAGE = {
     "slug": "real-slug", "name": "PrivacyFence QA [QATEST].html", "owner": "Real Person",
-    "size": 120, "visibility": "private", "url": "http://localhost:7700/real-slug",
+    "size": 120, "visibility": "signed-in", "url": "http://localhost:7700/real-slug",
     "created_at": 1760000000, "version": 1,
 }
 _PEEK_OTHER_PAGE = {**_PEEK_PAGE, "slug": "other", "name": "Private thing", "owner": "Real Person"}
@@ -4194,16 +4194,16 @@ class _FakePeekClient:
         self.upload_fails = False
         self.deleted: list[str] = []
 
-    def upload_page(self, data, name, visibility, password, slug=""):
+    def upload_page(self, data, name, visibility, slug=""):
         if self.upload_fails:
             raise recorder.PeekClientError("simulated upload failure")
         new = f"slug{len(self.pages) + 1}"
         self.pages[new] = {"name": name, "visibility": visibility}
         return SimpleNamespace(slug=new, visibility=visibility)
 
-    def set_visibility(self, slug, visibility, password):
+    def set_visibility(self, slug, visibility):
         self.pages[slug]["visibility"] = visibility
-        return visibility
+        return SimpleNamespace(visibility=visibility, notified=False)
 
     def rename_page(self, slug, name):
         page = self.pages.pop(slug)
