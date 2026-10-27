@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.11.0] — 2026-10-27
+
 ### Added
 
 - **Peek accounts for everyone, in organization mode.** With `--peek-auto-provision` and a Peek provisioning key, each person who signs in gets a Peek account (or keeps their existing one) connected for them; their own Peek sign-in still wins, and `privacyfence-app --peek-release` revokes PrivacyFence's token when someone leaves.
@@ -3505,7 +3507,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...HEAD
+[6.11.0]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...v6.11.0
 [6.10.0]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...v6.10.0
 [6.9.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.2...v6.9.1
 [6.8.2]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...v6.8.2
