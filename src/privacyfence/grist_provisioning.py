@@ -34,7 +34,7 @@ PACE_SECONDS = 0.5
 QUEUE_MAX = 1000
 STATE_FILE = "credentials/grist_provisioning.json"
 # The same path as daemon_main.TOKEN_FILES["grist"]; this module does not import daemon_main.
-TOKEN_FILE = "credentials/grist_token.json"
+TOKEN_FILE = "credentials/grist_token.json"  # nosec B105  # a file path, not a credential
 
 _SWEEP_STATUSES = frozenset({"pending", "provisioned", "adopted", "error", "no_account"})
 
@@ -75,6 +75,10 @@ def _update_state(principal_id: str, *, now: float, **fields: Any) -> dict[str, 
         state["updated_at"] = int(now)
         atomic_write_json(path, state)
     return state
+
+
+def _released(principal_id: str) -> bool:
+    return _read_state(principal_id).get("status") == "released"
 
 
 def _usable(path: Path, server_url: str, source: str) -> dict[str, Any] | None:
@@ -134,6 +138,9 @@ def _provision(
     now: float,
 ) -> tuple[str, str]:
     def done(status: str, detail: str = "") -> tuple[str, str]:
+        # --grist-release runs in another process; never write over it.
+        if _released(principal_id):
+            return "released", ""
         _update_state(principal_id, now=now, status=status, detail=detail)
         return status, detail
 
@@ -162,9 +169,13 @@ def _provision(
         ):
             managed = record["managed"]
         else:
+            if _released(principal_id):
+                return "released", ""
             issued = client.issue_key(principal_id)
             managed = issued.managed
             with principal_lock(principal_id):
+                if _released(principal_id):
+                    return "released", ""
                 if _usable(token_path, config.server_url, "manual") is not None:
                     saved = False
                 else:

@@ -881,7 +881,9 @@ def main(argv: list[str] | None = None) -> int:
         existing = (bundle.get("grist") or {}).get("auto_provision")
         existing = existing if isinstance(existing, dict) else {}
         if not args.grist_auto_provision:
-            bundle.setdefault("grist", {})["auto_provision"] = {"enabled": False}
+            # Only where Grist is already configured: a bare grist section would offer Grist with no server.
+            if isinstance(bundle.get("grist"), dict) and bundle["grist"]:
+                bundle["grist"]["auto_provision"] = {"enabled": False}
         else:
             grist_bundle = bundle.get("grist") or {}
             if not grist_bundle.get("server_url"):

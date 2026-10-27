@@ -71,12 +71,12 @@ Give the flag again on every `--grist-auto-provision` rebuild; leaving it out tu
 - Grist allows one API key per person. With no key in Grist, the provisioner creates a *managed*
   key. If the person already made a key, it is *adopted*: PrivacyFence uses it and never deletes it,
   because the person's own scripts use it. Regenerating or removing the key in Grist disconnects
-  PrivacyFence until the person's next sign-in.
+  PrivacyFence until the next sweep (within six hours) or sign-in.
 - The Grist install admin is never provisioned and connects by hand.
 - A person with no Grist account is provisioned once Grist has one: after their first sign-in to
   Grist, or when someone shares a document with their address.
 - A managed key expires 90 days after it was last issued and is renewed 30 days ahead while the
-  person keeps signing in. So a managed key lives at most about 150 days after the last sign-in; use
+  person keeps signing in. So a managed key lives at most about 180 days after the last sign-in; use
   `--grist-release` for anything sooner.
 
 **Release a person.** `privacyfence-app --grist-release PRINCIPAL_ID` (in Docker: `docker compose
