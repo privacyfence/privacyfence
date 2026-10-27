@@ -42,6 +42,7 @@ from privacyfence import (
     settings_controller,
     upload_staging,
     web_approval_ui,
+    whats_new,
 )
 from privacyfence.web import control_channel, state_stream
 from tests.diagnostics import capture_failure_diagnostics, suite_name_for
@@ -103,6 +104,8 @@ def _reset() -> None:
     # shape (a startup-set module-level value a test can override) --
     # reset to its documented default so one test's override can't leak.
     upload_staging._INSTANCE = None
+    # whats_new caches the parsed changelog for the life of the process.
+    whats_new.load_changelog.cache_clear()
     local_files.configure_file_bridge()
     local_files.force_bridge_for_tests(False)
     settings_controller._main_dispatch = None
@@ -147,6 +150,18 @@ def _reset_singletons():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_whats_new_state(monkeypatch, request):
+    # whats_new writes per-principal state on page views; without this, any test that renders an
+    # org page would write users/<id>/whats_new.json into the checkout (paths.data_dir() is the
+    # repository root in a source checkout). tmp_path is resolved lazily so tests that never
+    # touch it don't pay for a directory.
+    monkeypatch.setattr(
+        whats_new, "state_path",
+        lambda principal: request.getfixturevalue("tmp_path") / "whats_new_state" / principal.id / whats_new.STATE_FILENAME,
+    )
 
 
 # Stashes each phase's own outcome (setup/call/teardown) onto the test item
