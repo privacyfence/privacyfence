@@ -43,6 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Choose who can open a restricted Peek page.** peek_grant_access and peek_revoke_access (each with an approval card), peek_list_grants and peek_list_versions; comments say whether a signed-in account wrote them, and peek_add_comment can target a version.
+
+### Fixed
+
+- **Peek pages publish again on current Peek servers.** peek_upload_page and peek_set_visibility use Peek's public, signed-in and restricted, and a new page is restricted unless you choose otherwise; a page password is refused with a message that says to restrict the page and grant access.
+
 ## [6.10.0] — 2026-10-27
 
 ### Added

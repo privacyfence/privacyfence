@@ -330,3 +330,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198 |
 | [0237](0237-the-wheel-bundles-the-changelog-through-a-setup-py-build-hook.md) | The wheel bundles `CHANGELOG.md` through a `setup.py` build hook | Accepted; relates to 0023 |
 | [0238](0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md) | Org mode shows each person the changes since the version they last saw | Accepted; relates to 0014, 0023, 0237 |
+| [0239](0239-the-peek-connector-uses-peeks-visibilities-and-new-pages-are-restricted.md) | The Peek connector uses Peek's own visibilities, and new pages are restricted | Accepted; relates to 0158 |
+| [0240](0240-privacyfence-manages-who-can-open-a-restricted-peek-page-behind-a-card.md) | PrivacyFence manages who can open a restricted Peek page, always behind a card | Accepted; relates to 0158, 0239 |
