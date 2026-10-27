@@ -238,6 +238,62 @@ class TestAuthorizeAndIdpCallback:
         assert "code=" in redirect_url
 
 
+class TestGristNotifySignIn:
+    async def test_handle_idp_callback_calls_grist_notify_sign_in(self, tmp_path, monkeypatch):
+        import asyncio
+        import urllib.parse as up
+
+        real = asyncio.to_thread
+        calls: list[tuple] = []
+
+        async def _recorder(func, /, *args, **kwargs):
+            calls.append((func, args, kwargs))
+            return await real(func, *args, **kwargs)
+
+        notified: list[tuple] = []
+        monkeypatch.setattr(
+            op.grist_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: notified.append((principal.id, email_verified)),
+        )
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        _remember_consent(provider, client, "alice")
+        _patch_idp_exchange(
+            monkeypatch, claims={"sub": "alice", "email": "alice@acme.com", "email_verified": "true"},
+        )
+        auth_url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
+        monkeypatch.setattr(asyncio, "to_thread", _recorder)
+
+        await provider.handle_idp_callback(state=state, code="idp-code")
+
+        grist_calls = [c for c in calls if c[0] is op.grist_provisioning.notify_sign_in]
+        assert len(grist_calls) == 1
+        assert grist_calls[0][2] == {"email_verified": True}
+        assert notified == [("alice", True)]
+
+    async def test_authorization_denied_does_not_call_grist_notify_sign_in(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+
+        notified: list[str] = []
+        monkeypatch.setattr(
+            op.grist_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: notified.append(principal.id),
+        )
+        provider = _provider(tmp_path, monkeypatch, policy=AuthzPolicyConfig(allowed_domains=("acme.com",)))
+        client = _client_info()
+        await provider.register_client(client)
+        _patch_idp_exchange(monkeypatch, claims={"sub": "mallory", "email": "mallory@evil.example.com"})
+        auth_url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
+
+        with pytest.raises(oi.AuthorizationDenied):
+            await provider.handle_idp_callback(state=state, code="idp-code")
+
+        assert notified == []
+
+
 async def _idp_callback_for(provider, monkeypatch, client, *, claims, params=None) -> str:
     """register -> authorize -> IdP callback; returns where the browser is sent next."""
     import urllib.parse as up

@@ -96,6 +96,7 @@ from . import (
     agent_label,
     agent_overrides,
     audit_forwarding,
+    grist_provisioning,
     org_bundle_signing,
     org_mode,
     policy_upgrade,
@@ -1157,6 +1158,9 @@ def _start_org_web_server(
 
     server_config = org_mode.ServerConfig.from_org_config(org_config)
     idp = IdpConfig.from_org_config(org_config)
+    # Validated here so a broken "grist"."auto_provision" refuses startup; the provisioner
+    # itself re-reads it in grist_provisioning.start below.
+    org_mode.GristProvisioningConfig.from_org_config(org_config)
     if idp is None:
         raise org_mode.ConfigurationError(
             "org mode (org_config.json \"mode\": \"org\") requires an \"idp\" section "
@@ -1208,6 +1212,7 @@ def _start_org_web_server(
         return connectors
 
     connector_registry = ConnectorRegistry(factory=_connectors_for_principal)
+    grist_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
 
     # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't
@@ -2348,6 +2353,63 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --grist-release
+# ---------------------------------------------------------------------------- #
+
+def run_grist_release(principal_id: str) -> int:
+    """The administrator's way to give back the Grist key PrivacyFence holds for
+    one person who has left. PrivacyFence forgets the key first, then asks the
+    Grist provisioner to delete it in Grist when the provisioner created it.
+    Run it as the account that owns the data, with the provisioning key in the
+    environment. A person who signs in again is provisioned again.
+    """
+    from .grist_provisioner_api import GristProvisionerClient, GristProvisionerClientError
+
+    known = (
+        safe_principal_id(principal_id) == principal_id
+        and principal_id != LOCAL_PRINCIPAL_ID
+        and (data_dir() / "users" / principal_id).is_dir()
+    )
+    if not known:
+        print("No such account.", file=sys.stderr)
+        return 1
+    try:
+        config = org_mode.GristProvisioningConfig.from_org_config(load_org_config())
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if not config.enabled:
+        print("Grist auto-provisioning is not enabled in the organization config.", file=sys.stderr)
+        return 1
+    key = os.environ.get(config.key_env, "").strip()
+    if not key:
+        print(f"Set {config.key_env} to the Grist provisioning key first.", file=sys.stderr)
+        return 1
+    # Before the provisioner call, so a worker already holding this person stops.
+    grist_provisioning.release(principal_id)
+    try:
+        result = GristProvisionerClient(config.provisioner_url, key).release_account(principal_id)
+    except GristProvisionerClientError as exc:
+        print(
+            f"{exc} PrivacyFence has already forgotten the key; run --grist-release again to delete it in Grist.",
+            file=sys.stderr,
+        )
+        return 1
+    message = f"Released the Grist connection of {principal_id}."
+    if result.revoked:
+        message += " The Grist API key PrivacyFence was given is deleted in Grist."
+    elif result.released:
+        message += (
+            " Its Grist API key was the person's own, or was already replaced, and stays; "
+            "delete it in Grist or disable the account there."
+        )
+    else:
+        message += " The Grist provisioner had no link for it."
+    print(message)
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # Argument parsing
 # ---------------------------------------------------------------------------- #
 
@@ -2407,6 +2469,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Revoke every scoped token the account PRINCIPAL_ID holds ('local' in local mode, or the "
             "principal id the audit log and the org Settings page show) and exit. Run it as the "
             "account the daemon runs as."
+        ),
+    )
+    parser.add_argument(
+        "--grist-release", metavar="PRINCIPAL_ID", default=None,
+        help=(
+            "Release the Grist key PrivacyFence holds for the account PRINCIPAL_ID: the provisioner deletes "
+            "it in Grist if it created it, PrivacyFence forgets it, and the daemon exits. Needs the "
+            "provisioning key in the environment."
         ),
     )
     # How the Windows Service Control Manager starts the
@@ -2496,6 +2566,8 @@ def main(argv: list[str] | None = None) -> int:
     # must run as the account that owns it.
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
+    if args.grist_release is not None:
+        return run_grist_release(args.grist_release)
 
     oauth_flag = (
         args.gmail_oauth or args.drive_oauth or args.contacts_oauth

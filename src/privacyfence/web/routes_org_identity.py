@@ -31,7 +31,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import org_identity, web_shell
+from .. import grist_provisioning, org_identity, web_shell
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..web_push import PushSubscriptionStore, session_tag
@@ -225,6 +225,10 @@ def build_routes(
             logger.warning("Org sign-in failed: %s", exc)
             return PlainTextResponse("Sign-in failed. Please try again.", status_code=400)
         session_id = sessions.create(principal)
+        await asyncio.to_thread(
+            grist_provisioning.notify_sign_in, principal,
+            email_verified=grist_provisioning.email_verified_claim(claims),
+        )
         # The session this browser held before, if any (typically one that expired without a
         # sign-out): a different person signing in here does not inherit its push
         # subscriptions, and the same person's move to the new session.
