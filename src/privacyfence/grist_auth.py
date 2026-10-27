@@ -10,6 +10,7 @@ host is logged.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -159,11 +160,23 @@ def save_token_file(token_file: str, record: dict[str, Any]) -> None:
     atomic_write_json(token_file, record)
 
 
-def save_api_key(token_file: str, server_url: str, api_key: str) -> None:
-    save_token_file(
-        token_file,
-        {"auth": "api_key", "server_url": normalize_server_url(server_url), "api_key": api_key},
-    )
+def save_api_key(
+    token_file: str,
+    server_url: str,
+    api_key: str,
+    *,
+    source: str = "manual",
+    managed: bool = False,
+    expires_at: int = 0,
+) -> None:
+    record: dict[str, Any] = {
+        "auth": "api_key",
+        "server_url": normalize_server_url(server_url),
+        "api_key": api_key,
+    }
+    if source == "provisioned":
+        record.update({"source": "provisioned", "managed": managed, "expires_at": expires_at})
+    save_token_file(token_file, record)
 
 
 def load_token_file(token_file: str) -> dict[str, Any]:
@@ -185,7 +198,26 @@ def load_token_file(token_file: str) -> dict[str, Any]:
         value = record.get(key)
         if not isinstance(value, kind) or isinstance(value, bool) or value == "":
             raise GristClientError(_NOT_AUTHENTICATED)
+    if auth == "api_key" and "source" in record:
+        expires_at = record.get("expires_at")
+        if (
+            record["source"] != "provisioned"
+            or not isinstance(record.get("managed"), bool)
+            or not isinstance(expires_at, int)
+            or isinstance(expires_at, bool)
+        ):
+            raise GristClientError(_UNREADABLE)
     return {**record, "server_url": normalize_server_url(record["server_url"])}
+
+
+def token_source(record: dict[str, Any]) -> str:
+    """``"provisioned"`` for a key the Grist provisioner issued, else ``"manual"``."""
+    return "provisioned" if record.get("source") == "provisioned" else "manual"
+
+
+def key_id(api_key: str) -> str:
+    """The first 12 hex characters of the key's SHA-256, as the provisioner reports it."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
 
 
 class GristCredential(Protocol):

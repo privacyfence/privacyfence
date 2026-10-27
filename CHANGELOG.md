@@ -45,6 +45,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Peek accounts for everyone, in organization mode.** With `--peek-auto-provision` and a Peek provisioning key, each person who signs in gets a Peek account (or keeps their existing one) connected for them; their own Peek sign-in still wins, and `privacyfence-app --peek-release` revokes PrivacyFence's token when someone leaves.
+- **Grist API keys for everyone, in organization mode.** With a self-hosted Grist, the Grist provisioner and `--grist-auto-provision`, each person who signs in and has a Grist account gets their Grist connection set up for them; a key they paste on /connect still wins, an existing Grist key is reused rather than replaced, and `privacyfence-app --grist-release` deletes the key PrivacyFence was given when someone leaves.
+- **Choose who can open a restricted Peek page.** peek_grant_access and peek_revoke_access (each with an approval card), peek_list_grants and peek_list_versions; comments say whether a signed-in account wrote them, and peek_add_comment can target a version.
+
+### Fixed
+
+- **A big slack_search_messages sweep no longer overflows the client's tool-result limit.** Message texts are cut at 1,500 characters and, past about 60,000 characters in total, the oldest results are dropped; a final note entry says what was left out.
+- **Peek pages publish again on current Peek servers.** peek_upload_page and peek_set_visibility use Peek's public, signed-in and restricted, and a new page is restricted unless you choose otherwise; a page password is refused with a message that says to restrict the page and grant access.
+
+## [6.10.0] — 2026-10-27
+
+### Added
+
 - **Slack reads say what you have not read yet.** Channel history and thread reads mark each message unread, read or unknown against your own Slack read marker; a search does too when the agent asks for it with read_state, which costs one Slack request per conversation in the results. Search results now carry the thread_ts of a reply in a thread.
 - **slack_get_read_state.** A new Slack tool returns whether up to 20 specific messages are unread, read or unknown, without reading them again, so an agent checks only the messages that matter instead of every search result. Auto-approved; it returns no message text.
 - **What's new after an upgrade, in organization mode.** The first time you open PrivacyFence after your organization upgrades it, a strip under the header links to a What's new page listing the changes since the version you last used. Close the strip or open the page and it stays gone on every browser and device you sign in from.
@@ -3492,7 +3505,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...HEAD
+[6.10.0]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...v6.10.0
 [6.9.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.2...v6.9.1
 [6.8.2]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...v6.8.2
 [6.8.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.0...v6.8.1

@@ -17,7 +17,16 @@ from starlette.testclient import TestClient
 
 import json
 
-from privacyfence import apps_script_client, grist_auth, miro_auth, paths, peek_client, slack_client
+from privacyfence import (
+    apps_script_client,
+    grist_auth,
+    grist_provisioning,
+    miro_auth,
+    paths,
+    peek_client,
+    peek_provisioning,
+    slack_client,
+)
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_connect as rc
@@ -752,6 +761,21 @@ class TestPeekBox:
         assert "Connected" in row and "Not connected" not in row
         assert "Reconnect Peek" in row
 
+    def test_provisioned_file_shows_the_automatic_line(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        peek_client.save_token_file(
+            str(_peek_token_path(principal)), _PEEK_SERVER, _PEEK_SECRET_TOKEN, source="provisioned", expires_at=1,
+        )
+        row = self._peek_row(self._page(principal, _PEEK_ORG))
+        assert "Your organization connected your Peek account automatically." in row
+        assert "Reconnect Peek" in row
+
+    def test_device_file_does_not_show_the_automatic_line(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        _write_peek_token(principal)
+        row = self._peek_row(self._page(principal, _PEEK_ORG))
+        assert "connected your Peek account automatically" not in row
+
     def test_token_for_another_server_is_not_connected(self):
         principal = Principal(id="alice", email="alice@example.com")
         _write_peek_token(principal, "https://other.example.com")
@@ -864,6 +888,37 @@ class TestPeekFlow:
         assert "Connected" in page.split('<li class="service peek card stack">', 1)[1]
         assert _PEEK_SECRET_TOKEN not in page and _PEEK_SECRET_CODE not in page
 
+    def test_finish_saves_the_token_under_the_principal_lock(self, monkeypatch):
+        app, sessions, _unused = _app(org_config=_PEEK_ORG)
+        client, session_id, principal = self._start(monkeypatch, app, sessions)
+        events = []
+
+        class RecordingLock:
+            def __enter__(self):
+                events.append("enter")
+
+            def __exit__(self, *exc):
+                events.append("exit")
+
+        locked_ids = []
+        monkeypatch.setattr(
+            peek_provisioning, "principal_lock", lambda principal_id: locked_ids.append(principal_id) or RecordingLock(),
+        )
+        real_save = peek_client.save_token_file
+
+        def save(*args, **kwargs):
+            events.append("save")
+            return real_save(*args, **kwargs)
+
+        monkeypatch.setattr(peek_client, "save_token_file", save)
+        monkeypatch.setattr(
+            peek_client, "poll_device_login",
+            lambda base, code: peek_client.PeekLoginPoll(status="approved", token=_PEEK_SECRET_TOKEN),
+        )
+        self._post(client, session_id, "finish")
+        assert locked_ids == [principal.id]
+        assert events == ["enter", "save", "exit"]
+
     @pytest.mark.parametrize("status,message", [
         ("pending", "Peek has not recorded your approval yet."),
         ("denied", "The sign-in was denied in Peek."),
@@ -967,6 +1022,33 @@ class TestGristBox:
         assert '<input class="field" type="password" name="api_key" autocomplete="off"' in box
         assert "/oauth/start/grist" not in box
         assert "Not set up by your organization" not in box
+
+    def test_a_provisioned_key_shows_the_automatic_connection_line(self):
+        record = {
+            "auth": "api_key", "server_url": _GRIST_SERVER, "api_key": "k",
+            "source": "provisioned", "managed": True, "expires_at": 1,
+        }
+        box = _grist_box(_grist_page({"server_url": _GRIST_SERVER}, token_record=record))
+        assert "Your organization connected your Grist account automatically." in box
+        assert "Connected to https://grist.example.com." in box
+
+    def test_a_key_file_that_cannot_be_read_still_renders_the_box(self, monkeypatch):
+        record = {"auth": "api_key", "server_url": _GRIST_SERVER, "api_key": "k"}
+
+        def unreadable(_path):
+            raise rc.grist_auth.GristClientError("unreadable")
+
+        monkeypatch.setattr(rc, "_is_connected", lambda *a, **k: True)
+        monkeypatch.setattr(rc.grist_auth, "load_token_file", unreadable)
+        box = _grist_box(_grist_page({"server_url": _GRIST_SERVER}, token_record=record))
+        assert "Connected to https://grist.example.com." in box
+        assert "connected your Grist account automatically" not in box
+
+    def test_a_manual_key_does_not_show_the_automatic_connection_line(self):
+        record = {"auth": "api_key", "server_url": _GRIST_SERVER, "api_key": "k"}
+        box = _grist_box(_grist_page({"server_url": _GRIST_SERVER}, token_record=record))
+        assert "connected your Grist account automatically" not in box
+        assert "Connected to https://grist.example.com." in box
 
     def test_an_oauth_section_offers_connect(self):
         box = _grist_box(_grist_page(_GRIST_OAUTH))
@@ -1224,6 +1306,34 @@ class TestGristApiKey:
         assert f"Connected to {_GRIST_SERVER}" in page
         assert ">Reconnect</button>" in page
         assert self._KEY not in page and self._KEY not in r.text
+
+    def test_the_save_happens_under_the_principal_lock(self, monkeypatch):
+        client, session_id, principal, _registry = self._setup()
+        monkeypatch.setattr(rc.GristClient, "check_connection", lambda self: "grist.example.com")
+        events = []
+
+        class RecordingLock:
+            def __enter__(self):
+                events.append("enter")
+
+            def __exit__(self, *exc):
+                events.append("exit")
+
+        asked = []
+        monkeypatch.setattr(
+            grist_provisioning, "principal_lock", lambda principal_id: asked.append(principal_id) or RecordingLock(),
+        )
+        real_save = grist_auth.save_api_key
+
+        def save(*args, **kwargs):
+            events.append("save")
+            return real_save(*args, **kwargs)
+
+        monkeypatch.setattr(grist_auth, "save_api_key", save)
+        self._post(client, session_id, api_key=self._KEY)
+        assert asked == [principal.id]
+        assert events == ["enter", "save", "exit"]
+        assert self._token_file(principal).exists()
 
     def test_a_failed_check_writes_nothing_and_shows_the_error(self, monkeypatch):
         client, session_id, principal, _registry = self._setup()

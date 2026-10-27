@@ -1022,6 +1022,109 @@ class TestPeekFlags:
         message = self._exit_message(tmp_path, "--peek-base-url", url)
         assert message == "--peek-base-url must not contain a user name, password, query or fragment."
 
+    # --peek-auto-provision (organization mode)
+
+    def _org_args(self, tmp_path, *extra):
+        key_path = tmp_path / "key.pem"
+        if not key_path.exists():
+            build_org_bundle._generate_signing_key(str(key_path))
+        return [
+            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path), *extra,
+        ]
+
+    def _org_bundle(self, tmp_path, *extra):
+        assert build_org_bundle.main(self._org_args(tmp_path, *extra)) == 0
+        return json.loads((tmp_path / "org_config.json").read_text())
+
+    def test_auto_provision_writes_the_section_with_the_default_env(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+        )
+        assert bundle["peek"] == {
+            "base_url": "https://peek.example.com",
+            "auto_provision": {
+                "enabled": True, "key_env": "PRIVACYFENCE_PEEK_PROVISIONING_KEY", "trust_unverified_email": False,
+            },
+        }
+
+    def test_auto_provision_writes_a_custom_env(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+            "--peek-provisioning-key-env", "MY_PEEK_KEY",
+        )
+        assert bundle["peek"]["auto_provision"]["key_env"] == "MY_PEEK_KEY"
+
+    def test_auto_provision_writes_trust_unverified_email(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+            "--peek-trust-unverified-email",
+        )
+        assert bundle["peek"]["auto_provision"]["trust_unverified_email"] is True
+
+    def test_no_auto_provision_writes_enabled_false(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--no-peek-auto-provision",
+        )
+        assert bundle["peek"]["auto_provision"]["enabled"] is False
+
+    def test_auto_provision_requires_org_mode(self, tmp_path):
+        message = self._exit_message(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+        )
+        assert message == (
+            "--peek-auto-provision/--no-peek-auto-provision require --mode org (or --merge against an "
+            "existing org-mode bundle)."
+        )
+
+    def test_auto_provision_requires_a_base_url(self, tmp_path):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(self._org_args(tmp_path, "--peek-auto-provision"))
+        assert str(exc.value) == (
+            "--peek-auto-provision requires --peek-base-url (or --merge against a bundle that has one)."
+        )
+
+    @pytest.mark.parametrize("flag", [["--peek-provisioning-key-env", "K"], ["--peek-trust-unverified-email"]])
+    def test_auto_provision_options_alone_exit(self, tmp_path, flag):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(self._org_args(tmp_path, "--peek-base-url", "https://peek.example.com", *flag))
+        assert str(exc.value) == (
+            "--peek-provisioning-key-env and --peek-trust-unverified-email go with --peek-auto-provision."
+        )
+
+    def test_mode_local_strips_auto_provision(self, tmp_path):
+        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(["-o", str(out_path), "--merge", "--mode", "local"]) == 0
+        assert json.loads(out_path.read_text())["peek"] == {"base_url": "https://peek.example.com"}
+
+    def test_merge_with_a_new_base_url_keeps_auto_provision(self, tmp_path):
+        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(
+            ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"),
+             "--peek-base-url", "https://peek2.example.com"]
+        ) == 0
+        peek = json.loads(out_path.read_text())["peek"]
+        assert peek["base_url"] == "https://peek2.example.com"
+        assert peek["auto_provision"]["enabled"] is True
+
+    def test_merge_can_add_auto_provision_to_an_existing_bundle(self, tmp_path):
+        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com")
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(
+            ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"), "--peek-auto-provision"]
+        ) == 0
+        assert json.loads(out_path.read_text())["peek"]["auto_provision"]["enabled"] is True
+
+    def test_enable_peek_keeps_the_section(self, tmp_path):
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(["-o", str(out_path), "--enable-peek"]) == 0
+        assert json.loads(out_path.read_text())["peek"] == {"enabled": True}
+
 
 class TestScopedTokenFlags:
     """--enable/--disable-scoped-tokens and --scoped-token-max-days write the bundle's
@@ -1063,3 +1166,129 @@ class TestScopedTokenFlags:
                 build_org_bundle.main(args)
             assert excinfo.value.code == 2
             assert not (tmp_path / "org_config.json").exists()
+
+
+class TestGristAutoProvisionFlags:
+    """grist.auto_provision: the Grist provisioner switch (organization mode, API keys only)."""
+
+    def _args(self, tmp_path, *extra, mode=True):
+        key_path = tmp_path / "key.pem"
+        if not key_path.exists():
+            build_org_bundle._generate_signing_key(str(key_path))
+        base = ["-o", str(tmp_path / "org_config.json")]
+        if mode:
+            base += [
+                "--mode", "org", "--server-issuer-url", "https://pf.example.com",
+                "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid",
+                "--idp-client-secret", "csecret", "--sign-key", str(key_path),
+            ]
+        return [*base, *extra]
+
+    def _bundle(self, tmp_path) -> dict:
+        return json.loads((tmp_path / "org_config.json").read_text())
+
+    def _on(self, *extra):
+        return [
+            "--grist-server-url", "https://grist.example.com", "--grist-auto-provision",
+            "--grist-provisioner-url", "https://prov.example.com/", *extra,
+        ]
+
+    def _exit(self, tmp_path, *extra, mode=True):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(self._args(tmp_path, *extra, mode=mode))
+        return str(exc.value)
+
+    def test_writes_section_with_default_env(self, tmp_path):
+        assert build_org_bundle.main(self._args(tmp_path, *self._on())) == 0
+        assert self._bundle(tmp_path)["grist"] == {
+            "server_url": "https://grist.example.com",
+            "auto_provision": {
+                "enabled": True, "provisioner_url": "https://prov.example.com",
+                "key_env": "PRIVACYFENCE_GRIST_PROVISIONING_KEY", "trust_unverified_email": False,
+            },
+        }
+
+    def test_writes_custom_env(self, tmp_path):
+        build_org_bundle.main(self._args(tmp_path, *self._on("--grist-provisioning-key-env", "MY_KEY")))
+        assert self._bundle(tmp_path)["grist"]["auto_provision"]["key_env"] == "MY_KEY"
+
+    def test_writes_trust_unverified_email(self, tmp_path):
+        build_org_bundle.main(self._args(tmp_path, *self._on("--grist-trust-unverified-email")))
+        assert self._bundle(tmp_path)["grist"]["auto_provision"]["trust_unverified_email"] is True
+
+    def test_no_flag_writes_enabled_false(self, tmp_path):
+        build_org_bundle.main(
+            self._args(tmp_path, "--grist-server-url", "https://grist.example.com", "--no-grist-auto-provision")
+        )
+        grist = self._bundle(tmp_path)["grist"]
+        assert grist["auto_provision"] == {"enabled": False}
+        assert grist["server_url"].startswith("https://grist.example.com")
+
+    def test_no_flag_without_grist_section_writes_nothing(self, tmp_path):
+        build_org_bundle.main(self._args(tmp_path, "--no-grist-auto-provision"))
+        assert "grist" not in self._bundle(tmp_path)
+
+    def test_refuses_without_mode_org(self, tmp_path):
+        message = self._exit(tmp_path, *self._on(), mode=False)
+        assert "require --mode org" in message
+
+    def test_refuses_without_server_url(self, tmp_path):
+        message = self._exit(
+            tmp_path, "--grist-auto-provision", "--grist-provisioner-url", "https://prov.example.com",
+        )
+        assert message == (
+            "--grist-auto-provision requires --grist-server-url (or --merge against a bundle that has one)."
+        )
+
+    def test_refuses_with_oauth_app(self, tmp_path):
+        message = self._exit(
+            tmp_path, *self._on(), "--grist-client-id", "gid", "--grist-client-secret", "gsecret",
+        )
+        assert message == (
+            "--grist-auto-provision works only with API keys; it cannot be combined with --grist-client-id."
+        )
+
+    def test_refuses_without_provisioner_url(self, tmp_path):
+        message = self._exit(tmp_path, "--grist-server-url", "https://grist.example.com", "--grist-auto-provision")
+        assert message == "--grist-auto-provision requires --grist-provisioner-url."
+
+    @pytest.mark.parametrize(
+        "flag", [["--grist-provisioner-url", "https://prov.example.com"],
+                 ["--grist-provisioning-key-env", "X"], ["--grist-trust-unverified-email"]],
+    )
+    def test_refuses_companion_flags_alone(self, tmp_path, flag):
+        message = self._exit(tmp_path, *flag)
+        assert message.startswith("--grist-provisioner-url, --grist-provisioning-key-env and ")
+
+    def test_mode_local_strips_it(self, tmp_path):
+        build_org_bundle.main(self._args(tmp_path, *self._on()))
+        assert build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--merge", "--mode", "local"]) == 0
+        assert self._bundle(tmp_path)["grist"] == {"server_url": "https://grist.example.com"}
+
+    def test_merge_new_server_url_keeps_auto_provision(self, tmp_path):
+        build_org_bundle.main(self._args(tmp_path, *self._on()))
+        assert build_org_bundle.main(
+            ["-o", str(tmp_path / "org_config.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
+             "--grist-server-url", "https://grist2.example.com"]
+        ) == 0
+        grist = self._bundle(tmp_path)["grist"]
+        assert grist["server_url"] == "https://grist2.example.com"
+        assert grist["auto_provision"]["enabled"] is True
+
+    def test_merge_reuses_existing_provisioner_url(self, tmp_path):
+        build_org_bundle.main(self._args(tmp_path, *self._on("--grist-provisioning-key-env", "MY_KEY")))
+        assert build_org_bundle.main(
+            ["-o", str(tmp_path / "org_config.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
+             "--grist-auto-provision"]
+        ) == 0
+        auto = self._bundle(tmp_path)["grist"]["auto_provision"]
+        assert auto["provisioner_url"] == "https://prov.example.com"
+        assert auto["key_env"] == "MY_KEY"
+
+    def test_fresh_org_build_succeeds(self, tmp_path):
+        from privacyfence.org_mode import GristProvisioningConfig
+
+        assert build_org_bundle.main(self._args(tmp_path, *self._on())) == 0
+        config = GristProvisioningConfig.from_org_config(self._bundle(tmp_path))
+        assert config.enabled is True
+        assert config.provisioner_url == "https://prov.example.com"

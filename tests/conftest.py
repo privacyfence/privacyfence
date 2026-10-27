@@ -33,7 +33,9 @@ from privacyfence import (
     download_staging,
     gate,
     grist_auth,
+    grist_provisioning,
     local_files,
+    peek_provisioning,
     pii_detector,
     privacy_filter,
     privilege_separation,
@@ -98,6 +100,9 @@ def _reset() -> None:
     web_approval_ui._INSTANCE = None
     download_staging._INSTANCE = None
     grist_auth._DISCOVERY_CACHE.clear()
+    # The Grist provisioner is a process-wide singleton started by the org server.
+    grist_provisioning._INSTANCE = None
+    grist_provisioning._LOCKS.clear()
     # ADR 0007: upload_staging is the upload-side mirror of download_staging
     # above, reset the same way for the same reason. local_files'
     # configure_file_bridge() is gate.configure_popup_executor()'s own
@@ -143,6 +148,10 @@ def _reset() -> None:
     audit_log.set_released_request_id("")
     # The scoped-token store is a process-wide singleton over the data dir (ADR 0164).
     scoped_tokens.set_store(None)
+    # The Peek provisioner (organization mode) is a process-wide singleton; its per-person locks
+    # are keyed by principal id and must not carry over.
+    peek_provisioning._INSTANCE = None
+    peek_provisioning._LOCKS.clear()
 
 
 @pytest.fixture(autouse=True)

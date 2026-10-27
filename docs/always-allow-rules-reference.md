@@ -116,6 +116,7 @@ the request on the card, once.
 |---|---|
 | `peek_get_comments` |  |
 | `peek_get_stats` |  |
+| `peek_list_grants` |  |
 
 ### Salesforce
 
@@ -257,7 +258,9 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 |---|---|
 | `peek_add_comment` |  |
 | `peek_delete_page` |  |
+| `peek_grant_access` |  |
 | `peek_rename_page` |  |
+| `peek_revoke_access` |  |
 | `peek_set_visibility` |  |
 | `peek_upload_page` |  |
 

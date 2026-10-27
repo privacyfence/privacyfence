@@ -428,3 +428,207 @@ class TestRejectRemovedToolAnnotations:
     def test_any_value_is_refused_naming_the_removed_key(self, value):
         with pytest.raises(org_mode.ConfigurationError, match=r"mcp\.tool_annotations.*removed"):
             org_mode.reject_removed_tool_annotations({"mcp": {"tool_annotations": value}})
+
+
+class TestPeekProvisioningConfigFromOrgConfig:
+    @staticmethod
+    def _cfg(**auto):
+        return {"mode": "org", "peek": {"base_url": "https://peek.example.com/", "auto_provision": auto}}
+
+    def test_absent_is_disabled(self):
+        assert org_mode.PeekProvisioningConfig.from_org_config({}) == org_mode.PeekProvisioningConfig()
+        assert org_mode.PeekProvisioningConfig.from_org_config({"peek": "x"}).enabled is False
+
+    def test_enabled_uses_default_key_env_and_normalised_base_url(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True))
+        assert config.enabled is True
+        assert config.key_env == org_mode.DEFAULT_PEEK_PROVISIONING_KEY_ENV == "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
+        assert config.trust_unverified_email is False
+        assert config.base_url == "https://peek.example.com"
+
+    def test_custom_key_env(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True, key_env="MY_KEY_1"))
+        assert config.key_env == "MY_KEY_1"
+
+    def test_trust_unverified_email(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(
+            self._cfg(enabled=True, trust_unverified_email=True)
+        )
+        assert config.trust_unverified_email is True
+
+    def test_disabled_section_skips_the_enabled_only_checks(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(
+            {"peek": {"auto_provision": {"enabled": False, "key_env": "K"}}}
+        )
+        assert config == org_mode.PeekProvisioningConfig(key_env="K")
+
+    @pytest.mark.parametrize("key", ["enabled", "trust_unverified_email"])
+    def test_non_bool_flag_raises(self, key):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(self._cfg(**{key: "yes"}))
+        assert str(exc.value) == (
+            f"org_config.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got 'yes'"
+        )
+
+    @pytest.mark.parametrize("value", ["lower", "1ABC", "A-B", 5])
+    def test_bad_key_env_raises(self, value):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True, key_env=value))
+        assert str(exc.value) == (
+            "org_config.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable name, "
+            f"got {value!r}"
+        )
+
+    def test_enabled_in_local_mode_raises(self):
+        cfg = self._cfg(enabled=True)
+        cfg["mode"] = "local"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(cfg)
+        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
+
+    def test_enabled_without_base_url_raises(self):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(
+                {"mode": "org", "peek": {"auto_provision": {"enabled": True}}}
+            )
+        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\""
+
+    def test_unusable_base_url_raises(self):
+        cfg = self._cfg(enabled=True)
+        cfg["peek"]["base_url"] = "http://peek.example.com"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(cfg)
+        assert str(exc.value).startswith("org_config.json's \"peek\".\"base_url\" is not usable: ")
+
+
+class TestGristProvisioningConfigFromOrgConfig:
+    @staticmethod
+    def _org(**auto: object) -> dict:
+        return {
+            "mode": "org",
+            "grist": {"server_url": "https://grist.example.com/", "auto_provision": auto},
+        }
+
+    @staticmethod
+    def _enabled(**extra: object) -> dict:
+        return {"enabled": True, "provisioner_url": "https://prov.example.com/", **extra}
+
+    def test_absent_is_disabled(self):
+        assert org_mode.GristProvisioningConfig.from_org_config({}) == org_mode.GristProvisioningConfig()
+        assert org_mode.GristProvisioningConfig.from_org_config({"grist": {"enabled": True}}).enabled is False
+
+    def test_enabled_with_server_and_provisioner(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled()))
+        assert config == org_mode.GristProvisioningConfig(
+            enabled=True, key_env="PRIVACYFENCE_GRIST_PROVISIONING_KEY", trust_unverified_email=False,
+            provisioner_url="https://prov.example.com", server_url="https://grist.example.com",
+        )
+        assert org_mode.DEFAULT_GRIST_PROVISIONING_KEY_ENV == config.key_env
+
+    def test_custom_key_env(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env="MY_KEY_1")))
+        assert config.key_env == "MY_KEY_1"
+
+    def test_trust_unverified_email(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(
+            self._org(**self._enabled(trust_unverified_email=True))
+        )
+        assert config.trust_unverified_email is True
+
+    def test_non_bool_enabled(self):
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match=r'^org_config.json\'s "grist"."auto_provision"."enabled" must be true or false, got \'yes\'$',
+        ):
+            org_mode.GristProvisioningConfig.from_org_config(self._org(enabled="yes"))
+
+    def test_non_bool_trust_unverified_email(self):
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match=r'^org_config.json\'s "grist"."auto_provision"."trust_unverified_email" must be true or false, got 1$',
+        ):
+            org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(trust_unverified_email=1)))
+
+    @pytest.mark.parametrize("value", ["lower", "1ABC", "A-B"])
+    def test_bad_key_env(self, value):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env=value)))
+        assert str(exc.value) == (
+            'org_config.json\'s "grist"."auto_provision"."key_env" must be an environment variable name, '
+            f"got {value!r}"
+        )
+
+    def test_non_string_key_env(self):
+        with pytest.raises(org_mode.ConfigurationError, match="got 5$"):
+            org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env=5)))
+
+    def test_disabled_skips_url_checks(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(
+            {"mode": "local", "grist": {"auto_provision": {"enabled": False, "provisioner_url": "http://x"}}}
+        )
+        assert config == org_mode.GristProvisioningConfig(enabled=False)
+
+    def test_enabled_in_local_mode(self):
+        org = self._org(**self._enabled())
+        org["mode"] = "local"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "mode": "org"'
+
+    def test_enabled_without_server_url(self):
+        org = self._org(**self._enabled())
+        del org["grist"]["server_url"]
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "grist"."server_url"'
+
+    def test_enabled_with_oauth_app(self):
+        org = self._org(**self._enabled())
+        org["grist"]["client_id"] = "cid"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value) == (
+            'org_config.json\'s "grist"."auto_provision" works only with API keys; '
+            "remove the Grist OAuth app or turn auto-provisioning off"
+        )
+
+    def test_enabled_without_provisioner_url(self):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(self._org(enabled=True))
+        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "provisioner_url"'
+
+    def test_bad_server_url(self):
+        org = self._org(**self._enabled())
+        org["grist"]["server_url"] = "http://grist.example.com"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value).startswith('org_config.json\'s "grist"."server_url" is not usable: ')
+
+    def test_bad_provisioner_url(self):
+        org = self._org(enabled=True, provisioner_url="http://prov.example.com")
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value).startswith(
+            'org_config.json\'s "grist"."auto_provision"."provisioner_url" is not usable: '
+        )
+
+
+class TestWebPushConfigFromOrgConfig:
+    def test_absent_is_on(self):
+        assert org_mode.WebPushConfig.from_org_config({}).enabled is True
+
+    def test_explicit_off(self):
+        assert org_mode.WebPushConfig.from_org_config({"web_push": {"enabled": False}}).enabled is False
+
+    def test_non_bool_enabled(self):
+        with pytest.raises(org_mode.ConfigurationError, match='"web_push"."enabled" must be true or false, got 1$'):
+            org_mode.WebPushConfig.from_org_config({"web_push": {"enabled": 1}})
+
+
+class TestConnectorEnabledByOrg:
+    def test_non_empty_section_enables(self):
+        assert org_mode.connector_enabled_by_org({"grist": {"enabled": True}}, "grist") is True
+
+    def test_missing_or_empty_section_does_not(self):
+        assert org_mode.connector_enabled_by_org({}, "grist") is False
+        assert org_mode.connector_enabled_by_org({"grist": {}}, "grist") is False

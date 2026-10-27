@@ -137,6 +137,36 @@ class TestLoginCallback:
         session_id = cb.cookies[org_session.SESSION_COOKIE]
         assert sessions.get(session_id).id == "alice"
 
+    def test_login_callback_calls_notify_sign_in_with_email_verified(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            roi.peek_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: calls.append((principal.id, email_verified)),
+        )
+        app, _sessions = _app()
+
+        self._drive_login(
+            _client(app), monkeypatch,
+            claims={"sub": "alice", "email": "alice@example.com", "email_verified": True},
+        )
+        self._drive_login(
+            _client(app), monkeypatch, claims={"sub": "bob", "email": "bob@example.com"},
+        )
+
+        assert calls == [("alice", True), ("bob", False)]
+
+    def test_failed_login_callback_does_not_call_notify_sign_in(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(roi.peek_provisioning, "notify_sign_in", lambda *a, **kw: calls.append(a))
+        app, _sessions = _app(policy=AuthzPolicyConfig(allowed_domains=("acme.com",)))
+
+        cb = self._drive_login(
+            _client(app), monkeypatch, claims={"sub": "mallory", "email": "mallory@evil.example.com"},
+        )
+
+        assert cb.status_code == 400
+        assert calls == []
+
     def test_the_session_cookie_it_mints_is_usable_on_the_page_it_redirects_to(self, monkeypatch):
         # The regression a real browser found and no test here could: this
         # callback is reached by a top-level navigation the IdP initiated,
@@ -309,6 +339,57 @@ class TestLoginCallback:
         assert cb.status_code == 400
         assert org_session.SESSION_COOKIE not in cb.cookies
         assert sessions.session_count == 0
+
+    @staticmethod
+    def _record_to_thread(monkeypatch):
+        """Record every asyncio.to_thread call, still running it for real."""
+        import asyncio
+
+        real = asyncio.to_thread
+        calls: list[tuple] = []
+
+        async def _recorder(func, /, *args, **kwargs):
+            calls.append((func, args, kwargs))
+            return await real(func, *args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "to_thread", _recorder)
+        return calls
+
+    def test_login_callback_calls_grist_notify_sign_in_with_email_verified(self, monkeypatch):
+        notified: list[tuple] = []
+        monkeypatch.setattr(
+            roi.grist_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: notified.append((principal.id, email_verified)),
+        )
+        calls = self._record_to_thread(monkeypatch)
+        app, _sessions = _app()
+        cb = self._drive_login(
+            _client(app), monkeypatch,
+            claims={"sub": "alice", "email": "alice@example.com", "email_verified": True},
+        )
+
+        assert cb.status_code == 302
+        # Off the event loop, as a file write: through asyncio.to_thread.
+        grist_calls = [c for c in calls if c[0] is roi.grist_provisioning.notify_sign_in]
+        assert len(grist_calls) == 1
+        assert grist_calls[0][1][0].id == "alice"
+        assert grist_calls[0][2] == {"email_verified": True}
+        assert notified == [("alice", True)]
+
+    def test_failed_login_callback_does_not_call_grist_notify_sign_in(self, monkeypatch):
+        notified: list[str] = []
+        monkeypatch.setattr(
+            roi.grist_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: notified.append(principal.id),
+        )
+        policy = AuthzPolicyConfig(allowed_domains=("acme.com",))
+        app, _sessions = _app(policy=policy)
+        cb = self._drive_login(
+            _client(app), monkeypatch, claims={"sub": "mallory", "email": "mallory@evil.example.com"},
+        )
+
+        assert cb.status_code == 400
+        assert notified == []
 
     def test_authz_policy_admits_a_matching_principal(self, monkeypatch):
         policy = AuthzPolicyConfig(allowed_domains=("acme.com",))

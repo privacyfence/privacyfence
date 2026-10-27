@@ -11,8 +11,8 @@ people connect with Peek's own device sign-in, the flow `peek login` uses.
 - For `peek_add_comment`, a Peek server with the account comment endpoint:
   `POST /api/uploads/{slug}/account-comments`, answered for the page's owner or an admin using an
   access token, which posts the comment under that account's own name and answers with the new
-  comment. A Peek server without it answers 404 or 405, and `peek_add_comment` fails with a message
-  saying so (ADR [0153](adr/0153-peek-comments-are-posted-only-through-the-account-comment-endpoint.md)).
+  comment. The endpoint is part of Peek: a Peek server without it answers 404 or 405, and
+  `peek_add_comment` fails with a message saying so (ADR [0153](adr/0153-peek-comments-are-posted-only-through-the-account-comment-endpoint.md)).
   Every other tool works with any Peek server.
 
 ## Users connect
@@ -34,6 +34,62 @@ again. Peek appears there only when the organization's bundle names the Peek ser
 The token Peek issues is saved in `credentials/peek_token.json` with the server it belongs to, and
 is used only with that server (ADR [0152](adr/0152-which-peek-server-is-used-and-a-token-stays-with-it.md)).
 
+## Automatic accounts (organization mode)
+
+With Peek auto-provisioning, each person who signs in to PrivacyFence gets a Peek account on your
+organization's Peek server, or keeps their existing one, and PrivacyFence connects it for them: no
+**Connect Peek** clicks. PrivacyFence makes every call; Peek never connects to PrivacyFence, so the two
+can stay in separate network zones.
+
+**Set it up.**
+
+1. A Peek admin creates a scoped provisioning key on the Peek server:
+   `peek provisioner create --name PrivacyFence`. The key starts with `peekprov_`. It can create and
+   release accounts and mint tokens for them; it never reaches an admin account.
+2. Put the key in the PrivacyFence daemon's environment as `PRIVACYFENCE_PEEK_PROVISIONING_KEY`, or under
+   the name you give with `--peek-provisioning-key-env`. The bundle never holds the key. With systemd,
+   add it to the unit's `EnvironmentFile`; with Docker, add it to `privacyfence.env`
+   ([organization setup guide](org-mode-setup-guide.md), [Docker guide](org-mode-docker.md)).
+3. Rebuild the bundle with `--peek-base-url URL --peek-auto-provision` (see
+   [Build and distribute the bundle](#build-and-distribute-the-bundle)) and restart the daemon.
+
+**What happens.** When a person signs in, in the browser or through an AI client, PrivacyFence queues
+them and a single background worker creates or looks up their Peek account, by their PrivacyFence id
+and email, and mints a Peek token for it. Sign-in never waits for Peek. The token lives in the same
+`credentials/peek_token.json` as a hand-made connection, marked as provisioned, and **/connect** says
+that your organization connected the account automatically.
+
+**Who is provisioned.**
+
+- *A verified email.* Only a person whose ID token says `email_verified` is true is provisioned.
+  Without that check, anyone who can set their own email at the identity provider could take over
+  another person's Peek account. `--peek-trust-unverified-email` skips the check. Use it only when your
+  identity provider never sends the claim but issues only verified, organization-owned addresses,
+  such as Microsoft Entra ID work accounts.
+- *A person's own sign-in wins.* Someone who connected Peek by hand on **/connect** keeps that
+  connection; Peek is not called for them. **Reconnect Peek** replaces a provisioned token with their
+  own, and the provisioned one stays valid in Peek until it expires.
+- *Peek admins are not adopted.* If the person's Peek account is an admin, Peek refuses, and they
+  connect by hand.
+- *No email.* A person whose ID token carries no email is skipped.
+
+**Renewal.** Tokens last 90 days and are renewed in the background when 30 days or fewer are left, for
+as long as the person has signed in to PrivacyFence within the last 90 days. PrivacyFence keeps the
+person's email in `users/<id>/credentials/peek_provisioning.json` for this. Someone who stops signing
+in loses the Peek token when it expires, up to about 150 days after their last sign-in (a token
+renewed just inside the 90 days lives another 90).
+
+**When someone leaves.** Remove them from the identity provider first, then run
+`privacyfence-app --peek-release PRINCIPAL_ID` (with the provisioning key in the environment). It
+revokes PrivacyFence's token for the person and stops renewing it. Their Peek account and pages stay;
+disabling the account is the Peek admin's decision. Someone who can still sign in is provisioned
+again, so release is for people who can no longer sign in.
+
+**When one product is down.** PrivacyFence sign-in never needs Peek: if Peek is down, only the
+provisioning is delayed, and it is retried by a sweep every six hours and at the next sign-in. Peek
+and the tokens already issued keep working while PrivacyFence is down. Peek keeps its own users and
+sign-in, including people who do not use PrivacyFence.
+
 ## Values
 
 | Value | Where it comes from |
@@ -53,6 +109,17 @@ in either mode, Peek is not listed at all; `--enable-peek` writes the bare switc
 you do not want to pin a server ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
 Peek needs no other entry: there is no callback URL and no client secret.
 
+For [automatic accounts](#automatic-accounts-organization-mode), add these (organization mode only;
+they need `--peek-base-url`, and `--mode local` drops them):
+
+- `--peek-auto-provision` (or `--no-peek-auto-provision`) writes `peek.auto_provision.enabled`.
+- `--peek-provisioning-key-env NAME` names the environment variable the daemon reads the key from
+  (default `PRIVACYFENCE_PEEK_PROVISIONING_KEY`). It goes with `--peek-auto-provision`.
+- `--peek-trust-unverified-email` provisions people whose ID token lacks `email_verified`. It goes with
+  `--peek-auto-provision`; see the rule above for when this is safe.
+
+`--merge --peek-base-url NEW` keeps an existing `auto_provision` entry.
+
 ## What the assistant can do
 
 | Tool | What it does | Gate |
@@ -60,8 +127,12 @@ Peek needs no other entry: there is no callback URL and no client secret.
 | `peek_list_pages` | Lists the pages the account manages, newest first | auto |
 | `peek_get_comments` | Reads a page's comments (the latest version, or one you name) | review |
 | `peek_get_stats` | Reads visit counts, and the names and times of recent visitors | review |
+| `peek_list_versions` | Lists a page's versions, newest first, with size, time and link | auto |
+| `peek_list_grants` | Lists the people and Google groups granted access to a restricted page | review |
 | `peek_upload_page` | Publishes a page, or a new version of one | popup |
 | `peek_set_visibility` | Changes who can open a page | popup |
+| `peek_grant_access` | Grants a person or Google group access to a restricted page | popup |
+| `peek_revoke_access` | Removes a person's or group's access to a restricted page | popup |
 | `peek_add_comment` | Posts a comment under your own Peek account name | popup |
 | `peek_rename_page` | Renames a page | popup |
 | `peek_delete_page` | Deletes a page with its comments and visit history | popup |
@@ -78,10 +149,18 @@ See the [tools reference](tools-reference.md#peek) for every parameter and retur
   ([Letting personal data through](approvals-and-policy.md#letting-personal-data-through);
   [ADR 0158](adr/0158-peek-rules-name-pages-and-cover-only-new-versions.md)).
 - A new version keeps the page's link and its visibility. Comments belong to one version, and are
-  read per version; `peek_add_comment` always posts on the latest.
-- Pages restricted to named people (`restricted`) are listed, read and commented on, but who can
-  open them is changed in Peek's dashboard: the connector refuses to change a page into or out of
-  that state.
+  read per version; `peek_add_comment` posts on the latest version or the one you give.
+- A page has one of three visibilities: `public` (anyone with the link), `signed-in` (anyone signed
+  in to Peek) and `restricted` (only you, Peek admins and the people or groups granted access). A
+  new page is restricted unless you choose otherwise.
+- Grants apply only while a page is restricted. They stay on the page when it becomes public or
+  signed-in, and apply again if it is restricted later.
+- Peek emails a person or group the link when the page is restricted and they did not have access
+  yet, and emails everyone granted access when a page becomes restricted.
+- Group grants need Peek's Google group lookup; a Peek server without it accepts grants to people
+  only.
+- `peek_grant_access` and `peek_revoke_access` always ask, and `peek_list_grants` always shows a
+  review card: no **Peek — page** rule covers them.
 - A rename can change a page's slug. Old links keep redirecting in browsers, but the other Peek
   tools answer "no such page" for the old slug; use the slug the rename returns, or
   `peek_list_pages`.
@@ -91,7 +170,7 @@ See the [tools reference](tools-reference.md#peek) for every parameter and retur
 
 - Visit stats carry visitor names and times only, never IP addresses or browsers (ADR
   [0154](adr/0154-peek-visit-stats-carry-names-and-times-never-ip-addresses.md)).
-- A page password goes to Peek once and is never shown on the approval card or kept by PrivacyFence.
+- Grant email addresses are shown on the review card and the approval cards, and are personal data.
 - Every approval card names the Peek server it will talk to.
 - A token is sent only to the server it was issued for, over `https` (or loopback `http`), and
   redirects are never followed.
@@ -151,8 +230,7 @@ an admin changes it, or reads its comments).
 
 **`Peek found no such page (HTTP 404). It may have been renamed or deleted: call peek_list_pages to
 see the current slugs.`** and **`No Peek page '…' among the pages this account can manage. …`** —
-the slug is wrong, the page was deleted or renamed, or belongs to someone else. **`Peek says this
-page was renamed; its slug is now …. Use that slug.`** — use the new slug.
+the slug is wrong, the page was deleted or renamed, or belongs to someone else.
 
 **`Peek has no version N of this page (HTTP 404). Retention may have removed it.`** — read the
 versions up to the latest number `peek_list_pages` shows.
@@ -161,8 +239,92 @@ versions up to the latest number `peek_list_pages` shows.
 See the Peek setup guide.`** — the server predates the account comment endpoint (see
 [What you need](#what-you-need)). Update the Peek server.
 
-**`This page is restricted to people granted access in Peek. Change who can open it in Peek's
-dashboard (Access).`** — see [What the assistant can do](#what-the-assistant-can-do).
+**`Peek no longer has page passwords. Use restricted, then grant access to people with
+peek_grant_access.`** — a page password was given. Restrict the page and grant access instead.
+
+**`visibility must be public, signed-in or restricted.`** — use one of the three visibilities.
+
+**`Peek is limiting how fast these requests can be made (HTTP 429). Wait a minute, then try
+again.`** — Peek's rate limit. Wait, then repeat the call.
+
+**`Peek refused the file (HTTP 415): …`** — Peek does not accept the file as HTML; publish an HTML
+page.
+
+**`Peek has no version N of this page (HTTP 404). Retention may have removed it.`** when commenting —
+the version does not exist (any more). Use a number from `peek_list_versions`.
+
+**`This page's latest version is N.`** — `peek_add_comment` was given a higher version than the
+page has.
+
+**`Peek has no such grant on this page (HTTP 404). Call peek_list_grants to see who has access.`** —
+nobody with that address and kind has access. Check `peek_list_grants`.
+
+**`This Peek server cannot check Google group membership, so it does not accept group grants. Grant
+access to people one by one, or ask the Peek admin to set up group lookup.`** — the Peek server has
+no Google group lookup.
+
+**`kind must be user or group.`**, **`Enter one email address, such as alice@example.com.`** — fix
+the grant: one address per call, kind `user` or `group`.
+
+**`name must be 1 to 200 characters.`** — the page name, given or taken from the file, is empty or
+longer than 200 characters.
 
 **`Peek API error (HTTP 400): file too large or invalid form`** (or HTTP 413) — the page is larger
 than the Peek server accepts (2 MiB by default); PrivacyFence itself stops at 10 MB.
+
+### Automatic accounts
+
+**`org_config.json's "peek"."auto_provision"."enabled" must be true or false, got …`** (also for
+`trust_unverified_email`), **`… "key_env" must be an environment variable name, got …`**,
+**`… "peek"."auto_provision" needs "mode": "org"`**, **`… needs "peek"."base_url"`**,
+**`org_config.json's "peek"."base_url" is not usable: …`** — the daemon refuses to start with a bad
+entry. Rebuild the bundle with `--peek-base-url` and `--peek-auto-provision` in organization mode.
+
+**`--peek-auto-provision/--no-peek-auto-provision require --mode org (or --merge against an
+existing org-mode bundle).`**, **`--peek-auto-provision requires --peek-base-url (or --merge against a
+bundle that has one).`**, **`--peek-provisioning-key-env and --peek-trust-unverified-email go with
+--peek-auto-provision.`** — the builder refused; add the missing flag.
+
+**`Peek auto-provisioning is on, but … is not set; people connect Peek by hand on /connect.`** —
+the daemon's environment lacks the key. Set the variable named in the message (see the setup above)
+and restart.
+
+**`Peek provisioning ready at <host> (N accounts managed)`** — the startup check passed.
+**`Peek provisioning check failed: …`** — the message after the colon says why, and is one of the
+errors below. Provisioning is retried by the six-hourly sweep.
+
+**`Peek refused the provisioning key (HTTP 401). Check the key in the daemon's environment.`** — the
+key is wrong, revoked or expired. Create a new one with `peek provisioner create` and restart.
+
+**`This Peek server has no provisioning API (HTTP 404). Update Peek, or turn off Peek
+auto-provisioning.`** — the server is too old or the address is not a Peek server.
+
+**`Peek refused to provision this account (HTTP 409): account is a Peek admin; connect it by hand`** —
+the person is a Peek admin. They connect on **/connect**.
+
+**`Peek refused to provision this account (HTTP 409): account is linked to another external id or
+email`** — the email already belongs to a Peek account linked to a different PrivacyFence person.
+Fix the account in Peek.
+
+**`Peek refused to provision this account (HTTP 403): account email domain is not allowed`** — the
+Peek server does not allow that email domain. Allow it in Peek, or the person connects by hand.
+**`… (HTTP 403): account disabled`** — the Peek admin disabled the account; enable it in Peek.
+
+**`Peek has no provisioned account for this person (HTTP 404).`** — Peek lost the link between the
+person and the account. It is retried at the person's next sign-in.
+
+**`Not a Peek provisioning id: …`** — the PrivacyFence account id has characters Peek's external id
+does not allow. That person connects by hand.
+
+**`Peek provisioning queue is full; <id> waits for the next sweep or sign-in`** — more than 1000 people
+are waiting, which only happens when Peek has been slow or down for a long time. Nothing is lost;
+the sweep or the person's next sign-in queues them again.
+
+**`Peek provisioning sweep failed (will retry): …`**, **`Peek provisioning for <id> failed: …`**,
+**`Peek provisioning worker error: …`** — an unexpected failure; the next sweep tries again. If it
+repeats, check that Peek is reachable from the daemon.
+
+**`No such account.`**, **`Peek auto-provisioning is not enabled in the organization config.`**,
+**`Set <name> to the Peek provisioning key first.`** — messages of `--peek-release`. Check the
+account id (a directory under `users/`), that the bundle has `--peek-auto-provision`, and that the
+key variable is set in the shell that runs the command. A Peek error is printed as it is; see above.

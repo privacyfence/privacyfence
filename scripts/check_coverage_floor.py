@@ -86,7 +86,12 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/pii_detector.py": 98.0,
     # Org-config fail-closed load path.
     "src/privacyfence/org_mode.py": 100.0,
+    # Per-person Peek credentials and token lifetime.
+    "src/privacyfence/peek_provisioning.py": 100.0,
+    "src/privacyfence/peek_client.py": 100.0,
     "src/privacyfence/daemon_main.py": 96.0,
+    "src/privacyfence/grist_provisioning.py": 100.0,
+    "src/privacyfence/grist_provisioner_api.py": 100.0,
     # Org bundle trust.
     "src/privacyfence/org_bundle_signing.py": 99.0,
     # 91.0, not the ~93.2% the rest of this module would suggest: whether

@@ -184,7 +184,13 @@ EFFECT_BY_TOOL: dict[str, str] = {
         "A new page is published at a new link, open to whoever its visibility allows. A new "
         "version replaces what the page's link shows; earlier versions keep their own links.",
     "peek_set_visibility":
-        "Who can open the page changes. Its content and comments do not change.",
+        "Who can open the page changes. Its content and comments do not change. Making it "
+        "restricted emails the link to everyone already granted access.",
+    "peek_grant_access":
+        "The person or group can open the page whenever it is restricted. Peek emails them the "
+        "link the first time they are granted access to a restricted page.",
+    "peek_revoke_access":
+        "The person or group can no longer open the page while it is restricted.",
     "peek_add_comment":
         "The comment is posted on the page under your Peek account name. PrivacyFence cannot "
         "delete it.",
