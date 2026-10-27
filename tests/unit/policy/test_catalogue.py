@@ -167,6 +167,12 @@ class TestRulesForCatalogueEntry:
         assert rules[0].predicate == "peek.page"
         assert rules[0].operations == frozenset({"peek.read_comments", "peek.read_stats"})
 
+    def test_peek_page_rules_never_include_grant_operations(self):
+        grant_ops = {"peek.read_grants", "peek.grant_access", "peek.revoke_access"}
+        for verb in Verb:
+            for rule in catalogue.rules_for_catalogue_entry("peek.page", ["dash"], [verb]):
+                assert not rule.operations & grant_ops
+
     def test_peek_page_update_compiles_upload_only(self):
         rules = catalogue.rules_for_catalogue_entry("peek.page", ["dash"], [Verb.ADD])
         assert len(rules) == 1

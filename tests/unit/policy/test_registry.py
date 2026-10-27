@@ -281,6 +281,9 @@ _VERB_MATRIX: dict[str, Verb] = {
     "telegram_get_messages": Verb.READ,
     "peek_get_comments": Verb.READ,
     "peek_get_stats": Verb.READ,
+    "peek_list_grants": Verb.READ,
+    "peek_grant_access": Verb.UPDATE,
+    "peek_revoke_access": Verb.UPDATE,
     "peek_upload_page": Verb.ADD,
     "peek_set_visibility": Verb.UPDATE,
     "peek_add_comment": Verb.UPDATE,
@@ -307,5 +310,5 @@ _VERB_MATRIX: dict[str, Verb] = {
 
 
 def test_tool_to_verb_matches_the_verb_matrix():
-    assert len(_VERB_MATRIX) == 109
+    assert len(_VERB_MATRIX) == 112
     assert TOOL_TO_VERB == _VERB_MATRIX

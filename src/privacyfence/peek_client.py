@@ -2,9 +2,9 @@
 
 A Peek token is only ever sent to the server it was issued for (ADR 0152):
 the credential file records that server, every request goes to it, and
-redirects are never followed. Nothing here logs a token, a device code, a
-page password, page content or a comment body; log lines carry the host and
-counts only.
+redirects are never followed. Nothing here logs a token, a device code,
+page content, a comment body or an email address of a grant; log lines
+carry the host and counts only.
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from email.utils import parseaddr
+from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
 import requests
@@ -25,15 +26,16 @@ from . import secure_files
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 30
-VISIBILITIES = ("public", "password", "private")
-PASSWORD_MAX_BYTES = 72
+VISIBILITIES = ("public", "signed-in", "restricted")
 # PrivacyFence's own ceiling on a page it reads; the server's own max_upload
 # (2 MiB by default) still applies.
 UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 _SLUG_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+GRANT_KINDS = ("user", "group")
+_GRANT_EMAIL_RE = re.compile(r'[^@\s,;<>()\[\]"]+@[^@\s,;<>()\[\]"]+')
+_GRANT_EMAIL_MAX = 254
 
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
-_RENAMED_PREFIX = "page was renamed; use slug "
 _LOGIN_STATUSES = ("pending", "approved", "denied", "expired", "consumed")
 _REAUTH = "Use Authenticate… in PrivacyFence Settings"
 _UNEXPECTED_SHAPE = "Peek answered with something unexpected. Check the Peek server address."
@@ -43,12 +45,14 @@ class PeekClientError(Exception):
     """A Peek problem: bad input, a refused request, or an unusable answer.
 
     ``status`` is the HTTP status when the error came from an answer, else
-    ``None``.
+    ``None``; ``detail`` is then Peek's own error text (cut to 200
+    characters), else ``""``.
     """
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(self, message: str, *, status: int | None = None, detail: str = "") -> None:
         super().__init__(message)
         self.status = status
+        self.detail = detail
 
 
 # --- addresses and slugs ----------------------------------------------------
@@ -116,41 +120,43 @@ def _send(session: requests.Session, method: str, url: str, host: str, **kwargs:
     except requests.RequestException as exc:
         raise PeekClientError(f"Could not reach Peek at {host}: {type(exc).__name__}") from exc
     status = response.status_code
+    detail = "" if 200 <= status < 300 else _detail(response)
     if 300 <= status < 400:
         raise PeekClientError(
-            f"Peek answered with a redirect (HTTP {status}). Check the Peek server address.", status=status
+            f"Peek answered with a redirect (HTTP {status}). Check the Peek server address.",
+            status=status,
+            detail=detail,
         )
     if status == 401:
         raise PeekClientError(
-            f"Peek refused the saved sign-in (HTTP 401). {_REAUTH} to connect again.", status=status
+            f"Peek refused the saved sign-in (HTTP 401). {_REAUTH} to connect again.", status=status, detail=detail
         )
     if status == 403:
-        raise PeekClientError(f"Peek refused the request (HTTP 403): {_detail(response)}", status=status)
+        raise PeekClientError(f"Peek refused the request (HTTP 403): {detail}", status=status, detail=detail)
     if status == 404:
-        detail = _detail(response)
-        if detail.startswith(_RENAMED_PREFIX):
-            new_slug = detail[len(_RENAMED_PREFIX):]
-            try:
-                validate_slug(new_slug)
-            except PeekClientError:
-                pass
-            else:
-                raise PeekClientError(
-                    f"Peek says this page was renamed; its slug is now {new_slug}. Use that slug.", status=status
-                )
         raise PeekClientError(
             "Peek found no such page (HTTP 404). It may have been renamed or deleted: "
             "call peek_list_pages to see the current slugs.",
             status=status,
+            detail=detail,
         )
+    if status == 429:
+        raise PeekClientError(
+            "Peek is limiting how fast these requests can be made (HTTP 429). Wait a minute, then try again.",
+            status=status,
+            detail=detail,
+        )
+    if status == 415:
+        raise PeekClientError(f"Peek refused the file (HTTP 415): {detail}", status=status, detail=detail)
     if not 200 <= status < 300:
-        raise PeekClientError(f"Peek API error (HTTP {status}): {_detail(response)}", status=status)
+        raise PeekClientError(f"Peek API error (HTTP {status}): {detail}", status=status, detail=detail)
     try:
         response.json()
     except ValueError as exc:
         raise PeekClientError(
             f"Peek answered with something other than JSON (HTTP {status}). Check the Peek server address.",
             status=status,
+            detail=_detail(response),
         ) from exc
     return response
 
@@ -206,6 +212,11 @@ def _iso(item: dict[str, Any], key: str) -> str:
     if not seconds:
         return ""
     return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _bool(item: dict[str, Any], key: str) -> bool:
+    """True only for the JSON value ``true``."""
+    return item.get(key) is True
 
 
 # --- device sign-in -------------------------------------------------------------
@@ -322,6 +333,7 @@ class PeekComment:
     element_text: str
     created_at: str
     version: int
+    verified: bool = False  # a signed-in Peek account wrote it
 
 
 @dataclass(frozen=True)
@@ -358,6 +370,35 @@ class PeekRenameResult:
     name: str
 
 
+@dataclass(frozen=True)
+class PeekVersion:
+    version: int
+    size_bytes: int
+    created_at: str
+    url: str
+
+
+@dataclass(frozen=True)
+class PeekGrant:
+    kind: str  # "user" or "group"
+    email: str
+    created_at: str
+
+
+def validate_grant(kind: str, email: str) -> tuple[str, str]:
+    """Return ``(kind, email)`` with the email trimmed and lower-cased."""
+    if kind not in GRANT_KINDS:
+        raise PeekClientError("kind must be user or group.")
+    address = email.strip().lower()
+    if (
+        len(address) > _GRANT_EMAIL_MAX
+        or not _GRANT_EMAIL_RE.fullmatch(address)
+        or parseaddr(address) != ("", address)
+    ):
+        raise PeekClientError("Enter one email address, such as alice@example.com.")
+    return kind, address
+
+
 def _page(item: Any) -> PeekPage:
     d = _as_dict(item)
     return PeekPage(
@@ -383,16 +424,43 @@ def _comment(item: Any) -> PeekComment:
         element_text=_str(d, "element_text"),
         created_at=_iso(d, "created_at"),
         version=_int(d, "version"),
+        verified=_bool(d, "verified"),
     )
 
 
-def _check_visibility(visibility: str, password: str) -> None:
-    if visibility not in VISIBILITIES:
-        raise PeekClientError("visibility must be public, password or private.")
-    if (visibility == "password") != bool(password) or len(password.encode("utf-8")) > PASSWORD_MAX_BYTES:
-        raise PeekClientError("A password of 1 to 72 bytes goes with password visibility, and only with it.")
-    if password != password.strip():
-        raise PeekClientError("A Peek password cannot start or end with a space.")
+def _version(item: Any) -> PeekVersion:
+    d = _as_dict(item)
+    return PeekVersion(
+        version=_int(d, "version"), size_bytes=_int(d, "size"), created_at=_iso(d, "created_at"), url=_str(d, "url")
+    )
+
+
+def _grant(item: Any) -> PeekGrant:
+    d = _as_dict(item)
+    return PeekGrant(kind=_str(d, "kind"), email=_str(d, "email"), created_at=_iso(d, "created_at"))
+
+
+PASSWORDS_REMOVED = (
+    "Peek no longer has page passwords. Use restricted, then grant access to people with peek_grant_access."
+)
+
+
+def normalize_visibility(value: str) -> str:
+    """Peek's visibility for ``value``: ``private`` is Peek's old name for ``signed-in``."""
+    value = value.strip()
+    if value == "private":
+        return "signed-in"
+    if value == "password":
+        raise PeekClientError(PASSWORDS_REMOVED)
+    if value not in VISIBILITIES:
+        raise PeekClientError("visibility must be public, signed-in or restricted.")
+    return value
+
+
+@dataclass(frozen=True)
+class PeekVisibilityResult:
+    visibility: str
+    notified: bool
 
 
 # --- client ----------------------------------------------------------------------------
@@ -472,19 +540,14 @@ class PeekClient:
             recent=visits,
         )
 
-    def upload_page(
-        self, data: bytes, name: str, visibility: str, password: str, slug: str = ""
-    ) -> PeekUploadResult:
+    def upload_page(self, data: bytes, name: str, visibility: str, slug: str = "") -> PeekUploadResult:
         if slug:
             validate_slug(slug)
-            if visibility or password:
+            if visibility:
                 raise PeekClientError("A new version keeps the page's visibility; change it with set_visibility.")
             form = {"slug": slug}
         else:
-            _check_visibility(visibility, password)
-            form = {"visibility": visibility}
-            if visibility == "password":
-                form["password"] = password
+            form = {"visibility": normalize_visibility(visibility)}
         result = _as_dict(
             self._request("POST", "/api/upload", files={"file": (name, data, "text/html")}, data=form)
         )
@@ -496,15 +559,14 @@ class PeekClient:
             version_url=_str(result, "version_url"),
         )
 
-    def set_visibility(self, slug: str, visibility: str, password: str) -> str:
+    def set_visibility(self, slug: str, visibility: str) -> PeekVisibilityResult:
         validate_slug(slug)
-        _check_visibility(visibility, password)
         result = _as_dict(
             self._request(
-                "POST", f"/api/uploads/{slug}/visibility", json={"visibility": visibility, "password": password}
+                "POST", f"/api/uploads/{slug}/visibility", json={"visibility": normalize_visibility(visibility)}
             )
         )
-        return _str(result, "visibility")
+        return PeekVisibilityResult(visibility=_str(result, "visibility"), notified=_bool(result, "notified"))
 
     def delete_page(self, slug: str) -> None:
         validate_slug(slug)
@@ -517,12 +579,23 @@ class PeekClient:
         result = _as_dict(self._request("POST", f"/api/uploads/{slug}/name", json={"name": name}))
         return PeekRenameResult(slug=_str(result, "slug"), url=_str(result, "url"), name=_str(result, "name"))
 
-    def add_comment(self, slug: str, body: str, selector: str, element_text: str) -> PeekComment:
+    def add_comment(
+        self, slug: str, body: str, selector: str, element_text: str, version: int = 0
+    ) -> PeekComment:
         validate_slug(slug)
         payload = {"body": body, "selector": selector, "element_text": element_text}
+        kwargs: dict[str, Any] = {"json": payload}
+        if version > 0:
+            kwargs["params"] = {"v": str(version)}
         try:
-            result = self._request("POST", f"/api/uploads/{slug}/account-comments", json=payload)
+            result = self._request("POST", f"/api/uploads/{slug}/account-comments", **kwargs)
         except PeekClientError as exc:
+            if version > 0 and exc.status == 404 and exc.detail == "version not found":
+                raise PeekClientError(
+                    f"Peek has no version {version} of this page (HTTP 404). Retention may have removed it.",
+                    status=404,
+                    detail=exc.detail,
+                ) from exc
             if exc.status in (404, 405):
                 raise PeekClientError(
                     "This Peek server does not accept comments from PrivacyFence: "
@@ -531,3 +604,50 @@ class PeekClient:
                 ) from exc
             raise
         return _comment(result)
+
+    def list_versions(self, slug: str) -> list[PeekVersion]:
+        validate_slug(slug)
+        versions = [_version(item) for item in _as_list(self._request("GET", f"/api/uploads/{slug}/versions"))]
+        logger.debug("Peek at %s listed %d version(s)", self.host, len(versions))
+        return sorted(versions, key=lambda v: v.version, reverse=True)
+
+    def list_grants(self, slug: str) -> list[PeekGrant]:
+        validate_slug(slug)
+        grants = [_grant(item) for item in _as_list(self._request("GET", f"/api/uploads/{slug}/grants"))]
+        logger.debug("Peek at %s listed %d grant(s)", self.host, len(grants))
+        return sorted(grants, key=lambda g: (g.kind, g.email))
+
+    def add_grant(self, slug: str, kind: str, email: str) -> bool:
+        """Grant access; returns whether Peek emailed the grantee."""
+        validate_slug(slug)
+        kind, email = validate_grant(kind, email)
+        try:
+            result = _as_dict(self._request("POST", f"/api/uploads/{slug}/grants", json={"kind": kind, "email": email}))
+        except PeekClientError as exc:
+            _raise_grant_error(exc)
+        return _bool(result, "notified")
+
+    def remove_grant(self, slug: str, kind: str, email: str) -> None:
+        validate_slug(slug)
+        kind, email = validate_grant(kind, email)
+        try:
+            self._request("DELETE", f"/api/uploads/{slug}/grants", json={"kind": kind, "email": email})
+        except PeekClientError as exc:
+            if exc.status == 404 and exc.detail == "grant not found":
+                raise PeekClientError(
+                    "Peek has no such grant on this page (HTTP 404). Call peek_list_grants to see who has access.",
+                    status=404,
+                    detail=exc.detail,
+                ) from exc
+            _raise_grant_error(exc)
+
+
+def _raise_grant_error(exc: PeekClientError) -> NoReturn:
+    if exc.status == 400 and exc.detail.startswith("group grants need"):
+        raise PeekClientError(
+            "This Peek server cannot check Google group membership, so it does not accept group grants. "
+            "Grant access to people one by one, or ask the Peek admin to set up group lookup.",
+            status=400,
+            detail=exc.detail,
+        ) from exc
+    raise exc

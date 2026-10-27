@@ -7,6 +7,7 @@
     "element_text": "information",
     "id": 1,
     "selector": "p",
+    "verified": false,
     "version": 1
   }
 ]
