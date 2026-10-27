@@ -94,6 +94,9 @@ See the [tools reference](tools-reference.md#peek) for every parameter and retur
   only.
 - `peek_grant_access` and `peek_revoke_access` always ask, and `peek_list_grants` always shows a
   review card: no **Peek — page** rule covers them.
+- A rename can change a page's slug. Old links keep redirecting in browsers, but the other Peek
+  tools answer "no such page" for the old slug; use the slug the rename returns, or
+  `peek_list_pages`.
 - Peek's API cannot read a page's HTML back, so no tool does.
 
 ## Privacy

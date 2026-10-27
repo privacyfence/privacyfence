@@ -893,6 +893,10 @@ class TestSlugGuards:
             lambda c, s: c.delete_page(s),
             lambda c, s: c.rename_page(s, "n"),
             lambda c, s: c.add_comment(s, "b", "", ""),
+            lambda c, s: c.list_versions(s),
+            lambda c, s: c.list_grants(s),
+            lambda c, s: c.add_grant(s, "user", "a@b.c"),
+            lambda c, s: c.remove_grant(s, "user", "a@b.c"),
         ],
     )
     def test_bad_slug_rejected_before_any_request(self, monkeypatch, client, call):

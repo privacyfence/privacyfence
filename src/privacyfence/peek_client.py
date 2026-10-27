@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parseaddr
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
 import requests
@@ -120,7 +120,7 @@ def _send(session: requests.Session, method: str, url: str, host: str, **kwargs:
     except requests.RequestException as exc:
         raise PeekClientError(f"Could not reach Peek at {host}: {type(exc).__name__}") from exc
     status = response.status_code
-    detail = _detail(response)
+    detail = "" if 200 <= status < 300 else _detail(response)
     if 300 <= status < 400:
         raise PeekClientError(
             f"Peek answered with a redirect (HTTP {status}). Check the Peek server address.",
@@ -156,7 +156,7 @@ def _send(session: requests.Session, method: str, url: str, host: str, **kwargs:
         raise PeekClientError(
             f"Peek answered with something other than JSON (HTTP {status}). Check the Peek server address.",
             status=status,
-            detail=detail,
+            detail=_detail(response),
         ) from exc
     return response
 
@@ -450,7 +450,7 @@ def normalize_visibility(value: str) -> str:
     value = value.strip()
     if value == "private":
         return "signed-in"
-    if value == 'password':
+    if value == "password":
         raise PeekClientError(PASSWORDS_REMOVED)
     if value not in VISIBILITIES:
         raise PeekClientError("visibility must be public, signed-in or restricted.")
@@ -624,7 +624,7 @@ class PeekClient:
         try:
             result = _as_dict(self._request("POST", f"/api/uploads/{slug}/grants", json={"kind": kind, "email": email}))
         except PeekClientError as exc:
-            raise _grant_error(exc) from exc
+            _raise_grant_error(exc)
         return _bool(result, "notified")
 
     def remove_grant(self, slug: str, kind: str, email: str) -> None:
@@ -639,15 +639,15 @@ class PeekClient:
                     status=404,
                     detail=exc.detail,
                 ) from exc
-            raise _grant_error(exc) from exc
+            _raise_grant_error(exc)
 
 
-def _grant_error(exc: PeekClientError) -> PeekClientError:
+def _raise_grant_error(exc: PeekClientError) -> NoReturn:
     if exc.status == 400 and exc.detail.startswith("group grants need"):
-        return PeekClientError(
+        raise PeekClientError(
             "This Peek server cannot check Google group membership, so it does not accept group grants. "
             "Grant access to people one by one, or ask the Peek admin to set up group lookup.",
             status=400,
             detail=exc.detail,
-        )
-    return exc
+        ) from exc
+    raise exc

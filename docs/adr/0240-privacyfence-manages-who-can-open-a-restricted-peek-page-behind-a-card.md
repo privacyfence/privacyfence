@@ -28,7 +28,8 @@ email addresses.
    exclusion still holds if the scope ever gains an UPDATE verb. The grant list always gets its
    review card; a grant or a revoke always gets a popup.
 3. ADR 0158's rule coverage is unchanged: a Peek page rule covers comments and stats (*read*) and
-   new versions of a named page (*update* on `peek_upload_page`), and nothing else.
+   new versions of a named page (*add* on `peek_upload_page`; ADR 0158 calls this "update"), and
+   nothing else.
 4. Neither grant write is marked destructive: a revoke is undone by a new grant.
 
 ## Alternatives considered
