@@ -96,7 +96,7 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
         <li><code>org_config.json</code> shrinks to startup settings and credentials. It is still signed.</li>
         <li>Everything operational lives in <code>admin_config.json</code> and is changed on the <strong>Admin</strong> page, with a passkey for sensitive changes.</li>
         <li><strong>Settings</strong> is personal and looks the same for everyone, admin or not.</li>
-        <li>With no bundle, <code>docker run</code> starts a single-admin trial on <code>http://localhost:8765</code>.</li>
+        <li>With no bundle, <code>docker run</code> starts in single-user mode on <code>http://localhost:8765</code>.</li>
       </ul></div>
     </div>
 
@@ -133,26 +133,36 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
       <li><div>Back up <code>admin_config.json</code> with the rest of the data volume. It is not signed, so it gets the same file protection as the install-wide settings.</div></li>
     </ol>
 
-    <h3>Trying the Docker image on your computer</h3>
+    <h3>Single-user mode: the Docker image on your computer</h3>
     <pre>docker run --rm -p 127.0.0.1:8765:8765 \
   -v pf-data:/var/lib/privacyfence-org/.privacyfence \
   ghcr.io/privacyfence/privacyfence-org:latest</pre>
     <ol class="flow">
-      <li><div>With no bundle, the image starts in organization mode as a <strong>trial</strong>, with one administrator and no identity provider. It only runs at <code>http://localhost</code> or <code>127.0.0.1</code>.</div></li>
+      <li><div>With no bundle, the image starts in organization mode in <strong>single-user mode</strong>, with one administrator and no identity provider. It only runs at <code>http://localhost</code> or <code>127.0.0.1</code>.</div></li>
       <li><div><code>docker logs</code> shows a one-time <strong>setup code</strong>. Open <code>http://localhost:8765/login</code>, enter it, and enroll a passkey. From then on, you sign in with the passkey.</div></li>
       <li><div>Connect services on <code>/connect</code>. The built-in apps send the provider's redirect through <code>oauth.privacyfence.eu</code>, which bounces your browser straight back to <code>localhost</code>. Nothing is registered and nothing is stored there.</div></li>
-      <li><div>Add <code>http://localhost:8765/mcp</code> to Claude Code or Claude Desktop. It signs in through the same trial login and consent page.</div></li>
-      <li><div>To go to production, add an <code>idp</code> section and a public <code>https</code> address in <code>org_config.json</code>. Your admin settings and connections carry over.</div></li>
+      <li><div>Add <code>http://localhost:8765/mcp</code> to Claude Code or Claude Desktop. It signs in through the same single-user sign-in and consent page.</div></li>
+      <li><div>To go to production, add an <code>idp</code> section and a public <code>https</code> address in <code>org_bundle.json</code>. Your admin settings and connections carry over.</div></li>
     </ol>
-    <p class="note">Keep the <code>127.0.0.1:</code> in the port mapping. Inside the container PrivacyFence has to listen on every interface, and only that mapping keeps the trial off your network.</p>
+    <p class="note">Keep the <code>127.0.0.1:</code> in the port mapping. Inside the container PrivacyFence has to listen on every interface, and only that mapping keeps it off your network.</p>
 
     <h3>Organization servers and the relay</h3>
     <ul>
       <li>A server that uses a built-in app sends people's sign-in redirects through <code>https://oauth.privacyfence.eu</code>. That is a small Cloudflare Worker that forwards the browser to your server and keeps no logs.</li>
-      <li>On a new server, built-in services start <strong>off</strong>. Offering the first one on the Admin page is your opt-in to the relay. A trial and a desktop install start with them on.</li>
+      <li>On a new server, built-in services start <strong>off</strong>. Offering the first one on the Admin page is your opt-in to the relay. Single-user mode and a desktop install start with them on.</li>
       <li>Your server then registers itself automatically by serving a token at <code>/.well-known/privacyfence-relay</code>. That proves it controls its domain. It re-registers daily, and registrations expire after 35 days without one.</li>
       <li>Needs: an <code>https://</code> address with no path, reachable from the internet at that one path, and outbound HTTPS to <code>oauth.privacyfence.eu</code>. A server behind an IP allow-list or a VPN keeps using its own apps.</li>
       <li>Registered host names are listed publicly at <code>/registrations</code>. You can revoke any host with the token from mb2.</li>
+    </ul>
+
+    <h3>How the relay is released</h3>
+    <ul>
+      <li><strong>Its own track.</strong> The relay is a service PrivacyFence runs, like <code>downloads.privacyfence.eu</code>. Operators never install it, and app releases never deploy it.</li>
+      <li><strong>How it deploys.</strong> The <code>deploy-oauth-relay-worker</code> GitHub workflow deploys it whenever a change under <code>cloudflare/oauth-relay/</code> reaches <code>main</code>, or when you run the workflow on <code>main</code>. A test job runs first, and a <code>/health</code> smoke test runs after.</li>
+      <li><strong>First deploy.</strong> You do it by hand from the feature branch (step 4 below), so the end-to-end checks can run before the pull request merges. The merge then redeploys the same code through the workflow.</li>
+      <li><strong>Before tagging 7.0.0.</strong> <code>/cut-release</code> and <code>docs/releasing.md</code> check that <code>https://oauth.privacyfence.eu/health</code> answers 200.</li>
+      <li><strong>Compatibility.</strong> The relay's routes only grow. Every relay version keeps serving every released 7.x server, and a breaking change gets a new path while the old one stays.</li>
+      <li><strong>Runbook.</strong> <code>docs/oauth-relay.md</code> covers setup, smoke tests, revoking a server, rotating the revoke token and rolling back. It is a contributor doc, not published on the website.</li>
     </ul>
 
     <h3>Provider caveats with the built-in apps</h3>
@@ -175,7 +185,7 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
     <h3>Desktop mode: 7 deprecates, 8 removes</h3>
     <div class="timeline">
       <div><b>6.x</b><span>Desktop mode and organization servers, side by side.</span></div>
-      <div><b>7.x</b><span>Desktop mode still works, with a notice in the log, in <code>privacyfence_status</code>, on every page and once from the menu-bar or tray app. A new guide covers moving to a server or the Docker trial.</span></div>
+      <div><b>7.x</b><span>Desktop mode still works, with a notice in the log, in <code>privacyfence_status</code>, on every page and once from the menu-bar or tray app. A new guide covers moving to a server or Docker single-user mode.</span></div>
       <div><b>8.0</b><span>Desktop mode is removed: the companion, installers and Claude Desktop shim. That is a separate plan, written after 7.0 ships.</span></div>
     </div>
     <p class="see">You cut 7.0.0 with <code>/cut-release</code> once the pull request merges. The changelog marks it as breaking.</p>
@@ -218,6 +228,7 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
     <h3>2. Create the Cloudflare token and the GitHub environment for the relay Worker</h3>
     <div class="meta"><span>mb2-relay-worker-cloudflare</span><span>about 20 minutes</span></div>
     <ol class="steps">
+      <li><label><input type="checkbox" id="mb2-0"></label><div>Check the ground. In the <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa">PrivacyFence Cloudflare account</a>, the zone <code>privacyfence.eu</code> should be <strong>Active</strong>. Then open its <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/privacyfence.eu/dns/records">DNS records</a>: there must be <strong>no</strong> record named <code>oauth</code>. Wrangler creates it as a Worker custom domain on the first deploy, and an existing record would block that.</div></li>
       <li><label><input type="checkbox" id="mb2-1"></label><div>In Cloudflare, open the account's <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/api-tokens">account API tokens</a> page and create a token named <code>privacyfence-oauth-relay-deploy</code>. Give it Account: <strong>Workers Scripts Edit</strong>, and Zone: <strong>Workers Routes Edit</strong> and <strong>Zone Read</strong>. Scope the zone resources to <code>privacyfence.eu</code> and leave the expiry empty. This is the same shape as the download Worker's token in <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/downloads-and-release-kpi.md#use-account-owned-api-tokens">downloads-and-release-kpi.md</a>, without the D1 and R2 permissions.</div></li>
       <li><label><input type="checkbox" id="mb2-2"></label><div>Verify it in your own terminal. Read the token from your password manager into an environment variable; don't type it into a chat. Run:<pre>curl -s -H "Authorization: Bearer $CF_TOKEN" \
   https://api.cloudflare.com/client/v4/accounts/326657b4f70af041996d60fd6b8f83fa/tokens/verify</pre>You should see <code>"status": "active"</code>.</div></li>
@@ -229,7 +240,7 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
           <li><code>CF_OAUTH_RELAY_REVOKE_TOKEN</code>: a new random value made with <code>openssl rand -base64 32</code> in your terminal. Keep a copy in your password manager; you need it to revoke a server.</li>
         </ul></div></li>
     </ol>
-    <p class="done-when"><strong>Done when:</strong> the <code>oauth-relay-worker</code> environment holds the three secrets, and the curl above reports the token active.</p>
+    <p class="done-when"><strong>Done when:</strong> the <code>oauth-relay-worker</code> environment holds the three secrets, the curl above reports the token active, and there is no <code>oauth</code> DNS record yet.</p>
   </section>
 
   <section class="item" id="mb3">
@@ -245,8 +256,40 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
 
   <h2 id="after">After implementation</h2>
 
+  <section class="item" id="ma0">
+    <h3>4. Deploy the relay for the first time</h3>
+    <div class="meta"><span>ma0-relay-first-deploy</span><span>about 30 minutes</span></div>
+    <p>Do this once the feature branch is complete, before the pull request merges. Run it in your own terminal, and read every secret from your password manager into a shell variable; never paste one into a chat. For example: <code>export CLOUDFLARE_API_TOKEN="$(op read 'op://…')"</code>.</p>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="ma0-1"></label><div>Get the code and run its tests:<pre>git fetch origin feature/builtin-oauth-apps
+git checkout feature/builtin-oauth-apps
+cd cloudflare/oauth-relay
+npm ci
+npm run typecheck &amp;&amp; npm test</pre>Both should pass.</div></li>
+      <li><label><input type="checkbox" id="ma0-2"></label><div>Set the deploy credentials for this shell:<pre>export CLOUDFLARE_API_TOKEN=…     # the mb2 token, from your password manager
+export CLOUDFLARE_ACCOUNT_ID=326657b4f70af041996d60fd6b8f83fa
+export REVOKE_TOKEN=…             # the CF_OAUTH_RELAY_REVOKE_TOKEN value</pre></div></li>
+      <li><label><input type="checkbox" id="ma0-3"></label><div>Rehearse, then deploy:<pre>npx wrangler deploy --dry-run --outdir dist
+npx wrangler deploy</pre>The deploy output should list <code>oauth.privacyfence.eu (custom domain)</code> and a Durable Object migration <code>v1</code>.</div></li>
+      <li><label><input type="checkbox" id="ma0-4"></label><div>Set the revoke token on the Worker:<pre>printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre></div></li>
+      <li><label><input type="checkbox" id="ma0-5"></label><div>In the dashboard, open <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/workers-and-pages">Workers &amp; Pages</a> → <strong>privacyfence-oauth-relay</strong>. Under <strong>Settings → Domains &amp; Routes</strong> you should see <code>oauth.privacyfence.eu</code>. Under <strong>Observability</strong>, logs should be off. Under <strong>Settings → Variables and Secrets</strong>, <code>REVOKE_TOKEN</code> should be listed as a secret.</div></li>
+      <li><label><input type="checkbox" id="ma0-6"></label><div>Run the smoke tests (the same ones are in <code>docs/oauth-relay.md</code>):<pre>curl -sI https://oauth.privacyfence.eu/health                # HTTP/2 200
+curl -s  https://oauth.privacyfence.eu/registrations         # []
+curl -s -X POST https://oauth.privacyfence.eu/register \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"example.com","token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
+                                                             # {"error":"proof_failed"}
+curl -sI 'https://oauth.privacyfence.eu/callback/slack?state=localhost:8765~x&amp;code=y'
+                                                             # 302, location: http://localhost:8765/oauth/callback/slack?state=...
+curl -s  'https://oauth.privacyfence.eu/callback/slack?state=unregistered.example~x&amp;code=y'
+                                                             # 400 "This sign-in cannot be completed..."</pre></div></li>
+      <li><label><input type="checkbox" id="ma0-7"></label><div>After the pull request merges, open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/deploy-oauth-relay-worker.yml">Actions → deploy-oauth-relay-worker</a>. The run on <code>main</code> should be green, including its health smoke test. Approve the <code>oauth-relay-worker</code> environment if GitHub asks you to. From then on, relay changes deploy only this way.</div></li>
+    </ol>
+    <p class="done-when"><strong>Report back:</strong> paste into the PR <code>ma0: relay deployed, revoke token set, smoke tests ok</code>. After the merge, add <code>workflow deploy ok</code>.</p>
+  </section>
+
   <section class="item" id="ma1">
-    <h3>4. Sign in with the built-in apps on a desktop install</h3>
+    <h3>5. Sign in with the built-in apps on a desktop install</h3>
     <div class="meta"><span>ma1-desktop-builtin-signin</span><span>about 45 minutes</span></div>
     <ol class="steps">
       <li><label><input type="checkbox" id="ma1-1"></label><div>Get an installer from the feature branch. Open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml">Actions → build.yml</a>, choose <strong>Run workflow</strong>, and pick branch <code>feature/builtin-oauth-apps</code>, or ask the orchestrator session to dispatch it. Download your platform's installer from the run's artifacts. The build log's "Build" step should print <code>built-in app &lt;key&gt;: included</code> for all seven.</div></li>
@@ -257,15 +300,12 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
   </section>
 
   <section class="item" id="ma2">
-    <h3>5. Connect an organization server through the relay</h3>
+    <h3>6. Connect an organization server through the relay</h3>
     <div class="meta"><span>ma2-org-relay-signin</span><span>about 1–1.5 hours</span></div>
     <ol class="steps">
-      <li><label><input type="checkbox" id="ma2-1"></label><div>Deploy the relay from the branch in your own terminal, with the token from mb2 read into <code>CLOUDFLARE_API_TOKEN</code> from your password manager:<pre>git checkout feature/builtin-oauth-apps
-cd cloudflare/oauth-relay &amp;&amp; npm ci
-CLOUDFLARE_ACCOUNT_ID=326657b4f70af041996d60fd6b8f83fa npx wrangler deploy
-printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <code>curl -sI https://oauth.privacyfence.eu/health</code> should answer <code>200</code>. Once the PR merges, the deploy workflow takes over.</div></li>
+      <li><label><input type="checkbox" id="ma2-1"></label><div>Make sure step 4 is done: <code>curl -sI https://oauth.privacyfence.eu/health</code> answers 200. Also make sure the test server is reachable from the internet over HTTPS at <code>https://&lt;its host&gt;/.well-known/privacyfence-relay</code>, with no IP allow-list blocking Cloudflare.</div></li>
       <li><label><input type="checkbox" id="ma2-2"></label><div>On a test org server with a public HTTPS hostname, install the branch's wheel. Put a JSON file with the seven apps' IDs and secrets on that server only, mode 0600, owned by the service account, and point <code>PRIVACYFENCE_BUILTIN_APPS</code> at it in the service's environment file. The format is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/builtin-oauth-apps/docs/configuration-reference.md">configuration-reference.md</a>. Use a signed bundle with <code>mode</code>, <code>server</code> and <code>idp</code> only, and no connector sections.</div></li>
-      <li><label><input type="checkbox" id="ma2-3"></label><div>Restart the server. Within a minute, <code>https://oauth.privacyfence.eu/registrations</code> should list your server's host. As an IdP admin, the <strong>Admin</strong> page's Services section should say "Relay registration: registered".</div></li>
+      <li><label><input type="checkbox" id="ma2-3"></label><div>Restart the server. On a new server the built-in services start off, so sign in as an IdP admin, open <strong>Admin → Services</strong> and offer Google, Slack, Salesforce, Atlassian and Miro, approving the passkey prompts. Within a minute, <code>https://oauth.privacyfence.eu/registrations</code> should list your server's host. As an IdP admin, the <strong>Admin</strong> page's Services section should say "Relay registration: registered".</div></li>
       <li><label><input type="checkbox" id="ma2-4"></label><div>As a normal user, open <code>/connect</code> and connect Gmail, Slack, Salesforce, Jira and Miro. The browser should pass briefly through <code>oauth.privacyfence.eu</code> and land back on <code>/connect</code> showing Connected.</div></li>
       <li><label><input type="checkbox" id="ma2-5"></label><div>Check revocation. Run <code>curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H "Content-Type: application/json" -d '{"host":"&lt;your host&gt;"}' https://oauth.privacyfence.eu/admin/revoke</code>. Starting a new Slack connect should now stop on the relay's "not registered" page. Removing a revoked host is not supported, so use a throwaway hostname for this step, or do it last.</div></li>
     </ol>
@@ -273,7 +313,7 @@ printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <co
   </section>
 
   <section class="item" id="ma3">
-    <h3>6. Upgrade an org server, then use the Admin page</h3>
+    <h3>7. Upgrade an org server, then use the Admin page</h3>
     <div class="meta"><span>ma3-upgrade-and-admin-page</span><span>about 45 minutes</span></div>
     <ol class="steps">
       <li><label><input type="checkbox" id="ma3-1"></label><div>On a second test org server running the current release, use an old-style bundle that carries <code>authz</code>, <code>web_push</code> and connector sections for Slack and Google only. Then upgrade it to the branch's wheel and restart. The log should say <code>Imported … settings from org_config.json into org/admin_config.json</code>. The Admin page should show Slack and Google offered and everything else off, with your sign-in restrictions filled in.</div></li>
@@ -289,17 +329,17 @@ printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <co
   </section>
 
   <section class="item" id="ma4">
-    <h3>7. Try the Docker image on localhost, and check desktop deprecation</h3>
-    <div class="meta"><span>ma4-docker-trial-and-deprecation</span><span>about 40 minutes</span></div>
+    <h3>8. Try the Docker image on localhost, and check desktop deprecation</h3>
+    <div class="meta"><span>ma4-docker-single-user-and-deprecation</span><span>about 40 minutes</span></div>
     <ol class="steps">
       <li><label><input type="checkbox" id="ma4-1"></label><div>Get the branch's image. Open the build.yml run from item 4 (or dispatch one on <code>feature/builtin-oauth-apps</code>), download the org image artifact for your CPU, and run <code>gunzip -c &lt;file&gt; | docker load</code>.</div></li>
-      <li><label><input type="checkbox" id="ma4-2"></label><div>Run it with no bundle: <code>docker run --rm -p 127.0.0.1:8765:8765 -v pf-trial:/var/lib/privacyfence-org/.privacyfence &lt;loaded image&gt;</code>. The log should show the trial warning and a <code>Trial setup code: XXXX-XXXX</code> line.</div></li>
-      <li><label><input type="checkbox" id="ma4-3"></label><div>Open <code>http://localhost:8765/login</code>. A wrong code should say "That code is not right." Enter the right one, and you land on the passkey page. Enroll a passkey, sign out, then sign back in with the passkey. Repeat the sign-in once in Safari if you have a Mac: trial cookies are not marked Secure on plain <code>http://localhost</code>, so Safari keeps them.</div></li>
+      <li><label><input type="checkbox" id="ma4-2"></label><div>Run it with no bundle: <code>docker run --rm -p 127.0.0.1:8765:8765 -v pf-data:/var/lib/privacyfence-org/.privacyfence &lt;loaded image&gt;</code>. The log should show the single-user warning and a <code>Setup code: XXXX-XXXX</code> line.</div></li>
+      <li><label><input type="checkbox" id="ma4-3"></label><div>Open <code>http://localhost:8765/login</code>. A wrong code should say "That code is not right." Enter the right one, and you land on the passkey page. Enroll a passkey, sign out, then sign back in with the passkey. Repeat the sign-in once in Safari if you have a Mac: single-user cookies are not marked Secure on plain <code>http://localhost</code>, so Safari keeps them.</div></li>
       <li><label><input type="checkbox" id="ma4-4"></label><div>Open <strong>Admin</strong>. The relay line should say "Relay registration: not needed on localhost." On <code>/connect</code>, connect Slack and Gmail. The browser passes through <code>oauth.privacyfence.eu</code> and comes back to <code>localhost:8765</code>.</div></li>
-      <li><label><input type="checkbox" id="ma4-5"></label><div>Add <code>http://localhost:8765/mcp</code> to Claude Code or Claude Desktop. Signing in should send you to the trial login and then the consent page. Then ask for "my last 3 emails" and approve it.</div></li>
+      <li><label><input type="checkbox" id="ma4-5"></label><div>Add <code>http://localhost:8765/mcp</code> to Claude Code or Claude Desktop. Signing in should send you to the single-user sign-in and then the consent page. Then ask for "my last 3 emails" and approve it.</div></li>
       <li><label><input type="checkbox" id="ma4-6"></label><div>On the desktop install from item 4, check four things: the daemon log has the "Desktop mode is deprecated" line; every Settings, Approvals and Admin page shows the deprecation strip; the companion showed the notice once and not after a restart; and <code>privacyfence_status</code> in your AI client returns a <code>deprecation</code> field.</div></li>
     </ol>
-    <p class="done-when"><strong>Report back:</strong> paste <code>ma4: trial start ok, setup code ok, passkey ok, relay localhost ok, mcp ok, deprecation log/strip/companion/status ok</code> into the PR.</p>
+    <p class="done-when"><strong>Report back:</strong> paste <code>ma4: single-user start ok, setup code ok, passkey ok, relay localhost ok, mcp ok, deprecation log/strip/companion/status ok</code> into the PR.</p>
   </section>
 </div>
 

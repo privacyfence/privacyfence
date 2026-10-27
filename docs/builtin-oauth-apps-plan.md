@@ -1,4 +1,4 @@
-# Plan: PrivacyFence 7 — split the organization config, an Admin page, built-in OAuth apps and a Docker trial
+# Plan: PrivacyFence 7 — split the organization config, an Admin page, built-in OAuth apps and single-user Docker mode
 
 ## Goal
 
@@ -42,7 +42,7 @@ After this plan:
   directly through their fixed loopback redirects.
 
 - **The Docker image starts in organization mode on its own.** With no bundle and no IdP it runs
-  as a single-administrator trial on `http://localhost`. Sign-in uses a one-time setup code from the
+  as single-user mode, with one administrator, on `http://localhost`. Sign-in uses a one-time setup code from the
   container log, then a passkey. Built-in apps reach it through the relay's loopback forwarding.
   `mode` and the server address can also come from environment variables.
 - **The upgrade can be undone.** 7.x copies `org_config.json` to `org_bundle.json`, and its pin
@@ -287,14 +287,14 @@ Schema, version 1:
   - Unreadable or malformed JSON, a non-object, or `version != 1` raises `AdminConfigError`. The
     message names the path and never the content.
 - `save(data) -> None` writes atomically.
-- `import_from_bundle(bundle: dict[str, Any], *, mode: Mode, trial: bool) -> dict[str, Any]`
+- `import_from_bundle(bundle: dict[str, Any], *, mode: Mode, single_user: bool) -> dict[str, Any]`
   builds a fresh config:
   - **`offered`, when the bundle has a non-empty section for any service in `SERVICES`:** each
     service's `offered` is whether its section is non-empty, as ADR 0196 had it.
   - **`offered`, otherwise:**
-    - In local mode, and in an org-mode trial (D9), google, slack, salesforce, atlassian, miro and
+    - In local mode, and in an org-mode single-user install (D9), google, slack, salesforce, atlassian, miro and
       telegram are `true`.
-    - On a non-trial org server they are all `false`. The first service an admin offers on the
+    - On a multi-user org server they are all `false`. The first service an admin offers on the
       Admin page is the opt-in, and that is what starts relay registration and puts the host on the
       public list.
     - grist and peek are always `false` here, because they need a server address.
@@ -303,14 +303,14 @@ Schema, version 1:
   - Each `OPERATIONAL_SECTIONS` key present in the bundle is copied verbatim.
   - `imported_from_bundle_sha256` is the SHA-256 hex of
     `json.dumps(bundle, sort_keys=True, separators=(",", ":"))`, or `""` for an empty bundle.
-- `ensure(bundle, *, mode, trial) -> tuple[dict[str, Any], bool]`:
+- `ensure(bundle, *, mode, single_user) -> tuple[dict[str, Any], bool]`:
   - It returns `(loaded, False)` when the file exists, except in one case.
   - **The exception:** the loaded `imported_from_bundle_sha256` is `""`, meaning the config was
     created with no bundle, and `legacy_keys_in(bundle)` is non-empty. That is an IT bundle
     arriving after the first start. Then it re-imports, saves and returns `(new, True)`. This
     happens at most once, because the new config records the bundle's hash.
   - With no file, it saves and returns `(import_from_bundle(...), True)`.
-- `config_for(bundle, *, mode, trial) -> dict[str, Any]` returns `load()` when the file exists,
+- `config_for(bundle, *, mode, single_user) -> dict[str, Any]` returns `load()` when the file exists,
   otherwise `import_from_bundle(...)`, without writing. Readers that run without the daemon use it:
   the CLI and `SettingsController`. A missing file then never changes what the bundle offers.
 - `load()` normalizes on read: a missing service gets the `import_from_bundle` default for it, and a
@@ -326,8 +326,8 @@ Schema, version 1:
 is called once in `run_app`, right after `bundle = load_org_config()`.
 
 - It calls `admin_config.ensure(bundle, mode=org_mode.resolve_mode(bundle),
-  trial=org_mode.is_trial(bundle))`. p4 lands before `is_trial` exists (p15), so p4 passes
-  `trial=False` and p15 changes the call.
+  single_user=org_mode.is_single_user(bundle))`. p4 lands before `is_single_user` exists (p15), so p4 passes
+  `single_user=False` and p15 changes the call.
 - On import it logs at WARNING `Imported <n> settings from org_config.json into
   org/admin_config.json; they are now managed on the Admin page`, where `<n>` is
   `len(admin_config.legacy_keys_in(bundle))`.
@@ -418,13 +418,13 @@ composed from the bundle, the admin config and the built-in apps.
   `init_privacy_filter`'s `org_managed`. Everything else gets
   `org_config = effective_org_config(bundle, admin)`.
 - The CLI dispatch (`daemon_main.py:2518`) uses
-  `oauth_apps.effective_org_config(bundle, admin_config.config_for(bundle, mode="local", trial=False), mode="local")`,
+  `oauth_apps.effective_org_config(bundle, admin_config.config_for(bundle, mode="local", single_user=False), mode="local")`,
   with `bundle = load_org_config()`.
   - The CLI OAuth runners are loopback flows and always use the local apps.
   - An `AdminConfigError` there exits the same way a `ConfigurationError` does.
 - `settings_controller._org_config_or_empty` (`:1203`) and `refresh_connectors`'s `work`
   (`:1240`) call
-  `effective_org_config(bundle, admin_config.config_for(bundle, mode=org_mode.resolve_mode(bundle), trial=False))`,
+  `effective_org_config(bundle, admin_config.config_for(bundle, mode=org_mode.resolve_mode(bundle), single_user=False))`,
   with `bundle = load_org_config()`. An `AdminConfigError` is handled like the
   `ConfigurationError` already caught there.
 - In org mode the raw `bundle` travels down with a new `bundle` keyword:
@@ -597,6 +597,46 @@ with `@cloudflare/vitest-pool-workers`).
   - smoke test `curl --head https://oauth.privacyfence.eu/health`;
   - job names `verify-oauth-relay` and `deploy-oauth-relay` (not `verify`, which the download Worker's workflow already uses).
 
+**How the relay is released.** The relay is a service PrivacyFence runs, like the download
+Worker. It is not an artifact operators install, and it ships on its own track, not with app
+releases.
+
+- **Production deploys.** `deploy-oauth-relay-worker.yml` deploys the Worker when a change under
+  `cloudflare/oauth-relay/**` reaches `main`, or when someone runs the workflow on `main`.
+- **Tags do not deploy it.** A release tag never changes the relay, and a relay change never needs
+  an app release.
+- **Order.** The relay must be live before the first release whose org servers use built-in apps,
+  7.0.0. The feature PR merging to `main` deploys it, and `/cut-release` and `docs/releasing.md`
+  gain a pre-flight line: `curl -fsSI https://oauth.privacyfence.eu/health` must return 200 before
+  tagging.
+- **Compatibility rule.** Every relay version must keep serving every released 7.x server. The D5
+  contract (`/register`, `/callback/:grant`, the `state` format, the loopback rule) only grows:
+  - a route or a field may be added;
+  - an existing one is never changed or removed while a supported release uses it.
+
+  A breaking change is a new path (for example `/v2/callback/...`) used by the new release, with
+  the old path kept.
+- **The maintainer runbook** is a new contributor doc, `docs/oauth-relay.md`. It is not published
+  on the website (ADR 0051): add it to `scripts/build_site.py`'s `CONTRIBUTOR_DOCS` (`:168-182`)
+  and to the contributor half of `docs/README.md`. It covers:
+  - **Provisioning.** The zone, the token, the GitHub environment and its three secrets, and the
+    first deploy.
+  - **Checking a deploy.** These smoke tests:
+    - `/health` returns 200;
+    - `/registrations` is a JSON list;
+    - `/register` for a host that cannot prove itself returns 403 `proof_failed`;
+    - a loopback `/callback` returns a 302 to `http://localhost:…`;
+    - an unregistered host's `/callback` returns 400.
+  - **Revoking a host.** The curl call.
+  - **Rotating `REVOKE_TOKEN`.** Update the environment secret, then run the workflow on `main`.
+  - **Rolling back.** `npx wrangler rollback`, or the dashboard's Deployments tab.
+  - **Reading the registrations.**
+  - **The compatibility rule** above.
+- **Cloudflare resources.** `docs/downloads-and-release-kpi.md`'s "Cloudflare resources" table
+  gains rows for the Worker `privacyfence-oauth-relay`, the custom domain `oauth.privacyfence.eu`
+  and the Durable Object class `Registry`. Its credentials table gains rows for the three
+  `CF_OAUTH_RELAY_*` secrets.
+
 **Accepted risks**, recorded in ADR 0243:
 
 - Slack documents no PKCE, so a relayed Slack code passes through the Worker in the browser
@@ -728,7 +768,7 @@ environment to a URL they choose.
   section and running it through the existing parser, `org_mode.<X>.from_org_config({"<section>":
   candidate})`. Use `step_up_config.StepUpConfig.from_org_config` and
   `scoped_tokens.policy_from_org_config(..., org_mode=True)` the same way.
-  - A `ConfigurationError` becomes `AdminConfigError(str(exc).replace("org_config.json's ", ""))`.
+  - A `ConfigurationError` becomes `AdminConfigError(str(exc).replace("org_bundle.json's ", ""))`.
   - `set_server_address` validates with `grist_auth.normalize_server_url` or
     `peek_client.normalize_base_url`. Their `GristClientError` or `PeekClientError` becomes
     `AdminConfigError(str(exc))`. An empty value clears the address.
@@ -973,51 +1013,51 @@ bundle's `server` section does not set:
 - `port` from `PRIVACYFENCE_PORT` (an integer from 1 to 65535);
 - `issuer_url` from `PRIVACYFENCE_ISSUER_URL`.
 
-The bundle always wins over the environment. In trial mode (below) a missing `issuer_url` defaults
+The bundle always wins over the environment. In single-user mode (below) a missing `issuer_url` defaults
 to `http://localhost:<port>`.
 
-**Trial mode.**
+**Single-user mode.**
 
-- `org_mode.is_trial(org_config) -> bool` returns `resolve_mode(org_config) == "org" and not
+- `org_mode.is_single_user(org_config) -> bool` returns `resolve_mode(org_config) == "org" and not
   org_config.get("idp")`.
-- In trial mode, `_start_org_web_server` no longer raises "org mode requires an \"idp\" section".
+- In single-user mode, `_start_org_web_server` no longer raises "org mode requires an \"idp\" section".
   Instead it requires the issuer URL's scheme to be `http` and its hostname to be `localhost` or
   `127.0.0.1`. Otherwise it raises `ConfigurationError("Organization mode without an identity
-  provider is a trial and runs only at http://localhost or http://127.0.0.1. Add an \"idp\"
-  section to org_config.json to serve any other address.")`.
-- A trial needs no bundle at all. Built-in apps and the admin config supply everything else.
-- **A real server never falls back to a trial.** Trial mode is refused when the data directory
+  provider is single-user mode and runs only at http://localhost or http://127.0.0.1. Add an \"idp\"
+  section to org_bundle.json to serve any other address.")`.
+- Single-user mode needs no bundle at all. Built-in apps and the admin config supply everything else.
+- **A real server never falls back to single-user mode.** Single-user mode is refused when the data directory
   shows it belonged to an organization server. That means a pinned signing key exists under
   either name (`org_bundle_signing_pubkey.txt` or the 6.x `org_config_signing_pubkey.txt`, D13),
   or the admin config's
   `imported_from_bundle_sha256` is non-empty. The message is `ConfigurationError("This data
-  directory belonged to an organization server; restore org_config.json, or use a new data
-  directory for a trial.")`. Without this, deleting the bundle would silently turn a production
-  server into a trial reachable on `0.0.0.0` with only a setup code (the downgrade
+  directory belonged to an organization server; restore org_bundle.json, or use a new data
+  directory for single-user mode.")`. Without this, deleting the bundle would silently turn a production
+  server into single-user mode reachable on `0.0.0.0` with only a setup code (the downgrade
   `load_org_config`'s docstring warns about).
 - **Types.** `OrgAuth.idp` becomes `IdpConfig | None` (`web/server.py:698`), and
   `OrgOAuthProvider.__init__`'s `idp` becomes `IdpConfig | None` (`oauth_provider.py:251`), with
   `authorize` guarded. `routes_org_identity` and `routes_org_stepup` are mounted only when `idp` is
   not None (`web/server.py:1349`, `:1373`), and the issuer log line (`daemon_main.py:1253-1255`)
-  logs `trial` instead when it is None.
-- At every trial start, `daemon_main` logs at WARNING `Trial mode: a single administrator, no
-  identity provider. For evaluation on this computer only.`
+  logs `single-user` instead when it is None.
+- At every single-user start, `daemon_main` logs at WARNING `Single-user mode: one administrator, no
+  identity provider, on this computer only.`
 
 **The Docker image.**
 
 - `deploy/docker/Dockerfile` adds `ENV PRIVACYFENCE_MODE=org PRIVACYFENCE_BIND_HOST=0.0.0.0` to
   its existing `ENV` block.
 - `deploy/docker/healthcheck.py` reads the bundle's `server.port`. With no bundle, or no port in
-  it, it uses `PRIVACYFENCE_PORT`, else 8765, so a trial container reports healthy.
+  it, it uses `PRIVACYFENCE_PORT`, else 8765, so a single-user container reports healthy.
 - `tests/integration/test_org_docker_image.py::test_refuses_to_start_without_a_bundle` (`:185`,
-  asserting exit 78) is replaced by the trial-start test.
+  asserting exit 78) is replaced by the single-user start test.
 - `deploy/docker/docker-entrypoint.sh` no longer exits 78 when there is no bundle. Without one, it
-  prints `No organization bundle: starting a trial at http://localhost:8765 (docs/org-mode-docker.md, "Try it on this computer").`
+  prints `No organization bundle: starting in single-user mode at http://localhost:8765 (docs/org-mode-docker.md, "Run it on this computer").`
   to stderr, then `exec`s as before.
-- The trial command, documented in `docs/org-mode-docker.md`, is
+- The single-user command, documented in `docs/org-mode-docker.md`, is
   `docker run --rm -p 127.0.0.1:8765:8765 -v pf-data:/var/lib/privacyfence-org/.privacyfence ghcr.io/privacyfence/privacyfence-org:latest`.
-  The `127.0.0.1:` publish keeps the trial unreachable from the network. The image cannot check
-  this, and the docs say so plainly. The trial is opened at `http://localhost:8765`, not
+  The `127.0.0.1:` publish keeps it unreachable from the network. The image cannot check
+  this, and the docs say so plainly. Single-user mode is opened at `http://localhost:8765`, not
   `127.0.0.1`: the Host allowlist and the passkey's rp_id are both `localhost`.
 - `tests/integration/test_org_docker_image.py` covers the image. A phase that changes the image
   dispatches `build.yml` (in `ci.dispatchable`) to run it, because the container cannot build
@@ -1040,18 +1080,18 @@ to `http://localhost:<port>`.
     issuer.
   - The Admin page's relay status line says `Relay registration: not needed on localhost.`
 
-### D10. Trial sign-in: a setup code, then a passkey
+### D10. Single-user sign-in: a setup code, then a passkey
 
-**Module `src/privacyfence/web/trial_auth.py`.** Its `build_routes(...)` is mounted instead of
-`routes_org_identity.build_routes` when `org_mode.is_trial(org_config)`.
+**Module `src/privacyfence/web/single_user_auth.py`.** Its `build_routes(...)` is mounted instead of
+`routes_org_identity.build_routes` when `org_mode.is_single_user(org_config)`.
 
-- **The principal.** `TRIAL_PRINCIPAL = Principal(id="trial-admin", email="admin@localhost",
-  display_name="Trial administrator", is_admin=True)`.
-- **The setup code.** It is generated and logged inside `build_routes`, so trial_auth's own tests
+- **The principal.** `SINGLE_USER_PRINCIPAL = Principal(id="single-user", email="admin@localhost",
+  display_name="Administrator", is_admin=True)`.
+- **The setup code.** It is generated and logged inside `build_routes`, so single_user_auth's own tests
   cover it.
-  - It is made only when `webauthn_stepup.has_credentials(TRIAL_PRINCIPAL)` is false: eight
+  - It is made only when `webauthn_stepup.has_credentials(SINGLE_USER_PRINCIPAL)` is false: eight
     characters from `secrets.token_hex(4).upper()`, shown as `XXXX-XXXX`, kept in memory only.
-  - It is logged at WARNING: `Trial setup code: <code>. Open http://localhost:<port>/login to set
+  - It is logged at WARNING: `Setup code: <code>. Open http://localhost:<port>/login to set
     up your passkey.`
   - **Checked on every request.** Every request checks `has_credentials` again, so the code works
     only while no passkey is enrolled, and a later recovery wipe does not bring an old code back
@@ -1060,11 +1100,11 @@ to `http://localhost:<port>`.
     after four characters when it is missing. Anything that is not then `^[0-9A-F]{4}-[0-9A-F]{4}$`
     counts as a wrong attempt. The comparison is `hmac.compare_digest(typed.encode(),
     code.encode())`.
-  - **Limits.** Five wrong attempts discard the code until the next start, logging `Trial setup
+  - **Limits.** Five wrong attempts discard the code until the next start, logging `Setup
     code used up after 5 wrong attempts; restart PrivacyFence for a new one.` A successful use
     also discards it; a restart issues a new one while no passkey is enrolled.
-- **Cookies.** `pf_trial_setup` and the session cookie are `Secure` only when the issuer is
-  `https`. `org_session.set_session_cookie` gains `secure: bool = True`, and trial_auth passes
+- **Cookies.** `pf_setup_binding` and the session cookie are `Secure` only when the issuer is
+  `https`. `org_session.set_session_cookie` gains `secure: bool = True`, and single_user_auth passes
   `False` for an `http` issuer. Safari does not keep `Secure` cookies on `http://localhost`.
 - **`GET /login?next=<path>`:**
   - With no passkey enrolled, a form: "Setup code" input, button "Continue".
@@ -1072,21 +1112,21 @@ to `http://localhost:<port>`.
   - `next` is cleaned with `routes_org_identity._safe_next_path`.
   - The page is rendered with `web_shell.plain_page(..., nonce=nonce_for(request))`, as
     `routes_org_identity`'s `signed_out` page is.
-  - It sets `pf_trial_setup`: a random value, HttpOnly, SameSite=Strict, 10-minute max-age,
+  - It sets `pf_setup_binding`: a random value, HttpOnly, SameSite=Strict, 10-minute max-age,
     echoed as a hidden field.
 - **`POST /login/setup`** (form: `code`, `next`, the hidden binding value):
   - It is origin-checked with `org_session.check_origin`.
   - The cookie must match the hidden field (`hmac.compare_digest`).
-  - On success it consumes the code, creates an org session for `TRIAL_PRINCIPAL` with
+  - On success it consumes the code, creates an org session for `SINGLE_USER_PRINCIPAL` with
     `org_session`'s existing creation and cookie helpers (as `routes_org_identity.login_callback`
     does, including issuing a fresh session id), and redirects to `/security?next=<safe next>`.
   - On failure it re-renders the form with `That code is not right.`, or after the fifth failure
     `The setup code is used up. Restart PrivacyFence to get a new one.`
 - **`routes_security`.** After a successful enrollment, when the page was opened with a `next`
   that `_safe_next_path` accepts, it shows a "Continue" link to it. That carries an MCP client's
-  `/oauth/trial/continue` through first-time setup.
+  `/oauth/single-user/continue` through first-time setup.
 - **`POST /login/passkey/options` and `POST /login/passkey/verify`:**
-  - They use `webauthn_stepup.begin_assertion` and `verify_assertion` for `TRIAL_PRINCIPAL`.
+  - They use `webauthn_stepup.begin_assertion` and `verify_assertion` for `SINGLE_USER_PRINCIPAL`.
   - The `rp_id` and origin are the ones `/security` enrolled with: `StepUpConfig.rp_id` (the
     `step_up` config's, defaulting to the issuer host, `routes_security.py:516`, `:545`) and
     `issuer_url.rstrip('/')`.
@@ -1096,28 +1136,28 @@ to `http://localhost:<port>`.
 - **`POST /logout` and `GET /signed-out`** behave exactly as `routes_org_identity`'s, including
   `end_browser_push`. The nav's sign-out form posts to `/logout` (`web_shell.py:534-546`).
 - **MCP clients through the OAuth server.**
-  - `OrgOAuthProvider` gets `trial: bool`, with `idp` `None` when `trial` is true.
+  - `OrgOAuthProvider` gets `single_user: bool`, with `idp` `None` when `single_user` is true.
   - `authorize` records the pending authorization as today but returns
-    `/login?next=/oauth/trial/continue%3Fstate%3D<own_state>`.
+    `/login?next=/oauth/single-user/continue%3Fstate%3D<own_state>`.
   - `routes_mcp.mount_org_oauth(provider, *, issuer_url, sessions: OrgSessionStore | None = None)`:
-    - It mounts `GET /oauth/trial/continue?state=` only when `provider.trial`, and the IdP
+    - It mounts `GET /oauth/single-user/continue?state=` only when `provider.single_user`, and the IdP
       callback route (`IDP_CALLBACK_PATH`, `routes_mcp.py:1091`) only when it is not.
     - The call at `web/server.py:1335` passes `sessions=org.sessions`.
-  - The continue route needs a session for `TRIAL_PRINCIPAL`; without one it redirects to
-    `/login?next=<itself>`. It calls `provider.handle_trial_continue(state=..., principal=...)`.
+  - The continue route needs a session for `SINGLE_USER_PRINCIPAL`; without one it redirects to
+    `/login?next=<itself>`. It calls `provider.handle_single_user_continue(state=..., principal=...)`.
   - `handle_idp_callback` is split into `_pop_pending(state)`, the IdP-specific claims step, and
     `_finish_for_principal(pending, principal) -> str` (today's consent check and code minting,
-    unchanged). `handle_trial_continue` is `_pop_pending` + `_finish_for_principal`, so consent
-    (ADR 0177) applies to trial clients unchanged.
-- **Step-up and approvals** work as on any org server; `TRIAL_PRINCIPAL`'s passkey is the step-up
+    unchanged). `handle_single_user_continue` is `_pop_pending` + `_finish_for_principal`, so consent
+    (ADR 0177) applies to single-user clients unchanged.
+- **Step-up and approvals** work as on any org server; `SINGLE_USER_PRINCIPAL`'s passkey is the step-up
   passkey.
 - **Lost passkey.** Stop the container and delete the file
-  `webauthn_stepup._credentials_path(TRIAL_PRINCIPAL)` resolves to in the volume. The next start
+  `webauthn_stepup._credentials_path(SINGLE_USER_PRINCIPAL)` resolves to in the volume. The next start
   prints a new code. This goes in the docs.
 - **Audit.** Sign-in outcomes are audit-logged the way `routes_security._audit`
   (`routes_security.py:452`) writes them: an `AuditEntry` under `principal_scope`. The decisions
-  are `trial_setup_signin`, `trial_setup_refused`, `trial_passkey_signin` and
-  `trial_passkey_refused`. A refusal never records the typed code.
+  are `single_user_setup_signin`, `single_user_setup_refused`, `single_user_passkey_signin` and
+  `single_user_passkey_refused`. A refusal never records the typed code.
 
 ### D11. Local mode is deprecated in 7.x
 
@@ -1288,10 +1328,15 @@ signs in during 7.x would keep old data.
   same file before replacing anything, so an upgrade stops before the old release is removed.
   Because of that, the marker's path and its `format` key are a stable contract.
 
-### D13. The 6 → 7 upgrade is reversible: 7.x never changes 6.x's files
+### D13. The 6 → 7 upgrade is reversible
 
 A 7.x install must be able to go back to the latest 6.x release (6.9.x) and keep running with the
-`org_config.json` it had. 7.x therefore never writes, renames or deletes a 6.x configuration file.
+`org_config.json` it had. So:
+
+- 7.x never writes, renames or deletes a 6.x bundle or pin file.
+- Every other file 6.x also reads stays in a format 6.9.x reads. That covers settings.yaml,
+  scoped_tokens.json, `org/oauth_clients.json`, `oauth_refresh.json`, the VAPID key and
+  `credentials/`.
 
 **New file names, adopted by copying.**
 
@@ -1318,18 +1363,22 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
   - When `org_bundle.json` does not exist and `org_config.json` does:
     - copy the legacy file's bytes unchanged to `org_bundle.json` (`atomic_write_bytes`, mode
       0600), so the signature still verifies;
-    - copy each legacy pin file to its new name when the new one does not exist;
+    - copy each legacy pin file to its new name when the new one does not exist (see the next
+      bullet: this happens on every call, not only together with the bundle copy);
     - write `org/org_bundle_adopted.json` = `{"from": "org_config.json", "sha256": "<hex of the
       copied bytes>", "at": "<UTC ISO-8601>"}`;
     - log at WARNING `Copied org/org_config.json to org/org_bundle.json for PrivacyFence 7. The
       original is kept unchanged so that you can go back to 6.x.`;
     - return True.
-  - Otherwise it does nothing and returns False.
+  - Independently of the bundle, on every call: each legacy pin file whose new-name copy is
+    missing is copied. A 6.x data directory whose bundle was removed but whose pins remain keeps
+    its key and serial protection, and the next upload cannot trust a new key on first use.
+  - Otherwise it does nothing to the bundle and returns False.
   - It never modifies or deletes a legacy file. A failed copy raises `ConfigurationError` naming
     the file, so the daemon refuses to start rather than run with half a configuration.
-  - `load_org_config` stores the result in the module-level
-    `daemon_main._bundle_adopted_this_start: bool`, which `tests/conftest.py::_reset` sets back to
-    False. When it is True, `run_app` records an audit entry `org_bundle_adopted` right after
+  - `load_org_config` sets the module-level `daemon_main._bundle_adopted_this_start: bool` only
+    ever to True (`|=`), because `load_org_config` runs several times per process.
+    `tests/conftest.py::_reset` sets it back to False. When it is True, `run_app` records an audit entry `org_bundle_adopted` right after
     `log_org_config_bundle_hash`.
 - **After adoption** 7.x reads and writes only the new names.
   - When `org_config.json` still exists and its SHA-256 differs from the one recorded in
@@ -1340,12 +1389,22 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
 - **Every 7.x reader and writer uses `paths.org_bundle_path()`:**
   - `daemon_main.load_org_config` (`:485`) and `log_org_config_bundle_hash` (`:548`);
   - `settings_controller.install_org_config_bytes` (`:1145`) and the snapshot's
-    installed-date read (`:2108`);
-  - `deploy/docker/healthcheck.py:16` and `deploy/docker/docker-entrypoint.sh:5`. In the shell
-    script, it either file counts as "a bundle is installed", because adoption runs in the daemon;
+    installed-date read (`:2108`). When `org_bundle_adopted.json` exists and the bundle's SHA-256
+    still equals its `sha256`, the snapshot shows the legacy file's mtime as the installed date,
+    not the copy time;
+  - `deploy/docker/healthcheck.py:16` reads the new name and falls back to the old one.
+    `deploy/docker/docker-entrypoint.sh:5` counts either file as "a bundle is installed", because
+    adoption runs in the daemon. It keeps its message prefix `No organization bundle at`, which
+    `tests/integration/test_org_docker_image.py:188` asserts; p15 replaces that test;
   - `scripts/build_org_bundle.py`'s `--output` default becomes `org_bundle.json` (`:239`);
-  - `scripts/qa_authenticate_connectors.py:61` keeps working through adoption, so only its
-    default path constant changes to the new name.
+  - `scripts/qa_authenticate_connectors.py:61`: the default path constant changes to the new
+    name. The backup name at `:119` uses `DEFAULT_ORG_CONFIG_PATH.name` instead of a hard-coded
+    `org_config.json`, and the docstring (`:24`, `:41`, `:107`) names the new file;
+  - user-facing messages that name `org_config.json` as the file to edit. Those are in
+    `daemon_main.load_org_config`, about 25 in `org_mode.py` (`:47-512`), `step_up_config.py:293`
+    and `:299`, and the D9/D10 messages in this plan. They say `org_bundle.json`. p6's mapping of
+    parser errors strips `"org_bundle.json's "` accordingly. `web/mcp_dispatch.py:653` and
+    `sync/src/privacyfence_sync/runner.py:41` are rewritten by p18.
 - **The other 7.x writes are 6.x-compatible.**
   - `admin_config.json`, `data_format.json`, `relay_token.txt` and `org_bundle_adopted.json` are
     new files that 6.x ignores.
@@ -1353,16 +1412,21 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
     already reads: version-3 rows, canonical verb names, tokens holding their own rules. 6.9.x is
     the current code base, where all three exist.
   - What does not carry back to 6.x: changes made on the Admin page, bundles installed under 7.x,
-    passkeys or connections made in a trial. A downgrade returns to the configuration
+    connections made through the relay (p5), and passkeys or connections made in single-user
+    mode. A downgrade returns to the configuration
     `org_config.json` holds.
 - **Re-upgrading after a downgrade.** `org_bundle.json` and `admin_config.json` still exist, so
   7.x uses them as they were. To start from 6.x's current files instead, delete
   `org/org_bundle.json`, `org/org_bundle_adopted.json`, the two new pin files and
   `org/admin_config.json`, then start 7.x. Adoption and the import run again. The docs give
   exactly this list.
-- **Trial safety (D9)** treats either pin-file name as "this belonged to an organization server".
+  - Deleting only `org_bundle.json` on a 7.x server re-adopts the old `org_config.json`. If 7.x
+    has since recorded a newer serial, the new serial pin refuses that older bundle with its
+    existing "delete the serial pin" message. The docs say this next to the re-upgrade list.
+- **Single-user safety (D9)** treats either pin-file name as "this belonged to an organization server".
 - **8.x (ADR 0246's list).** 8.x deletes `adopt_legacy_files` and the legacy constants along with
-  the other pre-7 converters. The D12 checkpoint does not need the legacy file, because the marker
+  the other pre-7 converters. It keeps the "org_config.json is present and ignored" warning, so
+  an operator who copies a bundle there out of 6.x habit is not met with silence. The D12 checkpoint does not need the legacy file, because the marker
   is written only after adoption has run.
 
 ## ADRs
@@ -1391,11 +1455,12 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
   same personal sections. The org Privacy and Stats sections move to Admin. Amends 0217 (where
   Stats lives); relates to 0033.
 - **0243** — Org servers use the built-in apps through the PrivacyFence-hosted redirect relay at
-  `oauth.privacyfence.eu`. It forwards only to hosts that proved control of their domain, keeps no
+  `oauth.privacyfence.eu`. It is deployed from `main` on its own track, never by a release tag,
+  and its contract only grows. It forwards only to hosts that proved control of their domain, keeps no
   logs, lists registrations publicly, and maintainers can revoke a host. It forwards to a loopback
   host without registration. Relates to 0011, 0186.
 - **0244** — `mode` and the server address may come from environment variables. Organization mode
-  without an IdP is a single-administrator trial, allowed only on `http://localhost` or
+  without an IdP is single-user mode, with one administrator,, allowed only on `http://localhost` or
   `127.0.0.1`, signed in with a one-time setup code and then a passkey. The Docker image starts in
   organization mode. Relates to 0011, 0177, 0213.
 - **0245** — Local (desktop) mode is deprecated in 7.x, announced in the log, status, pages and
@@ -1427,7 +1492,7 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - (ma2) Deploy the relay from the branch and connect through it from an org server.
   - (ma3) Upgrade an org server with an old-style bundle, then use the Admin page and check that
     Settings looks the same for an admin and a normal user.
-  - (ma4) Run the branch's Docker image as a localhost trial: setup code, passkey, a connector
+  - (ma4) Run the branch's Docker image in single-user mode: setup code, passkey, a connector
     through the relay, and an MCP client signing in. Check that a desktop install shows the
     deprecation notices.
 
@@ -1446,15 +1511,15 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   data is fixed, by design. The log, the Admin page and the docs name the problem; nothing is
   silently skipped.
 
-- **Trial-mode safety relies on the port publish.** Inside the container the daemon binds
+- **Single-user safety relies on the port publish.** Inside the container the daemon binds
   `0.0.0.0`. Only `-p 127.0.0.1:8765:8765` keeps it off the network, and the image cannot verify
-  that. The issuer must be loopback and the account needs a passkey, so a reachable trial still
+  that. The issuer must be loopback and the account needs a passkey, so a reachable single-user install still
   needs the setup code from the container log. ADR 0244 and the Docker docs say this plainly.
-- **Trial sign-in is new authentication code.** p16 runs on Opus for that reason (see its
+- **Single-user sign-in is new authentication code.** p16 runs on Opus for that reason (see its
   `worker_model_reason`).
 
 - **Fresh org servers start with built-in services off.** The relay, and the public listing of the
-  host name, start only once an admin offers a built-in service. A trial and a desktop install
+  host name, start only once an admin offers a built-in service. Single-user mode and a desktop install
   start with them on.
 - **A bundle that adds a provider later** does not offer it by itself after the import. An admin
   switches it on, and the docs say so.
@@ -1504,18 +1569,21 @@ manual_before:
   why: until verified, Google shows an unverified-app screen and caps the app at 100 users; nothing in the plan waits for it
   done_when: the Google Cloud console's Verification Center shows the submission, or the user chose to defer it
 manual_after:
+- id: ma0-relay-first-deploy
+  title: Deploy the relay Worker for the first time from the feature branch, set its revoke token, and run the runbook's smoke tests
+  why: the deploy workflow deploys only main, and ma2 and ma4 need the real relay at oauth.privacyfence.eu before the PR merges
 - id: ma1-desktop-builtin-signin
   title: Install a desktop build of the feature branch (from a dispatched build.yml run) with no organization bundle, and sign in to Gmail, Slack, Salesforce, Jira and Miro with the built-in apps
   why: real provider consent screens and loopback redirects cannot run in CI
 - id: ma2-org-relay-signin
-  title: Deploy the relay from the feature branch with wrangler, then on a test org server whose bundle has only mode/server/idp, register with the relay and connect Gmail, Slack, Salesforce, Jira and Miro through it
+  title: On a test org server whose bundle has only mode/server/idp, offer the built-in services, register with the relay (deployed in ma0) and connect Gmail, Slack, Salesforce, Jira and Miro through it
   why: the relay round trip needs a public domain, the real Worker and real providers; the deploy workflow only deploys main
 - id: ma3-upgrade-and-admin-page
   title: Upgrade an org server that has an old-style bundle, check the one-time import, use the Admin page, and compare Settings for an admin and a normal user
   why: checks the migration and the admin path end to end, with step-up, on a real deployment
-- id: ma4-docker-trial-and-deprecation
-  title: Run the branch's Docker image as a localhost trial (setup code, passkey, a connector through the relay, an MCP client), and check a desktop install's deprecation notices
-  why: the trial's browser ceremonies, the real relay and a real MCP client cannot run in CI
+- id: ma4-docker-single-user-and-deprecation
+  title: Run the branch's Docker image in single-user mode (setup code, passkey, a connector through the relay, an MCP client), and check a desktop install's deprecation notices
+  why: single-user mode's browser ceremonies, the real relay and a real MCP client cannot run in CI
 verify_after_merge:
 - python3 -m mypy src/privacyfence
 - python3 scripts/mypy_strict_modules.py
@@ -1545,20 +1613,25 @@ phases:
   - tests/unit/test_build_org_bundle.py
   - scripts/qa_authenticate_connectors.py
   - tests/unit/test_qa_authenticate_connectors.py
+  - src/privacyfence/org_mode.py
+  - tests/unit/test_org_mode.py
+  - src/privacyfence/step_up_config.py
+  - tests/unit/test_step_up_config.py
   - tests/conftest.py
   brief: |-
     Read "Design → D13" in full. Every name, message and rule is there.
-    1. org_bundle_signing.py: switch PINNED_PUBKEY_FILENAME and PINNED_SERIAL_FILENAME to the 7.x names, add the two LEGACY_ constants, and add adopt_legacy_files(org_dir) per D13. Use secure_files.atomic_write_bytes, and write org_bundle_adopted.json with atomic_write_json.
+    1. org_bundle_signing.py: switch PINNED_PUBKEY_FILENAME and PINNED_SERIAL_FILENAME to the 7.x names, add the two LEGACY_ constants, and add adopt_legacy_files(org_dir) per D13. The pins are copied on every call when their new name is missing, independently of the bundle. Use secure_files.atomic_write_bytes, and write org_bundle_adopted.json with atomic_write_json.
     2. paths.py: add ORG_BUNDLE_FILENAME, LEGACY_ORG_CONFIG_FILENAME and org_bundle_path().
     3. daemon_main.py:
-       - load_org_config calls adopt_legacy_files(org_dir()) first, sets _bundle_adopted_this_start, and reads paths.org_bundle_path().
+       - load_org_config calls adopt_legacy_files(org_dir()) first, sets _bundle_adopted_this_start with |= (only ever to True), and reads paths.org_bundle_path().
        - Add the "changed after the upgrade and is ignored" warning per D13.
        - log_org_config_bundle_hash reads the new path.
        - run_app records the org_bundle_adopted audit entry right after log_org_config_bundle_hash.
        - Update the error texts that name org_config.json in load_org_config to name org/org_bundle.json.
-    4. settings_controller.py: install_org_config_bytes writes paths.org_bundle_path() (:1145), and the snapshot's installed date reads it (:2108).
-    5. deploy/docker/healthcheck.py and docker-entrypoint.sh per D13 (either file counts as installed). Name both files in the entrypoint message.
-    6. scripts/build_org_bundle.py: the --output default becomes org_bundle.json. scripts/qa_authenticate_connectors.py: DEFAULT_ORG_CONFIG_PATH becomes the new name.
+       - Do the same for every user-facing message D13 lists: org_mode.py (:47-512) and step_up_config.py (:293, :299) say org_bundle.json. Update the tests that pin those texts. Leave web/mcp_dispatch.py and the sync runner to p18.
+    4. settings_controller.py: install_org_config_bytes writes paths.org_bundle_path() (:1145). The snapshot's installed date reads it (:2108), and uses the legacy file's mtime while the bundle still equals the adopted copy (D13).
+    5. deploy/docker/healthcheck.py and docker-entrypoint.sh per D13: the healthcheck reads the new name and falls back to the old one, and the entrypoint counts either file as installed. Keep the entrypoint message's prefix "No organization bundle at" (tests/integration/test_org_docker_image.py:188 asserts it), followed by the new path.
+    6. scripts/build_org_bundle.py: the --output default becomes org_bundle.json. scripts/qa_authenticate_connectors.py: DEFAULT_ORG_CONFIG_PATH becomes the new name; the backup at :119 uses DEFAULT_ORG_CONFIG_PATH.name; the docstring (:24, :41, :107) names the new file.
     7. tests/conftest.py: reset daemon_main._bundle_adopted_this_start in _reset().
     8. Tests:
        - test_org_bundle_signing.py:
@@ -1570,13 +1643,18 @@ phases:
          - a data dir with only org_config.json loads through adoption and audits org_bundle_adopted once;
          - a changed org_config.json after adoption logs the "ignored" warning and is not read;
          - a downgrade simulation: after a 7.x start that installs a newer-serial bundle, the legacy serial pin and org_config.json are untouched.
-       - Existing tests that write org_dir()/"org_config.json" keep working through adoption. Change only the tests that read the installed file back, or that assert a pin file's name, to the new names (test_settings_controller.py, test_routes_settings.py, test_build_org_bundle.py, test_qa_authenticate_connectors.py). Do not weaken any assertion.
+       - Existing tests:
+         - tests/unit/test_daemon_main.py: switch the _write_signed_bundle helper (~:370) and every org_config.json write to the new name. Tests that change the bundle after a first load, patch open() for the bundle path, or call log_org_config_bundle_hash directly would otherwise pass for the wrong reason or fail: :342, :415-437, :479-512. Keep the legacy name only in the new adoption tests.
+         - tests/unit/test_settings_controller.py and tests/unit/web/test_routes_settings.py: retarget every org_dir()/"org_config.json" path to the new name, including the `assert not (...).exists()` checks (test_settings_controller.py:667, 673, 758, 849; test_routes_settings.py:1029, 1039, 1099, 1128, 1206, 1220, 1268, 1298), which would otherwise always pass. An upload's own filename field may stay "org_config.json".
+         - test_build_org_bundle.py and test_qa_authenticate_connectors.py: the new default name.
+         - Do not weaken any assertion.
     9. Run ruff check . and python3 -m pytest tests/unit -q.
     Stop condition: if more than 40 existing tests need edits beyond a file name, stop with status=blocked and list them.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_bundle_signing.py -q -k adopt passes and selects at least 4 tests
   - grep -rn '"org_config.json"' src/privacyfence | grep -v LEGACY_ORG_CONFIG_FILENAME finds nothing
+  - git grep -n 'org_dir() / "org_config.json"' tests/unit/test_settings_controller.py tests/unit/web/test_routes_settings.py tests/unit/test_daemon_main.py finds nothing outside the adoption tests
   - ruff check . passes
 - id: p1-builtin-apps-generator
   title: Bake built-in OAuth app credentials into every distribution and read them at runtime
@@ -1625,7 +1703,7 @@ phases:
   - scripts/check_coverage_floor.py
   brief: |-
     Read "Design → D2", "D3" and "D8". Names, schema, import rules, the ensure exception, config_for, load normalization and messages are all there. This phase adds the module only; service_rows and apply_change come in p6, and no caller changes here.
-    1. Create src/privacyfence/admin_config.py with AdminConfigError, SERVICES, SERVICE_LABELS, OPERATIONAL_SECTIONS, LEGACY_BUNDLE_KEYS, admin_config_path, load (with normalization), save, import_from_bundle(bundle, *, mode, trial), ensure(bundle, *, mode, trial), config_for(bundle, *, mode, trial) and legacy_keys_in, exactly as D2 and D3 define them.
+    1. Create src/privacyfence/admin_config.py with AdminConfigError, SERVICES, SERVICE_LABELS, OPERATIONAL_SECTIONS, LEGACY_BUNDLE_KEYS, admin_config_path, load (with normalization), save, import_from_bundle(bundle, *, mode, single_user), ensure(bundle, *, mode, single_user), config_for(bundle, *, mode, single_user) and legacy_keys_in, exactly as D2 and D3 define them.
        - Use secure_files.atomic_write_json, and a module-level threading.Lock _write_lock around save.
        - Do not import oauth_apps at module level (it will import this module).
     2. tests/conftest.py: add the D8 autouse fixture _isolate_admin_config_and_builtin_apps, modelled on _isolate_whats_new_state, with D8's exempt-module rule. It patches admin_config.admin_config_path and app_credentials.builtin_app.
@@ -1636,8 +1714,8 @@ phases:
        - Normalization fills a missing service and a missing key.
        - The saved file has mode 0o600 on POSIX; skip on Windows the way the existing secure_files tests do.
        - import_from_bundle:
-         - an empty bundle in local mode, and in an org trial, offers google, slack, salesforce, atlassian, miro and telegram;
-         - an empty bundle on a non-trial org server offers none;
+         - an empty bundle in local mode, and in org single-user mode, offers google, slack, salesforce, atlassian, miro and telegram;
+         - an empty bundle on a multi-user org server offers none;
          - grist and peek are never offered from an empty bundle;
          - a bundle with only slack and peek sections offers exactly those two and copies peek.base_url;
          - atlassian assets and assets_workspace_id are copied;
@@ -1713,7 +1791,7 @@ phases:
        - org_mode.py:535.
        If any other hit decides something from org_config being empty or non-empty, stop with status=blocked and name it.
     2. daemon_main.py:
-       - Add load_admin_config(bundle) -> tuple[dict, bool] and record_admin_config_import(bundle, imported) per D3, passing trial=False (p15 changes it).
+       - Add load_admin_config(bundle) -> tuple[dict, bool] and record_admin_config_import(bundle, imported) per D3, passing single_user=False (p15 changes it).
        - Add effective_org_config(bundle, admin) per D4.
        - In run_app:
          - `bundle = load_org_config()`, then reject_removed_tool_annotations(bundle), then `admin, imported = load_admin_config(bundle)`.
@@ -1814,7 +1892,7 @@ phases:
     Read "Design → D6": the action table, the validation rules, the bearer-token rule, the tighten_step_up rule, the summaries, the room upload rules, and the page state's services row fields. This phase is pure module code; the routes come in p7a and p7b.
     1. In src/privacyfence/admin_config.py add:
        - apply_change(action, payload) -> tuple[str, list[str]] for every action in D6's table except the four privacy actions, which stay with org_install_policy.
-         - It loads the config (config_for with the payload's "bundle", "mode" and "trial" keys, which the routes pass), validates, mutates, saves under _write_lock, and returns (summary, changed_sections).
+         - It loads the config (config_for with the payload's "bundle", "mode" and "single_user" keys, which the routes pass), validates, mutates, saves under _write_lock, and returns (summary, changed_sections).
          - changed_sections uses the D6 section names.
          - A no-op returns ("", []) and saves nothing.
        - The validation per D6:
@@ -1823,11 +1901,11 @@ phases:
          - the comma- or newline-separated authz lists split, stripped, with empty entries dropped;
          - set_audit_forwarding keeps http.bearer_token_env unchanged;
          - the tighten_step_up rule with its exact message.
-       - replace_rooms(data, *, bundle, mode, trial) -> str per D6's room rules. It raises AdminConfigError("The file is not a room directory written by sync_room_directory.py.") for any rule violation, and AdminConfigError("A room directory can hold at most 5000 rooms.") for too many.
+       - replace_rooms(data, *, bundle, mode, single_user) -> str per D6's room rules. It raises AdminConfigError("The file is not a room directory written by sync_room_directory.py.") for any rule violation, and AdminConfigError("A room directory can hold at most 5000 rooms.") for too many.
        - service_rows(bundle, admin, *, mode) with exactly D6's row fields, importing oauth_apps inside the function. Never a secret.
     2. tests/unit/test_admin_config.py:
        - Each action's stored result, summary and changed_sections.
-       - Each parser's error surfaces without the "org_config.json's " prefix: a negative inline_max_bytes, an http audit URL, required_groups without groups_claim.
+       - Each parser's error surfaces without the "org_bundle.json's " prefix: a negative inline_max_bytes, an http audit URL, required_groups without groups_claim.
        - Scoped tokens 0 and 366 are refused.
        - set_audit_forwarding cannot change bearer_token_env, even if the payload carries one.
        - tighten_step_up accepts false→true and a wider scope; refuses true→false, a narrower scope and require_passkey true→false, with the exact message; an unchanged submission is a no-op.
@@ -1862,7 +1940,7 @@ phases:
     2. routes_settings.py: add the keyword `sensitive: bool | None = None` to _needs_step_up and _apply_step_up_gate per D6; existing callers are unchanged. Test in test_routes_settings.py that sensitive=True gates an action not in _SENSITIVE_ACTIONS, and sensitive=False skips one that is.
     3. Create src/privacyfence/web/routes_admin.py:
        - AdminAction and ADMIN_ACTIONS per D6's table, excluding the four privacy actions (p9a), and RESTART_LABELS per D6.
-       - A mode-independent core: `_dispatch(principal, action, body, *, mode, bundle, org_config, refresh_live, ...) -> Response`. It covers coercion (reuse routes_settings._coerce), the step-up gate with sensitive=, apply_change (passing bundle, mode and trial=False; p15 changes it), the audit under principal_scope, the `applies` handling, and the page-state response.
+       - A mode-independent core: `_dispatch(principal, action, body, *, mode, bundle, org_config, refresh_live, ...) -> Response`. It covers coercion (reuse routes_settings._coerce), the step-up gate with sensitive=, apply_change (passing bundle, mode and single_user=False; p15 changes it), the audit under principal_scope, the `applies` handling, and the page-state response.
        - `_admin_state(*, mode, bundle, org_config, startup_admin, principal) -> dict` per D6's "Page state". Leave out privacy and stats; p9a adds them.
        - build_org_routes(*, sessions, step_up, step_up_origin, connector_registry, org_config, bundle, startup_admin): `POST /api/admin/{action}` and `GET /api/admin/state`, with D6's 401/403/404 rules and CSRF and origin checks copied from routes_settings.build_org_routes' settings_action.
        - ROUTE_CLASSIFICATION mapping each POST path to "action-dispatcher" or "bespoke-sensitive", and a RuntimeError at build time for an unclassified POST route, as routes_settings does (ADR 0014).
@@ -2120,6 +2198,12 @@ phases:
   - .github/workflows/dependency-audit.yml
   - .github/dependabot.yml
   - .claude/toolkit.yaml
+  - docs/oauth-relay.md
+  - docs/README.md
+  - scripts/build_site.py
+  - docs/downloads-and-release-kpi.md
+  - docs/releasing.md
+  - .claude/commands/cut-release.md
   brief: |-
     Read "Design → D5": the contract, the host rules and "The Worker". Routes, codes, texts and headers are all there.
     1. Create cloudflare/oauth-relay/:
@@ -2156,14 +2240,17 @@ phases:
     - If the vitest workers pool version pinned in cloudflare/downloads cannot run a SQLite Durable Object (an error naming new_sqlite_classes or ctx.storage.sql), stop with status=blocked. Do not switch to D1: D1 needs a dashboard-provisioned id this plan does not have.
     - If vi.spyOn(globalThis, "fetch") does not intercept the Worker's outbound fetch in the pool, stop with status=blocked.
 
+    Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
   - grep -n "enabled = false" cloudflare/oauth-relay/wrangler.toml matches
   - grep -n "cloudflare/oauth-relay" .claude/toolkit.yaml .github/workflows/dependency-audit.yml .github/dependabot.yml matches in all three
-- id: p15-mode-from-env-and-trial
-  title: Mode and server address from the environment, trial mode on localhost, and a Docker image that starts in org mode
+  - python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q passes
+  - grep -n "oauth.privacyfence.eu/health" docs/releasing.md .claude/commands/cut-release.md matches in both
+- id: p15-mode-from-env-and-single-user
+  title: Mode and server address from the environment, single-user mode on localhost, and a Docker image that starts in org mode
   depends_on:
   - p9b-admin-org-sections-ui
   complexity: M
@@ -2183,40 +2270,40 @@ phases:
   - deploy/docker/healthcheck.py
   - tests/integration/test_org_docker_image.py
   brief: |-
-    Read "Design → D9", except "The relay on localhost", which p5 and p11 already did. The trial sign-in is p16; after this phase a trial starts and serves its pages but nobody can sign in yet, which is expected.
-    1. org_mode.py: resolve_mode's environment order and conflict error, the ServerConfig environment fallbacks, and is_trial, exactly per D9.
+    Read "Design → D9", except "The relay on localhost", which p5 and p11 already did. Single-user sign-in is p16; after this phase a single-user install starts and serves its pages but nobody can sign in yet, which is expected.
+    1. org_mode.py: resolve_mode's environment order and conflict error, the ServerConfig environment fallbacks, and is_single_user, exactly per D9.
     2. tests/conftest.py: add an autouse fixture that runs monkeypatch.delenv(name, raising=False) for PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL, so a developer's environment never leaks into tests.
-    3. daemon_main.py load_admin_config: pass trial=org_mode.is_trial(bundle) instead of False (D3). routes_admin's apply_change and replace_rooms calls pass trial the same way, replacing the False p7a and p7b used.
+    3. daemon_main.py load_admin_config: pass single_user=org_mode.is_single_user(bundle) instead of False (D3). routes_admin's apply_change and replace_rooms calls pass single_user the same way, replacing the False p7a and p7b used.
        Then in _start_org_web_server:
-       - In trial mode, replace the "requires an idp section" raise with D9's loopback check and message, and with D9's "a real server never falls back to a trial" check (a pinned signing key, or a non-empty imported_from_bundle_sha256).
+       - In single-user mode, replace the "requires an idp section" raise with D9's loopback check and message, and with D9's "a real server never falls back to single-user mode" check (a pinned signing key, or a non-empty imported_from_bundle_sha256).
        - Apply D9's "Types" bullet: OrgAuth.idp and OrgOAuthProvider's idp become Optional, authorize is guarded, routes_org_identity and routes_org_stepup are mounted only when idp is not None (web/server.py:1349, :1373), and the issuer log line (daemon_main.py:1253-1255) handles None.
-       - Log D9's trial warning in run_app.
-       - Stop condition: if anything besides those call sites dereferences idp in a way a trial start reaches, stop with status=blocked and list the call sites.
-    4. deploy/docker/Dockerfile, docker-entrypoint.sh and healthcheck.py per D9. tests/integration/test_org_docker_image.py: replace test_refuses_to_start_without_a_bundle (:185) with a test that the image without a bundle starts, is healthy, and logs the trial line. Copy the existing tests' container-run helper.
+       - Log D9's single-user warning in run_app.
+       - Stop condition: if anything besides those call sites dereferences idp in a way a single-user start reaches, stop with status=blocked and list the call sites.
+    4. deploy/docker/Dockerfile, docker-entrypoint.sh and healthcheck.py per D9. tests/integration/test_org_docker_image.py: replace test_refuses_to_start_without_a_bundle (:185) with a test that the image without a bundle starts, is healthy, and logs the single-user line. Copy the existing tests' container-run helper.
     5. Tests:
-       - tests/unit/test_org_mode.py: resolve_mode with bundle only, env only, neither, both equal, both different, and an invalid env value; each ServerConfig env fallback, with the bundle winning; is_trial.
+       - tests/unit/test_org_mode.py: resolve_mode with bundle only, env only, neither, both equal, both different, and an invalid env value; each ServerConfig env fallback, with the bundle winning; is_single_user.
          - tests/unit/test_daemon_main.py:
            - an unsigned bundle without mode under PRIVACYFENCE_MODE=org is refused by load_org_config;
-           - a trial with issuer http://localhost:8765 builds the org app (monkeypatch the server start as the existing org tests do);
-           - a trial with issuer https://pf.example.com raises D9's message;
-           - a trial over a data directory with a pinned signing key, or with an imported admin config, raises the "belonged to an organization server" message.
+           - single-user mode with issuer http://localhost:8765 builds the org app (monkeypatch the server start as the existing org tests do);
+           - single-user mode with issuer https://pf.example.com raises D9's message;
+           - single-user mode over a data directory with a pinned signing key, or with an imported admin config, raises the "belonged to an organization server" message.
     6. Run ruff check . and python3 -m pytest tests/unit -q.
     7. Push the phase branch, then dispatch build.yml on it (ci.dispatchable; this container cannot build images) and check that the build-org-image job's image tests pass, including the new one.
   acceptance:
   - python3 -m pytest tests/unit -q passes
-  - python3 -m pytest tests/unit/test_org_mode.py -q -k "resolve_mode or is_trial or env" passes and selects at least 9 tests
+  - python3 -m pytest tests/unit/test_org_mode.py -q -k "resolve_mode or is_single_user or env" passes and selects at least 9 tests
   - the dispatched build.yml run's build-org-image job passes
   - ruff check . passes
-- id: p16-trial-sign-in
-  title: Trial sign-in with a setup code and a passkey, for the browser and for MCP clients
+- id: p16-single-user-sign-in
+  title: Single-user sign-in with a setup code and a passkey, for the browser and for MCP clients
   depends_on:
-  - p15-mode-from-env-and-trial
+  - p15-mode-from-env-and-single-user
   complexity: M
   worker_model: opus
   worker_model_reason: This phase replaces the identity provider with its own sign-in (a one-time code, a session cookie and a WebAuthn assertion) and changes the OAuth server's authorize path; a mistake is an authentication bypass that tests may not reveal.
   touches:
-  - src/privacyfence/web/trial_auth.py
-  - tests/unit/web/test_trial_auth.py
+  - src/privacyfence/web/single_user_auth.py
+  - tests/unit/web/test_single_user_auth.py
   - src/privacyfence/web/oauth_provider.py
   - tests/unit/web/test_oauth_provider.py
   - src/privacyfence/web/routes_mcp.py
@@ -2232,9 +2319,9 @@ phases:
   - scripts/check_coverage_floor.py
   brief: |-
     Read "Design → D10" in full, and ADR 0177 (consent) and ADR 0178 (finish in the starting session).
-    1. web/oauth_provider.py: split handle_idp_callback into _pop_pending, the claims step and _finish_for_principal, with no behaviour change. The existing tests in tests/unit/web/test_oauth_provider.py must pass unchanged before you go on. Then add trial: bool and an optional idp, the trial authorize return value, and handle_trial_continue, per D10.
+    1. web/oauth_provider.py: split handle_idp_callback into _pop_pending, the claims step and _finish_for_principal, with no behaviour change. The existing tests in tests/unit/web/test_oauth_provider.py must pass unchanged before you go on. Then add single_user: bool and an optional idp, the single-user authorize return value, and handle_single_user_continue, per D10.
     2. org_session.set_session_cookie gains `secure: bool = True` per D10, with a test in tests/unit/web/test_org_session.py.
-    3. Create web/trial_auth.py per D10:
+    3. Create web/single_user_auth.py per D10:
        - the setup code: generated and logged in build_routes, normalized comparison, the attempt limit, consumed on success, has_credentials checked on every request;
        - the cookie-bound GET /login (plain_page), POST /login/setup, POST /login/passkey/options and POST /login/passkey/verify;
        - POST /logout and GET /signed-out, as routes_org_identity's;
@@ -2242,10 +2329,10 @@ phases:
        - the Secure flag rule.
        Use org_session's existing session-creation and cookie helpers, as routes_org_identity.login_callback does.
     4. routes_security.py: the "Continue" link after enrollment when a safe `next` is present, per D10, with a test in tests/unit/web/test_routes_security.py.
-    5. routes_mcp.mount_org_oauth: add the `sessions` keyword, mount /oauth/trial/continue only for a trial provider, and mount the IdP callback only for a non-trial one, per D10. Update the call at web/server.py:1335.
-    6. web/server.py and daemon_main.py: in trial mode, mount trial_auth.build_routes where routes_org_identity's would be, and construct OrgOAuthProvider with trial=True.
-    7. scripts/check_coverage_floor.py: add "src/privacyfence/web/trial_auth.py" to MODULE_FLOORS at 100. routes_mcp.py already has a floor of 100, so the new route needs full tests.
-    8. tests/unit/web/test_trial_auth.py:
+    5. routes_mcp.mount_org_oauth: add the `sessions` keyword, mount /oauth/single-user/continue only for a single-user provider, and mount the IdP callback only for a multi-user one, per D10. Update the call at web/server.py:1335.
+    6. web/server.py and daemon_main.py: in single-user mode, mount single_user_auth.build_routes where routes_org_identity's would be, and construct OrgOAuthProvider with single_user=True.
+    7. scripts/check_coverage_floor.py: add "src/privacyfence/web/single_user_auth.py" to MODULE_FLOORS at 100. routes_mcp.py already has a floor of 100, so the new route needs full tests.
+    8. tests/unit/web/test_single_user_auth.py:
        - The code is logged once and never appears in any response or audit summary.
        - A lowercase code and one without the dash are accepted; a non-ASCII value counts as a wrong attempt and gives no 500.
        - After a successful setup the code no longer works.
@@ -2253,29 +2340,29 @@ phases:
        - Cookies are not Secure for an http issuer, and are Secure for an https issuer.
        - The setup redirect carries next through to /security?next=...
        - POST /logout ends the session and redirects to /signed-out.
-       - A right code gives a session for trial-admin and redirects to /security.
+       - A right code gives a session for single-user and redirects to /security.
        - A wrong code gives the message; the fifth wrong code uses the code up, and even the right code is then refused.
-       - A missing or mismatched pf_trial_setup cookie is refused, as is a foreign Origin.
+       - A missing or mismatched pf_setup_binding cookie is refused, as is a foreign Origin.
        - After enrollment the setup form is gone and POST /login/setup is refused.
        - The passkey options and verify flow: monkeypatch webauthn_stepup.verify_assertion to succeed or fail, giving a session or a refusal.
        - next is sanitized: //evil.example is refused.
        - Each audit decision is recorded.
     9. tests/unit/web/test_oauth_provider.py and test_routes_mcp.py:
-       - A trial authorize returns the /login?next=/oauth/trial/continue... URL.
-       - /oauth/trial/continue without a session goes to /login, with a session finishes through consent exactly like the IdP path (copy the IdP-path consent tests), and refuses a state that is unknown or expired.
-       - A non-trial server has no /oauth/trial/continue route, and a trial server has no IdP callback route.
-    10. tests/unit/web/test_server_org_mode.py: in trial mode /login is the trial page and /oauth/idp/login-callback does not exist.
+       - A single-user authorize returns the /login?next=/oauth/single-user/continue... URL.
+       - /oauth/single-user/continue without a session goes to /login, with a session finishes through consent exactly like the IdP path (copy the IdP-path consent tests), and refuses a state that is unknown or expired.
+       - A multi-user server has no /oauth/single-user/continue route, and a single-user server has no IdP callback route.
+    10. tests/unit/web/test_server_org_mode.py: in single-user mode /login is the single-user sign-in page and /oauth/idp/login-callback does not exist.
     11. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
     Stop condition: if session creation in routes_org_identity cannot be reused without copying private code that carries security checks (for example session fixation handling), stop with status=blocked and describe what would have to be duplicated.
   acceptance:
   - python3 -m pytest tests/unit -q passes
-  - python3 -m pytest tests/unit/web/test_trial_auth.py -q --cov=privacyfence.web.trial_auth --cov-branch --cov-report=term-missing passes and reports 100%
+  - python3 -m pytest tests/unit/web/test_single_user_auth.py -q --cov=privacyfence.web.single_user_auth --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m pytest tests/unit/web/test_oauth_provider.py -q passes
   - ruff check . passes
 - id: p17-local-mode-deprecation
   title: 'Local mode shows that it is deprecated: the log, privacyfence_status, a page strip and a one-time companion notice'
   depends_on:
-  - p16-trial-sign-in
+  - p16-single-user-sign-in
   complexity: M
   touches:
   - src/privacyfence/org_mode.py
@@ -2435,7 +2522,7 @@ phases:
   - docs/adr/0241-operational-settings-live-in-a-daemon-written-admin-config.md
   - docs/adr/0242-administration-is-a-separate-admin-page.md
   - docs/adr/0243-org-servers-use-built-in-apps-through-a-domain-verified-relay.md
-  - docs/adr/0244-organization-mode-can-start-from-the-environment-and-run-as-a-localhost-trial.md
+  - docs/adr/0244-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md
   - docs/adr/0245-local-mode-is-deprecated-in-7-and-removed-in-8.md
   - docs/adr/0246-7x-is-the-migration-checkpoint-for-8x.md
   - docs/adr/0247-the-6-to-7-upgrade-is-reversible.md
@@ -2454,7 +2541,7 @@ phases:
          - 0241: refuse to start with legacy keys; keep them as read-only defaults alongside the admin config; keep switches in the bundle for desktop installs.
          - 0242: keep admin sections inside Settings.
          - 0243: no relay; a maintainer-approved list of servers; forwarding to any server that asks.
-         - 0244: a trial that still needs an IdP; signing in to the trial with Google through the relay; a fixed password.
+         - 0244: single-user mode that still needs an IdP; signing in with Google through the relay; a fixed password.
          - 0245: dropping local mode in 7 without a deprecation release; keeping local mode indefinitely.
          - 0246: keeping every converter forever; a per-file version check in 8 instead of one marker; migrating lazily per principal as before.
          - 0247: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
@@ -2505,9 +2592,9 @@ phases:
        - Outbound HTTPS to oauth.privacyfence.eu when using built-in apps.
        - admin_config.json lives in the data volume and is part of the backup.
        - The bundle is credentials-only.
-       - A new first section, "Try it on this computer" (open it at http://localhost:8765, not 127.0.0.1, because the Host allowlist and the passkey's rp_id are localhost): the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from the trial to a real server (an idp section and a public address).
+       - A new first section, "Run it on this computer" (open it at http://localhost:8765, not 127.0.0.1, because the Host allowlist and the passkey's rp_id are localhost): the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from single-user mode to a multi-user server (an idp section and a public address).
        - The PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL variables.
-    3. configuration-reference.md: the D9 environment variables and their precedence; org_config.json's remaining keys (D2); org/admin_config.json (D3 schema; written by the Admin page; hand-edit only to relax step-up, then restart); org/relay_token.txt; the PRIVACYFENCE_BUILTIN_APPS development variable and its JSON shape.
+    3. configuration-reference.md: the D9 environment variables and their precedence; org_bundle.json's keys (D2), and that it is the 6.x org_config.json copied once (D13); org/admin_config.json (D3 schema; written by the Admin page; hand-edit only to relax step-up, then restart); org/relay_token.txt; the PRIVACYFENCE_BUILTIN_APPS development variable and its JSON shape.
     4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.
     5. how-it-works.md (:277-278), connector-qa.md (:153): where they say operational settings live in the bundle, point to the Admin page and admin_config.json instead. testing-policy.md (:183): add the Admin page to the phone-layout list of app surfaces.
     6. Run the docs tests below, python3 -m pytest tests/unit/test_docs_configuration_reference.py -q, and ruff check ..
@@ -2568,7 +2655,7 @@ phases:
        - The admin config's settings.yaml-level trust, and that signing now covers only startup settings and credentials (0240, 0241).
     5. Create docs/moving-to-organization-mode.md, the page LOCAL_MODE_DEPRECATION links to (privacyfence.eu/docs/moving-to-organization-mode/):
        - why desktop mode goes away in 8 (ADR 0245);
-       - the two ways forward: the Docker trial on this computer (link org-mode-docker.md "Try it on this computer") and an organization server (org-mode-setup-guide.md);
+       - the two ways forward: the Docker image in single-user mode on this computer (link org-mode-docker.md "Run it on this computer") and an organization server (org-mode-setup-guide.md);
        - bringing rules along (link org-mode-setup-guide.md "Moving a person from a desktop install");
        - before any later upgrade to 8.x, start 7.x once and check "Ready for PrivacyFence 8" (D12).
        Add it to docs/README.md's index in the existing format. Add a one-paragraph deprecation note at the top of install-macos.md, install-windows.md and install-linux.md linking to it, and to getting-started.md's "Local or organization deployment".
@@ -2578,7 +2665,7 @@ phases:
     7. CHANGELOG.md under "## [Unreleased]":
        - one entry each for: built-in apps; the Admin page and personal-only Settings; the org config split with the one-time import (naming the moved build_org_bundle.py flags and sync_room_directory.py's --output); and organization servers using built-in apps through the relay;
        - a "Removed" or "Changed" note that build_org_bundle.py refuses the moved flags;
-       - the Docker localhost trial and the environment variables;
+       - the Docker image's single-user mode on localhost and the environment variables;
        - "Deprecated: desktop (local) mode, to be removed in PrivacyFence 8";
        - "Every start upgrades all stored data and records data_format.json. PrivacyFence 8 will require it, so upgrade to 8 only from 7.x.";
        - "PrivacyFence 7 reads org/org_bundle.json, copied once from org_config.json, and never changes 6.x's files, so you can go back to 6.9.x" (D13);
