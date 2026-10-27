@@ -73,7 +73,7 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
 <div class="wrap">
   <header style="display:grid;gap:10px">
     <h1>PrivacyFence 7 Rollout</h1>
-    <p class="lede">What changes in PrivacyFence 7, then the steps only you can do for the <code>builtin-oauth-apps</code> plan. The part before implementation must be done before <code>/implement</code> starts. The part after implementation is done once the feature branch is complete, before its pull request merges. Never paste a secret into a chat, an issue or this page. Each secret has one named home, given in its step.</p>
+    <p class="lede">What changes in PrivacyFence 7, then the steps only you can do for the <code>builtin-oauth-apps</code> plan. The part before implementation must be done before <code>/implement</code> starts. The part after implementation is done once the feature branch is complete, before its pull request merges, except steps 11 and 12, which follow the merge and the 7.0.0 tag. Never paste a secret into a chat, an issue or this page. Each secret has one named home, given in its step.</p>
   </header>
 
   <nav class="toc" aria-label="On this page"><a href="#overview">What to expect</a><a href="#before">Before implementation</a><a href="#after">After implementation</a></nav>
@@ -178,10 +178,30 @@ PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker 
     <ul>
       <li><strong>Its own track.</strong> The relay is a service PrivacyFence runs, like <code>downloads.privacyfence.eu</code>. Operators never install it, and app releases never deploy it.</li>
       <li><strong>How it deploys.</strong> The <code>deploy-oauth-relay-worker</code> GitHub workflow deploys it whenever a change under <code>cloudflare/oauth-relay/</code> reaches <code>main</code>, or when you run the workflow on <code>main</code>. A test job runs first, and a <code>/health</code> smoke test runs after.</li>
-      <li><strong>First deploy.</strong> You do it by hand from the feature branch (step 4 below), so the end-to-end checks can run before the pull request merges. The merge then redeploys the same code through the workflow.</li>
+      <li><strong>First deploy.</strong> You do it by hand from the feature branch (step 5 below), so the end-to-end checks can run before the pull request merges. The merge then redeploys the same code through the workflow.</li>
       <li><strong>Before tagging 7.0.0.</strong> <code>/cut-release</code> and <code>docs/releasing.md</code> check that <code>https://oauth.privacyfence.eu/health</code> answers 200.</li>
       <li><strong>Compatibility.</strong> The relay's routes only grow. Every relay version keeps serving every released 7.x server, and a breaking change gets a new path while the old one stays.</li>
       <li><strong>Runbook.</strong> <code>docs/oauth-relay.md</code> covers setup, smoke tests, revoking a server, rotating the revoke token and rolling back. It is a contributor doc, not published on the website.</li>
+    </ul>
+
+    <h3>The website and the relay terms</h3>
+    <ul>
+      <li><strong>On merge, together with the relay:</strong> a new <a href="https://privacyfence.eu/relay-terms/">/relay-terms/</a> page (free, as is, no warranty, liability limited as far as the law allows, can change or stop at any time, operators are responsible for their own servers, abuse gets a host revoked), linked from the footer and from the relay itself (<code>oauth.privacyfence.eu/</code> redirects there).</li>
+      <li>The privacy policy gains a <strong>Sign-in relay</strong> section: what the relay processes, the host list only maintainers see, no Worker logs, and the registration emails (host, IP, country).</li>
+      <li>Every "there is no PrivacyFence-operated server" sentence (home, enterprise, how it works, security, FAQ, compare) is corrected: no <em>data</em> passes through PrivacyFence; only sign-in redirects for the built-in apps pass through the relay.</li>
+      <li>The download page and the FAQ say that PrivacyFence 7 deprecates desktop mode and 8 removes it.</li>
+      <li><strong>After you tag 7.0.0:</strong> a follow-up website PR (step 12) rewrites the product and connector pages for 7.x, because they link docs that exist only once the stable release is out.</li>
+      <li>The terms were written from the plan, not by a lawyer. Step 12 asks you to have them reviewed.</li>
+    </ul>
+
+    <h3>The new live-check runner: runner.privacyfence.eu</h3>
+    <ul>
+      <li><strong>A fresh host.</strong> A Hetzner Cloud server that does nothing but PrivacyFence's live checks. The weekly <code>connector-live-check</code> and <code>qa-record-fixture</code> move to it, under a new label and runner group, <code>privacyfence-live</code>. The old runner keeps serving <code>main</code> until the merge switches the label. Then you remove it.</li>
+      <li><strong>It tests the built-in apps.</strong> The QA tokens are re-minted with PrivacyFence's own apps, and the runner's bundle becomes optional. The workflows write the built-in credentials into the checkout from repository secrets, and delete them again at the end of each run.</li>
+      <li><strong>Behind Cloudflare, administered over Tailscale.</strong> <code>runner.privacyfence.eu</code> is a proxied DNS record. The server's firewall accepts only HTTPS from Cloudflare. SSH is closed: you reach the box with Tailscale SSH.</li>
+      <li><strong>Separation.</strong> The GitHub runner runs as <code>pfrunner</code>, which has no sudo and is not in the <code>docker</code> group. Peek and the QA org server are containers that cannot see its files.</li>
+      <li><strong>A QA organization server.</strong> <code>https://runner.privacyfence.eu</code> serves a PrivacyFence org server signed in with the QA Google Workspace. It is the public host the relay test needs, and it stays for later manual QA.</li>
+      <li><strong>A weekly relay check.</strong> The live check also tests <code>oauth.privacyfence.eu/health</code> and reports <code>relay: up</code> or <code>down</code>.</li>
     </ul>
 
     <h3>Provider caveats with the built-in apps</h3>
@@ -279,10 +299,72 @@ PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker 
     <p class="done-when"><strong>Done when:</strong> the Verification Center shows the submission, or you decided to defer it.</p>
   </section>
 
+  <section class="item" id="mb4">
+    <h3>4. Build the new live-check runner, runner.privacyfence.eu</h3>
+    <div class="meta"><span>mb4-live-runner-host</span><span>about 1.5 hours</span></div>
+    <p class="note">You need a Hetzner Cloud project, a Tailscale account, the Cloudflare <code>privacyfence.eu</code> zone and organization owner rights on GitHub. Three short-lived values pass through this step: the Tailscale auth key, the GitHub runner registration token and the origin certificate's private key. Each goes only where the step says, never into a chat or this page.</p>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="mb4-1"></label><div><strong>Tailscale policy.</strong> In the <a href="https://login.tailscale.com/admin/acls/file">Tailscale admin console → Access controls</a>, add a tag the server will carry, and let only you reach it and use SSH on it. Merge this into the policy file, with your own login:<pre>"tagOwners": { "tag:pf-runner": ["autogroup:admin"] },
+"grants": [
+  { "src": ["you@example.com"], "dst": ["tag:pf-runner"], "ip": ["*"] }
+],
+"ssh": [
+  { "action": "check", "src": ["you@example.com"],
+    "dst": ["tag:pf-runner"], "users": ["root", "pfrunner"] }
+]</pre>If your policy still uses <code>"acls"</code> rather than <code>"grants"</code>, add the equivalent <code>{"action": "accept", "src": [...], "dst": ["tag:pf-runner:*"]}</code> entry instead.</div></li>
+      <li><label><input type="checkbox" id="mb4-2"></label><div><strong>Auth key.</strong> In <a href="https://login.tailscale.com/admin/settings/keys">Settings → Keys</a>, choose <strong>Generate auth key</strong>: not reusable, expiry 1 day, <strong>Pre-approved</strong> on, tag <code>tag:pf-runner</code>. Keep the page open. The key goes only into the Hetzner field in step 4.</div></li>
+      <li><label><input type="checkbox" id="mb4-3"></label><div><strong>Firewall.</strong> In the <a href="https://console.hetzner.cloud/">Hetzner Cloud console</a>, open your project → <strong>Firewalls</strong> → <strong>Create Firewall</strong>, named <code>pf-runner</code>.<ul><li>Delete the default SSH and ICMP inbound rules.</li><li>Add one inbound rule: TCP, port <code>443</code>, with every source range listed at <a href="https://www.cloudflare.com/ips-v4/">cloudflare.com/ips-v4</a> and <a href="https://www.cloudflare.com/ips-v6/">cloudflare.com/ips-v6</a>.</li><li>Optionally add UDP <code>41641</code> from anywhere, for direct Tailscale connections (it works without it, through relays).</li><li>Leave outbound open.</li></ul></div></li>
+      <li><label><input type="checkbox" id="mb4-4"></label><div><strong>Server.</strong> <strong>Servers → Add Server</strong>:<ul><li>Location: Falkenstein or Nuremberg.</li><li>Image: <strong>Ubuntu 24.04</strong>.</li><li>Type: shared x86, at least 2 vCPU, 4 GB RAM and 40 GB disk (CX32 or CPX21).</li><li>Networking: public IPv4 and IPv6.</li><li>SSH key: yours (unused, because port 22 stays closed).</li><li>Firewall: <code>pf-runner</code>.</li><li>Name: <code>runner-privacyfence-eu</code>.</li></ul>Under <strong>Cloud config</strong>, paste the block below, then replace <code>TSKEY</code> with the auth key from step 2:<pre>#cloud-config
+package_update: true
+package_upgrade: true
+packages: [unattended-upgrades, git, curl, jq, build-essential,
+           python3-venv, python3-dev, libffi-dev, libssl-dev]
+users:
+  - name: pfrunner
+    shell: /bin/bash
+    lock_passwd: true
+runcmd:
+  - chmod 700 /home/pfrunner
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --ssh --hostname=pf-runner --advertise-tags=tag:pf-runner --authkey=TSKEY
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl disable --now ssh.socket ssh.service || true
+  - dpkg-reconfigure -f noninteractive unattended-upgrades</pre>Note the server's IPv4 and IPv6 addresses.</div></li>
+      <li><label><input type="checkbox" id="mb4-5"></label><div><strong>Check access.</strong> After about three minutes, <code>pf-runner</code> should appear in the <a href="https://login.tailscale.com/admin/machines">Tailscale machines list</a>. From your computer (on the tailnet):<pre>ssh root@pf-runner 'cloud-init status --wait; id pfrunner; docker --version; python3 --version'
+nc -vz -w 5 &lt;public IPv4&gt; 22      # must time out
+</pre>Then, in the Tailscale machines list, open <code>pf-runner</code> → <strong>Disable key expiry</strong>, so the server stays on the tailnet.</div></li>
+      <li><label><input type="checkbox" id="mb4-6"></label><div><strong>DNS.</strong> In Cloudflare, open <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/privacyfence.eu/dns/records">privacyfence.eu → DNS → Records</a>. Add an <code>A</code> record <code>runner</code> pointing to the IPv4 address, and an <code>AAAA</code> record <code>runner</code> pointing to the IPv6 address. Set both to <strong>Proxied</strong> (orange cloud).</div></li>
+      <li><label><input type="checkbox" id="mb4-7"></label><div><strong>Origin certificate.</strong> Open <strong>SSL/TLS → Origin Server → Create Certificate</strong>: generate the private key with Cloudflare, RSA, host name <code>runner.privacyfence.eu</code> only, validity 15 years. Then, without saving either value on your computer, write both on the server:<pre>ssh root@pf-runner 'install -d -m 700 /etc/pf-qa'
+ssh root@pf-runner 'cat &gt; /etc/pf-qa/origin.pem'       # paste the certificate, then Ctrl-D
+ssh root@pf-runner 'umask 077; cat &gt; /etc/pf-qa/origin.key'   # paste the key, then Ctrl-D</pre></div></li>
+      <li><label><input type="checkbox" id="mb4-8"></label><div><strong>Strict TLS for this host only.</strong> Open <strong>Rules → Configuration Rules → Create rule</strong>, named <code>runner strict TLS</code>. The match is "Hostname equals <code>runner.privacyfence.eu</code>"; then set <strong>SSL</strong> to <strong>Full (strict)</strong>. This leaves the rest of the zone as it is.</div></li>
+      <li><label><input type="checkbox" id="mb4-9"></label><div><strong>Bots.</strong> Open <strong>Security → Bots</strong>. If <strong>Bot Fight Mode</strong> is on, turn it off. On the Free plan a WAF rule cannot exempt a path from it, and it would challenge the relay's proof fetch and the sign-in redirects. If you have Super Bot Fight Mode on a paid plan, add a WAF custom rule instead: <strong>Skip</strong> Super Bot Fight Mode where the host is <code>runner.privacyfence.eu</code> and the URI path starts with <code>/.well-known/privacyfence-relay</code> or <code>/oauth/callback/</code>.</div></li>
+      <li><label><input type="checkbox" id="mb4-10"></label><div><strong>Peek.</strong> On the old runner host, run <code>docker inspect peek</code> and note its volume and environment. Start it the same way on the new host, as root, bound to localhost only:<pre>ssh root@pf-runner
+docker run -d --name peek --restart unless-stopped \
+  -p 127.0.0.1:7700:7700 -e PEEK_BASE_URL=http://localhost:7700 \
+  &lt;same volume and other env as the old host&gt; ghcr.io/andras-tkcs/peek:main</pre></div></li>
+      <li><label><input type="checkbox" id="mb4-11"></label><div><strong>Runner group.</strong> Open <a href="https://github.com/organizations/privacyfence/settings/actions/runner-groups">GitHub → privacyfence organization → Settings → Actions → Runner groups → New runner group</a>, and create a group named <code>privacyfence-live</code>:<ul><li>Repository access: <strong>Selected repositories</strong> → <code>privacyfence/privacyfence</code>.</li><li>Tick <strong>Allow public repositories</strong>.</li><li>Workflow access: <strong>Selected workflows</strong>, with exactly these two entries:<pre>privacyfence/privacyfence/.github/workflows/connector-live-check.yml@refs/heads/main
+privacyfence/privacyfence/.github/workflows/qa-record-fixture.yml@refs/heads/main</pre></li></ul></div></li>
+      <li><label><input type="checkbox" id="mb4-12"></label><div><strong>Register the runner.</strong> In <strong>Settings → Actions → Runners → New runner → New self-hosted runner</strong>, choose Linux, x64. Run that page's <em>Download</em> commands, including the checksum check, as <code>pfrunner</code>:<pre>ssh pfrunner@pf-runner
+mkdir actions-runner &amp;&amp; cd actions-runner
+# paste the Download commands from the GitHub page here</pre>Then configure it, with the token from that page's <em>Configure</em> section:<pre>./config.sh --url https://github.com/privacyfence --token &lt;from the page&gt; \
+  --runnergroup privacyfence-live --labels privacyfence-live \
+  --name runner-privacyfence-eu --unattended</pre>Install it as a service, as root:<pre>ssh root@pf-runner 'cd /home/pfrunner/actions-runner &amp;&amp; ./svc.sh install pfrunner &amp;&amp; ./svc.sh start &amp;&amp; ./svc.sh status'</pre>The runner list should show <code>runner-privacyfence-eu</code> <strong>Idle</strong> in <code>privacyfence-live</code>. It stays idle until the merge.</div></li>
+      <li><label><input type="checkbox" id="mb4-13"></label><div><strong>QA state that does not change.</strong> Copy three things from the old runner, by way of your computer, then delete the local copies. They are <code>tests/fixtures/qa_environment.yaml</code>, <code>credentials/telegram.session</code> and <code>credentials/grist_token.json</code>. Do <strong>not</strong> copy the old Google, Slack, Salesforce, Atlassian or Miro tokens: step 6 mints new ones.<pre>ssh pfrunner@pf-runner 'mkdir -p -m 700 privacyfence/credentials privacyfence/tests/fixtures privacyfence/org'
+scp qa_environment.yaml pfrunner@pf-runner:privacyfence/tests/fixtures/
+scp telegram.session grist_token.json pfrunner@pf-runner:privacyfence/credentials/
+ssh pfrunner@pf-runner 'chmod 600 privacyfence/credentials/*'</pre></div></li>
+      <li><label><input type="checkbox" id="mb4-14"></label><div><strong>Peek token.</strong> Open a tunnel to the new Peek, and sign in from your computer:<pre>ssh -N -L 7700:localhost:7700 root@pf-runner &amp;
+peek login --host http://localhost:7700</pre>Write <code>{"base_url": "http://localhost:7700", "token": "…"}</code> to <code>~pfrunner/privacyfence/credentials/peek_token.json</code> (mode 600), as <code>docs/connector-qa.md</code> describes.</div></li>
+      <li><label><input type="checkbox" id="mb4-15"></label><div><strong>Clean up.</strong> Delete the auth key in Tailscale if it is still listed, and close the GitHub runner page.</div></li>
+    </ol>
+    <p class="done-when"><strong>Done when:</strong> the organization's runner list shows <code>runner-privacyfence-eu</code> online in <code>privacyfence-live</code>, <code>ssh root@pf-runner</code> works over Tailscale, <code>nc -vz -w 5 &lt;public IPv4&gt; 22</code> times out, and <code>curl -sI https://runner.privacyfence.eu</code> answers from Cloudflare (a 52x error is expected until the QA server runs in step 6).</p>
+  </section>
+
   <h2 id="after">After implementation</h2>
 
   <section class="item" id="ma0">
-    <h3>4. Deploy the relay for the first time</h3>
+    <h3>5. Deploy the relay for the first time</h3>
     <div class="meta"><span>ma0-relay-first-deploy</span><span>about 30 minutes</span></div>
     <p>Do this once the feature branch is complete, before the pull request merges. Run it in your own terminal, and read every secret from your password manager into a shell variable; never paste one into a chat. For example: <code>export CLOUDFLARE_API_TOKEN="$(op read 'op://…')"</code>.</p>
     <ol class="steps">
@@ -312,14 +394,72 @@ curl -sI 'https://oauth.privacyfence.eu/callback/slack?state=localhost:8765~x&am
                                                              # 302, location: http://localhost:8765/oauth/callback/slack?state=...
 curl -s  'https://oauth.privacyfence.eu/callback/slack?state=unregistered.example~x&amp;code=y'
                                                              # 400 "This sign-in cannot be completed..."</pre></div></li>
-      <li><label><input type="checkbox" id="ma0-email"></label><div>Check the registration email in step 6: when your test server first registers, <code>info@privacyfence.eu</code> should receive "New PrivacyFence relay registration: &lt;host&gt;" with the time, the IP address and the revoke command. <code>/registrations</code> (with the maintainer token) should show <code>notify_failures: 0</code>.</div></li>
+      <li><label><input type="checkbox" id="ma0-email"></label><div>Check the registration email in step 8: when your test server first registers, <code>info@privacyfence.eu</code> should receive "New PrivacyFence relay registration: &lt;host&gt;" with the time, the IP address and the revoke command. <code>/registrations</code> (with the maintainer token) should show <code>notify_failures: 0</code>.</div></li>
       <li><label><input type="checkbox" id="ma0-7"></label><div>After the pull request merges, open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/deploy-oauth-relay-worker.yml">Actions → deploy-oauth-relay-worker</a>. The run on <code>main</code> should be green, including its health smoke test. Approve the <code>oauth-relay-worker</code> environment if GitHub asks you to. From then on, relay changes deploy only this way.</div></li>
     </ol>
     <p class="done-when"><strong>Report back:</strong> paste into the PR <code>ma0: relay deployed, revoke token set, smoke tests ok</code>. After the merge, add <code>workflow deploy ok</code>.</p>
   </section>
 
+  <section class="item" id="ma6">
+    <h3>6. Re-mint the QA tokens with the built-in apps, and start the QA org server</h3>
+    <div class="meta"><span>ma6-live-runner-builtin-tokens</span><span>about 1.5 hours</span></div>
+    <p class="note">This needs the feature branch, with p21 done, and the runner from step 4. The runner group admits only <code>main</code>'s workflows, so the branch's live check first runs on the new runner after the merge (step 11). Here you prepare everything it needs.</p>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="ma6-1"></label><div><strong>Built-in apps for minting.</strong> On your computer, outside any repository, create <code>~/.config/privacyfence-qa/builtin-apps.json</code> with mode 600. Fill in the five loopback apps from your password manager (the same values as the mb1 secrets):<pre>{"google_desktop":  {"client_id": "…", "client_secret": "…"},
+ "slack":           {"client_id": "…", "client_secret": "…"},
+ "salesforce":      {"client_id": "…", "client_secret": "…"},
+ "atlassian_local": {"client_id": "…", "client_secret": "…"},
+ "miro":            {"client_id": "…", "client_secret": "…"}}</pre></div></li>
+      <li><label><input type="checkbox" id="ma6-2"></label><div><strong>Mint.</strong> In a checkout of <code>feature/builtin-oauth-apps</code> with no <code>org/org_bundle.json</code> and no <code>org/org_config.json</code>, follow the branch's <code>docs/connector-qa.md</code> ("Authenticating the QA accounts"). Add <code>--builtin-apps-json ~/.config/privacyfence-qa/builtin-apps.json</code>:<pre>python3 scripts/qa_authenticate_connectors.py --builtin-apps-json ~/.config/privacyfence-qa/builtin-apps.json</pre>Sign in with each QA account. Every consent screen should name <strong>PrivacyFence</strong>, not your old QA apps.</div></li>
+      <li><label><input type="checkbox" id="ma6-3"></label><div><strong>Install the tokens on the runner,</strong> then delete them locally:<pre>cd credentials
+scp token.json drive_token.json calendar_token.json contacts_token.json tasks_token.json \
+    apps_script_token.json slack_token.json salesforce_token.json atlassian_token.json \
+    miro_token.json pfrunner@pf-runner:privacyfence/credentials/
+ssh pfrunner@pf-runner 'chmod 600 privacyfence/credentials/*; ls privacyfence/credentials'
+rm token.json drive_token.json calendar_token.json contacts_token.json tasks_token.json \
+   apps_script_token.json slack_token.json salesforce_token.json atlassian_token.json miro_token.json</pre>The runner should now list these ten files, plus <code>telegram.session</code>, <code>grist_token.json</code> and <code>peek_token.json</code>. It should have no <code>org/org_bundle.json</code>.</div></li>
+      <li><label><input type="checkbox" id="ma6-4"></label><div><strong>A sign-in app for the QA org server.</strong> In the QA Workspace's Google Cloud project, open <a href="https://console.cloud.google.com/auth/clients">Google Auth Platform → Clients → Create client</a>:<ul><li>Type: <strong>Web application</strong>, named <code>PrivacyFence QA server</code>.</li><li>Authorised redirect URIs: <code>https://runner.privacyfence.eu/oauth/idp/callback</code>, <code>https://runner.privacyfence.eu/oauth/idp/login-callback</code> and <code>https://runner.privacyfence.eu/oauth/stepup/callback</code>.</li><li>Audience: <strong>Internal</strong>.</li></ul>Keep the client secret in your password manager.</div></li>
+      <li><label><input type="checkbox" id="ma6-5"></label><div><strong>QA org server files.</strong> On the host, as root:<pre>ssh root@pf-runner
+git clone --depth 1 -b feature/builtin-oauth-apps https://github.com/privacyfence/privacyfence /opt/pf-qa/src
+mkdir -p /opt/pf-qa/run &amp;&amp; cd /opt/pf-qa/run
+cp ../src/deploy/docker/compose.yaml .
+CF=$( { curl -s https://www.cloudflare.com/ips-v4/; echo; curl -s https://www.cloudflare.com/ips-v6/; } | tr '\n' ' ')
+cat &gt; Caddyfile &lt;&lt;EOF
+{
+    servers {
+        trusted_proxies static $CF
+        client_ip_headers CF-Connecting-IP
+    }
+}
+runner.privacyfence.eu {
+    tls /etc/pf-qa/origin.pem /etc/pf-qa/origin.key
+    reverse_proxy privacyfence:8765
+}
+EOF
+cat &gt; compose.override.yaml &lt;&lt;'EOF'
+services:
+  caddy:
+    volumes:
+      - /etc/pf-qa:/etc/pf-qa:ro
+EOF</pre></div></li>
+      <li><label><input type="checkbox" id="ma6-6"></label><div><strong>Its settings.</strong> Load the branch's org image. On the host, as root, run <code>gunzip -c &lt;file&gt; | docker load</code> on the image artifact from the build.yml run (copy it over with <code>scp</code>), and note its tag. Then:<pre>cd /opt/pf-qa/run
+printf 'PF_HOSTNAME=runner.privacyfence.eu\nPRIVACYFENCE_IMAGE_TAG=&lt;loaded tag&gt;\n' &gt; .env
+umask 077; cat &gt; idp_client_secret       # paste the client secret, then Ctrl-D
+cat &gt; privacyfence.env &lt;&lt;'EOF'
+PRIVACYFENCE_ISSUER_URL=https://runner.privacyfence.eu
+PRIVACYFENCE_IDP_ISSUER=https://accounts.google.com
+PRIVACYFENCE_IDP_CLIENT_ID=&lt;client ID from the previous step&gt;
+PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret
+PRIVACYFENCE_ADMIN_EMAILS=&lt;your QA Workspace address&gt;
+PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2
+EOF</pre>Turn on the <code>idp_client_secret</code> secret, following the commented <code>secrets:</code> example in the branch's <code>compose.yaml</code> (point its <code>file:</code> at <code>./idp_client_secret</code>). Then run <code>docker compose up -d</code>.</div></li>
+      <li><label><input type="checkbox" id="ma6-7"></label><div><strong>Check.</strong> <code>https://runner.privacyfence.eu/login</code> should offer Google sign-in. Sign in with your QA admin address; <strong>Admin</strong> should be in the nav. <code>curl -sI https://runner.privacyfence.eu/.well-known/privacyfence-relay</code> should answer 404: nothing is offered yet. Step 8 uses this server.</div></li>
+    </ol>
+    <p class="done-when"><strong>Report back:</strong> paste <code>ma6: tokens re-minted with built-in apps and installed on runner-privacyfence-eu, QA org server up at runner.privacyfence.eu</code> into the PR.</p>
+  </section>
+
   <section class="item" id="ma1">
-    <h3>5. Sign in with the built-in apps on a desktop install</h3>
+    <h3>7. Sign in with the built-in apps on a desktop install</h3>
     <div class="meta"><span>ma1-desktop-builtin-signin</span><span>about 45 minutes</span></div>
     <ol class="steps">
       <li><label><input type="checkbox" id="ma1-1"></label><div>Get an installer from the feature branch. Open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml">Actions → build.yml</a>, choose <strong>Run workflow</strong>, and pick branch <code>feature/builtin-oauth-apps</code>, or ask the orchestrator session to dispatch it. Download your platform's installer from the run's artifacts. The build log's "Build" step should print <code>built-in app &lt;key&gt;: included</code> for all seven.</div></li>
@@ -330,20 +470,20 @@ curl -s  'https://oauth.privacyfence.eu/callback/slack?state=unregistered.exampl
   </section>
 
   <section class="item" id="ma2">
-    <h3>6. Connect an organization server through the relay</h3>
+    <h3>8. Connect an organization server through the relay</h3>
     <div class="meta"><span>ma2-org-relay-signin</span><span>about 1–1.5 hours</span></div>
     <ol class="steps">
-      <li><label><input type="checkbox" id="ma2-1"></label><div>Make sure step 4 is done: <code>curl -sI https://oauth.privacyfence.eu/health</code> answers 200. Also make sure the test server is reachable from the internet over HTTPS at <code>https://&lt;its host&gt;/.well-known/privacyfence-relay</code>, with no IP allow-list blocking Cloudflare.</div></li>
-      <li><label><input type="checkbox" id="ma2-2"></label><div>Set up a test org server with a public HTTPS hostname, exactly as "Starting a new organization server" above describes: the branch's image from the build.yml run (or its wheel), <code>privacyfence.env</code> with the IdP and your admin email, and <strong>no bundle</strong>. The built-in app credentials are baked into the branch's image. If you run the wheel instead, put a JSON file with the seven apps' IDs and secrets on that server only (mode 0600, owned by the service account) and point <code>PRIVACYFENCE_BUILTIN_APPS</code> at it. The format is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/builtin-oauth-apps/docs/configuration-reference.md">configuration-reference.md</a>.</div></li>
+      <li><label><input type="checkbox" id="ma2-1"></label><div>Make sure step 5 is done: <code>curl -sI https://oauth.privacyfence.eu/health</code> answers 200. Also make sure the test server is reachable from the internet over HTTPS at <code>https://&lt;its host&gt;/.well-known/privacyfence-relay</code>, with no IP allow-list blocking Cloudflare.</div></li>
+      <li><label><input type="checkbox" id="ma2-2"></label><div>Use the QA org server on <code>https://runner.privacyfence.eu</code> from step 6. It is set up exactly as "Starting a new organization server" above describes, and any other public host works the same way: the branch's image from the build.yml run (or its wheel), <code>privacyfence.env</code> with the IdP and your admin email, and <strong>no bundle</strong>. The built-in app credentials are baked into the branch's image. If you run the wheel instead, put a JSON file with the seven apps' IDs and secrets on that server only (mode 0600, owned by the service account) and point <code>PRIVACYFENCE_BUILTIN_APPS</code> at it. The format is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/builtin-oauth-apps/docs/configuration-reference.md">configuration-reference.md</a>.</div></li>
       <li><label><input type="checkbox" id="ma2-3"></label><div>Before offering anything, <code>curl -I https://&lt;host&gt;/.well-known/privacyfence-relay</code> should answer 404. Restart the server. On a new server the built-in services start off, so sign in as an IdP admin, open <strong>Admin → Services</strong> and offer Google, Slack, Salesforce, Atlassian and Miro, approving the passkey prompts. Within a minute, <code>/registrations</code> (with the maintainer token) should list your server's host, and the well-known path should now answer 200. As an IdP admin, the <strong>Admin</strong> page's Services section should say "Relay registration: registered".</div></li>
       <li><label><input type="checkbox" id="ma2-4"></label><div>As a normal user, open <code>/connect</code> and connect Gmail, Slack, Salesforce, Jira and Miro. The browser should pass briefly through <code>oauth.privacyfence.eu</code> and land back on <code>/connect</code> showing Connected.</div></li>
-      <li><label><input type="checkbox" id="ma2-5"></label><div>Check revocation. Run <code>curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H "Content-Type: application/json" -d '{"host":"&lt;your host&gt;"}' https://oauth.privacyfence.eu/admin/revoke</code>. Starting a new Slack connect should now stop on the relay's "not registered" page. Removing a revoked host is not supported, so use a throwaway hostname for this step, or do it last.</div></li>
+      <li><label><input type="checkbox" id="ma2-5"></label><div>Check revocation. Run <code>curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H "Content-Type: application/json" -d '{"host":"&lt;your host&gt;"}' https://oauth.privacyfence.eu/admin/revoke</code>. Starting a new Slack connect should now stop on the relay's "not registered" page. Then restore it: the same call to <code>/admin/restore</code> answers <code>{"revoked": false}</code>. Sign-ins work again only after the server re-registers. Restart the server, or wait for the daily re-registration, and check that a Slack connect goes through.</div></li>
     </ol>
     <p class="done-when"><strong>Report back:</strong> paste into the PR a line such as <code>ma2: registered ok, gmail ok, slack ok, salesforce ok, jira ok, miro ok, revoke ok</code>.</p>
   </section>
 
   <section class="item" id="ma3">
-    <h3>7. Upgrade an org server, then use the Admin page</h3>
+    <h3>9. Upgrade an org server, then use the Admin page</h3>
     <div class="meta"><span>ma3-upgrade-and-admin-page</span><span>about 45 minutes</span></div>
     <ol class="steps">
       <li><label><input type="checkbox" id="ma3-1"></label><div>On a second test org server running the current release, use an old-style bundle that carries <code>authz</code>, <code>web_push</code> and connector sections for Slack and Google only. Then upgrade it to the branch's wheel and restart. The log should say <code>Imported … settings from org_config.json into org/admin_config.json</code>. The Admin page should show Slack and Google offered and everything else off, with your sign-in restrictions filled in.</div></li>
@@ -353,23 +493,59 @@ curl -s  'https://oauth.privacyfence.eu/callback/slack?state=unregistered.exampl
       <li><label><input type="checkbox" id="ma3-8"></label><div><strong>Downgrade check.</strong> Note the SHA-256 of <code>org/org_config.json</code> and the two old pin files before upgrading. After the 7 start, they must be unchanged and <code>org_bundle.json</code> must exist. Then stop 7, reinstall the 6.9.x image or package, and start it: it must come up with the same connectors and settings as before the upgrade.</div></li>
       <li><label><input type="checkbox" id="ma3-7"></label><div>Back on the upgraded server: the bottom of the Admin page should say "Ready for PrivacyFence 8: yes", and the data volume should contain <code>data_format.json</code> with <code>"format": 7</code>. A person who never signed in after the upgrade should still have their rules converted. Check one under <code>users/&lt;id&gt;/authority/config/settings.yaml</code>: <code>auto_accept.version</code> is 3.</div></li>
       <li><label><input type="checkbox" id="ma3-5"></label><div>Compare <strong>Settings</strong> as the admin and as a normal user. Both should show the same sections, with no Privacy or Stats. As the normal user there is no Admin item in the header, and opening <code>/admin</code> says "Only administrators can open this page."</div></li>
-      <li><label><input type="checkbox" id="ma3-6"></label><div>On the desktop install from item 4, open <strong>Admin</strong>, withdraw Miro and check it disappears from Settings → Connectors. Then upload a <code>rooms.json</code> from <code>scripts/sync_room_directory.py --output rooms.json</code>, or skip this step if you have no Workspace room directory.</div></li>
+      <li><label><input type="checkbox" id="ma3-6"></label><div>On the desktop install from item 7, open <strong>Admin</strong>, withdraw Miro and check it disappears from Settings → Connectors. Then upload a <code>rooms.json</code> from <code>scripts/sync_room_directory.py --output rooms.json</code>, or skip this step if you have no Workspace room directory.</div></li>
     </ol>
     <p class="done-when"><strong>Report back:</strong> paste <code>ma3: import ok, 6.x files untouched ok, downgrade to 6.9 ok, ignored-warning ok, live offer/withdraw ok, restart notice ok, ready-for-8 ok, settings same ok, desktop ok</code> into the PR.</p>
   </section>
 
   <section class="item" id="ma4">
-    <h3>8. Try the Docker image on localhost, and check desktop deprecation</h3>
+    <h3>10. Try the Docker image on localhost, and check desktop deprecation</h3>
     <div class="meta"><span>ma4-docker-single-user-and-deprecation</span><span>about 40 minutes</span></div>
     <ol class="steps">
-      <li><label><input type="checkbox" id="ma4-1"></label><div>Get the branch's image. Open the build.yml run from item 4 (or dispatch one on <code>feature/builtin-oauth-apps</code>), download the org image artifact for your CPU, and run <code>gunzip -c &lt;file&gt; | docker load</code>.</div></li>
+      <li><label><input type="checkbox" id="ma4-1"></label><div>Get the branch's image. Open the build.yml run from item 7 (or dispatch one on <code>feature/builtin-oauth-apps</code>), download the org image artifact for your CPU, and run <code>gunzip -c &lt;file&gt; | docker load</code>.</div></li>
       <li><label><input type="checkbox" id="ma4-2"></label><div>Run it with no bundle: <code>docker run --rm -p 127.0.0.1:8765:8765 -v pf-data:/var/lib/privacyfence-org/.privacyfence &lt;loaded image&gt;</code>. The log should show the single-user warning and a <code>Setup code: XXXX-XXXX</code> line.</div></li>
       <li><label><input type="checkbox" id="ma4-3"></label><div>Open <code>http://localhost:8765/login</code>. A wrong code should say "That code is not right." Enter the right one, and you land on the passkey page. Enroll a passkey, sign out, then sign back in with the passkey. Repeat the sign-in once in Safari if you have a Mac: single-user cookies are not marked Secure on plain <code>http://localhost</code>, so Safari keeps them.</div></li>
       <li><label><input type="checkbox" id="ma4-4"></label><div>Open <strong>Admin</strong>. The relay line should say "Relay registration: not needed on localhost." On <code>/connect</code>, connect Slack and Gmail. The browser passes through <code>oauth.privacyfence.eu</code> and comes back to <code>localhost:8765</code>.</div></li>
       <li><label><input type="checkbox" id="ma4-5"></label><div>Add <code>http://localhost:8765/mcp</code> to Claude Code or Claude Desktop. Signing in should send you to the single-user sign-in and then the consent page. Then ask for "my last 3 emails" and approve it.</div></li>
-      <li><label><input type="checkbox" id="ma4-6"></label><div>On the desktop install from item 4, check four things: the daemon log has the "Desktop mode is deprecated" line; every Settings, Approvals and Admin page shows the deprecation strip; the companion showed the notice once and not after a restart; and <code>privacyfence_status</code> in your AI client returns a <code>deprecation</code> field.</div></li>
+      <li><label><input type="checkbox" id="ma4-6"></label><div>On the desktop install from item 7, check four things: the daemon log has the "Desktop mode is deprecated" line; every Settings, Approvals and Admin page shows the deprecation strip; the companion showed the notice once and not after a restart; and <code>privacyfence_status</code> in your AI client returns a <code>deprecation</code> field.</div></li>
     </ol>
     <p class="done-when"><strong>Report back:</strong> paste <code>ma4: single-user start ok, setup code ok, passkey ok, relay localhost ok, mcp ok, deprecation log/strip/companion/status ok</code> into the PR.</p>
+  </section>
+
+  <section class="item" id="ma7">
+    <h3>11. After the merge: switch the live checks to the new runner, retire the old one</h3>
+    <div class="meta"><span>ma7-live-runner-cutover</span><span>about 45 minutes</span></div>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="ma7-1"></label><div>Open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/connector-live-check.yml">Actions → connector-live-check</a> → <strong>Run workflow</strong> on <code>main</code>. In the run's <em>Set up job</em> step, the runner name should be <code>runner-privacyfence-eu</code>. The job summary should show every connector passing and <code>relay: up</code>. If a connector drifts, the run opens its usual fixture PR. Review it like any other.</div></li>
+      <li><label><input type="checkbox" id="ma7-2"></label><div>Run <code>/qa-record</code> once for one connector (for example <code>gmail</code>) on a scratch branch, and check that the fixture commit names the <code>privacyfence-live</code> runner.</div></li>
+      <li><label><input type="checkbox" id="ma7-3"></label><div>Remove the old runner. In <a href="https://github.com/organizations/privacyfence/settings/actions/runners">organization Settings → Actions → Runners</a>, open the old runner → <strong>Remove</strong>, and run the command it shows on the old host (<code>./config.sh remove --token …</code> as the runner user), then <code>sudo ./svc.sh uninstall</code>. Delete the <code>privacyfence-test</code> runner group.</div></li>
+      <li><label><input type="checkbox" id="ma7-4"></label><div>Wipe the old QA state: on the old host, run <code>shred -u ~/privacyfence/credentials/*</code> and then <code>rm -rf ~/privacyfence</code> as the runner user. Remove that user if nothing else needs it. The host's other test services are untouched.</div></li>
+      <li><label><input type="checkbox" id="ma7-5"></label><div>Revoke the old grants. In each QA account's connected-apps page (Google account → Security → Third-party connections, Slack → Manage apps, Salesforce → Connected Apps OAuth Usage, Atlassian → Connected apps, Miro → Profile → Your apps), remove the old QA apps' access. Keep the QA apps themselves if you want to test an organization's own apps later, or delete them.</div></li>
+    </ol>
+    <p class="done-when"><strong>Done when:</strong> a <code>main</code> run of connector-live-check is green on <code>runner-privacyfence-eu</code>, and the old runner, its group and its QA state are gone.</p>
+  </section>
+
+  <section class="item" id="ma5">
+    <h3>12. After tagging 7.0.0: the website follow-up and a legal review</h3>
+    <div class="meta"><span>ma5-post-release-website-and-legal-review</span><span>about 1 hour, plus the review</span></div>
+    <p>Product pages land only after the stable release that documents them (ADR 0099), so this is a separate pull request after the tag. The relay terms are a legal text the plan cannot vouch for.</p>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="ma5-1"></label><div>Check that <a href="https://privacyfence.eu/docs/oauth-relay/">/docs/</a> shows the 7.0 docs (the pages workflow rebuilds them from the newest stable tag).</div></li>
+      <li><label><input type="checkbox" id="ma5-2"></label><div>Start a new Claude Code session on this repository (Sonnet is enough) and paste:<pre>PrivacyFence 7.0.0 is released. Update the hand-written website pages under website/ (not website/_docs/) for 7.x, on a branch chore/website-7x cut from main, and open one PR to main.
+
+Read first: CHANGELOG.md's 7.0.0 section, docs/adr/0239 to 0249, docs/org-mode-setup-guide.md, docs/configuration-reference.md, docs/org-mode-docker.md, docs/oauth-relay.md, docs/moving-to-organization-mode.md, and website/relay-terms/index.html and website/privacy/index.html (already updated; keep them consistent).
+
+Change:
+- website/index.html, enterprise, how-it-works, faq, security, gdpr, compare (and its subpages), ai-agents (and its subpages): built-in sign-in apps (Google, Slack, Salesforce, Atlassian, Miro) and that an organization may use its own; the Admin page; starting an organization server from environment variables in Docker; single-user mode (the Docker image on localhost, setup code then passkey, and that it is no protection against an agent that can run docker); desktop mode deprecated in 7 and removed in 8.
+- website/connectors/*: say PrivacyFence ships its own app and an organization may register its own; remove "The app is never publicly distributed" from the Slack page; link the provider's docs page under /docs/.
+- website/download/index.html: add the Docker single-user path as the recommended way for one person, keeping the desktop installers with the deprecation notice.
+- website/relay-terms/ and website/privacy/#relay: link /docs/oauth-relay/ where they link /docs/ today.
+Keep claims accurate: no data passes through a PrivacyFence-operated server; only built-in-app sign-in redirects pass through oauth.privacyfence.eu.
+Update tests/unit/test_website_claims.py only where it pins a changed sentence. Run python3 -m pytest tests/unit -q -k website and ruff check . before pushing.</pre></div></li>
+      <li><label><input type="checkbox" id="ma5-3"></label><div>Review and merge that PR, then open <a href="https://privacyfence.eu/">privacyfence.eu</a> and skim the home, download and connectors pages.</div></li>
+      <li><label><input type="checkbox" id="ma5-4"></label><div>Have <a href="https://privacyfence.eu/relay-terms/">/relay-terms/</a> and the privacy policy's relay section reviewed by a lawyer familiar with Hungarian and EU law. Apply the changes in a small PR, then remove the "Not reviewed by a lawyer yet" comment from the page source.</div></li>
+    </ol>
+    <p class="done-when"><strong>Done when:</strong> the follow-up PR is merged and the terms carry a reviewed "Last updated" date.</p>
   </section>
 </div>
 

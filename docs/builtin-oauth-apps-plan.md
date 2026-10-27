@@ -435,8 +435,7 @@ composed from the bundle, the admin config and the built-in apps.
   - that stores it in a new `OrgAuth` field, `bundle: dict[str, Any]`.
 
   The Admin dispatcher (D6) needs it to recompute the effective config.
-- The QA scripts (`scripts/qa_*.py`) are not changed. They read the QA runner's own bundle, which
-  still carries `grist`/`peek` sections, and they ignore the admin config.
+- The QA scripts (`scripts/qa_*.py`) move to the effective config and a new runner; see D17.
 
 ### D5. Org mode through the relay
 
@@ -1807,6 +1806,229 @@ The `ensure` re-import is a merge, not a replacement:
 ADR 0239 notes that with built-in apps a stolen refresh token no longer also needs the org's own
 client secret.
 
+### D16. Relay terms and the website
+
+Hand-written website pages deploy from `main` on merge (pages.yml); `/docs/` follows the newest
+stable tag (ADRs 0052, 0099). The relay also goes live on merge. So the website work splits in two.
+
+**In this PR (p13c), live together with the relay:**
+
+1. **Relay terms, `website/relay-terms/index.html` (new).** Kicker "Legal", title `Relay terms —
+   PrivacyFence`, canonical `https://privacyfence.eu/relay-terms/`, a "Last updated" line, built
+   from `website/imprint/index.html`'s structure. Sections and their substance:
+   - *What the relay is.* A free, non-commercial service at `oauth.privacyfence.eu` that forwards
+     an OAuth sign-in redirect for PrivacyFence's built-in apps to the PrivacyFence server that
+     started it. Operated by the publisher named in the imprint (link `/imprint/`).
+   - *As is, no warranty.* Provided "as is" and "as available", without warranty of any kind,
+     express or implied, including availability, fitness for a purpose and non-infringement. No
+     service-level agreement, no support obligation.
+   - *Limitation of liability.* To the extent permitted by applicable law, the publisher is not
+     liable for any damage arising from using or being unable to use the relay, including lost
+     data, lost access, interrupted sign-ins or costs of replacement apps. This does not limit
+     liability that cannot be limited by law, such as for intent or gross negligence, or for
+     injury to life, body or health.
+   - *Change, suspension, revocation.* The relay, the built-in apps and these terms may change,
+     be suspended or end at any time, without notice. A registered host can be revoked at any
+     time, in particular for abuse, a security concern or a provider's request.
+   - *Your responsibilities.* The operator of a PrivacyFence server is responsible for that server,
+     for the accounts people connect, and for its own legal compliance, including any records of
+     processing. Each provider's own terms apply to its sign-in (Google, Slack, Salesforce,
+     Atlassian, Miro). Do not register a host you do not control; do not use the relay to phish or
+     to get around a provider's policy.
+   - *Use your own apps.* An organization that needs guarantees registers its own apps on the
+     Admin page; the relay is then not used (link `/docs/oauth-relay/`, which exists only after the
+     7.0 release, so link `/docs/` until the follow-up in ma5).
+   - *Privacy.* Link `/privacy/#relay`.
+   - *Contact.* `info@privacyfence.eu`.
+
+   The page carries an HTML comment and the plan's ma5 step says: have the terms reviewed by a
+   lawyer before relying on them. The plan does not claim they are legally sufficient.
+2. **Wiring, like `/imprint/`.** `scripts/build_site.py` (the page map at `:125`, the llms list at
+   `:1144`: `- [Relay terms](.../relay-terms/): the terms for the sign-in relay at
+   oauth.privacyfence.eu`), the footer partial (`website/_partials/footer.html`, after Imprint:
+   `Relay terms`), and `tests/unit/test_website_pages.py`'s footer list.
+3. **Privacy policy, `website/privacy/index.html`.**
+   - The scope sentence (`:26-27`) names `oauth.privacyfence.eu` too.
+   - A new section `<h2 id="relay">Sign-in relay (oauth.privacyfence.eu)</h2>`, after the download
+     section. The relay:
+     - forwards the sign-in redirect, which carries a one-time authorization code and the server's
+       host name, and processes the IP address in transit;
+     - stores only each registered server's host name and registration dates, visible only to the
+       PrivacyFence maintainers (SEC-09);
+     - writes no logs (SEC-15);
+     - emails the maintainers the host name, the IP address and the country of the request when a
+       new server registers (SEC-23), kept in that mailbox for up to 12 months;
+     - is used only by organization servers and single-user installs that use the built-in apps;
+       an organization's own apps never touch it.
+     Legal basis Art. 6(1)(f) (operating and securing the service). Cloudflare is the processor,
+     as for the download service.
+   - "It sends nothing to the project" (`:45-54`) names the one exception: an organization server
+     or single-user install that uses the built-in apps registers its host name with the relay
+     and sends its sign-in redirects through it.
+   - "Last updated".
+4. **"No PrivacyFence-operated server" claims.** These become wrong when the relay is live, so they
+   change in this PR, each to a sentence that keeps the claim about data and names the relay:
+   `website/index.html:116` and `:177`, `website/enterprise/index.html:30`,
+   `website/how-it-works/index.html:43`, `website/security/index.html:41` and `:100`,
+   `website/faq/index.html:86`, `website/compare/claude-connectors/index.html:72`. The substance:
+   *no data passes through a PrivacyFence-operated server; when an organization server uses
+   PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence
+   relay, and an organization can use its own apps instead.* Where a page says installed copies
+   keep running without the maintainer, add: new sign-ins with the built-in apps on a server
+   depend on the relay; existing connections and your own apps do not.
+5. **Desktop mode deprecation.** A notice on `website/download/index.html` (above "Before you
+   install") and in the FAQ's `#modes` answer: `PrivacyFence 7 deprecates desktop (local) mode,
+   and PrivacyFence 8 removes it. Desktop installs keep working through 7.x. Plan new deployments
+   on organization mode.` linking `/enterprise/`. It says "PrivacyFence 7" rather than "this
+   release", so it is true before the tag too. The download page keeps its installers.
+6. **Tests.** Update an expected sentence in `tests/unit/test_website_claims.py` only where it
+   pins a sentence changed above. Add to `tests/unit/test_website_pages.py`: `/relay-terms/` is in
+   the page map and its canonical URL is right; the footer links it; the privacy page has
+   `id="relay"`; no page outside `website/_docs/` contains `there are none` or `no
+   PrivacyFence-operated server is involved`.
+
+**The relay links its terms (p11).**
+
+- `GET /` and `GET /terms` (and HEAD) answer 302 to `https://privacyfence.eu/relay-terms/`.
+- The 400 texts end with ` Terms: https://privacyfence.eu/relay-terms/`.
+- A successful `/register` response adds `"terms": "https://privacyfence.eu/relay-terms/"`.
+- The first deploy from the branch (ma0) comes before the pages deploy, so the terms link 404s
+  until the merge. That window is the maintainer's own test.
+
+**The product can see the terms (p8a, p13a).** The Admin page's relay status line ends with
+`Relay terms` linking `https://privacyfence.eu/relay-terms/`. `docs/oauth-relay.md` links the
+terms and the privacy section.
+
+**After the 7.0.0 tag (manual ma5): a follow-up website PR.** Product pages that describe 7.x
+features land only after the stable release that documents them (ADR 0099). The guide carries a
+ready-to-run session prompt for it, covering:
+
+- the home, download, enterprise, how-it-works, faq, security, gdpr, compare and ai-agents pages:
+  built-in apps, the Admin page, the environment-only Docker start, single-user mode, and the
+  desktop-mode timeline;
+- the connector pages (`website/connectors/*`): PrivacyFence ships its own app, an organization may
+  use its own; Slack loses "The app is never publicly distributed";
+- the download page: the Docker single-user install as the recommended path for one person;
+- links from the terms and privacy pages to `/docs/oauth-relay/` once it exists.
+
+### D17. A new live-check runner: runner.privacyfence.eu
+
+**Why.** The live checks (`connector-live-check.yml`, `qa-record-fixture.yml`) run on the
+self-hosted runner labelled `privacyfence-test` in the runner group of the same name (ADRs 0019,
+0181). Every token on it was minted with the QA bundle's own OAuth apps
+(`scripts/qa_authenticate_connectors.py`, `docs/connector-qa.md:42-49`), and the recorder reads the
+raw bundle (`daemon_main.load_org_config()`, for example `scripts/qa_fixture_recorder.py:863-870`,
+`:1526-1534`). With built-in apps, the path most people take no longer goes through that bundle, so
+the live checks would test the wrong clients. The current host also runs unrelated test services.
+A new host replaces it rather than reworking it in place.
+
+**The host.**
+
+- A Hetzner Cloud server: Ubuntu 24.04 LTS, x86-64, at least 2 vCPU, 4 GB RAM and 40 GB disk.
+  It is dedicated to PrivacyFence: no other repository's runner and no other service.
+- Host name `runner.privacyfence.eu`. It is a proxied (orange-cloud) DNS record in the
+  `privacyfence.eu` Cloudflare zone, with SSL mode Full (strict) and a Cloudflare Origin CA
+  certificate on the origin.
+- **Firewall.** A Hetzner Cloud Firewall allows inbound TCP 443 only from Cloudflare's published
+  ranges (`https://www.cloudflare.com/ips-v4` and `-v6`), and nothing else: no 22, no 80. Outbound
+  is open.
+- **Administration over Tailscale.** The Cloudflare proxy does not carry SSH, so the host is
+  administered only over Tailscale.
+  - cloud-init joins the tailnet at first boot with a one-off, pre-approved auth key and runs
+    `tailscale up --ssh`.
+  - The tailnet ACL lets only the maintainer reach it.
+  - OpenSSH is disabled (`systemctl disable --now ssh`). `peek login` and file copies go over
+    Tailscale (`ssh -L 7700:localhost:7700 <tailnet name>`, `scp`).
+- **Users.**
+  - `pfrunner` runs the GitHub runner service. It holds the QA state in `~/privacyfence` (mode 700)
+    and has no sudo.
+  - `pfrunner` is not in the `docker` group, which is root-equivalent. The live checks need no
+    Docker.
+  - Peek and the QA org server run as containers started by the admin account, with no mount of
+    `/home/pfrunner`.
+- Unattended upgrades are on, and the runner binary updates itself (GitHub's default).
+
+**The runner.**
+
+- It is registered as `runner-privacyfence-eu` with the labels `self-hosted,privacyfence-live`, in
+  a new organization runner group `privacyfence-live`.
+- The group is set to "Selected workflows": `connector-live-check.yml` and `qa-record-fixture.yml`
+  on `main`, as ADR 0181 requires.
+- It runs as a non-ephemeral systemd service (ADR 0019 Decision 4).
+- The workflows on `main` switch to `runs-on: [self-hosted, privacyfence-live]` when this plan
+  merges. That is the cutover: until then the old runner keeps serving `main`'s current
+  workflows, and the new one sits idle. Afterwards the old runner, its group and its QA state
+  are removed.
+
+**What the live checks test: the built-in apps.**
+
+- `scripts/qa_fixture_recorder.py` builds its configuration the way the CLI does (D4):
+  `oauth_apps.effective_org_config(bundle, admin_config.config_for(bundle, mode="local", single_user=False), mode="local")`,
+  with `bundle = daemon_main.load_org_config()`. It does this in one helper,
+  `_qa_org_config()`, replacing each direct `load_org_config()` call.
+- A provider the runner's bundle does not carry uses its built-in app. The runner's bundle
+  becomes optional: by default it is absent, and a maintainer may add a provider section to test
+  an own app.
+- Both workflows gain a step "Write built-in app credentials", before the QA state is copied in.
+  - It runs `python3 scripts/builtin_apps.py write --exclude google_web --exclude atlassian_relay`
+    with the ten needed `PF_APP_*` secrets in step-level `env:` only. The runner uses loopback
+    apps only.
+  - A final step, `if: always()`, deletes `src/privacyfence/_builtin_apps.py` from the workspace,
+    because the runner is not ephemeral.
+- The copy-in step requires `credentials/` and `tests/fixtures/qa_environment.yaml`. It copies
+  `org/org_bundle.json` only when present, and no longer reads `org/org_config.json`.
+- `scripts/qa_authenticate_connectors.py` mints tokens with whatever the effective config names,
+  so on a checkout with the built-in apps it mints built-in-app tokens. It gains
+  `--builtin-apps-json PATH`: it sets `PRIVACYFENCE_BUILTIN_APPS` for its child processes, so a
+  maintainer can mint from a source checkout with a local JSON file instead of a generated module.
+  The file is never committed (it lives outside the repository).
+- `connector-live-check.yml` adds a step `curl -fsSI https://oauth.privacyfence.eu/health`
+  (continue-on-error, reported in the summary as `relay: up` or `relay: down`). That gives a
+  weekly external check of the relay.
+- D4's line "The QA scripts are not changed" no longer holds; this section replaces it.
+
+**The QA organization server.** `https://runner.privacyfence.eu` serves a PrivacyFence
+organization server from `deploy/docker/`. Its only users are the maintainer and the QA Google
+Workspace accounts, through a QA Google OIDC app.
+
+- It is the public host the relay round trip needs (ma2), and stays for later manual QA.
+- Its Caddyfile uses the Origin CA certificate (`tls /etc/caddy/origin.pem /etc/caddy/origin.key`)
+  instead of ACME.
+- `PRIVACYFENCE_TRUSTED_PROXIES` names the Caddy container only. Caddy takes the client address
+  from `CF-Connecting-IP` with `trusted_proxies` set to Cloudflare's ranges.
+- Cloudflare's Bot Fight Mode is off for the zone, or a WAF skip rule covers
+  `/.well-known/privacyfence-relay` and `/oauth/callback/*` on this host. Otherwise the relay's proof
+  fetch and the redirects are challenged.
+- It runs whatever image the maintainer loads: the feature branch's image for ma2, released
+  images afterwards.
+
+**The relay gains a restore route (p11).** A revocation (D5) is permanent today. A mistaken one, or
+ma2's revocation test on the long-lived QA host, could not be undone.
+
+- `POST /admin/restore` uses the same token check and body as `/admin/revoke`. It sets
+  `revoked = 0` and clears `verified_at`, so the host must prove control again before forwarding
+  resumes. It returns 200 `{"host", "revoked": false}`.
+- The runbook (`docs/oauth-relay.md`) documents it.
+- Tests: 401 without the token; after restore, the callback is refused until a new successful
+  `/register`.
+
+**Docs.**
+
+- `docs/connector-qa.md`'s runner section (`:462-584`) is rewritten for this host. It keeps the
+  requirements and adds:
+  - the Hetzner, Cloudflare and Tailscale setup;
+  - the `pfrunner` and Docker separation;
+  - minting with built-in apps;
+  - the QA org server;
+  - the cutover and decommissioning.
+- It fixes the stale "not registered to this repository" line (`:573`).
+- `docs/testing-policy.md`, `.claude/commands/qa-record.md`, `.claude/toolkit.yaml`,
+  `.claude/skills/steward/SKILL.md`, `.github/pull_request_template.md` and
+  `tests/fixtures/live/README.md` change the runner's name and label wherever they give it.
+- ADR **0250** (new) records the decision. ADRs 0019 and 0181 get a status line (amended by
+  0250). ADR 0019's dead link to `docs/connector-live-check-setup.md` is fixed, as a status-line
+  note only.
+
 ## ADRs
 
 - **0239** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -1837,7 +2059,8 @@ client secret.
   and its contract only grows. It forwards only to hosts that proved control of their domain, keeps no
   logs, shows registrations only to maintainers, and maintainers can revoke a host. It runs in the
   existing Cloudflare account, with required reviewers on deploys. It forwards to a loopback
-  host without registration. Relates to 0011, 0186.
+  host without registration. It is offered as is, under the published relay terms, with no
+  warranty and liability limited as far as the law allows (D16). Relates to 0011, 0186.
 - **0244** — `mode` and the server address may come from environment variables. Organization mode
   without an IdP is single-user mode, with one administrator,, allowed only on `http://localhost` or
   `127.0.0.1`, signed in with a one-time setup code and then a passkey. The Docker image starts in
@@ -1862,6 +2085,11 @@ client secret.
   (org mode no longer always needs a signed bundle) and 0011.
 - **0249** — Admins can be named by IdP-verified email (`PRIVACYFENCE_ADMIN_EMAILS` or
   `idp.admin_emails`), alongside the group claim. Relates to 0011.
+- **0250** — Live connector checks run on a dedicated runner, `runner.privacyfence.eu`
+  (Hetzner, behind the Cloudflare proxy, administered only over Tailscale), labelled
+  `privacyfence-live` in its own runner group. They test the built-in apps, and the runner's bundle
+  is optional. The host also serves a QA organization server for relay testing. Amends 0019 (the
+  host) and 0181 (the group and label); relates to 0239, 0243.
 
 ## Manual steps
 
@@ -1872,6 +2100,9 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
     secrets.
   - (mb2) Create the Cloudflare token and the relay Worker's GitHub environment.
   - (mb3) Optionally, start Google's verification.
+  - (mb4) Build the new live-check runner, `runner.privacyfence.eu` (D17): Hetzner, Tailscale,
+    the Cloudflare record and origin certificate, the `privacyfence-live` runner group and the
+    runner itself.
 - **After:**
   - (ma1) Sign in with the built-in apps on a desktop build.
   - (ma2) Deploy the relay from the branch and connect through it from an org server.
@@ -1880,8 +2111,21 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - (ma4) Run the branch's Docker image in single-user mode: setup code, passkey, a connector
     through the relay, and an MCP client signing in. Check that a desktop install shows the
     deprecation notices.
+  - (ma6) Re-mint the QA tokens with the built-in apps, install them on the new runner, and
+    start the QA org server there. ma2 uses that server.
+  - (ma7) After the merge, run the live check on `main` on the new runner, then retire the old
+    runner and wipe its QA state.
+  - (ma5) After tagging 7.0.0, run the follow-up website session from the guide; have the relay
+    terms reviewed by a lawyer.
 
 ## Risks and open questions
+
+- **The relay terms are not legal advice.** The plan writes them from the decisions above (D16), and
+  ma5 asks for a lawyer's review. Until then they rest on the publisher's own judgement.
+- **The live-check cutover is a single switch.** `main`'s workflows move to the
+  `privacyfence-live` label when the PR merges. If the new runner is not registered and stocked
+  (mb4, ma6), the weekly check queues instead of running. The fix is to finish ma6, not to point
+  the workflows back at the old runner.
 
 - **Security decisions the maintainer made from the audit (D15).**
   - Single-user mode is hardened (step-up on) and documented as no protection against an agent
@@ -1972,6 +2216,10 @@ manual_before:
   title: (Optional, long-running) Submit the Google consent screen for verification
   why: until verified, Google shows an unverified-app screen and caps the app at 100 users; nothing in the plan waits for it
   done_when: the Google Cloud console's Verification Center shows the submission, or the user chose to defer it
+- id: mb4-live-runner-host
+  title: 'Build runner.privacyfence.eu: the Hetzner server, Tailscale, the Cloudflare DNS record, origin certificate and firewall, the pfrunner user, Peek, and the GitHub runner registered in the new privacyfence-live group; copy over the QA state that does not change'
+  why: p21 switches the live-check workflows to the privacyfence-live label at merge; without a registered runner in that group they would queue forever, and ma2 needs the host's public name for the QA org server
+  done_when: 'the organization''s Actions runner list shows runner-privacyfence-eu online in group privacyfence-live (Selected workflows: the two QA workflows on main), tailscale ssh reaches the host, ssh to its public address times out, and https://runner.privacyfence.eu answers through Cloudflare'
 manual_after:
 - id: ma0-relay-first-deploy
   title: Deploy the relay Worker for the first time from the feature branch, set its revoke token, and run the runbook's smoke tests
@@ -1988,6 +2236,15 @@ manual_after:
 - id: ma4-docker-single-user-and-deprecation
   title: Run the branch's Docker image in single-user mode (setup code, passkey, a connector through the relay, an MCP client), and check a desktop install's deprecation notices
   why: single-user mode's browser ceremonies, the real relay and a real MCP client cannot run in CI
+- id: ma6-live-runner-builtin-tokens
+  title: Mint built-in-app tokens for the QA accounts from the feature branch and install them on runner.privacyfence.eu; deploy the branch's image as the QA org server there (ma2 uses it)
+  why: token minting needs real consent screens in a browser, and the runner group admits only main's workflows, so nothing in CI can do it before the merge
+- id: ma7-live-runner-cutover
+  title: 'After the merge, dispatch connector-live-check on main, confirm it ran on runner-privacyfence-eu with every connector green and relay: up, then decommission the old privacyfence-test runner, its group and its QA state'
+  why: the cutover happens only when main's workflows carry the new label; the old host holds live tokens until it is wiped
+- id: ma5-post-release-website-and-legal-review
+  title: After tagging 7.0.0, run the follow-up website session from the guide (product and connector pages for 7.x, the Docker single-user download path, links to /docs/oauth-relay/), and have the relay terms reviewed by a lawyer
+  why: 'ADR 0099: product pages land only after the stable release that documents them, and the relay terms are a legal text the plan cannot vouch for'
 verify_after_merge:
 - python3 -m mypy src/privacyfence
 - python3 scripts/mypy_strict_modules.py
@@ -2448,6 +2705,7 @@ phases:
        - test_routes_admin.py: GET /admin renders for the owner or admin with the Admin nav item active; an org non-admin gets 403; no session redirects to /login?next=/admin.
     6. Run ruff check . and python3 -m pytest tests/unit -q. If the session-start hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
     Also apply D15 SEC-05's Admin-page line for relayed Slack and Miro rows, with a test.
+    Also apply D16: the relay status line ends with a "Relay terms" link to https://privacyfence.eu/relay-terms/, with a test.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - grep -n "def org_nav_items" src/privacyfence/web_shell.py matches
@@ -2654,9 +2912,9 @@ phases:
     - If the vitest workers pool version pinned in cloudflare/downloads cannot run a SQLite Durable Object (an error naming new_sqlite_classes or ctx.storage.sql), stop with status=blocked. Do not switch to D1: D1 needs a dashboard-provisioned id this plan does not have.
     - If vi.spyOn(globalThis, "fetch") does not intercept the Worker's outbound fetch in the pool, stop with status=blocked.
 
-    Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
+    Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands, and links to https://privacyfence.eu/relay-terms/ and https://privacyfence.eu/privacy/#relay), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
-    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (the NOTIFY send_email binding, src/notify.ts, the daily cap, failure counters on /registrations, and every listed test; the runbook explains the Email Routing setup), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite.
+    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (the NOTIFY send_email binding, src/notify.ts, the daily cap, failure counters on /registrations, and every listed test; the runbook explains the Email Routing setup), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
@@ -3002,7 +3260,7 @@ phases:
   - python3 -m pytest tests/unit/test_org_identity.py -q -k admin passes
   - ruff check . passes
 - id: p12-adrs
-  title: ADRs 0239-0249 and the status lines on the ADRs they amend
+  title: ADRs 0239-0250 and the status lines on the ADRs they amend
   depends_on:
   - p20b-admins-by-email
   - p10-bundle-tooling
@@ -3020,6 +3278,9 @@ phases:
   - docs/adr/0247-the-6-to-7-upgrade-is-reversible.md
   - docs/adr/0248-an-organization-server-can-start-from-environment-variables.md
   - docs/adr/0249-admins-can-be-named-by-verified-email.md
+  - docs/adr/0250-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md
+  - docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md
+  - docs/adr/0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md
   - docs/adr/0011-org-mode-runs-its-own-oauth-authorization-server.md
   - docs/adr/0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md
   - docs/adr/README.md
@@ -3027,9 +3288,9 @@ phases:
   - docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md
   - docs/adr/0217-the-org-admin-stats-page-shows-counts-only.md
   brief: |-
-    1. Check `ls docs/adr | tail -3` first. If 0239-0249 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
-    2. Write the eleven ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
-       - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, Design D1-D8, "Accepted risks" and "Risks".
+    1. Check `ls docs/adr | tail -3` first. If 0239-0250 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
+    2. Write the twelve ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
+       - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, the Design (D1-D17), "Accepted risks" and "Risks".
        - Alternatives to record:
          - 0239: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
          - 0240: keep everything in the signed bundle; a third startup-only file for mode/server/idp; let the daemon write the org's own credentials into an unsigned org_config.json.
@@ -3041,8 +3302,9 @@ phases:
          - 0246: keeping every converter forever; a per-file version check in 8 instead of one marker; migrating lazily per principal as before.
          - 0248: keeping a signed bundle mandatory for org mode; reading every bundle key from the environment (only the IdP and server need it); mixing bundle and environment fields within the idp section.
          - 0249: the group claim only; any email claim without email_verified; the first person to sign in becomes admin.
+         - 0250: reworking the existing runner in place; keeping the live checks on own QA apps; a GitHub-hosted runner with credentials as secrets (ADR 0019 rejected it); opening SSH to the internet instead of Tailscale.
          - 0247: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
-       - Fold in D15 where it names an ADR: 0239 (SEC-02 threat, SEC-13 rotation, SEC-22), 0241 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0243 (SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0244 (SEC-01: single-user mode is no protection against an agent that can run docker), 0246 (SEC-21), 0248 (SEC-14).
+       - Fold in D15 where it names an ADR: 0239 (SEC-02 threat, SEC-13 rotation, SEC-22), 0241 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0250 (D17: the firewall, Tailscale-only administration, pfrunner outside the docker group, secrets only in step env and the generated module deleted after each run), 0243 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0244 (SEC-01: single-user mode is no protection against an agent that can run docker), 0246 (SEC-21), 0248 (SEC-14).
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
        - 0016: "Amended by [0240](...): the signature no longer covers operational settings. Amended by [0247](...): the bundle and pin file names."
@@ -3051,7 +3313,9 @@ phases:
        - 0016's line also names 0248: "org mode no longer always needs a signed bundle".
        - 0196: "Amended by [0240](...) and [0241](...)."
        - 0217: "Amended by [0242](...): the Stats section is on the Admin page."
-    4. docs/adr/README.md: add eleven index rows in the existing format:
+       - 0019: "Amended by [0250](...): the runner host. The setup doc this ADR cites is now docs/connector-qa.md."
+       - 0181: "Amended by [0250](...): the runner group and label are privacyfence-live."
+    4. docs/adr/README.md: add twelve index rows in the existing format:
        - 0239: "Accepted; relates to 0040"
        - 0240: "Accepted; amends 0016, 0196"
        - 0241: "Accepted; amends 0196; relates to 0016, 0034, 0068, 0070, 0200"
@@ -3063,9 +3327,10 @@ phases:
        - 0247: "Accepted; amends 0016, 0200; relates to 0246"
        - 0248: "Accepted; amends 0011, 0016"
        - 0249: "Accepted; relates to 0011"
+       - 0250: "Accepted; amends 0019, 0181; relates to 0239, 0243"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md docs/adr/0246-*.md docs/adr/0247-*.md docs/adr/0248-*.md docs/adr/0249-*.md lists eleven files (or the renumbered eleven)
+  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md docs/adr/0246-*.md docs/adr/0247-*.md docs/adr/0248-*.md docs/adr/0249-*.md docs/adr/0250-*.md lists twelve files (or the renumbered twelve)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -3192,54 +3457,95 @@ phases:
   - grep -n "moving-to-organization-mode" docs/README.md docs/install-macos.md docs/install-windows.md docs/install-linux.md matches in each
   - git diff origin/main -- CHANGELOG.md | grep -c "^+## \[" prints 0
 - id: p13c-website
-  title: Website pages and privacy policy
+  title: Relay terms, the privacy policy, the no-relay claims and the desktop-mode notice on the website
   depends_on:
   - p12-adrs
   complexity: M
   touches:
+  - website/relay-terms/index.html
   - website/privacy/index.html
-  - website/connectors/index.html
-  - website/connectors/google-workspace/index.html
-  - website/connectors/jira-confluence/index.html
-  - website/connectors/salesforce/index.html
-  - website/connectors/slack/index.html
-  - website/connectors/miro/index.html
+  - website/_partials/footer.html
+  - website/index.html
   - website/enterprise/index.html
+  - website/how-it-works/index.html
+  - website/security/index.html
+  - website/faq/index.html
+  - website/compare/claude-connectors/index.html
+  - website/download/index.html
+  - scripts/build_site.py
+  - tests/unit/test_website_pages.py
   - tests/unit/test_website_claims.py
   brief: |-
-    1. website/privacy/index.html:
-       - Extend the scope sentence (lines ~26-27) to name oauth.privacyfence.eu.
-       - Add a section "Sign-in relay (oauth.privacyfence.eu)" after the download section. It says the relay:
-         - is a small Cloudflare Workers service that forwards an organization server's sign-in redirect;
-         - processes the IP address and the request in transit;
-         - stores only each registered server's host name and registration dates, visible only to PrivacyFence maintainers;
-         - writes no logs (D15 SEC-15);
-         - emails the PrivacyFence maintainers the host name, the IP address and the country of the request when a new server registers (D15 SEC-23);
-         - is used only by organization servers that use the built-in apps.
-         The legal basis is Art. 6(1)(f), as for hosting.
-       - Change "sends nothing to the project" (lines ~45-54) to name the one exception: an organization server's registration of its host name.
-       - Update "Last updated".
-    2. Change the sentences that say an administrator must register an app and ship a bundle, so they say PrivacyFence ships its own app and an organization may use its own:
-       - website/connectors/index.html:203
-       - google-workspace/index.html:155-156
-       - jira-confluence/index.html:117-118
-       - salesforce/index.html:92-93
-       - slack/index.html:95-96: remove "The app is never publicly distributed".
-       - miro/index.html:61
-       - website/enterprise/index.html:85: also mention the Admin page.
-       Keep each change to those sentences.
-    3. If tests/unit/test_website_claims.py pins a sentence you changed, update that expected text, and nothing else.
-    4. Run python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_website_links.py -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_website_layout.py tests/integration/test_website_consent.py -q.
+    Read "Design → D16" (items 1-6 under "In this PR"), and D15 SEC-09, SEC-15 and SEC-23 for the privacy section. These pages deploy on merge, the same moment the relay goes live; product pages about 7.x features are NOT part of this phase (they are ma5's follow-up).
+    1. Create website/relay-terms/index.html from website/imprint/index.html's structure, with D16 item 1's sections. Write them in plain English, keep every point D16 lists, and add an HTML comment at the top: "Not reviewed by a lawyer yet; see the plan's ma5." Link /docs/ (not /docs/oauth-relay/, which does not exist before the 7.0 tag).
+    2. Wire it like /imprint/: scripts/build_site.py's page map and llms list, and website/_partials/footer.html (after Imprint, "Relay terms").
+    3. website/privacy/index.html per D16 item 3: the scope sentence, the new id="relay" section after the download section, the exception in "The PrivacyFence software is not covered", and "Last updated".
+    4. Change each claim D16 item 4 lists, at the lines it gives, to keep the data claim and name the relay. Change only those sentences. Grep website/ (excluding website/_docs/) for "PrivacyFence-operated" and "there are none" afterwards; every remaining hit must be true with the relay live.
+    5. Add D16 item 5's deprecation notice to website/download/index.html and the FAQ's #modes answer. Use the page's existing notice or callout class if it has one; otherwise a <p class="page-copy"> with <strong>.
+    6. Tests per D16 item 6.
+    7. Run python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_links.py tests/unit/test_website_canonical_description.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py -q, then python3 -m pytest tests/unit -q -k website and ruff check .. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_website_layout.py tests/integration/test_website_consent.py -q.
   acceptance:
-  - python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_website_links.py -q passes
-  - grep -n "oauth.privacyfence.eu" website/privacy/index.html matches
-  - grep -rn "never publicly distributed" website/connectors/slack/index.html finds nothing
+  - python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_links.py tests/unit/test_website_canonical_description.py -q passes
+  - grep -n "relay-terms" scripts/build_site.py website/_partials/footer.html matches in both
+  - grep -n 'id="relay"' website/privacy/index.html matches
+  - grep -n "oauth.privacyfence.eu" website/privacy/index.html website/relay-terms/index.html matches in both
+  - grep -rln "there are none" website --include=*.html --exclude-dir=_docs finds nothing
+  - grep -n "PrivacyFence 8 removes it" website/download/index.html website/faq/index.html matches in both
+- id: p21-live-runner
+  title: Live checks on the new runner (runner.privacyfence.eu) with the built-in apps
+  depends_on:
+  - p13a-docs-operator
+  - p13b-docs-user
+  complexity: M
+  touches:
+  - .github/workflows/connector-live-check.yml
+  - .github/workflows/qa-record-fixture.yml
+  - scripts/qa_fixture_recorder.py
+  - scripts/qa_authenticate_connectors.py
+  - tests/unit/test_qa_fixture_recorder.py
+  - tests/unit/test_qa_authenticate_connectors.py
+  - tests/unit/test_live_check_workflows.py
+  - docs/connector-qa.md
+  - docs/testing-policy.md
+  - docs/coding-and-testing-guidelines.md
+  - docs/release-testing.md
+  - docs/security-and-compliance.md
+  - .claude/commands/qa-record.md
+  - .claude/toolkit.yaml
+  - .claude/skills/steward/SKILL.md
+  - .github/pull_request_template.md
+  - tests/fixtures/live/README.md
+  - CHANGELOG.md
+  brief: |-
+    Read "Design → D17" and ADR 0250 (written in p12). The runner itself is set up by hand (manual mb4); this phase changes only the repository.
+    1. scripts/qa_fixture_recorder.py: add _qa_org_config() per D17 (effective_org_config over load_org_config() and admin_config.config_for(..., mode="local", single_user=False), mode="local") and use it at every daemon_main.load_org_config() call (~:864, :945, :1283, :1323, :1527, :1790, :1880, :1937, :1984, :2042). Update the module docstring's runner name and label (:4-6) and the label text near :2528-2538 and :2601.
+    2. scripts/qa_authenticate_connectors.py: add --builtin-apps-json PATH (sets PRIVACYFENCE_BUILTIN_APPS in the env passed to every child subprocess.run; refuses a path inside the repository with exit 2 and "Keep the built-in apps file outside the repository."). Update the docstring (:12-14) for built-in apps and the optional bundle.
+    3. Both workflows, per D17:
+       - runs-on: [self-hosted, privacyfence-live]; the header comments name runner.privacyfence.eu and the privacyfence-live group.
+       - A "Write built-in app credentials" step before the QA-state copy-in: `python3 scripts/builtin_apps.py write --exclude google_web --exclude atlassian_relay`, with exactly the ten PF_APP_GOOGLE_DESKTOP_*, PF_APP_SLACK_*, PF_APP_SALESFORCE_*, PF_APP_ATLASSIAN_LOCAL_*, PF_APP_MIRO_* secrets in that step's env only.
+       - The copy-in requires credentials/ and tests/fixtures/qa_environment.yaml, copies org/org_bundle.json only if present, and no longer mentions org/org_config.json.
+       - A last step with if: always() runs `rm -f src/privacyfence/_builtin_apps.py`.
+       - connector-live-check.yml: the relay health step (continue-on-error) and its line in the job summary.
+       - qa-record-fixture.yml's commit message (:247) names the privacyfence-live runner.
+    4. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; the builtin step's run line and its env keys are exactly the ten secrets; no PF_APP_ secret appears in workflow-level or job-level env; the cleanup step exists with if: always() and comes last in the runner job; no step references org/org_config.json; the refusal step of qa-record-fixture.yml is unchanged (it still checks refs/heads/main).
+    5. Tests for 1 and 2: _qa_org_config fills a provider absent from the bundle from a stubbed builtin_app and keeps a bundle section that is present; --builtin-apps-json passes the env var to the child and refuses an in-repo path.
+    6. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, minting with built-in apps, the optional bundle, the QA org server, the cutover and decommissioning), fix :573, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
+    7. CHANGELOG.md under ## [Unreleased]: one line that live checks moved to a new runner and test the built-in apps (contributor-facing).
+    8. Run ruff check ., python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_qa_authenticate_connectors.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_qa_authenticate_connectors.py -q passes
+  - grep -rn "privacyfence-test" .github/workflows .claude docs/connector-qa.md docs/testing-policy.md finds nothing
+  - grep -c "privacyfence-live" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml reports at least 1 for each file
+  - grep -n "org/org_config.json" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml finds nothing
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
 - id: p14-retire-plan
   title: Delete the plan document and its manual-steps page
   depends_on:
   - p13a-docs-operator
   - p13b-docs-user
   - p13c-website
+  - p21-live-runner
   complexity: S
   touches:
   - docs/builtin-oauth-apps-plan.md
