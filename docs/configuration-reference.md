@@ -281,6 +281,9 @@ How the daemon treats the file:
 | `--atlassian-assets` | off | `atlassian.assets` | Request the Jira Assets scopes at Atlassian sign-in; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--atlassian-assets-workspace-id ID` | none | `atlassian.assets_workspace_id` | The site's Assets workspace id, the `workspaceId` at `https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace`; needs `--atlassian-client-id`/`--atlassian-client-secret`. |
 | `--peek-base-url URL` | none | `peek.base_url` | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
+| `--peek-auto-provision` / `--no-peek-auto-provision` | off | `peek.auto_provision.enabled` | Organization mode: create a Peek account for each person at sign-in and connect it for them. Needs `--peek-base-url` and a Peek provisioning key in the daemon's environment. |
+| `--peek-provisioning-key-env NAME` | `PRIVACYFENCE_PEEK_PROVISIONING_KEY` | `peek.auto_provision.key_env` | The environment variable the daemon reads the Peek provisioning key from. Goes with `--peek-auto-provision`. |
+| `--peek-trust-unverified-email` | off | `peek.auto_provision.trust_unverified_email` | Provision people whose ID token does not say `email_verified`. Only for identity providers that issue only verified, organization-owned addresses, such as Microsoft Entra ID. Goes with `--peek-auto-provision`. |
 | `--enable-telegram` | off | `telegram.enabled` | Offer Telegram. Its app credentials ship in the build, so the section is only a switch. Without it Telegram is neither listed nor usable ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). |
 | `--enable-peek` | off | `peek.enabled` | Offer Peek without pinning a server (local mode). `--peek-base-url` implies it. |
 | `--enable-grist` | off | `grist.enabled` | Offer Grist with an API key and no pinned server (local mode). `--grist-server-url` implies it. |
@@ -366,6 +369,7 @@ options below are for running it by hand.
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
 | `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
 | `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (`local` in local mode, or the principal id the audit log and the org Settings page show) and exit. Run it as the account the daemon runs as. |
+| `--peek-release PRINCIPAL_ID` | Revoke the Peek token PrivacyFence minted for that account, stop renewing it, and exit. The Peek account stays. Needs the Peek provisioning key in the environment; run it as the account the daemon runs as. |
 
 The sign-in options are for an install that is not privilege-separated (a source checkout or a
 `pip`/`pipx` install). On a packaged install the daemon refuses to run as your account, so they

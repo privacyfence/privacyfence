@@ -428,3 +428,74 @@ class TestRejectRemovedToolAnnotations:
     def test_any_value_is_refused_naming_the_removed_key(self, value):
         with pytest.raises(org_mode.ConfigurationError, match=r"mcp\.tool_annotations.*removed"):
             org_mode.reject_removed_tool_annotations({"mcp": {"tool_annotations": value}})
+
+
+class TestPeekProvisioningConfigFromOrgConfig:
+    @staticmethod
+    def _cfg(**auto):
+        return {"mode": "org", "peek": {"base_url": "https://peek.example.com/", "auto_provision": auto}}
+
+    def test_absent_is_disabled(self):
+        assert org_mode.PeekProvisioningConfig.from_org_config({}) == org_mode.PeekProvisioningConfig()
+        assert org_mode.PeekProvisioningConfig.from_org_config({"peek": "x"}).enabled is False
+
+    def test_enabled_uses_default_key_env_and_normalised_base_url(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True))
+        assert config.enabled is True
+        assert config.key_env == org_mode.DEFAULT_PEEK_PROVISIONING_KEY_ENV == "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
+        assert config.trust_unverified_email is False
+        assert config.base_url == "https://peek.example.com"
+
+    def test_custom_key_env(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True, key_env="MY_KEY_1"))
+        assert config.key_env == "MY_KEY_1"
+
+    def test_trust_unverified_email(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(
+            self._cfg(enabled=True, trust_unverified_email=True)
+        )
+        assert config.trust_unverified_email is True
+
+    def test_disabled_section_skips_the_enabled_only_checks(self):
+        config = org_mode.PeekProvisioningConfig.from_org_config(
+            {"peek": {"auto_provision": {"enabled": False, "key_env": "K"}}}
+        )
+        assert config == org_mode.PeekProvisioningConfig(key_env="K")
+
+    @pytest.mark.parametrize("key", ["enabled", "trust_unverified_email"])
+    def test_non_bool_flag_raises(self, key):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(self._cfg(**{key: "yes"}))
+        assert str(exc.value) == (
+            f"org_config.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got 'yes'"
+        )
+
+    @pytest.mark.parametrize("value", ["lower", "1ABC", "A-B", 5])
+    def test_bad_key_env_raises(self, value):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True, key_env=value))
+        assert str(exc.value) == (
+            "org_config.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable name, "
+            f"got {value!r}"
+        )
+
+    def test_enabled_in_local_mode_raises(self):
+        cfg = self._cfg(enabled=True)
+        cfg["mode"] = "local"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(cfg)
+        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
+
+    def test_enabled_without_base_url_raises(self):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(
+                {"mode": "org", "peek": {"auto_provision": {"enabled": True}}}
+            )
+        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\""
+
+    def test_unusable_base_url_raises(self):
+        cfg = self._cfg(enabled=True)
+        cfg["peek"]["base_url"] = "http://peek.example.com"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(cfg)
+        assert str(exc.value).startswith("org_config.json's \"peek\".\"base_url\" is not usable: ")

@@ -237,7 +237,7 @@ the connector's console must list it exactly.
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `--atlassian-client-id`, `--atlassian-client-secret` | [Atlassian setup](atlassian-setup.md) |
 | Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |
 | Miro | `https://pf.acme.example.com/oauth/callback/miro` | `--miro-client-id`, `--miro-client-secret` | [Miro setup](miro-setup.md) |
-| Peek | none (device sign-in) | `--peek-base-url` | [Peek setup](peek-setup.md) |
+| Peek | none (device sign-in, or automatic accounts with `--peek-auto-provision`) | `--peek-base-url` | [Peek setup](peek-setup.md), [automatic accounts](peek-setup.md#automatic-accounts-organization-mode) |
 | Telegram | none | `--enable-telegram` | [Telegram setup](telegram-setup.md) |
 
 Notes:
@@ -253,7 +253,9 @@ Notes:
 - **Jira and Confluence** share one Atlassian app and one redirect URI, because an Atlassian OAuth
   app accepts only one callback URL.
 - **Peek** has no OAuth app and no callback URL: each person approves a code in Peek itself on
-  `/connect`. `--peek-base-url` names the Peek server; the connector is offered only with it.
+  `/connect`, or automatic accounts with `--peek-auto-provision`
+  ([Peek setup](peek-setup.md#automatic-accounts-organization-mode)). `--peek-base-url` names the Peek
+  server; the connector is offered only with it.
 - **Telegram** needs no registration: its app credentials ship inside PrivacyFence. `--enable-telegram`
   offers it, and each person signs in with their phone number on `/connect`.
 - A connector appears on `/connect` only if its section is in the bundle; the others are not listed
@@ -339,6 +341,9 @@ purpose, stop the daemon and delete `org/org_config_serial.txt`; delete it toget
 | `--grist-auth-server-url URL` | the server URL | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
 | `--miro-client-id`, `--miro-client-secret` | none | The Miro app people sign in with. Give both or neither. |
 | `--peek-base-url URL` | none | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
+| `--peek-auto-provision` / `--no-peek-auto-provision` | off | Create a Peek account for each person at sign-in and connect it for them. Organization mode; needs `--peek-base-url` and the Peek provisioning key in the daemon's environment. |
+| `--peek-provisioning-key-env NAME` | `PRIVACYFENCE_PEEK_PROVISIONING_KEY` | The environment variable the daemon reads the Peek provisioning key from. Goes with `--peek-auto-provision`. |
+| `--peek-trust-unverified-email` | off | Provision people whose ID token lacks `email_verified`. Only for identity providers that issue only verified, organization-owned addresses. Goes with `--peek-auto-provision`. |
 | `--step-up-enabled` / `--step-up-disabled` | off | Require a fresh passkey or sign-in before an approval is released ([section 12](#12-approvals-and-step-up)). |
 | `--step-up-scope SCOPE` | `writes_and_pii_reads` | Which approvals need step-up: `writes`, `writes_and_pii_reads` or `writes_and_reads`. |
 | `--step-up-require-passkey` / `--step-up-no-require-passkey` | off | Accept only a passkey for step-up, never a fresh sign-in. |
@@ -655,7 +660,7 @@ ExecStart=/opt/privacyfence/venv/bin/privacyfence-app
 Restart=on-failure
 RestartSec=5
 UMask=0077
-# Only for --audit-forwarding-http-bearer-token-env; the file holds NAME=token, mode 0600, owned by root.
+# For --audit-forwarding-http-bearer-token-env and the Peek provisioning key; the file holds NAME=value lines, mode 0600, owned by root.
 # EnvironmentFile=/etc/privacyfence-org.env
 
 # Filesystem: read-only everywhere except the data directory.
@@ -1059,6 +1064,7 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 | `authority/logs/audit/` | The install's own audit log and its chain key. |
 | `deployment_id` | The install's ID, stamped on every audit entry. |
 | `users/<principal>/credentials/` | Each person's connector tokens. |
+| `users/<principal>/credentials/peek_provisioning.json` | Peek auto-provisioning state and the person's email, for token renewal. |
 | `users/<principal>/authority/config/settings.yaml` | Each person's always-allow rules. |
 | `users/<principal>/authority/webauthn_credentials.json`, `webauthn_recovery_code.json`, `step_up_state.json` | Each person's passkeys and recovery code. |
 | `users/<principal>/logs/audit/` | Each person's audit log and its chain key. |

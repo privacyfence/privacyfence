@@ -25,6 +25,7 @@ from privacyfence.peek_client import (
     PeekClientError,
     PeekComment,
     PeekGrant,
+    PeekProvisioningClient,
     PeekVersion,
     bundle_base_url,
     load_token_file,
@@ -362,7 +363,37 @@ class TestTokenFile:
         save_token_file(path, BASE, TOKEN)
         saved = json.loads(Path(path).read_text(encoding="utf-8"))
         assert saved == {"base_url": BASE, "token": TOKEN}
-        assert load_token_file(path) == {"base_url": BASE, "token": TOKEN}
+        assert load_token_file(path) == {"base_url": BASE, "token": TOKEN, "source": "device", "expires_at": "0"}
+
+    def test_provisioned_round_trip(self, tmp_path):
+        path = str(tmp_path / "peek_token.json")
+        save_token_file(path, BASE, TOKEN, source="provisioned", expires_at=1800000000)
+        assert json.loads(Path(path).read_text(encoding="utf-8")) == {
+            "base_url": BASE,
+            "token": TOKEN,
+            "source": "provisioned",
+            "expires_at": 1800000000,
+        }
+        assert load_token_file(path) == {
+            "base_url": BASE,
+            "token": TOKEN,
+            "source": "provisioned",
+            "expires_at": "1800000000",
+        }
+
+    def test_unknown_source_is_unreadable(self, tmp_path):
+        path = tmp_path / "peek_token.json"
+        path.write_text(json.dumps({"base_url": BASE, "token": TOKEN, "source": "other"}), encoding="utf-8")
+        with pytest.raises(PeekClientError, match="could not be read"):
+            load_token_file(str(path))
+
+    def test_non_int_expires_at_reads_as_zero(self, tmp_path):
+        path = tmp_path / "peek_token.json"
+        path.write_text(
+            json.dumps({"base_url": BASE, "token": TOKEN, "source": "provisioned", "expires_at": "soon"}),
+            encoding="utf-8",
+        )
+        assert load_token_file(str(path))["expires_at"] == "0"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
     def test_mode_is_0600(self, tmp_path):
@@ -913,6 +944,172 @@ class TestSecretsStayOutOfErrors:
             client.set_visibility("p1", "public")
         text = str(exc.value) + repr(exc.value) + repr(client)
         assert not any(secret in text for secret in (TOKEN, DEVICE))
+
+
+KEY = "peekprov_SECRET-789"
+
+
+@pytest.fixture
+def prov() -> PeekProvisioningClient:
+    return PeekProvisioningClient(BASE, KEY)
+
+
+class TestErrorDetail:
+    @pytest.mark.parametrize("status", [403, 404, 409, 500])
+    def test_detail_is_set(self, monkeypatch, client, status):
+        Recorder(monkeypatch, FakeResponse(status, {"error": "the reason"}))
+        with pytest.raises(PeekClientError) as exc:
+            client.list_pages()
+        assert exc.value.status == status
+        assert exc.value.detail == "the reason"
+
+
+class TestPeekProvisioningClient:
+    def test_upsert_sends_put_with_body_and_key(self, monkeypatch, prov):
+        body = {
+            "external_id": "alice",
+            "account_id": 7,
+            "created": True,
+            "adopted": False,
+            "disabled": False,
+            "has_token": False,
+            "token_expires_at": 0,
+        }
+        rec = Recorder(monkeypatch, FakeResponse(200, body))
+        account = prov.upsert_account("alice", "a@x.com", "Alice")
+        call = rec.calls[0]
+        assert call["method"] == "PUT"
+        assert call["url"] == f"{BASE}/api/provisioning/accounts/alice"
+        assert call["json"] == {"email": "a@x.com", "name": "Alice"}
+        assert call["headers"] == {"Authorization": f"Bearer {KEY}"}
+        assert call["allow_redirects"] is False
+        assert account.account_id == 7 and account.created is True and account.adopted is False
+        assert account.disabled is False and account.has_token is False and account.token_expires_at == 0
+
+    def test_booleans_are_true_only_for_json_true(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(200, {"created": "true", "has_token": 1, "disabled": True}))
+        account = prov.upsert_account("alice", "a@x.com", "")
+        assert (account.created, account.has_token, account.disabled) == (False, False, True)
+
+    def test_mint_parses_token(self, monkeypatch, prov):
+        rec = Recorder(monkeypatch, FakeResponse(201, {"token": "t-1", "token_id": 4, "expires_at": 1800000000}))
+        minted = prov.mint_token("alice", 30)
+        assert rec.calls[0]["method"] == "POST"
+        assert rec.calls[0]["url"] == f"{BASE}/api/provisioning/accounts/alice/token"
+        assert rec.calls[0]["json"] == {"expires_days": 30}
+        assert (minted.token, minted.token_id, minted.expires_at) == ("t-1", 4, 1800000000)
+        assert "t-1" not in repr(minted)
+
+    def test_mint_without_token_is_unexpected_shape(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(201, {"token_id": 4}))
+        with pytest.raises(PeekClientError, match="something unexpected"):
+            prov.mint_token("alice")
+
+    def test_check_returns_account_count(self, monkeypatch, prov):
+        rec = Recorder(monkeypatch, FakeResponse(200, {"name": "PrivacyFence", "accounts": 3}))
+        assert prov.check() == 3
+        assert rec.calls[0]["method"] == "GET"
+        assert rec.calls[0]["url"] == f"{BASE}/api/provisioning/self"
+
+    def test_check_without_count_is_zero(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(200, {"name": "PrivacyFence"}))
+        assert prov.check() == 0
+
+    def test_release_true_on_200(self, monkeypatch, prov):
+        rec = Recorder(monkeypatch, FakeResponse(200, {"released": True}))
+        assert prov.release_account("alice") is True
+        assert rec.calls[0]["method"] == "DELETE"
+
+    def test_release_false_on_not_found(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(404, {"error": "not found"}))
+        assert prov.release_account("alice") is False
+
+    def test_release_plain_404_is_no_provisioning_api(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(404, raw=True))
+        with pytest.raises(PeekClientError, match="no provisioning API \\(HTTP 404\\)"):
+            prov.release_account("alice")
+
+    def test_release_other_error_is_raised(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(500, {"error": "boom"}))
+        with pytest.raises(PeekClientError, match="HTTP 500"):
+            prov.release_account("alice")
+
+    def test_401_message(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(401, {"error": "bad key"}))
+        with pytest.raises(PeekClientError) as exc:
+            prov.upsert_account("alice", "a@x.com", "")
+        assert str(exc.value) == (
+            "Peek refused the provisioning key (HTTP 401). Check the key in the daemon's environment."
+        )
+        assert exc.value.status == 401
+
+    def test_plain_404_on_check_and_upsert(self, monkeypatch, prov):
+        message = (
+            "This Peek server has no provisioning API (HTTP 404). Update Peek, or turn off Peek auto-provisioning."
+        )
+        for call in (prov.check, lambda: prov.upsert_account("alice", "a@x.com", "")):
+            Recorder(monkeypatch, FakeResponse(404, raw=True))
+            with pytest.raises(PeekClientError) as exc:
+                call()
+            assert str(exc.value) == message
+
+    def test_json_404_on_mint(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(404, {"error": "not found"}))
+        with pytest.raises(PeekClientError) as exc:
+            prov.mint_token("alice")
+        assert str(exc.value) == "Peek has no provisioned account for this person (HTTP 404)."
+        assert exc.value.detail == "not found"
+
+    def test_json_404_elsewhere_keeps_the_send_message(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(404, {"error": "not found"}))
+        with pytest.raises(PeekClientError, match="Peek found no such page"):
+            prov.upsert_account("alice", "a@x.com", "")
+
+    def test_409_with_detail(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(409, {"error": "account is a Peek admin; connect it by hand"}))
+        with pytest.raises(PeekClientError) as exc:
+            prov.upsert_account("alice", "a@x.com", "")
+        assert str(exc.value) == (
+            "Peek refused to provision this account (HTTP 409): account is a Peek admin; connect it by hand"
+        )
+        assert exc.value.status == 409
+        assert exc.value.detail.startswith("account is a Peek admin")
+
+    def test_403_with_detail(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(403, {"error": "account disabled"}))
+        with pytest.raises(PeekClientError) as exc:
+            prov.mint_token("alice")
+        assert str(exc.value) == "Peek refused to provision this account (HTTP 403): account disabled"
+
+    def test_other_status_keeps_the_send_message(self, monkeypatch, prov):
+        Recorder(monkeypatch, FakeResponse(500, {"error": "boom"}))
+        with pytest.raises(PeekClientError) as exc:
+            prov.check()
+        assert str(exc.value) == "Peek API error (HTTP 500): boom"
+        assert exc.value.detail == "boom"
+
+    @pytest.mark.parametrize("bad", ["", "a b", "a/b", "x" * 201])
+    def test_invalid_external_id_is_refused_before_any_request(self, monkeypatch, prov, bad):
+        rec = Recorder(monkeypatch, FakeResponse(200, {}))
+        for call in (
+            lambda: prov.upsert_account(bad, "a@x.com", ""),
+            lambda: prov.mint_token(bad),
+            lambda: prov.release_account(bad),
+        ):
+            with pytest.raises(PeekClientError, match="Not a Peek provisioning id"):
+                call()
+        assert rec.calls == []
+
+    def test_repr_has_host_and_not_the_key(self, prov):
+        assert repr(prov) == "PeekProvisioningClient(peek.example.com)"
+        assert KEY not in repr(prov)
+
+    def test_log_lines_carry_no_secrets(self, monkeypatch, prov, caplog):
+        Recorder(monkeypatch, FakeResponse(200, {"external_id": "alice"}))
+        with caplog.at_level(logging.DEBUG, logger="privacyfence.peek_client"):
+            prov.upsert_account("alice", "a@x.com", "Alice Name")
+        assert "Peek provisioning at peek.example.com: upsert_account alice" in caplog.text
+        assert not any(secret in caplog.text for secret in (KEY, "a@x.com", "Alice Name"))
 
 
 class TestLiveFixtureParsing:
