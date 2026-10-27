@@ -63,7 +63,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
+from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, grist_provisioning, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
 from ..app_credentials import telegram_app_credentials
 from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
@@ -763,9 +763,10 @@ def build_routes(
         else:
             try:
                 await asyncio.to_thread(GristClient(bundle.server_url, grist_auth.GristApiKey(api_key)).check_connection)
-                grist_auth.save_api_key(
-                    str(paths.user_dir(principal) / _token_files()["grist"]), bundle.server_url, api_key,
-                )
+                with grist_provisioning.principal_lock(principal.id):
+                    grist_auth.save_api_key(
+                        str(paths.user_dir(principal) / _token_files()["grist"]), bundle.server_url, api_key,
+                    )
             except grist_auth.GristClientError as exc:
                 error = str(exc)
             else:
@@ -1013,12 +1014,20 @@ def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str 
         return f'<li class="service card cluster">{head}{action}{error_html}</li>'
     server = _esc(bundle.server_url)
     status = f"Connected to {server}." if connected else f"Your organization uses {server}."
+    provisioned_html = ""
+    if connected:
+        try:
+            record = grist_auth.load_token_file(str(paths.user_dir(principal) / _token_files()["grist"]))
+        except grist_auth.GristClientError:
+            record = {}
+        if grist_auth.token_source(record) == "provisioned":
+            provisioned_html = '<div class="field-help">Your organization connected your Grist account automatically.</div>'
     return (
         f'<li class="service grist card stack"><div class="pf-service-head cluster">'
         f'<span class="pf-service-chip">Grist</span>{badge}</div>{error_html}'
         '<form class="pf-grist-form stack" method="post" action="/connect/grist">'
         f'<input type="hidden" name="csrf" value="{_esc(csrf)}">'
-        f'<div class="field-help">{status}</div>'
+        f'{provisioned_html}<div class="field-help">{status}</div>'
         '<label><span class="field-label">API key</span>'
         '<input class="field" type="password" name="api_key" autocomplete="off" autocapitalize="off" '
         'spellcheck="false" required></label>'
