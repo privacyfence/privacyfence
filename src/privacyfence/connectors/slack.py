@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -70,6 +71,42 @@ def _apply_message_privacy(dicts: list[dict[str, Any]], content_category: str) -
         d["user_name"] = apply_text("slack_privacy", "user_identity", d["user_name"] or "")
         d["user_id"] = apply_text("slack_privacy", "user_identity", d["user_id"] or "")
     return dicts
+
+
+# A search result goes to the calling MCP client as one inline tool result, and clients reject
+# one past their token cap (a 100-message sweep of long messages was 132k characters). Each
+# message's text is cut to _SEARCH_MAX_TEXT_CHARS, and the oldest results are dropped until the
+# list serializes within _SEARCH_MAX_RESULT_CHARS.
+_SEARCH_MAX_TEXT_CHARS = 1500
+_SEARCH_MAX_RESULT_CHARS = 60_000
+
+
+def _bound_search_results(filtered: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """`filtered` with long texts cut and, if still too large, the oldest messages dropped,
+    plus a note saying what was dropped or cut ("" when nothing was)."""
+    cut = 0
+    for d in filtered:
+        text = d["text"] or ""
+        if len(text) > _SEARCH_MAX_TEXT_CHARS:
+            d["text"] = text[:_SEARCH_MAX_TEXT_CHARS] + " [...truncated]"
+            cut += 1
+    kept = list(filtered)
+    size = len(json.dumps(kept, ensure_ascii=False))
+    while kept and size > _SEARCH_MAX_RESULT_CHARS:
+        size -= len(json.dumps(kept.pop(), ensure_ascii=False)) + 2
+    dropped = len(filtered) - len(kept)
+    parts = []
+    if dropped:
+        parts.append(
+            f"{dropped} older result(s) were left out to keep the result small; "
+            "search again with a smaller minutes or days, or a narrower query, to see them"
+        )
+    if cut:
+        parts.append(
+            f"{cut} message text(s) were cut at {_SEARCH_MAX_TEXT_CHARS} characters; "
+            "slack_get_channel_history or slack_get_thread_replies return a message in full"
+        )
+    return kept, ("; ".join(parts) + "." if parts else "")
 
 
 _CURSOR_DESCRIPTION = (
@@ -347,7 +384,7 @@ class SlackConnector(Connector):
                     "text, thread_ts, reply_count}, up to count (default 20, max 100); a participant "
                     "search reads at most 10 conversations. Text and names may be redacted. Use "
                     "read_state=true with care: one Slack request per conversation, easily "
-                    "rate-limited; prefer slack_get_read_state for the few messages that matter. "
+                    "rate-limited; prefer slack_get_read_state for a few messages. "
                     "Use slack_get_channel_history for one known channel. Requires user approval."
                 ),
                 params=[
@@ -880,7 +917,10 @@ class SlackConnector(Connector):
                 m.read_state = message_read_state(
                     m.id, marker, own=bool(own_user_id) and m.user_id == own_user_id
                 )
-        filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
+        filtered, bound_note = _bound_search_results(
+            _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
+        )
+        n = len(filtered)
         # Query/participant are Claude's own input (kept in the preview as
         # identifying context, same reasoning as drive_sheets_get_values's
         # Range); Results (count) is only learned once this call is approved.
@@ -931,7 +971,7 @@ class SlackConnector(Connector):
             summary=f"{n} result{'s' if n != 1 else ''} for {target_desc}",
             sender=query or participant,
             raw_data=messages,
-            filtered_data=filtered,
+            filtered_data=filtered + [{"note": bound_note}] if bound_note else filtered,
             gate="review",
             preview=preview,
             new_info=new_info,

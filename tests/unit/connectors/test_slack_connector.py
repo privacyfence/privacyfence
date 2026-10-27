@@ -795,6 +795,31 @@ class TestSearchMessages:
         assert gated_call_spy[0]["preview"]["Since"] == "all time"
         client.search_messages.assert_called_once_with("budget", 20, "", 0, 0, only_channels=None, exclude_channels=frozenset())
 
+    async def test_oversized_result_is_bounded_with_a_note(self, gated_call_spy):
+        connector, client = make_connector()
+        long_text = "x" * 1400
+        client.search_messages.return_value = [
+            make_message(id=str(i), text=long_text) for i in range(100)
+        ]
+
+        result = await connector.call("slack_search_messages", {"minutes": 1440, "count": 100})
+
+        assert len(json.dumps(result)) <= slack_module._SEARCH_MAX_RESULT_CHARS + 1000
+        assert "note" in result[-1] and "older result(s)" in result[-1]["note"]
+        kwargs = gated_call_spy[0]
+        assert len(kwargs["preview_tables"][0]["rows"]) == len(result) - 1
+        assert kwargs["new_info"] == {"Results": str(len(result) - 1)}
+
+    async def test_long_message_text_is_cut(self, gated_call_spy):
+        connector, client = make_connector()
+        client.search_messages.return_value = [make_message(text="y" * 5000)]
+
+        result = await connector.call("slack_search_messages", {"query": "budget"})
+
+        assert result[0]["text"].endswith("[...truncated]")
+        assert len(result[0]["text"]) < 1600
+        assert "cut at" in result[1]["note"]
+
     async def test_empty_search_results_produce_no_table(self, gated_call_spy):
         connector, client = make_connector()
         client.search_messages.return_value = []
