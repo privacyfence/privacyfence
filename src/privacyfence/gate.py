@@ -273,7 +273,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "jira_export_issues": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "peek_get_comments": WIDE, "peek_get_stats": WIDE, "peek_upload_page": WIDE,
-    "peek_add_comment": WIDE,
+    "peek_add_comment": WIDE, "peek_list_grants": WIDE,
     "miro_list_items": WIDE, "miro_get_items": WIDE, "miro_list_connectors": WIDE,
     "miro_create_items": WIDE, "miro_create_connectors": WIDE,
     "miro_update_items": WIDE,
