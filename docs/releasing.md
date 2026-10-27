@@ -211,6 +211,12 @@ channel. Their release entries keep whatever body GitHub generated.
 `setuptools_scm` remains the only version source, and nothing may parse `CHANGELOG.md` to find out
 what is being built.
 
+The wheel also carries `CHANGELOG.md` (`setup.py` copies it into the built package; see
+[ADR 0237](adr/0237-the-wheel-bundles-the-changelog-through-a-setup-py-build-hook.md)), so the
+section a release PR writes is what organization users read on the What's new page after upgrading
+([ADR 0238](adr/0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md)).
+A pre-release shows its `[Unreleased]` entries there.
+
 ## Packaged-artifact release gating
 
 Every published DMG/installer/`.deb` is started and exercised, automatically, before it (or

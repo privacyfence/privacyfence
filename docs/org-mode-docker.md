@@ -181,7 +181,8 @@ docker compose up -d
 The advice in the guide's [Upgrade](org-mode-setup-guide.md#upgrade) applies: read the release's
 changelog entry first, use the `build_org_bundle.py` that matches the release for future bundle
 changes, and back up first. Going back is safe only if the older version reads the data as the newer
-one left it.
+one left it. After an upgrade, each person sees a strip linking to What's new (`/whats-new`) the first
+time they open PrivacyFence, listing the changelog sections since the version they last used.
 
 ## Backup and restore
 
