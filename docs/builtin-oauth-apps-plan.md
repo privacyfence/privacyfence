@@ -1185,48 +1185,82 @@ signs in during 7.x would keep old data.
   successful pass rewrites it.
 - `check_not_newer(marker) -> None`. When `marker["format"] > DATA_FORMAT` it raises
   `org_mode.ConfigurationError("This data was last used by PrivacyFence <written_by> (data format <n>). This release, <__version__>, cannot read it. Install <written_by> or newer.")`.
-  `run_app` calls it first thing after `load_org_config`, so a 7.x install never opens data an 8.x
-  release has already changed.
-- `migrate_everything(*, log) -> list[str]` returns the problems it found, empty when everything
-  succeeded. It runs at every 7.x start, in both modes, after `load_admin_config` and before the
-  web server is built. It replaces `_upgrade_all_principals`, which already covers the org-mode
-  part of steps 2 and 3. For every principal in `web.mcp_auth.scoped_token_principals()` (the
-  local principal plus every `users/<id>/`, which in local mode includes other OS accounts' `os-…`
-  principals), under `principal_scope`:
-  1. **Settings.** Read `authority/config/settings.yaml` (`_resolve_authority_path`) when it
-     exists. Run `daemon_main._drop_converted_v1_sections` (A1), then
-     `policy_store.reject_v1_sections`. A `V1PolicyConfigError` becomes the problem
-     `"<principal id>: settings.yaml still has v1 policy sections"` and the next steps are skipped
-     for that principal.
-  2. **Rules.** Run `policy_upgrade.ensure_scope_rows`. When it returns `False`, the section stayed
-     version 2, and the problem is `"<principal id>: rules are still in the version-2 format"`.
-  3. **Tokens.** Run `policy_upgrade.ensure_token_rules`, with `{}` when there is no settings
-     file, as `_upgrade_all_principals` does. Afterwards, read the principal's
-     `authority_dir(principal) / "scoped_tokens.json"` directly. Every entry that has a `rule_ids`
-     key and no `rules` key adds the problem `"<principal id>: scoped token <id> still names
-     rules"`.
-  4. **Verb names.** The new `policy_upgrade.ensure_canonical_verbs(config, resolved, principal,
-     *, log) -> bool` rewrites stored rows whose `verbs` use a name from
-     `policy.registry.LEGACY_VERB_ALIASES`. It does this for the settings.yaml `auto_accept` rows
-     and for each scoped token's `rules`.
-     - It re-serializes each row with `scope_rows.row_from_dict` then `scope_rows.row_to_dict`,
-       which already resolves the aliases (`_parse_verbs`).
-     - It writes only when the result differs from what is stored.
-     - It takes the same backup-once rule as `ensure_scope_rows`, with suffix
-       `.pre-canonical-verbs.bak`.
-     - A row `row_from_dict` cannot parse is left as it is and adds the problem
-       `"<principal id>: rule <id> could not be read"`.
-     - It returns `False` on a write failure, which adds the problem
-       `"<principal id>: could not rewrite settings.yaml"`.
+  - `daemon_main.main()` calls it right after `check_runtime_identity` (about
+    `daemon_main.py:2487`), before anything reads or rewrites data, including
+    `load_config(args.config, principal=LOCAL_PRINCIPAL)` at `:2510`, the CLI OAuth flags and
+    `--revoke-scoped-tokens`.
+  - A `ConfigurationError` there goes to the existing `_refuse_to_start` path.
+- `migrate_everything(*, log: Callable[[str], None]) -> list[str]` returns the problems it found,
+  empty when everything succeeded. It never raises for a single principal's data: every
+  `OSError`, `yaml.YAMLError` or `json.JSONDecodeError` on one file becomes a problem naming the
+  principal and the file.
+  - **When.** It runs at every 7.x start, in both modes, in `run_app` after `load_admin_config` and
+    before the web server is built.
+  - **Logging.** `run_app` passes `log=logger.warning`, so problems are logged at once rather than
+    deferred.
+  - **What it replaces.** It replaces `_upgrade_all_principals`, which already covers the org-mode
+    part of steps 2 and 3.
+  - **For whom.** Every principal in `web.mcp_auth.scoped_token_principals()`: the local principal
+    plus every `users/<id>/`, which in local mode includes other OS accounts' `os-…` principals.
+    Each runs under `principal_scope`:
+  1. **Settings file.** Resolve `authority/config/settings.yaml` with
+     `daemon_main._resolve_authority_path`. Import it inside the function, because daemon_main
+     imports data_format.
+     - A missing file means no rules: go to step 3 with `{}`.
+     - A file that does not parse to a mapping is the problem `"<principal id>: settings.yaml is
+       not a mapping"`.
+  2. **v1 clean-up and rules.**
+     - Call `policy_store.drop_converted_v1_sections(config)`. When it removed anything, write the
+       file with `atomic_write_text`. A failed write is the problem `"<principal id>: could not
+       rewrite settings.yaml"`, and the rest is skipped for that principal.
+     - Then `policy_store.reject_v1_sections`. A `V1PolicyConfigError` is the problem
+       `"<principal id>: settings.yaml still has v1 policy sections"`, and the rest is skipped.
+     - Then `policy_upgrade.ensure_scope_rows`. Afterwards **re-read the file**. If
+       `policy_upgrade._v2_rules` of its `auto_accept` section is not `None`, the problem is
+       `"<principal id>: rules are still in the version-2 format"`. This catches the case where
+       `ensure_scope_rows` returns `True` after a failed write (`policy_upgrade.py:86-90`).
+  3. **Tokens.**
+     - Run `policy_upgrade.ensure_token_rules(config, principal, log=log)`.
+     - Then read `authority_dir(principal) / "scoped_tokens.json"` directly. An unreadable file is
+       the problem `"<principal id>: scoped_tokens.json cannot be read"`.
+     - Every entry that has a `rule_ids` key and no `rules` key adds the problem `"<principal id>:
+       scoped token <id> still names rules"`.
+  4. **Verb names.** Run `policy_upgrade.ensure_canonical_verbs(config, resolved, principal) ->
+     list[str]`, which returns problems. It rewrites **only the `verbs` value** of rows whose
+     `verbs` list contains a key of `policy.registry.LEGACY_VERB_ALIASES`. Every other key, and
+     every other row, is kept byte-for-byte in meaning; nothing is re-serialized.
+     - **In settings.yaml.** Only a version-3 `auto_accept` section is touched. For each row dict
+       in `rules`:
+       - if its `verbs` names a legacy alias, set `verbs` to the sorted, de-duplicated list of
+         canonical names (each alias mapped through `LEGACY_VERB_ALIASES`, other names kept);
+       - first check the row is readable with `scope_rows.row_from_dict(row) is not None`. An
+         unreadable row is left as it is and is the problem `"<principal id>: rule <id or 'without
+         an id'> could not be read"`.
+       - When anything changed, back up once to `<file>.pre-canonical-verbs.bak` (never
+         overwriting an existing backup), then write with `atomic_write_text`. A failed backup or
+         write is the problem `"<principal id>: could not rewrite settings.yaml"`.
+     - **In scoped_tokens.json.** Use a new raw-file function next to `own_rules_in_file`:
+       `scoped_tokens.canonicalize_verbs_in_file(path) -> tuple[bool, list[str]]`.
+       - It loads the JSON, and for each entry's `rules` list edits only `verbs` as above.
+       - It leaves legacy entries (`rule_ids`), unknown keys and unreadable rows untouched.
+       - It writes with `atomic_write_json` only when something changed.
+       - It returns `(changed, problems)`.
+       - It does not use the store's `_write`/`_to_json`, which re-serialize and drop what they
+         cannot read. No store exists yet at this point anyway: `set_store` is called later, in
+         `web/server.py:1562`.
   - **Install-wide.** The admin config must exist (`admin_config.load()` is not `None`, which it is
     after `load_admin_config`). Otherwise the problem is `"the admin config has not been created"`.
   - **The marker.** When the list is empty and `read_marker()` is `None` or has `format < 7`, write
-    the marker. A marker already at format 7 is left as it is. Problems are logged at WARNING, one
-    line each, prefixed `Not ready for PrivacyFence 8: `, and the marker is not written. The next
-    start tries again.
-  - **Not in scope:** `former_ids` on rows (ADR 0172) stays, because it is data, not a format. The
-    audit log's chainless lines (ADR 0176) are history, not something to convert; 8.x keeps reading
-    them or decides otherwise in its own plan. Serial-less bundles (ADR 0200) are 8.x's decision.
+    the marker. A marker already at format 7 is left as it is. Each problem is logged at WARNING,
+    prefixed `Not ready for PrivacyFence 8: `, and the marker is not written. The next start tries
+    again.
+  - **Out of scope.**
+    - A local `--config` path that points outside the authority directory is not walked. The
+      marker covers the data directory only, and 8.x drops local mode anyway.
+    - `former_ids` on rows (ADR 0172) stays, because it is data, not a format.
+    - The audit log's chainless lines (ADR 0176) are history, not something to convert. 8.x keeps
+      reading them or decides otherwise in its own plan.
+    - Serial-less bundles (ADR 0200) are 8.x's decision.
 - **Readiness on the Admin page.** `data_format.status() -> dict` returns `{"ready": bool,
   "problems": list[str]}` from the last `migrate_everything` run, kept in module state; it is reset
   by `data_format.reset_for_tests()` in `tests/conftest.py::_reset`. The admin page state carries
@@ -2178,32 +2212,39 @@ phases:
   - tests/conftest.py
   - scripts/check_coverage_floor.py
   brief: |-
-    Read "Design → D12" in full.
-    1. policy_upgrade.py: add ensure_canonical_verbs per D12, for the settings rows and each scoped token's rules. For the tokens, use the scoped token store's own write path, as ensure_token_rules does (own_legacy_rules / own_rules_in_file). Read those first. If no existing writer fits, add a function to scoped_tokens.py next to own_rules_in_file that rewrites each token's rules through the same locked store path, with tests in tests/unit/test_scoped_tokens.py.
-    2. Create src/privacyfence/data_format.py with DATA_FORMAT, marker_path, read_marker, check_not_newer, migrate_everything, status and reset_for_tests, per D12. Do the per-principal steps in D12's order with D12's exact problem texts, and write the marker atomically (secure_files.atomic_write_json).
-    3. daemon_main.py:
-       - run_app calls data_format.check_not_newer(data_format.read_marker()) right after load_org_config.
-       - Then data_format.migrate_everything(log=_deferred_warnings.append) after load_admin_config, in both modes.
-       - Remove _upgrade_all_principals and its call in _start_org_web_server (~1231): migrate_everything now runs earlier, before the web server and the scoped token store, in both modes. Keep load_config's own lazy calls; they are idempotent.
-       - Stop condition: if anything between run_app's start and _start_org_web_server depends on _upgrade_all_principals having run at that later point, stop with status=blocked and explain.
-    4. tests/conftest.py: patch data_format.marker_path in the D8 fixture, exempt test_data_format, and call data_format.reset_for_tests() in _reset().
-    5. scripts/check_coverage_floor.py: add "src/privacyfence/data_format.py" to MODULE_FLOORS at 100.
-    6. Tests:
-       - tests/unit/test_data_format.py, with paths.data_dir patched to tmp_path:
-         - A fresh tmp data dir gets the marker with format 7 and the running version.
-         - A principal with a v2 section is converted and the marker is written.
-         - A principal with a marked v1 section is cleaned and the marker is written; an unmarked v1 section gives the exact problem and no marker.
-         - A token with legacy_raw that cannot be given rules gives the problem.
-         - A row with a legacy verb name is rewritten to the canonical name, with a backup, and the marker is written.
-         - An unreadable row gives the problem.
+    Read "Design → D12" in full. Every step, problem text and rule is there.
+    1. policy_upgrade.py: add ensure_canonical_verbs(config, resolved, principal) -> list[str] per D12 step 4, for settings.yaml only. It edits only `verbs` values, on version-3 sections only, keeps every other key, backs up once, and writes with atomic_write_text.
+    2. scoped_tokens.py: add canonicalize_verbs_in_file(path) -> tuple[bool, list[str]] next to own_rules_in_file, per D12. It edits only `verbs` inside each entry's rules, leaves legacy entries, unknown keys and unreadable rows untouched, and writes with atomic_write_json only on change.
+    3. Create src/privacyfence/data_format.py with DATA_FORMAT, marker_path, read_marker, check_not_newer, migrate_everything, status and reset_for_tests, per D12. Use D12's steps, order and exact problem texts. It does its own v1 clean-up write, re-reads the file after ensure_scope_rows, turns every per-file error into a problem, and imports daemon_main helpers inside the function.
+    4. daemon_main.py:
+       - main() calls data_format.check_not_newer(data_format.read_marker()) right after check_runtime_identity (~2487); a ConfigurationError goes to _refuse_to_start.
+       - run_app calls data_format.migrate_everything(log=logger.warning) after load_admin_config, in both modes, before the web server is built.
+       - Remove _upgrade_all_principals and its call in _start_org_web_server (~1231). Keep load_config's own lazy calls; they are idempotent.
+    5. tests/conftest.py: patch data_format.marker_path in the D8 fixture, exempt test_data_format, and call data_format.reset_for_tests() in _reset().
+    6. tests/unit/test_daemon_main.py: in the run_app harness (_patch_common, ~3257-3301), stub data_format.migrate_everything (returning []) and data_format.check_not_newer, so run_app tests never walk the source checkout.
+    7. scripts/check_coverage_floor.py: add "src/privacyfence/data_format.py" to MODULE_FLOORS at 100.
+    8. Tests:
+       - tests/unit/test_data_format.py, with paths.data_dir patched to tmp_path, and the admin config created where a test expects the marker:
+         - A fresh data dir gets the marker with format 7 and the running version.
+         - A v2 section is converted and the marker is written.
+         - A v2 section whose rewrite fails (monkeypatch atomic_write_text to raise for that path) gives the "still in the version-2 format" problem and no marker.
+         - A marked v1 section is cleaned and the marker is written; a failed clean-up write gives the problem; an unmarked v1 section gives the problem and no marker.
+         - A token entry with rule_ids and no rules gives the problem.
+         - A row with a legacy verb name gets only its verbs rewritten. Assert every other key, including former_ids, conditions/predicate and an unknown extra key, is unchanged, and that a backup exists. The same for a token's rules row.
+         - A row already canonical, but with operations in a hand-made order, is not rewritten (the file's mtime and content are unchanged).
+         - An unreadable row gives the problem and is left as it is.
+         - A corrupt settings.yaml and a corrupt scoped_tokens.json of an os-… principal each give a problem; migrate_everything does not raise, and other principals are still migrated.
          - An org principal under users/<id> that never signed in is migrated.
          - A marker at format 7 is not rewritten.
-         - A marker at format 8 makes check_not_newer raise the exact message.
+         - check_not_newer with format 8 raises the exact message.
          - A malformed marker reads as None.
          - status() reflects the last run.
-       - tests/unit/test_policy_upgrade.py: ensure_canonical_verbs for settings rows and token rules; no write when already canonical.
-       - tests/unit/test_daemon_main.py: run_app refuses a format-8 marker (the existing run_app test harness); the org start no longer calls _upgrade_all_principals, and every principal is still converted before the web server is built (adapt the existing tests of _upgrade_all_principals to migrate_everything, keeping their assertions).
-    7. Run ruff check . and python3 -m pytest tests/unit -q.
+       - tests/unit/test_policy_upgrade.py: ensure_canonical_verbs; no write when already canonical. tests/unit/test_scoped_tokens.py: canonicalize_verbs_in_file.
+       - tests/unit/test_daemon_main.py:
+         - main() refuses a format-8 marker before load_config runs (assert load_config was not called).
+         - Rewrite test_upgrade_all_principals_runs_before_the_token_store_loads (~2440-2483) to record that run_app calls migrate_everything before _maybe_start_web_server.
+         - Port the three direct _upgrade_all_principals tests (~2485-2546) to migrate_everything, keeping their assertions.
+    9. Run ruff check . and python3 -m pytest tests/unit -q.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_data_format.py -q --cov=privacyfence.data_format --cov-branch --cov-report=term-missing passes and reports 100%
@@ -2222,10 +2263,10 @@ phases:
   brief: |-
     Read "Design → D12" ("Readiness on the Admin page").
     1. routes_admin.py: add "upgrade_ready": data_format.status() to the admin page state in both modes.
-    2. settings_window_html.py: render D12's two lines at the bottom of the admin surface, showing at most the first three problems, escaped.
+    2. settings_window_html.py: render D12's two lines at the bottom of the admin surface, showing at most the first three problems, each passed through esc() (settings_window_html.py:379).
     3. Tests:
        - test_routes_admin.py: the state carries upgrade_ready in both modes.
-       - test_settings_window_html.py: both lines render; problem text is HTML-escaped (use a problem containing "<b>").
+       - test_settings_window_html.py: both lines are in the page's JS, and the problem text goes through esc(). Rendering is client-side, so assert on the JS source; if the hook's Chromium line had no WARNING, also add a browser-smoke check that a problem containing "<b>" shows as text.
     4. Run ruff check . and python3 -m pytest tests/unit -q.
   acceptance:
   - python3 -m pytest tests/unit -q passes
