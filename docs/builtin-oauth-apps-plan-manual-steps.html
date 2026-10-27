@@ -102,7 +102,7 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
 
     <h3>Three places configuration lives</h3>
     <div class="files">
-      <div class="file"><span class="path">org/org_config.json</span><span class="who">Built offline, signed, installed by you</span>
+      <div class="file"><span class="path">org/org_bundle.json</span><span class="who">Built offline, signed, installed by you. 7.x copies it once from 6.x's org_config.json.</span>
         <ul><li><code>mode</code>, <code>server</code>, <code>idp</code> (all three can also come from environment variables)</li><li>Your own app credentials, only for providers where you don't want the built-in app</li><li>A Grist OAuth app, if you use one</li></ul></div>
       <div class="file"><span class="path">org/admin_config.json</span><span class="who">Written by PrivacyFence, edited on the Admin page</span>
         <ul><li>Which services are offered</li><li>Grist and Peek server addresses, Jira Assets, rooms, unattended sessions</li><li>Org mode: file delivery, web push, sign-in restrictions, step-up (stricter only), scoped tokens, audit forwarding</li></ul></div>
@@ -126,8 +126,10 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
     <h3>Upgrading an existing server from 6.x</h3>
     <ol class="flow">
       <li><div>Install 7 and restart. You don't need to change anything first.</div></li>
+      <li><div>7 copies <code>org_config.json</code> and its signing-key and serial pins to new names (<code>org_bundle.json</code>, <code>org_bundle_signing_pubkey.txt</code>, <code>org_bundle_serial.txt</code>). It never changes or deletes 6.x's files.</div></li>
       <li><div>On this first start, PrivacyFence copies the operational settings out of your current <code>org_config.json</code> into <code>admin_config.json</code>, and logs that it did. The connectors your bundle offered stay exactly the ones offered. A provider you add to the bundle later also needs switching on, on the Admin page.</div></li>
       <li><div>From then on those sections in the bundle are ignored, and each start logs a warning naming them. Rebuild the bundle with only the startup and credential flags; <code>build_org_bundle.py</code> now refuses the moved flags and names each one.</div></li>
+      <li><div><strong>Changed your mind?</strong> Stop 7 and install the latest 6.x (6.9.x). It runs with the <code>org_config.json</code> it always had. Admin page changes and bundles installed under 7 don't carry back. To upgrade again from 6.x's current files, first delete <code>org_bundle.json</code>, <code>org_bundle_adopted.json</code>, the two new pin files and <code>admin_config.json</code>.</div></li>
       <li><div>Back up <code>admin_config.json</code> with the rest of the data volume. It is not signed, so it gets the same file protection as the install-wide settings.</div></li>
     </ol>
 
@@ -278,11 +280,12 @@ printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <co
       <li><label><input type="checkbox" id="ma3-2"></label><div>Restart again. The log should now warn that <code>org_config.json carries settings that are now managed on the Admin page and are ignored</code>, naming <code>authz</code> and <code>web_push</code>.</div></li>
       <li><label><input type="checkbox" id="ma3-3"></label><div>As an IdP admin, open <strong>Admin</strong>. Offer Miro: it asks for your passkey, and Miro appears on <code>/connect</code> without a restart. Withdraw Slack: no passkey, and Slack disappears from <code>/connect</code>.</div></li>
       <li><label><input type="checkbox" id="ma3-4"></label><div>Change the inline download limit under File delivery. The page should say "Restart PrivacyFence for these changes to take effect: File delivery". Try to turn step-up's <em>require passkey</em> off: the page should not offer it.</div></li>
+      <li><label><input type="checkbox" id="ma3-8"></label><div><strong>Downgrade check.</strong> Note the SHA-256 of <code>org/org_config.json</code> and the two old pin files before upgrading. After the 7 start, they must be unchanged and <code>org_bundle.json</code> must exist. Then stop 7, reinstall the 6.9.x image or package, and start it: it must come up with the same connectors and settings as before the upgrade.</div></li>
       <li><label><input type="checkbox" id="ma3-7"></label><div>Back on the upgraded server: the bottom of the Admin page should say "Ready for PrivacyFence 8: yes", and the data volume should contain <code>data_format.json</code> with <code>"format": 7</code>. A person who never signed in after the upgrade should still have their rules converted. Check one under <code>users/&lt;id&gt;/authority/config/settings.yaml</code>: <code>auto_accept.version</code> is 3.</div></li>
       <li><label><input type="checkbox" id="ma3-5"></label><div>Compare <strong>Settings</strong> as the admin and as a normal user. Both should show the same sections, with no Privacy or Stats. As the normal user there is no Admin item in the header, and opening <code>/admin</code> says "Only administrators can open this page."</div></li>
       <li><label><input type="checkbox" id="ma3-6"></label><div>On the desktop install from item 4, open <strong>Admin</strong>, withdraw Miro and check it disappears from Settings → Connectors. Then upload a <code>rooms.json</code> from <code>scripts/sync_room_directory.py --output rooms.json</code>, or skip this step if you have no Workspace room directory.</div></li>
     </ol>
-    <p class="done-when"><strong>Report back:</strong> paste <code>ma3: import ok, ignored-warning ok, live offer/withdraw ok, restart notice ok, ready-for-8 ok, settings same ok, desktop ok</code> into the PR.</p>
+    <p class="done-when"><strong>Report back:</strong> paste <code>ma3: import ok, 6.x files untouched ok, downgrade to 6.9 ok, ignored-warning ok, live offer/withdraw ok, restart notice ok, ready-for-8 ok, settings same ok, desktop ok</code> into the PR.</p>
   </section>
 
   <section class="item" id="ma4">

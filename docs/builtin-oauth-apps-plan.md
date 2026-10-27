@@ -45,6 +45,9 @@ After this plan:
   as a single-administrator trial on `http://localhost`. Sign-in uses a one-time setup code from the
   container log, then a passkey. Built-in apps reach it through the relay's loopback forwarding.
   `mode` and the server address can also come from environment variables.
+- **The upgrade can be undone.** 7.x copies `org_config.json` to `org_bundle.json`, and its pin
+  files to new names, and never touches 6.x's files. Going back to the latest 6.x keeps working
+  with the `org_config.json` it had.
 - **7.x is the migration checkpoint.** Every 7.x start upgrades every person's stored rules and
   tokens, not only those of people who sign in. Once nothing is left to convert, it writes a
   `data_format.json` marker. 8.x can then drop all the old upgrade code and refuse data without
@@ -124,7 +127,7 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
   Observability is off (ADR 0186).
 - **Privacy page.** `website/privacy/index.html:26-27` and `:45-54` say the policy covers only the
   site and `downloads.privacyfence.eu`, and that the software "sends nothing to the project".
-- **ADR numbers.** The highest accepted ADR is 0238, so this plan takes 0239 to 0246.
+- **ADR numbers.** The highest accepted ADR is 0238, so this plan takes 0239 to 0247.
 - **Operational sections and their parsers.** Each takes the whole org config dict:
   - `download_delivery`: `org_mode.DownloadDeliveryConfig.from_org_config`
   - `audit_forwarding`: `org_mode.AuditForwardingConfig.from_org_config`
@@ -213,6 +216,9 @@ accepted: each one identifies the PrivacyFence app, and every sign-in still need
 consent.
 
 ### D2. What stays in `org_config.json`
+
+From 7.x on, this file is `org/org_bundle.json`, adopted from `org_config.json` by copying (D13).
+"Bundle" and `org_config.json` elsewhere in this plan mean that file.
 
 `org_config.json` stays a signed bundle, with the same loading, signing, serial and hash-log rules
 (`daemon_main.load_org_config`, ADR 0016, 0200). Its meaningful keys are now:
@@ -981,8 +987,9 @@ to `http://localhost:<port>`.
   section to org_config.json to serve any other address.")`.
 - A trial needs no bundle at all. Built-in apps and the admin config supply everything else.
 - **A real server never falls back to a trial.** Trial mode is refused when the data directory
-  shows it belonged to an organization server. That means
-  `org_bundle_signing.pinned_public_key_path(org_dir())` exists, or the admin config's
+  shows it belonged to an organization server. That means a pinned signing key exists under
+  either name (`org_bundle_signing_pubkey.txt` or the 6.x `org_config_signing_pubkey.txt`, D13),
+  or the admin config's
   `imported_from_bundle_sha256` is non-empty. The message is `ConfigurationError("This data
   directory belonged to an organization server; restore org_config.json, or use a new data
   directory for a trial.")`. Without this, deleting the bundle would silently turn a production
@@ -1281,6 +1288,83 @@ signs in during 7.x would keep old data.
   same file before replacing anything, so an upgrade stops before the old release is removed.
   Because of that, the marker's path and its `format` key are a stable contract.
 
+### D13. The 6 → 7 upgrade is reversible: 7.x never changes 6.x's files
+
+A 7.x install must be able to go back to the latest 6.x release (6.9.x) and keep running with the
+`org_config.json` it had. 7.x therefore never writes, renames or deletes a 6.x configuration file.
+
+**New file names, adopted by copying.**
+
+| What | 6.x name (left untouched) | 7.x name |
+|---|---|---|
+| The signed bundle | `org/org_config.json` | `org/org_bundle.json` |
+| The pinned signing key | `org/org_config_signing_pubkey.txt` | `org/org_bundle_signing_pubkey.txt` |
+| The pinned serial | `org/org_config_serial.txt` | `org/org_bundle_serial.txt` |
+
+The pin files move too. If 7.x installed a newer bundle and advanced a shared serial pin, 6.x
+would refuse its own older `org_config.json` after a downgrade (ADR 0200).
+
+- **Constants.**
+  - `org_bundle_signing.py`: `PINNED_PUBKEY_FILENAME = "org_bundle_signing_pubkey.txt"` and
+    `PINNED_SERIAL_FILENAME = "org_bundle_serial.txt"`, plus
+    `LEGACY_PINNED_PUBKEY_FILENAME = "org_config_signing_pubkey.txt"` and
+    `LEGACY_PINNED_SERIAL_FILENAME = "org_config_serial.txt"`.
+  - `paths.py`: `ORG_BUNDLE_FILENAME = "org_bundle.json"`,
+    `LEGACY_ORG_CONFIG_FILENAME = "org_config.json"` and `org_bundle_path() -> Path`, which returns
+    `org_dir() / ORG_BUNDLE_FILENAME`.
+- **Adoption.** `org_bundle_signing.adopt_legacy_files(org_dir: Path) -> bool` is called at the
+  top of `daemon_main.load_org_config()`, so it covers the daemon, the CLI and every script that
+  loads the bundle through it.
+  - When `org_bundle.json` does not exist and `org_config.json` does:
+    - copy the legacy file's bytes unchanged to `org_bundle.json` (`atomic_write_bytes`, mode
+      0600), so the signature still verifies;
+    - copy each legacy pin file to its new name when the new one does not exist;
+    - write `org/org_bundle_adopted.json` = `{"from": "org_config.json", "sha256": "<hex of the
+      copied bytes>", "at": "<UTC ISO-8601>"}`;
+    - log at WARNING `Copied org/org_config.json to org/org_bundle.json for PrivacyFence 7. The
+      original is kept unchanged so that you can go back to 6.x.`;
+    - return True.
+  - Otherwise it does nothing and returns False.
+  - It never modifies or deletes a legacy file. A failed copy raises `ConfigurationError` naming
+    the file, so the daemon refuses to start rather than run with half a configuration.
+  - `load_org_config` stores the result in the module-level
+    `daemon_main._bundle_adopted_this_start: bool`, which `tests/conftest.py::_reset` sets back to
+    False. When it is True, `run_app` records an audit entry `org_bundle_adopted` right after
+    `log_org_config_bundle_hash`.
+- **After adoption** 7.x reads and writes only the new names.
+  - When `org_config.json` still exists and its SHA-256 differs from the one recorded in
+    `org_bundle_adopted.json`, every start logs at WARNING `org/org_config.json changed after the
+    upgrade and is ignored: PrivacyFence 7 reads org/org_bundle.json. Install the new bundle on
+    the Admin page, or copy it to org/org_bundle.json.`
+  - That covers an operator who followed 6.x docs and copied a new bundle to the old name.
+- **Every 7.x reader and writer uses `paths.org_bundle_path()`:**
+  - `daemon_main.load_org_config` (`:485`) and `log_org_config_bundle_hash` (`:548`);
+  - `settings_controller.install_org_config_bytes` (`:1145`) and the snapshot's
+    installed-date read (`:2108`);
+  - `deploy/docker/healthcheck.py:16` and `deploy/docker/docker-entrypoint.sh:5`. In the shell
+    script, it either file counts as "a bundle is installed", because adoption runs in the daemon;
+  - `scripts/build_org_bundle.py`'s `--output` default becomes `org_bundle.json` (`:239`);
+  - `scripts/qa_authenticate_connectors.py:61` keeps working through adoption, so only its
+    default path constant changes to the new name.
+- **The other 7.x writes are 6.x-compatible.**
+  - `admin_config.json`, `data_format.json`, `relay_token.txt` and `org_bundle_adopted.json` are
+    new files that 6.x ignores.
+  - The settings.yaml and scoped_tokens.json rewrites D12 performs produce formats the latest 6.x
+    already reads: version-3 rows, canonical verb names, tokens holding their own rules. 6.9.x is
+    the current code base, where all three exist.
+  - What does not carry back to 6.x: changes made on the Admin page, bundles installed under 7.x,
+    passkeys or connections made in a trial. A downgrade returns to the configuration
+    `org_config.json` holds.
+- **Re-upgrading after a downgrade.** `org_bundle.json` and `admin_config.json` still exist, so
+  7.x uses them as they were. To start from 6.x's current files instead, delete
+  `org/org_bundle.json`, `org/org_bundle_adopted.json`, the two new pin files and
+  `org/admin_config.json`, then start 7.x. Adoption and the import run again. The docs give
+  exactly this list.
+- **Trial safety (D9)** treats either pin-file name as "this belonged to an organization server".
+- **8.x (ADR 0246's list).** 8.x deletes `adopt_legacy_files` and the legacy constants along with
+  the other pre-7 converters. The D12 checkpoint does not need the legacy file, because the marker
+  is written only after adoption has run.
+
 ## ADRs
 
 - **0239** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -1324,6 +1408,10 @@ signs in during 7.x would keep old data.
     install 7.x first.
 
   Relates to 0047, 0171, 0172, 0228, 0236, 0041.
+- **0247** — The 6 → 7 upgrade is reversible. 7.x adopts `org_config.json` and its pin files by
+  copying them to new names (`org_bundle.json`, `org_bundle_signing_pubkey.txt`,
+  `org_bundle_serial.txt`) and never changes a 6.x file, so the latest 6.x keeps running after a
+  downgrade. Amends 0016 and 0200 (the file names); relates to 0246.
 
 ## Manual steps
 
@@ -1344,6 +1432,14 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
     deprecation notices.
 
 ## Risks and open questions
+
+- **Downgrade target is the latest 6.x.** D12 rewrites rules into formats 6.9.x reads: version-3
+  rows, canonical verbs, tokens with their own rules. An older 6.x release may not read them.
+  The docs name 6.9.x as the release to go back to.
+- **The 7.x docs use the new file name.** An operator who follows old instructions and copies a
+  bundle to `org_config.json` after upgrading gets the "changed after the upgrade and is ignored"
+  warning at every start. That is deliberate: it is better than 7.x silently reading a file that
+  6.x also owns.
 
 - **A principal whose data cannot be converted blocks the marker.** Examples are a v1 section
   without the conversion marker, or an unreadable rule. That install cannot move to 8.x until the
@@ -1426,10 +1522,62 @@ verify_after_merge:
 - test ! -d cloudflare/oauth-relay || (cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test)
 final_checks:
 - docs/builtin-oauth-apps-plan.md and docs/builtin-oauth-apps-plan-manual-steps.html are deleted, and grep -rn "builtin-oauth-apps-plan" --exclude-dir=.git . finds nothing
-- ADRs 0239-0246 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0016, 0196 and 0217 carry one new Status line each; ADR 0040 is unchanged
+- ADRs 0239-0247 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0016, 0196, 0200 and 0217 carry new Status lines; ADR 0040 is unchanged
 - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
 - cd cloudflare/oauth-relay && npm ci && npm test && npm run typecheck && npm run dry-run passes
 phases:
+- id: p0-bundle-file-rename
+  title: 7.x reads org_bundle.json, adopted by copying org_config.json and its pin files, so a downgrade to 6.x keeps working
+  depends_on: []
+  complexity: M
+  touches:
+  - src/privacyfence/org_bundle_signing.py
+  - tests/unit/test_org_bundle_signing.py
+  - src/privacyfence/paths.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  - src/privacyfence/settings_controller.py
+  - tests/unit/test_settings_controller.py
+  - tests/unit/web/test_routes_settings.py
+  - deploy/docker/healthcheck.py
+  - deploy/docker/docker-entrypoint.sh
+  - scripts/build_org_bundle.py
+  - tests/unit/test_build_org_bundle.py
+  - scripts/qa_authenticate_connectors.py
+  - tests/unit/test_qa_authenticate_connectors.py
+  - tests/conftest.py
+  brief: |-
+    Read "Design → D13" in full. Every name, message and rule is there.
+    1. org_bundle_signing.py: switch PINNED_PUBKEY_FILENAME and PINNED_SERIAL_FILENAME to the 7.x names, add the two LEGACY_ constants, and add adopt_legacy_files(org_dir) per D13. Use secure_files.atomic_write_bytes, and write org_bundle_adopted.json with atomic_write_json.
+    2. paths.py: add ORG_BUNDLE_FILENAME, LEGACY_ORG_CONFIG_FILENAME and org_bundle_path().
+    3. daemon_main.py:
+       - load_org_config calls adopt_legacy_files(org_dir()) first, sets _bundle_adopted_this_start, and reads paths.org_bundle_path().
+       - Add the "changed after the upgrade and is ignored" warning per D13.
+       - log_org_config_bundle_hash reads the new path.
+       - run_app records the org_bundle_adopted audit entry right after log_org_config_bundle_hash.
+       - Update the error texts that name org_config.json in load_org_config to name org/org_bundle.json.
+    4. settings_controller.py: install_org_config_bytes writes paths.org_bundle_path() (:1145), and the snapshot's installed date reads it (:2108).
+    5. deploy/docker/healthcheck.py and docker-entrypoint.sh per D13 (either file counts as installed). Name both files in the entrypoint message.
+    6. scripts/build_org_bundle.py: the --output default becomes org_bundle.json. scripts/qa_authenticate_connectors.py: DEFAULT_ORG_CONFIG_PATH becomes the new name.
+    7. tests/conftest.py: reset daemon_main._bundle_adopted_this_start in _reset().
+    8. Tests:
+       - test_org_bundle_signing.py:
+         - adoption copies the bundle bytes and both pins, writes the record, and leaves the legacy files byte-identical with unchanged mtimes;
+         - no adoption when org_bundle.json exists;
+         - a failed copy raises ConfigurationError;
+         - pins are read and written only under the new names after adoption.
+       - test_daemon_main.py:
+         - a data dir with only org_config.json loads through adoption and audits org_bundle_adopted once;
+         - a changed org_config.json after adoption logs the "ignored" warning and is not read;
+         - a downgrade simulation: after a 7.x start that installs a newer-serial bundle, the legacy serial pin and org_config.json are untouched.
+       - Existing tests that write org_dir()/"org_config.json" keep working through adoption. Change only the tests that read the installed file back, or that assert a pin file's name, to the new names (test_settings_controller.py, test_routes_settings.py, test_build_org_bundle.py, test_qa_authenticate_connectors.py). Do not weaken any assertion.
+    9. Run ruff check . and python3 -m pytest tests/unit -q.
+    Stop condition: if more than 40 existing tests need edits beyond a file name, stop with status=blocked and list them.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - python3 -m pytest tests/unit/test_org_bundle_signing.py -q -k adopt passes and selects at least 4 tests
+  - grep -rn '"org_config.json"' src/privacyfence | grep -v LEGACY_ORG_CONFIG_FILENAME finds nothing
+  - ruff check . passes
 - id: p1-builtin-apps-generator
   title: Bake built-in OAuth app credentials into every distribution and read them at runtime
   depends_on: []
@@ -1468,6 +1616,7 @@ phases:
   title: 'The admin config file: schema, load/save and the one-time import from a bundle'
   depends_on:
   - p1-builtin-apps-generator
+  - p0-bundle-file-rename
   complexity: M
   touches:
   - src/privacyfence/admin_config.py
@@ -1932,7 +2081,8 @@ phases:
   - ruff check . passes
 - id: p10-bundle-tooling
   title: build_org_bundle.py writes only startup settings and credentials; the room sync writes a file to upload
-  depends_on: []
+  depends_on:
+  - p0-bundle-file-rename
   complexity: M
   touches:
   - scripts/build_org_bundle.py
@@ -2273,7 +2423,7 @@ phases:
   - grep -n "Ready for PrivacyFence 8" src/privacyfence/settings_window_html.py matches
   - ruff check . passes
 - id: p12-adrs
-  title: ADRs 0239-0246 and the status lines on the ADRs they amend
+  title: ADRs 0239-0247 and the status lines on the ADRs they amend
   depends_on:
   - p19b-upgrade-readiness-on-admin
   - p10-bundle-tooling
@@ -2288,13 +2438,15 @@ phases:
   - docs/adr/0244-organization-mode-can-start-from-the-environment-and-run-as-a-localhost-trial.md
   - docs/adr/0245-local-mode-is-deprecated-in-7-and-removed-in-8.md
   - docs/adr/0246-7x-is-the-migration-checkpoint-for-8x.md
+  - docs/adr/0247-the-6-to-7-upgrade-is-reversible.md
+  - docs/adr/0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md
   - docs/adr/README.md
   - docs/adr/0016-org-config-bundle-hash-log-and-signing.md
   - docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md
   - docs/adr/0217-the-org-admin-stats-page-shows-counts-only.md
   brief: |-
-    1. Check `ls docs/adr | tail -3` first. If 0239-0246 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
-    2. Write the eight ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
+    1. Check `ls docs/adr | tail -3` first. If 0239-0247 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
+    2. Write the nine ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
        - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, Design D1-D8, "Accepted risks" and "Risks".
        - Alternatives to record:
          - 0239: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
@@ -2305,12 +2457,14 @@ phases:
          - 0244: a trial that still needs an IdP; signing in to the trial with Google through the relay; a fixed password.
          - 0245: dropping local mode in 7 without a deprecation release; keeping local mode indefinitely.
          - 0246: keeping every converter forever; a per-file version check in 8 instead of one marker; migrating lazily per principal as before.
+         - 0247: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
-       - 0016: "Amended by [0240](...): the signature no longer covers operational settings."
+       - 0016: "Amended by [0240](...): the signature no longer covers operational settings. Amended by [0247](...): the bundle and pin file names."
+       - 0200: "Amended by [0247](...): the serial pin file name."
        - 0196: "Amended by [0240](...) and [0241](...)."
        - 0217: "Amended by [0242](...): the Stats section is on the Admin page."
-    4. docs/adr/README.md: add eight index rows in the existing format:
+    4. docs/adr/README.md: add nine index rows in the existing format:
        - 0239: "Accepted; relates to 0040"
        - 0240: "Accepted; amends 0016, 0196"
        - 0241: "Accepted; amends 0196; relates to 0016, 0034, 0068, 0070, 0200"
@@ -2319,9 +2473,10 @@ phases:
        - 0244: "Accepted; relates to 0011, 0177, 0213"
        - 0245: "Accepted; relates to 0002, 0003"
        - 0246: "Accepted; relates to 0041, 0047, 0171, 0172, 0228, 0236"
+       - 0247: "Accepted; amends 0016, 0200; relates to 0246"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md docs/adr/0246-*.md lists eight files (or the renumbered eight)
+  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md docs/adr/0246-*.md docs/adr/0247-*.md lists nine files (or the renumbered nine)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -2337,13 +2492,14 @@ phases:
   - docs/connector-qa.md
   - docs/testing-policy.md
   brief: |-
-    Reference docs describe today's behaviour and link the ADRs p12 wrote (take their file names from docs/adr/).
+    Reference docs describe today's behaviour and link the ADRs p12 wrote (take their file names from docs/adr/). Wherever a doc names the file 7.x reads or installs, use org/org_bundle.json (D13); org_config.json appears only as the 6.x name.
     1. org-mode-setup-guide.md:
        - §5 "Connector apps": built-in apps through the relay are the default. Give the relay requirements from D5 (an https issuer_url with no path, a server reachable from the internet at /.well-known/privacyfence-relay, allowed through §7's IP restriction, outbound HTTPS to oauth.privacyfence.eu), the 35-day re-verification, the public /registrations list, and that your own app goes in the bundle.
        - §6 "Build the bundle": only the startup and credential flags remain; list the moved flags and say they are now on the Admin page; describe the one-time import on upgrade and the "are ignored" warning.
        - "Who may sign in", §10 (install-wide policy), §12 (step-up, including "stricter only from the page; relax by editing org/admin_config.json and restarting"), "Notifications on a phone", §13 (file delivery), audit forwarding and scoped tokens: each now points to the matching Admin page section and says which changes need a restart.
        - A new "Admin page" subsection: who sees it, the sections, step-up.
-       - §14 "Upgrade": upgrading to 8.x requires having run 7.x at least once with "Ready for PrivacyFence 8: yes" on the Admin page. Explain data_format.json (D12), the problems it can report and how to fix each, and that 7.x refuses data from a newer release.
+       - §14 "Upgrade" and a new "Going back to 6.x" subsection: 7.x copies org_config.json and its pin files to org_bundle.json and the new pin names, and never changes 6.x's files (D13). To go back, stop 7.x and install the latest 6.x (6.9.x): it runs with org_config.json as it was, and changes made on the Admin page do not carry back. To re-upgrade from 6.x's current files, delete D13's list of 7.x files first. Use the new file name everywhere the guide installs or copies a bundle (Docker: org/org_bundle.json).
+       - Also in §14: upgrading to 8.x requires having run 7.x at least once with "Ready for PrivacyFence 8: yes" on the Admin page. Explain data_format.json (D12), the problems it can report and how to fix each, and that 7.x refuses data from a newer release.
        - §15 Troubleshooting: rows for the relay errors (proof_failed, host_not_public, revoked, too_soon, the issuer_url message, and the relay's 400 text from D5) and for the "are ignored" warning.
     2. org-mode-docker.md:
        - Outbound HTTPS to oauth.privacyfence.eu when using built-in apps.
@@ -2388,7 +2544,7 @@ phases:
   - plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md
   - CHANGELOG.md
   brief: |-
-    Reference docs describe today's behaviour and link the ADRs p12 wrote.
+    Reference docs describe today's behaviour and link the ADRs p12 wrote. Wherever a doc names the file 7.x reads or installs, use org/org_bundle.json (D13).
     1. getting-started.md and connecting-a-service.md:
        - A fresh install offers Google, Slack, Salesforce, Atlassian, Miro and Telegram with built-in apps and no bundle.
        - The Admin page: who sees it; Services and Features; on desktop it is the install owner's.
@@ -2425,6 +2581,7 @@ phases:
        - the Docker localhost trial and the environment variables;
        - "Deprecated: desktop (local) mode, to be removed in PrivacyFence 8";
        - "Every start upgrades all stored data and records data_format.json. PrivacyFence 8 will require it, so upgrade to 8 only from 7.x.";
+       - "PrivacyFence 7 reads org/org_bundle.json, copied once from org_config.json, and never changes 6.x's files, so you can go back to 6.9.x" (D13);
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
     8. Run the docs tests below and ruff check ..
