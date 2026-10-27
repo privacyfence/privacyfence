@@ -95,7 +95,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Google Contacts](#google-contacts) | 7 | 3 | 0 | 4 |
 | [Google Tasks](#google-tasks) | 8 | 3 | 0 | 5 |
 | [Apps Script](#apps-script) | 4 | 1 | 2 | 1 |
-| [Slack](#slack) | 11 | 6 | 3 | 2 |
+| [Slack](#slack) | 12 | 7 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
 | [Salesforce](#salesforce) | 9 | 1 | 4 | 4 |
 | [Jira](#jira) | 13 | 6 | 3 | 4 |
@@ -104,7 +104,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
-| **Total** | **166** | **57** | **38** | **71** |
+| **Total** | **167** | **58** | **38** | **71** |
 
 ## Gmail
 
@@ -219,6 +219,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
+| `slack_get_read_state` | read | `auto` | Get your own Slack read state for a few specific messages you already have, without reading them again. |
 | `slack_list_channels` | read | `auto` | List Slack channels visible to the user (id, name, privacy, topic, purpose, member count). |
 | `slack_list_dms` | read | `auto` | List 1:1 direct-message conversations visible to the user (id, other participant). |
 | `slack_list_group_chats` | read | `auto` | List group-DM conversations visible to the user (id, name, participants). |
@@ -227,7 +228,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `slack_resolve_permalink` | read | `auto` | Parse a Slack message permalink (from a message's "Copy link") into the channel id, timestamp, and (if the link points at a threaded reply) thread root timestamp needed by slack_get_channel_history/slack_get_thread_replies. |
 | `slack_get_channel_history` | read | `review` | Fetch recent messages in a Slack channel. |
 | `slack_get_thread_replies` | read | `review` | Fetch all replies in a Slack thread. |
-| `slack_search_messages` | read | `review` | Search Slack messages by query, participant, recent time window, or a combination. |
+| `slack_search_messages` | read | `review` | Search Slack messages by query, participant, time window, or a combination. |
 | `slack_create_group_chat` | write | `popup` | Create (or reopen the existing) group-DM conversation with the given participants and return its channel id, ready for slack_send_message. |
 | `slack_send_message` | write | `popup` | Send a message to a Slack channel or DM. |
 

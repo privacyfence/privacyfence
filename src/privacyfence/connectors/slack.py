@@ -12,7 +12,7 @@ from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
 from ..preview_dates import format_preview_datetime
 from ..privacy_filter import apply_list, apply_text, category_policy
-from ..slack_client import SlackClient, SlackClientError
+from ..slack_client import SlackClient, SlackClientError, message_read_state
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def _since_minutes(minutes: int) -> str:
 
 
 def _message_to_dict(m: Any) -> dict[str, Any]:
-    return {
+    d = {
         "ts": m.id,
         "channel_id": m.channel_id,
         "channel_name": m.channel_name,
@@ -52,6 +52,9 @@ def _message_to_dict(m: Any) -> dict[str, Any]:
         "thread_ts": m.thread_ts,
         "reply_count": m.reply_count,
     }
+    if m.read_state:
+        d["read_state"] = m.read_state
+    return d
 
 
 def _apply_message_privacy(dicts: list[dict[str, Any]], content_category: str) -> list[dict[str, Any]]:
@@ -72,6 +75,9 @@ def _apply_message_privacy(dicts: list[dict[str, Any]], content_category: str) -
 _CURSOR_DESCRIPTION = (
     "Opaque cursor from a previous result's next_cursor; empty starts at the newest messages."
 )
+
+_READ_STATE_MAX_MESSAGES = 20
+_READ_STATE_MAX_THREADS = 3
 
 
 def _message_page_result(
@@ -268,7 +274,9 @@ class SlackConnector(Connector):
                     "Slack-imposed cap can make a page smaller than limit; see "
                     "docs/slack-setup.md) -- call again with cursor=next_cursor to read the "
                     "next page instead of assuming this is everything. Each message is {ts, channel_id, channel_name, user_id, "
-                    "user_name, text, thread_ts, reply_count}, newest first, one page of up "
+                    "user_name, text, thread_ts, reply_count, read_state}, newest first "
+                    "(read_state is 'unread', 'read' or 'unknown', from your own Slack read "
+                    "marker), one page of up "
                     "to limit messages (default 50, capped at 1000); text and names may be "
                     "redacted by the user's privacy settings. Use slack_get_thread_replies "
                     "for a thread's replies, or slack_search_messages to find messages by "
@@ -303,7 +311,9 @@ class SlackConnector(Connector):
                     "read the next page (see slack_get_channel_history's own note on why the "
                     "page can be short). Each message "
                     "is {ts, channel_id, channel_name, user_id, user_name, text, thread_ts, "
-                    "reply_count}, the parent message included, in Slack's order; text and "
+                    "reply_count, read_state}, the parent message included, in Slack's order; "
+                    "read_state is 'unread', 'read' or 'unknown' (a reply in a thread you do "
+                    "not follow); text and "
                     "names may be redacted by the user's privacy settings. Use "
                     "slack_get_channel_history for the channel's top-level messages; get "
                     "thread_ts from a permalink with slack_resolve_permalink. Requires "
@@ -326,19 +336,19 @@ class SlackConnector(Connector):
             ToolSpec(
                 name="slack_search_messages",
                 description=(
-                    "Search Slack messages by query, participant, recent time window, or a combination. "
-                    "Prefer participant over a text-only query for messages from or with someone -- e.g. "
-                    "'Bob wrote me' is participant='Bob'; 'Bob in a chat with Jane' is participant='Bob,Jane' "
-                    "-- it reads the matching DM/group-chat conversation(s) directly, which is more reliable "
-                    "than Slack's search index. Combine with query to filter their text. Defaults to "
-                    "90 days; widen or disable via days. For the last N minutes across every channel, DM, "
-                    "group DM and thread, pass minutes (query may then be empty): newest first, none older, "
-                    "but search-index delay can miss the last minute or two. Returns a list of "
-                    "{ts, channel_id, channel_name, user_id, user_name, text, thread_ts, reply_count}, up to "
-                    "count (default 20, capped at 100); a participant search reads at most 10 conversations "
-                    "and 2 history pages each, so it can return fewer. Text and names may be redacted by "
-                    "privacy settings. Use slack_get_channel_history for one known channel. "
-                    "Requires user approval."
+                    "Search Slack messages by query, participant, time window, or a combination. "
+                    "For messages from or with someone prefer participant over query -- 'Bob wrote me' "
+                    "is participant='Bob'; 'Bob in a chat with Jane' is participant='Bob,Jane' -- it "
+                    "reads those DM/group-chat conversations directly, more reliably than search; "
+                    "query then filters their text. Defaults to 90 days; widen or disable via days. "
+                    "For the last N minutes in every channel, DM, group DM and thread, pass minutes "
+                    "(query may be empty): newest first; search-index delay can miss the last minute "
+                    "or two. Returns a list of {ts, channel_id, channel_name, user_id, user_name, "
+                    "text, thread_ts, reply_count}, up to count (default 20, max 100); a participant "
+                    "search reads at most 10 conversations. Text and names may be redacted. Use "
+                    "read_state=true with care: one Slack request per conversation, easily "
+                    "rate-limited; prefer slack_get_read_state for the few messages that matter. "
+                    "Use slack_get_channel_history for one known channel. Requires user approval."
                 ),
                 params=[
                     ToolParam(
@@ -394,6 +404,48 @@ class SlackConnector(Connector):
                             "Comma-separated channel ids whose messages are dropped from the results. "
                             "Pass the ids a 'conversations I'm a member of' rule excludes; a result "
                             "from one of them stops that rule from covering the search."
+                        ),
+                    ),
+                    ToolParam(
+                        "read_state", "bool", required=False, default=False,
+                        description=(
+                            "Also return each message's read_state: 'unread' or 'read' against your own "
+                            "Slack read marker for its conversation, or 'unknown' for a thread reply or "
+                            "a conversation with no marker. Use with care: it costs one extra "
+                            "conversations.info request per conversation in the results (50/min) before "
+                            "the approval card appears, so a large sweep is easily rate-limited. For a "
+                            "handful of messages use slack_get_read_state instead. Default false."
+                        ),
+                    ),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="slack_get_read_state",
+                description=(
+                    "Get your own Slack read state for a few specific messages you already have, "
+                    "without reading them again. Use it sparingly, only for messages whose read "
+                    "state matters (for example the ones you are about to report as new), not for "
+                    "every search result: each distinct conversation costs one Slack request and "
+                    "each distinct thread one rate-limited conversations.replies request (about a "
+                    "minute each on an app distributed outside the Slack Marketplace). Returns a "
+                    "list of {channel_id, ts, thread_ts, read_state}, one per distinct requested "
+                    "message in request order, where read_state is 'unread', 'read' or 'unknown' "
+                    "(a thread you do not follow, or no marker). Prefer it over "
+                    "slack_search_messages' read_state=true for more than a few conversations. "
+                    "Returns no message text. Auto-approved."
+                ),
+                params=[
+                    ToolParam(
+                        "messages", "str",
+                        description=(
+                            "Comma-separated messages to check, 1 to 20, each channel_id:ts for a "
+                            "top-level message or channel_id:ts:thread_ts for a reply in a thread, "
+                            "from a message's channel_id, ts and thread_ts fields in "
+                            "slack_search_messages, slack_get_channel_history or "
+                            "slack_get_thread_replies. At most 3 distinct threads. A repeated entry "
+                            "is checked once."
                         ),
                     ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -476,6 +528,8 @@ class SlackConnector(Connector):
             return await self._get_thread_replies(**args)
         if tool == "slack_search_messages":
             return await self._search_messages(**args)
+        if tool == "slack_get_read_state":
+            return await self._get_read_state(**args)
         if tool == "slack_create_group_chat":
             return await self._create_group_chat(**args)
         if tool == "slack_send_message":
@@ -556,6 +610,54 @@ class SlackConnector(Connector):
         )
         return result
 
+    async def _get_read_state(self, messages: str) -> Any:
+        entries: list[tuple[str, str, str]] = []
+        for item in (part.strip() for part in messages.split(",")):
+            if not item:
+                continue
+            parts = item.split(":")
+            if len(parts) not in (2, 3) or not parts[0] or not parts[1]:
+                raise ValueError(
+                    "slack_get_read_state takes channel_id:ts or channel_id:ts:thread_ts "
+                    f"entries; got {item}"
+                )
+            thread_ts = parts[2] if len(parts) == 3 else ""
+            entries.append((parts[0], parts[1], "" if thread_ts == parts[1] else thread_ts))
+        entries = list(dict.fromkeys(entries))
+        if not entries or len(entries) > _READ_STATE_MAX_MESSAGES:
+            raise ValueError(f"slack_get_read_state takes 1 to {_READ_STATE_MAX_MESSAGES} messages")
+        threads = list(dict.fromkeys((c, t) for c, _, t in entries if t))
+        if len(threads) > _READ_STATE_MAX_THREADS:
+            raise ValueError(
+                f"slack_get_read_state takes at most {_READ_STATE_MAX_THREADS} distinct threads per call"
+            )
+        t0 = time.time()
+        markers = await self._fetch(
+            self._slack.last_read_markers, [c for c, _, t in entries if not t]
+        )
+        thread_markers = await self._fetch(self._slack.thread_last_read_markers, threads)
+        result = [
+            {
+                "channel_id": channel_id,
+                "ts": ts,
+                "thread_ts": thread_ts,
+                "read_state": message_read_state(
+                    ts,
+                    thread_markers.get((channel_id, thread_ts), "")
+                    if thread_ts
+                    else markers.get(channel_id, ""),
+                ),
+            }
+            for channel_id, ts, thread_ts in entries
+        ]
+        unread = sum(1 for r in result if r["read_state"] == "unread")
+        self._auto_audit(
+            "slack_get_read_state", "Get Slack Read State",
+            f"Read state of {len(result)} message(s), {unread} unread",
+            ",".join(dict.fromkeys(e[0] for e in entries)), t0,
+        )
+        return result
+
     async def _refresh_user_cache(self) -> Any:
         t0 = time.time()
         count = await self._fetch(self._slack.refresh_user_directory)
@@ -602,11 +704,15 @@ class SlackConnector(Connector):
         # First, so the group-DM/self-DM/one-to-one checks below hit the caches
         # this one conversations.info call fills. Never cached itself: a rule
         # decision must not outlive leaving the conversation.
-        is_member = await self._fetch(self._slack.resolve_is_member, channel_id)
+        state = await self._fetch(self._slack.conversation_state, channel_id)
+        is_member = state.is_member
+        own = await self._fetch(self._slack.own_user_id)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
         is_one_to_one_dm = await self._fetch(self._slack.resolve_is_one_to_one_dm, channel_id)
+        for m in messages:
+            m.read_state = message_read_state(m.id, state.last_read, own=bool(own) and m.user_id == own)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
         # Channel is known via slack_list_channels; Messages (count) is
         # only learned once approved. No literal excerpt here (no "First
@@ -672,11 +778,17 @@ class SlackConnector(Connector):
         # First, so the group-DM/self-DM/one-to-one checks below hit the caches
         # this one conversations.info call fills. Never cached itself: a rule
         # decision must not outlive leaving the conversation.
-        is_member = await self._fetch(self._slack.resolve_is_member, channel_id)
+        state = await self._fetch(self._slack.conversation_state, channel_id)
+        is_member = state.is_member
+        own = await self._fetch(self._slack.own_user_id)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
         is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
         is_one_to_one_dm = await self._fetch(self._slack.resolve_is_one_to_one_dm, channel_id)
+        thread_marker = next((m.last_read for m in messages if m.id == thread_ts), "")
+        for m in messages:
+            marker = state.last_read if m.id == thread_ts else thread_marker
+            m.read_state = message_read_state(m.id, marker, own=bool(own) and m.user_id == own)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "thread_content")
         # Channel is known via slack_list_channels; Replies (count) is only
         # learned once approved. No literal excerpt here (no "Thread
@@ -727,13 +839,14 @@ class SlackConnector(Connector):
                 "is_group_dm": is_group_dm,
                 "is_self_dm": is_self_dm,
                 "is_one_to_one_dm": is_one_to_one_dm,
-                "own_user_id": await self._fetch(self._slack.own_user_id),
+                "own_user_id": own,
             },
         )
 
     async def _search_messages(
         self, query: str = "", count: int = 20, participant: str = "", days: int = 90,
         minutes: int = 0, member_only: bool = False, exclude_channels: str = "",
+        read_state: bool = False,
     ) -> Any:
         # Validate before gating, not after -- same reasoning as
         # calendar_set_event_visibility's/slack_create_group_chat's own
@@ -755,6 +868,18 @@ class SlackConnector(Connector):
             only_channels=member_ids, exclude_channels=excluded,
         )
         n = len(messages)
+        own_user_id = await self._fetch(self._slack.own_user_id)
+        if read_state:
+            markers = await self._fetch(
+                self._slack.last_read_markers, [m.channel_id for m in messages]
+            )
+            for m in messages:
+                # A reply is judged by its thread's marker, which search does not carry.
+                is_reply = bool(m.thread_ts) and m.thread_ts != m.id
+                marker = "" if is_reply else markers.get(m.channel_id, "")
+                m.read_state = message_read_state(
+                    m.id, marker, own=bool(own_user_id) and m.user_id == own_user_id
+                )
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
         # Query/participant are Claude's own input (kept in the preview as
         # identifying context, same reasoning as drive_sheets_get_values's
@@ -825,10 +950,11 @@ class SlackConnector(Connector):
                 "days": days,
                 "minutes": minutes,
                 "member_only": member_only,
+                "read_state": read_state,
                 "exclude_channels": sorted(excluded),
                 "all_results_in_my_conversations": member_ids is not None
                 and all(m.channel_id in member_ids for m in messages),
-                "own_user_id": await self._fetch(self._slack.own_user_id),
+                "own_user_id": own_user_id,
             },
         )
 

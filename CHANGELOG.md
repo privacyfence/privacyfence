@@ -43,6 +43,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Slack reads say what you have not read yet.** Channel history and thread reads mark each message unread, read or unknown against your own Slack read marker; a search does too when the agent asks for it with read_state, which costs one Slack request per conversation in the results. Search results now carry the thread_ts of a reply in a thread.
+- **slack_get_read_state.** A new Slack tool returns whether up to 20 specific messages are unread, read or unknown, without reading them again, so an agent checks only the messages that matter instead of every search result. Auto-approved; it returns no message text.
+
 ### Fixed
 
 - **`privacyfence_check_policy` no longer cites a rule that cannot cover the tool.** Tools that share an operation (Slack search and channel history both read messages) made a read-only rule, such as "Slack – my conversations: allow read", turn a search's verdict into `unknown` and appear among the rules the call depends on, although the search is always denied under it. The check now considers only rules whose covered tools include the tool asked about.

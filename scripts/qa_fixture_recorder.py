@@ -2192,6 +2192,16 @@ def _check_slack_membership(client: SlackClient, method: str, target: str, conve
     return CheckResult("slack", method, target, ok, note)
 
 
+def _check_slack_read_marker(client: SlackClient, method: str, target: str, conversation_id: str) -> CheckResult:
+    try:
+        state = client.conversation_state(conversation_id)
+    except (SlackClientError, TypeError) as exc:
+        return CheckResult("slack", method, target, False, str(exc))
+    ok = bool(state.last_read)
+    note = "conversations.info reports last_read" if ok else "conversations.info reported no last_read"
+    return CheckResult("slack", method, target, ok, note)
+
+
 def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # No new seed artifact needed -- connector-qa.md's "Seed: Slack" already has
     # you create the privacyfence-qa-control channel with a durable,
@@ -2250,13 +2260,23 @@ def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except SlackClientError as exc:
         results.append(CheckResult("slack", "get_thread_replies", target, False, str(exc)))
 
-    # After the try/except so a failing thread check does not skip it. Neither check records a
-    # fixture: they prove Slack answers the membership questions the connector relies on.
+    # After the try/except so a failing thread check does not skip it. None of these checks records
+    # a fixture: they prove Slack answers the membership and read-marker questions the connector
+    # relies on, for a channel, a group DM and a 1:1 DM.
     if channel_id:
         results.append(_check_slack_membership(client, "conversation_membership", target, channel_id))
+        results.append(_check_slack_read_marker(client, "conversation_read_marker", target, channel_id))
     group_dm_id = cfg.get("group_dm_id", "")
     if group_dm_id:
         results.append(_check_slack_membership(client, "group_dm_membership", group_dm_id, group_dm_id))
+        results.append(_check_slack_read_marker(client, "group_dm_read_marker", group_dm_id, group_dm_id))
+    try:
+        dms = client.list_dms(max_results=1)
+    except SlackClientError as exc:
+        results.append(CheckResult("slack", "dm_read_marker", "1:1 DM", False, str(exc)))
+    else:
+        if dms:
+            results.append(_check_slack_read_marker(client, "dm_read_marker", dms[0].id, dms[0].id))
 
     return results
 

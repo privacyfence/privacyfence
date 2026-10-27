@@ -54,7 +54,7 @@ from privacyfence.calendar_client import CalendarClient  # noqa: E402
 from privacyfence.contacts_client import ContactsClient  # noqa: E402
 from privacyfence.tasks_client import TasksClient  # noqa: E402
 from privacyfence.apps_script_client import AppsScriptClient  # noqa: E402
-from privacyfence.slack_client import SlackClient, SlackClientError  # noqa: E402
+from privacyfence.slack_client import SlackClient, SlackClientError, SlackConversationState, SlackDirectMessage  # noqa: E402
 from privacyfence.telegram_client import TelegramPrivacyFenceClient  # noqa: E402
 
 
@@ -2209,13 +2209,20 @@ class TestCheckSlack:
         assert get_thread.raw is None
         assert "[QATEST]" in get_thread.note
 
-    def _membership_client(self, monkeypatch, *, member=True, ids=frozenset({"C1", "G1"}), ids_error=None):
+    def _membership_client(
+        self, monkeypatch, *, member=True, ids=frozenset({"C1", "G1"}), ids_error=None,
+        last_read="1700000000.000100", dms=(),
+    ):
         client = self._client({
             "conversations.replies": {
                 "messages": [{"ts": "100.1", "user": "U1", "text": self.SEED_TEXT}],
             },
         })
-        monkeypatch.setattr(client, "resolve_is_member", lambda _cid: member)
+        monkeypatch.setattr(
+            client, "conversation_state",
+            lambda _cid: SlackConversationState(is_member=member, last_read=last_read),
+        )
+        monkeypatch.setattr(client, "list_dms", lambda max_results=100, participant="": list(dms))
 
         def my_conversation_ids():
             if ids_error is not None:
@@ -2299,6 +2306,77 @@ class TestCheckSlack:
         membership = [r for r in results if r.method.endswith("_membership")]
         assert len(membership) == 2
         assert all(not r.fixture_relpath and r.raw is None for r in membership)
+
+    def test_read_marker_ok_when_a_marker_is_reported(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        marker = next(r for r in self._check() if r.method == "conversation_read_marker")
+
+        assert marker.ok
+        assert marker.note == "conversations.info reports last_read"
+        assert not marker.fixture_relpath and marker.raw is None
+
+    def test_read_marker_not_ok_when_none_is_reported(self, monkeypatch):
+        self._membership_client(monkeypatch, last_read="")
+
+        marker = next(r for r in self._check() if r.method == "conversation_read_marker")
+
+        assert not marker.ok
+        assert marker.note == "conversations.info reported no last_read"
+
+    def test_read_marker_carries_the_error_text(self, monkeypatch):
+        client = self._membership_client(monkeypatch)
+
+        def boom(_cid):
+            raise SlackClientError("conversations.info failed: ratelimited")
+
+        monkeypatch.setattr(client, "conversation_state", boom)
+
+        marker = next(r for r in self._check() if r.method == "conversation_read_marker")
+
+        assert not marker.ok
+        assert marker.note == "conversations.info failed: ratelimited"
+
+    def test_group_dm_read_marker_only_when_group_dm_id_is_set(self, monkeypatch):
+        self._membership_client(monkeypatch)
+
+        assert not any(r.method == "group_dm_read_marker" for r in self._check())
+
+        group = next(r for r in self._check(group_dm_id="G1") if r.method == "group_dm_read_marker")
+        assert group.ok
+        assert group.seed_artifact == "G1"
+
+    def test_dm_read_marker_uses_the_first_dm(self, monkeypatch):
+        client = self._membership_client(monkeypatch)
+        seen = []
+        monkeypatch.setattr(
+            client, "list_dms",
+            lambda max_results=100, participant="": seen.append(max_results) or [SlackDirectMessage(id="D1", user_id="U2")],
+        )
+
+        dm = next(r for r in self._check() if r.method == "dm_read_marker")
+
+        assert dm.ok
+        assert dm.seed_artifact == "D1"
+        assert seen == [1]
+
+    def test_dm_read_marker_absent_without_a_dm(self, monkeypatch):
+        self._membership_client(monkeypatch, dms=())
+
+        assert not any(r.method == "dm_read_marker" for r in self._check())
+
+    def test_dm_read_marker_not_ok_when_listing_dms_fails(self, monkeypatch):
+        client = self._membership_client(monkeypatch)
+
+        def boom(max_results=100, participant=""):
+            raise SlackClientError("conversations.list failed: ratelimited")
+
+        monkeypatch.setattr(client, "list_dms", boom)
+
+        dm = next(r for r in self._check() if r.method == "dm_read_marker")
+
+        assert not dm.ok
+        assert dm.note == "conversations.list failed: ratelimited"
 
 
 class TestCheckTelegram:
