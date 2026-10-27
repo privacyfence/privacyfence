@@ -36,7 +36,7 @@ Use dedicated accounts that share nothing with a personal or production identity
 | Salesforce | A Developer Edition org | Use `--salesforce-login-url https://login.salesforce.com` when building the bundle. |
 | Grist | A getgrist.com account holding nothing real | The runner connects with that account's personal API key, in `credentials/grist_token.json` written by hand as `{"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "…"}` with mode 600. There is no bundle section. |
 | Miro | A free Miro account holding nothing real, with a Developer team and the QA app | The runner's `credentials/miro_token.json` was obtained by hand once with the form-body token exchange, is refreshed by the runner, and is rotated with `scripts/qa_authenticate_connectors.py --only miro`. The QA app's client id and secret are the `miro` section of the QA bundle. |
-| Peek | A QA account on a QA Peek server | The fork's Docker image, `ghcr.io/andras-tkcs/peek:main`, runs on the self-hosted runner's host, bound to `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`. The recorder reaches it as `http://localhost:7700`, so no TLS is involved. The runner's token is in `credentials/peek_token.json`, written by hand as `{"base_url": "http://localhost:7700", "token": "…"}` with mode 600; take the token from `peek login --host http://localhost:7700` through an SSH tunnel. There is no bundle section. |
+| Peek | A QA account on a QA Peek server | Peek's own Docker image, `ghcr.io/andras-tkcs/peek:main`, runs on the self-hosted runner's host, bound to `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`. The recorder reaches it as `http://localhost:7700`, so no TLS is involved. The runner's token is in `credentials/peek_token.json`, written by hand as `{"base_url": "http://localhost:7700", "token": "…"}` with mode 600; take the token from `peek login --host http://localhost:7700` through an SSH tunnel. There is no bundle section. |
 | Telegram | Your own account | No dedicated account; `privacyfence-app --telegram-setup` signs in with a phone number and code. |
 
 For each of Google, Slack, Atlassian and Salesforce, follow the "For IT admins" section of
@@ -233,14 +233,15 @@ if it reports `database is locked`.
 
 ### Seed: Peek
 
-- [ ] On the QA Peek server, upload a private page named `PrivacyFence QA [QATEST].html` with the body
+- [ ] On the QA Peek server, upload a signed-in page named `PrivacyFence QA [QATEST].html` with the body
       `Synthetic PrivacyFence QA test page. No real information.`
 - [ ] Add one comment to it whose text carries `[QATEST]`.
 - [ ] Set `peek.page_slug` to the page's slug (the last path segment of its address). The recorder
       refuses to record unless the page's name and every comment on it carry `[QATEST]`.
 
-`--lifecycle` uploads a private `[QATEST-LIFECYCLE]` page, makes it public, renames it, posts a
-comment as the QA account (the fork's account comment endpoint), reads the comment back and deletes
+`--lifecycle` uploads a signed-in `[QATEST-LIFECYCLE]` page, makes it public, checks its versions,
+grants and revokes access for a placeholder address, renames it, posts a
+comment as the QA account (Peek's account comment endpoint), reads the comment back and deletes
 the page by the slug the rename returned, then checks that it is no longer listed. Visit stats are
 never recorded: they carry IP addresses.
 
@@ -385,7 +386,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 | `tasks` | **`task_list_id`**, **`seed_task_id`** | `get_task.json` | creates, updates and deletes one task in `task_list_id` |
 | `apps_script` | `seed_script_title`, `seed_script_id` | `get_content.json` | — |
 | `telegram` | `chat_id`, `history_limit` | `get_messages.json` | — |
-| `peek` | **`page_slug`** | `list_pages.json`, `get_comments.json` | uploads, publishes, renames, comments on and deletes one page |
+| `peek` | **`page_slug`** | `list_pages.json`, `get_comments.json` | uploads, publishes, checks versions, grants and revokes access, renames, comments on and deletes one page |
 | `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id`, `lifecycle_object_type`, `lifecycle_name_field`, `lifecycle_note_field` | `list_reports.json`, `run_report_page.json`, `get_record.json` | creates and updates one Task (`lifecycle_object_type`), then two more in one batch; never deletes them |
 | `grist` | **`doc_id`**, `table_id`, `lifecycle_table_id` | `list_documents.json`, `list_columns.json`, `get_records.json` | adds and updates one row in `lifecycle_table_id`; never deletes it |
 | `miro` | **`board_id`**, `lifecycle_board_id` | `get_board.json`, `list_items.json`, `list_connectors.json`, `list_tags.json` | creates a sticky note, a shape and a frame on `lifecycle_board_id`, updates the sticky note and moves items into and out of frames; never deletes them |
@@ -754,12 +755,13 @@ For each representative read, list, search, create, update, send or upload tool:
 
 - **Connect.** Signing in with the device flow works in Settings and on `/connect`, and the
   password is never shown.
-- **Review cards.** `peek_get_comments` and `peek_get_stats` prompt for review; the stats card shows
+- **Review cards.** `peek_get_comments`, `peek_get_stats` and `peek_list_grants` prompt for review; the stats card shows
   visitor names and times, with no IP address.
-- **Popup cards.** `peek_upload_page`, `peek_set_visibility`, `peek_rename_page` and
-  `peek_delete_page` each name the server.
-- **Comments.** `peek_add_comment` posts under the QA account's name, not as `anonymous`. Against a
-  stock Peek server without the fork's endpoint it answers "no account comment endpoint".
+- **Popup cards.** `peek_upload_page`, `peek_set_visibility`, `peek_grant_access`,
+  `peek_revoke_access`, `peek_rename_page` and `peek_delete_page` each name the server.
+  `peek_list_versions` runs without a card (auto).
+- **Comments.** `peek_add_comment` posts under the QA account's name, not as `anonymous`. A Peek server
+  without the account comment endpoint answers 404 or 405, and the tool says so.
 
 ### Jira checks
 
