@@ -428,3 +428,115 @@ class TestRejectRemovedToolAnnotations:
     def test_any_value_is_refused_naming_the_removed_key(self, value):
         with pytest.raises(org_mode.ConfigurationError, match=r"mcp\.tool_annotations.*removed"):
             org_mode.reject_removed_tool_annotations({"mcp": {"tool_annotations": value}})
+
+
+class TestGristProvisioningConfigFromOrgConfig:
+    @staticmethod
+    def _org(**auto: object) -> dict:
+        return {
+            "mode": "org",
+            "grist": {"server_url": "https://grist.example.com/", "auto_provision": auto},
+        }
+
+    @staticmethod
+    def _enabled(**extra: object) -> dict:
+        return {"enabled": True, "provisioner_url": "https://prov.example.com/", **extra}
+
+    def test_absent_is_disabled(self):
+        assert org_mode.GristProvisioningConfig.from_org_config({}) == org_mode.GristProvisioningConfig()
+        assert org_mode.GristProvisioningConfig.from_org_config({"grist": {"enabled": True}}).enabled is False
+
+    def test_enabled_with_server_and_provisioner(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled()))
+        assert config == org_mode.GristProvisioningConfig(
+            enabled=True, key_env="PRIVACYFENCE_GRIST_PROVISIONING_KEY", trust_unverified_email=False,
+            provisioner_url="https://prov.example.com", server_url="https://grist.example.com",
+        )
+        assert org_mode.DEFAULT_GRIST_PROVISIONING_KEY_ENV == config.key_env
+
+    def test_custom_key_env(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env="MY_KEY_1")))
+        assert config.key_env == "MY_KEY_1"
+
+    def test_trust_unverified_email(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(
+            self._org(**self._enabled(trust_unverified_email=True))
+        )
+        assert config.trust_unverified_email is True
+
+    def test_non_bool_enabled(self):
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match=r'^org_config.json\'s "grist"."auto_provision"."enabled" must be true or false, got \'yes\'$',
+        ):
+            org_mode.GristProvisioningConfig.from_org_config(self._org(enabled="yes"))
+
+    def test_non_bool_trust_unverified_email(self):
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match=r'^org_config.json\'s "grist"."auto_provision"."trust_unverified_email" must be true or false, got 1$',
+        ):
+            org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(trust_unverified_email=1)))
+
+    @pytest.mark.parametrize("value", ["lower", "1ABC", "A-B"])
+    def test_bad_key_env(self, value):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env=value)))
+        assert str(exc.value) == (
+            'org_config.json\'s "grist"."auto_provision"."key_env" must be an environment variable name, '
+            f"got {value!r}"
+        )
+
+    def test_non_string_key_env(self):
+        with pytest.raises(org_mode.ConfigurationError, match="got 5$"):
+            org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env=5)))
+
+    def test_disabled_skips_url_checks(self):
+        config = org_mode.GristProvisioningConfig.from_org_config(
+            {"mode": "local", "grist": {"auto_provision": {"enabled": False, "provisioner_url": "http://x"}}}
+        )
+        assert config == org_mode.GristProvisioningConfig(enabled=False)
+
+    def test_enabled_in_local_mode(self):
+        org = self._org(**self._enabled())
+        org["mode"] = "local"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "mode": "org"'
+
+    def test_enabled_without_server_url(self):
+        org = self._org(**self._enabled())
+        del org["grist"]["server_url"]
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "grist"."server_url"'
+
+    def test_enabled_with_oauth_app(self):
+        org = self._org(**self._enabled())
+        org["grist"]["client_id"] = "cid"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value) == (
+            'org_config.json\'s "grist"."auto_provision" works only with API keys; '
+            "remove the Grist OAuth app or turn auto-provisioning off"
+        )
+
+    def test_enabled_without_provisioner_url(self):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(self._org(enabled=True))
+        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "provisioner_url"'
+
+    def test_bad_server_url(self):
+        org = self._org(**self._enabled())
+        org["grist"]["server_url"] = "http://grist.example.com"
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value).startswith('org_config.json\'s "grist"."server_url" is not usable: ')
+
+    def test_bad_provisioner_url(self):
+        org = self._org(enabled=True, provisioner_url="http://prov.example.com")
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(org)
+        assert str(exc.value).startswith(
+            'org_config.json\'s "grist"."auto_provision"."provisioner_url" is not usable: '
+        )
