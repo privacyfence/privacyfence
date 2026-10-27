@@ -161,6 +161,15 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
       <li>Switching a service between the built-in app and your own makes everyone who connected Salesforce, Atlassian or Miro connect again.</li>
     </ul>
 
+    <h3>7.x is the stepping stone to 8</h3>
+    <ul>
+      <li>Every 7.x start upgrades all stored data for <strong>every</strong> person: old rule formats, old verb names, and tokens that still name rules. Today some of this only happens when a person signs in.</li>
+      <li>When nothing old is left, it writes <code>data_format.json</code> (<code>"format": 7</code>) next to the data. It goes into your backups and the Docker volume like everything else.</li>
+      <li>The Admin page says <strong>Ready for PrivacyFence 8: yes</strong>, or lists what still blocks it, for example a person's settings that cannot be converted.</li>
+      <li>8.x drops all the old upgrade code. It refuses data without the marker: "Install PrivacyFence 7.x, start it once, then install this release." Its installers can check the same file before replacing anything.</li>
+      <li>7.x also refuses data that 8.x has already written, so a downgrade can't half-read it.</li>
+    </ul>
+
     <h3>Desktop mode: 7 deprecates, 8 removes</h3>
     <div class="timeline">
       <div><b>6.x</b><span>Desktop mode and organization servers, side by side.</span></div>
@@ -269,10 +278,11 @@ printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <co
       <li><label><input type="checkbox" id="ma3-2"></label><div>Restart again. The log should now warn that <code>org_config.json carries settings that are now managed on the Admin page and are ignored</code>, naming <code>authz</code> and <code>web_push</code>.</div></li>
       <li><label><input type="checkbox" id="ma3-3"></label><div>As an IdP admin, open <strong>Admin</strong>. Offer Miro: it asks for your passkey, and Miro appears on <code>/connect</code> without a restart. Withdraw Slack: no passkey, and Slack disappears from <code>/connect</code>.</div></li>
       <li><label><input type="checkbox" id="ma3-4"></label><div>Change the inline download limit under File delivery. The page should say "Restart PrivacyFence for these changes to take effect: File delivery". Try to turn step-up's <em>require passkey</em> off: the page should not offer it.</div></li>
+      <li><label><input type="checkbox" id="ma3-7"></label><div>Back on the upgraded server: the bottom of the Admin page should say "Ready for PrivacyFence 8: yes", and the data volume should contain <code>data_format.json</code> with <code>"format": 7</code>. A person who never signed in after the upgrade should still have their rules converted. Check one under <code>users/&lt;id&gt;/authority/config/settings.yaml</code>: <code>auto_accept.version</code> is 3.</div></li>
       <li><label><input type="checkbox" id="ma3-5"></label><div>Compare <strong>Settings</strong> as the admin and as a normal user. Both should show the same sections, with no Privacy or Stats. As the normal user there is no Admin item in the header, and opening <code>/admin</code> says "Only administrators can open this page."</div></li>
       <li><label><input type="checkbox" id="ma3-6"></label><div>On the desktop install from item 4, open <strong>Admin</strong>, withdraw Miro and check it disappears from Settings → Connectors. Then upload a <code>rooms.json</code> from <code>scripts/sync_room_directory.py --output rooms.json</code>, or skip this step if you have no Workspace room directory.</div></li>
     </ol>
-    <p class="done-when"><strong>Report back:</strong> paste <code>ma3: import ok, ignored-warning ok, live offer/withdraw ok, restart notice ok, settings same ok, desktop ok</code> into the PR.</p>
+    <p class="done-when"><strong>Report back:</strong> paste <code>ma3: import ok, ignored-warning ok, live offer/withdraw ok, restart notice ok, ready-for-8 ok, settings same ok, desktop ok</code> into the PR.</p>
   </section>
 
   <section class="item" id="ma4">

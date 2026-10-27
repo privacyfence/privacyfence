@@ -45,6 +45,10 @@ After this plan:
   as a single-administrator trial on `http://localhost`. Sign-in uses a one-time setup code from the
   container log, then a passkey. Built-in apps reach it through the relay's loopback forwarding.
   `mode` and the server address can also come from environment variables.
+- **7.x is the migration checkpoint.** Every 7.x start upgrades every person's stored rules and
+  tokens, not only those of people who sign in. Once nothing is left to convert, it writes a
+  `data_format.json` marker. 8.x can then drop all the old upgrade code and refuse data without
+  the marker, with "install 7.x first". The Admin page says whether an install is ready for 8.
 - **Desktop (local) mode is deprecated.** 7.x says so in the daemon log, in `privacyfence_status`,
   on every local page and once from the companion. 8.x removes it, in a separate plan written after
   7.0 ships. The release is cut as 7.0.0 by the maintainer after this plan's PR merges.
@@ -120,7 +124,7 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
   Observability is off (ADR 0186).
 - **Privacy page.** `website/privacy/index.html:26-27` and `:45-54` say the policy covers only the
   site and `downloads.privacyfence.eu`, and that the software "sends nothing to the project".
-- **ADR numbers.** The highest accepted ADR is 0238, so this plan takes 0239 to 0245.
+- **ADR numbers.** The highest accepted ADR is 0238, so this plan takes 0239 to 0246.
 - **Operational sections and their parsers.** Each takes the whole org config dict:
   - `download_delivery`: `org_mode.DownloadDeliveryConfig.from_org_config`
   - `audit_forwarding`: `org_mode.AuditForwardingConfig.from_org_config`
@@ -1091,6 +1095,103 @@ to `http://localhost:<port>`.
 - **Release.** The release itself is cut as 7.0.0 by the maintainer after merge, per
   `docs/releasing.md`. No phase tags anything.
 
+### D12. 7.x is the migration checkpoint for 8.x
+
+8.x is meant to delete the code that upgrades data from older releases:
+
+- the v1-policy clean-up (ADR 0047);
+- the v2→v3 rule conversion (ADR 0172);
+- tokens that only name rules (ADR 0236), with the limit-pair successors (ADR 0228);
+- the legacy verb aliases (ADR 0171);
+- this plan's import of operational settings from the bundle (D3).
+
+That is safe only if every install has run a 7.x release that finished all of them, for every
+person, and left proof. Today there is no proof: no install-wide data-format marker exists. And in
+org mode the v1 clean-up runs only when a person's settings are first loaded, so someone who never
+signs in during 7.x would keep old data.
+
+**The marker.**
+
+- The file is `paths.data_dir() / "data_format.json"`, returned by
+  `data_format.marker_path()` at call time.
+- It is written atomically, mode 0600, as
+  `{"format": 7, "written_by": "<privacyfence.__version__>", "completed_at": "<UTC ISO-8601>"}`.
+- `format` is an integer. It is the contract 8.x reads, so it never changes shape: 8.x and its
+  installers rely on `format` alone.
+- `data_dir()` is the system root on a separated install, `~/.privacyfence` or
+  `%LOCALAPPDATA%\PrivacyFence` otherwise, and the data volume in Docker. So the marker travels
+  with the data, including in backups.
+
+**Module `src/privacyfence/data_format.py`.**
+
+- `DATA_FORMAT = 7`.
+- `marker_path() -> Path`.
+- `read_marker() -> dict[str, Any] | None`. A missing file gives `None`. An unreadable or
+  malformed file, or one with a non-integer `format`, logs a warning and gives `None`, so the next
+  successful pass rewrites it.
+- `check_not_newer(marker) -> None`. When `marker["format"] > DATA_FORMAT` it raises
+  `org_mode.ConfigurationError("This data was last used by PrivacyFence <written_by> (data format <n>). This release, <__version__>, cannot read it. Install <written_by> or newer.")`.
+  `run_app` calls it first thing after `load_org_config`, so a 7.x install never opens data an 8.x
+  release has already changed.
+- `migrate_everything(*, log) -> list[str]` returns the problems it found, empty when everything
+  succeeded. It runs at every 7.x start, in both modes, after `load_admin_config` and before the
+  web server is built. It replaces `_upgrade_all_principals`, which already covers the org-mode
+  part of steps 2 and 3. For every principal in `web.mcp_auth.scoped_token_principals()` (the
+  local principal plus every `users/<id>/`, which in local mode includes other OS accounts' `os-…`
+  principals), under `principal_scope`:
+  1. **Settings.** Read `authority/config/settings.yaml` (`_resolve_authority_path`) when it
+     exists. Run `daemon_main._drop_converted_v1_sections` (A1), then
+     `policy_store.reject_v1_sections`. A `V1PolicyConfigError` becomes the problem
+     `"<principal id>: settings.yaml still has v1 policy sections"` and the next steps are skipped
+     for that principal.
+  2. **Rules.** Run `policy_upgrade.ensure_scope_rows`. When it returns `False`, the section stayed
+     version 2, and the problem is `"<principal id>: rules are still in the version-2 format"`.
+  3. **Tokens.** Run `policy_upgrade.ensure_token_rules`, with `{}` when there is no settings
+     file, as `_upgrade_all_principals` does. Afterwards, any token in the principal's store that
+     still has `legacy_raw` adds the problem `"<principal id>: scoped token <id> still names
+     rules"`.
+  4. **Verb names.** The new `policy_upgrade.ensure_canonical_verbs(config, resolved, principal,
+     *, log) -> bool` rewrites stored rows whose `verbs` use a name from
+     `policy.registry.LEGACY_VERB_ALIASES`. It does this for the settings.yaml `auto_accept` rows
+     and for each scoped token's `rules`.
+     - It re-serializes each row with `scope_rows.row_from_dict` then `scope_rows.row_to_dict`,
+       which already resolves the aliases (`_parse_verbs`).
+     - It writes only when the result differs from what is stored.
+     - It takes the same backup-once rule as `ensure_scope_rows`, with suffix
+       `.pre-canonical-verbs.bak`.
+     - A row `row_from_dict` cannot parse is left as it is and adds the problem
+       `"<principal id>: rule <id> could not be read"`.
+     - It returns `False` on a write failure, which adds the problem
+       `"<principal id>: could not rewrite settings.yaml"`.
+  - **Install-wide.** The admin config must exist (`admin_config.load()` is not `None`, which it is
+    after `load_admin_config`). Otherwise the problem is `"the admin config has not been created"`.
+  - **The marker.** When the list is empty and `read_marker()` is `None` or has `format < 7`, write
+    the marker. A marker already at format 7 is left as it is. Problems are logged at WARNING, one
+    line each, prefixed `Not ready for PrivacyFence 8: `, and the marker is not written. The next
+    start tries again.
+  - **Not in scope:** `former_ids` on rows (ADR 0172) stays, because it is data, not a format. The
+    audit log's chainless lines (ADR 0176) are history, not something to convert; 8.x keeps reading
+    them or decides otherwise in its own plan. Serial-less bundles (ADR 0200) are 8.x's decision.
+- **Readiness on the Admin page.** `data_format.status() -> dict` returns `{"ready": bool,
+  "problems": list[str]}` from the last `migrate_everything` run, kept in module state; it is reset
+  by `data_format.reset_for_tests()` in `tests/conftest.py::_reset`. The admin page state carries
+  it as `"upgrade_ready"`. The Admin page shows, at the bottom:
+  - `Ready for PrivacyFence 8: yes.`, or
+  - `Ready for PrivacyFence 8: not yet. <n> problem(s): <first three problems>. Fix them and restart; see the upgrade notes.`
+- **Test isolation.** The D8 conftest fixture also patches `data_format.marker_path` to
+  `tmp_path / "data_format.json"`. `test_data_format` is an exempt module.
+
+**What 8.x does with it.** This is recorded in ADR 0246 and is not built here.
+
+- At startup, if the data directory holds existing data (`settings.yaml`, `credentials/`, `users/`
+  or `org/`) and the marker is missing or has `format < 7`, 8.x refuses to start with: `This data
+  comes from a PrivacyFence release older than 7. Install PrivacyFence 7.x, start it once so it can
+  upgrade your data, then install this release.`
+- A data directory with no existing data is a fresh install, and 8.x writes `format` 8.
+- 8.x's installers (deb `preinst`, the macOS pkg `preinstall`, the Windows installer) may read the
+  same file before replacing anything, so an upgrade stops before the old release is removed.
+  Because of that, the marker's path and its `format` key are a stable contract.
+
 ## ADRs
 
 - **0239** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -1126,6 +1227,14 @@ to `http://localhost:<port>`.
   organization mode. Relates to 0011, 0177, 0213.
 - **0245** — Local (desktop) mode is deprecated in 7.x, announced in the log, status, pages and
   companion, and is to be removed in 8.x. Relates to 0002, 0003.
+- **0246** — 7.x is the migration checkpoint.
+  - Every start migrates every person's data eagerly, then records `data_format.json`
+    (`format: 7`).
+  - 7.x refuses data whose format is newer than its own.
+  - 8.x may delete the pre-7 converters and refuses data without the marker, telling people to
+    install 7.x first.
+
+  Relates to 0047, 0171, 0172, 0228, 0236, 0041.
 
 ## Manual steps
 
@@ -1146,6 +1255,11 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
     deprecation notices.
 
 ## Risks and open questions
+
+- **A principal whose data cannot be converted blocks the marker.** Examples are a v1 section
+  without the conversion marker, or an unreadable rule. That install cannot move to 8.x until the
+  data is fixed, by design. The log, the Admin page and the docs name the problem; nothing is
+  silently skipped.
 
 - **Trial-mode safety relies on the port publish.** Inside the container the daemon binds
   `0.0.0.0`. Only `-p 127.0.0.1:8765:8765` keeps it off the network, and the image cannot verify
@@ -1223,7 +1337,7 @@ verify_after_merge:
 - test ! -d cloudflare/oauth-relay || (cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test)
 final_checks:
 - docs/builtin-oauth-apps-plan.md and docs/builtin-oauth-apps-plan-manual-steps.html are deleted, and grep -rn "builtin-oauth-apps-plan" --exclude-dir=.git . finds nothing
-- ADRs 0239-0245 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0016, 0196 and 0217 carry one new Status line each; ADR 0040 is unchanged
+- ADRs 0239-0246 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0016, 0196 and 0217 carry one new Status line each; ADR 0040 is unchanged
 - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
 - cd cloudflare/oauth-relay && npm ci && npm test && npm run typecheck && npm run dry-run passes
 phases:
@@ -1954,10 +2068,80 @@ phases:
   - grep -rn "organization config bundle" src/privacyfence finds nothing
   - pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-fail-under=100 passes
   - ruff check . passes
-- id: p12-adrs
-  title: ADRs 0239-0245 and the status lines on the ADRs they amend
+- id: p19a-migration-checkpoint
+  title: Every 7.x start migrates every person's data and records the data-format marker
   depends_on:
   - p18-moved-setting-strings
+  complexity: M
+  touches:
+  - src/privacyfence/data_format.py
+  - tests/unit/test_data_format.py
+  - src/privacyfence/policy_upgrade.py
+  - tests/unit/test_policy_upgrade.py
+  - src/privacyfence/scoped_tokens.py
+  - tests/unit/test_scoped_tokens.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  - tests/conftest.py
+  - scripts/check_coverage_floor.py
+  brief: |-
+    Read "Design → D12" in full.
+    1. policy_upgrade.py: add ensure_canonical_verbs per D12, for the settings rows and each scoped token's rules. For the tokens, use the scoped token store's own write path, as ensure_token_rules does (own_legacy_rules / own_rules_in_file). Read those first. If no existing writer fits, add a function to scoped_tokens.py next to own_rules_in_file that rewrites each token's rules through the same locked store path, with tests in tests/unit/test_scoped_tokens.py.
+    2. Create src/privacyfence/data_format.py with DATA_FORMAT, marker_path, read_marker, check_not_newer, migrate_everything, status and reset_for_tests, per D12. Do the per-principal steps in D12's order with D12's exact problem texts, and write the marker atomically (secure_files.atomic_write_json).
+    3. daemon_main.py:
+       - run_app calls data_format.check_not_newer(data_format.read_marker()) right after load_org_config.
+       - Then data_format.migrate_everything(log=_deferred_warnings.append) after load_admin_config, in both modes.
+       - Remove _upgrade_all_principals and its call in _start_org_web_server (~1231): migrate_everything now runs earlier, before the web server and the scoped token store, in both modes. Keep load_config's own lazy calls; they are idempotent.
+       - Stop condition: if anything between run_app's start and _start_org_web_server depends on _upgrade_all_principals having run at that later point, stop with status=blocked and explain.
+    4. tests/conftest.py: patch data_format.marker_path in the D8 fixture, exempt test_data_format, and call data_format.reset_for_tests() in _reset().
+    5. scripts/check_coverage_floor.py: add "src/privacyfence/data_format.py" to MODULE_FLOORS at 100.
+    6. Tests:
+       - tests/unit/test_data_format.py, with paths.data_dir patched to tmp_path:
+         - A fresh tmp data dir gets the marker with format 7 and the running version.
+         - A principal with a v2 section is converted and the marker is written.
+         - A principal with a marked v1 section is cleaned and the marker is written; an unmarked v1 section gives the exact problem and no marker.
+         - A token with legacy_raw that cannot be given rules gives the problem.
+         - A row with a legacy verb name is rewritten to the canonical name, with a backup, and the marker is written.
+         - An unreadable row gives the problem.
+         - An org principal under users/<id> that never signed in is migrated.
+         - A marker at format 7 is not rewritten.
+         - A marker at format 8 makes check_not_newer raise the exact message.
+         - A malformed marker reads as None.
+         - status() reflects the last run.
+       - tests/unit/test_policy_upgrade.py: ensure_canonical_verbs for settings rows and token rules; no write when already canonical.
+       - tests/unit/test_daemon_main.py: run_app refuses a format-8 marker (the existing run_app test harness); the org start no longer calls _upgrade_all_principals, and every principal is still converted before the web server is built (adapt the existing tests of _upgrade_all_principals to migrate_everything, keeping their assertions).
+    7. Run ruff check . and python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - python3 -m pytest tests/unit/test_data_format.py -q --cov=privacyfence.data_format --cov-branch --cov-report=term-missing passes and reports 100%
+  - grep -n "_upgrade_all_principals" src/privacyfence/daemon_main.py finds nothing
+  - ruff check . passes
+- id: p19b-upgrade-readiness-on-admin
+  title: The Admin page says whether the install is ready for PrivacyFence 8
+  depends_on:
+  - p19a-migration-checkpoint
+  complexity: S
+  touches:
+  - src/privacyfence/web/routes_admin.py
+  - tests/unit/web/test_routes_admin.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/test_settings_window_html.py
+  brief: |-
+    Read "Design → D12" ("Readiness on the Admin page").
+    1. routes_admin.py: add "upgrade_ready": data_format.status() to the admin page state in both modes.
+    2. settings_window_html.py: render D12's two lines at the bottom of the admin surface, showing at most the first three problems, escaped.
+    3. Tests:
+       - test_routes_admin.py: the state carries upgrade_ready in both modes.
+       - test_settings_window_html.py: both lines render; problem text is HTML-escaped (use a problem containing "<b>").
+    4. Run ruff check . and python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - grep -n "Ready for PrivacyFence 8" src/privacyfence/settings_window_html.py matches
+  - ruff check . passes
+- id: p12-adrs
+  title: ADRs 0239-0246 and the status lines on the ADRs they amend
+  depends_on:
+  - p19b-upgrade-readiness-on-admin
   - p10-bundle-tooling
   - p11-relay-worker
   complexity: M
@@ -1969,13 +2153,14 @@ phases:
   - docs/adr/0243-org-servers-use-built-in-apps-through-a-domain-verified-relay.md
   - docs/adr/0244-organization-mode-can-start-from-the-environment-and-run-as-a-localhost-trial.md
   - docs/adr/0245-local-mode-is-deprecated-in-7-and-removed-in-8.md
+  - docs/adr/0246-7x-is-the-migration-checkpoint-for-8x.md
   - docs/adr/README.md
   - docs/adr/0016-org-config-bundle-hash-log-and-signing.md
   - docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md
   - docs/adr/0217-the-org-admin-stats-page-shows-counts-only.md
   brief: |-
-    1. Check `ls docs/adr | tail -3` first. If 0239-0245 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
-    2. Write the seven ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
+    1. Check `ls docs/adr | tail -3` first. If 0239-0246 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
+    2. Write the eight ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
        - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, Design D1-D8, "Accepted risks" and "Risks".
        - Alternatives to record:
          - 0239: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
@@ -1985,12 +2170,13 @@ phases:
          - 0243: no relay; a maintainer-approved list of servers; forwarding to any server that asks.
          - 0244: a trial that still needs an IdP; signing in to the trial with Google through the relay; a fixed password.
          - 0245: dropping local mode in 7 without a deprecation release; keeping local mode indefinitely.
+         - 0246: keeping every converter forever; a per-file version check in 8 instead of one marker; migrating lazily per principal as before.
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
        - 0016: "Amended by [0240](...): the signature no longer covers operational settings."
        - 0196: "Amended by [0240](...) and [0241](...)."
        - 0217: "Amended by [0242](...): the Stats section is on the Admin page."
-    4. docs/adr/README.md: add seven index rows in the existing format:
+    4. docs/adr/README.md: add eight index rows in the existing format:
        - 0239: "Accepted; relates to 0040"
        - 0240: "Accepted; amends 0016, 0196"
        - 0241: "Accepted; amends 0196; relates to 0016, 0034, 0068, 0070, 0200"
@@ -1998,9 +2184,10 @@ phases:
        - 0243: "Accepted; relates to 0011, 0186"
        - 0244: "Accepted; relates to 0011, 0177, 0213"
        - 0245: "Accepted; relates to 0002, 0003"
+       - 0246: "Accepted; relates to 0041, 0047, 0171, 0172, 0228, 0236"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md lists seven files (or the renumbered seven)
+  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md docs/adr/0246-*.md lists eight files (or the renumbered eight)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -2022,6 +2209,7 @@ phases:
        - §6 "Build the bundle": only the startup and credential flags remain; list the moved flags and say they are now on the Admin page; describe the one-time import on upgrade and the "are ignored" warning.
        - "Who may sign in", §10 (install-wide policy), §12 (step-up, including "stricter only from the page; relax by editing org/admin_config.json and restarting"), "Notifications on a phone", §13 (file delivery), audit forwarding and scoped tokens: each now points to the matching Admin page section and says which changes need a restart.
        - A new "Admin page" subsection: who sees it, the sections, step-up.
+       - §14 "Upgrade": upgrading to 8.x requires having run 7.x at least once with "Ready for PrivacyFence 8: yes" on the Admin page. Explain data_format.json (D12), the problems it can report and how to fix each, and that 7.x refuses data from a newer release.
        - §15 Troubleshooting: rows for the relay errors (proof_failed, host_not_public, revoked, too_soon, the issuer_url message, and the relay's 400 text from D5) and for the "are ignored" warning.
     2. org-mode-docker.md:
        - Outbound HTTPS to oauth.privacyfence.eu when using built-in apps.
@@ -2091,7 +2279,8 @@ phases:
     5. Create docs/moving-to-organization-mode.md, the page LOCAL_MODE_DEPRECATION links to (privacyfence.eu/docs/moving-to-organization-mode/):
        - why desktop mode goes away in 8 (ADR 0245);
        - the two ways forward: the Docker trial on this computer (link org-mode-docker.md "Try it on this computer") and an organization server (org-mode-setup-guide.md);
-       - bringing rules along (link org-mode-setup-guide.md "Moving a person from a desktop install").
+       - bringing rules along (link org-mode-setup-guide.md "Moving a person from a desktop install");
+       - before any later upgrade to 8.x, start 7.x once and check "Ready for PrivacyFence 8" (D12).
        Add it to docs/README.md's index in the existing format. Add a one-paragraph deprecation note at the top of install-macos.md, install-windows.md and install-linux.md linking to it, and to getting-started.md's "Local or organization deployment".
        If the website docs build has a list of published docs, find where test_website_docs_pages.py reads it; if that list needs the new page, add it there.
     6. docs/privacyfence-sync.md (:50-51) and sync/README.md (:89-94): unattended sessions are turned on on the Admin page. Copy sync/README.md to plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md, as the sync/** rule in .claude/toolkit.yaml requires.
@@ -2101,6 +2290,7 @@ phases:
        - a "Removed" or "Changed" note that build_org_bundle.py refuses the moved flags;
        - the Docker localhost trial and the environment variables;
        - "Deprecated: desktop (local) mode, to be removed in PrivacyFence 8";
+       - "Every start upgrades all stored data and records data_format.json. PrivacyFence 8 will require it, so upgrade to 8 only from 7.x.";
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
     8. Run the docs tests below and ruff check ..
