@@ -1,0 +1,185 @@
+<title>Built-in Apps Setup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+/* Layout: one reading column; a sticky progress bar; each manual item is a checklist block with its own steps. */
+:root {
+  --bg: #f6f7f5; --surface: #ffffff; --fg: #1d2421; --muted: #5b6661; --line: #d9dfdb;
+  --accent: #1f6f5c; --accent-soft: #e2efe9; --warn: #8a5a00; --warn-soft: #fbf1dc;
+  --display: "Fraunces", Georgia, serif; --body: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141917; --surface: #1c2320; --fg: #e4ebe7; --muted: #9aa6a0; --line: #2e3833;
+  --accent: #6fc7ad; --accent-soft: #1f3a31; --warn: #e7b65a; --warn-soft: #3a2f17; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #141917; --surface: #1c2320; --fg: #e4ebe7; --muted: #9aa6a0; --line: #2e3833;
+  --accent: #6fc7ad; --accent-soft: #1f3a31; --warn: #e7b65a; --warn-soft: #3a2f17; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--body); }
+.wrap { max-width: 760px; margin: 0 auto; padding-block: 24px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 28px; }
+h1 { font: 600 2rem/1.15 var(--display); margin: 0; text-wrap: balance; }
+h2 { font: 600 1.35rem/1.2 var(--display); margin: 0; padding-top: 8px; border-top: 2px solid var(--fg); text-wrap: balance; }
+h3 { font-size: 1.05rem; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; }
+a { color: var(--accent); }
+code { font: 0.88em var(--mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.lede { color: var(--muted); }
+.progress { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 8px; display: flex; gap: 12px; align-items: center; font: 500 0.85rem var(--mono); color: var(--muted); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; font: 0.8rem var(--mono); color: var(--muted); }
+.meta span { border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; }
+ol.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: s; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+ol.steps > li > label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+ol.steps > li > label::before { content: counter(s) "."; font: 500 0.85rem var(--mono); color: var(--muted); min-width: 1.6em; padding-top: 2px; }
+ol.steps > li > div { min-width: 0; }
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 3px; }
+input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+li.done > div { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { color: var(--muted); font-size: 0.92em; }
+.done-when { background: var(--accent-soft); border-radius: 6px; padding: 10px 12px; }
+.note { background: var(--warn-soft); color: var(--fg); border-left: 3px solid var(--warn); padding: 10px 12px; border-radius: 0 6px 6px 0; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 0.9rem; min-width: 520px; width: 100%; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.75rem var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font: 0.85rem/1.5 var(--mono); }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header style="display:grid;gap:10px">
+    <h1>Built-in Apps Setup</h1>
+    <p class="lede">The steps only you can do for the <code>builtin-oauth-apps</code> plan. The part before implementation must be done before <code>/implement</code> starts. The part after implementation is done once the feature branch is complete, before its pull request merges. Never paste a secret into a chat, an issue or this page. Each secret has one named home, given in its step.</p>
+  </header>
+
+  <div class="progress" aria-live="polite"><span id="count">0 / 0 steps</span><div class="bar"><i id="fill"></i></div></div>
+
+  <h2>Before implementation</h2>
+
+  <section class="item" id="mb1">
+    <h3>1. Register the seven PrivacyFence-owned OAuth apps and store them as repository secrets</h3>
+    <div class="meta"><span>mb1-register-builtin-apps</span><span>about 2–3 hours</span></div>
+    <p>Register each app under a PrivacyFence account, not a personal one or a customer's. Each app's name is <strong>PrivacyFence</strong>, so that is what people see on the consent screen. You need a public privacy policy URL (<code>https://privacyfence.eu/privacy/</code>) and a homepage (<code>https://privacyfence.eu</code>). For the scopes or permissions, follow the repo's own setup guide for each provider; the redirects below replace the ones those guides list.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>App</th><th>Redirect URIs to register</th><th>Secret names</th></tr></thead>
+      <tbody>
+        <tr><td>Google Desktop</td><td>none (Desktop app client)</td><td><code>PF_APP_GOOGLE_DESKTOP_CLIENT_ID</code>, <code>…_SECRET</code></td></tr>
+        <tr><td>Google Web</td><td><code>https://oauth.privacyfence.eu/callback/gmail</code>, <code>/drive</code>, <code>/calendar</code>, <code>/contacts</code>, <code>/tasks</code>, <code>/apps_script</code> (all six, full URL each)</td><td><code>PF_APP_GOOGLE_WEB_CLIENT_ID</code>, <code>…_SECRET</code></td></tr>
+        <tr><td>Slack</td><td><code>http://127.0.0.1:53682/callback</code><br><code>https://oauth.privacyfence.eu/callback/slack</code></td><td><code>PF_APP_SLACK_CLIENT_ID</code>, <code>…_SECRET</code></td></tr>
+        <tr><td>Salesforce</td><td><code>http://localhost:53683/callback</code><br><code>https://oauth.privacyfence.eu/callback/salesforce</code></td><td><code>PF_APP_SALESFORCE_CLIENT_ID</code> (consumer key), <code>…_SECRET</code></td></tr>
+        <tr><td>Atlassian, local</td><td><code>http://127.0.0.1:53684/callback</code></td><td><code>PF_APP_ATLASSIAN_LOCAL_CLIENT_ID</code>, <code>…_SECRET</code></td></tr>
+        <tr><td>Atlassian, relay</td><td><code>https://oauth.privacyfence.eu/callback/atlassian</code></td><td><code>PF_APP_ATLASSIAN_RELAY_CLIENT_ID</code>, <code>…_SECRET</code></td></tr>
+        <tr><td>Miro</td><td><code>http://localhost:53686/callback</code><br><code>https://oauth.privacyfence.eu/callback/miro</code></td><td><code>PF_APP_MIRO_CLIENT_ID</code>, <code>…_SECRET</code></td></tr>
+      </tbody>
+    </table></div>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="mb1-1"></label><div><strong>Google project.</strong> Create a project named <code>privacyfence-builtin</code> at <a href="https://console.cloud.google.com/projectcreate">console.cloud.google.com/projectcreate</a>. Then enable the Gmail, Drive, Calendar, People, Tasks and Apps Script APIs in its <a href="https://console.cloud.google.com/apis/library">API library</a>. <span class="see">The list and scopes are in <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/google-cloud-setup.md">google-cloud-setup.md</a>.</span></div></li>
+      <li><label><input type="checkbox" id="mb1-2"></label><div><strong>Google branding.</strong> In <a href="https://console.cloud.google.com/auth/branding">Google Auth Platform → Branding</a>, set the app name to PrivacyFence and add the homepage and privacy policy URLs. In <a href="https://console.cloud.google.com/auth/audience">Audience</a>, choose <strong>External</strong> and <strong>In production</strong>. In <a href="https://console.cloud.google.com/auth/scopes">Data Access</a>, add the scopes from google-cloud-setup.md.</div></li>
+      <li><label><input type="checkbox" id="mb1-3"></label><div><strong>Google clients.</strong> At <a href="https://console.cloud.google.com/auth/clients/create">Clients → Create client</a>, create a <strong>Desktop app</strong> named "PrivacyFence desktop". Then create a <strong>Web application</strong> named "PrivacyFence relay" with the six redirect URIs from the table. Copy each ID and secret straight into the GitHub secrets in the last step of this section. You should see two clients listed.</div></li>
+      <li><label><input type="checkbox" id="mb1-4"></label><div><strong>Slack.</strong> At <a href="https://api.slack.com/apps?new_app=1">api.slack.com/apps → Create New App</a>, choose "From scratch" in your PrivacyFence workspace. Under <strong>OAuth &amp; Permissions</strong>, add both redirect URLs and the user token scopes from <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/slack-setup.md">slack-setup.md</a>. Under <strong>Manage Distribution</strong>, complete the checklist and choose <strong>Activate Public Distribution</strong>. The client ID and secret are under <strong>Basic Information → App Credentials</strong>.</div></li>
+      <li><label><input type="checkbox" id="mb1-5"></label><div><strong>Salesforce.</strong> In a Developer Edition org you control (sign up at <a href="https://developer.salesforce.com/signup">developer.salesforce.com/signup</a> if you have none), open Setup → <strong>App Manager</strong> → <strong>New Connected App</strong>. Enable OAuth, add both callback URLs on separate lines, and add the scopes from <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/salesforce-setup.md">salesforce-setup.md</a>. Turn PKCE on. The consumer key and secret are under <strong>Manage Consumer Details</strong>.</div></li>
+      <li><label><input type="checkbox" id="mb1-6"></label><div><strong>Atlassian, two apps.</strong> At <a href="https://developer.atlassian.com/console/myapps/">developer.atlassian.com/console/myapps</a>, choose <strong>Create → OAuth 2.0 integration</strong> twice: "PrivacyFence" with the local callback, and "PrivacyFence (organization servers)" with the relay callback. Add the Jira and Confluence permissions from <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/atlassian-setup.md">atlassian-setup.md</a>, including the Assets scope. Under <strong>Distribution</strong>, set each app to <strong>Sharing</strong> and fill in the vendor and privacy details.</div></li>
+      <li><label><input type="checkbox" id="mb1-7"></label><div><strong>Miro.</strong> At <a href="https://miro.com/app/settings/user-profile/apps">miro.com/app/settings/user-profile/apps</a>, create an app named PrivacyFence and tick <strong>Expire user authorization token</strong>. This cannot be changed later. Add both redirect URIs and the permissions <code>boards:read</code> and <code>boards:write</code>. Then make the app available to other users (Distribute / public app), as described in <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/miro-setup.md">miro-setup.md</a>.</div></li>
+      <li><label><input type="checkbox" id="mb1-8"></label><div><strong>Store the 14 secrets.</strong> At <a href="https://github.com/privacyfence/privacyfence/settings/secrets/actions/new">Settings → Secrets and variables → Actions → New repository secret</a>, add each name from the table's last column, one per ID and one per secret. Paste each value directly from the provider console into GitHub's form. They are repository secrets, not environment secrets, because build.yml and publish-pypi.yml read them that way.</div></li>
+    </ol>
+    <p class="done-when"><strong>Done when:</strong> the repository's Actions secrets list shows all 14 names: <code>PF_APP_GOOGLE_DESKTOP_CLIENT_ID/_SECRET</code>, <code>PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET</code>, <code>PF_APP_SLACK_CLIENT_ID/_SECRET</code>, <code>PF_APP_SALESFORCE_CLIENT_ID/_SECRET</code>, <code>PF_APP_ATLASSIAN_LOCAL_CLIENT_ID/_SECRET</code>, <code>PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET</code>, <code>PF_APP_MIRO_CLIENT_ID/_SECRET</code>.</p>
+  </section>
+
+  <section class="item" id="mb2">
+    <h3>2. Create the Cloudflare token and the GitHub environment for the relay Worker</h3>
+    <div class="meta"><span>mb2-relay-worker-cloudflare</span><span>about 20 minutes</span></div>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="mb2-1"></label><div>In Cloudflare, open the account's <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/api-tokens">account API tokens</a> page and create a token named <code>privacyfence-oauth-relay-deploy</code>. Give it Account: <strong>Workers Scripts Edit</strong>, and Zone: <strong>Workers Routes Edit</strong> and <strong>Zone Read</strong>. Scope the zone resources to <code>privacyfence.eu</code> and leave the expiry empty. This is the same shape as the download Worker's token in <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/downloads-and-release-kpi.md#use-account-owned-api-tokens">downloads-and-release-kpi.md</a>, without the D1 and R2 permissions.</div></li>
+      <li><label><input type="checkbox" id="mb2-2"></label><div>Verify it in your own terminal. Read the token from your password manager into an environment variable; don't type it into a chat. Run:<pre>curl -s -H "Authorization: Bearer $CF_TOKEN" \
+  https://api.cloudflare.com/client/v4/accounts/326657b4f70af041996d60fd6b8f83fa/tokens/verify</pre>You should see <code>"status": "active"</code>.</div></li>
+      <li><label><input type="checkbox" id="mb2-3"></label><div>Create a GitHub environment named <code>oauth-relay-worker</code> at <a href="https://github.com/privacyfence/privacyfence/settings/environments/new">Settings → Environments → New environment</a>. Under <strong>Deployment branches</strong>, allow only <code>main</code>.</div></li>
+      <li><label><input type="checkbox" id="mb2-4"></label><div>In that environment, add three secrets:
+        <ul>
+          <li><code>CF_OAUTH_RELAY_WORKER_API_TOKEN</code>: the token.</li>
+          <li><code>CF_OAUTH_RELAY_WORKER_ACCOUNT_ID</code>: <code>326657b4f70af041996d60fd6b8f83fa</code>.</li>
+          <li><code>CF_OAUTH_RELAY_REVOKE_TOKEN</code>: a new random value made with <code>openssl rand -base64 32</code> in your terminal. Keep a copy in your password manager; you need it to revoke a server.</li>
+        </ul></div></li>
+    </ol>
+    <p class="done-when"><strong>Done when:</strong> the <code>oauth-relay-worker</code> environment holds the three secrets, and the curl above reports the token active.</p>
+  </section>
+
+  <section class="item" id="mb3">
+    <h3>3. Optional: submit the Google app for verification</h3>
+    <div class="meta"><span>mb3-google-verification</span><span>30 minutes now, then weeks of waiting</span></div>
+    <p class="note">Nothing in the plan waits for this. Until Google verifies the app, people see an "unverified app" screen, and the app is capped at 100 users in total. Gmail and Drive scopes are restricted, so verification includes an annual security assessment by a third party.</p>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="mb3-1"></label><div>Open <a href="https://console.cloud.google.com/auth/verification">Google Auth Platform → Verification Center</a> for <code>privacyfence-builtin</code>. Choose <strong>Prepare for verification</strong>, and give the scope justifications and the demo video Google asks for.</div></li>
+      <li><label><input type="checkbox" id="mb3-2"></label><div>Submit it, or decide to defer it and note that in the tracking issue.</div></li>
+    </ol>
+    <p class="done-when"><strong>Done when:</strong> the Verification Center shows the submission, or you decided to defer it.</p>
+  </section>
+
+  <h2>After implementation</h2>
+
+  <section class="item" id="ma1">
+    <h3>4. Sign in with the built-in apps on a desktop install</h3>
+    <div class="meta"><span>ma1-desktop-builtin-signin</span><span>about 45 minutes</span></div>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="ma1-1"></label><div>Get an installer from the feature branch. Open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml">Actions → build.yml</a>, choose <strong>Run workflow</strong>, and pick branch <code>feature/builtin-oauth-apps</code>, or ask the orchestrator session to dispatch it. Download your platform's installer from the run's artifacts. The build log's "Build" step should print <code>built-in app &lt;key&gt;: included</code> for all seven.</div></li>
+      <li><label><input type="checkbox" id="ma1-2"></label><div>Install it on a machine or VM that has no <code>org_config.json</code>. Open Settings → <strong>Connectors</strong>. You should see Google (Gmail, Drive and the rest), Slack, Salesforce, Jira, Confluence, Miro and Telegram listed without uploading any bundle.</div></li>
+      <li><label><input type="checkbox" id="ma1-3"></label><div>Sign in to Gmail, Slack, Salesforce, Jira and Miro with your test accounts. Each consent screen should name <strong>PrivacyFence</strong>. Each row should turn Connected. Then ask your AI client one read per service, for example "list my last 3 emails".</div></li>
+    </ol>
+    <p class="done-when"><strong>Report back:</strong> paste into the PR a line such as <code>ma1: gmail ok, slack ok, salesforce ok, jira ok, miro ok</code>, with "fail: &lt;what you saw&gt;" for any that did not work.</p>
+  </section>
+
+  <section class="item" id="ma2">
+    <h3>5. Connect an organization server through the relay</h3>
+    <div class="meta"><span>ma2-org-relay-signin</span><span>about 1–1.5 hours</span></div>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="ma2-1"></label><div>Deploy the relay from the branch in your own terminal, with the token from mb2 read into <code>CLOUDFLARE_API_TOKEN</code> from your password manager:<pre>git checkout feature/builtin-oauth-apps
+cd cloudflare/oauth-relay &amp;&amp; npm ci
+CLOUDFLARE_ACCOUNT_ID=326657b4f70af041996d60fd6b8f83fa npx wrangler deploy
+printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN</pre>Then <code>curl -sI https://oauth.privacyfence.eu/health</code> should answer <code>200</code>. Once the PR merges, the deploy workflow takes over.</div></li>
+      <li><label><input type="checkbox" id="ma2-2"></label><div>On a test org server with a public HTTPS hostname, install the branch's wheel. Put a JSON file with the seven apps' IDs and secrets on that server only, mode 0600, owned by the service account, and point <code>PRIVACYFENCE_BUILTIN_APPS</code> at it in the service's environment file. The format is in <a href="https://github.com/privacyfence/privacyfence/blob/feature/builtin-oauth-apps/docs/configuration-reference.md">configuration-reference.md</a>. Use a signed bundle with <code>mode</code>, <code>server</code> and <code>idp</code> only, and no connector sections.</div></li>
+      <li><label><input type="checkbox" id="ma2-3"></label><div>Restart the server. Within a minute, <code>https://oauth.privacyfence.eu/registrations</code> should list your server's host. As an IdP admin, Settings → <strong>Apps</strong> should say "Relay registration: registered".</div></li>
+      <li><label><input type="checkbox" id="ma2-4"></label><div>As a normal user, open <code>/connect</code> and connect Gmail, Slack, Salesforce, Jira and Miro. The browser should pass briefly through <code>oauth.privacyfence.eu</code> and land back on <code>/connect</code> showing Connected.</div></li>
+      <li><label><input type="checkbox" id="ma2-5"></label><div>Check revocation. Run <code>curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H "Content-Type: application/json" -d '{"host":"&lt;your host&gt;"}' https://oauth.privacyfence.eu/admin/revoke</code>. Starting a new Slack connect should now stop on the relay's "not registered" page. Removing a revoked host is not supported, so use a throwaway hostname for this step, or do it last.</div></li>
+    </ol>
+    <p class="done-when"><strong>Report back:</strong> paste into the PR a line such as <code>ma2: registered ok, gmail ok, slack ok, salesforce ok, jira ok, miro ok, revoke ok</code>.</p>
+  </section>
+
+  <section class="item" id="ma3">
+    <h3>6. Replace an app and withdraw a service</h3>
+    <div class="meta"><span>ma3-override-and-withdraw</span><span>about 30 minutes</span></div>
+    <ol class="steps">
+      <li><label><input type="checkbox" id="ma3-1"></label><div>On the desktop install from item 4, open Settings → <strong>Apps</strong>. Turn Miro off: step-up should ask for your passkey only when turning a service <em>on</em>, and Miro should disappear from Connectors.</div></li>
+      <li><label><input type="checkbox" id="ma3-2"></label><div>Enter a Slack app of your own (an app you registered per slack-setup.md, not the built-in one) under "Use your own app". Approve the passkey prompt. The row should read "Uses your organization's own app (client …)", and reconnecting Slack should show your app's name on Slack's consent screen. Reload the page and check that the secret never reappears in the form.</div></li>
+      <li><label><input type="checkbox" id="ma3-3"></label><div>Choose "Use the built-in app" and check the row goes back to "Uses the built-in PrivacyFence app".</div></li>
+      <li><label><input type="checkbox" id="ma3-4"></label><div>Repeat the Miro withdraw and the Slack override on the org server as an IdP admin. Sign in as a non-admin and confirm there is no Apps section.</div></li>
+    </ol>
+    <p class="done-when"><strong>Report back:</strong> paste <code>ma3: withdraw ok, override ok, revert ok, org admin ok, non-admin hidden ok</code> into the PR.</p>
+  </section>
+</div>
+
+<script>
+(function () {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type=checkbox]'));
+  var KEY = 'pf-builtin-apps-steps';
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+  function update() {
+    var done = boxes.filter(function (b) { return b.checked; }).length;
+    document.getElementById('count').textContent = done + ' / ' + boxes.length + ' steps';
+    document.getElementById('fill').style.width = (boxes.length ? (100 * done / boxes.length) : 0) + '%';
+  }
+  boxes.forEach(function (b) {
+    if (saved[b.id]) { b.checked = true; }
+    b.closest('li').classList.toggle('done', b.checked);
+    b.addEventListener('change', function () {
+      saved[b.id] = b.checked;
+      b.closest('li').classList.toggle('done', b.checked);
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+      update();
+    });
+  });
+  update();
+})();
+</script>
