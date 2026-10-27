@@ -947,3 +947,4 @@ class TestLiveFixtureParsing:
         assert comments, "recorded get_comments.json has no comments"
         assert all(c.id and c.author and c.body and c.created_at for c in comments)
         assert all("[QATEST]" in c.body for c in comments)
+        assert all(isinstance(c.verified, bool) for c in comments)
