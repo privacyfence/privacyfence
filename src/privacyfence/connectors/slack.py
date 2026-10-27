@@ -382,11 +382,9 @@ class SlackConnector(Connector):
                     "(query may be empty): newest first; search-index delay can miss the last minute "
                     "or two. Returns a list of {ts, channel_id, channel_name, user_id, user_name, "
                     "text, thread_ts, reply_count}, up to count (default 20, max 100); a participant "
-                    "search reads at most 10 conversations. Long texts are cut, and a very large "
-                    "result drops its oldest messages; a final {note} entry says so. Text and "
-                    "names may be redacted. Use "
+                    "search reads at most 10 conversations. Text and names may be redacted. Use "
                     "read_state=true with care: one Slack request per conversation, easily "
-                    "rate-limited; prefer slack_get_read_state for the few messages that matter. "
+                    "rate-limited; prefer slack_get_read_state for a few messages. "
                     "Use slack_get_channel_history for one known channel. Requires user approval."
                 ),
                 params=[
