@@ -3023,13 +3023,13 @@ def lifecycle_peek(manifest: dict[str, Any]) -> LifecycleResult:
     ok, note, cleanup_ok = False, "", None
     try:
         body = f"<!doctype html><html><body><p id=\"qa\">{LIFECYCLE_TAG} created by qa_fixture_recorder.py --lifecycle</p></body></html>"
-        uploaded = client.upload_page(body.encode("utf-8"), name, "private", "")
+        uploaded = client.upload_page(body.encode("utf-8"), name, "signed-in")
         slug = uploaded.slug
         if not slug:
             raise PeekClientError("upload_page returned no slug")
-        if uploaded.visibility != "private":
-            raise PeekClientError(f"upload_page returned visibility {uploaded.visibility!r}, expected 'private'")
-        if client.set_visibility(slug, "public", "") != "public":
+        if uploaded.visibility != "signed-in":
+            raise PeekClientError(f"upload_page returned visibility {uploaded.visibility!r}, expected 'signed-in'")
+        if client.set_visibility(slug, "public").visibility != "public":
             raise PeekClientError("set_visibility did not report public")
         page = client.get_page(slug)
         if page.visibility != "public":

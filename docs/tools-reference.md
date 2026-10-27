@@ -327,10 +327,10 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `peek_list_pages` | read | `auto` | List the Peek pages this account can manage, newest first, with each page's link and who can open it. |
 | `peek_get_comments` | read | `review` | Read the reviewers' comments on one Peek page, with what each comment is anchored to. |
 | `peek_get_stats` | read | `review` | Read how often one Peek page was opened, and the names visitors gave. |
-| `peek_add_comment` | write | `popup` | Post a comment on a Peek page under your own Peek account name. |
+| `peek_add_comment` | write | `popup` | Post a comment on a Peek page under your own Peek account name, on the latest version or the one you give. |
 | `peek_delete_page` | write | `popup` | Delete a Peek page, with its comments and visit history. |
 | `peek_rename_page` | write | `popup` | Rename a Peek page; its link may change to match the new name, and old links keep redirecting to it in browsers. |
-| `peek_set_visibility` | write | `popup` | Change who can open a Peek page: anyone with the link, anyone with the link and a password, or signed-in Peek accounts only. |
+| `peek_set_visibility` | write | `popup` | Change who can open a Peek page: anyone with the link, anyone signed in to Peek, or only the people granted access (restricted). |
 | `peek_upload_page` | write | `popup` | Publish an HTML page on Peek, or a new version of one of your pages, and get its share link. |
 
 ## Miro

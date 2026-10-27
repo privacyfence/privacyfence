@@ -29,6 +29,7 @@ from privacyfence.peek_client import (
     bundle_base_url,
     load_token_file,
     normalize_base_url,
+    normalize_visibility,
     poll_device_login,
     resolve_server,
     save_token_file,
@@ -42,7 +43,6 @@ pytestmark = pytest.mark.unit
 BASE = "https://peek.example.com"
 TOKEN = "tok-SECRET-123"
 DEVICE = "dev-SECRET-456"
-PASSWORD = "pw-SECRET-789"
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "peek"
 
@@ -554,90 +554,99 @@ class TestGetStats:
         assert client.get_stats("p1").recent == []
 
 
+class TestNormalizeVisibility:
+    @pytest.mark.parametrize("value", ["public", "signed-in", "restricted"])
+    def test_peeks_values_pass(self, value):
+        assert normalize_visibility(value) == value
+
+    def test_private_becomes_signed_in(self):
+        assert normalize_visibility("private") == "signed-in"
+        assert normalize_visibility(" private ") == "signed-in"
+
+    def test_password_is_refused_with_a_hint(self):
+        with pytest.raises(PeekClientError) as exc:
+            normalize_visibility("password")
+        assert str(exc.value) == (
+            "Peek no longer has page passwords. Use restricted, then grant access to people with peek_grant_access."
+        )
+
+    @pytest.mark.parametrize("value", ["", "other", "Public"])
+    def test_other_values_are_refused(self, value):
+        with pytest.raises(PeekClientError) as exc:
+            normalize_visibility(value)
+        assert str(exc.value) == "visibility must be public, signed-in or restricted."
+
+
 class TestUploadPage:
-    result = {"slug": "n1", "url": f"{BASE}/p/n1", "visibility": "private", "version": 1, "version_url": f"{BASE}/p/n1/v/1"}
+    result = {"slug": "n1", "url": f"{BASE}/p/n1", "visibility": "signed-in", "version": 1, "version_url": f"{BASE}/p/n1/v/1"}
 
     def test_new_page(self, monkeypatch, client):
         rec = Recorder(monkeypatch, ok(self.result))
-        res = client.upload_page(b"<p>hi</p>", "r.html", "private", "")
+        res = client.upload_page(b"<p>hi</p>", "r.html", "signed-in")
         call = rec.calls[0]
         assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/upload")
         assert call["files"] == {"file": ("r.html", b"<p>hi</p>", "text/html")}
-        assert call["data"] == {"visibility": "private"}
+        assert call["data"] == {"visibility": "signed-in"}
         assert auth_of(call) == f"Bearer {TOKEN}"
         assert (res.slug, res.url, res.visibility, res.version, res.version_url) == (
-            "n1", f"{BASE}/p/n1", "private", 1, f"{BASE}/p/n1/v/1",
+            "n1", f"{BASE}/p/n1", "signed-in", 1, f"{BASE}/p/n1/v/1",
         )
 
-    def test_password_only_for_password_visibility(self, monkeypatch, client):
+    def test_private_is_sent_as_signed_in(self, monkeypatch, client):
         rec = Recorder(monkeypatch, ok(self.result))
-        client.upload_page(b"x", "r.html", "password", PASSWORD)
-        assert rec.calls[0]["data"] == {"visibility": "password", "password": PASSWORD}
+        client.upload_page(b"x", "r.html", "private")
+        assert rec.calls[0]["data"] == {"visibility": "signed-in"}
+
+    def test_never_sends_a_password(self, monkeypatch, client):
+        rec = Recorder(monkeypatch, ok(self.result))
+        client.upload_page(b"x", "r.html", "restricted")
+        assert "password" not in rec.calls[0]["data"]
 
     def test_new_version_sends_only_slug(self, monkeypatch, client):
         rec = Recorder(monkeypatch, ok(self.result))
-        client.upload_page(b"x", "r.html", "", "", slug="p1")
+        client.upload_page(b"x", "r.html", "", slug="p1")
         assert rec.calls[0]["data"] == {"slug": "p1"}
 
-    @pytest.mark.parametrize("visibility, password", [("public", ""), ("", PASSWORD)])
-    def test_new_version_rejects_visibility_or_password(self, monkeypatch, client, visibility, password):
+    def test_new_version_rejects_visibility(self, monkeypatch, client):
         rec = Recorder(monkeypatch, ok(self.result))
         with pytest.raises(PeekClientError) as exc:
-            client.upload_page(b"x", "r.html", visibility, password, slug="p1")
+            client.upload_page(b"x", "r.html", "public", slug="p1")
         assert str(exc.value) == "A new version keeps the page's visibility; change it with set_visibility."
-        assert PASSWORD not in str(exc.value)
         assert rec.calls == []
 
-    @pytest.mark.parametrize("visibility", ["restricted", "", "other"])
+    @pytest.mark.parametrize("visibility", ["password", "", "other"])
     def test_bad_visibility(self, monkeypatch, client, visibility):
         rec = Recorder(monkeypatch, ok(self.result))
-        with pytest.raises(PeekClientError, match="visibility must be public, password or private."):
-            client.upload_page(b"x", "r.html", visibility, "")
+        with pytest.raises(PeekClientError):
+            client.upload_page(b"x", "r.html", visibility)
         assert rec.calls == []
-
-    @pytest.mark.parametrize(
-        "visibility, password",
-        [("password", ""), ("public", PASSWORD), ("password", "x" * 73), ("password", "é" * 37)],
-    )
-    def test_password_rules(self, monkeypatch, client, visibility, password):
-        rec = Recorder(monkeypatch, ok(self.result))
-        with pytest.raises(PeekClientError) as exc:
-            client.upload_page(b"x", "r.html", visibility, password)
-        assert str(exc.value) == "A password of 1 to 72 bytes goes with password visibility, and only with it."
-        assert rec.calls == []
-
-    @pytest.mark.parametrize("password", [" abc", "abc ", "   "])
-    def test_password_spaces(self, monkeypatch, client, password):
-        rec = Recorder(monkeypatch, ok(self.result))
-        with pytest.raises(PeekClientError) as exc:
-            client.upload_page(b"x", "r.html", "password", password)
-        assert str(exc.value) == "A Peek password cannot start or end with a space."
-        assert rec.calls == []
-
-    def test_72_bytes_is_fine(self, monkeypatch, client):
-        Recorder(monkeypatch, ok(self.result))
-        client.upload_page(b"x", "r.html", "password", "x" * 72)
 
 
 class TestSetVisibility:
     def test_request(self, monkeypatch, client):
-        rec = Recorder(monkeypatch, ok({"visibility": "password"}))
-        assert client.set_visibility("p1", "password", PASSWORD) == "password"
+        rec = Recorder(monkeypatch, ok({"visibility": "restricted", "notified": True}))
+        res = client.set_visibility("p1", "restricted")
         call = rec.calls[0]
         assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/uploads/p1/visibility")
-        assert call["json"] == {"visibility": "password", "password": PASSWORD}
+        assert call["json"] == {"visibility": "restricted"}
+        assert (res.visibility, res.notified) == ("restricted", True)
 
-    def test_checks_before_any_request(self, monkeypatch, client):
+    def test_private_is_sent_as_signed_in(self, monkeypatch, client):
+        rec = Recorder(monkeypatch, ok({"visibility": "signed-in", "notified": False}))
+        assert client.set_visibility("p1", "private").notified is False
+        assert rec.calls[0]["json"] == {"visibility": "signed-in"}
+
+    @pytest.mark.parametrize("visibility", ["password", "other"])
+    def test_checks_before_any_request(self, monkeypatch, client, visibility):
         rec = Recorder(monkeypatch, ok({}))
         with pytest.raises(PeekClientError):
-            client.set_visibility("p1", "restricted", "")
-        with pytest.raises(PeekClientError):
-            client.set_visibility("p1", "public", PASSWORD)
+            client.set_visibility("p1", visibility)
         assert rec.calls == []
 
-    def test_missing_answer_key(self, monkeypatch, client):
+    def test_missing_answer_keys(self, monkeypatch, client):
         Recorder(monkeypatch, ok({}))
-        assert client.set_visibility("p1", "public", "") == ""
+        res = client.set_visibility("p1", "public")
+        assert (res.visibility, res.notified) == ("", False)
 
 
 class TestDeletePage:
@@ -690,6 +699,27 @@ class TestAddComment:
         Recorder(monkeypatch, FakeResponse(403, {"error": "not owner"}))
         with pytest.raises(PeekClientError, match="HTTP 403"):
             client.add_comment("p1", "hello", "", "")
+
+    def test_version_is_sent_only_above_zero(self, monkeypatch, client):
+        rec = Recorder(monkeypatch, ok({"id": 9}))
+        client.add_comment("p1", "hello", "", "")
+        client.add_comment("p1", "hello", "", "", version=0)
+        client.add_comment("p1", "hello", "", "", version=3)
+        assert "params" not in rec.calls[0] and "params" not in rec.calls[1]
+        assert rec.calls[2]["params"] == {"v": "3"}
+
+    def test_version_not_found(self, monkeypatch, client):
+        Recorder(monkeypatch, FakeResponse(404, {"error": "version not found"}))
+        with pytest.raises(PeekClientError) as exc:
+            client.add_comment("p1", "hello", "", "", version=7)
+        assert str(exc.value) == "Peek has no version 7 of this page (HTTP 404). Retention may have removed it."
+        assert exc.value.status == 404
+
+    @pytest.mark.parametrize("version, detail", [(0, "version not found"), (7, "not found")])
+    def test_other_404s_are_the_missing_endpoint(self, monkeypatch, client, version, detail):
+        Recorder(monkeypatch, FakeResponse(404, {"error": detail}))
+        with pytest.raises(PeekClientError, match="no account comment endpoint"):
+            client.add_comment("p1", "hello", "", "", version=version)
 
 
 class TestVerified:
@@ -858,8 +888,8 @@ class TestSlugGuards:
             lambda c, s: c.get_page(s),
             lambda c, s: c.get_comments(s),
             lambda c, s: c.get_stats(s),
-            lambda c, s: c.upload_page(b"x", "a.html", "", "", slug=s),
-            lambda c, s: c.set_visibility(s, "public", ""),
+            lambda c, s: c.upload_page(b"x", "a.html", "", slug=s),
+            lambda c, s: c.set_visibility(s, "public"),
             lambda c, s: c.delete_page(s),
             lambda c, s: c.rename_page(s, "n"),
             lambda c, s: c.add_comment(s, "b", "", ""),
@@ -874,11 +904,11 @@ class TestSlugGuards:
 
 class TestSecretsStayOutOfErrors:
     def test_no_secret_in_raised_messages(self, monkeypatch, client):
-        Recorder(monkeypatch, requests.ConnectionError(f"{TOKEN} {DEVICE} {PASSWORD}"))
+        Recorder(monkeypatch, requests.ConnectionError(f"{TOKEN} {DEVICE}"))
         with pytest.raises(PeekClientError) as exc:
-            client.set_visibility("p1", "password", PASSWORD)
+            client.set_visibility("p1", "public")
         text = str(exc.value) + repr(exc.value) + repr(client)
-        assert not any(secret in text for secret in (TOKEN, DEVICE, PASSWORD))
+        assert not any(secret in text for secret in (TOKEN, DEVICE))
 
 
 class TestLiveFixtureParsing:
