@@ -1014,7 +1014,11 @@ bundle's `server` section does not set:
 
 - `bind_host` from `PRIVACYFENCE_BIND_HOST`;
 - `port` from `PRIVACYFENCE_PORT` (an integer from 1 to 65535);
-- `issuer_url` from `PRIVACYFENCE_ISSUER_URL`.
+- `issuer_url` from `PRIVACYFENCE_ISSUER_URL`;
+- `trusted_proxies` from `PRIVACYFENCE_TRUSTED_PROXIES`, a comma-separated list. Behind the
+  shipped Caddy, that is `172.30.87.2`, the value `docs/org-mode-docker.md:135` today passes as
+  `--server-trusted-proxy`. Without it a bundle-free server behind Caddy would ignore
+  `X-Forwarded-*`.
 
 The bundle always wins over the environment. In single-user mode (below) a missing `issuer_url` defaults
 to `http://localhost:<port>`.
@@ -1499,7 +1503,10 @@ section's `admin_emails` list.
 **Docker.**
 
 - `deploy/docker/privacyfence.env.example` is a new, commented example with the variables above
-  plus `PRIVACYFENCE_ISSUER_URL`.
+  plus `PRIVACYFENCE_ISSUER_URL` and `PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2`.
+- The docs say one Google OAuth client can also serve Peek and Grist sign-in, by adding their
+  redirect URIs to it. They recommend a separate client per service in the same Google project,
+  so each secret can be rotated or revoked on its own.
 - `compose.yaml` gains a commented `secrets:` example for `idp_client_secret`, mounted at
   `/run/secrets/idp_client_secret`.
 - The entrypoint's "no bundle" message changes:
@@ -2361,8 +2368,8 @@ phases:
   - tests/integration/test_org_docker_image.py
   brief: |-
     Read "Design → D9", except "The relay on localhost", which p5 and p11 already did. Single-user sign-in is p16; after this phase a single-user install starts and serves its pages but nobody can sign in yet, which is expected.
-    1. org_mode.py: resolve_mode's environment order and conflict error, the ServerConfig environment fallbacks, and is_single_user, exactly per D9.
-    2. tests/conftest.py: add an autouse fixture that runs monkeypatch.delenv(name, raising=False) for PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL, so a developer's environment never leaks into tests.
+    1. org_mode.py: resolve_mode's environment order and conflict error, the ServerConfig environment fallbacks (including PRIVACYFENCE_TRUSTED_PROXIES), and is_single_user, exactly per D9.
+    2. tests/conftest.py: add an autouse fixture that runs monkeypatch.delenv(name, raising=False) for PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT, PRIVACYFENCE_ISSUER_URL and PRIVACYFENCE_TRUSTED_PROXIES, so a developer's environment never leaks into tests.
     3. daemon_main.py load_admin_config: pass single_user=org_mode.is_single_user(bundle) instead of False (D3). routes_admin's apply_change and replace_rooms calls pass single_user the same way, replacing the False p7a and p7b used.
        Then in _start_org_web_server:
        - In single-user mode, replace the "requires an idp section" raise with D9's loopback check and message, and with D9's "a real server never falls back to single-user mode" check (a pinned signing key, or a non-empty imported_from_bundle_sha256).
@@ -2371,7 +2378,7 @@ phases:
        - Stop condition: if anything besides those call sites dereferences idp in a way a single-user start reaches, stop with status=blocked and list the call sites.
     4. deploy/docker/Dockerfile, docker-entrypoint.sh and healthcheck.py per D9. tests/integration/test_org_docker_image.py: replace test_refuses_to_start_without_a_bundle (:185) with a test that the image without a bundle starts, is healthy, and logs the single-user line. Copy the existing tests' container-run helper.
     5. Tests:
-       - tests/unit/test_org_mode.py: resolve_mode with bundle only, env only, neither, both equal, both different, and an invalid env value; each ServerConfig env fallback, with the bundle winning; is_single_user.
+       - tests/unit/test_org_mode.py: resolve_mode with bundle only, env only, neither, both equal, both different, and an invalid env value; each ServerConfig env fallback, including PRIVACYFENCE_TRUSTED_PROXIES split on commas, with the bundle winning; is_single_user.
          - tests/unit/test_daemon_main.py:
            - an unsigned bundle without mode under PRIVACYFENCE_MODE=org is refused by load_org_config;
            - single-user mode with issuer http://localhost:8765 builds the org app (monkeypatch the server start as the existing org tests do);

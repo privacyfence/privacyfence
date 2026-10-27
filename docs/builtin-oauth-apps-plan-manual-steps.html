@@ -131,7 +131,8 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
 PRIVACYFENCE_IDP_ISSUER=https://accounts.google.com
 PRIVACYFENCE_IDP_CLIENT_ID=…
 PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret
-PRIVACYFENCE_ADMIN_EMAILS=alice@acme.example.com</pre>Put the client secret in a Docker secret file, so it doesn't show in <code>docker inspect</code>. Set <code>PF_HOSTNAME</code> in <code>.env</code> for Caddy.</div></li>
+PRIVACYFENCE_ADMIN_EMAILS=alice@acme.example.com
+PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker secret file, so it doesn't show in <code>docker inspect</code>. Set <code>PF_HOSTNAME</code> in <code>.env</code> for Caddy.</div></li>
       <li><div><strong>Start.</strong> Run <code>docker compose up -d</code>. Caddy gets the TLS certificate, and the image starts in organization mode. There is no bundle to build or sign.</div></li>
       <li><div><strong>Turn services on.</strong> Sign in as the admin email, open <strong>Admin → Services</strong>, and offer the services you want. The server registers itself with the relay, and people can connect at <code>/connect</code>.</div></li>
     </ol>
