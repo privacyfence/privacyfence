@@ -1063,6 +1063,7 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 | `users/<principal>/authority/webauthn_credentials.json`, `webauthn_recovery_code.json`, `step_up_state.json` | Each person's passkeys and recovery code. |
 | `users/<principal>/logs/audit/` | Each person's audit log and its chain key. |
 | `users/<principal>/push_subscriptions.json` | Each person's subscribed browsers. |
+| `users/<principal>/whats_new.json` | Each person's last seen version, for What's new. |
 | `users/<principal>/downloads/`, `users/<principal>/uploads/` | Skip: short-lived encrypted staging. |
 | `logs/privacyfence.log` | Optional: the runtime log. |
 
@@ -1098,6 +1099,9 @@ Read the release's entry in the [changelog](../CHANGELOG.md) first, download the
 `build_org_bundle.py` for future bundle changes, and back up before upgrading. To go back, install
 the earlier version the same way (`pip install privacyfence==X.Y.Z`); that is safe only if the
 earlier version reads the data as the newer one left it, so keep the pre-upgrade backup.
+
+After an upgrade, each person sees a strip linking to What's new (`/whats-new`) the first time they
+open PrivacyFence, listing the changelog sections since the version they last used.
 
 A `settings.yaml` that still has `auto_accept_rules` or `auto_accept_grants` sections is refused at
 startup, unless it also carries the `migrated_to_policy_v2` marker, in which case those sections
