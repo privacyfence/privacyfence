@@ -540,3 +540,24 @@ class TestGristProvisioningConfigFromOrgConfig:
         assert str(exc.value).startswith(
             'org_config.json\'s "grist"."auto_provision"."provisioner_url" is not usable: '
         )
+
+
+class TestWebPushConfigFromOrgConfig:
+    def test_absent_is_on(self):
+        assert org_mode.WebPushConfig.from_org_config({}).enabled is True
+
+    def test_explicit_off(self):
+        assert org_mode.WebPushConfig.from_org_config({"web_push": {"enabled": False}}).enabled is False
+
+    def test_non_bool_enabled(self):
+        with pytest.raises(org_mode.ConfigurationError, match='"web_push"."enabled" must be true or false, got 1$'):
+            org_mode.WebPushConfig.from_org_config({"web_push": {"enabled": 1}})
+
+
+class TestConnectorEnabledByOrg:
+    def test_non_empty_section_enables(self):
+        assert org_mode.connector_enabled_by_org({"grist": {"enabled": True}}, "grist") is True
+
+    def test_missing_or_empty_section_does_not(self):
+        assert org_mode.connector_enabled_by_org({}, "grist") is False
+        assert org_mode.connector_enabled_by_org({"grist": {}}, "grist") is False
