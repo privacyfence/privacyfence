@@ -4193,6 +4193,27 @@ class _FakePeekClient:
         self.delete_leaves_it = False
         self.upload_fails = False
         self.deleted: list[str] = []
+        self.calls: list[str] = []
+        self.grants: list[SimpleNamespace] = []
+        self.grant_not_listed = False
+        self.comments_verified = True
+
+    def list_versions(self, slug):
+        self.calls.append("list_versions")
+        return [SimpleNamespace(version=1)]
+
+    def list_grants(self, slug):
+        self.calls.append("list_grants")
+        return [] if self.grant_not_listed else list(self.grants)
+
+    def add_grant(self, slug, kind, email):
+        self.calls.append("add_grant")
+        self.grants.append(SimpleNamespace(kind=kind, email=email))
+        return False
+
+    def remove_grant(self, slug, kind, email):
+        self.calls.append("remove_grant")
+        self.grants = [g for g in self.grants if (g.kind, g.email) != (kind, email)]
 
     def upload_page(self, data, name, visibility, slug=""):
         if self.upload_fails:
@@ -4228,7 +4249,10 @@ class _FakePeekClient:
         return SimpleNamespace(id=1)
 
     def get_comments(self, slug, version=0):
-        return [SimpleNamespace(body=c["body"], author=self.OWNER) for c in self.comments.get(slug, [])]
+        return [
+            SimpleNamespace(body=c["body"], author=self.OWNER, verified=self.comments_verified)
+            for c in self.comments.get(slug, [])
+        ]
 
     def delete_page(self, slug):
         if self.delete_should_fail:
@@ -4251,6 +4275,36 @@ class TestLifecyclePeek:
         assert fake.deleted == ["slug1-renamed"]
         assert not fake.pages
 
+    def test_lifecycle_peek_checks_versions_and_grants(self, monkeypatch):
+        fake = _FakePeekClient()
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert result.ok, result.note
+        assert fake.calls == ["list_versions", "add_grant", "list_grants", "remove_grant", "list_grants"]
+        assert "versions, grants" in result.note
+
+    def test_lifecycle_peek_fails_when_grant_not_listed(self, monkeypatch):
+        fake = _FakePeekClient()
+        fake.grant_not_listed = True
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert not result.ok and "did not show the grant" in result.note
+        assert result.cleanup_ok is True
+
+    def test_lifecycle_peek_fails_when_comment_not_verified(self, monkeypatch):
+        fake = _FakePeekClient()
+        fake.comments_verified = False
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert not result.ok and "verified true" in result.note
+        assert result.cleanup_ok is True
+
     def test_failing_add_comment_still_deletes(self, monkeypatch):
         fake = _FakePeekClient()
         fake.comment_should_fail = True
@@ -4266,7 +4320,7 @@ class TestLifecyclePeek:
     def test_comment_by_another_author_fails(self, monkeypatch):
         fake = _FakePeekClient()
         fake.get_comments = lambda slug, version=0: [
-            SimpleNamespace(body=c["body"], author="anonymous") for c in fake.comments.get(slug, [])
+            SimpleNamespace(body=c["body"], author="anonymous", verified=True) for c in fake.comments.get(slug, [])
         ]
         monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
 
