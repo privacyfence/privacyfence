@@ -7,6 +7,6 @@
     "slug": "qa-placeholder-slug",
     "url": "https://example.com/qa-placeholder",
     "version": 1,
-    "visibility": "private"
+    "visibility": "signed-in"
   }
 ]
