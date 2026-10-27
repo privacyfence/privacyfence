@@ -97,7 +97,7 @@ class TestPage:
         r = client.get("/whats-new")
         assert r.status_code == 200
         assert r.headers["cache-control"] == "no-store"
-        assert "What&#x27;s new in PrivacyFence" in r.text or "What's new in PrivacyFence" in r.text
+        assert "<h1>What's new in PrivacyFence</h1>" in r.text
         assert "You are using version 6.10.0." in r.text
         assert "Fix in 6.10.0." in r.text and "Fix in 6.9.1." in r.text
         assert "Fix in 6.8.2." not in r.text
@@ -176,6 +176,13 @@ class TestSeen:
         client, sessions = org
         _sign_in(client, sessions)
         r = client.post(routes_whats_new.SEEN_PATH, content="[]")
+        assert r.status_code == 403
+        assert r.json() == {"error": "csrf"}
+
+    def test_seen_rejects_a_non_string_csrf(self, org):
+        client, sessions = org
+        _sign_in(client, sessions)
+        r = client.post(routes_whats_new.SEEN_PATH, json={"csrf": 1})
         assert r.status_code == 403
         assert r.json() == {"error": "csrf"}
 

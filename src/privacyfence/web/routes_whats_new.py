@@ -123,7 +123,8 @@ def build_routes(*, sessions: OrgSessionStore) -> list[Route]:
             body = json.loads(raw or b"{}")
         except ValueError:
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
-        if not isinstance(body, dict) or not org_session.check_csrf(request, body.get("csrf")):
+        csrf = body.get("csrf") if isinstance(body, dict) else None
+        if not isinstance(csrf, str) or not org_session.check_csrf(request, csrf):
             return JSONResponse({"error": "csrf"}, status_code=403)
         running = whats_new.running_version()
         await asyncio.to_thread(whats_new.mark_seen, principal, running)

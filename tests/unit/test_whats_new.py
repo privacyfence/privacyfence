@@ -180,7 +180,7 @@ def test_read_last_seen_returns_the_stored_version(tmp_path):
     assert whats_new.read_last_seen(ALICE) == "6.9.1"
 
 
-@pytest.mark.parametrize("content", ["{not json", "[]", '{"last_seen_version": 3}'])
+@pytest.mark.parametrize("content", ["{not json", "[]", '{"last_seen_version": 3}', '{"last_seen_version": "garbage"}'])
 def test_read_last_seen_unusable_state_is_none_and_warns(tmp_path, caplog, content):
     write_state(tmp_path, content)
     with caplog.at_level(logging.WARNING, logger="privacyfence.whats_new"):

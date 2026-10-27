@@ -174,7 +174,7 @@ def read_last_seen(principal: Principal) -> str | None:
         logger.warning("What's new state for %s is not valid JSON", principal.id)
         return None
     value = data.get("last_seen_version") if isinstance(data, dict) else None
-    if not isinstance(value, str):
+    if not isinstance(value, str) or parse_version(value) is None:
         logger.warning("What's new state for %s has an unexpected shape", principal.id)
         return None
     return value
