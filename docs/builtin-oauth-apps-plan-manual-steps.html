@@ -119,12 +119,14 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
       <li><strong>Server only:</strong> File delivery, Access (sign-in restrictions), Step-up, Scoped tokens, Audit forwarding, Privacy and Stats.</li>
       <li>Service switches take effect at once. Most server settings take effect at the next restart, and the page tells you which ones are waiting.</li>
       <li>Step-up can only be made stricter here. Relaxing it stays a deliberate file edit plus a restart.</li>
+      <li>The audit-forwarding token's environment-variable name is shown but not editable. Otherwise an admin could send any server secret to a URL of their choosing.</li>
+      <li>Uploading a room directory needs a passkey, because room names reach the AI client.</li>
     </ul>
 
     <h3>Upgrading an existing server from 6.x</h3>
     <ol class="flow">
       <li><div>Install 7 and restart. You don't need to change anything first.</div></li>
-      <li><div>On this first start, PrivacyFence copies the operational settings out of your current <code>org_config.json</code> into <code>admin_config.json</code>, and logs that it did. The connectors your bundle offered stay exactly the ones offered.</div></li>
+      <li><div>On this first start, PrivacyFence copies the operational settings out of your current <code>org_config.json</code> into <code>admin_config.json</code>, and logs that it did. The connectors your bundle offered stay exactly the ones offered. A provider you add to the bundle later also needs switching on, on the Admin page.</div></li>
       <li><div>From then on those sections in the bundle are ignored, and each start logs a warning naming them. Rebuild the bundle with only the startup and credential flags; <code>build_org_bundle.py</code> now refuses the moved flags and names each one.</div></li>
       <li><div>Back up <code>admin_config.json</code> with the rest of the data volume. It is not signed, so it gets the same file protection as the install-wide settings.</div></li>
     </ol>
@@ -145,7 +147,8 @@ pre { margin: 0; background: var(--accent-soft); border-radius: 6px; padding: 10
     <h3>Organization servers and the relay</h3>
     <ul>
       <li>A server that uses a built-in app sends people's sign-in redirects through <code>https://oauth.privacyfence.eu</code>. That is a small Cloudflare Worker that forwards the browser to your server and keeps no logs.</li>
-      <li>Your server registers itself automatically by serving a token at <code>/.well-known/privacyfence-relay</code>. That proves it controls its domain. It re-registers daily, and registrations expire after 35 days without one.</li>
+      <li>On a new server, built-in services start <strong>off</strong>. Offering the first one on the Admin page is your opt-in to the relay. A trial and a desktop install start with them on.</li>
+      <li>Your server then registers itself automatically by serving a token at <code>/.well-known/privacyfence-relay</code>. That proves it controls its domain. It re-registers daily, and registrations expire after 35 days without one.</li>
       <li>Needs: an <code>https://</code> address with no path, reachable from the internet at that one path, and outbound HTTPS to <code>oauth.privacyfence.eu</code>. A server behind an IP allow-list or a VPN keeps using its own apps.</li>
       <li>Registered host names are listed publicly at <code>/registrations</code>. You can revoke any host with the token from mb2.</li>
     </ul>

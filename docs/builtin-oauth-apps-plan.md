@@ -277,38 +277,58 @@ Schema, version 1:
   - Unreadable or malformed JSON, a non-object, or `version != 1` raises `AdminConfigError`. The
     message names the path and never the content.
 - `save(data) -> None` writes atomically.
-- `import_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]` builds a fresh config:
-  - **`offered`.** If the bundle has a non-empty section for any service in `SERVICES`, each
-    service's `offered` is whether its section is non-empty, as ADR 0196 had it. Otherwise
-    google, slack, salesforce, atlassian, miro and telegram are `true`, and grist and peek are
-    `false`, because they need a server address.
+- `import_from_bundle(bundle: dict[str, Any], *, mode: Mode, trial: bool) -> dict[str, Any]`
+  builds a fresh config:
+  - **`offered`, when the bundle has a non-empty section for any service in `SERVICES`:** each
+    service's `offered` is whether its section is non-empty, as ADR 0196 had it.
+  - **`offered`, otherwise:**
+    - In local mode, and in an org-mode trial (D9), google, slack, salesforce, atlassian, miro and
+      telegram are `true`.
+    - On a non-trial org server they are all `false`. The first service an admin offers on the
+      Admin page is the opt-in, and that is what starts relay registration and puts the host on the
+      public list.
+    - grist and peek are always `false` here, because they need a server address.
   - `atlassian.assets`/`assets_workspace_id`, `peek.base_url`, and `grist.server_url` (only when
     the bundle's grist has no `client_id`) are copied from the bundle.
   - Each `OPERATIONAL_SECTIONS` key present in the bundle is copied verbatim.
   - `imported_from_bundle_sha256` is the SHA-256 hex of
     `json.dumps(bundle, sort_keys=True, separators=(",", ":"))`, or `""` for an empty bundle.
-- `ensure(bundle) -> tuple[dict[str, Any], bool]`:
-  - It returns the loaded config and `False` when the file exists.
-  - Otherwise it saves and returns `(import_from_bundle(bundle), True)`.
-- `default_config() -> dict[str, Any]` is `import_from_bundle({})`.
+- `ensure(bundle, *, mode, trial) -> tuple[dict[str, Any], bool]`:
+  - It returns `(loaded, False)` when the file exists, except in one case.
+  - **The exception:** the loaded `imported_from_bundle_sha256` is `""`, meaning the config was
+    created with no bundle, and `legacy_keys_in(bundle)` is non-empty. That is an IT bundle
+    arriving after the first start. Then it re-imports, saves and returns `(new, True)`. This
+    happens at most once, because the new config records the bundle's hash.
+  - With no file, it saves and returns `(import_from_bundle(...), True)`.
+- `config_for(bundle, *, mode, trial) -> dict[str, Any]` returns `load()` when the file exists,
+  otherwise `import_from_bundle(...)`, without writing. Readers that run without the daemon use it:
+  the CLI and `SettingsController`. A missing file then never changes what the bundle offers.
+- `load()` normalizes on read: a missing service gets the `import_from_bundle` default for it, and a
+  missing key inside a service gets its schema default. A hand-edited file missing a service
+  therefore never raises `KeyError`.
 - `service_rows(bundle, admin, *, mode)`: see D6.
 - `apply_change(action: str, payload: dict[str, Any]) -> tuple[str, list[str]]`: see D6. A
   module-level `threading.Lock`, `_write_lock`, serializes it.
 - No function in this module ever puts a value from `audit_forwarding.http.bearer_token_env`'s
   environment variable, or any client secret, into a message, a log line or a return value.
 
-**Where the import runs.** `daemon_main.load_admin_config(bundle) -> dict[str, Any]` is called
-once in `run_app`, right after `bundle = load_org_config()`.
+**Where the import runs.** `daemon_main.load_admin_config(bundle) -> tuple[dict[str, Any], bool]`
+is called once in `run_app`, right after `bundle = load_org_config()`.
 
-- It calls `admin_config.ensure(bundle)`.
+- It calls `admin_config.ensure(bundle, mode=org_mode.resolve_mode(bundle),
+  trial=org_mode.is_trial(bundle))`. p4 lands before `is_trial` exists (p15), so p4 passes
+  `trial=False` and p15 changes the call.
 - On import it logs at WARNING `Imported <n> settings from org_config.json into
-  org/admin_config.json; they are now managed on the Admin page`. It records an audit entry with
-  decision `admin_config_imported` and the bundle hash in its summary, after the audit logger is
-  initialized, next to `log_org_config_bundle_hash`.
-- Whenever `admin_config.legacy_keys_in(bundle)` is non-empty and no import happened, it logs at
-  WARNING `org_config.json carries settings that are now managed on the Admin page and are
-  ignored: <names>. Rebuild the bundle without them.`
+  org/admin_config.json; they are now managed on the Admin page`, where `<n>` is
+  `len(admin_config.legacy_keys_in(bundle))`.
+- Whenever `legacy_keys_in(bundle)` is non-empty and no import happened, it logs at WARNING
+  `org_config.json carries settings that are now managed on the Admin page and are ignored:
+  <names>. Rebuild the bundle without them.`
 - `AdminConfigError` becomes `org_mode.ConfigurationError` (refuse to start).
+- The audit entry is written by a separate
+  `daemon_main.record_admin_config_import(bundle, imported: bool)`, called right after
+  `log_org_config_bundle_hash(bundle)`, once the audit logger exists. When `imported` is true it
+  records decision `admin_config_imported`, with the bundle's SHA-256 in its summary.
 
 `settings_controller.install_org_config_bytes` (local bundle upload) sets the same "are ignored"
 text in `self.error` when the uploaded bundle carries legacy keys. The controller has no separate
@@ -349,6 +369,8 @@ composed from the bundle, the admin config and the built-in apps.
   2. For each service in `SERVICES` whose `admin["services"][s]["offered"]` is false, remove its
      section.
   3. For each offered service, build its section:
+     - (Read `offered` as `admin["services"].get(s, {}).get("offered", False)`; `load()` has
+       already normalized it.)
      - **google, slack, salesforce, miro:** the bundle section when `credentials_source` is
        `"bundle"`.
        - Otherwise, with `"builtin"`, the built-in app's fields: `{"consumer_key",
@@ -386,14 +408,18 @@ composed from the bundle, the admin config and the built-in apps.
   `init_privacy_filter`'s `org_managed`. Everything else gets
   `org_config = effective_org_config(bundle, admin)`.
 - The CLI dispatch (`daemon_main.py:2518`) uses
-  `oauth_apps.effective_org_config(load_org_config(), admin_config.load() or admin_config.default_config(), mode="local")`.
-  The CLI OAuth runners are loopback flows and always use the local apps.
+  `oauth_apps.effective_org_config(bundle, admin_config.config_for(bundle, mode="local", trial=False), mode="local")`,
+  with `bundle = load_org_config()`.
+  - The CLI OAuth runners are loopback flows and always use the local apps.
+  - An `AdminConfigError` there exits the same way a `ConfigurationError` does.
 - `settings_controller._org_config_or_empty` (`:1203`) and `refresh_connectors`'s `work`
-  (`:1240`) call `effective_org_config(load_org_config(), admin_config.load() or
-  admin_config.default_config())`.
+  (`:1240`) call
+  `effective_org_config(bundle, admin_config.config_for(bundle, mode=org_mode.resolve_mode(bundle), trial=False))`,
+  with `bundle = load_org_config()`. An `AdminConfigError` is handled like the
+  `ConfigurationError` already caught there.
 - In org mode the raw `bundle` travels down with a new `bundle` keyword:
   - `run_app` passes it to `_maybe_start_web_server(..., bundle=bundle)` (called at `:2160`);
-  - that passes it to `_start_org_web_server(..., bundle=...)` (called at `:801-805`);
+  - that passes it to `_start_org_web_server(..., bundle=...)` (called at `:818-821`);
   - that stores it in a new `OrgAuth` field, `bundle: dict[str, Any]`.
 
   The Admin dispatcher (D6) needs it to recompute the effective config.
@@ -582,8 +608,11 @@ with `@cloudflare/vitest-pool-workers`).
   adapter per mode (ADR 0033).
 - **Who may use it, local mode.** The routes go through `web/server.py`'s `_owner_only_routes`, as
   Settings does, so only the install owner reaches them.
-- **Who may use it, org mode.** A signed-in principal with `is_admin`. Anyone else gets 403 for an
-  action, and for `GET /admin` an HTML page that says `Only administrators can open this page.`
+- **Who may use it, org mode.** A signed-in principal with `is_admin`.
+  - No session: a JSON 401 `{"error": "Sign in first."}` for the API, and a redirect to
+    `/login?next=/admin` for the page.
+  - Signed in but not an admin: a JSON 403 `{"error": "Only administrators can do this."}`, and for
+    `GET /admin` an HTML page that says `Only administrators can open this page.`
 - **Requests.** CSRF and origin checks reuse each mode's existing helpers, as `routes_settings`
   uses them.
 - **Step-up.** Both modes call `routes_settings._apply_step_up_gate` with a new keyword,
@@ -596,8 +625,21 @@ with `@cloudflare/vitest-pool-workers`).
   - Local mode also applies the existing `require_human_session` check to sensitive admin actions,
     as `settings_action` does.
 - **Audit.** Every successful change records `routes_settings._record_settings_audit(principal,
-  summary)` (decision `settings_change`), with the summary from `admin_config.apply_change`
-  suffixed with ` (admin=<id>)` in org mode and ` (principal=local)` in local mode.
+  summary)` (decision `settings_change`) inside `with principal_scope(principal):`, as the
+  existing org dispatcher does. The summary comes from `admin_config.apply_change`, suffixed with
+  ` (admin=<id>)` in org mode and ` (principal=local)` in local mode. An empty summary (a no-op)
+  records nothing and saves nothing.
+- **Response.** Every `POST /api/admin/...` that succeeds returns the admin page state (below) as
+  JSON, which the bridge shim re-renders from. An error returns `{"error": <message>}` with 400
+  and is shown the way settings errors are.
+- **Getting the bundle and the startup state.**
+  - Local mode has no `OrgAuth`. The local builder reads the bundle per request with
+    `daemon_main.load_org_config()`, using `{}` on `ConfigurationError`.
+  - `startup_admin` (the admin config as loaded at startup) and the startup `org_config` dict
+    reach both builders through new keywords on `WebServer.__init__`, `build_app` and
+    `_maybe_start_web_server`.
+  - The routes mount where the settings routes mount (`web/server.py:1190`, only when a controller
+    exists).
 - **The nav.**
   - `web_shell` gets `ORG_ADMIN_NAV_ITEMS = ORG_NAV_ITEMS + (("admin", "Admin", "/admin"),)` and
     `def org_nav_items(is_admin: bool) -> tuple[...]`.
@@ -617,38 +659,74 @@ with `@cloudflare/vitest-pool-workers`).
 class AdminAction:
     modes: frozenset[str]
     sensitive: bool
-    applies_live: bool
+    applies: Literal["live", "restart", "self"]
 ```
+
+`applies` says how a change takes effect:
+
+- `"live"`: the dispatcher refreshes the effective config and rebuilds connectors.
+- `"restart"`: the change is only saved, and the page shows the restart notice.
+- `"self"`: the action already applies itself (the privacy actions, through
+  `org_install_policy.apply_change`'s own reload).
 
 It holds exactly these actions. "Both" means `{LOCAL_MODE, ORG_MODE}`. Each action's parameters are
 the JSON body keys, with these types: `service: str`, `enabled: bool`, `value: str` and so on.
 
-| Action | Parameters | Modes | Sensitive | Live |
+| Action | Parameters | Modes | Sensitive | Applies |
 |---|---|---|---|---|
-| `offer_service` | `service` | both | yes (ADR 0070) | yes |
-| `withdraw_service` | `service` | both | no | yes |
-| `set_atlassian_assets` | `enabled: bool, workspace_id: str = ""` | both | yes | yes |
-| `set_server_address` | `service: str` (`grist` or `peek`), `value: str` | both | yes | yes |
-| `set_unattended_sessions` | `enabled: bool` | both | yes | no |
-| `clear_rooms` | — | both | no | yes |
-| `set_download_delivery` | `inline_max_bytes: int, link_ttl_seconds: int, allow_disk_staging: bool, agent_links: bool, allow_exports: bool` | org | yes | no |
-| `set_web_push` | `enabled: bool` | org | yes | no |
-| `set_authz` | `allowed_domains: str, groups_claim: str, required_groups: str` (comma- or newline-separated lists) | org | yes | no |
-| `tighten_step_up` | `enabled: bool, require_passkey: bool, scope: str` | org | yes | no |
-| `set_scoped_tokens` | `enabled: bool, max_days: int` | org | yes | no |
-| `set_audit_forwarding` | `enabled: bool, kind: str, syslog_host: str, syslog_port: int, syslog_protocol: str, http_url: str, http_bearer_token_env: str` | org | yes | no |
-| `toggle_pii_detection`, `toggle_pii_category`, `set_default_policy`, `set_category_policy` | as today in `routes_settings._apply_org_action` | org | yes | yes |
+| `offer_service` | `service` | both | yes (ADR 0070) | live |
+| `withdraw_service` | `service` | both | no | live |
+| `set_atlassian_assets` | `enabled: bool, workspace_id: str = ""` | both | yes | live |
+| `set_server_address` | `service: str` (`grist` or `peek`), `value: str` | both | yes | live |
+| `set_unattended_sessions` | `enabled: bool` | both | yes | restart |
+| `clear_rooms` | — | both | no | live |
+| `set_download_delivery` | `inline_max_bytes: int, link_ttl_seconds: int, allow_disk_staging: bool, agent_links: bool, allow_exports: bool` | org | yes | restart |
+| `set_web_push` | `enabled: bool` | org | yes | restart |
+| `set_authz` | `allowed_domains: str, groups_claim: str, required_groups: str` (comma- or newline-separated lists) | org | yes | restart |
+| `tighten_step_up` | `enabled: bool, require_passkey: bool, scope: str` | org | yes | restart |
+| `set_scoped_tokens` | `enabled: bool, max_days: int` | org | yes | restart |
+| `set_audit_forwarding` | `enabled: bool, kind: str, syslog_host: str, syslog_port: int, syslog_protocol: str, http_url: str` | org | yes | restart |
+| `toggle_pii_detection`, `toggle_pii_category`, `set_default_policy`, `set_category_policy` | as today in `routes_settings._apply_org_action` | org | yes | self |
 
-- **The four privacy actions** (last row) keep their existing implementation: the
-  `_apply_org_action` branches move unchanged into `routes_admin`, still calling
-  `org_install_policy.apply_change`.
+**Restart labels**, for the `restart_needed` list:
+
+| Section | Label |
+|---|---|
+| `unattended_sessions` | Unattended sessions |
+| `download_delivery` | File delivery |
+| `web_push` | Web push |
+| `authz` | Sign-in restrictions |
+| `step_up` | Step-up |
+| `scoped_tokens` | Scoped tokens |
+| `audit_forwarding` | Audit forwarding |
+
+**`audit_forwarding.http.bearer_token_env` is not editable on the Admin page.** The daemon sends
+the named environment variable's value to the configured URL (`audit_forwarding.py:185-200`). If
+the page could set both the name and the URL, an IdP admin could send any secret in the server's
+environment to a URL they choose.
+
+- `set_audit_forwarding` keeps the stored name unchanged.
+- The page shows it read-only, with: `Set by editing org/admin_config.json on the server.`
+- ADR 0241 records this.
+
+- **The four privacy actions** (last row) keep their existing implementation. The
+  `_apply_org_action` branches and `_current_pii_flag` move unchanged into `routes_admin`, still
+  calling `org_install_policy.apply_change`. `routes_admin.build_org_routes` therefore also takes
+  `install_wide_settings` and `install_wide_settings_path`, passed from `web/server.py` as
+  `build_org_routes` for settings gets them today.
 - **Validation.** `admin_config.apply_change(action, payload)` validates by building the candidate
   section and running it through the existing parser, `org_mode.<X>.from_org_config({"<section>":
   candidate})`. Use `step_up_config.StepUpConfig.from_org_config` and
   `scoped_tokens.policy_from_org_config(..., org_mode=True)` the same way.
   - A `ConfigurationError` becomes `AdminConfigError(str(exc).replace("org_config.json's ", ""))`.
   - `set_server_address` validates with `grist_auth.normalize_server_url` or
-    `peek_client.normalize_base_url`. An empty value clears the address.
+    `peek_client.normalize_base_url`. Their `GristClientError` or `PeekClientError` becomes
+    `AdminConfigError(str(exc))`. An empty value clears the address.
+  - `set_scoped_tokens` checks `max_days` itself, because `policy_from_org_config` only logs a bad
+    value: it must be an int from 1 to `scoped_tokens.LOCAL_MAX_DAYS` (365). Otherwise it raises
+    `Scoped tokens can last from 1 to 365 days.`
+  - `step_up.rp_id`, `rp_name` and `batch` have no control on the page. They keep their imported
+    values and are set by hand in the file; the docs say so.
   - `set_atlassian_assets` stores `assets` and `assets_workspace_id`.
   - Unknown services raise `Unknown service.`
 - **`tighten_step_up`** accepts only changes that make step-up stricter:
@@ -656,6 +734,8 @@ the JSON body keys, with these types: `service: str`, `enabled: bool`, `value: s
   - `require_passkey` false→true;
   - `scope` moving later in `step_up_config.STEP_UP_SCOPES` (`("writes", "writes_and_pii_reads",
     "writes_and_reads")`, narrowest first).
+  - A submission that changes nothing is a no-op: an empty summary, nothing saved, nothing
+    audited.
 
   Anything else raises `AdminConfigError("Step-up can only be made stricter here. To relax it,
   edit org/admin_config.json and restart PrivacyFence (ADR 0068).")`.
@@ -678,11 +758,13 @@ the JSON body keys, with these types: `service: str`, `enabled: bool`, `value: s
 
 **Applying a change.**
 
-- **Live actions.** For an action marked live, after `apply_change` succeeds:
+- **Live actions.** For an action with `applies == "live"`, after `apply_change` succeeds:
   - Org mode: `oauth_apps.refresh_in_place(org_config, oauth_apps.effective_org_config(bundle,
     admin_config.load(), mode="org"))`, then `connector_registry.evict_all()`, a new method that
     clears `_hosts` and `_last_used` under the lock, then `relay_client.request_check()`.
-  - Local mode: `controller.refresh_connectors()`.
+  - Local mode: the same `refresh_in_place` on the startup `org_config` dict, which
+    `_connectors_for_new_principal` closes over (`daemon_main.py:874-876`), so other OS accounts'
+    principals see the change too. Then `controller.refresh_connectors()`.
 - **Restart-only actions.** These are only saved.
 - **Pending restart.** `routes_admin` keeps the admin config as loaded at startup
   (`startup_admin`, passed in by `daemon_main`). The page state's `"restart_needed"` lists the
@@ -693,11 +775,28 @@ the JSON body keys, with these types: `service: str`, `enabled: bool`, `value: s
 like `org_config_upload` does.
 
 - The file is at most 2 MB and is the JSON `scripts/sync_room_directory.py` now writes:
-  `{"rooms": [...], "rooms_synced_at": "<iso>"}`, where `rooms` is a list of objects.
-- It is not sensitive (plain directory data, no credential) and is classified
-  in the route-classification list `routes_admin` keeps, as ADR 0014 requires. It is
-  CSRF-checked.
+  `{"rooms": [...], "rooms_synced_at": "<iso>"}`.
+- Each room must be an object with a non-empty string `resource_email`. Its other values must be
+  strings of at most 500 characters, numbers, booleans or null. There are at most 5000 rooms.
+- It is **sensitive**: room names become tool output an agent reads. That means step-up (with
+  `routes_settings._step_up_in_force` and a fingerprint of the file's SHA-256, as
+  `org_config_upload` does), plus `require_human_session` in local mode. It is CSRF-checked, and
+  classified in the route-classification list `routes_admin` keeps, as ADR 0014 requires.
 - Summary: `Replaced the room directory (<n> rooms)`.
+- The bridge shim intercepts a new action, `upload_rooms`, the way it intercepts
+  `install_org_config` (`routes_settings.py:483-521`), and posts the file to this route.
+
+**Bundle upload (local mode).** The upload moves from Settings to the Admin page.
+
+- `routes_settings.org_config_upload`'s body becomes a module-level function
+  `handle_org_config_upload(request, *, controller, ..., state_builder)` with unchanged checks:
+  CSRF, human session, size, TOFU confirmation (409), then step-up.
+- `routes_admin`'s local builder mounts it at `POST /api/admin/org_config/upload`, with
+  `state_builder` returning the admin page state.
+- `/api/settings/org_config/upload` is removed. Update `_BESPOKE_SENSITIVE_ROUTE_PATHS` and
+  `install_org_config`'s shim fetch path.
+- The admin page state carries `"error": controller.error` in local mode, so D3's "are ignored"
+  message shows on the Admin page.
 
 **Page state.** `routes_admin` builds:
 
@@ -709,6 +808,7 @@ like `org_config_upload` does.
     and peek
   - `client_id`: from the bundle or built-in app, `""` otherwise
   - `relay`: `mode == "org" and app_source == "builtin" and key != "telegram"`
+  - for grist, `client_id` is the bundle Grist OAuth app's, or `""`
   - `options`: `{"assets": bool, "assets_workspace_id": str}` for atlassian, `{"server_url":
     str, "locked": bool}` for grist (locked when the bundle carries a Grist OAuth app),
     `{"base_url": str}` for peek, `{}` otherwise
@@ -724,6 +824,15 @@ like `org_config_upload` does.
 
 **Rendering.** `settings_window_html.build_html` gains `surface: Literal["settings", "admin"] =
 "settings"`.
+
+- `window.__pfCapabilities` gains `surface`.
+- `render()` branches first: `if (CAPS.surface === 'admin') { renderAdmin(state); return; }`.
+  The admin state never has to carry the settings keys (`connectors`, `telegram_auth`,
+  `peek_auth`).
+- `GET /admin` passes `initial_section="services"`, so the shared fallback
+  (`settings_window_html.py:346`, `:1875`) never lands on a hidden section.
+- The admin surface gets its own `not_applicable_actions`: the org-only admin actions in local
+  mode, and nothing in org mode.
 
 - `_capabilities_for(mode, is_admin, surface)`:
   - The admin surface's sections are `services`, `features` (Jira Assets, server addresses, rooms,
@@ -755,17 +864,34 @@ like `org_config_upload` does.
 
 ### D7. Bundle tooling
 
-- **`scripts/build_org_bundle.py`.** The flags that write a legacy key are hidden with
-  `help=argparse.SUPPRESS`. They stay parseable only to refuse:
+- **`scripts/build_org_bundle.py`.** These flags write a legacy key. They are hidden with
+  `help=argparse.SUPPRESS` and stay parseable only to refuse:
   - `--enable-telegram`, `--enable-peek`, `--enable-grist` and `--peek-base-url`;
-  - `--grist-server-url` without `--grist-client-id`;
-  - the `--atlassian-assets*` flags;
-  - every `--authz-*`, `--step-up-*`, `--unattended-*`, `--scoped-tokens-*`, download-delivery,
-    `--no-web-push` and `--audit-forwarding-*` flag.
+  - `--grist-server-url` when given without `--grist-client-id`;
+  - `--atlassian-assets` and `--atlassian-assets-workspace-id`;
+  - `--authz-allowed-domain`, `--authz-groups-claim` and `--authz-required-group`;
+  - `--step-up-enabled`, `--step-up-disabled`, `--step-up-scope`, `--step-up-rp-id`,
+    `--step-up-rp-name`, `--step-up-require-passkey` and `--step-up-no-require-passkey`;
+  - `--enable-unattended-sessions` and `--disable-unattended-sessions`;
+  - `--enable-scoped-tokens`, `--disable-scoped-tokens` and `--scoped-token-max-days`;
+  - `--downloads-inline-max-bytes`, `--downloads-link-ttl-seconds`, `--downloads-disable-staging`,
+    `--agent-links`/`--no-agent-links` and `--exports`/`--no-exports`;
+  - `--web-push`/`--no-web-push` (one `BooleanOptionalAction`);
+  - `--enable-audit-forwarding`, `--disable-audit-forwarding` and every
+    `--audit-forwarding-*` option.
 
   When any of them is given, the script prints `error: <flag> has moved to the Admin page (ADR
-  0241); remove it.` for each one and exits 2 without writing. Find each flag's exact spelling in
-  the script's argparse groups (lines 240-610).
+  0241); remove it.` for each one and exits 2 without writing.
+
+  `--idp-step-up-acr-value` writes `idp.step_up_acr_values`, which stays: it is part of the IdP, so
+  it is **not** refused.
+
+  Also update:
+  - the "nothing to write" check (`build_org_bundle.py:902-910`), which names unattended sessions
+    and scoped tokens, so it names only what remains;
+  - `--mode local`'s popping of operational keys (`:770-776`), which now has nothing to pop;
+  - `tests/unit/test_docs_configuration_reference.py:128-135`: `_bundle_options()` skips actions
+    whose `help is argparse.SUPPRESS`, so the reference no longer has to list refused flags.
 - `--merge` drops legacy keys from the merged bundle and prints `note: dropped <names>; they are
   managed on the Admin page now.`
 - The script's own copy of the canonicalization and signing logic is unchanged (ADR 0016).
@@ -790,8 +916,13 @@ patches:
 - `app_credentials.builtin_app` to return `None`.
 
 p5 extends it to patch `relay_client.relay_token_path` (a function returning
-`paths.org_dir() / "relay_token.txt"`) to `tmp_path / "relay_token.txt"`. Tests that need built-in
-apps patch `builtin_app` themselves.
+`paths.org_dir() / "relay_token.txt"`) to `tmp_path / "relay_token.txt"`.
+
+**Exempt modules.** The fixture does nothing when `request.module.__name__` ends with
+`test_app_credentials`, `test_admin_config` or `test_relay_client`. Those modules test the real
+functions and patch `paths.data_dir` to `tmp_path` themselves, so the real path functions run and
+count toward their 100% coverage. Any other test that needs built-in apps patches `builtin_app`
+itself.
 
 ### D9. Mode and server from the environment, and the Docker image starts in org mode
 
@@ -953,7 +1084,7 @@ to `http://localhost:<port>`.
     - Linux: `${XDG_STATE_HOME:-~/.local/state}/privacyfence-companion/notices.json`
   - The marker is the JSON `{"local_mode_deprecated_7": true}`, written atomically. A failure to
     read or write it means the notice shows again next time and is never an error.
-- **Docs.** p13 adds `docs/moving-to-organization-mode.md` (moving to a server or the Docker image,
+- **Docs.** p13b adds `docs/moving-to-organization-mode.md` (moving to a server or the Docker image,
   bringing rules along per the existing "Moving a person from a desktop install" section) and marks
   the install guides as deprecated.
 - **Changelog.** The changelog says so under a breaking-changes note.
@@ -971,14 +1102,17 @@ to `http://localhost:<port>`.
   covers operational settings).
 - **0241** — Operational settings live in a daemon-written `org/admin_config.json`, imported once
   from an existing bundle and then managed on the Admin page.
+  - On a new org server the built-in services start off; offering the first one is the opt-in to
+    the relay.
+  - The audit-forwarding bearer-token variable name is not editable from the page.
   - It has settings.yaml-level trust.
   - Changes need the install owner (local) or an IdP admin (org), plus step-up for sensitive ones.
   - Step-up can only be made stricter from the page; relaxing it is still a file edit, so ADR 0068
     holds.
   - On a desktop install the owner, not the bundle's author, now decides which services are
-    offered.
+    offered and whether unattended sessions are on.
 
-  Relates to 0016, 0034, 0068, 0070, 0200.
+  Amends 0196; relates to 0016, 0034, 0068, 0070, 0200.
 - **0242** — Administration is a separate top-level Admin page; Settings shows every person the
   same personal sections. The org Privacy and Stats sections move to Admin. Amends 0217 (where
   Stats lives); relates to 0033.
@@ -1020,6 +1154,11 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 - **Trial sign-in is new authentication code.** p16 runs on Opus for that reason (see its
   `worker_model_reason`).
 
+- **Fresh org servers start with built-in services off.** The relay, and the public listing of the
+  host name, start only once an admin offers a built-in service. A trial and a desktop install
+  start with them on.
+- **A bundle that adds a provider later** does not offer it by itself after the import. An admin
+  switches it on, and the docs say so.
 - **Desktop installs lose bundle enforcement of the offered services.** An IT-distributed bundle
   used to decide which services a desktop install offers. After the import, the install owner
   decides on the Admin page. This follows from moving the switches out of the signed bundle, and
@@ -1133,22 +1272,31 @@ phases:
   - tests/conftest.py
   - scripts/check_coverage_floor.py
   brief: |-
-    Read "Design → D2", "D3" and "D8". Names, schema, import rules and messages are all there. This phase adds the module only; service_rows and apply_change come in p6, and no caller changes here.
-    1. Create src/privacyfence/admin_config.py with AdminConfigError, SERVICES, SERVICE_LABELS, OPERATIONAL_SECTIONS, LEGACY_BUNDLE_KEYS, admin_config_path, load, save, import_from_bundle, ensure, default_config and legacy_keys_in, exactly as D2 and D3 define them. Use secure_files.atomic_write_json and a module-level threading.Lock _write_lock around save.
-    2. tests/conftest.py: add the D8 autouse fixture _isolate_admin_config_and_builtin_apps, modelled on _isolate_whats_new_state. It patches admin_config.admin_config_path and app_credentials.builtin_app.
+    Read "Design → D2", "D3" and "D8". Names, schema, import rules, the ensure exception, config_for, load normalization and messages are all there. This phase adds the module only; service_rows and apply_change come in p6, and no caller changes here.
+    1. Create src/privacyfence/admin_config.py with AdminConfigError, SERVICES, SERVICE_LABELS, OPERATIONAL_SECTIONS, LEGACY_BUNDLE_KEYS, admin_config_path, load (with normalization), save, import_from_bundle(bundle, *, mode, trial), ensure(bundle, *, mode, trial), config_for(bundle, *, mode, trial) and legacy_keys_in, exactly as D2 and D3 define them.
+       - Use secure_files.atomic_write_json, and a module-level threading.Lock _write_lock around save.
+       - Do not import oauth_apps at module level (it will import this module).
+    2. tests/conftest.py: add the D8 autouse fixture _isolate_admin_config_and_builtin_apps, modelled on _isolate_whats_new_state, with D8's exempt-module rule. It patches admin_config.admin_config_path and app_credentials.builtin_app.
     3. scripts/check_coverage_floor.py: add "src/privacyfence/admin_config.py" to MODULE_FLOORS at 100, in the entry format the file already uses.
-    4. tests/unit/test_admin_config.py:
+    4. tests/unit/test_admin_config.py. It is exempt from the fixture, so patch paths.data_dir to tmp_path in a module fixture.
        - A missing file loads as None.
-       - A malformed file, a non-object, or a wrong version raises AdminConfigError without the file content in the message.
-       - The saved file has mode 0o600 on POSIX; skip this on Windows the way the existing secure_files tests do.
+       - A malformed file, a non-object, or a wrong version raises AdminConfigError without the content in the message.
+       - Normalization fills a missing service and a missing key.
+       - The saved file has mode 0o600 on POSIX; skip on Windows the way the existing secure_files tests do.
        - import_from_bundle:
-         - an empty bundle offers google, slack, salesforce, atlassian, miro and telegram but not grist or peek;
-         - a bundle with only slack and peek sections offers exactly those two, and copies peek.base_url;
+         - an empty bundle in local mode, and in an org trial, offers google, slack, salesforce, atlassian, miro and telegram;
+         - an empty bundle on a non-trial org server offers none;
+         - grist and peek are never offered from an empty bundle;
+         - a bundle with only slack and peek sections offers exactly those two and copies peek.base_url;
          - atlassian assets and assets_workspace_id are copied;
          - grist.server_url is copied only when grist has no client_id;
          - every OPERATIONAL_SECTIONS key is copied verbatim;
          - the hash is the documented SHA-256, and "" for {}.
-       - ensure imports and saves when the file is missing, and returns (loaded, False) without touching the file when it exists.
+       - ensure:
+         - it imports and saves when the file is missing;
+         - it returns (loaded, False) without writing when the file exists;
+         - it re-imports exactly once when the stored hash is "" and the bundle has legacy keys.
+       - config_for never writes.
        - legacy_keys_in returns the dotted names, including atlassian.assets and a grist.server_url without client_id, and [] for a credentials-only bundle.
     5. Run ruff check ., python3 -m pytest tests/unit -q (the new autouse fixture must break nothing), and python3 -m mypy src/privacyfence/admin_config.py.
   acceptance:
@@ -1168,21 +1316,22 @@ phases:
   brief: |-
     Read "Design → D4" (the oauth_apps module part). The steps of effective_org_config are numbered there; implement them in that order.
     1. Create src/privacyfence/oauth_apps.py with RELAY_BASE_URL, RELAY_MARKER, GOOGLE_AUTH_URI, GOOGLE_TOKEN_URI, BUILTIN_KEY, AppSource, credentials_source, effective_org_config, refresh_in_place, relay_redirect_uri and uses_relay.
-       - Call the built-ins as `app_credentials.builtin_app(...)` and `app_credentials.telegram_app_credentials()` (module attribute access, after `from . import app_credentials`), so the conftest patch covers them.
-       - Import admin_config at module level; admin_config must not import oauth_apps at module level.
+       - Call the built-ins as `app_credentials.builtin_app(...)` and `app_credentials.telegram_app_credentials()`, after `from . import app_credentials`, so the conftest patch covers them.
+       - Read offered as `admin["services"].get(s, {}).get("offered", False)`.
+       - Import admin_config at module level.
     2. scripts/check_coverage_floor.py: add "src/privacyfence/oauth_apps.py" to MODULE_FLOORS at 100.
     3. tests/unit/test_oauth_apps.py:
        - Legacy keys are dropped: every LEGACY_BUNDLE_KEYS key, atlassian.assets/assets_workspace_id and the API-key grist.server_url are absent from the result even when present in the bundle.
-       - A withdrawn service's section is removed even when the bundle carries its credentials.
-       - Parametrized over google, slack, salesforce and miro × local and org × (bundle credentials, built-in present, built-in absent): the section's exact contents, including relay True only for built-in in org mode; google sections carry auth_uri/token_uri; salesforce built-in uses consumer_key/consumer_secret.
-       - atlassian combines credentials with the admin assets and assets_workspace_id, and has no section without credentials.
+       - A withdrawn service's section is removed even when the bundle carries its credentials, and a service missing from admin["services"] counts as not offered.
+       - Parametrized over google, slack, salesforce and miro × local and org × (bundle credentials, built-in present, built-in absent): the exact section, with relay True only for built-in in org mode; google carries auth_uri/token_uri; salesforce built-in uses consumer_key/consumer_secret.
+       - atlassian combines credentials with the admin assets values, and has no section without credentials.
        - telegram gets {"enabled": True} only when telegram_app_credentials() is not None.
-       - grist: a bundle OAuth app wins over the admin server_url; the admin server_url gives {"server_url": ...}; local with neither gives {"enabled": True}; org with neither gives no section.
+       - grist: a bundle OAuth app beats the admin server_url; the admin server_url alone; local with neither gives {"enabled": True}; org with neither gives no section.
        - peek: the same three cases with base_url.
        - Every OPERATIONAL_SECTIONS key is copied from admin.
        - A bundle "relay" key is stripped.
        - Neither input is mutated.
-       - refresh_in_place keeps the same object, removes missing keys and updates the others.
+       - refresh_in_place keeps the same object.
        - credentials_source for each case.
     4. Run ruff check ., python3 -m pytest tests/unit/test_oauth_apps.py -q and python3 -m mypy src/privacyfence/oauth_apps.py.
   acceptance:
@@ -1204,19 +1353,29 @@ phases:
   - tests/unit/web/test_server_org_mode.py
   brief: |-
     Read "Design → D3" ("Where the import runs") and "D4" ("Where it is applied").
-    1. Guard grep: `grep -rnE "(not|if|bool\()\s*org_config\b|len\(org_config\)" src/privacyfence`. The planner and the reviewer found only harmless hits: `org_config = org_config or {}` in _maybe_start_web_server, and `org_config or {}` at routes_settings.py:1643. If another hit decides something from org_config being empty or non-empty, stop with status=blocked and name it.
+    1. Guard grep: `grep -rnE "(not|if|bool\()\s*org_config\b|len\(org_config\)" src/privacyfence`. The reviewer found these hits, all harmless:
+       - daemon_main.py:558, which checks the signature field on the raw bundle;
+       - daemon_main.py:1120, a docstring;
+       - settings_controller.py:1295, 1385 and 1745;
+       - routes_connect.py:141;
+       - org_mode.py:535.
+       If any other hit decides something from org_config being empty or non-empty, stop with status=blocked and name it.
     2. daemon_main.py:
-       - Add load_admin_config(bundle) per D3. The import audit entry uses decision "admin_config_imported"; record it right after log_org_config_bundle_hash(bundle), so the audit logger exists.
+       - Add load_admin_config(bundle) -> tuple[dict, bool] and record_admin_config_import(bundle, imported) per D3, passing trial=False (p15 changes it).
        - Add effective_org_config(bundle, admin) per D4.
-       - In run_app: `bundle = load_org_config()`; reject_removed_tool_annotations(bundle); `admin = load_admin_config(bundle)`; resolve_mode, check_storage_permissions and init_privacy_filter use `bundle`; then `org_config = effective_org_config(bundle, admin)`, which every later use takes. log_org_config_bundle_hash keeps `bundle`.
-       - The CLI dispatch near line 2518 uses the local form from D4.
-       - Thread `bundle` and `admin` down: new keywords `bundle: dict[str, Any] | None = None` and `startup_admin: dict[str, Any] | None = None` on _maybe_start_web_server and _start_org_web_server, passed from run_app. OrgAuth in web/server.py gets fields `bundle: dict[str, Any]` and `startup_admin: dict[str, Any]` (both `field(default_factory=dict)`), set where OrgAuth is built. Nothing reads them yet; p7 does.
+       - In run_app:
+         - `bundle = load_org_config()`, then reject_removed_tool_annotations(bundle), then `admin, imported = load_admin_config(bundle)`.
+         - resolve_mode, check_storage_permissions and init_privacy_filter use `bundle`.
+         - Then `org_config = effective_org_config(bundle, admin)`; every later use takes it.
+         - log_org_config_bundle_hash(bundle), then record_admin_config_import(bundle, imported).
+       - The CLI dispatch near line 2518 uses the config_for form from D4, and exits on AdminConfigError the way it does on ConfigurationError.
+       - Thread `bundle` and `startup_admin` down as new keywords (default None) on _maybe_start_web_server and _start_org_web_server, passed from run_app. Add two OrgAuth fields in web/server.py, `bundle: dict[str, Any]` and `startup_admin: dict[str, Any]`, both `field(default_factory=dict)`, set where OrgAuth is built. Nothing reads them yet.
     3. settings_controller.py:
-       - _org_config_or_empty (~1203) and refresh_connectors' work (~1240) use `effective_org_config(load_org_config(), admin_config.load() or admin_config.default_config())`. Import both from .daemon_main inside the function, as the existing code does, and keep the existing error handling (an AdminConfigError is handled like ConfigurationError).
-       - install_org_config_bytes: after a successful install, if admin_config.legacy_keys_in(data) is non-empty, set self.error to D3's "are ignored" sentence.
+       - _org_config_or_empty (~1203) and refresh_connectors' work (~1240) use the config_for form from D4. Import from .daemon_main and .admin_config inside the function, as the existing code does, and handle AdminConfigError like ConfigurationError.
+       - install_org_config_bytes: after a successful install, if admin_config.legacy_keys_in(data) is non-empty and the stored admin config's imported_from_bundle_sha256 is not "", set self.error to D3's "are ignored" sentence. With a "" hash the next start re-imports, so show nothing.
     4. Tests.
        - test_daemon_main.py, a class TestAdminConfigStartup:
-         - The first start with a bundle carrying authz and a slack section writes admin_config.json with slack offered and authz copied, logs the import warning and records an admin_config_imported audit entry.
+         - The first start with a bundle carrying authz and a slack section writes admin_config.json with only slack offered and authz copied, logs the import warning with n=1, and records an admin_config_imported audit entry after the bundle-hash entry.
          - A second start does not re-import, and logs the "are ignored" warning.
          - A malformed admin_config.json raises ConfigurationError.
        - test_daemon_main.py, a class TestEffectiveOrgConfigWiring:
@@ -1225,10 +1384,11 @@ phases:
          - The CLI form uses google_desktop even when the bundle says mode org.
          - _start_org_web_server stores bundle and startup_admin on OrgAuth.
        - test_settings_controller.py:
-         - With no bundle and a built-in miro app, the snapshot lists Miro and authenticate_connector("miro") no longer sets "Miro isn't enabled in your organization config.".
-         - With miro withdrawn in admin_config.json, it does.
-         - A bundle upload carrying "authz" installs and sets the "are ignored" message.
-       - The p2 conftest fixture makes builtin_app return None by default, so existing tests keep their meaning. Do not weaken any assertion.
+         - The existing ORG_CONFIG_ENABLING_EVERY_CONNECTOR tests keep passing unchanged, because config_for imports from that bundle.
+         - With no bundle and a built-in miro app, the snapshot lists Miro and authenticate_connector("miro") succeeds past the org check.
+         - With miro withdrawn in admin_config.json, it is refused.
+         - A bundle upload carrying "authz" over an imported config installs and sets the "are ignored" message.
+       - Do not weaken any assertion.
     5. Run ruff check . and python3 -m pytest tests/unit -q.
   acceptance:
   - python3 -m pytest tests/unit -q passes
@@ -1299,32 +1459,38 @@ phases:
   - src/privacyfence/admin_config.py
   - tests/unit/test_admin_config.py
   brief: |-
-    Read "Design → D6": the action table, the validation and tighten_step_up rules, the summaries, and the page state's services row fields. This phase is pure module code; the routes come in p7.
+    Read "Design → D6": the action table, the validation rules, the bearer-token rule, the tighten_step_up rule, the summaries, the room upload rules, and the page state's services row fields. This phase is pure module code; the routes come in p7a and p7b.
     1. In src/privacyfence/admin_config.py add:
-       - apply_change(action, payload) -> tuple[str, list[str]] for every action in D6's table except the four privacy actions, which stay with org_install_policy. It loads the config (default_config() when missing), validates, mutates, saves under _write_lock, and returns (summary, changed_sections). changed_sections uses the section names: "services", "rooms", "unattended_sessions", "download_delivery", "web_push", "authz", "step_up", "scoped_tokens" and "audit_forwarding".
-       - Validation per D6:
-         - Each candidate section goes through its parser: org_mode.DownloadDeliveryConfig/WebPushConfig/AuthzPolicyConfig/AuditForwardingConfig.from_org_config, step_up_config.StepUpConfig.from_org_config and scoped_tokens.policy_from_org_config(..., org_mode=True).
-         - A ConfigurationError is mapped to AdminConfigError(str(exc).replace("org_config.json's ", "")).
-         - The comma- or newline-separated authz lists are split, stripped, and empty entries dropped.
-       - The tighten_step_up rule and its exact message.
-       - replace_rooms(data: dict[str, Any]) -> str: validates {"rooms": list of objects, "rooms_synced_at": str}, stores them, and returns "Replaced the room directory (<n> rooms)". It raises AdminConfigError("The file is not a room directory written by sync_room_directory.py.") otherwise. The upload route in p7 calls it.
-       - service_rows(bundle, admin, *, mode) with exactly D6's row fields. Use oauth_apps.credentials_source, and the bundle or built-in client_id; never a secret.
+       - apply_change(action, payload) -> tuple[str, list[str]] for every action in D6's table except the four privacy actions, which stay with org_install_policy.
+         - It loads the config (config_for with the payload's "bundle", "mode" and "trial" keys, which the routes pass), validates, mutates, saves under _write_lock, and returns (summary, changed_sections).
+         - changed_sections uses the D6 section names.
+         - A no-op returns ("", []) and saves nothing.
+       - The validation per D6:
+         - each parser, and the ConfigurationError, GristClientError and PeekClientError mappings;
+         - the scoped-tokens 1..365 check;
+         - the comma- or newline-separated authz lists split, stripped, with empty entries dropped;
+         - set_audit_forwarding keeps http.bearer_token_env unchanged;
+         - the tighten_step_up rule with its exact message.
+       - replace_rooms(data, *, bundle, mode, trial) -> str per D6's room rules. It raises AdminConfigError("The file is not a room directory written by sync_room_directory.py.") for any rule violation, and AdminConfigError("A room directory can hold at most 5000 rooms.") for too many.
+       - service_rows(bundle, admin, *, mode) with exactly D6's row fields, importing oauth_apps inside the function. Never a secret.
     2. tests/unit/test_admin_config.py:
        - Each action's stored result, summary and changed_sections.
-       - Each parser's error surfaces without the "org_config.json's " prefix (for example a negative inline_max_bytes, an http audit URL, required_groups without groups_claim).
-       - tighten_step_up: accepts false→true and a wider scope; refuses true→false, a narrower scope and require_passkey true→false, with the exact message.
-       - set_server_address normalizes and clears.
-       - An unknown service is refused with "Unknown service.".
-       - replace_rooms happy path and refusal.
-       - service_rows for each app_source, with the relay flag only in org mode for built-in apps, and grist locked when the bundle has an OAuth app.
-       - No row, summary or log record (caplog) contains a client_secret value or a bearer-token env var's value. Set a fake env var to a sentinel and assert it never appears.
+       - Each parser's error surfaces without the "org_config.json's " prefix: a negative inline_max_bytes, an http audit URL, required_groups without groups_claim.
+       - Scoped tokens 0 and 366 are refused.
+       - set_audit_forwarding cannot change bearer_token_env, even if the payload carries one.
+       - tighten_step_up accepts false→true and a wider scope; refuses true→false, a narrower scope and require_passkey true→false, with the exact message; an unchanged submission is a no-op.
+       - set_server_address normalizes, clears, and maps a client error.
+       - "Unknown service.".
+       - replace_rooms: the happy path, a room without resource_email, a 501-character name, a nested object value, and 5001 rooms.
+       - service_rows for each app_source, with the relay flag only in org mode for built-ins, grist locked when the bundle has an OAuth app, and grist's client_id rule.
+       - No row, summary or log record (caplog) contains a client_secret or a bearer-token env var's value. Set a fake env var to a sentinel and assert it never appears.
     3. Run ruff check ., python3 -m pytest tests/unit/test_admin_config.py -q and python3 -m mypy src/privacyfence/admin_config.py.
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/admin_config.py passes
   - ruff check . passes
-- id: p7-admin-routes
-  title: 'The Admin dispatcher for both modes: actions, step-up, audit, live refresh and the room upload'
+- id: p7a-admin-dispatcher-org
+  title: 'The Admin JSON API in org mode: action table, auth, step-up, audit, live refresh and the state endpoint'
   depends_on:
   - p5-org-relay-client
   - p6-admin-config-changes
@@ -1337,49 +1503,78 @@ phases:
   - src/privacyfence/connector_registry.py
   - tests/unit/test_connector_registry.py
   - src/privacyfence/web/server.py
-  - src/privacyfence/daemon_main.py
+  - scripts/check_coverage_floor.py
   brief: |-
-    Read "Design → D6" in full, except "Rendering", which is p8 and p9b. This phase builds the JSON API; the HTML page comes in p8.
+    Read "Design → D6" except "Rendering", the room upload and the bundle upload. This phase builds the org-mode JSON API; local mode and the uploads are p7b, and the HTML page is p8a.
     1. connector_registry.py: add evict_all() (clears _hosts and _last_used under the lock), with a test in tests/unit/test_connector_registry.py.
-    2. routes_settings.py: add the keyword `sensitive: bool | None = None` to _needs_step_up and _apply_step_up_gate per D6. Existing callers are unchanged. Add a test in test_routes_settings.py showing that sensitive=True gates an action that is not in _SENSITIVE_ACTIONS, and sensitive=False skips one that is.
+    2. routes_settings.py: add the keyword `sensitive: bool | None = None` to _needs_step_up and _apply_step_up_gate per D6; existing callers are unchanged. Test in test_routes_settings.py that sensitive=True gates an action not in _SENSITIVE_ACTIONS, and sensitive=False skips one that is.
     3. Create src/privacyfence/web/routes_admin.py:
-       - AdminAction and ADMIN_ACTIONS per D6's table, excluding the four privacy actions (p9a moves them).
-       - build_routes(*, controller, sessions, step_up, step_up_origin, require_human_session, startup_admin) for local mode, and build_org_routes(*, sessions, step_up, step_up_origin, connector_registry, org_config, bundle, startup_admin) for org mode.
-       - Each mounts `POST /api/admin/{action}`, `POST /api/admin/rooms/upload` and `GET /api/admin/state` (the D6 page state as JSON).
-       - Authentication and CSRF: copy how routes_settings.build_routes / build_org_routes authenticate, check CSRF and origin for their settings_action. Org mode answers 403 JSON {"error": "Only administrators can do this."} for a non-admin.
-       - An action not valid for the mode gives 404.
-       - Step-up, audit and the local require_human_session check follow D6.
-       - Live actions refresh per D6: org refresh_in_place + evict_all + relay_client.request_check; local controller.refresh_connectors().
-       - restart_needed per D6, comparing admin_config.load() with startup_admin, section by section.
-       - The room upload route: multipart and size limit as in routes_settings' org_config_upload, then admin_config.replace_rooms; CSRF-checked and not step-up-gated.
-       - Keep a module-level ROUTE_CLASSIFICATION mapping each POST path to "action-dispatcher" or "bespoke-nonsensitive", and raise RuntimeError at build time for an unclassified POST route, as routes_settings does (ADR 0014).
-    4. web/server.py:
-       - Mount build_routes in local mode, wrapped in _owner_only_routes, next to build_settings_routes.
-       - Mount build_org_routes in org mode next to build_org_routes for settings, passing org.org_config (the shared dict), org.bundle, org.startup_admin and org.connector_registry.
-       - daemon_main.py passes startup_admin to the local builder through _maybe_start_web_server's existing parameters, added in p4.
-    5. tests/unit/web/test_routes_admin.py:
-       - Local: owner-only (a non-owner principal gets 404, as Settings does).
-       - Each sensitive action needs step-up when step-up is required, and withdraw_service and clear_rooms do not.
-       - offer_service saves and calls controller.refresh_connectors.
-       - Org:
-         - a non-admin gets 403;
-         - an admin's withdraw_service removes the section from the shared org_config dict (`is` the same object) and calls evict_all and request_check;
-         - set_web_push saves and does not touch org_config, and GET /api/admin/state then lists "Web push" in restart_needed;
-         - an AdminConfigError gives 400 with its message;
-         - each successful change writes a settings_change audit entry with the summary and "(admin=<id>)";
-         - the room upload replaces rooms and refuses a non-room file and a file over 2 MB;
-         - org-only actions give 404 in local mode;
-         - GET /api/admin/state never contains a client secret: put a sentinel secret in the bundle and assert it is absent from the body.
-    6. Run ruff check . and python3 -m pytest tests/unit -q.
+       - AdminAction and ADMIN_ACTIONS per D6's table, excluding the four privacy actions (p9a), and RESTART_LABELS per D6.
+       - A mode-independent core: `_dispatch(principal, action, body, *, mode, bundle, org_config, refresh_live, ...) -> Response`. It covers coercion (reuse routes_settings._coerce), the step-up gate with sensitive=, apply_change (passing bundle, mode and trial=org_mode.is_trial(bundle) if that function exists yet, else False), the audit under principal_scope, the `applies` handling, and the page-state response.
+       - `_admin_state(*, mode, bundle, org_config, startup_admin, principal) -> dict` per D6's "Page state". Leave out privacy and stats; p9a adds them.
+       - build_org_routes(*, sessions, step_up, step_up_origin, connector_registry, org_config, bundle, startup_admin): `POST /api/admin/{action}` and `GET /api/admin/state`, with D6's 401/403/404 rules and CSRF and origin checks copied from routes_settings.build_org_routes' settings_action.
+       - ROUTE_CLASSIFICATION mapping each POST path to "action-dispatcher" or "bespoke-sensitive", and a RuntimeError at build time for an unclassified POST route, as routes_settings does (ADR 0014).
+    4. web/server.py: mount routes_admin.build_org_routes in org mode next to the settings build_org_routes call, passing org.org_config (the shared dict), org.bundle, org.startup_admin and org.connector_registry.
+    5. scripts/check_coverage_floor.py: add "src/privacyfence/web/routes_admin.py" to MODULE_FLOORS at 95.
+    6. tests/unit/web/test_routes_admin.py (org):
+       - No session: 401. A non-admin: 403. An unknown or local-only action: 404.
+       - Each sensitive action needs step-up when step-up is required (copy the step-up test setup from test_routes_org_settings.py); withdraw_service and clear_rooms do not.
+       - An admin's withdraw_service removes the section from the shared org_config dict (`is` the same object) and calls evict_all and request_check.
+       - set_web_push saves, leaves org_config alone, and GET /api/admin/state then lists "Web push" in restart_needed.
+       - An AdminConfigError gives 400 with its message.
+       - A successful change writes one settings_change audit entry ending "(admin=<id>)"; a no-op writes none.
+       - GET /api/admin/state never contains a sentinel secret placed in the bundle or a sentinel env var's value.
+    7. Run ruff check . and python3 -m pytest tests/unit -q.
   acceptance:
   - python3 -m pytest tests/unit -q passes
-  - python3 -m pytest tests/unit/web/test_routes_admin.py -q passes and selects at least 14 tests
+  - python3 -m pytest tests/unit/web/test_routes_admin.py -q passes and selects at least 12 tests
   - grep -n "ROUTE_CLASSIFICATION" src/privacyfence/web/routes_admin.py matches
   - ruff check . passes
-- id: p8-admin-page
-  title: The Admin page and nav item, with the Services, Features and organization-config sections
+- id: p7b-admin-dispatcher-local-and-uploads
+  title: The Admin JSON API in local mode, and the room-directory and bundle uploads
   depends_on:
-  - p7-admin-routes
+  - p7a-admin-dispatcher-org
+  complexity: M
+  touches:
+  - src/privacyfence/web/routes_admin.py
+  - tests/unit/web/test_routes_admin.py
+  - src/privacyfence/web/routes_settings.py
+  - tests/unit/web/test_routes_settings.py
+  - src/privacyfence/web/server.py
+  - tests/unit/web/test_server.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  brief: |-
+    Read "Design → D6": "Getting the bundle and the startup state", "Live actions" (local), "Room directory upload" and "Bundle upload (local mode)".
+    1. routes_admin.py:
+       - build_routes(*, controller, sessions, step_up, step_up_origin, require_human_session, startup_admin, org_config) for local mode. It reuses p7a's core with D6's local rules: the bundle per request, require_human_session for sensitive actions, and the local live refresh (refresh_in_place on the startup org_config plus controller.refresh_connectors()). The state carries "error": controller.error.
+       - POST /api/admin/rooms/upload in both builders, per D6, classified "bespoke-sensitive".
+    2. routes_settings.py:
+       - Refactor org_config_upload's body into handle_org_config_upload(request, *, controller, ..., state_builder) with unchanged checks.
+       - Remove /api/settings/org_config/upload and its _BESPOKE_SENSITIVE_ROUTE_PATHS entry.
+       - In _settings_bridge_shim, change install_org_config's fetch path to /api/admin/org_config/upload, and add an intercepted upload_rooms action posting to /api/admin/rooms/upload, the same way.
+       - routes_admin's local builder mounts POST /api/admin/org_config/upload with state_builder returning the admin state.
+       - Move the existing org_config_upload tests in test_routes_settings.py to the new path, changing only the URL and the response-state assertions.
+    3. web/server.py and daemon_main.py: add `startup_admin` and `org_config` keywords to WebServer.__init__, build_app and _maybe_start_web_server, passed from run_app (org_config is the same dict object the new-principal factory closes over). Mount build_routes in local mode wrapped in _owner_only_routes, next to build_settings_routes, only when a controller exists.
+    4. Tests:
+       - test_routes_admin.py, local:
+         - owner-only: a non-owner principal gets 404, as Settings does;
+         - require_human_session applies to sensitive actions;
+         - offer_service saves, refreshes the startup dict in place and calls controller.refresh_connectors;
+         - org-only actions give 404.
+       - Rooms upload in both modes: replaces rooms with step-up; refuses a non-room file and a file over 2 MB; in local mode refuses without a human session.
+       - Bundle upload at the new path: the TOFU 409 and step-up still apply, and the response is the admin state including the "are ignored" error.
+       - test_server.py: the local app mounts /api/admin/state for the owner.
+    5. Run ruff check . and python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - grep -rn "/api/settings/org_config/upload" src/privacyfence finds nothing
+  - grep -n "upload_rooms" src/privacyfence/web/routes_settings.py matches
+  - ruff check . passes
+- id: p8a-admin-page-and-services
+  title: The Admin page, its nav item, and the Services section
+  depends_on:
+  - p7b-admin-dispatcher-local-and-uploads
   complexity: M
   touches:
   - src/privacyfence/web_shell.py
@@ -1394,93 +1589,139 @@ phases:
   - src/privacyfence/web/routes_whats_new.py
   brief: |-
     Read "Design → D6": "The nav" and "Rendering". Every string is in D6.
-    1. web_shell.py: add ORG_ADMIN_NAV_ITEMS and org_nav_items(is_admin), change wrap's is_org test, and add the Admin item to _NAV_ITEMS, all per D6. Change the org nav call sites D6 lists to org_nav_items(principal.is_admin). Tests in tests/unit/test_web_shell.py:
-       - org_nav_items(True) ends with Admin and org_nav_items(False) has none;
-       - wrap treats both org tuples as org;
-       - the local nav has Admin.
+    1. web_shell.py: add ORG_ADMIN_NAV_ITEMS and org_nav_items(is_admin), change wrap's is_org test, and add the Admin item to _NAV_ITEMS, per D6. Change the org nav call sites D6 lists to org_nav_items(principal.is_admin).
+       - Tests in test_web_shell.py: org_nav_items(True) ends with Admin and org_nav_items(False) has none; wrap treats both org tuples as org; the local nav has Admin.
+       - Fix any existing test_web_shell.py assertion that pins the exact local nav tuple, updating only that expected tuple.
     2. settings_window_html.py:
-       - build_html gains `surface` and `_capabilities_for` gains the surface argument, per D6.
-       - The admin surface's local sections are services, features and org_config; the org sections are services and features (the other org sections are p9b).
-       - Move the bundle-upload control from the local Settings surface to the admin surface's org_config section. It still posts to /api/settings/org_config/upload.
-       - Add renderServices(state) and renderFeatures(state). Use toggleHtml for offer/withdraw, the D6 status lines and links, and the relay status line. For the Assets, server-address and unattended forms, copy the structure of the Grist API-key modal at settings_window_html.py:1970-2020. For the room directory, a file input that posts to /api/admin/rooms/upload like the org-config upload does, plus "Clear" posting clear_rooms.
+       - build_html gains `surface` and `_capabilities_for` gains the surface argument, per D6, with "surface" in the capabilities.
+       - The admin surface's sections are services and, in local mode, org_config. Features is p8b; the org-only sections are p9b.
+       - render() branches to renderAdmin(state) per D6.
+       - Add renderServices(state): toggleHtml for offer/withdraw, the D6 status lines and doc links, and the relay status line in org mode.
+       - The admin surface gets its own not_applicable_actions per D6.
+       - The settings surface is unchanged in this phase.
     3. routes_settings.py: give _settings_bridge_shim an `endpoint` parameter (default "/api/settings"); the admin surface passes "/api/admin".
-    4. routes_admin.py: add GET /admin in both builders.
-       - It renders web_shell.wrap(build_html(state, surface="admin", mode=..., is_admin=...)) with active="admin", copying how routes_settings renders GET /settings in each mode.
-       - In org mode a non-admin gets a 403 page with "Only administrators can open this page.".
+    4. routes_admin.py: add GET /admin in both builders. It renders web_shell.wrap(build_html(state, surface="admin", initial_section="services", mode=..., is_admin=...)) with active="admin", copying how routes_settings renders GET /settings in each mode. In org mode, no session redirects to /login?next=/admin and a non-admin gets a 403 page saying "Only administrators can open this page.".
     5. Tests:
-       - test_settings_window_html.py:
-         - The admin surface's section sets for local, org admin and org non-admin.
-         - The settings surface no longer has the bundle upload in local mode.
-         - Every D6 services status line renders for its row.
-         - The relay line appears only in org mode.
-         - A grist row with locked options shows no server form.
-       - test_routes_admin.py: GET /admin renders for the owner or admin with the Admin nav item active, and 403 for an org non-admin.
+       - test_settings_window_html.py: the admin surface's section sets for local, org admin and org non-admin; every D6 services status line renders for its row; the relay line appears only in org mode; initial_section "services" is used.
+       - test_routes_admin.py: GET /admin renders for the owner or admin with the Admin nav item active; an org non-admin gets 403; no session redirects to /login?next=/admin.
     6. Run ruff check . and python3 -m pytest tests/unit -q. If the session-start hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - grep -n "def org_nav_items" src/privacyfence/web_shell.py matches
   - grep -n "function renderServices" src/privacyfence/settings_window_html.py matches
   - ruff check . passes
-- id: p9a-move-org-admin-sections
-  title: Org privacy and stats move from Settings to the Admin dispatcher
+- id: p8b-admin-features-and-config
+  title: The Admin page's Features and Organization configuration sections
   depends_on:
-  - p8-admin-page
-  complexity: M
-  touches:
-  - src/privacyfence/web/routes_settings.py
-  - src/privacyfence/web/org_settings_scope.py
-  - src/privacyfence/web/routes_admin.py
-  - tests/unit/web/test_routes_settings.py
-  - tests/unit/web/test_routes_org_settings.py
-  - tests/unit/web/test_org_settings_scope.py
-  - tests/unit/web/test_routes_admin.py
-  brief: |-
-    Read "Design → D6": the last row of the action table, "Page state" (privacy, stats), and "Rendering" (what the org settings surface loses).
-    1. org_settings_scope.py: change toggle_pii_detection, toggle_pii_category, set_default_policy and set_category_policy to `ActionScope(frozenset({LOCAL_MODE}))`. In local mode they stay the owner's own settings.
-    2. routes_settings.py:
-       - Remove those four from _ORG_ALLOWED_ACTIONS and from _apply_org_action.
-       - Remove the admin-only "stats" and the admin privacy data from _org_state; an org admin's Settings state equals a normal user's.
-       - test_org_settings_scope.py's projection tests must still pass unchanged.
-    3. routes_admin.py:
-       - Add the four actions to ADMIN_ACTIONS as org-only, sensitive and live.
-       - Move their _apply_org_action branches here unchanged, still calling org_install_policy.apply_change and still mapping PolicyChangeRejected to the same error response.
-       - Add "privacy" (the rows _org_state built for admins) and "stats" (org_stats.collect(org_config)) to the org page state.
-    4. Tests:
-       - Move the existing org privacy-action and stats tests from test_routes_org_settings.py to test_routes_admin.py, adapting only the URL (/api/admin/...) and the state endpoint. Keep every assertion.
-       - Add: POST /api/settings/toggle_pii_detection in org mode now gives 404, and an org admin's /api/settings state has no "stats" key.
-    5. Run ruff check . and python3 -m pytest tests/unit -q.
-    Stop condition: if an existing test asserts that org admins see privacy or stats on /settings for a reason other than the old layout (for example an ADR 0217 verification test), move it to /admin as above. If it cannot be expressed against /admin, stop with status=blocked.
-  acceptance:
-  - python3 -m pytest tests/unit -q passes
-  - grep -n "toggle_pii_detection" src/privacyfence/web/routes_admin.py matches
-  - python3 -c "from privacyfence.web.routes_settings import _ORG_ALLOWED_ACTIONS as A; assert not {'toggle_pii_detection', 'toggle_pii_category', 'set_default_policy', 'set_category_policy'} & A" exits 0
-  - ruff check . passes
-- id: p9b-admin-org-sections-ui
-  title: 'The org-only Admin sections: delivery, access, step-up, tokens, audit, privacy and stats'
-  depends_on:
-  - p9a-move-org-admin-sections
+  - p8a-admin-page-and-services
   complexity: M
   touches:
   - src/privacyfence/settings_window_html.py
   - tests/unit/test_settings_window_html.py
   brief: |-
-    Read "Design → D6": the action table's org rows, "Page state" and "Rendering".
+    Read "Design → D6": the Features actions, "Room directory upload", "Bundle upload (local mode)" and "Rendering".
     1. settings_window_html.py:
-       - Add the org admin sections delivery, access, step_up, tokens, audit, privacy and stats to the admin surface, shown only in org mode for admins, and remove privacy and stats from the org settings surface.
-       - delivery, access, tokens, audit: one form per section. Its fields mirror the action's parameters (number inputs for ints, checkboxes for bools, a select for audit kind and syslog protocol, and textareas for the authz lists). It posts the whole section through the existing modal and post() pattern used in p8, and is prefilled from the state.
-       - step_up: the form offers only stricter choices: checkboxes that can only go from off to on, and a scope select whose options start at the current scope. Add the note "Relaxing step-up is a file edit (ADR 0068)."
-       - privacy and stats: reuse the existing renderPrivacy/renderStats code. Move it so the admin surface renders it; do not duplicate it.
-       - The restart banner: when state.restart_needed is non-empty, show "Saved. Restart PrivacyFence for these changes to take effect: <labels>." at the top of the Admin page.
+       - Add the features section to the admin surface in both modes, with renderFeatures(state):
+         - the Assets form (set_atlassian_assets);
+         - the Grist and Peek address forms (set_server_address), with no Grist form when options.locked;
+         - the unattended-sessions toggle;
+         - the room directory: count and synced date, a file input dispatching the intercepted upload_rooms action, and a Clear control (clear_rooms).
+         For the forms, copy the structure of the Grist API-key modal at settings_window_html.py:1970-2020.
+       - Move the Organization Configuration card (renderGeneral, :705-712) from the local settings surface to the admin surface's org_config section. Change its description to "Your own app credentials, and the server and identity-provider settings, from your IT administrator." It keeps dispatching install_org_config, and shows state.error when set.
     2. tests/unit/test_settings_window_html.py:
-       - Section sets: org admin on the admin surface has all of D6's org sections; org settings has no privacy or stats, for an admin or not.
-       - Each form renders with prefilled values from a sample state.
-       - The step-up form offers no option looser than the current value.
-       - The restart banner renders its labels.
-       - No rendered HTML contains a sample secret placed in the state's bundle data.
-    3. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
+       - The features section renders each form prefilled from a sample state.
+       - A locked grist shows no form.
+       - The rooms control dispatches upload_rooms.
+       - The local settings surface no longer contains "Organization Configuration", and the admin surface does.
+    3. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q, and fix any smoke test that looked for the Organization Configuration card on /settings so it looks on /admin.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - grep -n "function renderFeatures" src/privacyfence/settings_window_html.py matches
+  - ruff check . passes
+- id: p9a-org-settings-becomes-personal
+  title: 'Org Settings becomes personal: privacy, stats and the PII gate move to the Admin dispatcher'
+  depends_on:
+  - p8b-admin-features-and-config
+  complexity: M
+  touches:
+  - src/privacyfence/web/routes_settings.py
+  - src/privacyfence/web/org_settings_scope.py
+  - src/privacyfence/web/routes_admin.py
+  - src/privacyfence/web/server.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/web/test_routes_settings.py
+  - tests/unit/web/test_routes_org_settings.py
+  - tests/unit/web/test_org_settings_scope.py
+  - tests/unit/web/test_routes_admin.py
+  - tests/unit/test_settings_window_html.py
+  - tests/unit/web/test_server_org_mode.py
+  - tests/integration/test_browser_smoke.py
+  brief: |-
+    Read "Design → D6": the privacy-actions row and paragraph, "Page state" (privacy, stats), and "Rendering" (what the org settings surface loses). After this phase an org admin's /settings is the same as a normal user's. The Admin page renders privacy and stats in p9b.
+    1. org_settings_scope.py: change toggle_pii_detection, toggle_pii_category, set_default_policy and set_category_policy to `ActionScope(frozenset({LOCAL_MODE}))`. In local mode they stay the owner's own settings.
+    2. routes_settings.py:
+       - Remove those four from _ORG_ALLOWED_ACTIONS and from _apply_org_action.
+       - Remove the admin-only privacy and stats data and the PII general fields (_pii_general_fields) from _org_state.
+       - GET /settings/privacy in org mode becomes a 302 to /admin.
+       - GET /settings always starts on "auto_accept" in org mode.
+    3. routes_admin.py:
+       - Add the four actions to ADMIN_ACTIONS (org, sensitive, applies "self").
+       - Move their _apply_org_action branches and _current_pii_flag here unchanged, keeping the PolicyChangeRejected mapping.
+       - Add "privacy" (the rows _org_state built for admins) and "stats" (org_stats.collect(org_config)) to the org admin state.
+       - build_org_routes takes install_wide_settings and install_wide_settings_path; pass them from web/server.py.
+    4. settings_window_html.py:
+       - In org mode the settings surface's privacy and stats sections are false for everyone.
+       - renderGeneral's PII card condition (:635-647) becomes `CAPS.mode !== 'org'`.
+    5. Tests. Change exactly these, and keep every other assertion:
+       - test_org_settings_scope.py:
+         - test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_settings (:121) picks from the LOCAL-only admin_only actions.
+         - The admin_only parametrizations at :68 and :73 become parameter sets that are not empty, or are dropped if nothing org-routed is admin_only any more (say which in the commit message).
+       - test_settings_window_html.py:
+         - test_not_applicable_actions_match_org_settings_scope (:968-979) expects the four privacy actions in org not_applicable_actions.
+         - test_org_admin_sees_general_and_privacy (:927) and test_stats_page_is_org_admin_only (:963) assert the new layout: no privacy or stats on org settings for anyone.
+       - test_routes_org_settings.py:
+         - test_admin_sees_privacy_capabilities_non_admin_does_not (:326-347) asserts privacy is false for both.
+         - The privacy-action, privacy-route and stats tests (:157, :178-194 and others) move to test_routes_admin.py against /api/admin/..., with the same assertions.
+         - POST /api/settings/toggle_pii_detection in org mode is 404.
+       - test_routes_settings.py:449 and test_server_org_mode.py:120: /settings/privacy is a 302 to /admin.
+       - tests/integration/test_browser_smoke.py:
+         - test_org_settings_page_renders_for_admin (:2626-2643) asserts the org admin's Settings nav has no Privacy Filter or Stats.
+         - TestPhoneLayout's _ADMIN_SECTIONS and the settings-privacy-route case (:2839, :2941-2950) drop privacy and stats from Settings. p9b adds the Admin cases.
+    6. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q. Otherwise state in the phase result that the browser tests were edited but not run here, so the PR's CI run is their check.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - python3 -c "from privacyfence.web.routes_settings import _ORG_ALLOWED_ACTIONS as A; assert not {'toggle_pii_detection', 'toggle_pii_category', 'set_default_policy', 'set_category_policy'} & A" exits 0
+  - grep -n "toggle_pii_detection" src/privacyfence/web/routes_admin.py matches
+  - ruff check . passes
+- id: p9b-admin-org-sections-ui
+  title: 'The org-only Admin sections: delivery, access, step-up, tokens, audit, privacy and stats'
+  depends_on:
+  - p9a-org-settings-becomes-personal
+  complexity: M
+  touches:
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/test_settings_window_html.py
+  - tests/integration/test_browser_smoke.py
+  brief: |-
+    Read "Design → D6": the action table's org rows, the bearer-token rule, "Page state" and "Rendering".
+    1. settings_window_html.py, adding to the admin surface in org mode for admins:
+       - delivery, access, tokens, audit: one form per section. The fields mirror the action's parameters: number inputs for ints, checkboxes for bools, a select for audit kind and syslog protocol, and textareas for the authz lists. Each posts its whole section through the modal and post() pattern from p8b, prefilled from the state. In audit, the bearer-token variable name is shown read-only with D6's sentence.
+       - step_up: only stricter choices. Checkboxes can only go from off to on, and the scope select's options start at the current scope. Add the note "Relaxing step-up is a file edit (ADR 0068)."
+       - privacy and stats: move the existing renderPrivacy and renderStats code so the admin surface renders it, without duplicating it. Add the PII Detection Gate toggles (toggle_pii_detection/toggle_pii_category) to the admin privacy section.
+       - The restart banner: when state.restart_needed is non-empty, show "Saved. Restart PrivacyFence for these changes to take effect: <labels>." at the top.
+    2. tests/unit/test_settings_window_html.py:
+       - The org admin surface has all of D6's org sections.
+       - Each form renders prefilled from a sample state.
+       - The step-up form offers nothing looser than the current value.
+       - The bearer-token name has no input.
+       - The restart banner renders.
+       - No rendered HTML contains a sentinel secret placed in the state.
+    3. tests/integration/test_browser_smoke.py: add Admin-page cases to TestPhoneLayout for the org admin sections and the local services and features sections, copying the existing settings cases (docs/testing-policy.md requires phone layout for every app surface). Add an org test that the Admin page renders Privacy and Stats.
+    4. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q. Otherwise say they were not run here.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - grep -n "Restart PrivacyFence for these changes to take effect" src/privacyfence/settings_window_html.py matches
+  - grep -n "/admin" tests/integration/test_browser_smoke.py matches
   - ruff check . passes
 - id: p10-bundle-tooling
   title: build_org_bundle.py writes only startup settings and credentials; the room sync writes a file to upload
@@ -1491,23 +1732,26 @@ phases:
   - tests/unit/test_build_org_bundle.py
   - scripts/sync_room_directory.py
   - tests/unit/test_sync_room_directory.py
+  - tests/unit/test_docs_configuration_reference.py
   brief: |-
-    Read "Design → D2" (which keys stay) and "D7".
+    Read "Design → D2" (which keys stay) and "D7". D7 lists every flag exactly.
     1. scripts/build_org_bundle.py:
-       - Hide every flag D7 lists with help=argparse.SUPPRESS, and after parsing refuse each one that was given, with D7's exact message and exit code 2, writing nothing.
+       - Hide every flag D7 lists with help=argparse.SUPPRESS, and after parsing refuse each one given, with D7's exact message and exit code 2, writing nothing. --idp-step-up-acr-value stays.
        - --merge drops legacy keys with D7's note.
+       - Update the "nothing to write" check (:902-910) and --mode local's popping (:770-776) per D7.
        - Keep the signing code byte-identical (tests/unit/test_build_org_bundle.py cross-checks it).
     2. tests/unit/test_build_org_bundle.py:
-       - Delete or rewrite the tests that built operational sections, so they now assert the refusal: one parametrized test named test_moved_flag_is_refused over every moved flag, with the exact message and exit code 2. The refusal must fire even when the other required arguments are given, so pass a valid minimal argument set in each case.
+       - Rewrite the tests that built operational sections so they assert the refusal: one parametrized test named test_moved_flag_is_refused over every moved flag, with the exact message and exit code 2. Pass a valid minimal argument set in each case, so the refusal is what fails.
        - A --merge of a bundle with authz and peek drops them and prints the note.
-       - A credentials-only bundle still builds and signs as before, and every existing signing and cross-check test still passes.
-    3. scripts/sync_room_directory.py: --output replaces --org-config per D7. Remove the bundle-merge and signature handling, refuse --org-config with D7's message, write the rooms file with mode 0600, and update the module docstring and example.
-    4. tests/unit/test_sync_room_directory.py: rewrite the merge and signing tests into output-file tests: the written file's shape, mode 0600, and the --org-config refusal. Keep the directory-fetch tests unchanged.
-    5. Run ruff check . and python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py -q.
-    Stop condition: if a moved flag is shared with a key that stays (for example a flag writing both a credential and an operational value), stop with status=blocked and name it.
+       - A credentials-only bundle still builds and signs as before.
+       - Every signing and cross-check test still passes.
+    3. tests/unit/test_docs_configuration_reference.py: _bundle_options() skips actions whose help is argparse.SUPPRESS, per D7. Run it: docs/configuration-reference.md still lists the moved flags at this point, and the test only requires listed options to exist. If it also fails on extra documented flags, stop with status=blocked.
+    4. scripts/sync_room_directory.py: --output replaces --org-config per D7. Remove the bundle-merge and signature handling, refuse --org-config with D7's message, write the rooms file with mode 0600, and update the module docstring and example.
+    5. tests/unit/test_sync_room_directory.py: rewrite the merge and signing tests into output-file tests (the written file's shape, mode 0600, the --org-config refusal). Keep the directory-fetch tests unchanged.
+    6. Run ruff check . and python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py -q.
   acceptance:
-  - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py -q passes
-  - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k test_moved_flag_is_refused passes and selects at least 10 tests
+  - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py -q passes
+  - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k test_moved_flag_is_refused passes and selects at least 30 tests
   - ruff check . passes
 - id: p11-relay-worker
   title: The OAuth redirect relay Worker at oauth.privacyfence.eu and its deploy workflow
@@ -1564,13 +1808,14 @@ phases:
 - id: p15-mode-from-env-and-trial
   title: Mode and server address from the environment, trial mode on localhost, and a Docker image that starts in org mode
   depends_on:
-  - p7-admin-routes
+  - p9b-admin-org-sections-ui
   complexity: M
   touches:
   - src/privacyfence/org_mode.py
   - tests/unit/test_org_mode.py
   - src/privacyfence/daemon_main.py
   - tests/unit/test_daemon_main.py
+  - src/privacyfence/web/routes_admin.py
   - tests/conftest.py
   - deploy/docker/Dockerfile
   - deploy/docker/docker-entrypoint.sh
@@ -1579,7 +1824,7 @@ phases:
     Read "Design → D9", except "The relay on localhost", which p5 and p11 already did. The trial sign-in is p16; this phase makes a trial start, with routes_org_identity still mounted.
     1. org_mode.py: resolve_mode's environment order and conflict error, the ServerConfig environment fallbacks, and is_trial, exactly per D9.
     2. tests/conftest.py: add an autouse fixture that runs monkeypatch.delenv(name, raising=False) for PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL, so a developer's environment never leaks into tests.
-    3. daemon_main.py _start_org_web_server: in trial mode, replace the "requires an idp section" raise with D9's loopback check and message. Pass idp=None through, and do not mount routes_org_identity or the IdP step-up routes when idp is None (p16 mounts the trial routes). Log D9's trial warning in run_app.
+    3. daemon_main.py load_admin_config: pass trial=org_mode.is_trial(bundle) instead of False (D3). routes_admin's apply_change call passes trial the same way, if p7a left False there. Then in _start_org_web_server: in trial mode, replace the "requires an idp section" raise with D9's loopback check and message. Pass idp=None through, and do not mount routes_org_identity or the IdP step-up routes when idp is None (p16 mounts the trial routes). Log D9's trial warning in run_app.
        - Stop condition: if something other than routes_org_identity, routes_org_stepup and OrgOAuthProvider dereferences idp, so a trial cannot start, stop with status=blocked and list the call sites. Read web/server.py's org assembly and OrgAuth first.
     4. deploy/docker/Dockerfile and docker-entrypoint.sh per D9. tests/integration/test_org_docker_image.py: add a test that the image without a bundle starts, answers the healthcheck, and logs the trial line. Copy the existing tests' container-run helper.
     5. Tests:
@@ -1640,7 +1885,6 @@ phases:
   title: 'Local mode shows that it is deprecated: the log, privacyfence_status, a page strip and a one-time companion notice'
   depends_on:
   - p16-trial-sign-in
-  - p9b-admin-org-sections-ui
   complexity: M
   touches:
   - src/privacyfence/org_mode.py
@@ -1678,10 +1922,42 @@ phases:
   - python3 -m pytest tests/unit -q passes
   - grep -n "LOCAL_MODE_DEPRECATION" src/privacyfence/org_mode.py src/privacyfence/web/mcp_dispatch.py src/privacyfence/daemon_main.py matches in each
   - ruff check . passes
+- id: p18-moved-setting-strings
+  title: Messages that pointed at the bundle for moved settings point at the Admin page
+  depends_on:
+  - p17-local-mode-deprecation
+  complexity: S
+  touches:
+  - src/privacyfence/web/mcp_dispatch.py
+  - tests/unit/web/test_mcp_dispatch.py
+  - src/privacyfence/web/routes_settings.py
+  - tests/unit/web/test_routes_settings.py
+  - src/privacyfence/settings_controller.py
+  - tests/unit/test_settings_controller.py
+  - sync/src/privacyfence_sync/runner.py
+  - src/privacyfence/scoped_tokens.py
+  - tests/unit/test_scoped_tokens.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/test_settings_window_html.py
+  - src/privacyfence/resources/settings.yaml.example
+  brief: |-
+    Replace these strings exactly, and update every test that pins the old text (grep each old phrase in tests/ and sync/tests/):
+    1. web/mcp_dispatch.py:651-653 (begin_unattended_session) becomes: "Unattended sessions are disabled. An administrator turns them on on the Admin page (Features) before this connection can be marked unattended."
+    2. web/routes_settings.py _SCOPED_TOKENS_DISABLED (:1429-1432), and the identical text in scoped_tokens.py:518, become: "Scoped tokens are not enabled on this install. Your administrator turns them on on the Admin page."
+    3. settings_controller.py:1299 becomes: f"{connector_label(connector)} isn't offered on this install. Turn it on on the Admin page (Services)."
+    4. sync/src/privacyfence_sync/runner.py _UNATTENDED_DISABLED (:39-42) becomes: "This PrivacyFence does not allow unattended sessions (Admin page, Features). Ask your administrator, or run with --attended." sync/tests/test_preflight.py compares against the constant, so it needs no change.
+    5. settings_window_html.py, the welcome banner (:747-751): replace the sentence "If your IT team gave you an organization config bundle, install it first from the General page; only the connectors it enables are listed." with "The Admin page decides which services are offered." Update tests/unit/test_settings_window_html.py:263's expected phrase to "Admin page".
+    6. resources/settings.yaml.example:176: change the comment to say unattended sessions are set on the Admin page.
+    7. Run ruff check ., python3 -m pytest tests/unit -q, and, per the sync/** rule in .claude/toolkit.yaml: pip install -e "./sync[test]", then pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100, mypy sync/src and bandit -r sync/src.
+  acceptance:
+  - python3 -m pytest tests/unit -q passes
+  - grep -rn "organization config bundle" src/privacyfence finds nothing
+  - pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-fail-under=100 passes
+  - ruff check . passes
 - id: p12-adrs
   title: ADRs 0239-0245 and the status lines on the ADRs they amend
   depends_on:
-  - p17-local-mode-deprecation
+  - p18-moved-setting-strings
   - p10-bundle-tooling
   - p11-relay-worker
   complexity: M
@@ -1717,7 +1993,7 @@ phases:
     4. docs/adr/README.md: add seven index rows in the existing format:
        - 0239: "Accepted; relates to 0040"
        - 0240: "Accepted; amends 0016, 0196"
-       - 0241: "Accepted; amends 0196; relates to 0034, 0068, 0070, 0200"
+       - 0241: "Accepted; amends 0196; relates to 0016, 0034, 0068, 0070, 0200"
        - 0242: "Accepted; amends 0217; relates to 0033"
        - 0243: "Accepted; relates to 0011, 0186"
        - 0244: "Accepted; relates to 0011, 0177, 0213"
@@ -1736,6 +2012,9 @@ phases:
   - docs/org-mode-setup-guide.md
   - docs/org-mode-docker.md
   - docs/configuration-reference.md
+  - docs/how-it-works.md
+  - docs/connector-qa.md
+  - docs/testing-policy.md
   brief: |-
     Reference docs describe today's behaviour and link the ADRs p12 wrote (take their file names from docs/adr/).
     1. org-mode-setup-guide.md:
@@ -1751,9 +2030,12 @@ phases:
        - A new first section, "Try it on this computer": the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from the trial to a real server (an idp section and a public address).
        - The PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL variables.
     3. configuration-reference.md: the D9 environment variables and their precedence; org_config.json's remaining keys (D2); org/admin_config.json (D3 schema; written by the Admin page; hand-edit only to relax step-up, then restart); org/relay_token.txt; the PRIVACYFENCE_BUILTIN_APPS development variable and its JSON shape.
-    4. Run the docs tests below and ruff check ..
+    4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.
+    5. how-it-works.md (:277-278), connector-qa.md (:153): where they say operational settings live in the bundle, point to the Admin page and admin_config.json instead. testing-policy.md (:183): add the Admin page to the phone-layout list of app surfaces.
+    6. Run the docs tests below, python3 -m pytest tests/unit/test_docs_configuration_reference.py -q, and ruff check ..
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
+  - python3 -m pytest tests/unit/test_docs_configuration_reference.py -q passes
   - grep -n "oauth.privacyfence.eu" docs/org-mode-setup-guide.md docs/org-mode-docker.md matches in both
   - grep -n "admin_config.json" docs/configuration-reference.md docs/org-mode-setup-guide.md matches in both
 - id: p13b-docs-user
@@ -1779,6 +2061,9 @@ phases:
   - docs/install-windows.md
   - docs/install-linux.md
   - docs/README.md
+  - docs/privacyfence-sync.md
+  - sync/README.md
+  - plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md
   - CHANGELOG.md
   brief: |-
     Reference docs describe today's behaviour and link the ADRs p12 wrote.
@@ -1809,14 +2094,16 @@ phases:
        - bringing rules along (link org-mode-setup-guide.md "Moving a person from a desktop install").
        Add it to docs/README.md's index in the existing format. Add a one-paragraph deprecation note at the top of install-macos.md, install-windows.md and install-linux.md linking to it, and to getting-started.md's "Local or organization deployment".
        If the website docs build has a list of published docs, find where test_website_docs_pages.py reads it; if that list needs the new page, add it there.
-    6. CHANGELOG.md under "## [Unreleased]":
+    6. docs/privacyfence-sync.md (:50-51) and sync/README.md (:89-94): unattended sessions are turned on on the Admin page. Copy sync/README.md to plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md, as the sync/** rule in .claude/toolkit.yaml requires.
+       Also say, in connecting-a-service.md, that a bundle adding a provider's credentials later still needs the service switched on on the Admin page.
+    7. CHANGELOG.md under "## [Unreleased]":
        - one entry each for: built-in apps; the Admin page and personal-only Settings; the org config split with the one-time import (naming the moved build_org_bundle.py flags and sync_room_directory.py's --output); and organization servers using built-in apps through the relay;
        - a "Removed" or "Changed" note that build_org_bundle.py refuses the moved flags;
        - the Docker localhost trial and the environment variables;
        - "Deprecated: desktop (local) mode, to be removed in PrivacyFence 8";
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
-    7. Run the docs tests below and ruff check ..
+    8. Run the docs tests below and ruff check ..
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - grep -n "Admin page" docs/connecting-a-service.md docs/slack-setup.md docs/grist-setup.md matches in each
@@ -1859,9 +2146,9 @@ phases:
        - website/enterprise/index.html:85: also mention the Admin page.
        Keep each change to those sentences.
     3. If tests/unit/test_website_claims.py pins a sentence you changed, update that expected text, and nothing else.
-    4. Run python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_website_layout.py tests/integration/test_website_consent.py -q.
+    4. Run python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_website_links.py -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_website_layout.py tests/integration/test_website_consent.py -q.
   acceptance:
-  - python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py -q passes
+  - python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_website_links.py -q passes
   - grep -n "oauth.privacyfence.eu" website/privacy/index.html matches
   - grep -rn "never publicly distributed" website/connectors/slack/index.html finds nothing
 - id: p14-retire-plan
