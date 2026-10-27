@@ -37,7 +37,7 @@ def scoped_store(tmp_path, monkeypatch):
 
 def _create(store, principal=LOCAL_PRINCIPAL, *, days=90, now=None):
     return store.create(
-        principal, label="sales-sync", days=days, rule_ids=[], tools=[_TOOL],
+        principal, label="sales-sync", days=days, rules=[], tools=[_TOOL],
         policy=ScopedTokenPolicy(enabled=True, max_days=365), now=now,
     )
 

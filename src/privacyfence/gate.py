@@ -142,7 +142,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import dataclasses
 import functools
 import json
 import logging
@@ -164,7 +163,6 @@ from .auto_accept import (
     ReviewContext,
     add_policy_v2_rules,
     add_rules_changed_listener,
-    forget_removed_rules,
     get_policy_rows,
     get_policy_v2_store_rules,
     is_temp_accepted,
@@ -726,25 +724,11 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
 
 
 def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]:
-    """Every cached rule for an unscoped call; only the token's own rules under a scoped token
-    (ADR 0164). A rule id the token keeps but the person has since removed or changed simply
-    matches nothing. A rule with a ``rule_limits`` entry keeps only the operations that entry lists
-    (so verbs added to a row later never widen the token), and is dropped when none are left."""
-    rules = get_policy_v2_store_rules()
+    """Every cached rule for an unscoped call; under a scoped token only the token's own rules
+    (ADR 0164, ADR 0236), never the person's Auto-accept rules."""
     if scope is None:
-        return rules
-    scoped: list[policy_engine.PolicyRule] = []
-    for rule in rules:
-        if rule.id not in scope.rule_ids:
-            continue
-        limit = scope.rule_limits.get(rule.id)
-        if limit is not None:
-            operations = frozenset(op for op in rule.operations if (rule.predicate, op) in limit)
-            if not operations:
-                continue
-            rule = dataclasses.replace(rule, operations=operations)
-        scoped.append(rule)
-    return scoped
+        return get_policy_v2_store_rules()
+    return scope.compiled_rules()
 
 
 def rule_values(predicate: str, operation_key: str) -> list[str]:
@@ -1650,11 +1634,9 @@ async def propose_policy_change(
         changed = remove_policy_v2_rule(rule_id)
         affected_ids = [rule_id]
     else:
-        removed = remove_policy_v2_rule(rule_id, forget_in_tokens=False) if operation == "update" else False
+        removed = remove_policy_v2_rule(rule_id) if operation == "update" else False
         row_ids = policy_row_ids_for(new_rules)
         added = add_policy_v2_rules(new_rules)
-        if operation == "update" and rule_id not in row_ids:
-            forget_removed_rules([rule_id])
         changed = removed or added
         affected_ids = row_ids
 

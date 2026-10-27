@@ -101,8 +101,11 @@ with `--enable-scoped-tokens`); see [On a server, against organization mode](#on
 ## The rules a recipe needs
 
 A scheduled run gets no approval cards, so every step needs an auto-accept rule, unless the tool is
-one PrivacyFence never asks about (listing tools such as `drive_list_files`). Create rules in
-PrivacyFence's **Settings → Auto-accept → Add a rule**. Each one asks for your passkey.
+one PrivacyFence never asks about (listing tools such as `drive_list_files`). Put the rules a scheduled
+run uses on the recipe's scoped token: **Settings → Scoped tokens → New token**, under "New rule for
+this token" or "Copy from my Auto-accept rules". Auto-accept rules serve only attended runs without
+a token. A token's rules belong to the token: an Auto-accept rule, including one the card's Always
+allow adds, does not reach it, and deleting an Auto-accept rule does not change it.
 
 `privacyfence-sync permissions RECIPE` asks your PrivacyFence which rules and tools a given recipe
 needs, so the table below is background, no longer the way to work them out.
@@ -820,9 +823,10 @@ Each step shows one of these:
 | `NOT AVAILABLE ...` | The server (or the token) does not offer the tool |
 
 The summary lists each distinct rule once, with the verbs of every step merged, and then the tools a
-scoped token needs: create the token with exactly these. Create each rule in **Settings →
-Auto-accept → Add a rule**, and tick the personal-data box on the token if the data holds personal
-data (see the notes above).
+scoped token needs: create the token with exactly these. Add each rule on the token's form
+(**Settings → Scoped tokens → New token**, under "New rule for this token" or "Copy from my
+Auto-accept rules"; Auto-accept rules serve only attended runs without a token), and tick the
+personal-data box on the token if the data holds personal data (see the notes above).
 
 Trigger steps need no PrivacyFence rule and are not listed.
 
@@ -1017,8 +1021,7 @@ choose, and it can only be denied, never prompted.
    `unattended_sessions.enabled` ([ADR 0164](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md));
    a plain sign-in does.
 2. **Create a scoped token** in **Settings** with the recipe's rules and tools.
-   `privacyfence-sync permissions RECIPE` lists both. Create each rule first, then the token that
-   uses them.
+   `privacyfence-sync permissions RECIPE` lists both. Add each rule on the token's form.
 3. **Store the token in the scheduler's secret store**, never in the recipe, and hand it to the
    process as `PRIVACYFENCE_TOKEN` (or the variable named with `--token-env`). A trigger step's
    token goes into the same secret store, handed to the process under its `token_env` name.

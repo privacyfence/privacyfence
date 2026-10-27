@@ -866,7 +866,7 @@ class TestRefreshTokenSurvivesARestart:
         policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
         for principal_id, label in (("alice", "sales-sync"), ("alice", "nightly"), ("bob", "sales-sync")):
             store.create(
-                Principal(id=principal_id), label=label, days=90, rule_ids=[], tools=["gmail_list_messages"],
+                Principal(id=principal_id), label=label, days=90, rules=[], tools=["gmail_list_messages"],
                 policy=policy,
             )
 

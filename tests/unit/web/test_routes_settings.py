@@ -1493,12 +1493,19 @@ class TestAiClientTokenRoutes:
 
 
 def _scoped_token(token_id: str = "st-0123456789ab", label: str = "sales-sync"):
+    from privacyfence.policy import scope_rows
+    from privacyfence.policy.engine import PolicyRule
     from privacyfence.scoped_tokens import ScopedToken
 
+    rules = [
+        PolicyRule(id=rid, predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}))
+        for rid in ("r1", "r2")
+    ]
     return ScopedToken(
         id=token_id, label=label, digest="d" * 64, principal_id=LOCAL_PRINCIPAL.id, principal_email="",
-        principal_display_name="", created_at=1.0, expires_at=2.0, rule_ids=frozenset({"r1", "r2"}),
+        principal_display_name="", created_at=1.0, expires_at=2.0,
         tools=frozenset({"gmail_list_messages", "drive_list_files", "tasks_list_tasks"}),
+        rules=tuple(row for rule in rules for row in scope_rows.rows_for_rules([rule], rule.id)),
     )
 
 
@@ -1510,8 +1517,8 @@ def _scoped_wiring(
 
     secret = "pfst_" + "A" * 43
 
-    def _create(label, days, rule_ids, tools, allow_personal_data, allow_personal_data_reads):
-        calls.append(("create", label, days, rule_ids, tools, allow_personal_data, allow_personal_data_reads))
+    def _create(label, days, rules, tools, allow_personal_data, allow_personal_data_reads):
+        calls.append(("create", label, days, rules, tools, allow_personal_data, allow_personal_data_reads))
         if create_error:
             raise ScopedTokenError(create_error)
         return _scoped_token(label=label), secret
@@ -1547,7 +1554,7 @@ class TestScopedTokenRoutes:
     REVOKE_ALL = "/api/settings/scoped_tokens/revoke_all"
     RENAME = "/api/settings/scoped_tokens/rename"
     BODY = {
-        "label": "sales-sync", "days": 90, "rule_ids": ["r2", "r1"],
+        "label": "sales-sync", "days": 90, "rules": [{"kind": "copy", "rule_id": "r2"}, {"kind": "copy", "rule_id": "r1"}],
         "tools": ["gmail_list_messages", "drive_list_files"], "confirmed": True,
     }
 
@@ -1580,7 +1587,7 @@ class TestScopedTokenRoutes:
         assert r.json() == {"created": {"id": "st-0123456789ab", "label": "sales-sync", "expires_at": 2.0}}
         assert self.SECRET not in r.text
         assert calls == [
-            ("create", "sales-sync", 90, ["r1", "r2"], ["drive_list_files", "gmail_list_messages"], False, False),
+            ("create", "sales-sync", 90, [{"kind": "copy", "rule_id": "r1"}, {"kind": "copy", "rule_id": "r2"}], ["drive_list_files", "gmail_list_messages"], False, False),
             ("send", self.SECRET),
         ]
 
@@ -1606,8 +1613,30 @@ class TestScopedTokenRoutes:
             assert r.status_code == 400
         assert calls == []
 
+    def test_the_fingerprint_covers_the_rule_requests(self):
+        base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
+        other = {**base, "rules": [{"kind": "new", "group": "drive.folder", "value": "f", "verbs": ["read"]}]}
+        assert rs._scoped_create_fingerprint_body(base)["rules"] == base["rules"]
+        assert rs._scoped_create_fingerprint_body(base) != rs._scoped_create_fingerprint_body(other)
+
+    def test_a_body_with_rule_ids_and_no_rules_is_a_400(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        body = {k: v for k, v in self.BODY.items() if k != "rules"}
+        r = client.post(self.CREATE, json={"csrf": csrf, **body, "rule_ids": ["r1"]})
+        assert r.status_code == 400
+        assert calls == []
+
+    def test_a_new_rule_request_reaches_the_store_normalised(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        new = {"kind": "new", "group": "drive.folder", "value": "f1", "verbs": ["update", "read", "read"]}
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "rules": [new]}})
+        assert r.status_code == 200
+        assert calls[0][3] == [{**new, "verbs": ["read", "update"]}]
+
     def test_fingerprint_covers_the_reads_flag(self):
-        base = {"label": "a", "days": 1, "rule_ids": ["r"], "tools": ["t"]}
+        base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
         off = rs._scoped_create_fingerprint_body(base)
         on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data_reads": True})
         assert off["allow_personal_data_reads"] is False and on["allow_personal_data_reads"] is True
@@ -1623,7 +1652,7 @@ class TestScopedTokenRoutes:
         assert calls == []
 
     def test_the_fingerprint_covers_the_personal_data_flag(self):
-        base = {"label": "a", "days": 1, "rule_ids": ["r"], "tools": ["t"]}
+        base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
         off = rs._scoped_create_fingerprint_body(base)
         on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data": True})
         assert off["allow_personal_data"] is False and on["allow_personal_data"] is True
@@ -1713,7 +1742,7 @@ class TestScopedTokenRoutes:
         assert [c[0] for c in calls] == ["create"]
 
     @pytest.mark.parametrize("field,value", [
-        ("label", 5), ("days", "90"), ("days", True), ("rule_ids", "r1"), ("tools", [1]),
+        ("label", 5), ("days", "90"), ("days", True), ("rules", "r1"), ("rules", [{"kind": "copy"}]), ("tools", [1]),
     ])
     def test_a_wrong_typed_create_is_a_400(self, controller, sessions, field, value):
         client, calls = self._client(controller, sessions)

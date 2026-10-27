@@ -154,7 +154,7 @@ from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
 from ..scoped_tokens import (
-    DEFAULT_DAYS, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, get_store,
+    DEFAULT_DAYS, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, get_store, normalise_rule_requests,
 )
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
@@ -357,7 +357,7 @@ class ScopedTokenWiring:
     clipboard, so no response from this module ever carries it;
     ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
 
-    store_create: Callable[[str, int, list[str], list[str], bool, bool], tuple[ScopedToken, str]]
+    store_create: Callable[[str, int, list[dict[str, Any]], list[str], bool, bool], tuple[ScopedToken, str]]
     store_revoke: Callable[[str], ScopedToken | None]
     store_rename: Callable[[str, str], tuple[str, ScopedToken] | None]
     store_revoke_all: Callable[[], int]
@@ -369,12 +369,12 @@ def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
     """What a create-token step-up ceremony is bound to, or ``None`` for a
     malformed body. Shared by both modes' routes (ADR 0164, ADR 0165)."""
     label, days = payload.get("label"), payload.get("days")
-    rule_ids, tools = payload.get("rule_ids"), payload.get("tools")
+    rules, tools = normalise_rule_requests(payload.get("rules")), payload.get("tools")
     if not isinstance(label, str) or isinstance(days, bool) or not isinstance(days, int):
         return None
-    if not isinstance(rule_ids, list) or not isinstance(tools, list):
+    if rules is None or not isinstance(tools, list):
         return None
-    if not all(isinstance(name, str) for name in (*rule_ids, *tools)):
+    if not all(isinstance(name, str) for name in tools):
         return None
     allow_personal_data = payload.get("allow_personal_data", False)
     if not isinstance(allow_personal_data, bool):
@@ -383,7 +383,7 @@ def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
     if not isinstance(allow_personal_data_reads, bool):
         return None
     return {
-        "label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools),
+        "label": label, "days": days, "rules": rules, "tools": sorted(tools),
         "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
     }
 
@@ -1215,7 +1215,7 @@ def build_routes(
         _payload, bound = gated
         try:
             token, secret = await run_in_threadpool(
-                scoped_tokens.store_create, bound["label"], bound["days"], bound["rule_ids"], bound["tools"],
+                scoped_tokens.store_create, bound["label"], bound["days"], bound["rules"], bound["tools"],
                 bound["allow_personal_data"], bound["allow_personal_data_reads"],
             )
         except ScopedTokenError as exc:
@@ -1235,7 +1235,7 @@ def build_routes(
             _record_settings_audit(
                 LOCAL_PRINCIPAL,
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
-                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)",
+                f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)",
             )
         return JSONResponse({"created": {"id": token.id, "label": token.label, "expires_at": token.expires_at}})
 
@@ -1839,7 +1839,7 @@ def build_org_routes(
             try:
                 token, secret = await run_in_threadpool(
                     lambda: store.create(
-                        principal, label=bound["label"], days=bound["days"], rule_ids=bound["rule_ids"],
+                        principal, label=bound["label"], days=bound["days"], rules=bound["rules"],
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
@@ -1851,7 +1851,7 @@ def build_org_routes(
             _record_settings_audit(
                 principal,
                 f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
-                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s)"
+                f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)"
                 + (", personal data allowed" if token.allow_personal_data else "")
                 + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
                 + f" (principal={principal.id})",

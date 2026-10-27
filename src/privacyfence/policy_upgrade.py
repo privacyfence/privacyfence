@@ -3,7 +3,11 @@ schema (version 2) to one rule per scope (version 3).
 
 ``scope_rows.migrate_v2`` is the pure conversion. This module is the part that touches files
 and scoped tokens, so every writer and every load goes through the one function below and a
-section is never converted without its tokens being re-pointed first.
+section is never converted without its tokens being converted first.
+
+A scoped token holds its own copy of its rules in the same row format (ADR 0236). A later change
+to that format that needs a rewrite on disk must rewrite each token's ``rules`` too, the way
+``own_legacy_rules`` converts a token's old rule ids.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import yaml
 
 from . import scoped_tokens
 from .policy import scope_rows
+from .policy import store as policy_store
 from .principal import Principal
 from .secure_files import atomic_write_text
 
@@ -66,9 +71,12 @@ def ensure_scope_rows(
         )
         return False
 
+    v2_rules = [r for r in (policy_store.rule_from_dict(raw) for raw in raw_rules) if r is not None]
     try:
-        labels = scoped_tokens.migrate_tokens(principal, migration)
-    except OSError as exc:
+        labels = scoped_tokens.own_legacy_rules(
+            principal, lambda: v2_rules, migration.personal_data_ids, log=log,
+        )
+    except (OSError, ValueError) as exc:
         log(f"{principal.id}: could not update scoped tokens for the new rule format: {exc}")
         return False
 
@@ -89,3 +97,20 @@ def ensure_scope_rows(
             f"allowed it: {', '.join(labels)}"
         )
     return True
+
+
+def ensure_token_rules(
+    cfg: dict[str, Any], principal: Principal, *, log: Callable[[str], None] = logger.warning,
+) -> None:
+    """Give ``principal``'s scoped tokens written before tokens held their own rules a copy of
+    the rules they name, from ``cfg``'s version-3 rows (ADR 0236). Start-up only
+    (``daemon_main``), after ``ensure_scope_rows``; nothing is done while the section is still
+    version 2, whose own conversion handles the tokens."""
+    if _v2_rules(cfg.get("auto_accept")) is not None:
+        return
+    try:
+        scoped_tokens.own_legacy_rules(
+            principal, lambda: scope_rows.compile_rows(scope_rows.rows_from_config(cfg)), log=log,
+        )
+    except (OSError, ValueError) as exc:
+        log(f"{principal.id}: could not give scoped tokens their own copy of their rules: {exc}")

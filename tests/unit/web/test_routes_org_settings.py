@@ -60,6 +60,7 @@ from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import scope_rows
+from privacyfence.policy.engine import PolicyRule
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
@@ -975,22 +976,27 @@ class TestRemoveRule:
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == []
 
-    def test_drops_the_rule_from_that_principals_tokens_only(self, tmp_path, monkeypatch):
+    def test_leaves_scoped_tokens_alone(self, tmp_path, monkeypatch):
         rules = _catalogue_rules("gmail.sender", "read")
         _seed(tmp_path, monkeypatch, "alice", rules=rules)
         _seed(tmp_path, monkeypatch, "bob", rules=rules)
+        other = PolicyRule(
+            id="r-other", predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}),
+        )
+        token_rules = [*rules, other]
+        held = tuple(row for rule in token_rules for row in scope_rows.rows_for_rules([rule], rule.id))
         files = {}
         for principal in (ALICE, BOB):
             token = scoped_tokens.ScopedToken(
                 id="st-000000000000", label="sync", digest="d", principal_id=principal.id,
                 principal_email=principal.email, principal_display_name=principal.display_name,
-                created_at=0.0, expires_at=1e12, rule_ids=frozenset({rules[0].id, "r-other"}),
-                tools=frozenset({"gmail_get_message"}),
+                created_at=0.0, expires_at=1e12, tools=frozenset({"gmail_get_message"}), rules=held,
             )
             files[principal.id] = paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
             secure_files.atomic_write_json(
-                files[principal.id], {"version": 1, "tokens": [scoped_tokens._to_json(token)]},
+                files[principal.id], {"version": 2, "tokens": [scoped_tokens._to_json(token)]},
             )
+        before = {pid: path.read_bytes() for pid, path in files.items()}
         app, sessions = _app()
         client = _client(app)
         csrf = _signed_in(client, sessions, ALICE)
@@ -998,11 +1004,10 @@ class TestRemoveRule:
         r = _post_action(client, "remove_policy_rule", {"rule_id": rules[0].id}, csrf)
         assert r.status_code == 200
 
-        carried = {
-            pid: json.loads(path.read_text(encoding="utf-8"))["tokens"][0]["rule_ids"]
-            for pid, path in files.items()
-        }
-        assert carried == {"alice": ["r-other"], "bob": sorted([rules[0].id, "r-other"])}
+        assert {pid: path.read_bytes() for pid, path in files.items()} == before
+        carried = {pid: json.loads(raw)["tokens"][0]["rules"] for pid, raw in before.items()}
+        assert carried == {pid: [scope_rows.row_to_dict(row) for row in held] for pid in files}
+        assert {row["id"] for row in carried["alice"]} == {rules[0].id, "r-other"}
 
     def test_removes_exactly_that_rule_and_nothing_else(self, tmp_path, monkeypatch):
         sender_rule = _catalogue_rules("gmail.sender", "read")[0]
@@ -1531,7 +1536,7 @@ class TestScopedTokenRoutes:
     org gates, the one-time secret and the token working on /mcp as its owner."""
 
     ENABLED = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30)
-    BODY = {"label": "sales-sync", "days": 7, "rule_ids": [], "tools": ["gmail_get_message"]}
+    BODY = {"label": "sales-sync", "days": 7, "rules": [], "tools": ["gmail_get_message"]}
 
     @staticmethod
     def _store(*principals: Principal) -> scoped_tokens.ScopedTokenStore:
@@ -1568,7 +1573,7 @@ class TestScopedTokenRoutes:
         assert store.tokens_for(ALICE) == []
         # The route's text is the store's own.
         with pytest.raises(scoped_tokens.ScopedTokenError) as excinfo:
-            store.create(ALICE, label="x", days=1, rule_ids=[], tools=["gmail_get_message"],
+            store.create(ALICE, label="x", days=1, rules=[], tools=["gmail_get_message"],
                          policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90))
         assert str(excinfo.value) == ros._SCOPED_TOKENS_DISABLED
         # Not signed in: 401, whatever the policy.
@@ -1697,7 +1702,7 @@ class TestScopedTokenRoutes:
         client, csrf, store = self._setup(tmp_path, monkeypatch, rules=[rule])
         scoped_tokens.set_store(store)
 
-        body = {**self.BODY, "rule_ids": [rule.id], "confirmed": True}
+        body = {**self.BODY, "rules": [{"kind": "copy", "rule_id": rule.id}], "confirmed": True}
         secret = self._post(client, "create", body, csrf).json()["secret"]
 
         access = asyncio.run(mcp_auth.ScopedTokenVerifier().verify_token(secret))
@@ -1706,10 +1711,30 @@ class TestScopedTokenRoutes:
         assert (principal.id, principal.email, principal.display_name) == ("alice", "alice@example.com", "Alice")
         assert principal.is_admin is False
         scope = mcp_auth.scope_from_access_token(access)
-        assert scope is not None and scope.rule_ids == {rule.id} and scope.tools == {"gmail_get_message"}
+        assert scope is not None and scope.tools == {"gmail_get_message"}
+        assert scope.compiled_rules() == [rule]  # its own copy of the rule
         # A rule the person does not have is refused, not silently dropped.
-        bad = self._post(client, "create", {**self.BODY, "label": "other", "rule_ids": ["nope"], "confirmed": True}, csrf)
+        bad = self._post(client, "create", {**self.BODY, "label": "other", "rules": [{"kind": "copy", "rule_id": "nope"}], "confirmed": True}, csrf)
         assert bad.status_code == 400
+
+    def test_a_new_rule_request_creates_a_token_with_that_rule(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        new = {"kind": "new", "group": "gmail.sender", "value": "a@example.com", "verbs": ["read"]}
+
+        r = self._post(client, "create", {**self.BODY, "rules": [new], "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        (token,) = store.tokens_for(ALICE)
+        assert len(token.rules) == 1 and token.rules[0].scope == "gmail.sender"
+
+    def test_a_body_with_rule_ids_and_no_rules_is_refused(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        body = {k: v for k, v in self.BODY.items() if k != "rules"}
+
+        r = self._post(client, "create", {**body, "rule_ids": [], "confirmed": True}, csrf)
+
+        assert r.status_code == 400
+        assert store.tokens_for(ALICE) == []
 
     def test_days_over_the_admin_cap_are_refused(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
@@ -1726,7 +1751,7 @@ class TestScopedTokenRoutes:
         for label in ("one", "two", "three"):
             assert self._post(client, "create", {**self.BODY, "label": label, "confirmed": True}, csrf).status_code == 200
         bob_token, _secret = store.create(
-            BOB, label="bobs", days=5, rule_ids=[], tools=["gmail_get_message"], policy=self.ENABLED,
+            BOB, label="bobs", days=5, rules=[], tools=["gmail_get_message"], policy=self.ENABLED,
         )
         one = next(t for t in store.tokens_for(ALICE) if t.label == "one")
 
@@ -1754,7 +1779,7 @@ class TestScopedTokenRoutes:
         for label in ("one", "two"):
             assert self._post(client, "create", {**self.BODY, "label": label, "confirmed": True}, csrf).status_code == 200
         bob_token, _secret = store.create(
-            BOB, label="bobs", days=5, rule_ids=[], tools=["gmail_get_message"], policy=self.ENABLED,
+            BOB, label="bobs", days=5, rules=[], tools=["gmail_get_message"], policy=self.ENABLED,
         )
         one = next(t for t in store.tokens_for(ALICE) if t.label == "one")
 

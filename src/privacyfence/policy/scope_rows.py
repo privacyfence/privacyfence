@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from . import catalogue, describe, outdated, propose, registry, store
 from .catalogue import PolicyExtraScope
@@ -53,12 +53,9 @@ class ScopeRow:
 
 @dataclass(frozen=True)
 class V2Migration:
-    """The result of ``migrate_v2``: the rows plus what the token upgrade needs to re-point tokens."""
+    """The result of ``migrate_v2``: the rows, and the v2 rule ids that allowed personal data."""
 
     rows: list[ScopeRow] = field(default_factory=list)
-    id_map: dict[str, str] = field(default_factory=dict)
-    members: dict[str, frozenset[str]] = field(default_factory=dict)
-    member_pairs: dict[str, _Pairs] = field(default_factory=dict)
     personal_data_ids: frozenset[str] = frozenset()
 
 
@@ -373,6 +370,28 @@ def add_rules(rows: list[ScopeRow], rules: list[PolicyRule]) -> tuple[list[Scope
     return new_rows, list(dict.fromkeys(touched))
 
 
+def _quads(rules: Iterable[PolicyRule]) -> frozenset[tuple[str, str, str, str]]:
+    return frozenset(
+        (r.predicate, repr(r.conditions), repr(store._sortable(r.value)), op)
+        for r in rules for op in r.operations
+    )
+
+
+def rows_for_rules(rules: Sequence[PolicyRule], row_id: str) -> list[ScopeRow]:
+    """Rows that compile to exactly ``rules`` -- the same predicates, conditions, values and
+    operations -- all carrying ``row_id``: the rows ``add_rules`` builds when they compile back
+    to exactly that, else one custom row per rule. ``[]`` for no rules. A scoped token's own copy
+    of a rule is built with it (ADR 0236)."""
+    rules = [r for r in rules if r.operations]
+    if not rules:
+        return []
+    merged, _ = add_rules([], rules)
+    candidate = [dataclasses.replace(row, id=row_id, former_ids=()) for row in merged]
+    if _quads(compile_rows(candidate)) == _quads(rules):
+        return candidate
+    return [_custom_row(rule, row_id) for rule in rules]
+
+
 def remove_row(rows: list[ScopeRow], row_id: str) -> list[ScopeRow]:
     """``rows`` without the row with this id."""
     return [row for row in rows if row.id != row_id]
@@ -418,12 +437,6 @@ def set_verbs(rows: list[ScopeRow], row_id: str, verbs: Iterable[Verb]) -> list[
     return [updated if r.id == row_id else r for r in rows]
 
 
-def pairs_of(rows: Iterable[ScopeRow], row_id: str) -> _Pairs:
-    """The ``(predicate, operation)`` pairs ``compile_row`` gives for a row today; empty if unknown."""
-    row = next((r for r in rows if r.id == row_id), None)
-    return _pairs(compile_row(row)) if row is not None else frozenset()
-
-
 def migrate_v2(raw_rules: Any) -> V2Migration:
     """Convert a v2 rule list into rows without changing what any unscoped call can auto-accept.
 
@@ -455,8 +468,6 @@ def migrate_v2(raw_rules: Any) -> V2Migration:
         groups[key].append(rule)
 
     rows: list[ScopeRow] = []
-    id_map: dict[str, str] = {}
-    members: dict[str, frozenset[str]] = {}
     for item in placement:
         if isinstance(item, PolicyRule):
             rows.append(_custom_row(item, item.id))
@@ -468,16 +479,8 @@ def migrate_v2(raw_rules: Any) -> V2Migration:
             continue
         old_ids = frozenset(rule.id for rule in group)
         rows.append(dataclasses.replace(candidate, former_ids=tuple(sorted(old_ids))))
-        members[candidate.id] = old_ids
-        id_map.update({old: candidate.id for old in old_ids})
 
-    member_pairs: dict[str, _Pairs] = {}
-    for rule in rules:
-        member_pairs[rule.id] = member_pairs.get(rule.id, frozenset()) | _pairs([rule])
-    return V2Migration(
-        rows=rows, id_map=id_map, members=members, member_pairs=member_pairs,
-        personal_data_ids=frozenset(personal_data_ids),
-    )
+    return V2Migration(rows=rows, personal_data_ids=frozenset(personal_data_ids))
 
 
 __all__ = [
@@ -494,11 +497,11 @@ __all__ = [
     "migrate_v2",
     "missing_operations",
     "missing_tools",
-    "pairs_of",
     "remove_row",
     "row_from_dict",
     "row_id_for",
     "row_to_dict",
+    "rows_for_rules",
     "rows_from_config",
     "rows_from_section",
     "rows_to_config",

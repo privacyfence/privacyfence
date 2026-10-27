@@ -539,7 +539,7 @@ def test_org_tokens_load_after_a_restart_on_an_unseparated_install(tmp_path, mon
     alice = Principal(id="alice", email="alice@example.com")
     previous_run = scoped_tokens.ScopedTokenStore(lambda: [alice])
     token, secret = previous_run.create(
-        alice, label="sales-sync", days=90, rule_ids=[], tools=["gmail_list_messages"],
+        alice, label="sales-sync", days=90, rules=[], tools=["gmail_list_messages"],
         policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
     )
     assert (tmp_path / "users" / "alice" / "authority" / scoped_tokens.STORE_FILE_NAME).is_file()
@@ -1167,7 +1167,7 @@ class TestAudienceSeparation:
         store.load()
         scoped_tokens.set_store(store)
         _, secret = store.create(
-            principal or LOCAL_PRINCIPAL, label="sales-sync", days=90, rule_ids=[],
+            principal or LOCAL_PRINCIPAL, label="sales-sync", days=90, rules=[],
             tools=["gmail_list_messages"], policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
         )
         return secret
@@ -2132,8 +2132,8 @@ class TestScopedTokenWiring:
         )
         wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
 
-        flagged, _ = wiring.store_create("flagged", 30, [rule.id], ["gmail_list_messages"], True, False)
-        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], False, False)
+        flagged, _ = wiring.store_create("flagged", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], True, False)
+        plain, _ = wiring.store_create("plain", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], False, False)
 
         assert (flagged.allow_personal_data, plain.allow_personal_data) == (True, False)
         tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
@@ -2150,8 +2150,8 @@ class TestScopedTokenWiring:
         )
         wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
 
-        reads, _ = wiring.store_create("reads", 30, [rule.id], ["gmail_list_messages"], False, True)
-        plain, _ = wiring.store_create("plain", 30, [rule.id], ["gmail_list_messages"], True, False)
+        reads, _ = wiring.store_create("reads", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], False, True)
+        plain, _ = wiring.store_create("plain", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], True, False)
 
         assert (reads.allow_personal_data_reads, plain.allow_personal_data_reads) == (True, False)
         assert (reads.allow_personal_data, plain.allow_personal_data) == (False, True)
@@ -2170,7 +2170,7 @@ class TestScopedTokenWiring:
             scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
         )
         wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
-        token, _ = wiring.store_create("old", 30, [rule.id], ["gmail_list_messages"], False, False)
+        token, _ = wiring.store_create("old", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], False, False)
 
         old_label, renamed = wiring.store_rename(token.id, "new")
 
@@ -2190,17 +2190,18 @@ class TestScopedTokenWiring:
         rule = self._rules(monkeypatch)
         policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
         now = time.time()
+        copy = [{"kind": "copy", "rule_id": rule.id}]
 
-        def _make(label, days_ago, days, rule_ids):
+        def _make(label, days_ago, days, rules):
             token, _ = store.create(
-                LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=["gmail_list_messages"],
+                LOCAL_PRINCIPAL, label=label, days=days, rules=rules, tools=["gmail_list_messages"],
                 policy=policy, now=now - days_ago * 86400,
             )
             return token
 
-        fresh = _make("fresh", 0, 90, [rule.id])
-        soon = _make("soon", 80, 90, [rule.id])
-        gone = _make("gone", 100, 90, [rule.id])
+        fresh = _make("fresh", 0, 90, copy)
+        soon = _make("soon", 80, 90, copy)
+        gone = _make("gone", 100, 90, copy)
         wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object(), "drive": object()}))
         data = wiring.page_data()
 
@@ -2221,14 +2222,17 @@ class TestScopedTokenWiring:
         assert [group["connector"] for group in data["tools"]] == ["drive", "gmail"]
         assert "gmail_list_messages" in data["tools"][1]["tools"]
 
+        # The token's rules are its own rows (ADR 0236): deleting the Auto-accept rule changes nothing.
+        before = wiring.page_data()["tokens"][0]["rules"]
         monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
         monkeypatch.setattr("privacyfence.auto_accept.get_policy_rows", lambda: [])
-        assert wiring.page_data()["tokens"][0]["rules"] == [{"id": rule.id, "missing": True}]
+        assert wiring.page_data()["tokens"][0]["rules"] == before
 
 
-def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
-    """A token carries the pairs its rule had when it was made; a row extended afterwards is wider
-    than that limit, and the token list says which tools the token is still limited to."""
+def test_a_tokens_rules_come_from_its_own_rows(tmp_path, monkeypatch):
+    """Each of a token's rules is drawn from the token's own row (ADR 0236), named like the
+    Auto-accept page names a row; widening the person's row afterwards does not change it, and
+    there is no "missing" or "limited_to" key any more."""
     from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
     from privacyfence.policy import catalogue as policy_catalogue
     from privacyfence.policy.registry import Verb
@@ -2244,24 +2248,69 @@ def test_limited_to_appears_only_for_a_narrowed_limit(tmp_path, monkeypatch):
     policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
 
     def page():
-        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
-        return {t["label"]: t["rules"][0] for t in data["tokens"]}
+        return scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
 
     with principal_scope(alice):
         auto_accept.init_config_path(str(config_path))
         auto_accept.add_policy_v2_rules(policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.READ]))
-        store.create(alice, label="before", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
-        assert "limited_to" not in page()["before"]
+        (row,) = auto_accept.get_policy_rows()
+        store.create(alice, label="sync", days=30, rules=[{"kind": "copy", "rule_id": row.id}], tools=[], policy=policy)
+        before = page()
 
         auto_accept.add_policy_v2_rules(
             policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.DOWNLOAD])
         )
-        store.create(alice, label="after", days=30, rule_ids=[auto_accept.get_policy_rows()[0].id], tools=[], policy=policy)
-        entries = page()
+        after = page()
 
-    assert "drive_download_file" not in entries["before"]["limited_to"]
-    assert entries["before"]["limited_to"]
-    assert "limited_to" not in entries["after"]
+    (entry,) = before["tokens"][0]["rules"]
+    assert entry == before["rules"][0]  # named the way the Auto-accept page names the row
+    assert entry["id"] == row.id and entry["title"] and entry["sentence"]
+    assert not {"missing", "limited_to"} & set(entry)
+    assert "drive_download_file" in after["rules"][0]["tools"]
+    assert after["tokens"][0]["rules"] == [entry]
+    assert "drive_download_file" not in entry["tools"]
+
+
+def _page_data(tmp_path, monkeypatch, connector_names):
+    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+        return scoped_token_page_data(alice, policy=policy, delivery="once", connector_names=connector_names)
+
+
+def test_scope_groups_list_only_enabled_connectors(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"drive"})
+
+    ids = {g["id"] for g in data["scope_groups"]}
+    assert "drive.folder" in ids
+    assert not any(i.startswith("gmail.") for i in ids)
+    assert all(g["connector"] == "drive" for g in data["scope_groups"])
+
+
+def test_scope_groups_say_which_tools_each_verb_covers(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"drive"})
+
+    (folder,) = [g for g in data["scope_groups"] if g["id"] == "drive.folder"]
+    assert "drive_get_file_content" in folder["verb_tools"]["read"]
+    assert set(folder["verb_tools"]) == set(folder["verbs"])
+
+
+def test_tools_are_grouped_under_the_longest_connector_name(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"apps_script"})
+
+    (group,) = data["tools"]
+    assert group["connector"] == "apps_script"
+    assert group["tools"] and all(t.startswith("apps_script_") for t in group["tools"])
+    assert all(t.startswith("apps_script_") for t in data["auto_tools"])
 
 
 def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypatch):
@@ -2278,8 +2327,8 @@ def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypat
     policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
     with principal_scope(alice):
         auto_accept.init_config_path(str(config_path))
-    idle, _ = store.create(alice, label="idle", days=30, rule_ids=[], tools=["drive_list_files"], policy=policy)
-    busy, _ = store.create(alice, label="busy", days=30, rule_ids=[], tools=["drive_list_files"], policy=policy)
+    idle, _ = store.create(alice, label="idle", days=30, rules=[], tools=["drive_list_files"], policy=policy)
+    busy, _ = store.create(alice, label="busy", days=30, rules=[], tools=["drive_list_files"], policy=policy)
 
     def page():
         with principal_scope(alice):

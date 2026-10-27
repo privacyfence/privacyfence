@@ -70,8 +70,8 @@ Any other MCP client that speaks Streamable HTTP takes the same URL and header.
 ### Scoped tokens
 
 A scheduled job or a single script needs less than your own token. In **Settings → Scoped tokens**
-create one: give it a name, a lifetime (90 days by default, at most 365), the auto-accept rules it
-may use and the tools it may call. The companion copies the token to your clipboard once; it cannot
+create one: give it a name, a lifetime (90 days by default, at most 365), the rules it
+holds (new ones for this token, or copies of your Auto-accept rules) and the tools it may call. The companion copies the token to your clipboard once; it cannot
 be shown again. Use it as the bearer token in place of your own, for example
 `PRIVACYFENCE_TOKEN` for `privacyfence-sync`.
 
@@ -79,9 +79,9 @@ A client holding it sees only the tools you chose, and a call goes through only 
 auto-accepts it. Anything else is denied at once; a scoped token never raises an approval card.
 Settings flags a token with 14 days or fewer left, and `privacyfence_status` tells the client its
 expiry. **Revoke** stops one token at once; **Revoke all** stops every one. Your own token and your
-other clients are not affected. A token's rules, tools and expiry cannot be edited, except that deleting a rule (in Settings, or through `privacyfence_propose_policy_change`) also removes it from every scoped token that carried it; the token's other rules and tools stay, and adding the same rule again does not restore it. **Rename** changes only its name, and clients using it keep working. For any other change, **Duplicate** fills the New token form
+other clients are not affected. A token's rules, tools and expiry cannot be edited. Deleting or changing an Auto-accept rule does not change a token. **Rename** changes only its name, and clients using it keep working. For any other change, **Duplicate** fills the New token form
 from an existing token, with a numbered name, so you can create a replacement and revoke the old
-one. The form lists only the tools the selected rules cover, plus the tools that need no rule. On the New token form, a second checkbox, **Let reads return personal data**, lets covered Gmail message and thread reads and Slack reads return personal data (the scan still runs and is audited). A token keeps the operations its rules had when it was created, so edit a rule first and then create the token. A Gmail query rule such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it. See
+one, with a copy of its rules. The form lists only the tools the selected rules cover, plus the tools that need no rule. On the New token form, a second checkbox, **Let reads return personal data**, lets covered Gmail message and thread reads and Slack reads return personal data (the scan still runs and is audited). The rules are the token's own: add them on the form (a scope, a value and verbs, as on the Auto-accept page) or copy one of your Auto-accept rules, and they never auto-accept anything for your other AI clients ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)). A Gmail query rule such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it. See
 [Scoped tokens](security-and-compliance.md#scoped-tokens).
 
 ## Organization mode
@@ -100,14 +100,14 @@ Access tokens last one hour and are refreshed silently; after 30 days you sign i
 ### Scoped tokens
 
 If your administrator has turned scoped tokens on, **Settings → Scoped tokens** lets you create a
-named, expiring bearer token limited to chosen rules and tools, for a scheduled job that cannot sign
+named, expiring bearer token with its own rules and a chosen list of tools, for a scheduled job that cannot sign
 in. The token is shown once, in a dialog with a Copy button; it is not stored and cannot be shown
 again. Pass it as the bearer token (`Authorization: Bearer pfst_…`) to `/mcp`. Its lifetime is 90
 days by default and at most the administrator's limit. Revoke it in the same page. It is
-[deny-only](security-and-compliance.md#scoped-tokens). A token's rules, tools and expiry cannot be edited, except that deleting a rule (in Settings, or through `privacyfence_propose_policy_change`) also removes it from every scoped token that carried it; the token's other rules and tools stay, and adding the same rule again does not restore it. **Rename** changes only its name, and clients using it keep working. For any other change, **Duplicate** fills
+[deny-only](security-and-compliance.md#scoped-tokens). A token's rules, tools and expiry cannot be edited. Deleting or changing an Auto-accept rule does not change a token. **Rename** changes only its name, and clients using it keep working. For any other change, **Duplicate** fills
 the New token form from an existing token, with a numbered name, so you can create a replacement
-and revoke the old one. The form lists only the tools the selected rules cover, plus the tools that
-need no rule. On the New token form, a second checkbox, **Let reads return personal data**, lets covered Gmail message and thread reads and Slack reads return personal data (the scan still runs and is audited). A token keeps the operations its rules had when it was created, so edit a rule first and then create the token. A Gmail query rule such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it.
+and revoke the old one, with a copy of its rules. The form lists only the tools the selected rules cover, plus the tools that
+need no rule. On the New token form, a second checkbox, **Let reads return personal data**, lets covered Gmail message and thread reads and Slack reads return personal data (the scan still runs and is audited). The rules are the token's own: add them on the form (a scope, a value and verbs, as on the Auto-accept page) or copy one of your Auto-accept rules, and they never auto-accept anything for your other AI clients ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)). A Gmail query rule such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it.
 
 Connect your services at `https://pf.example.com/connect`. Setting up the deployment itself is
 [Organization deployment](org-mode-setup-guide.md).

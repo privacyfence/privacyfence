@@ -28,6 +28,7 @@ from privacyfence import agent_label, agent_overrides, card_builder, gate, org_i
 from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, current_agent
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
+from privacyfence.policy import scope_rows
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.scoped_tokens import ScopedToken, ScopedTokenStore
 from privacyfence.web import oauth_provider as op
@@ -384,10 +385,13 @@ def _audit_entries(audit_dir) -> list[dict]:
     return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
 
 
+_GMAIL_RULE = PolicyRule(
+    id="r-gmail", predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}),
+)
+
+
 def _install_rule(monkeypatch) -> None:
-    monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [PolicyRule(
-        id="r-gmail", predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}),
-    )])
+    monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [_GMAIL_RULE])
 
 
 def _no_rules(monkeypatch, popup_answer: str) -> None:
@@ -441,7 +445,7 @@ class TestClaimedIdentityNeverChangesAnOutcome:
 _SCOPED = ScopedToken(
     id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
     principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
-    rule_ids=frozenset({"r-gmail"}), tools=frozenset({"echo_say"}),
+    rules=tuple(scope_rows.rows_for_rules([_GMAIL_RULE], _GMAIL_RULE.id)), tools=frozenset({"echo_say"}),
 )
 
 

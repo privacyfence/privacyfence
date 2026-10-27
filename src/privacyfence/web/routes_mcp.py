@@ -642,7 +642,7 @@ def _dispatch_scoped_meta_tool(
             "expires_at": datetime.fromtimestamp(scope.expires_at, tz=timezone.utc).isoformat(),
             "days_left": days_left,
             "expiring_soon": expiring_soon,
-            "rules": len(scope.rule_ids),
+            "rules": len(scope.rules),
             "tools": len(scope.tools),
         }
         if expiring_soon:

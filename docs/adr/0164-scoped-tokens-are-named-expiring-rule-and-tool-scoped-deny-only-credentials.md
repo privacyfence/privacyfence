@@ -6,6 +6,7 @@ Accepted — 2026-10-11. Implemented.
 Amends [ADR 0037](0037-a-local-override-is-a-relabel-and-never-attests.md), [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md), [ADR 0008](0008-one-principal-per-os-user.md) and [ADR 0015](0015-unattended-session-flag-is-advisory-only.md).
 Amended by ADR 0173.
 Amended by [ADR 0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md): a deleted rule's id is dropped from every scoped token.
+Amended by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of its rules.
 
 ## Context
 

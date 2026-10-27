@@ -54,8 +54,11 @@ step.
 
 ## The rules a recipe needs
 
-Every step needs an auto-accept rule, because a scheduled run gets no cards. Create them in
-**Settings → Auto-accept → Add a rule** (each asks for your passkey): the report, Jira project,
+Every step needs an auto-accept rule, because a scheduled run gets no cards. Put them on the
+recipe's scoped token (**Settings → Scoped tokens → New token**, see
+[scoped tokens](connect-claude-code.md#scoped-tokens)), and use Auto-accept rules only for attended
+runs without a token. A token's rules belong to the token: an Auto-accept rule does not reach it.
+The rules cover: the report, Jira project,
 Jira Assets schema, Drive folder, Grist document and Peek page the recipe touches, with the verbs its steps use. The
 export tools and a Peek page upload also need **Let exports, downloads and page uploads carry
 personal data** ticked on the recipe's scoped token if the data holds personal data
