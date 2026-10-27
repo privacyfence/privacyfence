@@ -13,10 +13,12 @@ from privacyfence.peek_client import (
     PeekClient,
     PeekClientError,
     PeekComment,
+    PeekGrant,
     PeekPage,
     PeekRenameResult,
     PeekStats,
     PeekUploadResult,
+    PeekVersion,
     PeekVisibilityResult,
     PeekVisit,
 )
@@ -83,8 +85,12 @@ PEEK_SIBLINGS: dict[str, tuple[str, ...]] = {
     "peek_get_comments": ("peek_add_comment",),
     "peek_get_stats": ("peek_get_comments",),
     "peek_upload_page": ("peek_set_visibility",),
-    "peek_set_visibility": ("peek_upload_page",),
-    "peek_add_comment": ("peek_get_comments",),
+    "peek_set_visibility": ("peek_upload_page", "peek_grant_access"),
+    "peek_add_comment": ("peek_get_comments", "peek_list_versions"),
+    "peek_list_versions": ("peek_get_comments",),
+    "peek_list_grants": ("peek_grant_access", "peek_revoke_access"),
+    "peek_grant_access": ("peek_set_visibility", "peek_list_grants"),
+    "peek_revoke_access": ("peek_list_grants",),
     "peek_delete_page": ("peek_list_pages",),
     "peek_rename_page": ("peek_list_pages",),
 }
@@ -850,6 +856,245 @@ class TestRenamePage:
         )
 
 
+def make_restricted_page(slug: str) -> PeekPage:
+    return PeekPage(
+        slug=slug, name=f"{slug}.html", owner="ann", size_bytes=120, visibility="restricted",
+        url=f"https://peek.example.com/p/{slug}", created_at="2026-01-01T00:00:00Z", version=2,
+    )
+
+
+class TestListVersions:
+    async def test_returns_versions_without_gating_and_audits(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.list_versions.return_value = [
+            PeekVersion(2, 300, "2026-10-11T00:00:00Z", "https://peek.example.com/p/s1/v/2"),
+            PeekVersion(1, 120, "2026-10-10T00:00:00Z", "https://peek.example.com/p/s1/v/1"),
+        ]
+
+        result = await connector.call("peek_list_versions", {"slug": "s1"})
+
+        assert result["slug"] == "s1"
+        assert result["name"] == "s1.html"
+        assert [v["version"] for v in result["versions"]] == [2, 1]
+        assert set(result["versions"][0]) == {"version", "size_bytes", "created_at", "url"}
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(entries) == 1
+        assert '"decision": "auto_accepted"' in entries[0]
+        assert '"tool": "peek_list_versions"' in entries[0]
+        assert "2 version(s)" in entries[0]
+
+    async def test_bad_slug_and_client_error(self):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="Not a Peek page slug"):
+            await connector.call("peek_list_versions", {"slug": "a b"})
+        client.get_page.side_effect = PeekClientError("nope")
+        with pytest.raises(RuntimeError, match="nope"):
+            await connector.call("peek_list_versions", {"slug": "s1"})
+
+
+class TestListGrants:
+    async def test_gates_and_returns_grants(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.list_grants.return_value = [
+            PeekGrant("group", "team@example.com", "2026-10-10T11:07:00Z"),
+            PeekGrant("user", "bob@example.com", "2026-10-11T11:07:00Z"),
+        ]
+
+        result = await connector.call("peek_list_grants", {"slug": "s1"})
+
+        assert result == {
+            "slug": "s1",
+            "name": "s1.html",
+            "visibility": "restricted",
+            "grants": [
+                {"kind": "group", "email": "team@example.com", "created_at": "2026-10-10T11:07:00Z"},
+                {"kind": "user", "email": "bob@example.com", "created_at": "2026-10-11T11:07:00Z"},
+            ],
+        }
+        call = gated_call_spy[0]
+        assert call["gate"] == "review"
+        assert call["tool_name"] == "Read Peek Page Access"
+        assert call["summary"] == "2 grant(s) on s1.html"
+        assert list(call["preview"]) == ["Server", "Page", "Link", "Visibility"]
+        assert list(call["new_info"]) == ["Grants", "Email addresses"]
+        assert call["table_only"] is True
+        assert call["args"] == {"slug": "s1"}
+        assert call["pii_scan_text"] == "team@example.com\nbob@example.com"
+        assert call["preview_tables"][0]["headers"] == ["Kind", "Email", "Added"]
+        assert len(call["preview_tables"][0]["rows"]) == 2
+        assert "bob@example.com (user)" in call["details_text"]
+
+    async def test_no_grants(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.list_grants.return_value = []
+
+        result = await connector.call("peek_list_grants", {"slug": "s1"})
+
+        assert result["grants"] == []
+        call = gated_call_spy[0]
+        assert call["details_text"] == "(no grants)"
+        assert call["preview_tables"] == []
+
+    async def test_bad_slug_and_client_error(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="Not a Peek page slug"):
+            await connector.call("peek_list_grants", {"slug": "a b"})
+        client.get_page.side_effect = PeekClientError("nope")
+        with pytest.raises(RuntimeError, match="nope"):
+            await connector.call("peek_list_grants", {"slug": "s1"})
+        assert gated_call_spy == []
+
+
+class TestGrantAccess:
+    async def test_grant_on_a_restricted_page(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.add_grant.return_value = True
+
+        result = await connector.call(
+            "peek_grant_access", {"slug": "s1", "email": " Bob@Example.com "},
+        )
+
+        assert result == {"slug": "s1", "kind": "user", "email": "bob@example.com", "notified": True}
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup"
+        assert call["tool_name"] == "Grant Access to Peek Page"
+        assert call["summary"] == "Let bob@example.com open s1.html"
+        assert list(call["preview"]) == ["Server", "Page", "Link", "Visibility", "Grant to"]
+        assert call["preview"]["Grant to"] == "bob@example.com (user)"
+        assert call["details_text"] == (
+            "bob@example.com can open https://peek.example.com/p/s1. Peek emails them the link "
+            "unless they already had access."
+        )
+        assert call["args"] == {"slug": "s1"}
+        client.add_grant.assert_called_once_with("s1", "user", "bob@example.com")
+
+    async def test_grant_on_a_public_page_says_nothing_changes_yet(self, gated_call_spy):
+        connector, client = make_connector()
+        page = make_page("s1")
+        client.get_page.return_value = PeekPage(
+            page.slug, page.name, page.owner, page.size_bytes, "public", page.url,
+            page.created_at, page.version,
+        )
+        client.add_grant.return_value = False
+
+        result = await connector.call(
+            "peek_grant_access", {"slug": "s1", "email": "team@example.com", "kind": "group"},
+        )
+
+        assert result["notified"] is False
+        assert result["kind"] == "group"
+        assert gated_call_spy[0]["details_text"] == (
+            "team@example.com can open https://peek.example.com/p/s1 once it is restricted. "
+            "It is public now, so the grant changes nothing until then and no email is sent."
+        )
+        client.add_grant.assert_called_once_with("s1", "group", "team@example.com")
+
+    @pytest.mark.parametrize(
+        ("kind", "email", "message"),
+        [
+            ("user", "nobody", "Enter one email address"),
+            ("user", "a@b@c", "Enter one email address"),
+            ("team", "a@b.c", "kind must be user or group."),
+        ],
+    )
+    async def test_invalid_grant_is_refused_before_the_gate(
+        self, gated_call_spy, kind, email, message,
+    ):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match=message):
+            await connector.call(
+                "peek_grant_access", {"slug": "s1", "email": email, "kind": kind},
+            )
+        assert gated_call_spy == []
+        client.get_page.assert_not_called()
+        client.add_grant.assert_not_called()
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_grant_access",
+            {"slug": "s1", "email": "bob@example.com"}, client.add_grant,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.add_grant, "peek_grant_access",
+            {"slug": "s1", "email": "bob@example.com"},
+        )
+
+    async def test_group_lookup_error_surfaces(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.add_grant.side_effect = PeekClientError("This Peek server cannot check Google group")
+        with pytest.raises(RuntimeError, match="cannot check Google group"):
+            await connector.call(
+                "peek_grant_access", {"slug": "s1", "email": "t@example.com", "kind": "group"},
+            )
+
+
+class TestRevokeAccess:
+    async def test_revoke(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+
+        result = await connector.call(
+            "peek_revoke_access", {"slug": "s1", "email": "Bob@Example.com"},
+        )
+
+        assert result == {"slug": "s1", "kind": "user", "email": "bob@example.com", "removed": True}
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup"
+        assert call["tool_name"] == "Revoke Access to Peek Page"
+        assert call["summary"] == "Remove bob@example.com from s1.html"
+        assert list(call["preview"]) == ["Server", "Page", "Link", "Visibility", "Revoke from"]
+        assert call["preview"]["Revoke from"] == "bob@example.com (user)"
+        assert call["details_text"] == (
+            "bob@example.com can no longer open https://peek.example.com/p/s1 while it is "
+            "restricted."
+        )
+        client.remove_grant.assert_called_once_with("s1", "user", "bob@example.com")
+
+    async def test_revoke_unknown_grant_message(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.remove_grant.side_effect = PeekClientError(
+            "Peek has no such grant on this page (HTTP 404). Call peek_list_grants to see who has access.",
+            status=404,
+        )
+        with pytest.raises(RuntimeError, match="Peek has no such grant on this page"):
+            await connector.call("peek_revoke_access", {"slug": "s1", "email": "bob@example.com"})
+
+    async def test_invalid_grant_is_refused_before_the_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="Enter one email address"):
+            await connector.call("peek_revoke_access", {"slug": "s1", "email": "nobody"})
+        assert gated_call_spy == []
+        client.remove_grant.assert_not_called()
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_revoke_access",
+            {"slug": "s1", "email": "bob@example.com"}, client.remove_grant,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.remove_grant, "peek_revoke_access",
+            {"slug": "s1", "email": "bob@example.com"},
+        )
+
+
 class TestDeletePage:
     async def test_delete(self, gated_call_spy):
         connector, client = make_connector()
@@ -931,6 +1176,9 @@ class TestEveryToolIsAudited:
         client.rename_page.return_value = PeekRenameResult(
             "renamed", "https://peek.example.com/p/renamed", "Renamed",
         )
+        client.list_versions.return_value = []
+        client.list_grants.return_value = []
+        client.add_grant.return_value = False
         await assert_all_tools_leave_an_audit_trail(
             connector, peek_module, monkeypatch, tmp_path,
             arg_overrides={
@@ -941,5 +1189,9 @@ class TestEveryToolIsAudited:
                 "peek_add_comment": {"slug": "slug1", "body": "hi"},
                 "peek_delete_page": {"slug": "slug1"},
                 "peek_rename_page": {"slug": "slug1", "name": "Renamed"},
+                "peek_list_versions": {"slug": "slug1"},
+                "peek_list_grants": {"slug": "slug1"},
+                "peek_grant_access": {"slug": "slug1", "email": "bob@example.com"},
+                "peek_revoke_access": {"slug": "slug1", "email": "bob@example.com"},
             },
         )

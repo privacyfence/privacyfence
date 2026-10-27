@@ -102,9 +102,9 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
 | [Jira Assets](#jira-assets) | 8 | 3 | 5 | 0 |
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
-| [Peek](#peek) | 8 | 1 | 2 | 5 |
+| [Peek](#peek) | 12 | 2 | 3 | 7 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
-| **Total** | **167** | **58** | **38** | **71** |
+| **Total** | **171** | **59** | **39** | **73** |
 
 ## Gmail
 
@@ -325,11 +325,15 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
 | `peek_list_pages` | read | `auto` | List the Peek pages this account can manage, newest first, with each page's link and who can open it. |
+| `peek_list_versions` | read | `auto` | List the versions of one Peek page you manage, newest first, with each version's size, time and link. |
 | `peek_get_comments` | read | `review` | Read the reviewers' comments on one Peek page, with what each comment is anchored to. |
 | `peek_get_stats` | read | `review` | Read how often one Peek page was opened, and the names visitors gave. |
+| `peek_list_grants` | read | `review` | List who can open one restricted Peek page: the people and Google groups granted access. |
 | `peek_add_comment` | write | `popup` | Post a comment on a Peek page under your own Peek account name, on the latest version or the one you give. |
 | `peek_delete_page` | write | `popup` | Delete a Peek page, with its comments and visit history. |
+| `peek_grant_access` | write | `popup` | Let a person or a Google group open a restricted Peek page. |
 | `peek_rename_page` | write | `popup` | Rename a Peek page; its link may change to match the new name, and old links keep redirecting to it in browsers. |
+| `peek_revoke_access` | write | `popup` | Remove a person's or a Google group's access to a restricted Peek page. |
 | `peek_set_visibility` | write | `popup` | Change who can open a Peek page: anyone with the link, anyone signed in to Peek, or only the people granted access (restricted). |
 | `peek_upload_page` | write | `popup` | Publish an HTML page on Peek, or a new version of one of your pages, and get its share link. |
 

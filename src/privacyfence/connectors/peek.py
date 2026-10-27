@@ -24,6 +24,7 @@ from ..peek_client import (
     PeekClient,
     PeekClientError,
     normalize_visibility,
+    validate_grant,
     validate_slug,
 )
 from ..preview_dates import format_preview_datetime
@@ -40,7 +41,21 @@ _SLUG = ToolParam(
 
 _VISIBILITY_DESC = (
     "Who can open the page: public (anyone with the link), signed-in (anyone signed in to Peek) "
-    "or restricted (only you, Peek admins and the people or groups granted access)."
+    "or restricted (only you, Peek admins and the people or groups granted access). "
+    "Grant access with peek_grant_access."
+)
+
+_EMAIL = ToolParam(
+    "email", "str", required=True,
+    description="The email address of the person, or of the Google group.",
+)
+
+_GRANT_KIND = ToolParam(
+    "kind", "str", required=False, default="user",
+    description=(
+        "user (one person's email, the default) or group (a Google group's email; needs "
+        "group lookup on the Peek server)."
+    ),
 )
 
 _REASON = ToolParam(
@@ -188,8 +203,9 @@ class PeekConnector(Connector):
                     "Change who can open a Peek page: anyone with the link, anyone signed in to "
                     "Peek, or only the people granted access (restricted). Returns {slug, "
                     "visibility, notified}, where notified says whether Peek emailed the people "
-                    "granted access. Use peek_upload_page to publish a new version. Requires "
-                    "user approval."
+                    "granted access. Use peek_upload_page to publish a new version. Use "
+                    "peek_grant_access to choose who can open a restricted page. Requires user "
+                    "approval."
                 ),
                 params=[
                     _SLUG,
@@ -206,7 +222,7 @@ class PeekConnector(Connector):
                     "comment returned by peek_get_comments to reply at the same spot. Returns "
                     "{slug, version, comment: {id, author, verified, body, anchor_kind, selector, "
                     "element_text, created_at}}. Use peek_get_comments to read the existing "
-                    "comments. Requires user approval."
+                    "comments. Use peek_list_versions to find a version. Requires user approval."
                 ),
                 params=[
                     _SLUG,
@@ -273,6 +289,51 @@ class PeekConnector(Connector):
                 ],
                 read_only=False,
             ),
+            ToolSpec(
+                name="peek_list_versions",
+                description=(
+                    "List the versions of one Peek page you manage, newest first, with each "
+                    "version's size, time and link. Returns {slug, name, versions: [{version, "
+                    "size_bytes, created_at, url}]}. Use a version number with peek_get_comments "
+                    "or peek_add_comment. Auto-approved."
+                ),
+                params=[_SLUG, _REASON],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="peek_list_grants",
+                description=(
+                    "List who can open one restricted Peek page: the people and Google groups "
+                    "granted access. Returns {slug, name, visibility, grants: [{kind, email, "
+                    "created_at}]}. Grants apply only while the page is restricted. Use "
+                    "peek_grant_access and peek_revoke_access to change them. Requires user "
+                    "approval."
+                ),
+                params=[_SLUG, _REASON],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="peek_grant_access",
+                description=(
+                    "Let a person or a Google group open a restricted Peek page. Peek emails "
+                    "them the link when the page is restricted and they did not have access "
+                    "yet. Returns {slug, kind, email, notified}. Use peek_set_visibility to "
+                    "restrict the page, and peek_list_grants to see who has access. Requires "
+                    "user approval."
+                ),
+                params=[_SLUG, _EMAIL, _GRANT_KIND, _REASON],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="peek_revoke_access",
+                description=(
+                    "Remove a person's or a Google group's access to a restricted Peek page. "
+                    "Returns {slug, kind, email, removed}. Use peek_list_grants to see who "
+                    "has access. Requires user approval."
+                ),
+                params=[_SLUG, _EMAIL, _GRANT_KIND, _REASON],
+                read_only=False,
+            ),
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
@@ -292,6 +353,14 @@ class PeekConnector(Connector):
             return await self._delete_page(**args)
         if tool == "peek_rename_page":
             return await self._rename_page(**args)
+        if tool == "peek_list_versions":
+            return await self._list_versions(**args)
+        if tool == "peek_list_grants":
+            return await self._list_grants(**args)
+        if tool == "peek_grant_access":
+            return await self._grant_access(**args)
+        if tool == "peek_revoke_access":
+            return await self._revoke_access(**args)
         raise ValueError(f"Unknown Peek tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -307,6 +376,22 @@ class PeekConnector(Connector):
         self._auto_audit(
             "peek_list_pages", "List Peek Pages",
             f"List pages (max {max_results})", f"{len(result)} page(s)", t0,
+        )
+        return result
+
+    async def _list_versions(self, slug: str) -> Any:
+        _check_slug(slug)
+        t0 = time.time()
+        page = await self._fetch(self._client.get_page, slug)
+        versions = await self._fetch(self._client.list_versions, slug)
+        result = {
+            "slug": slug,
+            "name": page.name,
+            "versions": [asdict(v) for v in versions],
+        }
+        self._auto_audit(
+            "peek_list_versions", "List Peek Page Versions",
+            f"Versions of {page.name}", f"{len(versions)} version(s)", t0,
         )
         return result
 
@@ -372,6 +457,48 @@ class PeekConnector(Connector):
             preview_tables=[table] if comments else [],
             table_only=True,
             args={"slug": slug, "version": version},
+        )
+
+    async def _list_grants(self, slug: str) -> Any:
+        _check_slug(slug)
+        page = await self._fetch(self._client.get_page, slug)
+        grants = await self._fetch(self._client.list_grants, slug)
+        n = len(grants)
+        result = {
+            "slug": slug,
+            "name": page.name,
+            "visibility": page.visibility,
+            "grants": [asdict(g) for g in grants],
+        }
+        lines = [f"[{g.created_at}] {g.email} ({g.kind})" for g in grants]
+        table = {
+            "headers": ["Kind", "Email", "Added"],
+            "rows": [[g.kind, g.email, format_preview_datetime(g.created_at)] for g in grants],
+        }
+        return await gated_call(
+            connector=self.name,
+            tool="peek_list_grants",
+            tool_name="Read Peek Page Access",
+            summary=f"{n} grant(s) on {page.name}",
+            sender=page.name,
+            raw_data=grants,
+            filtered_data=result,
+            gate="review",
+            preview={
+                "Server": self._client.host,
+                "Page": page.name,
+                "Link": page.url,
+                "Visibility": page.visibility,
+            },
+            new_info={
+                "Grants": str(n),
+                "Email addresses": "The address of each person or group granted access",
+            },
+            details_text="\n".join(lines) if lines else "(no grants)",
+            pii_scan_text="\n".join(g.email for g in grants),
+            preview_tables=[table] if grants else [],
+            table_only=True,
+            args={"slug": slug},
         )
 
     async def _get_stats(self, slug: str) -> Any:
@@ -631,6 +758,68 @@ class PeekConnector(Connector):
             },
         }
 
+    async def _grant_access(self, slug: str, email: str, kind: str = "user") -> Any:
+        _check_slug(slug)
+        kind, email = _check_grant(kind, email)
+        page = await self._fetch(self._client.get_page, slug)
+        if page.visibility == "restricted":
+            details = (
+                f"{email} can open {page.url}. Peek emails them the link unless they already "
+                "had access."
+            )
+        else:
+            details = (
+                f"{email} can open {page.url} once it is restricted. It is {page.visibility} "
+                "now, so the grant changes nothing until then and no email is sent."
+            )
+        await gated_call(
+            connector=self.name,
+            tool="peek_grant_access",
+            tool_name="Grant Access to Peek Page",
+            summary=f"Let {email} open {page.name}",
+            sender=page.name,
+            raw_data={"slug": slug, "kind": kind, "email": email},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Server": self._client.host,
+                "Page": page.name,
+                "Link": page.url,
+                "Visibility": page.visibility,
+                "Grant to": f"{email} ({kind})",
+            },
+            details_text=details,
+            args={"slug": slug},
+        )
+        notified = await self._fetch(self._client.add_grant, slug, kind, email)
+        return {"slug": slug, "kind": kind, "email": email, "notified": notified}
+
+    async def _revoke_access(self, slug: str, email: str, kind: str = "user") -> Any:
+        _check_slug(slug)
+        kind, email = _check_grant(kind, email)
+        page = await self._fetch(self._client.get_page, slug)
+        await gated_call(
+            connector=self.name,
+            tool="peek_revoke_access",
+            tool_name="Revoke Access to Peek Page",
+            summary=f"Remove {email} from {page.name}",
+            sender=page.name,
+            raw_data={"slug": slug, "kind": kind, "email": email},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Server": self._client.host,
+                "Page": page.name,
+                "Link": page.url,
+                "Visibility": page.visibility,
+                "Revoke from": f"{email} ({kind})",
+            },
+            details_text=f"{email} can no longer open {page.url} while it is restricted.",
+            args={"slug": slug},
+        )
+        await self._fetch(self._client.remove_grant, slug, kind, email)
+        return {"slug": slug, "kind": kind, "email": email, "removed": True}
+
     async def _rename_page(self, slug: str, name: str) -> Any:
         _check_slug(slug)
         if not name.strip() or len(name.strip()) > 200:
@@ -722,6 +911,13 @@ class PeekConnector(Connector):
 def _check_slug(slug: str) -> None:
     try:
         validate_slug(slug)
+    except PeekClientError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _check_grant(kind: str, email: str) -> tuple[str, str]:
+    try:
+        return validate_grant(kind, email)
     except PeekClientError as exc:
         raise ValueError(str(exc)) from exc
 
