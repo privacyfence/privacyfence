@@ -49,6 +49,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A big slack_search_messages sweep no longer overflows the client's tool-result limit.** Message texts are cut at 1,500 characters and, past about 60,000 characters in total, the oldest results are dropped; a final note entry says what was left out.
 - **Peek pages publish again on current Peek servers.** peek_upload_page and peek_set_visibility use Peek's public, signed-in and restricted, and a new page is restricted unless you choose otherwise; a page password is refused with a message that says to restrict the page and grant access.
 
 ## [6.10.0] — 2026-10-27
