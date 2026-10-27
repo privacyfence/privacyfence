@@ -548,6 +548,30 @@ _ORG_SIGN_OUT_JS = """
 """
 
 
+# Org mode's "What's new" strip (ADR 0238): closing it removes it and tells the server the running
+# version's notes were seen, so it stays gone on every browser the person signs in from. The
+# server records the running version itself; the body carries only the CSRF token. It is not part
+# of _STREAM_JS, so the strip works on pages with no live updates.
+_WHATS_NEW_JS = """
+(function () {
+  var strip = document.getElementById('pf-shell-whats-new');
+  if (!strip) { return; }
+  var button = strip.querySelector('[data-whats-new-dismiss]');
+  if (!button) { return; }
+  button.addEventListener('click', function () {
+    strip.remove();
+    try {
+      fetch('/api/whats-new/seen', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({csrf: %(csrf)s})
+      });
+    } catch (e) {}
+  });
+})();
+"""
+
+
 def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
     items = []
     for key, label, href in nav_items:
@@ -598,6 +622,7 @@ def wrap(
     stream_url: str = "/api/state/stream",
     push_public_key: str = "",
     csrf: str = "",
+    whats_new_version: str = "",
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: the design files + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -605,7 +630,7 @@ def wrap(
     content's escaping, same convention web/routes_approvals.py's existing
     HTML-building routes already follow throughout this codebase.
 
-    ``active`` is one of ``"approvals"``/``"settings"`` -- which nav item
+    ``active`` is one of ``"approvals"``/``"settings"``/``"whats-new"`` -- which nav item
     renders as current. ``notifications_enabled`` is settings.yaml.
     example's ``web.notifications.enabled`` (default true) -- false turns
     off tiers 0 and 1 together (title badge, aria-live announcement,
@@ -657,6 +682,13 @@ def wrap(
     whenever ``dismissible_notice_html`` is given -- distinct notices need
     distinct keys or dismissing one silently dismisses the other too.
 
+    ``whats_new_version``: org mode's "PrivacyFence was updated to X" strip, shown right below
+    the notice when non-empty (``whats_new.pending_version``'s answer, computed by the caller).
+    Closing it posts ``csrf`` to ``/api/whats-new/seen``. Unlike ``dismissible_notice_html`` the
+    dismissal lives on the server, per person, not in ``localStorage`` per browser: one person
+    signs in from many browsers and devices (ADR 0238). It needs ``csrf``, and renders whether or
+    not ``live_updates`` is on.
+
     ``nav_items``/``principal_label``/``live_updates`` are what let org
     mode share this shell rather than serve a bare document. Local
     mode passes none of them.
@@ -701,6 +733,8 @@ def wrap(
     """
     if dismissible_notice_html and not dismissible_notice_key:
         raise ValueError("wrap(): dismissible_notice_html needs a dismissible_notice_key")
+    if whats_new_version and not csrf:
+        raise ValueError("wrap(): whats_new_version needs csrf")
     nonce = nonce or secrets.token_urlsafe(18)
     stream_script = ""
     if live_updates:
@@ -728,6 +762,19 @@ def wrap(
             '<button type="button" class="pf-shell-notice-close" data-dismiss-notice '
             'aria-label="Dismiss">&times;</button></div>'
         )
+    whats_new_strip = ""
+    whats_new_script = ""
+    if whats_new_version:
+        whats_new_strip = (
+            '<div class="pf-shell-notice" id="pf-shell-whats-new" role="status">'
+            f"<span>PrivacyFence was updated to {_html_escape(whats_new_version)}. "
+            '<a href="/whats-new">See what\'s new</a></span>'
+            '<button type="button" class="pf-shell-notice-close" data-whats-new-dismiss '
+            'aria-label="Dismiss">&times;</button></div>'
+        )
+        whats_new_script = (
+            f'<script nonce="{nonce}">{_WHATS_NEW_JS % {"csrf": json_for_script(csrf)}}</script>'
+        )
     is_org = nav_items == ORG_NAV_ITEMS
     app_links = _ORG_APP_LINKS if is_org else ""
     sign_out_script = f'<script nonce="{nonce}">{_ORG_SIGN_OUT_JS}</script>' if is_org else ""
@@ -744,11 +791,11 @@ def wrap(
 <body>
 {header_html(active, nav_items, live_html=live_html, principal_label=principal_label)}
 {banner}
-{notice}
+{notice}{whats_new_strip}
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
 <div class="pf-sr-only" id="pf-shell-announcer" aria-live="polite"></div>
-{stream_script}{sign_out_script}
+{stream_script}{sign_out_script}{whats_new_script}
 </body>
 </html>
 """

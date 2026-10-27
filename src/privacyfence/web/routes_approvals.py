@@ -107,7 +107,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import BaseRoute, Route
 
-from .. import approval_list_html, approval_window_html, deny_feedback, web_shell, webauthn_stepup
+from .. import approval_list_html, approval_window_html, deny_feedback, web_shell, webauthn_stepup, whats_new
 from ..approvals import BATCH_RESULTS, CONFIRM_RESULTS
 from ..deny_feedback import DenialFeedback
 from ..principal import Principal
@@ -468,6 +468,7 @@ def _inject_shim(html: str, shim: str) -> str:
 
 def _render_org_list_page(
     rows: list, *, csrf: str, nonce: str, principal: Principal, push_public_key: str = "",
+    whats_new_version: str = "",
 ) -> str:
     """Org mode's ``/approvals`` page, in the same shell local mode uses.
 
@@ -507,6 +508,7 @@ def _render_org_list_page(
         notifications_enabled=False,
         push_public_key=push_public_key,
         csrf=csrf,
+        whats_new_version=whats_new_version,
     )
 
 
@@ -528,6 +530,7 @@ def _build_route_list(
     unenrolled_batch_message: str | None,
     human_session_guard: Callable[[Request, str], Response | None],
     stopping: threading.Event | None = None,
+    whats_new_version_for: Callable[[Principal], str] = lambda principal: "",
 ) -> list[Route]:
     """The route list shared by both modes -- see module docstring for what
     each keyword argument covers and why it has to be mode-specific.
@@ -552,7 +555,11 @@ def _build_route_list(
             return unauthenticated_page_response(request, "/approvals")
         csrf = request.cookies.get(session_cookie_name, "")
         rows = [approval_list_html.row_from_approval(card) for card in registry.list_pending(principal.id)]
-        html = render_list_page(rows, csrf=csrf, nonce=_csp_nonce_for(request), principal=principal)
+        whats_new_version = await asyncio.to_thread(whats_new_version_for, principal)
+        html = render_list_page(
+            rows, csrf=csrf, nonce=_csp_nonce_for(request), principal=principal,
+            whats_new_version=whats_new_version,
+        )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     async def show_approval(request: Request) -> Response:
@@ -948,7 +955,10 @@ def create_app(
         # instead of stacked into the non-dismissable banner.
         return None if step_up is None else step_up.off_notice()
 
-    def _render_list_page(rows: list, *, csrf: str, nonce: str, principal: Principal) -> str:
+    def _render_list_page(
+        rows: list, *, csrf: str, nonce: str, principal: Principal, whats_new_version: str = "",
+    ) -> str:
+        del whats_new_version  # org mode only
         body = approval_list_html.build_list_html(
             rows, csrf=csrf, nonce=nonce,
             any_authed=any_connector_authenticated() if any_connector_authenticated else True,
@@ -1027,8 +1037,13 @@ def build_routes(
     def _resolve_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
 
-    def _render_list_page(rows: list, *, csrf: str, nonce: str, principal: Principal) -> str:
-        return _render_org_list_page(rows, csrf=csrf, nonce=nonce, principal=principal, push_public_key=push_public_key)
+    def _render_list_page(
+        rows: list, *, csrf: str, nonce: str, principal: Principal, whats_new_version: str = "",
+    ) -> str:
+        return _render_org_list_page(
+            rows, csrf=csrf, nonce=nonce, principal=principal, push_public_key=push_public_key,
+            whats_new_version=whats_new_version,
+        )
 
     def _unauthenticated_page(request: Request, next_path: str) -> Response:
         return RedirectResponse(
@@ -1062,6 +1077,7 @@ def build_routes(
         ),
         human_session_guard=_no_human_session_guard,
         stopping=stopping,
+        whats_new_version_for=whats_new.pending_version,
     )
 
 

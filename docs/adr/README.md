@@ -328,3 +328,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0234](0234-slack-reads-report-the-users-own-read-state.md) | Slack message reads report the user's own read state from Slack's read markers | Accepted; relates to 0226, 0227 |
 | [0235](0235-a-separate-auto-approved-tool-checks-the-read-state-of-named-messages.md) | A separate, auto-approved tool checks the read state of named Slack messages | Accepted; relates to 0234 |
 | [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198 |
+| [0237](0237-the-wheel-bundles-the-changelog-through-a-setup-py-build-hook.md) | The wheel bundles `CHANGELOG.md` through a `setup.py` build hook | Accepted; relates to 0023 |
+| [0238](0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md) | Org mode shows each person the changes since the version they last saw | Accepted; relates to 0014, 0023, 0237 |

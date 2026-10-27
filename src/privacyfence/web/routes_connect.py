@@ -63,7 +63,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell
+from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
 from ..app_credentials import telegram_app_credentials
 from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
@@ -540,6 +540,7 @@ def build_routes(
         if principal is None:
             return RedirectResponse("/login?next=/connect", status_code=302, headers={"Cache-Control": "no-store"})
         session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
+        whats_new_version = await asyncio.to_thread(whats_new.pending_version, principal)
         telegram_state = telegram_states.get(principal.id)
         html = _render_connect_page(
             principal=principal, org_config=org_config, telegram_state=telegram_state,
@@ -547,7 +548,7 @@ def build_routes(
             flash_connected=request.query_params.get("connected", ""),
             flash_error=request.query_params.get("error", ""),
             grist_error=grist_errors.get(principal.id, ""),
-            csrf=session_id, nonce=_csp_nonce_for(request),
+            csrf=session_id, nonce=_csp_nonce_for(request), whats_new_version=whats_new_version,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -1030,7 +1031,7 @@ def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str 
 def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
     flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
-    peek_state: _PeekState | None = None,
+    peek_state: _PeekState | None = None, whats_new_version: str = "",
 ) -> str:
     def offered(service: str) -> bool:  # ADR 0196: a service the org config doesn't enable is not listed
         return org_mode.connector_enabled_by_org(org_config, service)
@@ -1064,6 +1065,7 @@ def _render_connect_page(
     return web_shell.wrap(
         body, title="PrivacyFence — Connect your accounts", active="connections", nonce=nonce,
         nav_items=web_shell.ORG_NAV_ITEMS, principal_label=who, live_updates=False, notifications_enabled=False,
+        csrf=csrf, whats_new_version=whats_new_version,
     )
 
 

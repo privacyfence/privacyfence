@@ -47,6 +47,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Slack reads say what you have not read yet.** Channel history and thread reads mark each message unread, read or unknown against your own Slack read marker; a search does too when the agent asks for it with read_state, which costs one Slack request per conversation in the results. Search results now carry the thread_ts of a reply in a thread.
 - **slack_get_read_state.** A new Slack tool returns whether up to 20 specific messages are unread, read or unknown, without reading them again, so an agent checks only the messages that matter instead of every search result. Auto-approved; it returns no message text.
+- **What's new after an upgrade, in organization mode.** The first time you open PrivacyFence after your organization upgrades it, a strip under the header links to a What's new page listing the changes since the version you last used. Close the strip or open the page and it stays gone on every browser and device you sign in from.
 
 ### Changed
 
