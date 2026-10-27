@@ -169,6 +169,7 @@ PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker 
       <li>On a new server, built-in services start <strong>off</strong>. Offering the first one on the Admin page is your opt-in to the relay. Single-user mode and a desktop install start with them on.</li>
       <li>Your server then registers itself automatically by serving a token at <code>/.well-known/privacyfence-relay</code>. That proves it controls its domain. It re-registers daily, and registrations expire after 35 days without one.</li>
       <li>Needs: an <code>https://</code> address with no path, reachable from the internet at that one path, and outbound HTTPS to <code>oauth.privacyfence.eu</code>. A server behind an IP allow-list or a VPN keeps using its own apps.</li>
+      <li>Every new registration emails the maintainers at <code>info@privacyfence.eu</code> with the host, time, IP address and a ready-made revoke command. There is no waiting period. Suspicious hosts are revoked from the email.</li>
       <li>Registered host names are visible only to PrivacyFence maintainers (<code>/registrations</code> needs the maintainer token), and maintainers can revoke any host. A server's well-known token is served only once it actually needs the relay, so nobody else can register it first.</li>
       <li>Slack and Miro sign-ins don't use PKCE, so their sign-in codes pass through the relay usable. The Admin page says so on those rows. Use your own Slack or Miro app to avoid it.</li>
     </ul>
@@ -247,6 +248,12 @@ PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker 
     <div class="meta"><span>mb2-relay-worker-cloudflare</span><span>about 20 minutes</span></div>
     <ol class="steps">
       <li><label><input type="checkbox" id="mb2-0"></label><div>Check the ground. In the <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa">PrivacyFence Cloudflare account</a>, the zone <code>privacyfence.eu</code> should be <strong>Active</strong>. Then open its <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/privacyfence.eu/dns/records">DNS records</a>: there must be <strong>no</strong> record named <code>oauth</code>. Wrangler creates it as a Worker custom domain on the first deploy, and an existing record would block that.</div></li>
+      <li><label><input type="checkbox" id="mb2-email"></label><div><strong>Registration emails.</strong> The relay emails <code>info@privacyfence.eu</code> whenever a new server registers. Set up Cloudflare Email Routing on a subdomain only, so your existing <code>privacyfence.eu</code> mail is untouched:
+        <ol>
+          <li>Open the zone's <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/privacyfence.eu/email/routing/overview">Email → Email Routing</a>. Under <strong>Settings → Subdomains</strong>, add <code>relay.privacyfence.eu</code> and let Cloudflare add its MX and SPF records. Records are created for that subdomain only; check that the root <code>privacyfence.eu</code> MX records are unchanged.</li>
+          <li>Under <strong>Destination addresses</strong>, add <code>info@privacyfence.eu</code>, then click the verification link Cloudflare emails to it.</li>
+        </ol>
+        The Worker's <code>send_email</code> binding can deliver only to that verified address. The deploy token needs no extra permission.</div></li>
       <li><label><input type="checkbox" id="mb2-1"></label><div>In Cloudflare, open the account's <a href="https://dash.cloudflare.com/326657b4f70af041996d60fd6b8f83fa/api-tokens">account API tokens</a> page and create a token named <code>privacyfence-oauth-relay-deploy</code>. Give it Account: <strong>Workers Scripts Edit</strong>, and Zone: <strong>Workers Routes Edit</strong> and <strong>Zone Read</strong>. Scope the zone resources to <code>privacyfence.eu</code> and leave the expiry empty. This is the same shape as the download Worker's token in <a href="https://github.com/privacyfence/privacyfence/blob/plan/builtin-oauth-apps/docs/downloads-and-release-kpi.md#use-account-owned-api-tokens">downloads-and-release-kpi.md</a>, without the D1 and R2 permissions.</div></li>
       <li><label><input type="checkbox" id="mb2-2"></label><div>Verify it in your own terminal. Read the token from your password manager into an environment variable; don't type it into a chat. Run:<pre>curl -s -H "Authorization: Bearer $CF_TOKEN" \
   https://api.cloudflare.com/client/v4/accounts/326657b4f70af041996d60fd6b8f83fa/tokens/verify</pre>You should see <code>"status": "active"</code>.</div></li>
@@ -258,7 +265,7 @@ PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker 
           <li><code>CF_OAUTH_RELAY_REVOKE_TOKEN</code>: a new random value made with <code>openssl rand -base64 32</code> in your terminal. Keep a copy in your password manager; you need it to revoke a server.</li>
         </ul></div></li>
     </ol>
-    <p class="done-when"><strong>Done when:</strong> the <code>oauth-relay-worker</code> environment holds the three secrets, the curl above reports the token active, and there is no <code>oauth</code> DNS record yet.</p>
+    <p class="done-when"><strong>Done when:</strong> the <code>oauth-relay-worker</code> environment holds the three secrets, the curl above reports the token active, there is no <code>oauth</code> DNS record yet, <code>relay.privacyfence.eu</code> shows as an Email Routing subdomain, and <code>info@privacyfence.eu</code> is a verified destination.</p>
   </section>
 
   <section class="item" id="mb3">
@@ -305,6 +312,7 @@ curl -sI 'https://oauth.privacyfence.eu/callback/slack?state=localhost:8765~x&am
                                                              # 302, location: http://localhost:8765/oauth/callback/slack?state=...
 curl -s  'https://oauth.privacyfence.eu/callback/slack?state=unregistered.example~x&amp;code=y'
                                                              # 400 "This sign-in cannot be completed..."</pre></div></li>
+      <li><label><input type="checkbox" id="ma0-email"></label><div>Check the registration email in step 6: when your test server first registers, <code>info@privacyfence.eu</code> should receive "New PrivacyFence relay registration: &lt;host&gt;" with the time, the IP address and the revoke command. <code>/registrations</code> (with the maintainer token) should show <code>notify_failures: 0</code>.</div></li>
       <li><label><input type="checkbox" id="ma0-7"></label><div>After the pull request merges, open <a href="https://github.com/privacyfence/privacyfence/actions/workflows/deploy-oauth-relay-worker.yml">Actions → deploy-oauth-relay-worker</a>. The run on <code>main</code> should be green, including its health smoke test. Approve the <code>oauth-relay-worker</code> environment if GitHub asks you to. From then on, relay changes deploy only this way.</div></li>
     </ol>
     <p class="done-when"><strong>Report back:</strong> paste into the PR <code>ma0: relay deployed, revoke token set, smoke tests ok</code>. After the merge, add <code>workflow deploy ok</code>.</p>

@@ -1573,9 +1573,58 @@ points here.
     `cloudflare/oauth-relay/scripts/update-psl.mjs` from `public_suffix_list.dat` at a pinned
     commit, recorded in the file header.
   - Its test covers the hosts above.
-- `docs/oauth-relay.md` gains a "Review new registrations" step (weekly, from `/registrations`)
-  and a revocation turnaround (one working day after a report).
+- `docs/oauth-relay.md` gains a "Review new registrations" step: act on each SEC-23 notification
+  email, plus a weekly look at `/registrations`. It also sets a revocation turnaround of one
+  working day after a report.
 - ADRs 0239 and 0243 record this threat precisely.
+
+**SEC-23: every new registration emails the maintainers.** (p11, p13c, manual mb2, ma0) There
+is no waiting period: a new host is served at once, and the maintainers hear about it right away.
+
+- **Sending.** The Worker sends through Cloudflare Email Routing, with no third-party mail
+  provider and no API key.
+  - `wrangler.toml` has a `[[send_email]]` binding `name = "NOTIFY"` and
+    `destination_address = "info@privacyfence.eu"`. The binding can only deliver to that address,
+    which must be a verified destination in Email Routing.
+  - The sender is `relay-notify@relay.privacyfence.eu`. Email Routing is enabled on the subdomain
+    `relay.privacyfence.eu` only, so the MX records of `privacyfence.eu` and its existing mail are
+    not touched.
+- **When.**
+  - An email is sent when a host is verified for the first time, which inserts its row.
+  - Re-verification of a known host sends nothing.
+  - A hard cap of 50 notification emails per UTC day. The first registration over the cap sends
+    one email, `More new registrations today than the notification limit; see /registrations.`,
+    and the rest of that day sends none.
+- **Content.** Plain text, built by hand as an RFC 5322 message in `src/notify.ts`, with no
+  dependency.
+  - `Subject: New PrivacyFence relay registration: <host>`.
+  - The body lists:
+    - the host;
+    - the UTC time;
+    - the registering request's `CF-Connecting-IP` and `CF-IPCountry`, to judge abuse;
+    - the total count of active registrations;
+    - the revoke command, `curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H
+      "Content-Type: application/json" -d '{"host":"<host>"}'
+      https://oauth.privacyfence.eu/admin/revoke`.
+  - Headers are `From`, `To`, `Subject`, `Date`, `Message-ID` (`<uuid@relay.privacyfence.eu>`),
+    `MIME-Version`, and `Content-Type: text/plain; charset=utf-8`.
+  - The host is already validated as ASCII by the host rules, so no header injection is possible.
+    The code still refuses to send if any header value contains `\r` or `\n`.
+- **Never blocks a registration.** Sending runs in `ctx.waitUntil`. A failure is caught and
+  counted in the Durable Object (`notify_failures`, `last_notify_failure_at`). Both are shown in
+  the maintainer-only `/registrations` response, so failures are visible although the Worker
+  keeps no logs.
+- **Tests** (stub `NOTIFY` by passing `{...env, NOTIFY: stub}` to the fetch handler):
+  - a first registration sends exactly one message with the host, IP and revoke command;
+  - a re-verification sends none;
+  - the 51st first registration of a day sends the one over-the-limit message, and the 52nd
+    sends nothing;
+  - a throwing `NOTIFY` still returns 200 and increments `notify_failures`;
+  - a header value with a newline is refused.
+- **The weekly review stays** (SEC-02). The email is the prompt to act on a suspicious host the
+  same day.
+- **Privacy.** The privacy page (p13c) says the relay emails the maintainers the registering
+  server's host name, the request's IP address and country when a new server registers.
 
 **SEC-03: registration denial and storage flooding.** (p11, p5)
 
@@ -1842,8 +1891,9 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - The relay stays in the existing Cloudflare account, behind required reviewers.
   - `google_web` ships only in server builds.
   - A signed bundle locks the IdP.
-  - A delay before newly registered hosts can receive sign-ins was considered and not adopted;
-    review and revocation cover phishing hosts instead.
+  - A delay before newly registered hosts can receive sign-ins was considered and not adopted.
+    Instead, every new registration emails the maintainers (SEC-23), and review and revocation
+    cover phishing hosts.
   - Slack's and Miro's lack of PKCE through the relay is an accepted, documented risk.
 
 - **An environment-only server has no signature.** Its trust root is whoever controls the
@@ -2606,7 +2656,7 @@ phases:
 
     Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
-    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite.
+    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (the NOTIFY send_email binding, src/notify.ts, the daily cap, failure counters on /registrations, and every listed test; the runbook explains the Email Routing setup), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
@@ -2992,7 +3042,7 @@ phases:
          - 0248: keeping a signed bundle mandatory for org mode; reading every bundle key from the environment (only the IdP and server need it); mixing bundle and environment fields within the idp section.
          - 0249: the group claim only; any email claim without email_verified; the first person to sign in becomes admin.
          - 0247: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
-       - Fold in D15 where it names an ADR: 0239 (SEC-02 threat, SEC-13 rotation, SEC-22), 0241 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0243 (SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording), 0244 (SEC-01: single-user mode is no protection against an agent that can run docker), 0246 (SEC-21), 0248 (SEC-14).
+       - Fold in D15 where it names an ADR: 0239 (SEC-02 threat, SEC-13 rotation, SEC-22), 0241 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0243 (SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0244 (SEC-01: single-user mode is no protection against an agent that can run docker), 0246 (SEC-21), 0248 (SEC-14).
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
        - 0016: "Amended by [0240](...): the signature no longer covers operational settings. Amended by [0247](...): the bundle and pin file names."
@@ -3164,6 +3214,7 @@ phases:
          - processes the IP address and the request in transit;
          - stores only each registered server's host name and registration dates, visible only to PrivacyFence maintainers;
          - writes no logs (D15 SEC-15);
+         - emails the PrivacyFence maintainers the host name, the IP address and the country of the request when a new server registers (D15 SEC-23);
          - is used only by organization servers that use the built-in apps.
          The legal basis is Art. 6(1)(f), as for hosting.
        - Change "sends nothing to the project" (lines ~45-54) to name the one exception: an organization server's registration of its host name.
