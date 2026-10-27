@@ -63,7 +63,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, google_oauth, grist_auth, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
+from .. import atlassian_oauth, peek_client, peek_provisioning, google_oauth, grist_auth, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
 from ..app_credentials import telegram_app_credentials
 from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
@@ -715,9 +715,11 @@ def build_routes(
                     peek_states.set(principal.id, _dc_replace(state, error=str(exc)))
                 else:
                     if poll.status == "approved":
-                        peek_client.save_token_file(
-                            str(paths.user_dir(principal) / _token_files()["peek"]), state.base_url, poll.token,
-                        )
+                        # Shared with the provisioning worker so the two saves never interleave.
+                        with peek_provisioning.principal_lock(principal.id):
+                            peek_client.save_token_file(
+                                str(paths.user_dir(principal) / _token_files()["peek"]), state.base_url, poll.token,
+                            )
                         peek_states.clear(principal.id)
                         connector_registry.evict(principal.id)
                     elif poll.status == "pending":
@@ -962,10 +964,12 @@ def _peek_box_html(principal: Principal, org_config: dict[str, Any], peek_state:
     if not server:
         return _service_row_html(principal, org_config, "peek")
     connected = _is_connected(principal, "peek")
+    provisioned = False
     if connected:
         try:
             record = peek_client.load_token_file(str(paths.user_dir(principal) / _token_files()["peek"]))
             peek_client.resolve_server(server, record)
+            provisioned = record["source"] == "provisioned"
         except peek_client.PeekClientError:
             connected = False
     badge = _CONNECTED_BADGE if connected else '<span class="badge">Not connected</span>'
@@ -984,8 +988,13 @@ def _peek_box_html(principal: Principal, org_config: dict[str, Any], peek_state:
             '<button type="submit" class="button secondary">Cancel</button></form></div></div>'
         )
     else:
+        auto_help = (
+            '<div class="field-help">Your organization connected your Peek account automatically.</div>'
+            if provisioned else ""
+        )
         body = (
             f'<form class="pf-peek-form stack" method="post" action="/connect/peek/start">{csrf_field}'
+            f"{auto_help}"
             f'<div class="field-help">Your organization uses {_esc(server)}.</div>'
             '<div class="cluster"><button type="submit" class="button primary">'
             f'{"Reconnect" if connected else "Connect"} Peek</button></div></form>'
