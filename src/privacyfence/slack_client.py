@@ -33,6 +33,7 @@ call for every unique message author/channel a search or history fetch turns up.
 
 from __future__ import annotations
 
+import decimal
 import json
 import logging
 import os
@@ -170,6 +171,26 @@ DEFAULT_USER_SCOPES: list[str] = [
 
 class SlackClientError(Exception):
     """Raised for unrecoverable Slack client problems (auth, config, API)."""
+
+
+READ_STATE_UNREAD = "unread"
+READ_STATE_READ = "read"
+READ_STATE_UNKNOWN = "unknown"
+
+
+def message_read_state(ts: str, last_read: str, *, own: bool = False) -> str:
+    """Whether the message at ``ts`` is after the signed-in user's Slack read marker ``last_read``.
+    A message the user wrote is read. No marker, no ts, or a value that is not a Slack timestamp
+    reads as unknown."""
+    if own:
+        return READ_STATE_READ
+    if not ts or not last_read:
+        return READ_STATE_UNKNOWN
+    try:
+        unread = decimal.Decimal(ts) > decimal.Decimal(last_read)
+    except (decimal.InvalidOperation, TypeError):
+        return READ_STATE_UNKNOWN
+    return READ_STATE_UNREAD if unread else READ_STATE_READ
 
 
 def build_authorize_url(
@@ -335,6 +356,11 @@ class SlackMessage:
     attachments: list[dict[str, Any]] = field(default_factory=list)
     files: list[SlackFile] = field(default_factory=list)
     timestamp: datetime | None = None
+    # Slack's thread read marker: set only on a thread's parent message returned by
+    # conversations.replies, when the user follows the thread.
+    last_read: str = ""
+    # One of the READ_STATE_* values; "" means it was not computed.
+    read_state: str = ""
 
     def short_summary(self) -> str:
         """Human-readable one-liner for the review UI / logs."""
@@ -390,6 +416,16 @@ class SlackGroupChat:
 
     def short_summary(self) -> str:
         return f"Group DM with {', '.join(self.member_names or self.member_ids)}"
+
+
+@dataclass
+class SlackConversationState:
+    """The signed-in user's own state in one conversation, from one live conversations.info call.
+    Never cached: membership decides auto-accept rules (ADR 0226), and the read marker moves
+    whenever the user reads."""
+
+    is_member: bool = False
+    last_read: str = ""
 
 
 @dataclass
@@ -966,7 +1002,12 @@ class SlackClient:
         channel = raw.get("channel") or {}
         channel_id = channel.get("id", "")
         channel_name = channel.get("name", "") or self.resolve_channel_name(channel_id)
-        return self._parse_message(raw, channel_id, channel_name)
+        message = self._parse_message(raw, channel_id, channel_name)
+        if not message.thread_ts:
+            query = parse_qs(urlparse(raw.get("permalink") or "").query)
+            root = (query.get("thread_ts") or [""])[0]
+            message.thread_ts = "" if root == message.id else root
+        return message
 
     def _search_recent(self, query: str, count: int, cutoff: datetime) -> list[SlackMessage]:
         """Newest-first matches, at most ``count``, none older than ``cutoff``.
@@ -1672,23 +1713,29 @@ class SlackClient:
         return is_im
 
     def resolve_is_member(self, channel_id: str) -> bool:
-        """Whether the signed-in user is a member of ``channel_id`` right now, from one live
-        ``conversations.info`` call. Never cached: an auto-accept decision depends on it (ADR 0226).
-        A 1:1 DM (``is_im``) counts as membership, since a user token sees only its own DMs; any
-        other conversation needs ``is_member`` to be exactly ``True``. Reads False on an empty id,
-        an API error or an unexpected response. The same response also fills the group-DM,
+        """Whether the signed-in user is a member of ``channel_id`` right now: the ``is_member`` of
+        ``conversation_state``."""
+        return self.conversation_state(channel_id).is_member
+
+    def conversation_state(self, channel_id: str) -> SlackConversationState:
+        """The signed-in user's membership and read marker in ``channel_id`` right now, from one
+        live ``conversations.info`` call. Never cached: an auto-accept decision depends on
+        membership (ADR 0226) and the marker moves whenever the user reads. A 1:1 DM (``is_im``)
+        counts as membership, since a user token sees only its own DMs; any other conversation
+        needs ``is_member`` to be exactly ``True``. Reads as an empty state on an empty id, an API
+        error or an unexpected response. The same response also fills the group-DM,
         one-to-one-DM and IM-counterpart caches, so the connector's other channel-type checks for
         this call make no request of their own."""
         if not channel_id:
-            return False
+            return SlackConversationState()
         try:
             response = self._client.conversations_info(channel=channel_id)
         except SlackApiError as exc:
-            logger.debug("Could not resolve membership for %s: %s", channel_id, exc)
-            return False
+            logger.debug("Could not resolve conversation state for %s: %s", channel_id, exc)
+            return SlackConversationState()
         channel = response.get("channel")
         if not isinstance(channel, dict):
-            return False
+            return SlackConversationState()
         is_im = channel.get("is_im") is True
         self._channel_is_mpim_cache[channel_id] = channel.get("is_mpim") is True
         if channel_id.startswith("D"):
@@ -1696,7 +1743,41 @@ class SlackClient:
             self._im_counterpart_cache[channel_id] = (
                 str(channel.get("user") or "") if is_im else ""
             )
-        return is_im or channel.get("is_member") is True
+        return SlackConversationState(
+            is_member=is_im or channel.get("is_member") is True,
+            last_read=str(channel.get("last_read") or ""),
+        )
+
+    def last_read_markers(self, channel_ids: list[str]) -> dict[str, str]:
+        """The signed-in user's read marker per conversation, one live ``conversations.info`` call
+        for each distinct non-empty id. A conversation with no marker maps to ""."""
+        ids = list(dict.fromkeys(cid for cid in channel_ids if cid))
+        markers = _map_concurrent(ids, lambda cid: self.conversation_state(cid).last_read)
+        return dict(zip(ids, markers, strict=True))
+
+    def thread_last_read(self, channel_id: str, thread_ts: str) -> str:
+        """The signed-in user's read marker for one thread, from the thread parent's ``last_read``
+        in a single ``conversations.replies`` call. Slack sets it only when the user follows the
+        thread. Never cached; reads "" on an empty argument, an API error or no parent."""
+        if not channel_id or not thread_ts:
+            return ""
+        try:
+            response = self._client.conversations_replies(channel=channel_id, ts=thread_ts, limit=1)
+        except SlackApiError as exc:
+            logger.debug("Could not resolve thread read marker for %s/%s: %s", channel_id, thread_ts, exc)
+            return ""
+        for raw in response.get("messages") or []:
+            if raw.get("ts") == thread_ts:
+                return str(raw.get("last_read") or "")
+        return ""
+
+    def thread_last_read_markers(
+        self, threads: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        """``thread_last_read`` for each distinct ``(channel_id, thread_ts)`` pair."""
+        pairs = list(dict.fromkeys(threads))
+        markers = _map_concurrent(pairs, lambda t: self.thread_last_read(t[0], t[1]))
+        return dict(zip(pairs, markers, strict=True))
 
     def my_conversation_ids(self) -> frozenset[str] | None:
         """The id of every conversation (public and private channels, group DMs, 1:1 DMs) the
@@ -2039,6 +2120,7 @@ class SlackClient:
             attachments=raw.get("attachments", []) or [],
             files=files,
             timestamp=self._parse_ts(ts),
+            last_read=str(raw.get("last_read") or ""),
         )
 
     @staticmethod

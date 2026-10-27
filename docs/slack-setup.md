@@ -41,8 +41,8 @@ Slack limits each method by tier (requests per minute). The methods PrivacyFence
 
 | Method | Tier | Used for |
 |---|---|---|
-| `conversations.history`, `conversations.replies` | Tier 3 (50/min); 1/min and 15 messages for an app distributed outside the Marketplace | channel history, thread replies |
-| `conversations.info` | Tier 3 (50/min) | channel type and membership |
+| `conversations.history`, `conversations.replies` | Tier 3 (50/min); 1/min and 15 messages for an app distributed outside the Marketplace | channel history, thread replies and a thread's read marker |
+| `conversations.info` | Tier 3 (50/min) | channel type, membership and your read marker |
 | `users.conversations` | Tier 3 (50/min) | the conversations you are a member of |
 | `search.messages` | Tier 2 (20/min), at most 100 matches per page | search |
 | `conversations.list` | Tier 2 (20/min) | the channel, DM and group chat listings |
@@ -54,14 +54,36 @@ conversations on an internal app and about 50 minutes on a distributed one. Each
 1. Calls `slack_search_messages` with `minutes` set to the time since the last run, `member_only`
    true, `exclude_channels` set to the ids the "Slack — conversations I'm a member of" rule excludes,
    and `count` 100. This costs one `users.conversations` walk (one request per 200 conversations)
-   and 1–3 `search.messages` requests.
+   and 1–3 `search.messages` requests. Add `read_state` true only when the run needs read state for
+   most results: it costs one `conversations.info` request per conversation in the results.
+   Otherwise call `slack_get_read_state` afterwards for the few messages that matter (at most 20, at
+   most 3 threads).
 2. Calls `slack_get_thread_replies` for a result whose thread needs context. This costs one
-   `conversations.replies` and one `conversations.info` request.
+   `conversations.replies` and one `conversations.info` request. Its replies come back with
+   `read_state` from the thread's own marker.
 3. Uses `slack_get_channel_history` with `minutes` only for a conversation where the search-index
    delay matters.
 
 On an app distributed outside the Marketplace, step 2 is limited to 1 request per minute. See
 [ADR 0227](adr/0227-member-only-slack-search-drops-other-conversations-before-the-gate.md).
+
+## Read state
+
+`read_state` is `unread`, `read` or `unknown`, judged against your own Slack read marker for the
+conversation. A message you wrote is `read`. `unknown` means there is no marker to judge by.
+
+A thread reply in search results is `unknown`: Slack tracks the read marker of a thread separately
+from the channel's, and a search result does not carry it. `slack_get_thread_replies` and
+`slack_get_read_state` read the thread's own marker.
+
+These tools return it:
+
+- `slack_get_channel_history` and `slack_get_thread_replies`, on every message, with no extra request.
+- `slack_search_messages`, only with `read_state` true.
+- `slack_get_read_state`, for up to 20 messages you name, and no message text.
+
+See [ADR 0234](adr/0234-slack-reads-report-the-users-own-read-state.md) and
+[ADR 0235](adr/0235-a-separate-auto-approved-tool-checks-the-read-state-of-named-messages.md).
 
 ## Values
 

@@ -325,4 +325,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0231](0231-the-miro-connector-reads-adds-and-changes-and-never-deletes.md) | The Miro connector reads, adds and changes, and never deletes | Accepted; relates to 0089, 0145 |
 | [0232](0232-miro-rules-are-per-board-and-set-from-settings-not-the-card.md) | Miro auto-accept rules are per board and are set on Settings, never from the approval card | Accepted; relates to 0077, 0144, 0204, 0228 |
 | [0233](0233-a-miro-write-covers-a-batch-of-up-to-twenty-under-one-card.md) | A Miro write covers a batch of up to twenty items or connector lines under one approval card | Accepted; relates to 0231 |
+| [0234](0234-slack-reads-report-the-users-own-read-state.md) | Slack message reads report the user's own read state from Slack's read markers | Accepted; relates to 0226, 0227 |
+| [0235](0235-a-separate-auto-approved-tool-checks-the-read-state-of-named-messages.md) | A separate, auto-approved tool checks the read state of named Slack messages | Accepted; relates to 0234 |
 | [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198 |
