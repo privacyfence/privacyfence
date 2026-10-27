@@ -13,10 +13,13 @@ from privacyfence.peek_client import (
     PeekClient,
     PeekClientError,
     PeekComment,
+    PeekGrant,
     PeekPage,
     PeekRenameResult,
     PeekStats,
     PeekUploadResult,
+    PeekVersion,
+    PeekVisibilityResult,
     PeekVisit,
 )
 
@@ -37,7 +40,7 @@ def make_connector():
 
 def make_page(slug: str, created_at: str = "2026-01-01T00:00:00Z") -> PeekPage:
     return PeekPage(
-        slug=slug, name=f"{slug}.html", owner="ann", size_bytes=120, visibility="private",
+        slug=slug, name=f"{slug}.html", owner="ann", size_bytes=120, visibility="signed-in",
         url=f"https://peek.example.com/p/{slug}", created_at=created_at, version=2,
     )
 
@@ -82,8 +85,12 @@ PEEK_SIBLINGS: dict[str, tuple[str, ...]] = {
     "peek_get_comments": ("peek_add_comment",),
     "peek_get_stats": ("peek_get_comments",),
     "peek_upload_page": ("peek_set_visibility",),
-    "peek_set_visibility": ("peek_upload_page",),
-    "peek_add_comment": ("peek_get_comments",),
+    "peek_set_visibility": ("peek_upload_page", "peek_grant_access"),
+    "peek_add_comment": ("peek_get_comments", "peek_list_versions"),
+    "peek_list_versions": ("peek_get_comments",),
+    "peek_list_grants": ("peek_grant_access", "peek_revoke_access"),
+    "peek_grant_access": ("peek_set_visibility", "peek_list_grants"),
+    "peek_revoke_access": ("peek_list_grants",),
     "peek_delete_page": ("peek_list_pages",),
     "peek_rename_page": ("peek_list_pages",),
 }
@@ -135,10 +142,10 @@ class TestListPages:
             await connector.call("peek_list_pages", {})
 
 
-def make_comment(kind="page", selector="", element_text="", body="Looks good", cid=1):
+def make_comment(kind="page", selector="", element_text="", body="Looks good", cid=1, verified=False):
     return PeekComment(
         id=cid, author="bob", body=body, anchor_kind=kind, selector=selector,
-        element_text=element_text, created_at="2026-10-10T11:07:00Z", version=2,
+        element_text=element_text, created_at="2026-10-10T11:07:00Z", version=2, verified=verified,
     )
 
 
@@ -163,11 +170,26 @@ class TestGetComments:
         assert "bob (Element #hero): Fix the title" in call["details_text"]
         assert "Text \u201cQuoted\u201d" in call["details_text"]
         assert call["pii_scan_text"] == "Fix the title\nTypo here\nQuoted"
-        assert call["preview_tables"][0]["headers"] == ["Author", "Date", "Anchored to", "Comment"]
+        assert call["preview_tables"][0]["headers"] == [
+            "Author", "Signed in", "Date", "Anchored to", "Comment",
+        ]
+        assert [row[1] for row in call["preview_tables"][0]["rows"]] == ["no", "no"]
         assert call["table_only"] is True
         assert call["args"] == {"slug": "slug1", "version": 0}
         assert result["version"] == 2
         assert [c["id"] for c in result["comments"]] == [1, 2]
+
+    async def test_get_comments_returns_verified_and_signed_in_column(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("slug1")
+        client.get_comments.return_value = [
+            make_comment(cid=1, verified=True), make_comment(cid=2, verified=False),
+        ]
+
+        result = await connector.call("peek_get_comments", {"slug": "slug1"})
+
+        assert [c["verified"] for c in result["comments"]] == [True, False]
+        assert [row[1] for row in gated_call_spy[0]["preview_tables"][0]["rows"]] == ["yes", "no"]
 
     async def test_earlier_version(self, gated_call_spy):
         connector, client = make_connector()
@@ -203,7 +225,7 @@ class TestGetComments:
         await connector.call("peek_get_comments", {"slug": "slug1"})
 
         assert expected in gated_call_spy[0]["details_text"]
-        assert gated_call_spy[0]["preview_tables"][0]["rows"][0][2] == expected
+        assert gated_call_spy[0]["preview_tables"][0]["rows"][0][3] == expected
 
     async def test_negative_version_raises(self, gated_call_spy):
         connector, client = make_connector()
@@ -277,7 +299,7 @@ class TestGetStats:
 
 def _upload_result() -> PeekUploadResult:
     return PeekUploadResult(
-        "new1", "https://peek.example.com/p/new1", "private", 1,
+        "new1", "https://peek.example.com/p/new1", "restricted", 1,
         "https://peek.example.com/p/new1/v/1",
     )
 
@@ -313,14 +335,14 @@ class TestUploadPage:
 
         assert result == {
             "slug": "new1", "url": "https://peek.example.com/p/new1",
-            "visibility": "private", "version": 1,
+            "visibility": "restricted", "version": 1,
             "version_url": "https://peek.example.com/p/new1/v/1",
         }
         call = gated_call_spy[0]
         assert call["gate"] == "popup"
         assert call["tool"] == "peek_upload_page"
         assert call["preview"] == {
-            "Server": "peek.example.com", "Name": "r.html", "Visibility": "private",
+            "Server": "peek.example.com", "Name": "r.html", "Visibility": "restricted",
             "Size": f"{len(html):,} bytes",
         }
         head, _, source = call["details_text"].partition("--- HTML source")
@@ -330,23 +352,47 @@ class TestUploadPage:
         for field in ("preview", "args", "raw_data"):
             assert "<h1>" not in repr(call[field])
         client.upload_page.assert_called_once_with(
-            html.encode(), "r.html", "private", "", slug="",
+            html.encode(), "r.html", "restricted", slug="",
         )
 
-    async def test_password_visibility_hides_password(self, gated_call_spy, fake_local_files):
+    async def test_upload_defaults_to_restricted(self, gated_call_spy, fake_local_files):
         connector, client = make_connector()
         client.upload_page.return_value = _upload_result()
 
-        await connector.call("peek_upload_page", {
-            "html": "<p>x</p>", "visibility": "password", "password": "s3cret",
-        })
+        await connector.call("peek_upload_page", {"html": "<p>x</p>"})
 
-        call = gated_call_spy[0]
-        assert call["preview"]["Password"] == "Set (not shown)"
-        assert list(call["preview"]) == ["Server", "Name", "Visibility", "Size", "Password"]
-        for field in ("preview", "args", "raw_data", "details_text"):
-            assert "s3cret" not in repr(call[field])
-        assert client.upload_page.call_args.args[3] == "s3cret"
+        assert gated_call_spy[0]["preview"]["Visibility"] == "restricted"
+        assert gated_call_spy[0]["args"]["visibility"] == "restricted"
+        assert client.upload_page.call_args.args[2] == "restricted"
+
+    async def test_upload_private_is_published_as_signed_in(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+        client.upload_page.return_value = _upload_result()
+
+        await connector.call("peek_upload_page", {"html": "<p>x</p>", "visibility": "private"})
+
+        assert gated_call_spy[0]["preview"]["Visibility"] == "signed-in"
+        assert client.upload_page.call_args.args[2] == "signed-in"
+
+    async def test_upload_password_keyword_is_refused(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="Peek no longer has page passwords"):
+            await connector.call("peek_upload_page", {
+                "html": "<p>x</p>", "visibility": "restricted", "password": "s3cret",
+            })
+
+        assert gated_call_spy == []
+        client.upload_page.assert_not_called()
+
+    async def test_upload_name_over_200_characters_is_refused(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="name must be 1 to 200 characters."):
+            await connector.call("peek_upload_page", {"html": "<p>x</p>", "name": "n" * 201})
+
+        assert gated_call_spy == []
+        client.upload_page.assert_not_called()
 
     async def test_new_version(self, gated_call_spy, fake_local_files):
         connector, client = make_connector()
@@ -360,17 +406,16 @@ class TestUploadPage:
             "Server", "Page", "Link", "New version", "Visibility", "Size",
         ]
         assert call["preview"]["New version"] == "3"
-        assert call["preview"]["Visibility"] == "private (unchanged)"
+        assert call["preview"]["Visibility"] == "signed-in (unchanged)"
         assert call["args"]["slug"] == "slug1"
-        assert client.upload_page.call_args.args[2:4] == ("", "")
+        assert client.upload_page.call_args.args[2] == ""
         assert client.upload_page.call_args.kwargs == {"slug": "slug1"}
 
-    @pytest.mark.parametrize("extra", [{"visibility": "public"}, {"password": "pw"}])
-    async def test_slug_with_visibility_or_password(self, gated_call_spy, extra):
+    async def test_slug_with_visibility(self, gated_call_spy):
         connector, client = make_connector()
         with pytest.raises(ValueError, match="A new version keeps the page's visibility"):
             await connector.call(
-                "peek_upload_page", {"html": "<p>x</p>", "slug": "slug1", **extra},
+                "peek_upload_page", {"html": "<p>x</p>", "slug": "slug1", "visibility": "public"},
             )
         client.get_page.assert_not_called()
         assert gated_call_spy == []
@@ -449,15 +494,9 @@ class TestUploadPage:
     @pytest.mark.parametrize("args, message", [
         ({}, "give exactly one of html, local_path and upload_id"),
         ({"html": "<p>x</p>", "upload_id": "a"}, "give exactly one of"),
-        ({"html": "<p>x</p>", "visibility": "restricted"}, "visibility must be public"),
-        ({"html": "<p>x</p>", "visibility": "secret"}, "visibility must be public"),
-        ({"html": "<p>x</p>", "visibility": "password"}, "A password is required"),
-        ({"html": "<p>x</p>", "visibility": "public", "password": "p"},
-         "password must be empty unless"),
-        ({"html": "<p>x</p>", "visibility": "password", "password": "p" * 73},
-         "72 bytes or fewer"),
-        ({"html": "<p>x</p>", "visibility": "password", "password": " p"},
-         "must not start or end with a space"),
+        ({"html": "<p>x</p>", "visibility": "secret"}, "visibility must be public, signed-in or restricted."),
+        ({"html": "<p>x</p>", "visibility": "password"}, "Peek no longer has page passwords"),
+        ({"html": "<p>x</p>", "slug": "slug1", "password": "p"}, "Peek no longer has page passwords"),
         ({"html": "x" * (10 * 1024 * 1024 + 1)}, "larger than 10 MB"),
         ({"html": "<p>x</p>", "slug": "a b"}, "Not a Peek page slug"),
     ])
@@ -492,7 +531,7 @@ class TestUploadPage:
 
 
 def _comment_result() -> PeekComment:
-    return PeekComment(7, "ann", "Thanks", "element", "#a", "", "2026-10-10T11:07:00Z", 0)
+    return PeekComment(7, "ann", "Thanks", "element", "#a", "", "2026-10-10T11:07:00Z", 0, True)
 
 
 def _expect_gate_then_write(spy, write_mock):
@@ -521,45 +560,55 @@ async def _assert_write_needs_gate(monkeypatch, connector, write, tool, args):
     write.assert_not_called()
 
 
+def _set_visibility_result(visibility="public", notified=False):
+    return PeekVisibilityResult(visibility, notified)
+
+
 class TestSetVisibility:
     async def test_public(self, gated_call_spy):
         connector, client = make_connector()
         client.get_page.return_value = make_page("s1")
-        client.set_visibility.return_value = "public"
+        client.set_visibility.return_value = _set_visibility_result("public")
 
         result = await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "public"})
 
-        assert result == {"slug": "s1", "visibility": "public"}
+        assert result == {"slug": "s1", "visibility": "public", "notified": False}
         call = gated_call_spy[0]
         assert call["gate"] == "popup" and call["tool"] == "peek_set_visibility"
         assert call["preview"] == {
             "Server": "peek.example.com", "Page": "s1.html",
-            "Link": "https://peek.example.com/p/s1", "Visibility": "private \u2192 public",
+            "Link": "https://peek.example.com/p/s1", "Visibility": "signed-in \u2192 public",
         }
-        client.set_visibility.assert_called_once_with("s1", "public", "")
+        assert call["details_text"] == (
+            "Who can open https://peek.example.com/p/s1 changes from signed-in to public."
+        )
+        client.set_visibility.assert_called_once_with("s1", "public")
 
-    async def test_password_never_shown(self, gated_call_spy):
+    async def test_set_visibility_returns_notified(self, gated_call_spy):
         connector, client = make_connector()
         client.get_page.return_value = make_page("s1")
-        client.set_visibility.return_value = "password"
+        client.set_visibility.return_value = _set_visibility_result("restricted", True)
 
-        await connector.call(
-            "peek_set_visibility",
-            {"slug": "s1", "visibility": "password", "password": "s3cret"},
-        )
+        result = await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "restricted"})
 
-        call = gated_call_spy[0]
-        assert call["preview"]["Password"] == "Set (not shown)"
-        assert "s3cret" not in repr(call)
-        assert client.set_visibility.call_args.args == ("s1", "password", "s3cret")
+        assert result == {"slug": "s1", "visibility": "restricted", "notified": True}
+
+    async def test_set_visibility_password_keyword_is_refused(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="Peek no longer has page passwords"):
+            await connector.call(
+                "peek_set_visibility",
+                {"slug": "s1", "visibility": "restricted", "password": "s3cret"},
+            )
+
+        assert gated_call_spy == []
+        client.get_page.assert_not_called()
+        client.set_visibility.assert_not_called()
 
     @pytest.mark.parametrize("args, message", [
-        ({"visibility": "restricted"}, "visibility must be public, password or private."),
-        ({"visibility": "x"}, "visibility must be public, password or private."),
-        ({"visibility": "password"}, "A password is required"),
-        ({"visibility": "public", "password": "p"}, "password must be empty"),
-        ({"visibility": "password", "password": "x" * 73}, "72 bytes or fewer"),
-        ({"visibility": "password", "password": " p"}, "start or end with a space"),
+        ({"visibility": "x"}, "visibility must be public, signed-in or restricted."),
+        ({"visibility": "password"}, "Peek no longer has page passwords"),
     ])
     async def test_validation(self, gated_call_spy, args, message):
         connector, client = make_connector()
@@ -568,16 +617,68 @@ class TestSetVisibility:
         assert gated_call_spy == []
         client.get_page.assert_not_called()
 
-    async def test_restricted_page_refused(self, gated_call_spy):
+    async def test_private_is_set_as_signed_in(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.set_visibility.return_value = _set_visibility_result("signed-in")
+
+        await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "private"})
+
+        client.set_visibility.assert_called_once_with("s1", "signed-in")
+
+    async def test_set_visibility_changes_a_restricted_page(self, gated_call_spy):
         connector, client = make_connector()
         client.get_page.return_value = PeekPage(
             "s1", "S", "ann", 1, "restricted", "https://peek.example.com/p/s1",
             "2026-01-01T00:00:00Z", 1,
         )
-        with pytest.raises(ValueError, match="restricted to people granted access"):
-            await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "public"})
-        assert gated_call_spy == []
-        client.set_visibility.assert_not_called()
+        client.set_visibility.return_value = _set_visibility_result("public")
+
+        result = await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "public"})
+
+        assert result["visibility"] == "public"
+        assert gated_call_spy[0]["preview"]["Visibility"] == "restricted \u2192 public"
+        client.set_visibility.assert_called_once_with("s1", "public")
+
+    async def test_set_visibility_to_restricted_explains_emails(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.set_visibility.return_value = _set_visibility_result("restricted", True)
+
+        await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "restricted"})
+
+        details = gated_call_spy[0]["details_text"]
+        assert "Only you, Peek admins and the people granted access can open it." in details
+        assert "Peek emails the link to everyone already granted access." in details
+
+    async def test_no_email_line_when_already_restricted(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.get_page.return_value = PeekPage(
+            "s1", "S", "ann", 1, "restricted", "https://peek.example.com/p/s1",
+            "2026-01-01T00:00:00Z", 1,
+        )
+        client.set_visibility.return_value = _set_visibility_result("restricted")
+
+        await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "restricted"})
+
+        assert "Peek emails" not in gated_call_spy[0]["details_text"]
+        assert "no longer limited" not in gated_call_spy[0]["details_text"]
+
+    async def test_set_visibility_from_restricted_keeps_grants_text(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = PeekPage(
+            "s1", "S", "ann", 1, "restricted", "https://peek.example.com/p/s1",
+            "2026-01-01T00:00:00Z", 1,
+        )
+        client.set_visibility.return_value = _set_visibility_result("signed-in")
+
+        await connector.call("peek_set_visibility", {"slug": "s1", "visibility": "signed-in"})
+
+        assert (
+            "The page is no longer limited to the people granted access. Their grants stay and "
+            "apply again if the page is restricted later."
+        ) in gated_call_spy[0]["details_text"]
 
     async def test_stops_before_gate(self, gated_call_spy):
         connector, client = make_connector()
@@ -619,13 +720,59 @@ class TestAddComment:
         assert result == {
             "slug": "s1", "version": 2,
             "comment": {
-                "id": 7, "author": "ann", "body": "Thanks", "anchor_kind": "element",
+                "id": 7, "author": "ann", "verified": True, "body": "Thanks",
+                "anchor_kind": "element",
                 "selector": "#a", "element_text": "", "created_at": "2026-10-10T11:07:00Z",
             },
         }
         client.add_comment.assert_called_once_with(
-            "s1", "Nice", extra.get("selector", ""), extra.get("element_text", ""),
+            "s1", "Nice", extra.get("selector", ""), extra.get("element_text", ""), 0,
         )
+
+    async def test_add_comment_on_a_version(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.add_comment.return_value = _comment_result()
+
+        result = await connector.call("peek_add_comment", {"slug": "s1", "body": "Nice", "version": 1})
+
+        assert gated_call_spy[0]["preview"]["Version"] == "1"
+        assert result["version"] == 1
+        client.add_comment.assert_called_once_with("s1", "Nice", "", "", 1)
+
+    async def test_add_comment_version_above_latest_is_refused_before_the_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+
+        with pytest.raises(ValueError, match="This page's latest version is 2."):
+            await connector.call("peek_add_comment", {"slug": "s1", "body": "Nice", "version": 3})
+
+        assert gated_call_spy == []
+        client.add_comment.assert_not_called()
+
+    async def test_add_comment_negative_version_is_refused(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="version must be 0"):
+            await connector.call("peek_add_comment", {"slug": "s1", "body": "Nice", "version": -1})
+        client.get_page.assert_not_called()
+
+    async def test_add_comment_result_has_verified(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.add_comment.return_value = _comment_result()
+
+        result = await connector.call("peek_add_comment", {"slug": "s1", "body": "Nice"})
+
+        assert result["comment"]["verified"] is True
+
+    async def test_add_comment_limits_are_bytes(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.add_comment.return_value = _comment_result()
+
+        await connector.call("peek_add_comment", {"slug": "s1", "body": "\u00e9" * 1500})
+        with pytest.raises(ValueError, match=r"body must be 1 to 4000 bytes \(UTF-8\)."):
+            await connector.call("peek_add_comment", {"slug": "s1", "body": "\u00e9" * 2001})
 
     async def test_long_body_summary_is_cut(self, gated_call_spy):
         connector, client = make_connector()
@@ -635,11 +782,11 @@ class TestAddComment:
         assert gated_call_spy[0]["summary"] == "Comment on s1.html: " + "b" * 80 + "\u2026"
 
     @pytest.mark.parametrize("args, message", [
-        ({"body": "  "}, "body must be 1 to 4000 characters."),
-        ({"body": "x" * 4001}, "body must be 1 to 4000 characters."),
-        ({"body": "x", "selector": "s" * 501}, "selector must be 500 characters or fewer."),
+        ({"body": "  "}, r"body must be 1 to 4000 bytes \(UTF-8\)."),
+        ({"body": "x" * 4001}, r"body must be 1 to 4000 bytes \(UTF-8\)."),
+        ({"body": "x", "selector": "s" * 501}, r"selector must be 500 bytes or fewer \(UTF-8\)."),
         ({"body": "x", "selector": "a", "element_text": "t" * 201},
-         "element_text must be 200 characters or fewer."),
+         r"element_text must be 200 bytes or fewer \(UTF-8\)."),
         ({"body": "x", "element_text": "t"}, "element_text needs a selector."),
     ])
     async def test_validation(self, gated_call_spy, args, message):
@@ -709,6 +856,245 @@ class TestRenamePage:
         )
 
 
+def make_restricted_page(slug: str) -> PeekPage:
+    return PeekPage(
+        slug=slug, name=f"{slug}.html", owner="ann", size_bytes=120, visibility="restricted",
+        url=f"https://peek.example.com/p/{slug}", created_at="2026-01-01T00:00:00Z", version=2,
+    )
+
+
+class TestListVersions:
+    async def test_returns_versions_without_gating_and_audits(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("s1")
+        client.list_versions.return_value = [
+            PeekVersion(2, 300, "2026-10-11T00:00:00Z", "https://peek.example.com/p/s1/v/2"),
+            PeekVersion(1, 120, "2026-10-10T00:00:00Z", "https://peek.example.com/p/s1/v/1"),
+        ]
+
+        result = await connector.call("peek_list_versions", {"slug": "s1"})
+
+        assert result["slug"] == "s1"
+        assert result["name"] == "s1.html"
+        assert [v["version"] for v in result["versions"]] == [2, 1]
+        assert set(result["versions"][0]) == {"version", "size_bytes", "created_at", "url"}
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(entries) == 1
+        assert '"decision": "auto_accepted"' in entries[0]
+        assert '"tool": "peek_list_versions"' in entries[0]
+        assert "2 version(s)" in entries[0]
+
+    async def test_bad_slug_and_client_error(self):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="Not a Peek page slug"):
+            await connector.call("peek_list_versions", {"slug": "a b"})
+        client.get_page.side_effect = PeekClientError("nope")
+        with pytest.raises(RuntimeError, match="nope"):
+            await connector.call("peek_list_versions", {"slug": "s1"})
+
+
+class TestListGrants:
+    async def test_gates_and_returns_grants(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.list_grants.return_value = [
+            PeekGrant("group", "team@example.com", "2026-10-10T11:07:00Z"),
+            PeekGrant("user", "bob@example.com", "2026-10-11T11:07:00Z"),
+        ]
+
+        result = await connector.call("peek_list_grants", {"slug": "s1"})
+
+        assert result == {
+            "slug": "s1",
+            "name": "s1.html",
+            "visibility": "restricted",
+            "grants": [
+                {"kind": "group", "email": "team@example.com", "created_at": "2026-10-10T11:07:00Z"},
+                {"kind": "user", "email": "bob@example.com", "created_at": "2026-10-11T11:07:00Z"},
+            ],
+        }
+        call = gated_call_spy[0]
+        assert call["gate"] == "review"
+        assert call["tool_name"] == "Read Peek Page Access"
+        assert call["summary"] == "2 grant(s) on s1.html"
+        assert list(call["preview"]) == ["Server", "Page", "Link", "Visibility"]
+        assert list(call["new_info"]) == ["Grants", "Email addresses"]
+        assert call["table_only"] is True
+        assert call["args"] == {"slug": "s1"}
+        assert call["pii_scan_text"] == "team@example.com\nbob@example.com"
+        assert call["preview_tables"][0]["headers"] == ["Kind", "Email", "Added"]
+        assert len(call["preview_tables"][0]["rows"]) == 2
+        assert "bob@example.com (user)" in call["details_text"]
+
+    async def test_no_grants(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.list_grants.return_value = []
+
+        result = await connector.call("peek_list_grants", {"slug": "s1"})
+
+        assert result["grants"] == []
+        call = gated_call_spy[0]
+        assert call["details_text"] == "(no grants)"
+        assert call["preview_tables"] == []
+
+    async def test_bad_slug_and_client_error(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="Not a Peek page slug"):
+            await connector.call("peek_list_grants", {"slug": "a b"})
+        client.get_page.side_effect = PeekClientError("nope")
+        with pytest.raises(RuntimeError, match="nope"):
+            await connector.call("peek_list_grants", {"slug": "s1"})
+        assert gated_call_spy == []
+
+
+class TestGrantAccess:
+    async def test_grant_on_a_restricted_page(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.add_grant.return_value = True
+
+        result = await connector.call(
+            "peek_grant_access", {"slug": "s1", "email": " Bob@Example.com "},
+        )
+
+        assert result == {"slug": "s1", "kind": "user", "email": "bob@example.com", "notified": True}
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup"
+        assert call["tool_name"] == "Grant Access to Peek Page"
+        assert call["summary"] == "Let bob@example.com open s1.html"
+        assert list(call["preview"]) == ["Server", "Page", "Link", "Visibility", "Grant to"]
+        assert call["preview"]["Grant to"] == "bob@example.com (user)"
+        assert call["details_text"] == (
+            "bob@example.com can open https://peek.example.com/p/s1. Peek emails them the link "
+            "unless they already had access."
+        )
+        assert call["args"] == {"slug": "s1"}
+        client.add_grant.assert_called_once_with("s1", "user", "bob@example.com")
+
+    async def test_grant_on_a_public_page_says_nothing_changes_yet(self, gated_call_spy):
+        connector, client = make_connector()
+        page = make_page("s1")
+        client.get_page.return_value = PeekPage(
+            page.slug, page.name, page.owner, page.size_bytes, "public", page.url,
+            page.created_at, page.version,
+        )
+        client.add_grant.return_value = False
+
+        result = await connector.call(
+            "peek_grant_access", {"slug": "s1", "email": "team@example.com", "kind": "group"},
+        )
+
+        assert result["notified"] is False
+        assert result["kind"] == "group"
+        assert gated_call_spy[0]["details_text"] == (
+            "team@example.com can open https://peek.example.com/p/s1 once it is restricted. "
+            "It is public now, so the grant changes nothing until then and no email is sent."
+        )
+        client.add_grant.assert_called_once_with("s1", "group", "team@example.com")
+
+    @pytest.mark.parametrize(
+        ("kind", "email", "message"),
+        [
+            ("user", "nobody", "Enter one email address"),
+            ("user", "a@b@c", "Enter one email address"),
+            ("team", "a@b.c", "kind must be user or group."),
+        ],
+    )
+    async def test_invalid_grant_is_refused_before_the_gate(
+        self, gated_call_spy, kind, email, message,
+    ):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match=message):
+            await connector.call(
+                "peek_grant_access", {"slug": "s1", "email": email, "kind": kind},
+            )
+        assert gated_call_spy == []
+        client.get_page.assert_not_called()
+        client.add_grant.assert_not_called()
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_grant_access",
+            {"slug": "s1", "email": "bob@example.com"}, client.add_grant,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.add_grant, "peek_grant_access",
+            {"slug": "s1", "email": "bob@example.com"},
+        )
+
+    async def test_group_lookup_error_surfaces(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.add_grant.side_effect = PeekClientError("This Peek server cannot check Google group")
+        with pytest.raises(RuntimeError, match="cannot check Google group"):
+            await connector.call(
+                "peek_grant_access", {"slug": "s1", "email": "t@example.com", "kind": "group"},
+            )
+
+
+class TestRevokeAccess:
+    async def test_revoke(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+
+        result = await connector.call(
+            "peek_revoke_access", {"slug": "s1", "email": "Bob@Example.com"},
+        )
+
+        assert result == {"slug": "s1", "kind": "user", "email": "bob@example.com", "removed": True}
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup"
+        assert call["tool_name"] == "Revoke Access to Peek Page"
+        assert call["summary"] == "Remove bob@example.com from s1.html"
+        assert list(call["preview"]) == ["Server", "Page", "Link", "Visibility", "Revoke from"]
+        assert call["preview"]["Revoke from"] == "bob@example.com (user)"
+        assert call["details_text"] == (
+            "bob@example.com can no longer open https://peek.example.com/p/s1 while it is "
+            "restricted."
+        )
+        client.remove_grant.assert_called_once_with("s1", "user", "bob@example.com")
+
+    async def test_revoke_unknown_grant_message(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        client.remove_grant.side_effect = PeekClientError(
+            "Peek has no such grant on this page (HTTP 404). Call peek_list_grants to see who has access.",
+            status=404,
+        )
+        with pytest.raises(RuntimeError, match="Peek has no such grant on this page"):
+            await connector.call("peek_revoke_access", {"slug": "s1", "email": "bob@example.com"})
+
+    async def test_invalid_grant_is_refused_before_the_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="Enter one email address"):
+            await connector.call("peek_revoke_access", {"slug": "s1", "email": "nobody"})
+        assert gated_call_spy == []
+        client.remove_grant.assert_not_called()
+
+    async def test_stops_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        await _assert_stops_before_gate(
+            connector, client, gated_call_spy, "peek_revoke_access",
+            {"slug": "s1", "email": "bob@example.com"}, client.remove_grant,
+        )
+
+    async def test_write_needs_the_gate(self, monkeypatch):
+        connector, client = make_connector()
+        client.get_page.return_value = make_restricted_page("s1")
+        await _assert_write_needs_gate(
+            monkeypatch, connector, client.remove_grant, "peek_revoke_access",
+            {"slug": "s1", "email": "bob@example.com"},
+        )
+
+
 class TestDeletePage:
     async def test_delete(self, gated_call_spy):
         connector, client = make_connector()
@@ -721,7 +1107,7 @@ class TestDeletePage:
         assert call["gate"] == "popup"
         assert call["preview"] == {
             "Server": "peek.example.com", "Page": "s1.html",
-            "Link": "https://peek.example.com/p/s1", "Visibility": "private",
+            "Link": "https://peek.example.com/p/s1", "Visibility": "signed-in",
             "Created": "2026-01-01T00:00:00Z",
         }
         client.delete_page.assert_called_once_with("s1")
@@ -751,7 +1137,7 @@ class TestFieldCompleteness:
     async def test_comments_preview_has_no_placeholder(self, monkeypatch, gated_call_spy):
         pages = [{
             "slug": "slug1", "name": "QA page", "owner": "qa", "size": 10,
-            "visibility": "private", "url": "https://peek.example.com/p/slug1",
+            "visibility": "signed-in", "url": "https://peek.example.com/p/slug1",
             "created_at": 1760094420, "version": 2,
         }]
         comments = [{
@@ -776,20 +1162,23 @@ class TestEveryToolIsAudited:
         connector, client = make_connector()
         client.list_pages.return_value = []
         client.get_page.return_value = PeekPage(
-            "slug1", "QA page", "qa", 10, "private",
+            "slug1", "QA page", "qa", 10, "signed-in",
             "https://peek.example.com/p/slug1", "2026-10-10T11:07:00Z", 2,
         )
         client.get_comments.return_value = []
         client.get_stats.return_value = PeekStats("slug1", "QA page", 0, 0, [])
         client.upload_page.return_value = PeekUploadResult(
-            "new1", "https://peek.example.com/p/new1", "private", 1,
+            "new1", "https://peek.example.com/p/new1", "restricted", 1,
             "https://peek.example.com/p/new1/v/1",
         )
-        client.set_visibility.return_value = "public"
+        client.set_visibility.return_value = _set_visibility_result("public")
         client.add_comment.return_value = _comment_result()
         client.rename_page.return_value = PeekRenameResult(
             "renamed", "https://peek.example.com/p/renamed", "Renamed",
         )
+        client.list_versions.return_value = []
+        client.list_grants.return_value = []
+        client.add_grant.return_value = False
         await assert_all_tools_leave_an_audit_trail(
             connector, peek_module, monkeypatch, tmp_path,
             arg_overrides={
@@ -800,5 +1189,9 @@ class TestEveryToolIsAudited:
                 "peek_add_comment": {"slug": "slug1", "body": "hi"},
                 "peek_delete_page": {"slug": "slug1"},
                 "peek_rename_page": {"slug": "slug1", "name": "Renamed"},
+                "peek_list_versions": {"slug": "slug1"},
+                "peek_list_grants": {"slug": "slug1"},
+                "peek_grant_access": {"slug": "slug1", "email": "bob@example.com"},
+                "peek_revoke_access": {"slug": "slug1", "email": "bob@example.com"},
             },
         )

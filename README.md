@@ -77,7 +77,7 @@ MCP-compatible client can connect. See
 | Confluence | Search and read pages and attachments; create and update pages |
 | Jira Assets | Browse schemas, object types and attributes; search and read objects, linked objects and connected tickets; export to CSV/JSON (read-only) |
 | Grist | List documents and tables; read records after review; add and update records, add tables and columns (nothing is deleted) |
-| Peek | List your shared HTML pages; read comments and visit counts after review; publish pages and new versions, change who can open them, rename, comment on and delete them |
+| Peek | List your shared HTML pages and their versions; read comments, visit counts and who has access after review; publish pages and new versions, choose who can open them, rename, comment on and delete them |
 | Miro | List boards and tags; read items and connector lines after review; add and change sticky notes, cards, texts, shapes, frames and connector lines with approval (nothing is deleted) |
 
 [Connectors](https://privacyfence.eu/connectors/) summarizes what each one reviews and which writes
