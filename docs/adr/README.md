@@ -332,3 +332,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0238](0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md) | Org mode shows each person the changes since the version they last saw | Accepted; relates to 0014, 0023, 0237 |
 | [0239](0239-the-peek-connector-uses-peeks-visibilities-and-new-pages-are-restricted.md) | The Peek connector uses Peek's own visibilities, and new pages are restricted | Accepted; relates to 0158 |
 | [0240](0240-privacyfence-manages-who-can-open-a-restricted-peek-page-behind-a-card.md) | PrivacyFence manages who can open a restricted Peek page, always behind a card | Accepted; relates to 0158, 0239 |
+| [0241](0241-privacyfence-provisions-peek-accounts-with-a-scoped-key-and-only-calls-peek.md) | PrivacyFence provisions Peek accounts with a scoped key and only ever calls Peek | Accepted; extends 0151, 0152 |
+| [0242](0242-a-persons-own-peek-sign-in-wins-over-provisioning.md) | A person's own Peek sign-in wins over provisioning | Accepted; relates to 0151, 0241 |
+| [0243](0243-peek-provisioning-needs-a-verified-email-and-stops-renewing-after-90-days.md) | Peek provisioning needs a verified email and stops renewing after 90 days | Accepted; relates to 0241, 0242 |

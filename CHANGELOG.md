@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Peek accounts for everyone, in organization mode.** With `--peek-auto-provision` and a Peek provisioning key, each person who signs in gets a Peek account (or keeps their existing one) connected for them; their own Peek sign-in still wins, and `privacyfence-app --peek-release` revokes PrivacyFence's token when someone leaves.
 - **Choose who can open a restricted Peek page.** peek_grant_access and peek_revoke_access (each with an approval card), peek_list_grants and peek_list_versions; comments say whether a signed-in account wrote them, and peek_add_comment can target a version.
 
 ### Fixed
