@@ -36,7 +36,7 @@ Use dedicated accounts that share nothing with a personal or production identity
 | Salesforce | A Developer Edition org | Use `--salesforce-login-url https://login.salesforce.com` when building the bundle. |
 | Grist | A getgrist.com account holding nothing real | The runner connects with that account's personal API key, in `credentials/grist_token.json` written by hand as `{"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "…"}` with mode 600. There is no bundle section. |
 | Miro | A free Miro account holding nothing real, with a Developer team and the QA app | The runner's `credentials/miro_token.json` was obtained by hand once with the form-body token exchange, is refreshed by the runner, and is rotated with `scripts/qa_authenticate_connectors.py --only miro`. The QA app's client id and secret are the `miro` section of the QA bundle. |
-| Peek | A QA account on a QA Peek server | Peek's own Docker image, `ghcr.io/andras-tkcs/peek:main`, runs on the self-hosted runner's host, bound to `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`. The recorder reaches it as `http://localhost:7700`, so no TLS is involved. The runner's token is in `credentials/peek_token.json`, written by hand as `{"base_url": "http://localhost:7700", "token": "…"}` with mode 600; take the token from `peek login --host http://localhost:7700` through an SSH tunnel. There is no bundle section. |
+| Peek | A QA account on a QA Peek server | Peek's own Docker image, `ghcr.io/privacyfence/peek:main`, runs on the self-hosted runner's host, bound to `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`. The recorder reaches it as `http://localhost:7700`, so no TLS is involved. The runner's token is in `credentials/peek_token.json`, written by hand as `{"base_url": "http://localhost:7700", "token": "…"}` with mode 600; take the token from `peek login --host http://localhost:7700` through an SSH tunnel. There is no bundle section. |
 | Telegram | Your own account | No dedicated account; `privacyfence-app --telegram-setup` signs in with a phone number and code. |
 
 For each of Google, Slack, Atlassian and Salesforce, follow the "For IT admins" section of
@@ -479,7 +479,7 @@ A dedicated Linux host or VM, not shared with other repositories or workloads:
   `pythonX.Y-venv` package matching `python3 --version`);
 - the build prerequisites of PrivacyFence's dependencies;
 - outbound HTTPS to GitHub and the provider APIs (no inbound ports are needed);
-- the QA Peek container (`ghcr.io/andras-tkcs/peek:main`, bound to `127.0.0.1:7700`, with
+- the QA Peek container (`ghcr.io/privacyfence/peek:main`, bound to `127.0.0.1:7700`, with
   `PEEK_BASE_URL=http://localhost:7700`) running on the same host;
 - OS updates enabled and key-only SSH.
 
