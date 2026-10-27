@@ -298,8 +298,7 @@ Schema, version 1:
     - In local mode, and in an org-mode single-user install (D9), google, slack, salesforce, atlassian, miro and
       telegram are `true`.
     - On a multi-user org server they are all `false`. The first service an admin offers on the
-      Admin page is the opt-in, and that is what starts relay registration and puts the host on the
-      public list.
+      Admin page is the opt-in, and that is what starts relay registration.
     - grist and peek are always `false` here, because they need a server address.
   - `atlassian.assets`/`assets_workspace_id`, `peek.base_url`, and `grist.server_url` (only when
     the bundle's grist has no `client_id`) are copied from the bundle.
@@ -577,8 +576,9 @@ with `@cloudflare/vitest-pool-workers`).
     - Otherwise return 400 `text/plain`: `This sign-in cannot be completed: the PrivacyFence server
       it belongs to is not registered with the PrivacyFence relay. Ask your administrator.`
     - The Worker never stores or logs `code`.
-  - `GET /registrations` → 200 JSON `[{"host", "registered_at"}]` for non-revoked hosts, sorted by
-    host. This is the public listing the maintainer chose.
+  - `GET /registrations` → 200 JSON `[{"host", "registered_at"}]` for non-revoked, verified hosts,
+    sorted by host. It requires the maintainer token (`Authorization: Bearer <REVOKE_TOKEN>`) and
+    answers 401 without it (D15 SEC-09). There is no public list.
   - `POST /admin/revoke` with `Authorization: Bearer <REVOKE_TOKEN>` (a Worker secret, compared in
     constant time) and JSON body `{host}`:
     - It sets `revoked = 1`, inserting a revoked row when the host is absent.
@@ -1371,13 +1371,14 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
     - copy the legacy file's bytes unchanged to `org_bundle.json` (`atomic_write_bytes`, mode
       0600), so the signature still verifies;
     - copy each legacy pin file to its new name when the new one does not exist (see the next
-      bullet: this happens on every call, not only together with the bundle copy);
+      bullet, and D15 SEC-12, which limits pin copying to before `pins_adopted` is recorded);
     - write `org/org_bundle_adopted.json` = `{"from": "org_config.json", "sha256": "<hex of the
       copied bytes>", "at": "<UTC ISO-8601>"}`;
     - log at WARNING `Copied org/org_config.json to org/org_bundle.json for PrivacyFence 7. The
       original is kept unchanged so that you can go back to 6.x.`;
     - return True.
-  - Independently of the bundle, on every call: each legacy pin file whose new-name copy is
+  - Independently of the bundle, until `org_bundle_adopted.json` records `"pins_adopted": true`
+    (D15 SEC-12): each legacy pin file whose new-name copy is
     missing is copied. A 6.x data directory whose bundle was removed but whose pins remain keeps
     its key and serial protection, and the next upload cannot trust a new key on first use.
   - Otherwise it does nothing to the bundle and returns False.
@@ -1499,8 +1500,8 @@ returns the `idp` section `IdpConfig.from_org_config` reads.
 - An org server with no bundle at all, configured from the environment, is allowed. Its trust
   root is whoever controls the container's environment, the same party that chooses the image.
   ADR 0248 records this as an amendment to 0016.
-- So is a signed bundle **without** an `idp` section plus an IdP from the environment. The IdP
-  then comes from the unsigned environment. ADR 0248 says so explicitly.
+- A signed bundle **without** an `idp` section refuses an IdP from the environment, unless the
+  bundle carries `"idp": {"from_environment": true}` (D15 SEC-14).
 
 **A server stays a server.** The first start for which `_idp_present` is true sets
 `"org_server": true` in the admin config. It does this before IdP discovery, so a server whose IdP
@@ -1538,6 +1539,225 @@ section's `admin_emails` list.
 - `docs/org-mode-docker.md` leads with the environment-only quick start, and keeps the bundle flow
   as the option for your own connector apps or a signed configuration.
 
+### D15. Security hardening from the plan's security audit
+
+The rules below come from a dedicated security audit of this plan. They override anything earlier
+in the Design that contradicts them. Each names the phase that implements it; that phase's brief
+points here.
+
+**SEC-01: single-user mode does not protect against a local agent.** (p2, p16, p13b)
+
+- An agent that can run `docker`, read `docker logs`, or open a page on another localhost port can
+  take over a single-user install.
+- `admin_config.import_from_bundle(..., single_user=True)` sets `step_up` to
+  `{"enabled": true, "require_passkey": true, "scope": "writes_and_pii_reads"}`, the packaged-local
+  defaults.
+- p16 tests that a single-user approval, and every sensitive Admin action, return the step-up
+  challenge when no assertion is sent, even with a valid session cookie.
+- `LOCAL_MODE_DEPRECATION` and the docs (p13b) say plainly that anyone who can run `docker` on
+  that computer controls the install. They recommend running it under a separate OS account
+  (rootless Docker) or a VM, or using an organization server.
+- `docs/security-and-compliance.md:19-21` ("no PrivacyFence-operated infrastructure") and
+  `:66-67` are rewritten for the relay and for single-user mode.
+
+**SEC-02: brand-trusted consent phishing.** (p11, p13b, p12)
+
+- The provider docs never tell anyone to trust or pre-approve the built-in app. They say instead:
+  `Do not mark the built-in PrivacyFence app as trusted or pre-approved: that trust would extend
+  to every PrivacyFence server and to anyone using the public app. To trust an app, register your
+  own.`
+- The Worker refuses, with 400 `host_not_public`, any host whose registrable domain is in the
+  private section of the Public Suffix List (`x.github.io`, `a.pages.dev`, `a.workers.dev`,
+  `a.netlify.app`, ngrok domains and so on).
+  - `cloudflare/oauth-relay/src/psl_private.ts` is generated by
+    `cloudflare/oauth-relay/scripts/update-psl.mjs` from `public_suffix_list.dat` at a pinned
+    commit, recorded in the file header.
+  - Its test covers the hosts above.
+- `docs/oauth-relay.md` gains a "Review new registrations" step (weekly, from `/registrations`)
+  and a revocation turnaround (one working day after a report).
+- ADRs 0239 and 0243 record this threat precisely.
+
+**SEC-03: registration denial and storage flooding.** (p11, p5)
+
+- **Rate limit.** The Worker rate-limits `/register` per `(host, CF-Connecting-IP)`, and adds a
+  per-IP limit of 30 requests per 10 minutes, kept in the Durable Object.
+- **No blocking the owner.** An attempt never blocks a later successful proof: `too_soon` applies
+  only to repeated failures from the same IP for the same host.
+- **No rows for unverified hosts.** The `registrations` table gets a row only on successful
+  proof. Failed attempts are counted in a separate `attempts` table, pruned of rows older than one
+  hour on each write.
+- **The server keeps its status.** `relay_client` treats `too_soon` as "retry later" without
+  clearing an earlier success. It persists `last_ok_at` to `org/relay_status.json`
+  (`atomic_write_json`), so a restart within 35 days keeps relayed sign-in open.
+- **Tests:** an attacker's register never makes the owner's next valid proof fail; unverified
+  attempts create no `registrations` row.
+
+**SEC-04: the Admin page always needs a passkey for sensitive actions.** (p7a, p7b, p6)
+
+- Every Admin action marked sensitive in D6, and the room and bundle uploads, require a fresh
+  WebAuthn assertion whatever the `step_up` configuration says.
+- `routes_settings._apply_step_up_gate` gains `always: bool = False`. With `always=True`, a
+  sensitive action requires an assertion even when `step_up.enabled` or `require_passkey` is
+  false.
+- A principal with no passkey gets 403 `{"error": "Add a passkey on /security first.",
+  "enroll_url": "/security"}`.
+- In org mode `set_server_address` refuses `http://` addresses and hosts that are IP literals or
+  resolve to private, loopback or link-local addresses, with `Use an https:// address on a public
+  host name.`
+- **Tests:** on the default org step-up configuration, a sensitive Admin action without an
+  assertion is refused; an org http or loopback server address is refused.
+
+**SEC-05: what a compromised relay or deploy path can do.** (p11, p8a, p12, p13b, manual mb2)
+
+- The `oauth-relay-worker` GitHub environment gets required reviewers, with "prevent
+  self-review". The docs recommend the same for `downloads-worker`.
+- The relay stays in the existing Cloudflare account, by maintainer decision. ADR 0243 and
+  `docs/oauth-relay.md` record that a Workers deploy token covers every Worker in the account, so
+  the relay token could replace the download Worker and the reverse. Required reviewers are the
+  control.
+- Slack and Miro send no PKCE. A compromised relay could exchange their codes first, or inject an
+  attacker's own account. ADR 0243 and `security-and-compliance.md` state this per provider.
+- The Admin page's Slack and Miro rows, when `relay` is true, add the line: `Sign-in codes for
+  this service pass through oauth.privacyfence.eu without PKCE. Use your own app to avoid this.`
+
+**SEC-06: audit forwarding cannot be redirected to an attacker with the token attached.** (p6)
+
+- When `set_audit_forwarding` changes `kind`, or the scheme, host or port of `http_url`, it sets
+  `http.bearer_token_env` to `""`.
+- The summary is then `Changed audit forwarding; the bearer token was removed. Set it again in
+  org/admin_config.json.`
+- **Test:** a sentinel environment value is never sent to a changed URL.
+
+**SEC-07: admins and allowed domains need verified, organization-bound email.** (p20b)
+
+- **Google.** When the issuer is `https://accounts.google.com`, an email admin also needs
+  `claims.get("hd")` to equal the email's domain. A personal Google account registered with a
+  work address has no `hd`.
+- **Allowed domains.** `org_identity.check_authz_policy` trusts the email domain only when
+  `email_verified is True`, plus the same `hd` rule for Google. This changes existing behaviour,
+  and the CHANGELOG says so.
+- **Normalization.** Admin-email matching uses ASCII `.strip().lower()` and refuses addresses
+  with non-ASCII characters. It does not use `casefold`, which maps `ſ`→`s`.
+- **Tests:** a consumer account without `hd` is not admin; `email_verified: false` with an
+  allowed domain is denied; a non-ASCII address never matches.
+
+**SEC-08: reserved principal ids.** (p20b)
+
+- `principal_from_claims` maps a `sub` equal to `local` or `single-user`, or starting with `os-`,
+  to `"idp-" + sha256(sub).hexdigest()[:32]`.
+- When an IdP is added to a data directory holding `users/single-user/`, startup logs that this
+  data is not reachable by IdP users.
+- **Tests:** each reserved form is hashed.
+
+**SEC-09: no public directory of servers.** (p11, p5, p13c)
+
+- **`GET /registrations`** requires `Authorization: Bearer <REVOKE_TOKEN>`, the maintainer token.
+  Without it the answer is 401. The privacy page and the docs no longer mention a public list.
+- **The well-known route** returns 404 unless `relay_client.status()["needed"]` is true, so a
+  server whose admin never offered a built-in service cannot be registered by someone else.
+
+**SEC-10: strict relay parsing.** (p11)
+
+- **Loopback hosts** match exactly `^(localhost|127\.0\.0\.1)(:([1-9][0-9]{0,4}))?$`, with a port
+  of at most 65535.
+- **Repeated parameters.** A request with more than one `state`, `code` or `error` parameter gets
+  400.
+- **Paths.** `/callback/:grant` matches the exact path only; `/callback/slack/x` gets 404.
+- **Location.** It is built with `new URL()`, and its `.host` must equal the validated host.
+- **Negative tests:**
+  - host forms: `localhost.evil.com`, `localhost:80@evil.com`, `127.0.0.1.nip.io`, `LOCALHOST`,
+    `[::1]`;
+  - ports: `localhost:0`, `localhost:099`, `localhost:65536`;
+  - encoding and repeats: `localhost%2F@evil.com`, a duplicate `state`, a sub-path.
+
+**SEC-11: a later IT bundle never overwrites Admin-page decisions.** (p2, p20a)
+
+The `ensure` re-import is a merge, not a replacement:
+
+- It copies a legacy section only when the current config lacks it or holds its default.
+- It never lowers `step_up` (reuse the `tighten_step_up` comparison).
+- It keeps `services[*].offered` true where it already is.
+- It always keeps `org_server`.
+- Each overwritten section name is logged and audited.
+
+**SEC-12: key rotation keeps working after adoption.** (p0, p13a)
+
+- Legacy pins are copied only while `org_bundle_adopted.json` lacks `"pins_adopted": true`.
+- The first pin copy writes the record, with the bundle part empty if there was no bundle.
+- After that, deleting the new-name pin (documented rotation) never brings the old key back.
+- **Test:** rotation after adoption accepts a bundle signed with the new key and does not re-pin
+  the old one.
+
+**SEC-13: built-in secrets: fewer copies and a rotation plan.** (p1, p12, p11)
+
+- **Desktop installers ship no `google_web`.** `scripts/builtin_apps.py write` gains
+  `--exclude KEY` (repeatable). `build_dmg.sh`, `build_deb.sh` and `build_installer.ps1` call it
+  with `--exclude google_web`. The org image's wheel and the PyPI build include it, because
+  servers use them.
+- **Rotation.** ADR 0239 and `docs/oauth-relay.md` (a "Rotating a built-in app secret" section)
+  describe rotation: add the new secret alongside the old where the provider allows two (Google
+  and Salesforce do), release, then retire the old one after the release is adopted.
+
+**SEC-14: a signed bundle locks the IdP; no wildcard proxies.** (p20a, p15)
+
+- **The IdP.** When a signed bundle is present without an `idp` section, `PRIVACYFENCE_IDP_*` and
+  `PRIVACYFENCE_ADMIN_EMAILS` are refused with a `ConfigurationError`, unless the bundle carries
+  `"idp": {"from_environment": true}`. `build_org_bundle.py` gains
+  `--idp-from-environment` (p20b) to write it.
+- **Trusted proxies.** `trusted_proxies` from any source refuses `*`, `0.0.0.0/0` and `::/0` with
+  `trusted_proxies must name specific proxies, not a wildcard.`
+
+**SEC-15: "no logs" means the Worker writes none.** (p11, p12, p13c)
+
+- The privacy page and ADR 0243 say "the Worker writes no logs".
+- The runbook checks, as setup and on each review:
+  - that no Logpush job and no logging WAF rule cover `oauth.privacyfence.eu`;
+  - that `wrangler tail` access is limited to the maintainer token.
+
+**SEC-16: the setup code is single-use under concurrency.** (p16)
+
+- The check and the consume happen under one `threading.Lock`.
+- **Test:** two concurrent correct submissions, of which exactly one succeeds.
+- The docs say the code stops working once a passkey is enrolled.
+
+**SEC-17: no wildcard bind address in the Host allowlist.** (p15)
+
+- `web/server.py` (`:1610`) never adds `0.0.0.0` or `::` to `allowed_hosts`.
+- **Test:** `Host: 0.0.0.0` is refused when bound to `0.0.0.0`.
+
+**SEC-18: server state never comes from the request.** (p6, p7a)
+
+- The signature is `admin_config.apply_change(action, params, *, bundle, mode, single_user)`.
+- The dispatcher passes only the action's declared parameters, and rejects unknown body keys
+  (other than `csrf` and `webauthn_assertion`) with 400.
+- **Test:** a body carrying `bundle` is refused.
+
+**SEC-19: refreshing the shared config is atomic for readers.** (p3, p5, p7a)
+
+- `oauth_apps.refresh_in_place` runs under a module lock.
+- `oauth_apps.snapshot(org_config) -> dict` returns `dict(org_config)` under the same lock.
+  Readers that iterate over the config (`org_stats.collect`, the connect page's section loop)
+  use the snapshot.
+- The pending connect entry also stores the section's `client_id`. The callback fails cleanly,
+  with the existing `/connect?error=` path, when it changed.
+
+**SEC-20: room text is untrusted.** (p6)
+
+- `replace_rooms` refuses control characters, newlines included, in string values.
+- ADR 0241 says room text reaches agents as untrusted data.
+
+**SEC-21: the marker is advisory; backups are private.** (p19a, p12)
+
+- `<file>.pre-canonical-verbs.bak` and `.pre-scope-rules.bak` are written with mode 0600 through
+  `secure_files`.
+- ADR 0246 requires 8.x to keep reading pre-7 shapes fail-closed rather than trusting the marker,
+  and its installers not to follow symlinks when reading it.
+
+**SEC-22: public secrets and refresh tokens.** (p12)
+
+ADR 0239 notes that with built-in apps a stolen refresh token no longer also needs the org's own
+client secret.
+
 ## ADRs
 
 - **0239** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -1566,7 +1786,8 @@ section's `admin_emails` list.
 - **0243** — Org servers use the built-in apps through the PrivacyFence-hosted redirect relay at
   `oauth.privacyfence.eu`. It is deployed from `main` on its own track, never by a release tag,
   and its contract only grows. It forwards only to hosts that proved control of their domain, keeps no
-  logs, lists registrations publicly, and maintainers can revoke a host. It forwards to a loopback
+  logs, shows registrations only to maintainers, and maintainers can revoke a host. It runs in the
+  existing Cloudflare account, with required reviewers on deploys. It forwards to a loopback
   host without registration. Relates to 0011, 0186.
 - **0244** — `mode` and the server address may come from environment variables. Organization mode
   without an IdP is single-user mode, with one administrator,, allowed only on `http://localhost` or
@@ -1588,7 +1809,7 @@ section's `admin_emails` list.
   downgrade. Amends 0016 and 0200 (the file names); relates to 0246.
 - **0248** — An organization server can take its IdP and server address from environment
   variables, with no bundle. A bundle, when present, must still be signed and wins. A signed bundle
-  without an `idp` section may be combined with an IdP from the environment. Amends 0016
+  without an `idp` section refuses an environment IdP unless it sets `idp.from_environment`. Amends 0016
   (org mode no longer always needs a signed bundle) and 0011.
 - **0249** — Admins can be named by IdP-verified email (`PRIVACYFENCE_ADMIN_EMAILS` or
   `idp.admin_emails`), alongside the group claim. Relates to 0011.
@@ -1612,6 +1833,18 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
     deprecation notices.
 
 ## Risks and open questions
+
+- **Security decisions the maintainer made from the audit (D15).**
+  - Single-user mode is hardened (step-up on) and documented as no protection against an agent
+    that can run docker.
+  - Sensitive Admin actions always need a passkey.
+  - There is no public registration list.
+  - The relay stays in the existing Cloudflare account, behind required reviewers.
+  - `google_web` ships only in server builds.
+  - A signed bundle locks the IdP.
+  - A delay before newly registered hosts can receive sign-ins was considered and not adopted;
+    review and revocation cover phishing hosts instead.
+  - Slack's and Miro's lack of PKCE through the relay is an accepted, documented risk.
 
 - **An environment-only server has no signature.** Its trust root is whoever controls the
   container's environment, which is the same party that picks the image. ADR 0248 states this. A
@@ -1639,8 +1872,8 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 - **Single-user sign-in is new authentication code.** p16 runs on Opus for that reason (see its
   `worker_model_reason`).
 
-- **Fresh org servers start with built-in services off.** The relay, and the public listing of the
-  host name, start only once an admin offers a built-in service. Single-user mode and a desktop install
+- **Fresh org servers start with built-in services off.** Relay registration starts only once an
+  admin offers a built-in service. Single-user mode and a desktop install
   start with them on.
 - **A bundle that adds a provider later** does not offer it by itself after the import. An admin
   switches it on, and the docs say so.
@@ -1741,7 +1974,7 @@ phases:
   - tests/conftest.py
   brief: |-
     Read "Design → D13" in full. Every name, message and rule is there.
-    1. org_bundle_signing.py: switch PINNED_PUBKEY_FILENAME and PINNED_SERIAL_FILENAME to the 7.x names, add the two LEGACY_ constants, and add adopt_legacy_files(org_dir) per D13. The pins are copied on every call when their new name is missing, independently of the bundle. Use secure_files.atomic_write_bytes, and write org_bundle_adopted.json with atomic_write_json.
+    1. org_bundle_signing.py: switch PINNED_PUBKEY_FILENAME and PINNED_SERIAL_FILENAME to the 7.x names, add the two LEGACY_ constants, and add adopt_legacy_files(org_dir) per D13. The pins are copied when their new name is missing, independently of the bundle, but only until org_bundle_adopted.json records "pins_adopted": true (D15 SEC-12). Use secure_files.atomic_write_bytes, and write org_bundle_adopted.json with atomic_write_json.
     2. paths.py: add ORG_BUNDLE_FILENAME, LEGACY_ORG_CONFIG_FILENAME and org_bundle_path().
     3. daemon_main.py:
        - load_org_config calls adopt_legacy_files(org_dir()) first, sets _bundle_adopted_this_start with |= (only ever to True), and reads paths.org_bundle_path().
@@ -1771,6 +2004,7 @@ phases:
          - Do not weaken any assertion.
     9. Run ruff check . and python3 -m pytest tests/unit -q.
     Stop condition: if more than 40 existing tests need edits beyond a file name, stop with status=blocked and list them.
+    Also apply D15 SEC-12, with its test.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_bundle_signing.py -q -k adopt passes and selects at least 4 tests
@@ -1793,7 +2027,7 @@ phases:
   - scripts/build_installer.ps1
   - .github/workflows/build.yml
   - .github/workflows/publish-pypi.yml
-  brief: |
+  brief: |-
     Read the plan's "Design → D1" section first; every name, env var, message and module format is there.
     1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_desktop", "google_web", "slack", "salesforce", "atlassian_local", "atlassian_relay", "miro"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0239); ASCII only.
     2. Add `src/privacyfence/_builtin_apps.py` to .gitignore directly below the `_telegram_credentials.py` line, and `include src/privacyfence/_builtin_apps.py` to MANIFEST.in directly below line 6, extending the comment above it to name both generated modules.
@@ -1805,6 +2039,8 @@ phases:
     8. Run ruff check . and python3 -m pytest tests/unit/test_builtin_apps_script.py tests/unit/test_app_credentials.py tests/unit/test_telegram_credentials.py tests/unit/test_org_image_workflows.py -q.
     9. After pushing the phase branch, dispatch build.yml on it (it is in ci.dispatchable; mb1's secrets are in place by now). In the run, the "Build .deb" step's log and the build-org-image "Write built-in app credentials" step's log must each show `built-in app google_desktop: included`. If they show `not set`, check the env wiring of step 5; if the secrets themselves are missing, stop with status=blocked naming mb1.
     Stop condition: if `git grep -n "_telegram_credentials" setup.py` shows that setup.py handles the Telegram module, mirror it for _builtin_apps; if the Telegram module reaches the wheel by a mechanism you cannot mirror, stop with status=blocked.
+
+    Also apply D15 SEC-13 (desktop installers): add `--exclude KEY` to scripts/builtin_apps.py write, and pass `--exclude google_web` in build_dmg.sh, build_deb.sh and build_installer.ps1, with a test that the excluded key is absent from the module and that those three scripts pass it.
   acceptance:
   - python3 -m pytest tests/unit/test_builtin_apps_script.py tests/unit/test_app_credentials.py tests/unit/test_telegram_credentials.py tests/unit/test_org_image_workflows.py -q passes
   - grep -c "scripts/builtin_apps.py write" .github/workflows/build.yml .github/workflows/publish-pypi.yml scripts/build_dmg.sh scripts/build_deb.sh scripts/build_installer.ps1 reports at least 1 for each file
@@ -1850,6 +2086,7 @@ phases:
        - config_for never writes.
        - legacy_keys_in returns the dotted names, including atlassian.assets and a grist.server_url without client_id, and [] for a credentials-only bundle.
     5. Run ruff check ., python3 -m pytest tests/unit -q (the new autouse fixture must break nothing), and python3 -m mypy src/privacyfence/admin_config.py.
+    Also apply D15 SEC-01 (single-user step_up defaults in import_from_bundle) and SEC-11 (the ensure re-import is a merge with D15's four rules, logging each overwritten section), each with tests.
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m pytest tests/unit -q passes
@@ -1885,6 +2122,7 @@ phases:
        - refresh_in_place keeps the same object.
        - credentials_source for each case.
     4. Run ruff check ., python3 -m pytest tests/unit/test_oauth_apps.py -q and python3 -m mypy src/privacyfence/oauth_apps.py.
+    Also apply D15 SEC-19 (refresh_in_place under a module lock, and snapshot()), with a test that snapshot returns an independent copy.
   acceptance:
   - python3 -m pytest tests/unit/test_oauth_apps.py -q --cov=privacyfence.oauth_apps --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/oauth_apps.py passes
@@ -1996,6 +2234,7 @@ phases:
     9. Run ruff check . and python3 -m pytest tests/unit -q.
 
     10. Also implement D9's "The relay on localhost" rules on this side: register refuses a loopback issuer without calling the Worker and accepts http only on a loopback host; _tick treats a loopback issuer as not needing registration; start() skips the registration refusal for a loopback issuer. Test each in the files above.
+    Also apply D15 SEC-03's relay_client part (too_soon keeps last_ok_at; persist it in org/relay_status.json and load it at startup), SEC-09's well-known rule (404 unless needed), and SEC-19's pending client_id check, each with tests.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/web/test_routes_connect.py -q -k TestRelay passes and selects at least 6 tests
@@ -2036,6 +2275,7 @@ phases:
        - service_rows for each app_source, with the relay flag only in org mode for built-ins, grist locked when the bundle has an OAuth app, and grist's client_id rule.
        - No row, summary or log record (caplog) contains a client_secret or a bearer-token env var's value. Set a fake env var to a sentinel and assert it never appears.
     3. Run ruff check ., python3 -m pytest tests/unit/test_admin_config.py -q and python3 -m mypy src/privacyfence/admin_config.py.
+    Also apply D15: SEC-18 (the apply_change(action, params, *, bundle, mode, single_user) signature, replacing the payload keys), SEC-06 (bearer env dropped on a URL or kind change), SEC-04's org server-address rule, and SEC-20 (no control characters in rooms), each with tests.
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/admin_config.py passes
@@ -2076,6 +2316,7 @@ phases:
        - A successful change writes one settings_change audit entry ending "(admin=<id>)"; a no-op writes none.
        - GET /api/admin/state never contains a sentinel secret placed in the bundle or a sentinel env var's value.
     7. Run ruff check . and python3 -m pytest tests/unit -q.
+    Also apply D15: SEC-04 (the `always` keyword on _apply_step_up_gate, used by every sensitive Admin action; the enroll message), SEC-18 (only declared parameters; unknown body keys give 400) and SEC-19 (org_stats.collect gets oauth_apps.snapshot(org_config)), each with tests, including: on the default org step-up configuration, a sensitive Admin action without an assertion is refused.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/web/test_routes_admin.py -q passes and selects at least 12 tests
@@ -2116,6 +2357,7 @@ phases:
        - Bundle upload at the new path: the TOFU 409 and step-up still apply, and the response is the admin state including the "are ignored" error.
        - test_server.py: the local app mounts /api/admin/state for the owner.
     5. Run ruff check . and python3 -m pytest tests/unit -q.
+    Also apply D15 SEC-04 to the room and bundle uploads (always=True), with tests.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - grep -n "/api/admin/org_config/upload" src/privacyfence/web/routes_admin.py matches
@@ -2155,6 +2397,7 @@ phases:
        - test_settings_window_html.py: the admin surface's section sets for local, org admin and org non-admin; every D6 services status line renders for its row; the relay line appears only in org mode; initial_section "services" is used.
        - test_routes_admin.py: GET /admin renders for the owner or admin with the Admin nav item active; an org non-admin gets 403; no session redirects to /login?next=/admin.
     6. Run ruff check . and python3 -m pytest tests/unit -q. If the session-start hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
+    Also apply D15 SEC-05's Admin-page line for relayed Slack and Miro rows, with a test.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - grep -n "def org_nav_items" src/privacyfence/web_shell.py matches
@@ -2363,6 +2606,7 @@ phases:
 
     Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
+    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
@@ -2410,6 +2654,7 @@ phases:
            - single-user mode over a data directory with a pinned signing key, or with an imported admin config, raises the "belonged to an organization server" message.
     6. Run ruff check . and python3 -m pytest tests/unit -q.
     7. Push the phase branch, then dispatch build.yml on it (ci.dispatchable; this container cannot build images) and check that the build-org-image job's image tests pass, including the new one.
+    Also apply D15 SEC-17 (no 0.0.0.0 or :: in allowed_hosts, web/server.py:1610) and SEC-14's trusted_proxies wildcard refusal, each with a test.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_mode.py -q -k "resolve_mode or is_single_user or env" passes and selects at least 9 tests
@@ -2475,6 +2720,7 @@ phases:
     10. tests/unit/web/test_server_org_mode.py: in single-user mode /login is the single-user sign-in page and /oauth/idp/login-callback does not exist.
     11. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
     Stop condition: if session creation in routes_org_identity cannot be reused without copying private code that carries security checks (for example session fixation handling), stop with status=blocked and describe what would have to be duplicated.
+    Also apply D15 SEC-16 (check and consume under one lock, with a concurrency test) and SEC-01's tests: a valid single-user session cookie without an assertion cannot approve or perform a sensitive Admin action.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/web/test_single_user_auth.py -q --cov=privacyfence.web.single_user_auth --cov-branch --cov-report=term-missing passes and reports 100%
@@ -2603,6 +2849,7 @@ phases:
          - Rewrite test_upgrade_all_principals_runs_before_the_token_store_loads (~2440-2483) to record that run_app calls migrate_everything before _maybe_start_web_server.
          - Port the three direct _upgrade_all_principals tests (~2485-2546) to migrate_everything, keeping their assertions.
     9. Run ruff check . and python3 -m pytest tests/unit -q.
+    Also apply D15 SEC-21: both backup files are written mode 0600 through secure_files, with a test.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_data_format.py -q --cov=privacyfence.data_format --cov-branch --cov-report=term-missing passes and reports 100%
@@ -2669,6 +2916,7 @@ phases:
        - test_admin_config.py: apply_change cannot change org_server.
        - No log record (caplog) contains the secret in any test.
     7. Run ruff check . and python3 -m pytest tests/unit -q. Push, then dispatch build.yml on the phase branch (ci.dispatchable) and check that the build-org-image job's image tests pass.
+    Also apply D15 SEC-14 (a signed bundle without idp refuses the environment IdP unless idp.from_environment is true) and SEC-11's rule that a re-import keeps org_server, each with tests.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_mode.py -q -k idp_section passes and selects at least 7 tests
@@ -2684,6 +2932,8 @@ phases:
   - tests/unit/test_org_identity.py
   - scripts/build_org_bundle.py
   - tests/unit/test_build_org_bundle.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
   brief: |-
     Read "Design → D14" ("Admins by email").
     1. org_identity.py: IdpConfig gains admin_emails (each .strip().casefold(), from the section's admin_emails list). principal_from_claims sets is_admin when the group rule matches, or when isinstance(claims.get("email"), str), its .strip().casefold() is in admin_emails, and claims.get("email_verified") is True. The three callers (oauth_provider.py:470, routes_org_identity.py:222, routes_org_stepup.py:179) all pass verified ID-token claims and need no change.
@@ -2696,6 +2946,7 @@ phases:
        - A configured email with surrounding whitespace or different case still matches.
        - The group rule still works alone and together with the email list.
     4. Run ruff check . and python3 -m pytest tests/unit -q.
+    Also apply D15 SEC-07 (the Google hd rule, email_verified in check_authz_policy, ASCII lower with non-ASCII refused), SEC-08 (reserved subs hashed; the startup log line) and SEC-14's --idp-from-environment flag in build_org_bundle.py, each with tests. Add the SEC-07 behaviour change to the commit message so p13b can note it in the CHANGELOG.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_identity.py -q -k admin passes
@@ -2849,6 +3100,7 @@ phases:
     2. approvals-and-policy.md: in org mode the install-wide privacy policy is edited on the Admin page; Settings is personal.
     3. Provider setup docs (google-cloud, slack, salesforce, atlassian, miro):
        - Open with "You need this page only to use your organization's own app instead of the built-in one."
+       - Replace any advice to trust or pre-approve the client ID with D15 SEC-02's exact sentence; never tell anyone to trust the built-in app.
        - Give the provider caveat:
          - Google: an unverified-app screen and a 100-user cap until verification, which includes an annual security assessment for Gmail and Drive scopes; Workspace admins can trust the client ID; an org-mode override must be a Web application client.
          - Salesforce: orgs that block uninstalled connected apps need an admin to install or approve it.
@@ -2859,7 +3111,8 @@ phases:
        - telegram-setup.md: the Admin page switch.
        - google-cloud-setup.md "Room directory sync": the script writes rooms.json (--output) and you upload it on the Admin page.
     4. security-and-compliance.md, a "Built-in apps, the admin config and the relay" subsection:
-       - Built-in secrets are public in effect (0239).
+       - Built-in secrets are public in effect (0239), and secret rotation (D15 SEC-13).
+       - Rewrite :19-21 and :66-67 per D15 SEC-01, and state per provider what a compromised relay could do (D15 SEC-05).
        - What the relay sees and does not see (0243).
        - The admin config's settings.yaml-level trust, and that signing now covers only startup settings and credentials (0240, 0241).
     5. Create docs/moving-to-organization-mode.md, the page LOCAL_MODE_DEPRECATION links to (privacyfence.eu/docs/moving-to-organization-mode/):
@@ -2907,8 +3160,8 @@ phases:
        - Add a section "Sign-in relay (oauth.privacyfence.eu)" after the download section. It says the relay:
          - is a small Cloudflare Workers service that forwards an organization server's sign-in redirect;
          - processes the IP address and the request in transit;
-         - stores only each registered server's host name and registration dates, shown publicly at /registrations;
-         - keeps no request logs;
+         - stores only each registered server's host name and registration dates, visible only to PrivacyFence maintainers;
+         - writes no logs (D15 SEC-15);
          - is used only by organization servers that use the built-in apps.
          The legal basis is Art. 6(1)(f), as for hosting.
        - Change "sends nothing to the project" (lines ~45-54) to name the one exception: an organization server's registration of its host name.
