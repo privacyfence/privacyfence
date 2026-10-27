@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.10.0] — 2026-10-27
+
 ### Added
 
 - **Slack reads say what you have not read yet.** Channel history and thread reads mark each message unread, read or unknown against your own Slack read marker; a search does too when the agent asks for it with read_state, which costs one Slack request per conversation in the results. Search results now carry the thread_ts of a reply in a thread.
@@ -3492,7 +3494,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...HEAD
+[6.10.0]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...v6.10.0
 [6.9.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.2...v6.9.1
 [6.8.2]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...v6.8.2
 [6.8.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.0...v6.8.1
