@@ -67,13 +67,13 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
 ## Current state
 
 - **Which connectors are offered.** `org_mode.CONNECTOR_ORG_SECTION` and
-  `org_mode.connector_enabled_by_org` (`src/privacyfence/org_mode.py:523-535`, ADR 0196) offer a
+  `org_mode.connector_enabled_by_org` (`src/privacyfence/org_mode.py:660-672`, ADR 0196) offer a
   connector only when `org_config.json` has a non-empty section for it. An install with no bundle
   offers nothing. Callers:
-  - `daemon_main.build_connectors` (`daemon_main.py:1665`, `:1699`, `:1714`, `:1733`)
+  - `daemon_main.build_connectors` (`daemon_main.py:1677`, `:1711`, `:1726`, `:1745`)
   - `settings_controller._org_allows` (`:1297`) and `_connectors_state` (`:2180`)
   - `web/routes_connect._is_configured` (`:175-192`), `telegram_start` (`:578`) and
-    `_render_connect_page` (`:1036`)
+    `_render_connect_page` (`:1054`)
 - **Where app credentials are read.** All reads use the bundle sections `google` (`client_id`,
   `client_secret`, `auth_uri`, `token_uri`), `slack` (`client_id`, `client_secret`, optional
   `user_scopes`), `salesforce` (`consumer_key`, `consumer_secret`, optional `login_url`),
@@ -105,7 +105,7 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
     `settings_controller._org_config_or_empty` (`:1203`) and `refresh_connectors` (`:1240`).
   - Org mode captures the dict once into `OrgAuth.org_config` (`web/server.py`, around `:710`). That
     one object reaches `routes_connect.build_routes`, `build_org_routes` (`web/server.py:1343-1421`)
-    and `_connectors_for_principal` (`daemon_main.py:1192-1207`).
+    and `_connectors_for_principal` (`daemon_main.py:1200-1215`).
 - **Built-in credentials precedent.** `scripts/telegram_credentials.py` writes the git-ignored
   `src/privacyfence/_telegram_credentials.py` from the `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`
   secrets. `MANIFEST.in:6` includes it in the sdist and wheel.
@@ -130,7 +130,7 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
   Observability is off (ADR 0186).
 - **Privacy page.** `website/privacy/index.html:26-27` and `:45-54` say the policy covers only the
   site and `downloads.privacyfence.eu`, and that the software "sends nothing to the project".
-- **ADR numbers.** The highest accepted ADR is 0238, so this plan takes 0239 to 0249.
+- **ADR numbers.** The highest accepted ADR on main is 0248 (the Peek and Grist auto-provisioning and Peek API ADRs), so this plan takes 0249 to 0260.
 - **Operational sections and their parsers.** Each takes the whole org config dict:
   - `download_delivery`: `org_mode.DownloadDeliveryConfig.from_org_config`
   - `audit_forwarding`: `org_mode.AuditForwardingConfig.from_org_config`
@@ -138,8 +138,8 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
   - `web_push`: `org_mode.WebPushConfig.from_org_config`
   - `step_up`: `step_up_config.StepUpConfig.from_org_config` (`step_up_config.py:287`)
   - `scoped_tokens`: `scoped_tokens.policy_from_org_config` (`scoped_tokens.py:180`)
-  - `unattended_sessions.enabled`: `daemon_main.py:2140`
-  - `rooms`: `daemon_main.py:1456`, written into the bundle by `scripts/sync_room_directory.py`
+  - `unattended_sessions.enabled`: `daemon_main.py:2152`
+  - `rooms`: `daemon_main.py:1468`, written into the bundle by `scripts/sync_room_directory.py`
   - `telegram`, `peek` (`base_url`), `grist` (`server_url`, plus the OAuth app fields) and the
     Atlassian flags `assets`/`assets_workspace_id`
 - **When they are read.** In org mode most of these are parsed once at startup in
@@ -201,9 +201,9 @@ Every app has two fields, `client_id` and `client_secret`.
     character.` to stderr and returns 2.
 - `check-dist [--require] files...` is the same logic as `telegram_credentials.check_dist`, with
   `MODULE_SUFFIX = "privacyfence/_builtin_apps.py"`. Its messages read as the Telegram ones do, with
-  "Telegram" replaced by "built-in OAuth apps" and the ADR number changed to 0239. For example, the
+  "Telegram" replaced by "built-in OAuth apps" and the ADR number changed to 0249. For example, the
   error line ends `...; built-in OAuth apps will not work on this install. A stable release must
-  ship it (ADR 0239).`
+  ship it (ADR 0249).`
 
 **Reader: `app_credentials.builtin_app(key: str) -> dict[str, str] | None`.**
 
@@ -231,18 +231,21 @@ From 7.x on, this file is `org/org_bundle.json`, adopted from `org_config.json` 
 | `mode`, `server`, `idp` | unchanged (startup settings) |
 | `google`, `slack`, `salesforce`, `miro` | the app credentials, unchanged field names |
 | `atlassian` | `client_id`, `client_secret` only |
-| `grist` | the OAuth app only: `client_id`, `client_secret`, `auth_server_url`, `server_url` (the server the app belongs to, ADR 0143) |
+| `grist` | the OAuth app only: `client_id`, `client_secret`, `auth_server_url`, `server_url` (the server the app belongs to, ADR 0143); and `auto_provision`, with the API-key `server_url` while it is enabled (D18) |
+| `peek` | `auto_provision`, with `base_url` while it is enabled (D18) |
 | bookkeeping | `version`, `org_name`, `serial`, `signature`, `signing_public_key`, and whatever `org_bundle_signing` adds |
 | `mcp` | still refused when it carries `tool_annotations` (ADR 0089) |
 
 **Legacy operational keys.** `admin_config.LEGACY_BUNDLE_KEYS` is this tuple:
 `("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding",
-"unattended_sessions", "rooms", "rooms_synced_at", "telegram", "peek")`. Three legacy sub-keys
-are also treated as operational:
+"unattended_sessions", "rooms", "rooms_synced_at", "telegram")`. These legacy sub-keys are also
+treated as operational:
 
 - `atlassian.assets`
 - `atlassian.assets_workspace_id`
-- `grist.server_url` when `grist` has no `client_id` (the API-key server address)
+- `peek.enabled`, and `peek.base_url` unless `peek.auto_provision.enabled` is true (D18)
+- `grist.server_url` when `grist` has no `client_id` and `grist.auto_provision.enabled` is not
+  true (the API-key server address)
 
 All of these are imported once (D3) and afterwards ignored (D4). The function
 `admin_config.legacy_keys_in(bundle) -> list[str]` returns the ones present, as dotted names (for
@@ -419,7 +422,7 @@ composed from the bundle, the admin config and the built-in apps.
   `log_org_config_bundle_hash`, `resolve_mode`, `check_storage_permissions` and
   `init_privacy_filter`'s `org_managed`. Everything else gets
   `org_config = effective_org_config(bundle, admin)`.
-- The CLI dispatch (`daemon_main.py:2518`) uses
+- The CLI dispatch (`daemon_main.py:2658`) uses
   `oauth_apps.effective_org_config(bundle, admin_config.config_for(bundle, mode="local", single_user=False), mode="local")`,
   with `bundle = load_org_config()`.
   - The CLI OAuth runners are loopback flows and always use the local apps.
@@ -430,8 +433,8 @@ composed from the bundle, the admin config and the built-in apps.
   with `bundle = load_org_config()`. An `AdminConfigError` is handled like the
   `ConfigurationError` already caught there.
 - In org mode the raw `bundle` travels down with a new `bundle` keyword:
-  - `run_app` passes it to `_maybe_start_web_server(..., bundle=bundle)` (called at `:2160`);
-  - that passes it to `_start_org_web_server(..., bundle=...)` (called at `:818-821`);
+  - `run_app` passes it to `_maybe_start_web_server(..., bundle=bundle)` (called at `:2172`);
+  - that passes it to `_start_org_web_server(..., bundle=...)` (called at `:820-823`);
   - that stores it in a new `OrgAuth` field, `bundle: dict[str, Any]`.
 
   The Admin dispatcher (D6) needs it to recompute the effective config.
@@ -500,8 +503,8 @@ composed from the bundle, the admin config and the built-in apps.
   - it waits on `_wake` for at most the returned seconds, then clears it.
   - It logs at INFO on success and at WARNING with `detail` on failure, never the token.
 - Where it starts: in `daemon_main._start_org_web_server`, right after `server.start()`
-  (`daemon_main.py:1249`), with the shared `org_config` and `daemon_main._shutdown_event`
-  (`:268`). It is followed by `relay_client.request_check()` once the server reports ready. If
+  (`daemon_main.py:1261`), with the shared `org_config` and `daemon_main._shutdown_event`
+  (`:270`). It is followed by `relay_client.request_check()` once the server reports ready. If
   `server.start()` returns only after the server is ready, the call goes directly after it.
 - The admin dispatcher (D6) calls `relay_client.request_check()` after every successful change to `services`.
 - `/oauth/start` for a relayed service whose `status()["last_ok_at"]` is None redirects to
@@ -639,7 +642,7 @@ releases.
   and the Durable Object class `Registry`. Its credentials table gains rows for the three
   `CF_OAUTH_RELAY_*` secrets.
 
-**Accepted risks**, recorded in ADR 0243:
+**Accepted risks**, recorded in ADR 0253:
 
 - Slack documents no PKCE, so a relayed Slack code passes through the Worker in the browser
   redirect. The Worker keeps no logs and the code is single-use.
@@ -697,7 +700,7 @@ releases.
     `def org_nav_items(is_admin: bool) -> tuple[...]`.
   - `wrap`'s `is_org` test becomes `nav_items in (ORG_NAV_ITEMS, ORG_ADMIN_NAV_ITEMS)`.
   - The org pages that know their principal pass `web_shell.org_nav_items(principal.is_admin)`:
-    `routes_connect.py:1067`, `routes_approvals.py:505`, `routes_whats_new.py:93` and
+    `routes_connect.py:1085`, `routes_approvals.py:505`, `routes_whats_new.py:93` and
     `routes_settings.py:1925` and `:1949`.
   - `/security` (`web/server.py:1389`) keeps the static `ORG_NAV_ITEMS`: its nav is fixed when the
     route is built. This is accepted.
@@ -759,7 +762,7 @@ environment to a URL they choose.
 
 - `set_audit_forwarding` keeps the stored name unchanged.
 - The page shows it read-only, with: `Set by editing org/admin_config.json on the server.`
-- ADR 0241 records this.
+- ADR 0251 records this.
 
 - **The four privacy actions** (last row) keep their existing implementation. The
   `_apply_org_action` branches and `_current_pii_flag` move unchanged into `routes_admin`, still
@@ -815,7 +818,7 @@ environment to a URL they choose.
     admin_config.load(), mode="org"))`, then `connector_registry.evict_all()`, a new method that
     clears `_hosts` and `_last_used` under the lock, then `relay_client.request_check()`.
   - Local mode: the same `refresh_in_place` on the startup `org_config` dict, which
-    `_connectors_for_new_principal` closes over (`daemon_main.py:874-876`), so other OS accounts'
+    `_connectors_for_new_principal` closes over (`daemon_main.py:876-878`), so other OS accounts'
     principals see the change too. Then `controller.refresh_connectors()`.
 - **Restart-only actions.** These are only saved.
 - **Pending restart.** `routes_admin` keeps the admin config as loaded at startup
@@ -949,15 +952,15 @@ like `org_config_upload` does.
     `--audit-forwarding-*` option.
 
   When any of them is given, the script prints `error: <flag> has moved to the Admin page (ADR
-  0241); remove it.` for each one and exits 2 without writing.
+  0251); remove it.` for each one and exits 2 without writing.
 
   `--idp-step-up-acr-value` writes `idp.step_up_acr_values`, which stays: it is part of the IdP, so
   it is **not** refused.
 
   Also update:
-  - the "nothing to write" check (`build_org_bundle.py:902-910`), which names unattended sessions
+  - the "nothing to write" check (`build_org_bundle.py:1012-1020`), which names unattended sessions
     and scoped tokens, so it names only what remains;
-  - `--mode local`'s popping of operational keys (`:770-776`), which now has nothing to pop;
+  - `--mode local`'s popping of operational keys (`:819-829`), which now has nothing to pop;
   - `tests/unit/test_docs_configuration_reference.py:128-135`: `_bundle_options()` skips actions
     whose `help is argparse.SUPPRESS`, so the reference no longer has to list refused flags.
 - `--merge` drops legacy keys from the merged bundle and prints `note: dropped <names>; they are
@@ -967,7 +970,7 @@ like `org_config_upload` does.
   replaces `--org-config`, and so do the bundle-merge, signature and `--sign-key` logic. The file
   is `{"rooms": [...], "rooms_synced_at": "<iso>"}`, mode 0600. The administrator uploads it on
   the Admin page. Passing `--org-config` prints `error: --org-config has been replaced by --output;
-  upload the file on the Admin page (ADR 0241).` and exits 2.
+  upload the file on the Admin page (ADR 0251).` and exits 2.
 
 ### D8. Test isolation
 
@@ -1044,7 +1047,7 @@ to `http://localhost:<port>`.
 - **Types.** `OrgAuth.idp` becomes `IdpConfig | None` (`web/server.py:698`), and
   `OrgOAuthProvider.__init__`'s `idp` becomes `IdpConfig | None` (`oauth_provider.py:251`), with
   `authorize` guarded. `routes_org_identity` and `routes_org_stepup` are mounted only when `idp` is
-  not None (`web/server.py:1349`, `:1373`), and the issuer log line (`daemon_main.py:1253-1255`)
+  not None (`web/server.py:1349`, `:1373`), and the issuer log line (`daemon_main.py:1265-1267`)
   logs `single-user` instead when it is None.
 - At every single-user start, `daemon_main` logs at WARNING `Single-user mode: one administrator, no
   identity provider, on this computer only.`
@@ -1239,8 +1242,8 @@ signs in during 7.x would keep old data.
 - `check_not_newer(marker) -> None`. When `marker["format"] > DATA_FORMAT` it raises
   `org_mode.ConfigurationError("This data was last used by PrivacyFence <written_by> (data format <n>). This release, <__version__>, cannot read it. Install <written_by> or newer.")`.
   - `daemon_main.main()` calls it right after `check_runtime_identity` (about
-    `daemon_main.py:2487`), before anything reads or rewrites data, including
-    `load_config(args.config, principal=LOCAL_PRINCIPAL)` at `:2510`, the CLI OAuth flags and
+    `daemon_main.py:2623`), before anything reads or rewrites data, including
+    `load_config(args.config, principal=LOCAL_PRINCIPAL)` at `:2650`, the CLI OAuth flags and
     `--revoke-scoped-tokens`.
   - A `ConfigurationError` there goes to the existing `_refuse_to_start` path.
 - `migrate_everything(*, log: Callable[[str], None]) -> list[str]` returns the problems it found,
@@ -1323,7 +1326,7 @@ signs in during 7.x would keep old data.
 - **Test isolation.** The D8 conftest fixture also patches `data_format.marker_path` to
   `tmp_path / "data_format.json"`. `test_data_format` is an exempt module.
 
-**What 8.x does with it.** This is recorded in ADR 0246 and is not built here.
+**What 8.x does with it.** This is recorded in ADR 0256 and is not built here.
 
 - At startup, if the data directory holds existing data (`settings.yaml`, `credentials/`, `users/`
   or `org/`) and the marker is missing or has `format < 7`, 8.x refuses to start with: `This data
@@ -1336,11 +1339,11 @@ signs in during 7.x would keep old data.
 
 ### D13. The 6 → 7 upgrade is reversible
 
-A 7.x install must be able to go back to the latest 6.x release (6.9.x) and keep running with the
+A 7.x install must be able to go back to the latest 6.x release (6.10.0 or newer) and keep running with the
 `org_config.json` it had. So:
 
 - 7.x never writes, renames or deletes a 6.x bundle or pin file.
-- Every other file 6.x also reads stays in a format 6.9.x reads. That covers settings.yaml,
+- Every other file 6.x also reads stays in a format 6.10.x reads. That covers settings.yaml,
   scoped_tokens.json, `org/oauth_clients.json`, `oauth_refresh.json`, the VAPID key and
   `credentials/`.
 
@@ -1403,12 +1406,12 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
     `deploy/docker/docker-entrypoint.sh:5` counts either file as "a bundle is installed", because
     adoption runs in the daemon. It keeps its message prefix `No organization bundle at`, which
     `tests/integration/test_org_docker_image.py:188` asserts; p15 replaces that test;
-  - `scripts/build_org_bundle.py`'s `--output` default becomes `org_bundle.json` (`:239`);
+  - `scripts/build_org_bundle.py`'s `--output` default becomes `org_bundle.json` (`:247`);
   - `scripts/qa_authenticate_connectors.py:61`: the default path constant changes to the new
     name. The backup name at `:119` uses `DEFAULT_ORG_CONFIG_PATH.name` instead of a hard-coded
     `org_config.json`, and the docstring (`:24`, `:41`, `:107`) names the new file;
   - user-facing messages that name `org_config.json` as the file to edit. Those are in
-    `daemon_main.load_org_config`, about 25 in `org_mode.py` (`:47-512`), `step_up_config.py:293`
+    `daemon_main.load_org_config`, about 35 in `org_mode.py` (`:51-654`, including the Peek and Grist auto-provisioning messages), `step_up_config.py:293`
     and `:299`, and the D9/D10 messages in this plan. They say `org_bundle.json`. p6's mapping of
     parser errors strips `"org_bundle.json's "` accordingly. `web/mcp_dispatch.py:653` and
     `sync/src/privacyfence_sync/runner.py:41` are rewritten by p18.
@@ -1416,8 +1419,11 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
   - `admin_config.json`, `data_format.json`, `relay_token.txt` and `org_bundle_adopted.json` are
     new files that 6.x ignores.
   - The settings.yaml and scoped_tokens.json rewrites D12 performs produce formats the latest 6.x
-    already reads: version-3 rows, canonical verb names, tokens holding their own rules. 6.9.x is
-    the current code base, where all three exist.
+    already reads: version-3 rows, canonical verb names, tokens holding their own rules. 6.10.0 is the first release with all three: it
+    introduced tokens holding their own rules, and 6.9.x cannot read them.
+  - Peek and Grist accounts connected by auto-provisioning (unreleased on `main` when this plan was
+    revised) keep working after a downgrade only if the 6.x release carries that feature too;
+    otherwise the person connects again by hand.
   - What does not carry back to 6.x: changes made on the Admin page, bundles installed under 7.x,
     connections made through the relay (p5), and passkeys or connections made in single-user
     mode. A downgrade returns to the configuration
@@ -1431,7 +1437,7 @@ would refuse its own older `org_config.json` after a downgrade (ADR 0200).
     has since recorded a newer serial, the new serial pin refuses that older bundle with its
     existing "delete the serial pin" message. The docs say this next to the re-upgrade list.
 - **Single-user safety (D9)** treats either pin-file name as "this belonged to an organization server".
-- **8.x (ADR 0246's list).** 8.x deletes `adopt_legacy_files` and the legacy constants along with
+- **8.x (ADR 0256's list).** 8.x deletes `adopt_legacy_files` and the legacy constants along with
   the other pre-7 converters. It keeps the "org_config.json is present and ignored" warning, so
   an operator who copies a bundle there out of 6.x habit is not met with silence. The D12 checkpoint does not need the legacy file, because the marker
   is written only after adoption has run.
@@ -1498,7 +1504,7 @@ returns the `idp` section `IdpConfig.from_org_config` reads.
 - A bundle in org mode must still be signed (ADR 0016, `load_org_config`).
 - An org server with no bundle at all, configured from the environment, is allowed. Its trust
   root is whoever controls the container's environment, the same party that chooses the image.
-  ADR 0248 records this as an amendment to 0016.
+  ADR 0258 records this as an amendment to 0016.
 - A signed bundle **without** an `idp` section refuses an IdP from the environment, unless the
   bundle carries `"idp": {"from_environment": true}` (D15 SEC-14).
 
@@ -1575,7 +1581,7 @@ points here.
 - `docs/oauth-relay.md` gains a "Review new registrations" step: act on each SEC-23 notification
   email, plus a weekly look at `/registrations`. It also sets a revocation turnaround of one
   working day after a report.
-- ADRs 0239 and 0243 record this threat precisely.
+- ADRs 0249 and 0253 record this threat precisely.
 
 **SEC-23: every new registration emails the maintainers.** (p11, p13c, manual mb2, ma0) There
 is no waiting period: a new host is served at once, and the maintainers hear about it right away.
@@ -1659,12 +1665,12 @@ is no waiting period: a new host is served at once, and the maintainers hear abo
 
 - The `oauth-relay-worker` GitHub environment gets required reviewers, with "prevent
   self-review". The docs recommend the same for `downloads-worker`.
-- The relay stays in the existing Cloudflare account, by maintainer decision. ADR 0243 and
+- The relay stays in the existing Cloudflare account, by maintainer decision. ADR 0253 and
   `docs/oauth-relay.md` record that a Workers deploy token covers every Worker in the account, so
   the relay token could replace the download Worker and the reverse. Required reviewers are the
   control.
 - Slack and Miro send no PKCE. A compromised relay could exchange their codes first, or inject an
-  attacker's own account. ADR 0243 and `security-and-compliance.md` state this per provider.
+  attacker's own account. ADR 0253 and `security-and-compliance.md` state this per provider.
 - The Admin page's Slack and Miro rows, when `relay` is true, add the line: `Sign-in codes for
   this service pass through oauth.privacyfence.eu without PKCE. Use your own app to avoid this.`
 
@@ -1688,6 +1694,8 @@ is no waiting period: a new host is served at once, and the maintainers hear abo
   with non-ASCII characters. It does not use `casefold`, which maps `ſ`→`s`.
 - **Tests:** a consumer account without `hd` is not admin; `email_verified: false` with an
   allowed domain is denied; a non-ASCII address never matches.
+- **Entra ID and other providers without `email_verified`:** `idp.trust_unverified_email` lifts
+  the allowed-domains requirement only (D18).
 
 **SEC-08: reserved principal ids.** (p20b)
 
@@ -1742,7 +1750,7 @@ The `ensure` re-import is a merge, not a replacement:
   `--exclude KEY` (repeatable). `build_dmg.sh`, `build_deb.sh` and `build_installer.ps1` call it
   with `--exclude google_web`. The org image's wheel and the PyPI build include it, because
   servers use them.
-- **Rotation.** ADR 0239 and `docs/oauth-relay.md` (a "Rotating a built-in app secret" section)
+- **Rotation.** ADR 0249 and `docs/oauth-relay.md` (a "Rotating a built-in app secret" section)
   describe rotation: add the new secret alongside the old where the provider allows two (Google
   and Salesforce do), release, then retire the old one after the release is adopted.
 
@@ -1757,7 +1765,7 @@ The `ensure` re-import is a merge, not a replacement:
 
 **SEC-15: "no logs" means the Worker writes none.** (p11, p12, p13c)
 
-- The privacy page and ADR 0243 say "the Worker writes no logs".
+- The privacy page and ADR 0253 say "the Worker writes no logs".
 - The runbook checks, as setup and on each review:
   - that no Logpush job and no logging WAF rule cover `oauth.privacyfence.eu`;
   - that `wrangler tail` access is limited to the maintainer token.
@@ -1792,18 +1800,18 @@ The `ensure` re-import is a merge, not a replacement:
 **SEC-20: room text is untrusted.** (p6)
 
 - `replace_rooms` refuses control characters, newlines included, in string values.
-- ADR 0241 says room text reaches agents as untrusted data.
+- ADR 0251 says room text reaches agents as untrusted data.
 
 **SEC-21: the marker is advisory; backups are private.** (p19a, p12)
 
 - `<file>.pre-canonical-verbs.bak` and `.pre-scope-rules.bak` are written with mode 0600 through
   `secure_files`.
-- ADR 0246 requires 8.x to keep reading pre-7 shapes fail-closed rather than trusting the marker,
+- ADR 0256 requires 8.x to keep reading pre-7 shapes fail-closed rather than trusting the marker,
   and its installers not to follow symlinks when reading it.
 
 **SEC-22: public secrets and refresh tokens.** (p12)
 
-ADR 0239 notes that with built-in apps a stolen refresh token no longer also needs the org's own
+ADR 0249 notes that with built-in apps a stolen refresh token no longer also needs the org's own
 client secret.
 
 ### D16. Relay terms and the website
@@ -1944,7 +1952,8 @@ A new host replaces it rather than reworking it in place.
     and has no sudo.
   - `pfrunner` is not in the `docker` group, which is root-equivalent. The live checks need no
     Docker.
-  - Peek and the QA org server run as containers started by the admin account, with no mount of
+  - Peek (`ghcr.io/privacyfence/peek:main`, as `docs/connector-qa.md:39` names it since main moved
+    the QA image) and the QA org server run as containers started by the admin account, with no mount of
     `/home/pfrunner`.
 - Unattended upgrades are on, and the runner binary updates itself (GitHub's default).
 
@@ -2014,31 +2023,132 @@ ma2's revocation test on the long-lived QA host, could not be undone.
 
 **Docs.**
 
-- `docs/connector-qa.md`'s runner section (`:462-584`) is rewritten for this host. It keeps the
+- `docs/connector-qa.md`'s runner section (`:463-585`) is rewritten for this host. It keeps the
   requirements and adds:
   - the Hetzner, Cloudflare and Tailscale setup;
   - the `pfrunner` and Docker separation;
   - minting with built-in apps;
   - the QA org server;
   - the cutover and decommissioning.
-- It fixes the stale "not registered to this repository" line (`:573`).
+- It fixes the stale "not registered to this repository" line (`:574`).
 - `docs/testing-policy.md`, `.claude/commands/qa-record.md`, `.claude/toolkit.yaml`,
   `.claude/skills/steward/SKILL.md`, `.github/pull_request_template.md` and
   `tests/fixtures/live/README.md` change the runner's name and label wherever they give it.
-- ADR **0250** (new) records the decision. ADRs 0019 and 0181 get a status line (amended by
-  0250). ADR 0019's dead link to `docs/connector-live-check-setup.md` is fixed, as a status-line
+- ADR **0260** (new) records the decision. ADRs 0019 and 0181 get a status line (amended by
+  0260). ADR 0019's dead link to `docs/connector-live-check-setup.md` is fixed, as a status-line
   note only.
+
+### D18. Peek and Grist auto-provisioning, which landed on main during planning
+
+`main` gained Peek and Grist auto-provisioning (ADRs 0241-0248; `org_mode.PeekProvisioningConfig`
+and `GristProvisioningConfig`, `org_mode.py:521-651`; `peek_provisioning.py`,
+`grist_provisioning.py`; `build_org_bundle.py --peek-auto-provision` and
+`--grist-auto-provision`). Each person who signs in to an org server gets a Peek account, or a Grist
+API key, connected for them.
+
+- Its settings live in the bundle: `peek.auto_provision` and `grist.auto_provision`, with
+  `enabled`, `key_env` (the environment variable holding the provisioning key) and
+  `trust_unverified_email`, plus `provisioner_url` for Grist.
+- Turning it on requires the server address in the same bundle: `peek.base_url` or
+  `grist.server_url`.
+- `daemon_main` validates both at startup (`:1163-1167`) and starts both workers (`:1221-1222`).
+- `--peek-release` and `--grist-release` read the raw bundle (`:2386`, `:2436`).
+
+This section overrides D2, D3, D6 and D7 where they differ.
+
+**Auto-provisioning stays in the signed bundle.** Its settings name a secret and the endpoint that
+receives it. An Admin-page edit that redirected `base_url` or `provisioner_url` would send the
+provisioning key to another host, the same risk SEC-06 closes for audit forwarding. So:
+
+- **Bundle keys (D2).**
+  - `peek.auto_provision` and `grist.auto_provision` are bundle keys.
+  - While `auto_provision.enabled` is true, `peek.base_url`, and `grist.server_url` in API-key
+    mode, are bundle keys too, not legacy keys.
+  - `"peek"` leaves the top-level `LEGACY_BUNDLE_KEYS`. The legacy sub-keys become:
+    - `peek.enabled`;
+    - `peek.base_url` unless `peek.auto_provision.enabled`;
+    - `grist.server_url` when `grist` has no `client_id` and `grist.auto_provision.enabled` is
+      not true.
+  - `legacy_keys_in` follows the same rules.
+- **Import (D3).**
+  - `import_from_bundle` marks a service with `auto_provision.enabled` as `offered`.
+  - It leaves that service's admin `base_url` or `server_url` empty, because the bundle owns it.
+  - A later `ensure` re-import (SEC-11) never copies an address the bundle owns.
+- **Effective config (D3, step 1 and step 3).** Step 1 copies `peek` keeping only
+  `auto_provision`, plus `base_url` while it is enabled. It copies `grist` without the API-key
+  `server_url` unless auto-provisioning is enabled. In step 3:
+  - **peek.** When the bundle's `peek.auto_provision.enabled` is true, the section is
+    `{"base_url": <bundle base_url>, "auto_provision": <bundle auto_provision>}`, and the admin
+    `base_url` is ignored. Otherwise the D3 rules apply unchanged.
+  - **grist.** After the bundle-OAuth-app case, when the bundle's `grist.auto_provision.enabled` is
+    true, the section is `{"server_url": <bundle server_url>, "auto_provision": <bundle
+    auto_provision>}`.
+  - **Not offered.** A service the Admin page withdraws has no section, so its provisioning worker
+    sees `enabled: false` and does nothing. Withdrawing Peek or Grist is how an admin pauses
+    provisioning without a new bundle.
+  - **Startup.** `daemon_main`'s startup validation and `peek_provisioning.start` /
+    `grist_provisioning.start` receive the effective config (p4).
+  - **The release commands.** `run_peek_release` and `run_grist_release` keep reading the raw
+    bundle: the keys they need are bundle keys.
+- **Admin page (D6).**
+  - `service_rows` sets `options.locked` for peek and grist when the bundle's
+    `auto_provision.enabled` is true.
+  - These rows get the status line `Accounts are created and connected at sign-in (automatic
+    accounts, from the configuration file).` It comes after the server address
+    (`Server: <address>`).
+  - `set_server_address` on a locked service is refused with `The server address comes from the
+    configuration file while automatic accounts are on.`
+  - The row's doc link goes to the provider doc's automatic-accounts section (`peek-setup` and
+    `grist-setup` on main).
+- **Bundle tooling (D7).**
+  - `--peek-base-url`, and `--grist-server-url` without `--grist-client-id`, stay accepted, and
+    unrefused, when given with `--peek-auto-provision` or `--grist-auto-provision` (or with
+    `--merge` against a bundle that has it on). They are refused only on their own.
+  - The auto-provision flags are unchanged.
+  - `--merge` keeps `auto_provision` and the address it needs.
+- **Environment-only servers (D14).**
+  - A server with no bundle has no auto-provisioning. There are no environment variables for it in
+    this plan, and the docs say so.
+  - Adding `PRIVACYFENCE_PEEK_*` and `PRIVACYFENCE_GRIST_*` variables later fits D14's trust model
+    (the environment is as trusted as the bundle). It is listed under Risks as a follow-up.
+- **Single-user mode (D9).** Provisioning starts from the IdP sign-in callbacks
+  (`routes_org_identity.py:228-231`, `oauth_provider.py`), and single-user sign-in (D10) never
+  calls them. So a single-user install never provisions, even with a bundle that turns it on. p16
+  adds a test that a single-user sign-in calls neither `notify_sign_in`.
+- **Docs (p13a, p13b).**
+  - `peek-setup.md` and `grist-setup.md` keep the bundle flags for automatic accounts.
+  - The manual-address flow moves to the Admin page.
+  - The configuration reference's provisioning rows (`configuration-reference.md:284-296`) stay
+    under the bundle flags.
+
+**Unverified email is handled one way.** Main's provisioning trusts an unverified email only with
+an explicit `trust_unverified_email`, for providers like Microsoft Entra ID that never send
+`email_verified`. SEC-07 follows the same pattern, so organizations using Entra ID with allowed
+domains are not locked out:
+
+- `idp.trust_unverified_email` (bundle), or `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL=true`
+  (environment, D14), lets `check_authz_policy` trust the email domain without
+  `email_verified`.
+- The Google `hd` rule still applies, and admins by email never use it: they always need a
+  verified address.
+- The docs and the CHANGELOG line name it as the fix for Entra ID organizations that use allowed
+  domains.
+
+**Line references.** Every `file:line` in this plan was refreshed against `main` at `95e69b2d`
+(after the Peek, Grist and 6.10.0 merges). Phases still locate code by the names given next to each
+reference.
 
 ## ADRs
 
-- **0239** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
+- **0249** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
   ship in every distribution, baked in from CI secrets by `scripts/builtin_apps.py`. Relates to
   0040: same mechanism, new apps; 0040 gets no status line.
-- **0240** — `org_config.json` holds only the startup settings (`mode`, `server`, `idp`) and app
+- **0250** — `org_config.json` holds only the startup settings (`mode`, `server`, `idp`) and app
   credentials, stays signed, and a provider it does not carry uses the built-in app. Amends 0196
   (which services are offered is no longer read from the bundle) and 0016 (the signature no longer
-  covers operational settings).
-- **0241** — Operational settings live in a daemon-written `org/admin_config.json`, imported once
+  covers operational settings). Peek and Grist auto-provisioning stays in the bundle, because it
+  names a secret and the endpoint that receives it (D18); relates to 0241, 0244.
+- **0251** — Operational settings live in a daemon-written `org/admin_config.json`, imported once
   from an existing bundle and then managed on the Admin page.
   - On a new org server the built-in services start off; offering the first one is the opt-in to
     the relay.
@@ -2051,23 +2161,23 @@ ma2's revocation test on the long-lived QA host, could not be undone.
     offered and whether unattended sessions are on.
 
   Amends 0196; relates to 0016, 0034, 0068, 0070, 0200.
-- **0242** — Administration is a separate top-level Admin page; Settings shows every person the
+- **0252** — Administration is a separate top-level Admin page; Settings shows every person the
   same personal sections. The org Privacy and Stats sections move to Admin. Amends 0217 (where
   Stats lives); relates to 0033.
-- **0243** — Org servers use the built-in apps through the PrivacyFence-hosted redirect relay at
+- **0253** — Org servers use the built-in apps through the PrivacyFence-hosted redirect relay at
   `oauth.privacyfence.eu`. It is deployed from `main` on its own track, never by a release tag,
   and its contract only grows. It forwards only to hosts that proved control of their domain, keeps no
   logs, shows registrations only to maintainers, and maintainers can revoke a host. It runs in the
   existing Cloudflare account, with required reviewers on deploys. It forwards to a loopback
   host without registration. It is offered as is, under the published relay terms, with no
   warranty and liability limited as far as the law allows (D16). Relates to 0011, 0186.
-- **0244** — `mode` and the server address may come from environment variables. Organization mode
+- **0254** — `mode` and the server address may come from environment variables. Organization mode
   without an IdP is single-user mode, with one administrator,, allowed only on `http://localhost` or
   `127.0.0.1`, signed in with a one-time setup code and then a passkey. The Docker image starts in
   organization mode. Relates to 0011, 0177, 0213.
-- **0245** — Local (desktop) mode is deprecated in 7.x, announced in the log, status, pages and
+- **0255** — Local (desktop) mode is deprecated in 7.x, announced in the log, status, pages and
   companion, and is to be removed in 8.x. Relates to 0002, 0003.
-- **0246** — 7.x is the migration checkpoint.
+- **0256** — 7.x is the migration checkpoint.
   - Every start migrates every person's data eagerly, then records `data_format.json`
     (`format: 7`).
   - 7.x refuses data whose format is newer than its own.
@@ -2075,21 +2185,21 @@ ma2's revocation test on the long-lived QA host, could not be undone.
     install 7.x first.
 
   Relates to 0047, 0171, 0172, 0228, 0236, 0041.
-- **0247** — The 6 → 7 upgrade is reversible. 7.x adopts `org_config.json` and its pin files by
+- **0257** — The 6 → 7 upgrade is reversible. 7.x adopts `org_config.json` and its pin files by
   copying them to new names (`org_bundle.json`, `org_bundle_signing_pubkey.txt`,
   `org_bundle_serial.txt`) and never changes a 6.x file, so the latest 6.x keeps running after a
-  downgrade. Amends 0016 and 0200 (the file names); relates to 0246.
-- **0248** — An organization server can take its IdP and server address from environment
+  downgrade. Amends 0016 and 0200 (the file names); relates to 0256.
+- **0258** — An organization server can take its IdP and server address from environment
   variables, with no bundle. A bundle, when present, must still be signed and wins. A signed bundle
   without an `idp` section refuses an environment IdP unless it sets `idp.from_environment`. Amends 0016
   (org mode no longer always needs a signed bundle) and 0011.
-- **0249** — Admins can be named by IdP-verified email (`PRIVACYFENCE_ADMIN_EMAILS` or
+- **0259** — Admins can be named by IdP-verified email (`PRIVACYFENCE_ADMIN_EMAILS` or
   `idp.admin_emails`), alongside the group claim. Relates to 0011.
-- **0250** — Live connector checks run on a dedicated runner, `runner.privacyfence.eu`
+- **0260** — Live connector checks run on a dedicated runner, `runner.privacyfence.eu`
   (Hetzner, behind the Cloudflare proxy, administered only over Tailscale), labelled
   `privacyfence-live` in its own runner group. They test the built-in apps, and the runner's bundle
   is optional. The host also serves a QA organization server for relay testing. Amends 0019 (the
-  host) and 0181 (the group and label); relates to 0239, 0243.
+  host) and 0181 (the group and label); relates to 0249, 0253.
 
 ## Manual steps
 
@@ -2120,6 +2230,12 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 
 ## Risks and open questions
 
+- **Auto-provisioning on an environment-only server (open).** D18 keeps Peek and Grist
+  auto-provisioning in the bundle, so a server started from environment variables alone (D14)
+  cannot use it. `PRIVACYFENCE_PEEK_AUTO_PROVISION`, `..._BASE_URL`, `PRIVACYFENCE_GRIST_*`
+  variables would fit D14's trust model. They are left for a follow-up unless the maintainer wants
+  them in 7.0.
+
 - **The relay terms are not legal advice.** The plan writes them from the decisions above (D16), and
   ma5 asks for a lawyer's review. Until then they rest on the publisher's own judgement.
 - **The live-check cutover is a single switch.** `main`'s workflows move to the
@@ -2141,14 +2257,14 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - Slack's and Miro's lack of PKCE through the relay is an accepted, documented risk.
 
 - **An environment-only server has no signature.** Its trust root is whoever controls the
-  container's environment, which is the same party that picks the image. ADR 0248 states this. A
+  container's environment, which is the same party that picks the image. ADR 0258 states this. A
   bundle stays available for operators who want a signed configuration.
 - **Admins by email depend on `email_verified`.** An IdP that does not send it cannot use the email
   list, and its admins use the group claim instead.
 
-- **Downgrade target is the latest 6.x.** D12 rewrites rules into formats 6.9.x reads: version-3
-  rows, canonical verbs, tokens with their own rules. An older 6.x release may not read them.
-  The docs name 6.9.x as the release to go back to.
+- **Downgrade target is the latest 6.x.** D12 rewrites rules into formats 6.10.x reads: version-3
+  rows, canonical verbs, tokens with their own rules. 6.9.x and older cannot read tokens with
+  their own rules. The docs name the latest 6.x (6.10.0 or newer) as the release to go back to.
 - **The 7.x docs use the new file name.** An operator who follows old instructions and copies a
   bundle to `org_config.json` after upgrading gets the "changed after the upgrade and is ignored"
   warning at every start. That is deliberate: it is better than 7.x silently reading a file that
@@ -2162,7 +2278,7 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 - **Single-user safety relies on the port publish.** Inside the container the daemon binds
   `0.0.0.0`. Only `-p 127.0.0.1:8765:8765` keeps it off the network, and the image cannot verify
   that. The issuer must be loopback and the account needs a passkey, so a reachable single-user install still
-  needs the setup code from the container log. ADR 0244 and the Docker docs say this plainly.
+  needs the setup code from the container log. ADR 0254 and the Docker docs say this plainly.
 - **Single-user sign-in is new authentication code.** p16 runs on Opus for that reason (see its
   `worker_model_reason`).
 
@@ -2174,10 +2290,10 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 - **Desktop installs lose bundle enforcement of the offered services.** An IT-distributed bundle
   used to decide which services a desktop install offers. After the import, the install owner
   decides on the Admin page. This follows from moving the switches out of the signed bundle, and
-  ADR 0241 records it.
+  ADR 0251 records it.
 - **Signing no longer covers the operational settings.** `authz`, `step_up`, `audit_forwarding`
   and `scoped_tokens` were covered by the bundle signature and now are not. They have the same
-  protection as the install-wide settings.yaml. ADR 0240 and 0241 record this, and step-up can
+  protection as the install-wide settings.yaml. ADR 0250 and 0251 record this, and step-up can
   only be tightened from the UI.
 - **Something may treat a non-empty `org_config` as "has a bundle".** The effective config is
   never empty-equivalent to a missing bundle. p4 greps truthiness checks; the planner and reviewer
@@ -2251,7 +2367,7 @@ verify_after_merge:
 - test ! -d cloudflare/oauth-relay || (cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test)
 final_checks:
 - docs/builtin-oauth-apps-plan.md and docs/builtin-oauth-apps-plan-manual-steps.html are deleted, and grep -rn "builtin-oauth-apps-plan" --exclude-dir=.git . finds nothing
-- ADRs 0239-0249 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0011, 0016, 0196, 0200 and 0217 carry new Status lines; ADR 0040 is unchanged
+- ADRs 0249-0260 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0011, 0016, 0019, 0181, 0196, 0200 and 0217 carry new Status lines; ADR 0040 is unchanged
 - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
 - cd cloudflare/oauth-relay && npm ci && npm test && npm run typecheck && npm run dry-run passes
 phases:
@@ -2289,7 +2405,7 @@ phases:
        - log_org_config_bundle_hash reads the new path.
        - run_app records the org_bundle_adopted audit entry right after log_org_config_bundle_hash.
        - Update the error texts that name org_config.json in load_org_config to name org/org_bundle.json.
-       - Do the same for every user-facing message D13 lists: org_mode.py (:47-512) and step_up_config.py (:293, :299) say org_bundle.json. Update the tests that pin those texts. Leave web/mcp_dispatch.py and the sync runner to p18.
+       - Do the same for every user-facing message D13 lists: org_mode.py (:51-654, including the auto-provisioning messages) and step_up_config.py (:293, :299) say org_bundle.json. Update the tests that pin those texts. Leave web/mcp_dispatch.py and the sync runner to p18.
     4. settings_controller.py: install_org_config_bytes writes paths.org_bundle_path() (:1145). The snapshot's installed date reads it (:2108), and uses the legacy file's mtime while the bundle still equals the adopted copy (D13).
     5. deploy/docker/healthcheck.py and docker-entrypoint.sh per D13: the healthcheck reads the new name and falls back to the old one, and the entrypoint counts either file as installed. Keep the entrypoint message's prefix "No organization bundle at" (tests/integration/test_org_docker_image.py:188 asserts it), followed by the new path.
     6. scripts/build_org_bundle.py: the --output default becomes org_bundle.json. scripts/qa_authenticate_connectors.py: DEFAULT_ORG_CONFIG_PATH becomes the new name; the backup at :119 uses DEFAULT_ORG_CONFIG_PATH.name; the docstring (:24, :41, :107) names the new file.
@@ -2336,9 +2452,9 @@ phases:
   - .github/workflows/publish-pypi.yml
   brief: |-
     Read the plan's "Design → D1" section first; every name, env var, message and module format is there.
-    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_desktop", "google_web", "slack", "salesforce", "atlassian_local", "atlassian_relay", "miro"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0239); ASCII only.
+    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_desktop", "google_web", "slack", "salesforce", "atlassian_local", "atlassian_relay", "miro"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0249); ASCII only.
     2. Add `src/privacyfence/_builtin_apps.py` to .gitignore directly below the `_telegram_credentials.py` line, and `include src/privacyfence/_builtin_apps.py` to MANIFEST.in directly below line 6, extending the comment above it to name both generated modules.
-    3. In src/privacyfence/app_credentials.py add BUILTIN_APP_KEYS and builtin_app(key) per D1 (a literal `from . import _builtin_apps` with the same `# type: ignore[attr-defined]` comment the Telegram import carries; the PRIVACYFENCE_BUILTIN_APPS JSON-file fallback; one logger.warning naming only the env var on a bad file). Extend the module docstring by one paragraph naming ADR 0239.
+    3. In src/privacyfence/app_credentials.py add BUILTIN_APP_KEYS and builtin_app(key) per D1 (a literal `from . import _builtin_apps` with the same `# type: ignore[attr-defined]` comment the Telegram import carries; the PRIVACYFENCE_BUILTIN_APPS JSON-file fallback; one logger.warning naming only the env var on a bad file). Extend the module docstring by one paragraph naming ADR 0249.
     4. Call the generator next to every Telegram generator call: scripts/build_dmg.sh (after line 109: `"$PYTHON" scripts/builtin_apps.py write`), scripts/build_deb.sh (after line 95), scripts/build_installer.ps1 (after lines 94-95, followed by `if ($LASTEXITCODE -ne 0) { throw "Writing built-in app credentials failed" }`).
     5. .github/workflows/build.yml: add the 14 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries to the step-level `env:` of the `build` job's "Build .app, .pkg, .mcpb and DMG" step, the `build-windows` "Build installer" step and the `build-deb` "Build .deb" step. In `build-org-image`, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 14 env entries, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (same REQUIRE logic, `python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`).
     6. .github/workflows/publish-pypi.yml `build` job: the same two steps next to the Telegram ones, with check-dist over `dist/*.whl dist/*.tar.gz`. The secrets go only to the write step's env, never to the job.
@@ -2394,6 +2510,7 @@ phases:
        - legacy_keys_in returns the dotted names, including atlassian.assets and a grist.server_url without client_id, and [] for a credentials-only bundle.
     5. Run ruff check ., python3 -m pytest tests/unit -q (the new autouse fixture must break nothing), and python3 -m mypy src/privacyfence/admin_config.py.
     Also apply D15 SEC-01 (single-user step_up defaults in import_from_bundle) and SEC-11 (the ensure re-import is a merge with D15's four rules, logging each overwritten section), each with tests.
+    Also apply D18 (bundle keys and import): "peek" is no longer a top-level LEGACY_BUNDLE_KEYS entry; peek.enabled, peek.base_url unless peek.auto_provision.enabled, and grist.server_url without client_id unless grist.auto_provision.enabled are the legacy sub-keys; import_from_bundle offers a service whose auto_provision is enabled and leaves its admin address empty; the SEC-11 re-import never copies an address the bundle owns. Test each rule, including a bundle with peek.auto_provision enabled and base_url (not legacy, nothing copied) and one with only peek.base_url (legacy, copied).
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m pytest tests/unit -q passes
@@ -2430,6 +2547,7 @@ phases:
        - credentials_source for each case.
     4. Run ruff check ., python3 -m pytest tests/unit/test_oauth_apps.py -q and python3 -m mypy src/privacyfence/oauth_apps.py.
     Also apply D15 SEC-19 (refresh_in_place under a module lock, and snapshot()), with a test that snapshot returns an independent copy.
+    Also apply D18 (effective config): the peek and grist auto_provision branches in steps 1 and 3, with tests that the effective section carries the bundle's base_url/server_url and auto_provision while enabled, that the admin address is ignored then, and that withdrawing the service removes the section so org_mode.PeekProvisioningConfig.from_org_config and GristProvisioningConfig.from_org_config return enabled=False.
   acceptance:
   - python3 -m pytest tests/unit/test_oauth_apps.py -q --cov=privacyfence.oauth_apps --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/oauth_apps.py passes
@@ -2450,11 +2568,11 @@ phases:
   brief: |-
     Read "Design → D3" ("Where the import runs") and "D4" ("Where it is applied").
     1. Guard grep: `grep -rnE "(not|if|bool\()\s*org_config\b|len\(org_config\)" src/privacyfence`. The reviewer found these hits, all harmless:
-       - daemon_main.py:558, which checks the signature field on the raw bundle;
-       - daemon_main.py:1120, a docstring;
+       - daemon_main.py:560, which checks the signature field on the raw bundle;
+       - daemon_main.py:1122, a docstring;
        - settings_controller.py:1295, 1385 and 1745;
        - routes_connect.py:141;
-       - org_mode.py:535.
+       - org_mode.py:672.
        If any other hit decides something from org_config being empty or non-empty, stop with status=blocked and name it.
     2. daemon_main.py:
        - Add load_admin_config(bundle) -> tuple[dict, bool] and record_admin_config_import(bundle, imported) per D3, passing single_user=False (p15 changes it).
@@ -2486,6 +2604,7 @@ phases:
          - A bundle upload carrying "authz" over an imported config installs and sets the "are ignored" message.
        - Do not weaken any assertion.
     5. Run ruff check . and python3 -m pytest tests/unit -q.
+    Also apply D18 (startup): the PeekProvisioningConfig/GristProvisioningConfig validation and peek_provisioning.start / grist_provisioning.start in run_app (daemon_main.py ~:1163-1167, ~:1221-1222 on main) receive the effective org_config; run_peek_release and run_grist_release keep load_org_config(). Test that a withdrawn Peek starts no provisioning.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_daemon_main.py -q -k "TestAdminConfigStartup or TestEffectiveOrgConfigWiring" passes and selects at least 7 tests
@@ -2517,7 +2636,7 @@ phases:
        - In callback(), use pending.redirect_uri for the exchange instead of rebuilding it.
        - Strip RELAY_MARKER from the Google section before google_oauth.web_client_config, in both _build_authorize_url and _exchange_and_save.
     5. web/server.py: in the org-mode route assembly, right before the routes_connect.build_routes call, add Route("/.well-known/privacyfence-relay", ...) per D5.
-    6. daemon_main.py _start_org_web_server: after server.start() (line ~1249), call relay_client.start_registration_loop(server_config.issuer_url, org_config, _shutdown_event), then relay_client.request_check().
+    6. daemon_main.py _start_org_web_server: after server.start() (line ~1261), call relay_client.start_registration_loop(server_config.issuer_url, org_config, _shutdown_event), then relay_client.request_check().
     7. Tests.
        - tests/unit/test_relay_client.py:
          - The token is created once, is 43 characters, has mode 0600, and is regenerated when corrupt.
@@ -2583,6 +2702,7 @@ phases:
        - No row, summary or log record (caplog) contains a client_secret or a bearer-token env var's value. Set a fake env var to a sentinel and assert it never appears.
     3. Run ruff check ., python3 -m pytest tests/unit/test_admin_config.py -q and python3 -m mypy src/privacyfence/admin_config.py.
     Also apply D15: SEC-18 (the apply_change(action, params, *, bundle, mode, single_user) signature, replacing the payload keys), SEC-06 (bearer env dropped on a URL or kind change), SEC-04's org server-address rule, and SEC-20 (no control characters in rooms), each with tests.
+    Also apply D18 (Admin actions and rows): service_rows sets options.locked for peek and grist when the bundle's auto_provision is enabled (peek options become {"base_url": str, "locked": bool}) and adds "auto_provision": true to those rows; set_server_address on a locked service returns the D18 refusal text. Test both.
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/admin_config.py passes
@@ -2706,6 +2826,7 @@ phases:
     6. Run ruff check . and python3 -m pytest tests/unit -q. If the session-start hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
     Also apply D15 SEC-05's Admin-page line for relayed Slack and Miro rows, with a test.
     Also apply D16: the relay status line ends with a "Relay terms" link to https://privacyfence.eu/relay-terms/, with a test.
+    Also apply D18 (Admin rows): renderServices shows the automatic-accounts status line for a row with auto_provision true; test it.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - grep -n "def org_nav_items" src/privacyfence/web_shell.py matches
@@ -2727,7 +2848,7 @@ phases:
     1. settings_window_html.py:
        - Add the features section to the admin surface in both modes, with renderFeatures(state):
          - the Assets form (set_atlassian_assets);
-         - the Grist and Peek address forms (set_server_address), with no Grist form when options.locked;
+         - the Grist and Peek address forms (set_server_address), with no Grist or Peek form when options.locked;
          - the unattended-sessions toggle;
          - the room directory: count and synced date, a file input dispatching the intercepted upload_rooms action, and a Clear control (clear_rooms).
          For the forms, copy the structure of the Grist API-key modal at settings_window_html.py:1970-2020.
@@ -2735,7 +2856,7 @@ phases:
     2. routes_settings.py: now that no settings surface dispatches install_org_config, remove /api/settings/org_config/upload and its _BESPOKE_SENSITIVE_ROUTE_PATHS entry. Move the remaining settings-path upload tests in test_routes_settings.py to /api/admin/org_config/upload (in test_routes_settings.py or test_routes_admin.py), keeping their assertions.
     3. tests/unit/test_settings_window_html.py:
        - The features section renders each form prefilled from a sample state.
-       - A locked grist shows no form.
+       - A locked grist or peek (D18) shows no form.
        - The rooms control dispatches upload_rooms.
        - The local settings surface no longer contains "Organization Configuration", and the admin surface does.
     4. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q, and fix any smoke test that looked for the Organization Configuration card on /settings so it looks on /admin.
@@ -2845,7 +2966,7 @@ phases:
     1. scripts/build_org_bundle.py:
        - Hide every flag D7 lists with help=argparse.SUPPRESS, and after parsing refuse each one given, with D7's exact message and exit code 2, writing nothing. --idp-step-up-acr-value stays.
        - --merge drops legacy keys with D7's note.
-       - Update the "nothing to write" check (:902-910) and --mode local's popping (:770-776) per D7.
+       - Update the "nothing to write" check (:1012-1020) and --mode local's popping (:819-829) per D7.
        - Keep the signing code byte-identical (tests/unit/test_build_org_bundle.py cross-checks it).
     2. tests/unit/test_build_org_bundle.py:
        - Rewrite the tests that built operational sections so they assert the refusal: one parametrized test named test_moved_flag_is_refused over every moved flag, with the exact message and exit code 2. Pass a valid minimal argument set in each case, so the refusal is what fails.
@@ -2856,6 +2977,7 @@ phases:
     4. scripts/sync_room_directory.py: --output replaces --org-config per D7. Remove the bundle-merge and signature handling, refuse --org-config with D7's message, write the rooms file with mode 0600, and update the module docstring and example.
     5. tests/unit/test_sync_room_directory.py: rewrite the merge and signing tests into output-file tests (the written file's shape, mode 0600, the --org-config refusal). Keep the directory-fetch tests unchanged.
     6. Run ruff check . and python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py -q.
+    Also apply D18 (bundle tooling): --peek-base-url and --grist-server-url without --grist-client-id are accepted with --peek-auto-provision/--grist-auto-provision (or --merge against a bundle that has it on) and refused only on their own; --merge keeps auto_provision and its address. Keep every existing test_build_org_bundle.py auto-provision test passing.
   acceptance:
   - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py -q passes
   - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k test_moved_flag_is_refused passes and selects at least 30 tests
@@ -2949,7 +3071,7 @@ phases:
     3. daemon_main.py load_admin_config: pass single_user=org_mode.is_single_user(bundle) instead of False (D3). routes_admin's apply_change and replace_rooms calls pass single_user the same way, replacing the False p7a and p7b used.
        Then in _start_org_web_server:
        - In single-user mode, replace the "requires an idp section" raise with D9's loopback check and message, and with D9's "a real server never falls back to single-user mode" check (a pinned signing key, or a non-empty imported_from_bundle_sha256).
-       - Apply D9's "Types" bullet: OrgAuth.idp and OrgOAuthProvider's idp become Optional, authorize is guarded, routes_org_identity and routes_org_stepup are mounted only when idp is not None (web/server.py:1349, :1373), and the issuer log line (daemon_main.py:1253-1255) handles None.
+       - Apply D9's "Types" bullet: OrgAuth.idp and OrgOAuthProvider's idp become Optional, authorize is guarded, routes_org_identity and routes_org_stepup are mounted only when idp is not None (web/server.py:1349, :1373), and the issuer log line (daemon_main.py:1265-1267) handles None.
        - Log D9's single-user warning in run_app.
        - Stop condition: if anything besides those call sites dereferences idp in a way a single-user start reaches, stop with status=blocked and list the call sites.
     4. deploy/docker/Dockerfile, docker-entrypoint.sh and healthcheck.py per D9. tests/integration/test_org_docker_image.py: replace test_refuses_to_start_without_a_bundle (:185) with a test that the image without a bundle starts, is healthy, and logs the single-user line. Copy the existing tests' container-run helper.
@@ -3029,6 +3151,7 @@ phases:
     11. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
     Stop condition: if session creation in routes_org_identity cannot be reused without copying private code that carries security checks (for example session fixation handling), stop with status=blocked and describe what would have to be duplicated.
     Also apply D15 SEC-16 (check and consume under one lock, with a concurrency test) and SEC-01's tests: a valid single-user session cookie without an assertion cannot approve or perform a sensitive Admin action.
+    Also apply D18 (single-user mode): a single-user sign-in calls neither peek_provisioning.notify_sign_in nor grist_provisioning.notify_sign_in; test it with both stubbed.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/web/test_single_user_auth.py -q --cov=privacyfence.web.single_user_auth --cov-branch --cov-report=term-missing passes and reports 100%
@@ -3133,7 +3256,7 @@ phases:
        - run_app calls data_format.migrate_everything(log=logger.warning) after load_admin_config, in both modes, before the web server is built.
        - Remove _upgrade_all_principals and its call in _start_org_web_server (~1231). Keep load_config's own lazy calls; they are idempotent.
     5. tests/conftest.py: patch data_format.marker_path in the D8 fixture, exempt test_data_format, and call data_format.reset_for_tests() in _reset().
-    6. tests/unit/test_daemon_main.py: in the run_app harness (_patch_common, ~3257-3301), stub data_format.migrate_everything (returning []) and data_format.check_not_newer, so run_app tests never walk the source checkout.
+    6. tests/unit/test_daemon_main.py: in the run_app harness (_patch_common, ~3443-3487), stub data_format.migrate_everything (returning []) and data_format.check_not_newer, so run_app tests never walk the source checkout.
     7. scripts/check_coverage_floor.py: add "src/privacyfence/data_format.py" to MODULE_FLOORS at 100.
     8. Tests:
        - tests/unit/test_data_format.py, with paths.data_dir patched to tmp_path, and the admin config created where a test expects the marker:
@@ -3225,6 +3348,7 @@ phases:
        - No log record (caplog) contains the secret in any test.
     7. Run ruff check . and python3 -m pytest tests/unit -q. Push, then dispatch build.yml on the phase branch (ci.dispatchable) and check that the build-org-image job's image tests pass.
     Also apply D15 SEC-14 (a signed bundle without idp refuses the environment IdP unless idp.from_environment is true) and SEC-11's rule that a re-import keeps org_server, each with tests.
+    Also apply D18: PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL ("true" or "false", anything else is a ConfigurationError) maps to the idp section's trust_unverified_email; IdpConfig gains trust_unverified_email: bool = False, read from the section.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_mode.py -q -k idp_section passes and selects at least 7 tests
@@ -3255,30 +3379,31 @@ phases:
        - The group rule still works alone and together with the email list.
     4. Run ruff check . and python3 -m pytest tests/unit -q.
     Also apply D15 SEC-07 (the Google hd rule, email_verified in check_authz_policy, ASCII lower with non-ASCII refused), SEC-08 (reserved subs hashed; the startup log line) and SEC-14's --idp-from-environment flag in build_org_bundle.py, each with tests. Add the SEC-07 behaviour change to the commit message so p13b can note it in the CHANGELOG.
+    Also apply D18's unverified-email rule: check_authz_policy trusts the email domain without email_verified only when IdpConfig.trust_unverified_email is true (the Google hd rule still applies); admins by email never use it; build_org_bundle.py gains --idp-trust-unverified-email. Tests: Entra-style claims without email_verified are denied by default and allowed with the flag; an email admin without email_verified is never admin, flag or not.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_identity.py -q -k admin passes
   - ruff check . passes
 - id: p12-adrs
-  title: ADRs 0239-0250 and the status lines on the ADRs they amend
+  title: ADRs 0249-0260 and the status lines on the ADRs they amend
   depends_on:
   - p20b-admins-by-email
   - p10-bundle-tooling
   - p11-relay-worker
   complexity: M
   touches:
-  - docs/adr/0239-built-in-oauth-apps-ship-in-every-distribution.md
-  - docs/adr/0240-org-config-holds-only-startup-settings-and-app-credentials.md
-  - docs/adr/0241-operational-settings-live-in-a-daemon-written-admin-config.md
-  - docs/adr/0242-administration-is-a-separate-admin-page.md
-  - docs/adr/0243-org-servers-use-built-in-apps-through-a-domain-verified-relay.md
-  - docs/adr/0244-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md
-  - docs/adr/0245-local-mode-is-deprecated-in-7-and-removed-in-8.md
-  - docs/adr/0246-7x-is-the-migration-checkpoint-for-8x.md
-  - docs/adr/0247-the-6-to-7-upgrade-is-reversible.md
-  - docs/adr/0248-an-organization-server-can-start-from-environment-variables.md
-  - docs/adr/0249-admins-can-be-named-by-verified-email.md
-  - docs/adr/0250-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md
+  - docs/adr/0249-built-in-oauth-apps-ship-in-every-distribution.md
+  - docs/adr/0250-org-config-holds-only-startup-settings-and-app-credentials.md
+  - docs/adr/0251-operational-settings-live-in-a-daemon-written-admin-config.md
+  - docs/adr/0252-administration-is-a-separate-admin-page.md
+  - docs/adr/0253-org-servers-use-built-in-apps-through-a-domain-verified-relay.md
+  - docs/adr/0254-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md
+  - docs/adr/0255-local-mode-is-deprecated-in-7-and-removed-in-8.md
+  - docs/adr/0256-7x-is-the-migration-checkpoint-for-8x.md
+  - docs/adr/0257-the-6-to-7-upgrade-is-reversible.md
+  - docs/adr/0258-an-organization-server-can-start-from-environment-variables.md
+  - docs/adr/0259-admins-can-be-named-by-verified-email.md
+  - docs/adr/0260-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md
   - docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md
   - docs/adr/0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md
   - docs/adr/0011-org-mode-runs-its-own-oauth-authorization-server.md
@@ -3288,49 +3413,49 @@ phases:
   - docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md
   - docs/adr/0217-the-org-admin-stats-page-shows-counts-only.md
   brief: |-
-    1. Check `ls docs/adr | tail -3` first. If 0239-0250 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
+    1. Check `ls docs/adr | tail -3` first. If 0249-0260 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
     2. Write the twelve ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
        - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, the Design (D1-D17), "Accepted risks" and "Risks".
        - Alternatives to record:
-         - 0239: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
-         - 0240: keep everything in the signed bundle; a third startup-only file for mode/server/idp; let the daemon write the org's own credentials into an unsigned org_config.json.
-         - 0241: refuse to start with legacy keys; keep them as read-only defaults alongside the admin config; keep switches in the bundle for desktop installs.
-         - 0242: keep admin sections inside Settings.
-         - 0243: no relay; a maintainer-approved list of servers; forwarding to any server that asks.
-         - 0244: single-user mode that still needs an IdP; signing in with Google through the relay; a fixed password.
-         - 0245: dropping local mode in 7 without a deprecation release; keeping local mode indefinitely.
-         - 0246: keeping every converter forever; a per-file version check in 8 instead of one marker; migrating lazily per principal as before.
-         - 0248: keeping a signed bundle mandatory for org mode; reading every bundle key from the environment (only the IdP and server need it); mixing bundle and environment fields within the idp section.
-         - 0249: the group claim only; any email claim without email_verified; the first person to sign in becomes admin.
-         - 0250: reworking the existing runner in place; keeping the live checks on own QA apps; a GitHub-hosted runner with credentials as secrets (ADR 0019 rejected it); opening SSH to the internet instead of Tailscale.
-         - 0247: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
-       - Fold in D15 where it names an ADR: 0239 (SEC-02 threat, SEC-13 rotation, SEC-22), 0241 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0250 (D17: the firewall, Tailscale-only administration, pfrunner outside the docker group, secrets only in step env and the generated module deleted after each run), 0243 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0244 (SEC-01: single-user mode is no protection against an agent that can run docker), 0246 (SEC-21), 0248 (SEC-14).
+         - 0249: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
+         - 0250: keep everything in the signed bundle; a third startup-only file for mode/server/idp; let the daemon write the org's own credentials into an unsigned org_config.json.
+         - 0251: refuse to start with legacy keys; keep them as read-only defaults alongside the admin config; keep switches in the bundle for desktop installs.
+         - 0252: keep admin sections inside Settings.
+         - 0253: no relay; a maintainer-approved list of servers; forwarding to any server that asks.
+         - 0254: single-user mode that still needs an IdP; signing in with Google through the relay; a fixed password.
+         - 0255: dropping local mode in 7 without a deprecation release; keeping local mode indefinitely.
+         - 0256: keeping every converter forever; a per-file version check in 8 instead of one marker; migrating lazily per principal as before.
+         - 0258: keeping a signed bundle mandatory for org mode; reading every bundle key from the environment (only the IdP and server need it); mixing bundle and environment fields within the idp section.
+         - 0259: the group claim only; any email claim without email_verified; the first person to sign in becomes admin.
+         - 0260: reworking the existing runner in place; keeping the live checks on own QA apps; a GitHub-hosted runner with credentials as secrets (ADR 0019 rejected it); opening SSH to the internet instead of Tailscale.
+         - 0257: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
+       - Fold in D15 where it names an ADR: 0249 (SEC-02 threat, SEC-13 rotation, SEC-22), 0251 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0260 (D17: the firewall, Tailscale-only administration, pfrunner outside the docker group, secrets only in step env and the generated module deleted after each run), 0253 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0254 (SEC-01: single-user mode is no protection against an agent that can run docker), 0256 (SEC-21), 0258 (SEC-14).
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
-       - 0016: "Amended by [0240](...): the signature no longer covers operational settings. Amended by [0247](...): the bundle and pin file names."
-       - 0200: "Amended by [0247](...): the serial pin file name."
-       - 0011: "Amended by [0248](...): the IdP may come from environment variables."
-       - 0016's line also names 0248: "org mode no longer always needs a signed bundle".
-       - 0196: "Amended by [0240](...) and [0241](...)."
-       - 0217: "Amended by [0242](...): the Stats section is on the Admin page."
-       - 0019: "Amended by [0250](...): the runner host. The setup doc this ADR cites is now docs/connector-qa.md."
-       - 0181: "Amended by [0250](...): the runner group and label are privacyfence-live."
+       - 0016: "Amended by [0250](...): the signature no longer covers operational settings. Amended by [0257](...): the bundle and pin file names."
+       - 0200: "Amended by [0257](...): the serial pin file name."
+       - 0011: "Amended by [0258](...): the IdP may come from environment variables."
+       - 0016's line also names 0258: "org mode no longer always needs a signed bundle".
+       - 0196: "Amended by [0250](...) and [0251](...)."
+       - 0217: "Amended by [0252](...): the Stats section is on the Admin page."
+       - 0019: "Amended by [0260](...): the runner host. The setup doc this ADR cites is now docs/connector-qa.md."
+       - 0181: "Amended by [0260](...): the runner group and label are privacyfence-live."
     4. docs/adr/README.md: add twelve index rows in the existing format:
-       - 0239: "Accepted; relates to 0040"
-       - 0240: "Accepted; amends 0016, 0196"
-       - 0241: "Accepted; amends 0196; relates to 0016, 0034, 0068, 0070, 0200"
-       - 0242: "Accepted; amends 0217; relates to 0033"
-       - 0243: "Accepted; relates to 0011, 0186"
-       - 0244: "Accepted; relates to 0011, 0177, 0213"
-       - 0245: "Accepted; relates to 0002, 0003"
-       - 0246: "Accepted; relates to 0041, 0047, 0171, 0172, 0228, 0236"
-       - 0247: "Accepted; amends 0016, 0200; relates to 0246"
-       - 0248: "Accepted; amends 0011, 0016"
-       - 0249: "Accepted; relates to 0011"
-       - 0250: "Accepted; amends 0019, 0181; relates to 0239, 0243"
+       - 0249: "Accepted; relates to 0040"
+       - 0250: "Accepted; amends 0016, 0196"
+       - 0251: "Accepted; amends 0196; relates to 0016, 0034, 0068, 0070, 0200"
+       - 0252: "Accepted; amends 0217; relates to 0033"
+       - 0253: "Accepted; relates to 0011, 0186"
+       - 0254: "Accepted; relates to 0011, 0177, 0213"
+       - 0255: "Accepted; relates to 0002, 0003"
+       - 0256: "Accepted; relates to 0041, 0047, 0171, 0172, 0228, 0236"
+       - 0257: "Accepted; amends 0016, 0200; relates to 0256"
+       - 0258: "Accepted; amends 0011, 0016"
+       - 0259: "Accepted; relates to 0011"
+       - 0260: "Accepted; amends 0019, 0181; relates to 0249, 0253"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0239-*.md docs/adr/0240-*.md docs/adr/0241-*.md docs/adr/0242-*.md docs/adr/0243-*.md docs/adr/0244-*.md docs/adr/0245-*.md docs/adr/0246-*.md docs/adr/0247-*.md docs/adr/0248-*.md docs/adr/0249-*.md docs/adr/0250-*.md lists twelve files (or the renumbered twelve)
+  - ls docs/adr/0249-*.md docs/adr/0250-*.md docs/adr/0251-*.md docs/adr/0252-*.md docs/adr/0253-*.md docs/adr/0254-*.md docs/adr/0255-*.md docs/adr/0256-*.md docs/adr/0257-*.md docs/adr/0258-*.md docs/adr/0259-*.md docs/adr/0260-*.md lists twelve files (or the renumbered twelve)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -3353,7 +3478,7 @@ phases:
        - "Who may sign in", §10 (install-wide policy), §12 (step-up, including "stricter only from the page; relax by editing org/admin_config.json and restarting"), "Notifications on a phone", §13 (file delivery), audit forwarding and scoped tokens: each now points to the matching Admin page section and says which changes need a restart.
        - A new "Admin page" subsection: who sees it, the sections, step-up.
        - §4 "Identity provider" and "Who is an admin": the environment alternative to the bundle (D14), admins by verified email, that Entra ID admins use the group claim, and that a multi-tenant issuer like accounts.google.com should be paired with allowed domains (Admin → Sign-in) or an Internal consent screen. Note that one Google OAuth client can also serve Peek and Grist sign-in, but a separate client per service is recommended. §6: the bundle is optional when the IdP comes from the environment.
-       - §14 "Upgrade" and a new "Going back to 6.x" subsection: 7.x copies org_config.json and its pin files to org_bundle.json and the new pin names, and never changes 6.x's files (D13). To go back, stop 7.x and install the latest 6.x (6.9.x): it runs with org_config.json as it was, and changes made on the Admin page do not carry back. To re-upgrade from 6.x's current files, delete D13's list of 7.x files first. Use the new file name everywhere the guide installs or copies a bundle (Docker: org/org_bundle.json).
+       - §14 "Upgrade" and a new "Going back to 6.x" subsection: 7.x copies org_config.json and its pin files to org_bundle.json and the new pin names, and never changes 6.x's files (D13). To go back, stop 7.x and install the latest 6.x (6.10.0 or newer): it runs with org_config.json as it was, and changes made on the Admin page do not carry back. To re-upgrade from 6.x's current files, delete D13's list of 7.x files first. Use the new file name everywhere the guide installs or copies a bundle (Docker: org/org_bundle.json).
        - Also in §14: upgrading to 8.x requires having run 7.x at least once with "Ready for PrivacyFence 8: yes" on the Admin page. Explain data_format.json (D12), the problems it can report and how to fix each, and that 7.x refuses data from a newer release.
        - §15 Troubleshooting: rows for the relay errors (proof_failed, host_not_public, revoked, too_soon, the issuer_url message, and the relay's 400 text from D5) and for the "are ignored" warning.
     2. org-mode-docker.md, leading with a "Quick start" per D14:
@@ -3375,6 +3500,7 @@ phases:
     4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.
     5. how-it-works.md (:277-278), connector-qa.md (:153): where they say operational settings live in the bundle, point to the Admin page and admin_config.json instead. testing-policy.md (:183): add the Admin page to the phone-layout list of app surfaces.
     6. Run the docs tests below, python3 -m pytest tests/unit/test_docs_configuration_reference.py -q, and ruff check ..
+    Also apply D18 (operator docs): the configuration reference's auto-provisioning rows stay bundle flags; org-mode-docker.md says an environment-only server has no auto-provisioning and needs a bundle for it.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - python3 -m pytest tests/unit/test_docs_configuration_reference.py -q passes
@@ -3428,12 +3554,12 @@ phases:
        - telegram-setup.md: the Admin page switch.
        - google-cloud-setup.md "Room directory sync": the script writes rooms.json (--output) and you upload it on the Admin page.
     4. security-and-compliance.md, a "Built-in apps, the admin config and the relay" subsection:
-       - Built-in secrets are public in effect (0239), and secret rotation (D15 SEC-13).
+       - Built-in secrets are public in effect (0249), and secret rotation (D15 SEC-13).
        - Rewrite :19-21 and :66-67 per D15 SEC-01, and state per provider what a compromised relay could do (D15 SEC-05).
-       - What the relay sees and does not see (0243).
-       - The admin config's settings.yaml-level trust, and that signing now covers only startup settings and credentials (0240, 0241).
+       - What the relay sees and does not see (0253).
+       - The admin config's settings.yaml-level trust, and that signing now covers only startup settings and credentials (0250, 0251).
     5. Create docs/moving-to-organization-mode.md, the page LOCAL_MODE_DEPRECATION links to (privacyfence.eu/docs/moving-to-organization-mode/):
-       - why desktop mode goes away in 8 (ADR 0245);
+       - why desktop mode goes away in 8 (ADR 0255);
        - the two ways forward: the Docker image in single-user mode on this computer (link org-mode-docker.md "Run it on this computer") and an organization server (org-mode-setup-guide.md);
        - bringing rules along (link org-mode-setup-guide.md "Moving a person from a desktop install");
        - before any later upgrade to 8.x, start 7.x once and check "Ready for PrivacyFence 8" (D12).
@@ -3447,10 +3573,11 @@ phases:
        - the Docker image's single-user mode on localhost and the environment variables;
        - "Deprecated: desktop (local) mode, to be removed in PrivacyFence 8";
        - "Every start upgrades all stored data and records data_format.json. PrivacyFence 8 will require it, so upgrade to 8 only from 7.x.";
-       - "PrivacyFence 7 reads org/org_bundle.json, copied once from org_config.json, and never changes 6.x's files, so you can go back to 6.9.x" (D13);
+       - "PrivacyFence 7 reads org/org_bundle.json, copied once from org_config.json, and never changes 6.x's files, so you can go back to the latest 6.x (6.10.0 or newer)" (D13);
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
     8. Run the docs tests below and ruff check ..
+    Also apply D18 (user docs): peek-setup.md and grist-setup.md keep the bundle flags for automatic accounts and move only the manual server address to the Admin page; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - grep -n "Admin page" docs/connecting-a-service.md docs/slack-setup.md docs/grist-setup.md matches in each
@@ -3517,8 +3644,8 @@ phases:
   - tests/fixtures/live/README.md
   - CHANGELOG.md
   brief: |-
-    Read "Design → D17" and ADR 0250 (written in p12). The runner itself is set up by hand (manual mb4); this phase changes only the repository.
-    1. scripts/qa_fixture_recorder.py: add _qa_org_config() per D17 (effective_org_config over load_org_config() and admin_config.config_for(..., mode="local", single_user=False), mode="local") and use it at every daemon_main.load_org_config() call (~:864, :945, :1283, :1323, :1527, :1790, :1880, :1937, :1984, :2042). Update the module docstring's runner name and label (:4-6) and the label text near :2528-2538 and :2601.
+    Read "Design → D17" and ADR 0260 (written in p12). The runner itself is set up by hand (manual mb4); this phase changes only the repository.
+    1. scripts/qa_fixture_recorder.py: add _qa_org_config() per D17 (effective_org_config over load_org_config() and admin_config.config_for(..., mode="local", single_user=False), mode="local") and use it at every daemon_main.load_org_config() call (~:864, :945, :1283, :1323, :1527, :1790, :1880, :1937, :1984, :2042, :2093, :2171). Update the module docstring's runner name and label (:4-6) and the label text near :2528-2538 and :2601.
     2. scripts/qa_authenticate_connectors.py: add --builtin-apps-json PATH (sets PRIVACYFENCE_BUILTIN_APPS in the env passed to every child subprocess.run; refuses a path inside the repository with exit 2 and "Keep the built-in apps file outside the repository."). Update the docstring (:12-14) for built-in apps and the optional bundle.
     3. Both workflows, per D17:
        - runs-on: [self-hosted, privacyfence-live]; the header comments name runner.privacyfence.eu and the privacyfence-live group.
@@ -3529,7 +3656,7 @@ phases:
        - qa-record-fixture.yml's commit message (:247) names the privacyfence-live runner.
     4. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; the builtin step's run line and its env keys are exactly the ten secrets; no PF_APP_ secret appears in workflow-level or job-level env; the cleanup step exists with if: always() and comes last in the runner job; no step references org/org_config.json; the refusal step of qa-record-fixture.yml is unchanged (it still checks refs/heads/main).
     5. Tests for 1 and 2: _qa_org_config fills a provider absent from the bundle from a stubbed builtin_app and keeps a bundle section that is present; --builtin-apps-json passes the env var to the child and refuses an in-repo path.
-    6. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, minting with built-in apps, the optional bundle, the QA org server, the cutover and decommissioning), fix :573, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
+    6. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, minting with built-in apps, the optional bundle, the QA org server, the cutover and decommissioning), fix :574, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
     7. CHANGELOG.md under ## [Unreleased]: one line that live checks moved to a new runner and test the built-in apps (contributor-facing).
     8. Run ruff check ., python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_qa_authenticate_connectors.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
   acceptance:
