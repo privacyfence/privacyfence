@@ -10,9 +10,12 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-import setuptools.dist
 
 pytestmark = pytest.mark.unit
+
+# setup.py imports setuptools at module level, and a bare Python 3.14 venv does not ship it. The
+# wheel integration test builds with the real toolchain, so skipping here loses no coverage.
+setuptools_dist = pytest.importorskip("setuptools.dist")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,7 +39,7 @@ def test_changelog_source_is_the_repository_root_file():
 
 def test_build_py_copies_the_changelog_into_build_lib(tmp_path):
     module = _load()
-    dist = setuptools.dist.Distribution(
+    dist = setuptools_dist.Distribution(
         {"name": "privacyfence", "packages": [], "package_dir": {"": "src"}}
     )
     cmd = module.BuildPyWithChangelog(dist)
