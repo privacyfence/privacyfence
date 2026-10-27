@@ -2384,6 +2384,152 @@ class TestOrgModeConnectorRegistry:
         assert "slack" not in bob_host.connectors
 
 
+    def test_org_server_starts_peek_provisioner_with_registry_evict(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            daemon_main.peek_provisioning, "start", lambda org_config, **kw: calls.append((org_config, kw)),
+        )
+        org_config = self._org_config()
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=org_config,
+        )
+
+        assert len(calls) == 1
+        passed_config, kwargs = calls[0]
+        assert passed_config is org_config
+        assert kwargs["on_change"] == result.org.connector_registry.evict
+        assert kwargs["stop_event"] is daemon_main._shutdown_event
+
+    def test_org_server_refuses_broken_peek_auto_provision(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            daemon_main.peek_provisioning, "start", lambda *a, **kw: pytest.fail("started the provisioner"),
+        )
+        org_config = self._org_config(peek={"auto_provision": {"enabled": "yes"}})
+
+        with pytest.raises(org_mode.ConfigurationError, match="must be true or false"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=org_config,
+            )
+
+
+class TestPeekRelease:
+    """``privacyfence-app --peek-release PRINCIPAL_ID``: take back the Peek token PrivacyFence minted."""
+
+    KEY_ENV = "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
+
+    class _FakeClient:
+        instances: list = []
+        answer: Any = True
+
+        def __init__(self, base_url, key):
+            self.base_url, self.key, self.released = base_url, key, []
+            type(self).instances.append(self)
+
+        def release_account(self, principal_id):
+            self.released.append(principal_id)
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return self.answer
+
+    @pytest.fixture
+    def env(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "alice").mkdir(parents=True)
+        fake = type("FakeClient", (self._FakeClient,), {"instances": [], "answer": True})
+        monkeypatch.setattr(daemon_main, "PeekProvisioningClient", fake)
+        org_config = {
+            "mode": "org",
+            "peek": {"base_url": "https://peek.example.com", "auto_provision": {"enabled": True}},
+        }
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: org_config)
+        monkeypatch.setenv(self.KEY_ENV, "peekprov_secret")
+        released = []
+        monkeypatch.setattr(daemon_main.peek_provisioning, "release", released.append)
+        return SimpleNamespace(fake=fake, org_config=org_config, released=released, root=tmp_path)
+
+    def test_unknown_account(self, env, capsys):
+        for principal_id in ("nobody", "../escape", ""):
+            assert daemon_main.run_peek_release(principal_id) == 1
+        captured = capsys.readouterr()
+        assert captured.err == "No such account.\n" * 3
+        assert captured.out == ""
+        assert env.fake.instances == []
+
+    def test_local_is_refused(self, env, capsys):
+        (env.root / "users" / "local").mkdir()
+        assert daemon_main.run_peek_release("local") == 1
+        assert capsys.readouterr().err == "No such account.\n"
+
+    def test_configuration_error_is_printed(self, env, monkeypatch, capsys):
+        env.org_config["peek"]["auto_provision"]["enabled"] = "yes"
+        assert daemon_main.run_peek_release("alice") == 1
+        assert "must be true or false" in capsys.readouterr().err
+        assert env.released == []
+
+    def test_not_enabled(self, env, capsys):
+        del env.org_config["peek"]["auto_provision"]
+        assert daemon_main.run_peek_release("alice") == 1
+        assert capsys.readouterr().err == "Peek auto-provisioning is not enabled in the organization config.\n"
+
+    def test_missing_key(self, env, monkeypatch, capsys):
+        monkeypatch.setenv(self.KEY_ENV, "  ")
+        assert daemon_main.run_peek_release("alice") == 1
+        assert capsys.readouterr().err == f"Set {self.KEY_ENV} to the Peek provisioning key first.\n"
+        assert env.fake.instances == []
+
+    def test_success_revoked_message(self, env, capsys):
+        assert daemon_main.run_peek_release("alice") == 0
+        captured = capsys.readouterr()
+        assert captured.out == (
+            "Released the Peek connection of alice. The Peek account stays. "
+            "PrivacyFence's token for it is revoked.\n"
+        )
+        assert captured.err == ""
+        client = env.fake.instances[0]
+        assert (client.base_url, client.key) == ("https://peek.example.com", "peekprov_secret")
+
+    def test_no_link_message(self, env, capsys):
+        env.fake.answer = False
+        assert daemon_main.run_peek_release("alice") == 0
+        assert capsys.readouterr().out == (
+            "Released the Peek connection of alice. The Peek account stays. "
+            "Peek had no provisioned token for it.\n"
+        )
+
+    def test_client_error_exits_1(self, env, capsys):
+        from privacyfence.peek_client import PeekClientError
+
+        env.fake.answer = PeekClientError("Peek refused the provisioning key (HTTP 401).")
+        assert daemon_main.run_peek_release("alice") == 1
+        captured = capsys.readouterr()
+        assert captured.err == "Peek refused the provisioning key (HTTP 401).\n"
+        assert captured.out == ""
+        assert env.released == ["alice"]
+
+    def test_release_called(self, env):
+        assert daemon_main.run_peek_release("alice") == 0
+        assert env.fake.instances[0].released == ["alice"]
+        assert env.released == ["alice"]
+
+    def test_runs_after_the_runtime_identity_check(self, monkeypatch):
+        from privacyfence import privilege_separation
+
+        calls: list[str] = []
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_peek_release", lambda principal_id: calls.append(principal_id) or 0)
+
+        assert daemon_main.main(["--peek-release", "alice"]) == 0
+        assert calls == ["identity", "alice"]
+
+
 class TestScopeRowsUpgrade:
     """The v2 -> v3 ``auto_accept:`` upgrade at load and at org startup (ADR 0172)."""
 
@@ -4357,6 +4503,7 @@ class TestPrintMcpToken:
         monkeypatch.setattr(daemon_main, "run_print_mcp_token", lambda: 0)
 
         assert daemon_main.main(["--print-mcp-token"]) == 0
+
 
 
 class TestRevokeScopedTokens:

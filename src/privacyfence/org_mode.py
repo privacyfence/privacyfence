@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlsplit
+
+from .peek_client import PeekClientError, normalize_base_url
 
 Mode = Literal["local", "org"]
 
@@ -514,6 +517,66 @@ class WebPushConfig:
         return WebPushConfig(enabled=enabled)
 
 
+DEFAULT_PEEK_PROVISIONING_KEY_ENV = "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
+_ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]{0,127}")
+
+
+@dataclass(frozen=True)
+class PeekProvisioningConfig:
+    """Whether org mode creates a Peek account for each person at sign-in and connects it for them.
+
+    Lives in ``org_config.json``'s ``peek.auto_provision`` section and is written by
+    ``scripts/build_org_bundle.py --peek-auto-provision``. Off by default. The provisioning key
+    itself is never in the bundle: ``key_env`` names the environment variable the daemon reads it
+    from, as ``AuditForwardingConfig.http_bearer_token_env`` does for the SIEM bearer token.
+    ``trust_unverified_email`` provisions people whose ID token does not say ``email_verified``,
+    for providers that only issue verified, organization-owned addresses. ``base_url`` is the
+    normalised ``peek.base_url`` and is set only when enabled. Local mode never provisions.
+    """
+
+    enabled: bool = False
+    key_env: str = DEFAULT_PEEK_PROVISIONING_KEY_ENV
+    trust_unverified_email: bool = False
+    base_url: str = ""
+
+    @staticmethod
+    def from_org_config(org_config: dict[str, Any]) -> "PeekProvisioningConfig":
+        peek = org_config.get("peek")
+        peek = peek if isinstance(peek, dict) else {}
+        raw = peek.get("auto_provision")
+        raw = raw if isinstance(raw, dict) else {}
+        flags: dict[str, bool] = {}
+        for key in ("enabled", "trust_unverified_email"):
+            value = raw.get(key, False)
+            if not isinstance(value, bool):
+                raise ConfigurationError(
+                    f"org_config.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got {value!r}"
+                )
+            flags[key] = value
+        key_env = raw.get("key_env", DEFAULT_PEEK_PROVISIONING_KEY_ENV)
+        if not isinstance(key_env, str) or not _ENV_NAME_RE.fullmatch(key_env):
+            raise ConfigurationError(
+                "org_config.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable "
+                f"name, got {key_env!r}"
+            )
+        if not flags["enabled"]:
+            return PeekProvisioningConfig(
+                key_env=key_env, trust_unverified_email=flags["trust_unverified_email"],
+            )
+        if resolve_mode(org_config) != "org":
+            raise ConfigurationError("org_config.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\"")
+        if not peek.get("base_url"):
+            raise ConfigurationError("org_config.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\"")
+        try:
+            base_url = normalize_base_url(str(peek["base_url"]))
+        except PeekClientError as exc:
+            raise ConfigurationError(f"org_config.json's \"peek\".\"base_url\" is not usable: {exc}") from exc
+        return PeekProvisioningConfig(
+            enabled=True, key_env=key_env, trust_unverified_email=flags["trust_unverified_email"],
+            base_url=base_url,
+        )
+
+
 # Which org_config.json section switches each connector on (ADR 0196). A connector with no
 # non-empty section is not offered at all, whatever else is in place: Google's six share one
 # section, Jira, Confluence and Jira Assets share Atlassian's. Telegram, Peek and Grist carry
@@ -545,10 +608,12 @@ __all__ = [
     "DEFAULT_INLINE_MAX_BYTES",
     "DEFAULT_LINK_TTL_SECONDS",
     "DEFAULT_MODE",
+    "DEFAULT_PEEK_PROVISIONING_KEY_ENV",
     "DEFAULT_SYSLOG_PORT",
     "DEFAULT_SYSLOG_PROTOCOL",
     "DownloadDeliveryConfig",
     "Mode",
+    "PeekProvisioningConfig",
     "connector_enabled_by_org",
     "ServerConfig",
     "SyslogProtocol",
