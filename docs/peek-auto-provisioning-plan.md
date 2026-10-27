@@ -420,7 +420,7 @@ phases:
       - tests/fixtures/**
     brief: |
       Read this plan's Design sections "Peek's provisioning API", "The token file" and "peek_client additions", and "Risks".
-      1. Add detail to PeekClientError and pass it from every _send raise that follows an HTTP answer. Existing messages stay byte-identical, and the existing tests in tests/unit/test_peek_client.py must pass unchanged.
+      1. Add detail to PeekClientError and pass it from every _send raise that follows an HTTP answer. Existing messages stay byte-identical, and the existing tests in tests/unit/test_peek_client.py must pass unchanged. If PeekClientError already has detail (the peek-api-alignment plan adds it the same way), keep it and skip this step; if that plan landed first, the renamed-slug branch is gone and tests/unit/test_peek_client.py reflects it.
       2. Change save_token_file and load_token_file as Design says. save_token_file stays the one write site (TOKEN_WRITE_SITES already lists it).
       3. Add _bool, PeekProvisionedAccount, PeekMintedToken and PeekProvisioningClient with the signatures, paths, bodies, error messages and log line in Design.
       4. Tests in tests/unit/test_peek_client.py, mocking requests.Session.request the way the file already does:
