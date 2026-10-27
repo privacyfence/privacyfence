@@ -144,7 +144,7 @@ from starlette.responses import (
 )
 from starlette.routing import BaseRoute, Route
 
-from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepup, web_shell
+from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepup, web_shell, whats_new
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
 from ..policy import scope_rows
@@ -1936,6 +1936,7 @@ def build_org_routes(
             scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
+        whats_new_version = await asyncio.to_thread(whats_new.pending_version, principal)
         # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
         # mode's own _render_settings_page carries -- see that function's
         # own comment. Whether it's ever exercised depends on this org's
@@ -1951,6 +1952,7 @@ def build_org_routes(
             # settings is wired to one local SettingsController's own
             # on_change, module docstring).
             live_updates=False, notifications_enabled=False,
+            csrf=csrf, whats_new_version=whats_new_version,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

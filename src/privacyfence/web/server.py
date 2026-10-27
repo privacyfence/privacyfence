@@ -1302,7 +1302,7 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig
-    from . import routes_approvals, routes_org_stepup, routes_push, routes_security
+    from . import routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new
     from .routes_settings import build_org_routes
 
     extra_routes: list[BaseRoute] = []
@@ -1365,6 +1365,7 @@ def _build_org_app(
     push_store = org.push_store if org.push_notifier is not None else None
     push_public_key = org.push_notifier.public_key if org.push_notifier is not None and push_store else ""
     extra_routes.extend(routes_push.build_routes(sessions=org.sessions, store=push_store))
+    extra_routes.extend(routes_whats_new.build_routes(sessions=org.sessions))
     extra_routes.extend(routes_approvals.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
         push_public_key=push_public_key, stopping=stopping,
