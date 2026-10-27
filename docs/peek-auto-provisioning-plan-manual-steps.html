@@ -1,0 +1,153 @@
+<title>Peek Auto-Provisioning Checks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+/* Layout: one reading column; each check is a numbered panel with a step checklist and a report line. */
+:root {
+  --bg: #f6f7f5; --surface: #ffffff; --fg: #1d2420; --muted: #5b665f; --line: #d9ded9;
+  --accent: #2f6b4f; --accent-soft: #e3efe8; --warn: #8a5a00; --warn-soft: #fbf1dc; --code-bg: #eef1ee;
+  --display: "Fraunces", Georgia, serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --surface: #1a201d; --fg: #e4e9e5; --muted: #9aa59e; --line: #2c3530;
+  --accent: #7cc4a0; --accent-soft: #1f3329; --warn: #e8b85a; --warn-soft: #33290f; --code-bg: #222a26; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121614; --surface: #1a201d; --fg: #e4e9e5; --muted: #9aa59e; --line: #2c3530;
+  --accent: #7cc4a0; --accent-soft: #1f3329; --warn: #e8b85a; --warn-soft: #33290f; --code-bg: #222a26; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 760px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 28px; }
+h1 { font-family: var(--display); font-size: 2rem; line-height: 1.15; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-size: 1.3rem; margin: 0; text-wrap: balance; }
+h3 { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; font-weight: 600; }
+p { margin: 0; max-width: 65ch; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--mono); font-size: 0.84rem; background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+.intro { display: flex; flex-direction: column; gap: 12px; }
+.note { background: var(--warn-soft); color: var(--fg); border: 1px solid var(--line); padding: 12px 14px; border-radius: 8px; }
+.note strong { color: var(--warn); }
+.part { display: flex; flex-direction: column; gap: 18px; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.item-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.time { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+.why { color: var(--muted); }
+ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: step; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; counter-increment: step; }
+ol.steps li > div { min-width: 0; }
+ol.steps li > div::before { content: counter(step) ". "; font-weight: 600; font-variant-numeric: tabular-nums; }
+ol.steps input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.see { color: var(--muted); font-size: 0.92em; display: block; margin-top: 2px; }
+.report { background: var(--accent-soft); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.progress { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <h1>Peek auto-provisioning: checks after implementation</h1>
+    <p>These checks cover what CI cannot: a real Peek server, your identity provider and two servers in separate network zones. Do them after the feature PR <code>feature/peek-auto-provisioning</code> is ready, and before you merge it. The Peek side (<code>feat/pf-provisioning</code> in andras-tkcs/peek) must already be merged and released.</p>
+    <p class="note"><strong>Secrets.</strong> The Peek provisioning key never goes into chat, the PR, a ticket or the bundle. It goes straight from Peek's output into your password manager and the PrivacyFence server's environment file.</p>
+    <p class="progress" id="progress">0 of 0 steps done</p>
+  </header>
+
+  <section class="part">
+    <h3>Before implementation</h3>
+    <p>Nothing. The phases build and test against fakes.</p>
+  </section>
+
+  <section class="part">
+    <h3>After implementation</h3>
+
+    <article class="item" id="ma1">
+      <div class="item-head"><h2>1. Peek release and provisioning key</h2><span class="time">about 20 min</span></div>
+      <p class="why">This proves the wire contract against a real Peek server.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><div>Open <a href="https://github.com/andras-tkcs/peek/releases" target="_blank" rel="noopener noreferrer">Peek's releases</a> and pick the first release that lists provisioning keys.<span class="see">You should see a release published after the <code>feat/pf-provisioning</code> PR merged.</span></div></li>
+        <li><input type="checkbox" id="ma1-2"><div>Upgrade your Peek server to that release, as in Peek's <a href="https://github.com/andras-tkcs/peek/blob/main/docs/operations.md#upgrades-and-rollbacks" target="_blank" rel="noopener noreferrer">Upgrades and rollbacks</a>. For Docker, pin the tag: <code>ghcr.io/andras-tkcs/peek:&lt;version&gt;</code>.<span class="see">Peek starts and <code>/readyz</code> answers 200.</span></div></li>
+        <li><input type="checkbox" id="ma1-3"><div>From the PrivacyFence server's network zone, check that the API exists:<pre>curl -s -o /dev/null -w '%{http_code}\n' https://peek.example.com/api/provisioning/self</pre><span class="see">Expect <code>401</code>, which means the API is there and wants a key. <code>404</code> means the release is too old. A timeout means the firewall blocks PrivacyFence → Peek.</span></div></li>
+        <li><input type="checkbox" id="ma1-4"><div>On a machine where <code>peek</code> is signed in as a Peek admin, run:<pre>peek provisioner create --name PrivacyFence</pre><span class="see">It prints a key that starts with <code>peekprov_</code>, once.</span></div></li>
+        <li><input type="checkbox" id="ma1-5"><div>Copy the key into your password manager now. Do not paste it anywhere else.</div></li>
+        <li><input type="checkbox" id="ma1-6"><div>Open Peek's <strong>Admin</strong> page.<span class="see">The <strong>Provisioners</strong> card lists <em>PrivacyFence</em> with last used "never" and 0 accounts.</span></div></li>
+      </ol>
+      <div class="report"><strong>Done when</strong><p>The Provisioners card lists PrivacyFence and <code>/api/provisioning/self</code> answers 401 from the PrivacyFence zone.</p></div>
+    </article>
+
+    <article class="item" id="ma2">
+      <div class="item-head"><h2>2. Key in PrivacyFence, bundle rebuilt</h2><span class="time">about 15 min</span></div>
+      <p class="why">This exercises the key read from the environment, bundle validation and the startup check on a real install.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma2-1"><div><strong>systemd:</strong> add the key to <code>/etc/privacyfence-org.env</code> (owned by root, mode 0600) as one line, <code>PRIVACYFENCE_PEEK_PROVISIONING_KEY=</code> followed by the key, with <code>sudoedit /etc/privacyfence-org.env</code>. In <code>/etc/systemd/system/privacyfence-org.service</code>, uncomment <code>EnvironmentFile=/etc/privacyfence-org.env</code>, then run <code>sudo systemctl daemon-reload</code>. See <a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-auto-provisioning/docs/org-mode-setup-guide.md#8-hardened-systemd-unit" target="_blank" rel="noopener noreferrer">Hardened systemd unit</a>.<span class="see"><strong>Docker:</strong> put the same line in <code>privacyfence.env</code> next to <code>compose.yaml</code> instead (<a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-auto-provisioning/docs/org-mode-docker.md" target="_blank" rel="noopener noreferrer">org-mode Docker</a>).</span></div></li>
+        <li><input type="checkbox" id="ma2-2"><div>Rebuild the bundle with your usual flags plus <code>--peek-auto-provision</code>. Keep <code>--peek-base-url</code>. Follow <a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-auto-provisioning/docs/org-mode-setup-guide.md#changing-a-bundle-later" target="_blank" rel="noopener noreferrer">Changing a bundle later</a> and <a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-auto-provisioning/docs/org-mode-setup-guide.md#install-the-bundle" target="_blank" rel="noopener noreferrer">Install the bundle</a>.<span class="see">The builder accepts it. Without <code>--mode org</code> or a Peek address, it refuses with a message naming the missing flag.</span></div></li>
+        <li><input type="checkbox" id="ma2-3"><div>Restart PrivacyFence (<code>sudo systemctl restart privacyfence-org</code>, or <code>docker compose up -d</code>), then read the log:<pre>journalctl -u privacyfence-org --since "5 min ago" | grep -i "peek provisioning"</pre><span class="see">Expect <code>Peek provisioning ready at peek.example.com (0 accounts managed)</code>. "is not set" means the environment file did not load. "HTTP 401" means the key is wrong.</span></div></li>
+      </ol>
+      <div class="report"><strong>Done when</strong><p>The "ready" line is in the log.</p></div>
+    </article>
+
+    <article class="item" id="ma3">
+      <div class="item-head"><h2>3. Three people: new, existing, admin</h2><span class="time">about 20 min</span></div>
+      <p class="why">This verifies create, adopt and the admin refusal against the real Peek server and identity provider.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma3-1"><div>Prepare three test identities in your identity provider: <strong>A</strong> has no Peek account, <strong>B</strong> already has a non-admin Peek account with a page, and <strong>C</strong> is a Peek admin. All three may sign in to PrivacyFence.</div></li>
+        <li><input type="checkbox" id="ma3-2"><div>In a private window, sign in to PrivacyFence as A at <code>https://pf.example.com/connect</code>. Wait a few seconds and reload.<span class="see">Peek shows <strong>Connected</strong> with "Your organization connected your Peek account automatically."</span></div></li>
+        <li><input type="checkbox" id="ma3-3"><div>On Peek's Admin page, find A under Users.<span class="see">A shows the badge <strong>Managed by PrivacyFence</strong>.</span></div></li>
+        <li><input type="checkbox" id="ma3-4"><div>In an AI client connected as A, ask it to list your Peek pages.<span class="see"><code>peek_list_pages</code> runs without a sign-in prompt and returns an empty list.</span></div></li>
+        <li><input type="checkbox" id="ma3-5"><div>Repeat steps 2 and 4 as B.<span class="see">B is Connected, and <code>peek_list_pages</code> lists B's existing page. Nothing was lost.</span></div></li>
+        <li><input type="checkbox" id="ma3-6"><div>Sign in as C.<span class="see">Peek stays <strong>Not connected</strong>, and <strong>Connect Peek</strong> works by hand. The PrivacyFence log has <code>Peek provisioning for &lt;C's id&gt;: admin</code>.</span></div></li>
+      </ol>
+      <div class="report"><strong>Report back</strong><p>Paste into the PR: <code>ma3: A created PASS/FAIL, B adopted PASS/FAIL, C refused PASS/FAIL</code>.</p></div>
+    </article>
+
+    <article class="item" id="ma4">
+      <div class="item-head"><h2>4. Each works without the other</h2><span class="time">about 15 min</span></div>
+      <p class="why">This proves neither product needs the other, which CI cannot show across two servers.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma4-1"><div>Stop Peek (<code>docker stop peek</code> or its service). Sign in to PrivacyFence as a fourth test person D.<span class="see">Sign-in finishes at normal speed and the other connectors work. The log has a <code>Peek provisioning for &lt;D's id&gt;</code> warning that says Peek could not be reached.</span></div></li>
+        <li><input type="checkbox" id="ma4-2"><div>Start Peek again. Within six hours, or at D's next sign-in, D becomes Connected.<span class="see">To check right away, sign out and back in as D.</span></div></li>
+        <li><input type="checkbox" id="ma4-3"><div>Stop PrivacyFence. Sign in to Peek's own web page as A through Peek's OAuth sign-in, and as a Peek user who is not a PrivacyFence user.<span class="see">Both reach the dashboard, open pages and comment. Peek's log shows no attempt to reach PrivacyFence.</span></div></li>
+        <li><input type="checkbox" id="ma4-4"><div>Start PrivacyFence again.</div></li>
+      </ol>
+      <div class="report"><strong>Report back</strong><p>Paste into the PR: <code>ma4: PF without Peek PASS/FAIL, Peek without PF PASS/FAIL</code>.</p></div>
+    </article>
+
+    <article class="item" id="ma5">
+      <div class="item-head"><h2>5. Release a person</h2><span class="time">about 10 min</span></div>
+      <p class="why">This verifies the offboarding call against the real Peek server.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma5-1"><div>Find A's principal id on the PrivacyFence Settings page or in the audit log.</div></li>
+        <li><input type="checkbox" id="ma5-2"><div><strong>systemd:</strong> run it as the daemon's account, with the environment file loaded and without putting the key on the command line:<pre>sudo systemd-run --pipe --wait -p User=privacyfence-org \
+  -p EnvironmentFile=/etc/privacyfence-org.env \
+  /opt/privacyfence/venv/bin/privacyfence-app --peek-release &lt;A's id&gt;</pre><span class="see"><strong>Docker:</strong> <code>docker compose exec privacyfence privacyfence-app --peek-release &lt;A's id&gt;</code>. Expect: "Released the Peek connection of …; PrivacyFence's Peek token for it is revoked. The Peek account stays."</span></div></li>
+        <li><input type="checkbox" id="ma5-3"><div>In Peek, sign in as A and open the dashboard's API keys.<span class="see">The <em>PrivacyFence</em> key is gone, and A's pages are still there.</span></div></li>
+        <li><input type="checkbox" id="ma5-4"><div>Remember: if A signs in to PrivacyFence again, A is provisioned again. Release is for people who can no longer sign in, so remove them from the identity provider first.</div></li>
+      </ol>
+      <div class="report"><strong>Report back</strong><p>Paste into the PR: <code>ma5: release PASS/FAIL</code>.</p></div>
+    </article>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var KEY = "peek-auto-provisioning-checks";
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  var progress = document.getElementById("progress");
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { saved = {}; }
+  function update() {
+    var done = boxes.filter(function (b) { return b.checked; }).length;
+    progress.textContent = done + " of " + boxes.length + " steps done";
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!saved[b.id];
+    b.addEventListener("change", function () {
+      saved[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* storage unavailable */ }
+      update();
+    });
+  });
+  update();
+})();
+</script>
