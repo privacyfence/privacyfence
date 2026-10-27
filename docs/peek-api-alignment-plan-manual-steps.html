@@ -1,0 +1,101 @@
+<title>Peek Restricted Sharing Check</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+/* Layout: one reading column; each check is a numbered panel with a step checklist and a report line. */
+:root {
+  --bg: #f6f7f5; --surface: #ffffff; --fg: #1d2420; --muted: #5b665f; --line: #d9ded9;
+  --accent: #2f6b4f; --accent-soft: #e3efe8; --warn: #8a5a00; --warn-soft: #fbf1dc; --code-bg: #eef1ee;
+  --display: "Fraunces", Georgia, serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --surface: #1a201d; --fg: #e4e9e5; --muted: #9aa59e; --line: #2c3530;
+  --accent: #7cc4a0; --accent-soft: #1f3329; --warn: #e8b85a; --warn-soft: #33290f; --code-bg: #222a26; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121614; --surface: #1a201d; --fg: #e4e9e5; --muted: #9aa59e; --line: #2c3530;
+  --accent: #7cc4a0; --accent-soft: #1f3329; --warn: #e8b85a; --warn-soft: #33290f; --code-bg: #222a26; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 760px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 28px; }
+h1 { font-family: var(--display); font-size: 2rem; line-height: 1.15; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-size: 1.3rem; margin: 0; text-wrap: balance; }
+h3 { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; font-weight: 600; }
+p { margin: 0; max-width: 65ch; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--mono); font-size: 0.84rem; background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+.intro { display: flex; flex-direction: column; gap: 12px; }
+.note { background: var(--warn-soft); color: var(--fg); border: 1px solid var(--line); padding: 12px 14px; border-radius: 8px; }
+.note strong { color: var(--warn); }
+.part { display: flex; flex-direction: column; gap: 18px; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.item-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.time { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+.why { color: var(--muted); }
+ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: step; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; counter-increment: step; }
+ol.steps li > div { min-width: 0; }
+ol.steps li > div::before { content: counter(step) ". "; font-weight: 600; font-variant-numeric: tabular-nums; }
+ol.steps input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.see { color: var(--muted); font-size: 0.92em; display: block; margin-top: 2px; }
+.report { background: var(--accent-soft); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.progress { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <h1>Peek restricted sharing: one check with a colleague</h1>
+    <p>Do this after the feature PR <code>feature/peek-api-alignment</code> is ready and before you merge it. Run PrivacyFence from that branch against your real Peek server. You need one colleague with a Peek account; that is the part CI cannot do.</p>
+    <p class="progress" id="progress">0 of 0 steps done</p>
+  </header>
+
+  <section class="part">
+    <h3>Before implementation</h3>
+    <p>Nothing. The phases build and test against mocks.</p>
+  </section>
+
+  <section class="part">
+    <h3>After implementation</h3>
+    <article class="item" id="ma1">
+      <div class="item-head"><h2>1. Restrict, grant, revoke</h2><span class="time">about 15 min</span></div>
+      <p class="why">This confirms Peek's email and access check with a real second person.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><div>Ask your AI client to publish a small HTML page to Peek, without saying who can open it.<span class="see">The approval card shows <strong>Visibility: restricted</strong>. Approve it. The result says <code>"visibility": "restricted"</code>.</span></div></li>
+        <li><input type="checkbox" id="ma1-2"><div>Send the page link to your colleague and ask them to open it while signed in to Peek.<span class="see">They are refused: the page is restricted and they have no grant yet.</span></div></li>
+        <li><input type="checkbox" id="ma1-3"><div>Ask the assistant to give your colleague access, by their email.<span class="see">The card is titled <strong>Grant Access to Peek Page</strong> and says Peek emails them the link. Approve it. The result has <code>"notified": true</code> when Peek has email set up.</span></div></li>
+        <li><input type="checkbox" id="ma1-4"><div>Your colleague checks their inbox and opens the page again.<span class="see">The email from Peek arrives (if your Peek server has SMTP configured) and the page opens.</span></div></li>
+        <li><input type="checkbox" id="ma1-5"><div>Ask the assistant who can open the page.<span class="see">A review card <strong>Read Peek Page Access</strong> lists your colleague's email. Approve it.</span></div></li>
+        <li><input type="checkbox" id="ma1-6"><div>Ask the assistant to remove their access, then ask your colleague to reload the page.<span class="see">The <strong>Revoke Access to Peek Page</strong> card appears even if you have a Peek page rule. After you approve, they are refused again.</span></div></li>
+        <li><input type="checkbox" id="ma1-7"><div>Ask the assistant to delete the test page.</div></li>
+      </ol>
+      <div class="report"><strong>Report back</strong><p>Paste into the PR: <code>ma1: default restricted PASS/FAIL, grant + email PASS/FAIL, revoke PASS/FAIL</code>.</p></div>
+    </article>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var KEY = "peek-auto-provisioning-checks";
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  var progress = document.getElementById("progress");
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { saved = {}; }
+  function update() {
+    var done = boxes.filter(function (b) { return b.checked; }).length;
+    progress.textContent = done + " of " + boxes.length + " steps done";
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!saved[b.id];
+    b.addEventListener("change", function () {
+      saved[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* storage unavailable */ }
+      update();
+    });
+  });
+  update();
+})();
+</script>
