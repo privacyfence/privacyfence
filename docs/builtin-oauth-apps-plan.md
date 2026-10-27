@@ -1452,8 +1452,9 @@ environment. A multi-user server's bootstrap becomes:
 returns the `idp` section `IdpConfig.from_org_config` reads.
 
 - When `org_config` has a non-empty `idp`, that section, unchanged: a bundle wins. If any
-  `PRIVACYFENCE_IDP_*` variable is also set, log at WARNING once: `PRIVACYFENCE_IDP_* is ignored:
-  org_bundle.json has an "idp" section.`
+  `PRIVACYFENCE_IDP_*` variable or `PRIVACYFENCE_ADMIN_EMAILS` is also set, log at WARNING once:
+  `PRIVACYFENCE_IDP_* and PRIVACYFENCE_ADMIN_EMAILS are ignored: org_bundle.json has an "idp"
+  section.` The once-only flag is a module-level variable that `tests/conftest.py::_reset` clears.
 - Otherwise, when `PRIVACYFENCE_IDP_ISSUER` and `PRIVACYFENCE_IDP_CLIENT_ID` are both set, a
   section built from the environment:
 
@@ -1470,11 +1471,24 @@ returns the `idp` section `IdpConfig.from_org_config` reads.
   - Setting both `PRIVACYFENCE_IDP_CLIENT_SECRET` and `..._FILE` raises
     `ConfigurationError("Set PRIVACYFENCE_IDP_CLIENT_SECRET or PRIVACYFENCE_IDP_CLIENT_SECRET_FILE, not both.")`.
   - An unreadable secret file raises `ConfigurationError` naming the variable, never the content.
+  - **A partial environment is an error, not single-user mode.** When any `PRIVACYFENCE_IDP_*`
+    variable or `PRIVACYFENCE_ADMIN_EMAILS` is set but `PRIVACYFENCE_IDP_ISSUER` or
+    `PRIVACYFENCE_IDP_CLIENT_ID` is missing, it raises `ConfigurationError("Set both
+    PRIVACYFENCE_IDP_ISSUER and PRIVACYFENCE_IDP_CLIENT_ID, or neither.")`.
 - Otherwise `None`.
 - `org_identity.IdpConfig.from_org_config` (`org_identity.py:118`) reads `org_mode.idp_section(org_config)`
   instead of `org_config.get("idp")`.
-- `org_mode.is_single_user(org_config)` (D9) becomes `resolve_mode(org_config) == "org" and
-  idp_section(org_config) is None`. It never calls `from_org_config`, which does network discovery.
+- `org_mode.is_single_user(org_config)` (D9) becomes `resolve_mode(org_config) == "org" and not
+  _idp_present(org_config)`.
+  - `_idp_present` is a secret-free predicate: the bundle `idp` section is non-empty, or both
+    `PRIVACYFENCE_IDP_ISSUER` and `PRIVACYFENCE_IDP_CLIENT_ID` are set.
+  - It never reads the secret file, never warns, and never calls `from_org_config`, which does
+    network discovery.
+  - Only `IdpConfig.from_org_config` builds the full section through `idp_section`.
+- `org_mode.py` gains a module logger (`logger = logging.getLogger(__name__)`). It must not
+  import `org_identity`; the dependency already runs the other way (`org_identity.py:38`).
+- `IdpConfig.client_secret` becomes `field(repr=False)` (`org_identity.py:85`), so a repr or a
+  traceback of the config never shows it.
 - The secret never appears in a log line, an audit entry, the Admin page or an error message. The
   docs recommend the `_FILE` form with a Docker secret, so the value does not show in `docker
   inspect`.
@@ -1485,16 +1499,25 @@ returns the `idp` section `IdpConfig.from_org_config` reads.
 - An org server with no bundle at all, configured from the environment, is allowed. Its trust
   root is whoever controls the container's environment, the same party that chooses the image.
   ADR 0248 records this as an amendment to 0016.
+- So is a signed bundle **without** an `idp` section plus an IdP from the environment. The IdP
+  then comes from the unsigned environment. ADR 0248 says so explicitly.
 
-**A server stays a server.** The first start that resolves an IdP section sets
-`"org_server": true` in the admin config. D9's single-user refusal also fires when that flag is
+**A server stays a server.** The first start for which `_idp_present` is true sets
+`"org_server": true` in the admin config. It does this before IdP discovery, so a server whose IdP
+is down still records it. `admin_config.apply_change` never changes this key, and the Admin page
+does not show it as editable. D9's single-user refusal also fires when that flag is
 set, so removing the IdP variables never turns a real server into single-user mode.
 
 **Admins by email.** `IdpConfig` gains `admin_emails: tuple[str, ...]`, lower-cased, from the
 section's `admin_emails` list.
 
-- `org_identity.principal_from_claims` sets `is_admin` when the group rule matches, **or** when the
-  lower-cased `email` claim is in `admin_emails` **and** `claims.get("email_verified") is True`.
+- `org_identity.principal_from_claims` sets `is_admin` when the group rule matches, **or** when
+  `isinstance(claims.get("email"), str)`, its `.strip().casefold()` is in `admin_emails`, **and**
+  `claims.get("email_verified") is True`. The configured list is normalized the same way
+  (`.strip().casefold()`).
+- A multi-tenant issuer such as `accounts.google.com` accepts any Google account that has verified
+  the address. The docs recommend pairing the email list with allowed domains (Admin → Sign-in), or
+  an Internal consent screen.
 - An IdP that does not send `email_verified` (Microsoft Entra ID, for example) cannot name admins
   by email. The docs tell those admins to use the group claim.
 - `scripts/build_org_bundle.py` gains `--idp-admin-email` (repeatable), writing `idp.admin_emails`.
@@ -1510,7 +1533,7 @@ section's `admin_emails` list.
 - `compose.yaml` gains a commented `secrets:` example for `idp_client_secret`, mounted at
   `/run/secrets/idp_client_secret`.
 - The entrypoint's "no bundle" message changes:
-  - with `PRIVACYFENCE_IDP_ISSUER` set: `No organization bundle: using the IdP and server from the environment.`
+  - with both `PRIVACYFENCE_IDP_ISSUER` and `PRIVACYFENCE_IDP_CLIENT_ID` set: `No organization bundle: using the IdP and server from the environment.`
   - otherwise: the single-user message from D9.
 - `docs/org-mode-docker.md` leads with the environment-only quick start, and keeps the bundle flow
   as the option for your own connector apps or a signed configuration.
@@ -1564,7 +1587,8 @@ section's `admin_emails` list.
   `org_bundle_serial.txt`) and never changes a 6.x file, so the latest 6.x keeps running after a
   downgrade. Amends 0016 and 0200 (the file names); relates to 0246.
 - **0248** — An organization server can take its IdP and server address from environment
-  variables, with no bundle. A bundle, when present, must still be signed and wins. Amends 0016
+  variables, with no bundle. A bundle, when present, must still be signed and wins. A signed bundle
+  without an `idp` section may be combined with an IdP from the environment. Amends 0016
   (org mode no longer always needs a signed bundle) and 0011.
 - **0249** — Admins can be named by IdP-verified email (`PRIVACYFENCE_ADMIN_EMAILS` or
   `idp.admin_emails`), alongside the group claim. Relates to 0011.
@@ -2628,15 +2652,21 @@ phases:
   - tests/integration/test_org_docker_image.py
   brief: |-
     Read "Design → D14" ("The IdP from the environment", "Signing", "A server stays a server", "Docker") and D9.
-    1. org_mode.py: add idp_section(org_config) per D14, with the variable table, the _FILE rule, the both-set error and the once-only warning. Change is_single_user to use it.
-    2. org_identity.py: IdpConfig.from_org_config reads org_mode.idp_section(org_config) instead of org_config.get("idp") (:118).
-    3. admin_config.py: add the "org_server" flag (schema default false; load() normalizes it). daemon_main.py: set it to true and save on the first start whose idp_section is not None. D9's single-user refusal checks it.
-    4. tests/conftest.py: extend the environment-clearing fixture from p15 to every PRIVACYFENCE_IDP_* variable and PRIVACYFENCE_ADMIN_EMAILS.
-    5. deploy/docker: privacyfence.env.example, the compose.yaml secrets example and the entrypoint message, per D14. tests/integration/test_org_docker_image.py: a container started with PRIVACYFENCE_IDP_ISSUER pointing at an unreachable issuer logs the environment message and fails discovery with a ConfigurationError (it must not start in single-user mode). Copy the existing container helper.
+    1. org_mode.py: add a module logger, idp_section(org_config) per D14 (the variable table, the _FILE rule, the both-set error, the partial-environment error and the once-only warning, which names PRIVACYFENCE_ADMIN_EMAILS too), and the secret-free _idp_present predicate. Change is_single_user to use _idp_present.
+    2. org_identity.py: IdpConfig.from_org_config reads org_mode.idp_section(org_config) instead of org_config.get("idp") (:118). Make client_secret field(repr=False) (:85).
+    3. admin_config.py: add the "org_server" flag (schema default false; load() normalizes it), and keep apply_change from ever changing it. daemon_main.py: set it to true and save on the first start for which _idp_present is true, before IdP discovery. D9's single-user refusal checks it.
+    4. tests/conftest.py: extend the environment-clearing fixture from p15 to every PRIVACYFENCE_IDP_* variable and PRIVACYFENCE_ADMIN_EMAILS, and reset org_mode's once-only warning flag in _reset().
+    5. deploy/docker: privacyfence.env.example, the compose.yaml secrets example and the entrypoint message, per D14. tests/integration/test_org_docker_image.py: copy TestRunningContainer (:206) into a positive test. Start the image with no bundle and -e PRIVACYFENCE_IDP_ISSUER=<the mock IdP's base_url>, PRIVACYFENCE_IDP_CLIENT_ID, PRIVACYFENCE_ISSUER_URL=https://<ISSUER_HOST>, PRIVACYFENCE_PORT and DEV_ALLOW_INSECURE_IDP=1, as that class's bundle-based setup does. Assert the entrypoint's environment line, that /login redirects to the mock IdP, and that no single-user line is logged.
     6. Tests:
-       - test_org_mode.py: idp_section with a bundle only; env only; both (the bundle wins, one warning); the secret from an env value and from a file; both secret forms set is an error; an unreadable file names the variable and not the content; the comma lists; is_single_user with env idp is false.
-       - test_org_identity.py: from_org_config builds from env (monkeypatch discover_idp).
-       - test_daemon_main.py: org mode with no bundle and env idp starts the org app (monkeypatch discovery and the server start as the existing tests do); org_server is set; a later start with the IdP variables removed and a localhost issuer is refused with D9's message; an unsigned bundle in org mode is still refused.
+       - test_org_mode.py:
+         - idp_section with a bundle only; env only; both (the bundle wins, one warning, also triggered by PRIVACYFENCE_ADMIN_EMAILS alone);
+         - the secret from an env value and from a file; both secret forms set is an error; an unreadable file names the variable and not the content;
+         - a partial environment (CLIENT_ID missing, or only ADMIN_EMAILS set) is an error;
+         - the comma lists;
+         - is_single_user with an env idp is false, and it never opens the secret file (monkeypatch open to fail for it).
+       - test_org_identity.py: from_org_config builds from env (monkeypatch discover_idp); repr(IdpConfig(...)) does not contain the secret.
+       - test_daemon_main.py: org mode with no bundle and env idp starts the org app (monkeypatch discovery and the server start as the existing tests do); org_server is set even when discovery fails; a later start with the IdP variables removed and a localhost issuer is refused with D9's message; an unsigned bundle in org mode is still refused.
+       - test_admin_config.py: apply_change cannot change org_server.
        - No log record (caplog) contains the secret in any test.
     7. Run ruff check . and python3 -m pytest tests/unit -q. Push, then dispatch build.yml on the phase branch (ci.dispatchable) and check that the build-org-image job's image tests pass.
   acceptance:
@@ -2656,12 +2686,14 @@ phases:
   - tests/unit/test_build_org_bundle.py
   brief: |-
     Read "Design → D14" ("Admins by email").
-    1. org_identity.py: IdpConfig gains admin_emails (lower-cased, from the section's admin_emails list). principal_from_claims sets is_admin when the group rule matches, or when the lower-cased email is in admin_emails and claims.get("email_verified") is True.
+    1. org_identity.py: IdpConfig gains admin_emails (each .strip().casefold(), from the section's admin_emails list). principal_from_claims sets is_admin when the group rule matches, or when isinstance(claims.get("email"), str), its .strip().casefold() is in admin_emails, and claims.get("email_verified") is True. The three callers (oauth_provider.py:470, routes_org_identity.py:222, routes_org_stepup.py:179) all pass verified ID-token claims and need no change.
     2. scripts/build_org_bundle.py: add --idp-admin-email (repeatable, action="append"), writing idp.admin_emails, next to --idp-admin-group-value. tests/unit/test_build_org_bundle.py: the flag writes the list and the bundle still signs.
     3. tests/unit/test_org_identity.py:
        - A verified listed email is admin; matching is case-insensitive.
        - email_verified false, missing, or the string "true" is not admin.
        - An unlisted email is not admin.
+       - A list-valued email claim is not admin.
+       - A configured email with surrounding whitespace or different case still matches.
        - The group rule still works alone and together with the email list.
     4. Run ruff check . and python3 -m pytest tests/unit -q.
   acceptance:
@@ -2753,7 +2785,7 @@ phases:
        - §6 "Build the bundle": only the startup and credential flags remain; list the moved flags and say they are now on the Admin page; describe the one-time import on upgrade and the "are ignored" warning.
        - "Who may sign in", §10 (install-wide policy), §12 (step-up, including "stricter only from the page; relax by editing org/admin_config.json and restarting"), "Notifications on a phone", §13 (file delivery), audit forwarding and scoped tokens: each now points to the matching Admin page section and says which changes need a restart.
        - A new "Admin page" subsection: who sees it, the sections, step-up.
-       - §4 "Identity provider" and "Who is an admin": the environment alternative to the bundle (D14), admins by verified email, and that Entra ID admins use the group claim. §6: the bundle is optional when the IdP comes from the environment.
+       - §4 "Identity provider" and "Who is an admin": the environment alternative to the bundle (D14), admins by verified email, that Entra ID admins use the group claim, and that a multi-tenant issuer like accounts.google.com should be paired with allowed domains (Admin → Sign-in) or an Internal consent screen. Note that one Google OAuth client can also serve Peek and Grist sign-in, but a separate client per service is recommended. §6: the bundle is optional when the IdP comes from the environment.
        - §14 "Upgrade" and a new "Going back to 6.x" subsection: 7.x copies org_config.json and its pin files to org_bundle.json and the new pin names, and never changes 6.x's files (D13). To go back, stop 7.x and install the latest 6.x (6.9.x): it runs with org_config.json as it was, and changes made on the Admin page do not carry back. To re-upgrade from 6.x's current files, delete D13's list of 7.x files first. Use the new file name everywhere the guide installs or copies a bundle (Docker: org/org_bundle.json).
        - Also in §14: upgrading to 8.x requires having run 7.x at least once with "Ready for PrivacyFence 8: yes" on the Admin page. Explain data_format.json (D12), the problems it can report and how to fix each, and that 7.x refuses data from a newer release.
        - §15 Troubleshooting: rows for the relay errors (proof_failed, host_not_public, revoked, too_soon, the issuer_url message, and the relay's 400 text from D5) and for the "are ignored" warning.
@@ -2769,7 +2801,7 @@ phases:
        - Outbound HTTPS to oauth.privacyfence.eu when using built-in apps.
        - admin_config.json lives in the data volume and is part of the backup.
        - The bundle is credentials-only.
-       - A new first section, "Run it on this computer" (open it at http://localhost:8765, not 127.0.0.1, because the Host allowlist and the passkey's rp_id are localhost): the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from single-user mode to a multi-user server (an idp section and a public address).
+       - A new first section, "Run it on this computer" (open it at http://localhost:8765, not 127.0.0.1, because the Host allowlist and the passkey's rp_id are localhost): the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from single-user mode to a multi-user server (PRIVACYFENCE_IDP_* and a public PRIVACYFENCE_ISSUER_URL in privacyfence.env, or an idp section in a signed bundle).
        - The PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL variables.
     3. configuration-reference.md: the D9 and D14 environment variables and their precedence (a bundle's idp section wins over PRIVACYFENCE_IDP_*); org_bundle.json's keys (D2), and that it is the 6.x org_config.json copied once (D13); org/admin_config.json (D3 schema; written by the Admin page; hand-edit only to relax step-up, then restart); org/relay_token.txt; the PRIVACYFENCE_BUILTIN_APPS development variable and its JSON shape.
     4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.

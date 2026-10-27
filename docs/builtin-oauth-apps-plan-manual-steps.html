@@ -136,7 +136,7 @@ PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker 
       <li><div><strong>Start.</strong> Run <code>docker compose up -d</code>. Caddy gets the TLS certificate, and the image starts in organization mode. There is no bundle to build or sign.</div></li>
       <li><div><strong>Turn services on.</strong> Sign in as the admin email, open <strong>Admin → Services</strong>, and offer the services you want. The server registers itself with the relay, and people can connect at <code>/connect</code>.</div></li>
     </ol>
-    <p class="see">You still need a signed <code>org_bundle.json</code> if you want your own connector apps, or a configuration nobody can change without your signing key. A bundle wins over the environment. Admins by email need an IdP that sends <code>email_verified</code>; with Entra ID, use the group claim instead.</p>
+    <p class="see">You still need a signed <code>org_bundle.json</code> if you want your own connector apps, or a configuration nobody can change without your signing key. A bundle wins over the environment. Admins by email need an IdP that sends <code>email_verified</code>; with Entra ID, use the group claim instead. With Google as the IdP, use an Internal consent screen or set allowed domains on <strong>Admin → Sign-in</strong>, because any Google account can verify an address. One Google OAuth client can also sign people in to Peek and Grist, but a separate client per service is easier to rotate or revoke.</p>
 
     <h3>Upgrading an existing server from 6.x</h3>
     <ol class="flow">
@@ -157,7 +157,7 @@ PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker 
       <li><div><code>docker logs</code> shows a one-time <strong>setup code</strong>. Open <code>http://localhost:8765/login</code>, enter it, and enroll a passkey. From then on, you sign in with the passkey.</div></li>
       <li><div>Connect services on <code>/connect</code>. The built-in apps send the provider's redirect through <code>oauth.privacyfence.eu</code>, which bounces your browser straight back to <code>localhost</code>. Nothing is registered and nothing is stored there.</div></li>
       <li><div>Add <code>http://localhost:8765/mcp</code> to Claude Code or Claude Desktop. It signs in through the same single-user sign-in and consent page.</div></li>
-      <li><div>To go to production, add an <code>idp</code> section and a public <code>https</code> address in <code>org_bundle.json</code>. Your admin settings and connections carry over.</div></li>
+      <li><div>To move to a multi-user server, add the <code>PRIVACYFENCE_IDP_*</code> variables and a public <code>https</code> <code>PRIVACYFENCE_ISSUER_URL</code> to <code>privacyfence.env</code> (or an <code>idp</code> section in a signed <code>org_bundle.json</code>). Your admin settings and connections carry over.</div></li>
     </ol>
     <p class="note">Keep the <code>127.0.0.1:</code> in the port mapping. Inside the container PrivacyFence has to listen on every interface, and only that mapping keeps it off your network.</p>
 
