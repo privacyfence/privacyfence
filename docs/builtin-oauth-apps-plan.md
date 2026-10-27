@@ -2094,7 +2094,7 @@ provisioning key to another host, the same risk SEC-06 closes for audit forwardi
   - `service_rows` sets `options.locked` for peek and grist when the bundle's
     `auto_provision.enabled` is true.
   - These rows get the status line `Accounts are created and connected at sign-in (automatic
-    accounts, from the configuration file).` It comes after the server address
+    accounts, set in the server configuration).` It comes after the server address
     (`Server: <address>`).
   - `set_server_address` on a locked service is refused with `The server address comes from the
     configuration file while automatic accounts are on.`
@@ -2106,11 +2106,74 @@ provisioning key to another host, the same risk SEC-06 closes for audit forwardi
     `--merge` against a bundle that has it on). They are refused only on their own.
   - The auto-provision flags are unchanged.
   - `--merge` keeps `auto_provision` and the address it needs.
-- **Environment-only servers (D14).**
-  - A server with no bundle has no auto-provisioning. There are no environment variables for it in
-    this plan, and the docs say so.
-  - Adding `PRIVACYFENCE_PEEK_*` and `PRIVACYFENCE_GRIST_*` variables later fits D14's trust model
-    (the environment is as trusted as the bundle). It is listed under Risks as a follow-up.
+- **Environment-only servers (D14): auto-provisioning from environment variables (p20c).** A
+  server started without a bundle can turn on automatic accounts from its environment. D14's trust
+  model applies: whoever controls the environment already chooses the image and holds the keys.
+
+  | Variable | Bundle equivalent |
+  |---|---|
+  | `PRIVACYFENCE_PEEK_AUTO_PROVISION` (`true`/`false`) | `peek.auto_provision.enabled` |
+  | `PRIVACYFENCE_PEEK_BASE_URL` | `peek.base_url` |
+  | `PRIVACYFENCE_PEEK_TRUST_UNVERIFIED_EMAIL` (`true`/`false`) | `peek.auto_provision.trust_unverified_email` |
+  | `PRIVACYFENCE_GRIST_AUTO_PROVISION` (`true`/`false`) | `grist.auto_provision.enabled` |
+  | `PRIVACYFENCE_GRIST_SERVER_URL` | `grist.server_url` |
+  | `PRIVACYFENCE_GRIST_PROVISIONER_URL` | `grist.auto_provision.provisioner_url` |
+  | `PRIVACYFENCE_GRIST_TRUST_UNVERIFIED_EMAIL` (`true`/`false`) | `grist.auto_provision.trust_unverified_email` |
+
+  - **The overlay.** `org_mode.with_environment_provisioning(bundle) -> dict[str, Any]` returns
+    `bundle` unchanged when no variable above is set. Otherwise it returns a copy whose `peek` and
+    `grist` sections carry the values above, with `key_env` left at its default
+    (`PRIVACYFENCE_PEEK_PROVISIONING_KEY`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY`).
+    `PeekProvisioningConfig` and `GristProvisioningConfig` then validate the result exactly as they
+    validate a bundle. Their messages name the variable, not the bundle key, when the value came from
+    the environment: they gain a `source: Literal["bundle", "environment"]` argument, default
+    `"bundle"`.
+  - **Refusals.** Each raises `ConfigurationError` at startup:
+    - **A bundle is installed** (`load_org_config()` is non-empty) and any variable above is set:
+      `PRIVACYFENCE_PEEK_* and PRIVACYFENCE_GRIST_* are for servers without org_bundle.json. Set
+      automatic accounts in the bundle (build_org_bundle.py --peek-auto-provision /
+      --grist-auto-provision).` A bundle server keeps one source of truth, as SEC-14 does for
+      the IdP.
+    - **An address without its switch:** `PRIVACYFENCE_PEEK_BASE_URL` or
+      `PRIVACYFENCE_GRIST_SERVER_URL` without `..._AUTO_PROVISION=true`.
+      `PRIVACYFENCE_PEEK_BASE_URL is read only with PRIVACYFENCE_PEEK_AUTO_PROVISION=true; set the
+      address on the Admin page otherwise.` (Grist likewise.)
+    - **A boolean variable that is not `true` or `false`.** The message names the variable.
+    - **No IdP:** auto-provisioning variables in single-user mode (no IdP). The message is
+      `Automatic accounts need an identity provider.`
+  - **Where the overlay is applied.**
+    - `daemon_main` computes `bundle_for_apps = org_mode.with_environment_provisioning(bundle)`
+      once, after `load_org_config()`. It passes that to `effective_org_config` (D4) and to
+      `admin_config.service_rows`, and the startup validation and both provisioner `start` calls
+      see it through the effective config.
+    - `admin_config.ensure` and `import_from_bundle` keep the raw bundle. So on an
+      environment-only server Peek and Grist start not offered, like every service there (D3).
+      The admin offers them on the Admin page, where the row shows the locked address.
+    - `run_peek_release` and `run_grist_release` read
+      `with_environment_provisioning(load_org_config())`.
+  - **Locked rows.** The locked-row status line above covers both sources.
+  - **Key files.** `org_mode.provisioning_key(key_env) -> str | None` returns the stripped value of
+    `key_env`, or the contents of the file named by `key_env + "_FILE"` (one trailing newline
+    stripped). Setting both raises `ConfigurationError` (`Set <key_env> or <key_env>_FILE, not
+    both.`). An unreadable file raises `ConfigurationError` naming the variable, never the
+    content.
+    - It replaces the direct `os.environ.get(config.key_env, "")` reads in
+      `peek_provisioning.py:309`, `grist_provisioning.py:358` and `daemon_main.py:2393`, `:2443`,
+      so bundle servers gain the `_FILE` form too.
+    - The startup validation calls it once per enabled provisioner, so a bad file stops startup.
+  - **Docker.**
+    - `deploy/docker/privacyfence.env.example` gains a commented block for these variables.
+    - `compose.yaml`'s commented `secrets:` example gains `peek_provisioning_key` and
+      `grist_provisioning_key`, used through `..._PROVISIONING_KEY_FILE=/run/secrets/...`.
+    - `docs/org-mode-docker.md`'s environment-only quick start shows Peek and Grist automatic
+      accounts as an optional step.
+  - **Tests (p20c).**
+    - Each variable reaches its config field.
+    - Each refusal above.
+    - A bundle-installed server refuses the variables.
+    - The overlay leaves `admin_config.ensure` untouched.
+    - `provisioning_key` handles plain, `_FILE`, both, and an unreadable file.
+    - `run_peek_release` works on an environment-only server.
 - **Single-user mode (D9).** Provisioning starts from the IdP sign-in callbacks
   (`routes_org_identity.py:228-231`, `oauth_provider.py`), and single-user sign-in (D10) never
   calls them. So a single-user install never provisions, even with a bundle that turns it on. p16
@@ -2189,10 +2252,11 @@ reference.
   copying them to new names (`org_bundle.json`, `org_bundle_signing_pubkey.txt`,
   `org_bundle_serial.txt`) and never changes a 6.x file, so the latest 6.x keeps running after a
   downgrade. Amends 0016 and 0200 (the file names); relates to 0256.
-- **0258** — An organization server can take its IdP and server address from environment
-  variables, with no bundle. A bundle, when present, must still be signed and wins. A signed bundle
-  without an `idp` section refuses an environment IdP unless it sets `idp.from_environment`. Amends 0016
-  (org mode no longer always needs a signed bundle) and 0011.
+- **0258** — An organization server can take its IdP and server address, and Peek and Grist
+  automatic accounts (D18), from environment variables, with no bundle. A bundle, when present,
+  must still be signed and wins. A signed bundle without an `idp` section refuses an environment
+  IdP unless it sets `idp.from_environment`, and refuses the provisioning variables outright.
+  Amends 0016 (org mode no longer always needs a signed bundle) and 0011; relates to 0241, 0244.
 - **0259** — Admins can be named by IdP-verified email (`PRIVACYFENCE_ADMIN_EMAILS` or
   `idp.admin_emails`), alongside the group claim. Relates to 0011.
 - **0260** — Live connector checks run on a dedicated runner, `runner.privacyfence.eu`
@@ -2230,11 +2294,9 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 
 ## Risks and open questions
 
-- **Auto-provisioning on an environment-only server (open).** D18 keeps Peek and Grist
-  auto-provisioning in the bundle, so a server started from environment variables alone (D14)
-  cannot use it. `PRIVACYFENCE_PEEK_AUTO_PROVISION`, `..._BASE_URL`, `PRIVACYFENCE_GRIST_*`
-  variables would fit D14's trust model. They are left for a follow-up unless the maintainer wants
-  them in 7.0.
+- **Auto-provisioning from the environment is unit-tested only.** No manual step runs a real Peek
+  or Grist provisioner from environment variables. The bundle path and the environment path meet in
+  the same `from_org_config` validation, and main's provisioning tests cover the workers.
 
 - **The relay terms are not legal advice.** The plan writes them from the decisions above (D16), and
   ma5 asks for a lawyer's review. Until then they rest on the publisher's own judgement.
@@ -3384,10 +3446,48 @@ phases:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_identity.py -q -k admin passes
   - ruff check . passes
+- id: p20c-provisioning-from-environment
+  title: Peek and Grist automatic accounts from environment variables, and provisioning key files
+  depends_on:
+  - p20b-admins-by-email
+  complexity: M
+  touches:
+  - src/privacyfence/org_mode.py
+  - tests/unit/test_org_mode.py
+  - src/privacyfence/peek_provisioning.py
+  - tests/unit/test_peek_provisioning.py
+  - src/privacyfence/grist_provisioning.py
+  - tests/unit/test_grist_provisioning.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  - src/privacyfence/admin_config.py
+  - tests/unit/test_admin_config.py
+  - deploy/docker/privacyfence.env.example
+  - deploy/docker/compose.yaml
+  brief: |-
+    Read "Design → D18", the bullet "Environment-only servers (D14): auto-provisioning from environment variables (p20c)", and D14 for the IdP pattern this copies. Every variable name, message and rule is there.
+    1. org_mode.py: add with_environment_provisioning(bundle) and provisioning_key(key_env) per D18. Give PeekProvisioningConfig.from_org_config and GristProvisioningConfig.from_org_config a keyword-only source: Literal["bundle", "environment"] = "bundle"; with "environment", each message names the PRIVACYFENCE_* variable from D18's table instead of the bundle key. Keep every existing message for source="bundle" byte-identical (existing tests pin them).
+    2. peek_provisioning.py (~:309) and grist_provisioning.py (~:358): read the key with org_mode.provisioning_key(config.key_env).
+    3. daemon_main.py:
+       - After load_org_config() in run_app, compute bundle_for_apps = org_mode.with_environment_provisioning(bundle) and use it wherever p4 passes the bundle to effective_org_config, and where admin_config.service_rows gets its bundle (the OrgAuth bundle field stays the raw bundle for admin_config.ensure; add a second field bundle_for_apps if the Admin dispatcher needs it). admin_config.ensure and import_from_bundle keep the raw bundle.
+       - The startup validation (~:1163-1167) passes source="environment" when the section came from the overlay, and calls provisioning_key once for each enabled provisioner so a bad _FILE stops startup.
+       - run_peek_release and run_grist_release (~:2386, ~:2436) read with_environment_provisioning(load_org_config()) and use provisioning_key (~:2393, ~:2443).
+    4. admin_config.py: the locked-row status line is D18's "set in the server configuration" text (p6 wrote "from the configuration file" if it followed an older plan text; align it and its test).
+    5. deploy/docker/privacyfence.env.example: a commented "Automatic Peek and Grist accounts (optional)" block with the D18 variables and the _FILE key form. compose.yaml: extend the commented secrets: example with peek_provisioning_key and grist_provisioning_key.
+    6. Tests per D18 "Tests (p20c)", plus: with no variable set, with_environment_provisioning returns the very same dict object; source="bundle" messages are unchanged.
+    7. Run ruff check ., python3 -m pytest tests/unit/test_org_mode.py tests/unit/test_peek_provisioning.py tests/unit/test_grist_provisioning.py tests/unit/test_admin_config.py tests/unit/test_daemon_main.py -q, then python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_org_mode.py tests/unit/test_peek_provisioning.py tests/unit/test_grist_provisioning.py tests/unit/test_admin_config.py tests/unit/test_daemon_main.py -q passes
+  - grep -n "def with_environment_provisioning" src/privacyfence/org_mode.py matches
+  - grep -n "def provisioning_key" src/privacyfence/org_mode.py matches
+  - grep -rn "os.environ.get(config.key_env" src/privacyfence finds nothing
+  - grep -n "PRIVACYFENCE_PEEK_AUTO_PROVISION" deploy/docker/privacyfence.env.example matches
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
 - id: p12-adrs
   title: ADRs 0249-0260 and the status lines on the ADRs they amend
   depends_on:
-  - p20b-admins-by-email
+  - p20c-provisioning-from-environment
   - p10-bundle-tooling
   - p11-relay-worker
   complexity: M
@@ -3500,7 +3600,7 @@ phases:
     4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.
     5. how-it-works.md (:277-278), connector-qa.md (:153): where they say operational settings live in the bundle, point to the Admin page and admin_config.json instead. testing-policy.md (:183): add the Admin page to the phone-layout list of app surfaces.
     6. Run the docs tests below, python3 -m pytest tests/unit/test_docs_configuration_reference.py -q, and ruff check ..
-    Also apply D18 (operator docs): the configuration reference's auto-provisioning rows stay bundle flags; org-mode-docker.md says an environment-only server has no auto-provisioning and needs a bundle for it.
+    Also apply D18 (operator docs): the configuration reference's auto-provisioning rows stay bundle flags and gain the D18 environment variables (with the rule that a bundle-installed server refuses them) and the <key_env>_FILE form; org-mode-docker.md's environment-only quick start shows Peek and Grist automatic accounts as an optional step with the provisioning keys as Docker secrets.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - python3 -m pytest tests/unit/test_docs_configuration_reference.py -q passes
@@ -3577,7 +3677,7 @@ phases:
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
     8. Run the docs tests below and ruff check ..
-    Also apply D18 (user docs): peek-setup.md and grist-setup.md keep the bundle flags for automatic accounts and move only the manual server address to the Admin page; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
+    Also apply D18 (user docs): peek-setup.md and grist-setup.md keep the bundle flags for automatic accounts, add the environment-variable alternative for servers without a bundle (offer the service on the Admin page to start it) and move only the manual server address to the Admin page; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - grep -n "Admin page" docs/connecting-a-service.md docs/slack-setup.md docs/grist-setup.md matches in each

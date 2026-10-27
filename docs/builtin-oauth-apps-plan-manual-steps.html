@@ -134,8 +134,15 @@ PRIVACYFENCE_IDP_CLIENT_ID=…
 PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret
 PRIVACYFENCE_ADMIN_EMAILS=alice@acme.example.com
 PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2</pre>Put the client secret in a Docker secret file, so it doesn't show in <code>docker inspect</code>. Set <code>PF_HOSTNAME</code> in <code>.env</code> for Caddy.</div></li>
+      <li><div><strong>Optional: automatic Peek and Grist accounts.</strong> To give everyone who signs in a Peek account or a Grist key, add:<pre>PRIVACYFENCE_PEEK_AUTO_PROVISION=true
+PRIVACYFENCE_PEEK_BASE_URL=https://peek.acme.example.com
+PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE=/run/secrets/peek_provisioning_key
+PRIVACYFENCE_GRIST_AUTO_PROVISION=true
+PRIVACYFENCE_GRIST_SERVER_URL=https://grist.acme.example.com
+PRIVACYFENCE_GRIST_PROVISIONER_URL=https://grist-provisioner.acme.example.com
+PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE=/run/secrets/grist_provisioning_key</pre>The keys come from Peek and the Grist provisioner. Keep them in Docker secrets too. With Entra ID, add <code>..._TRUST_UNVERIFIED_EMAIL=true</code>, because Entra never marks an address verified. These variables are only for servers without a bundle; a bundle server sets the same things with <code>--peek-auto-provision</code> and <code>--grist-auto-provision</code>.</div></li>
       <li><div><strong>Start.</strong> Run <code>docker compose up -d</code>. Caddy gets the TLS certificate, and the image starts in organization mode. There is no bundle to build or sign.</div></li>
-      <li><div><strong>Turn services on.</strong> Sign in as the admin email, open <strong>Admin → Services</strong>, and offer the services you want. The server registers itself with the relay, and people can connect at <code>/connect</code>.</div></li>
+      <li><div><strong>Turn services on.</strong> Sign in as the admin email, open <strong>Admin → Services</strong>, and offer the services you want, including Peek and Grist if you turned on automatic accounts. Their server address shows locked. The server registers itself with the relay, and people can connect at <code>/connect</code>.</div></li>
     </ol>
     <p class="see">You still need a signed <code>org_bundle.json</code> if you want your own connector apps, or a configuration nobody can change without your signing key. A bundle wins over the environment. Admins by email need an IdP that sends <code>email_verified</code>; with Entra ID, use the group claim instead. With Google as the IdP, use an Internal consent screen or set allowed domains on <strong>Admin → Sign-in</strong>, because any Google account can verify an address. One Google OAuth client can also sign people in to Peek and Grist, but a separate client per service is easier to rotate or revoke.</p>
 
