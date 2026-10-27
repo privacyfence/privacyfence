@@ -187,11 +187,8 @@ def _provision(
             managed = issued.managed
             with principal_lock(principal_id):
                 lost_release = _released(principal_id)
-                if lost_release:
-                    saved = False
-                elif _usable(token_path, config.server_url, "manual") is not None:
-                    saved = False
-                else:
+                saved = False
+                if not lost_release and _usable(token_path, config.server_url, "manual") is None:
                     save_api_key(
                         str(token_path),
                         config.server_url,
