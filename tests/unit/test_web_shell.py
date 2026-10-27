@@ -132,6 +132,45 @@ class TestDismissibleNotice:
         assert "localStorage" in html
 
 
+class TestWhatsNewStrip:
+    """Org mode's per-person "PrivacyFence was updated" strip (ADR 0238)."""
+
+    def test_whats_new_strip_renders_with_version_and_link(self):
+        html = web_shell.wrap("<p>body</p>", title="t", active="approvals", whats_new_version="1.0<x>", csrf="c")
+        assert 'id="pf-shell-whats-new"' in html
+        assert "PrivacyFence was updated to 1.0&lt;x&gt;." in html
+        assert '<a href="/whats-new">See what\'s new</a>' in html
+        assert "data-whats-new-dismiss" in html
+        assert html.index("pf-shell-whats-new") < html.index("<p>body</p>")
+
+    def test_whats_new_strip_absent_by_default(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert 'id="pf-shell-whats-new"' not in html
+        assert "/api/whats-new/seen" not in html
+
+    def test_whats_new_needs_csrf(self):
+        with pytest.raises(ValueError, match="whats_new_version needs csrf"):
+            web_shell.wrap("", title="t", active="approvals", whats_new_version="1.0")
+
+    def test_whats_new_script_posts_to_seen_with_csrf(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", nonce="N0NCE", whats_new_version="1.0", csrf="tok</script>",
+        )
+        script = html[html.index("getElementById('pf-shell-whats-new')") - 200:]
+        assert '<script nonce="N0NCE">' in script
+        assert "fetch('/api/whats-new/seen'" in script
+        assert "body: JSON.stringify({csrf: " + web_shell.json_for_script("tok</script>") + "})" in script
+        assert "tok</script>" not in html
+
+    def test_whats_new_strip_renders_without_live_updates(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", live_updates=False, whats_new_version="1.0", csrf="c",
+        )
+        assert 'id="pf-shell-whats-new"' in html
+        assert "fetch('/api/whats-new/seen'" in html
+        assert "EventSource" not in html
+
+
 class TestNotifications:
     """Tiers 0-1 only: the title badge and a local service-worker notification (ADR 0064)."""
 
