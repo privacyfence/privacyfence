@@ -797,8 +797,10 @@ like `org_config_upload` does.
   CSRF, human session, size, TOFU confirmation (409), then step-up.
 - `routes_admin`'s local builder mounts it at `POST /api/admin/org_config/upload`, with
   `state_builder` returning the admin page state.
-- `/api/settings/org_config/upload` is removed. Update `_BESPOKE_SENSITIVE_ROUTE_PATHS` and
-  `install_org_config`'s shim fetch path.
+- `/api/settings/org_config/upload` stays until p8b moves the card off the settings surface;
+  p8b then removes it and its `_BESPOKE_SENSITIVE_ROUTE_PATHS` entry.
+- The shim's upload paths become `<endpoint>/org_config/upload` and `<endpoint>/rooms/upload`
+  once p8a adds the `endpoint` parameter.
 - The admin page state carries `"error": controller.error` in local mode, so D3's "are ignored"
   message shows on the Admin page.
 
@@ -833,6 +835,20 @@ like `org_config_upload` does.
 - `render()` branches first: `if (CAPS.surface === 'admin') { renderAdmin(state); return; }`.
   The admin state never has to carry the settings keys (`connectors`, `telegram_auth`,
   `peek_auth`).
+- `renderAdmin` draws its own nav and section switch. It does not call `renderNav` or
+  `renderSection`, which read settings-only state. Its section keys and labels, in order:
+  - services "Services"
+  - features "Features"
+  - org_config "Organization configuration"
+  - delivery "File delivery"
+  - access "Sign-in"
+  - step_up "Step-up"
+  - tokens "Scoped tokens"
+  - audit "Audit forwarding"
+  - privacy "Privacy Filter"
+  - stats "Stats"
+
+  Each is shown only when the capabilities include it.
 - `GET /admin` passes `initial_section="services"`, so the shared fallback
   (`settings_window_html.py:346`, `:1875`) never lands on a hidden section.
 - The admin surface gets its own `not_applicable_actions`: the org-only admin actions in local
@@ -964,6 +980,19 @@ to `http://localhost:<port>`.
   provider is a trial and runs only at http://localhost or http://127.0.0.1. Add an \"idp\"
   section to org_config.json to serve any other address.")`.
 - A trial needs no bundle at all. Built-in apps and the admin config supply everything else.
+- **A real server never falls back to a trial.** Trial mode is refused when the data directory
+  shows it belonged to an organization server. That means
+  `org_bundle_signing.pinned_public_key_path(org_dir())` exists, or the admin config's
+  `imported_from_bundle_sha256` is non-empty. The message is `ConfigurationError("This data
+  directory belonged to an organization server; restore org_config.json, or use a new data
+  directory for a trial.")`. Without this, deleting the bundle would silently turn a production
+  server into a trial reachable on `0.0.0.0` with only a setup code (the downgrade
+  `load_org_config`'s docstring warns about).
+- **Types.** `OrgAuth.idp` becomes `IdpConfig | None` (`web/server.py:698`), and
+  `OrgOAuthProvider.__init__`'s `idp` becomes `IdpConfig | None` (`oauth_provider.py:251`), with
+  `authorize` guarded. `routes_org_identity` and `routes_org_stepup` are mounted only when `idp` is
+  not None (`web/server.py:1349`, `:1373`), and the issuer log line (`daemon_main.py:1253-1255`)
+  logs `trial` instead when it is None.
 - At every trial start, `daemon_main` logs at WARNING `Trial mode: a single administrator, no
   identity provider. For evaluation on this computer only.`
 
@@ -971,13 +1000,18 @@ to `http://localhost:<port>`.
 
 - `deploy/docker/Dockerfile` adds `ENV PRIVACYFENCE_MODE=org PRIVACYFENCE_BIND_HOST=0.0.0.0` to
   its existing `ENV` block.
+- `deploy/docker/healthcheck.py` reads the bundle's `server.port`. With no bundle, or no port in
+  it, it uses `PRIVACYFENCE_PORT`, else 8765, so a trial container reports healthy.
+- `tests/integration/test_org_docker_image.py::test_refuses_to_start_without_a_bundle` (`:185`,
+  asserting exit 78) is replaced by the trial-start test.
 - `deploy/docker/docker-entrypoint.sh` no longer exits 78 when there is no bundle. Without one, it
   prints `No organization bundle: starting a trial at http://localhost:8765 (docs/org-mode-docker.md, "Try it on this computer").`
   to stderr, then `exec`s as before.
 - The trial command, documented in `docs/org-mode-docker.md`, is
   `docker run --rm -p 127.0.0.1:8765:8765 -v pf-data:/var/lib/privacyfence-org/.privacyfence ghcr.io/privacyfence/privacyfence-org:latest`.
   The `127.0.0.1:` publish keeps the trial unreachable from the network. The image cannot check
-  this, and the docs say so plainly.
+  this, and the docs say so plainly. The trial is opened at `http://localhost:8765`, not
+  `127.0.0.1`: the Host allowlist and the passkey's rp_id are both `localhost`.
 - `tests/integration/test_org_docker_image.py` covers the image. A phase that changes the image
   dispatches `build.yml` (in `ci.dispatchable`) to run it, because the container cannot build
   images.
@@ -1001,63 +1035,82 @@ to `http://localhost:<port>`.
 
 ### D10. Trial sign-in: a setup code, then a passkey
 
-**Module `src/privacyfence/web/trial_auth.py`.** It is mounted instead of
+**Module `src/privacyfence/web/trial_auth.py`.** Its `build_routes(...)` is mounted instead of
 `routes_org_identity.build_routes` when `org_mode.is_trial(org_config)`.
 
 - **The principal.** `TRIAL_PRINCIPAL = Principal(id="trial-admin", email="admin@localhost",
   display_name="Trial administrator", is_admin=True)`.
-- **The setup code.**
-  - At startup, when `webauthn_stepup.has_credentials(TRIAL_PRINCIPAL)` is false, the daemon
-    generates `secrets.token_hex(4).upper()` formatted `XXXX-XXXX`. It keeps the code in memory only
-    and logs it at WARNING: `Trial setup code: <code>. Open http://localhost:<port>/login to set up
-    your passkey.`
-  - Five wrong codes invalidate it until the next start. The log line for that is `Trial setup code
-    used up after 5 wrong attempts; restart PrivacyFence for a new one.`
-  - Once a passkey is enrolled, the code is discarded and setup is refused.
+- **The setup code.** It is generated and logged inside `build_routes`, so trial_auth's own tests
+  cover it.
+  - It is made only when `webauthn_stepup.has_credentials(TRIAL_PRINCIPAL)` is false: eight
+    characters from `secrets.token_hex(4).upper()`, shown as `XXXX-XXXX`, kept in memory only.
+  - It is logged at WARNING: `Trial setup code: <code>. Open http://localhost:<port>/login to set
+    up your passkey.`
+  - **Checked on every request.** Every request checks `has_credentials` again, so the code works
+    only while no passkey is enrolled, and a later recovery wipe does not bring an old code back
+    to life.
+  - **Comparing.** The typed value is normalized: stripped, upper-cased, with a dash inserted
+    after four characters when it is missing. Anything that is not then `^[0-9A-F]{4}-[0-9A-F]{4}$`
+    counts as a wrong attempt. The comparison is `hmac.compare_digest(typed.encode(),
+    code.encode())`.
+  - **Limits.** Five wrong attempts discard the code until the next start, logging `Trial setup
+    code used up after 5 wrong attempts; restart PrivacyFence for a new one.` A successful use
+    also discards it; a restart issues a new one while no passkey is enrolled.
+- **Cookies.** `pf_trial_setup` and the session cookie are `Secure` only when the issuer is
+  `https`. `org_session.set_session_cookie` gains `secure: bool = True`, and trial_auth passes
+  `False` for an `http` issuer. Safari does not keep `Secure` cookies on `http://localhost`.
 - **`GET /login?next=<path>`:**
   - With no passkey enrolled, a form: "Setup code" input, button "Continue".
   - Otherwise, a "Sign in with your passkey" button that runs the WebAuthn get ceremony.
   - `next` is cleaned with `routes_org_identity._safe_next_path`.
-  - The page uses `web_shell.wrap` with no nav and the CSP nonce helper.
-- **`POST /login/setup`** (form: `code`, `next`):
-  - It is origin-checked with `org_session.check_origin`. There is no session yet, so it is bound
-    instead by a short-lived `pf_trial_setup` cookie set by `GET /login`: a random value, HttpOnly,
-    SameSite=Strict, 10-minute max-age, echoed as a hidden field and compared in constant time.
-  - It compares the code with `secrets.compare_digest`.
-  - On success it creates an org session for `TRIAL_PRINCIPAL` with `org_session`'s existing
-    creation and cookie helpers, as `routes_org_identity.login_callback` does, and redirects to
-    `/security`. The passkey page already prompts enrollment there.
+  - The page is rendered with `web_shell.plain_page(..., nonce=nonce_for(request))`, as
+    `routes_org_identity`'s `signed_out` page is.
+  - It sets `pf_trial_setup`: a random value, HttpOnly, SameSite=Strict, 10-minute max-age,
+    echoed as a hidden field.
+- **`POST /login/setup`** (form: `code`, `next`, the hidden binding value):
+  - It is origin-checked with `org_session.check_origin`.
+  - The cookie must match the hidden field (`hmac.compare_digest`).
+  - On success it consumes the code, creates an org session for `TRIAL_PRINCIPAL` with
+    `org_session`'s existing creation and cookie helpers (as `routes_org_identity.login_callback`
+    does, including issuing a fresh session id), and redirects to `/security?next=<safe next>`.
   - On failure it re-renders the form with `That code is not right.`, or after the fifth failure
     `The setup code is used up. Restart PrivacyFence to get a new one.`
-- **`POST /login/passkey/options` and `POST /login/passkey/verify`** use
-  `webauthn_stepup.begin_assertion` and `verify_assertion` for `TRIAL_PRINCIPAL`, with `rp_id` taken
-  from the issuer host. Bind them with the same cookie pattern, and keep the challenge in a
-  `StepUpChallengeStore`-like single-use store keyed by that cookie. On success they create the
-  session and return `{"redirect": next}`.
-- **`GET /logout`** behaves as today's org logout.
+- **`routes_security`.** After a successful enrollment, when the page was opened with a `next`
+  that `_safe_next_path` accepts, it shows a "Continue" link to it. That carries an MCP client's
+  `/oauth/trial/continue` through first-time setup.
+- **`POST /login/passkey/options` and `POST /login/passkey/verify`:**
+  - They use `webauthn_stepup.begin_assertion` and `verify_assertion` for `TRIAL_PRINCIPAL`.
+  - The `rp_id` and origin are the ones `/security` enrolled with: `StepUpConfig.rp_id` (the
+    `step_up` config's, defaulting to the issuer host, `routes_security.py:516`, `:545`) and
+    `issuer_url.rstrip('/')`.
+  - They are bound with the same cookie pattern. The challenge lives in a single-use store keyed
+    by that cookie.
+  - On success they create the session (a fresh session id) and return `{"redirect": next}`.
+- **`POST /logout` and `GET /signed-out`** behave exactly as `routes_org_identity`'s, including
+  `end_browser_push`. The nav's sign-out form posts to `/logout` (`web_shell.py:534-546`).
 - **MCP clients through the OAuth server.**
-  - `OrgOAuthProvider` gets `trial: bool`, and `idp` may be `None` when `trial` is true.
-  - `authorize` then records the pending authorization as today but returns
+  - `OrgOAuthProvider` gets `trial: bool`, with `idp` `None` when `trial` is true.
+  - `authorize` records the pending authorization as today but returns
     `/login?next=/oauth/trial/continue%3Fstate%3D<own_state>`.
-  - The new route `GET /oauth/trial/continue?state=` needs a trial session for `TRIAL_PRINCIPAL`
-    and calls `provider.handle_trial_continue(state=..., principal=...)`.
-  - To support it, split `handle_idp_callback` into:
-    - `_pop_pending(state)`;
-    - the IdP-specific claims step;
-    - `_finish_for_principal(pending, principal) -> str`, which holds today's consent check and
-      code minting, unchanged.
-
-    `handle_trial_continue` = `_pop_pending` + `_finish_for_principal`. This makes consent (ADR
-    0177) apply to trial clients unchanged.
+  - `routes_mcp.mount_org_oauth(provider, *, issuer_url, sessions: OrgSessionStore | None = None)`:
+    - It mounts `GET /oauth/trial/continue?state=` only when `provider.trial`, and the IdP
+      callback route (`IDP_CALLBACK_PATH`, `routes_mcp.py:1091`) only when it is not.
+    - The call at `web/server.py:1335` passes `sessions=org.sessions`.
+  - The continue route needs a session for `TRIAL_PRINCIPAL`; without one it redirects to
+    `/login?next=<itself>`. It calls `provider.handle_trial_continue(state=..., principal=...)`.
+  - `handle_idp_callback` is split into `_pop_pending(state)`, the IdP-specific claims step, and
+    `_finish_for_principal(pending, principal) -> str` (today's consent check and code minting,
+    unchanged). `handle_trial_continue` is `_pop_pending` + `_finish_for_principal`, so consent
+    (ADR 0177) applies to trial clients unchanged.
 - **Step-up and approvals** work as on any org server; `TRIAL_PRINCIPAL`'s passkey is the step-up
   passkey.
-- **Lost passkey.** Recovery is to stop the container and delete
-  `users/trial-admin/authority/webauthn_credentials.json`, or the exact path
+- **Lost passkey.** Stop the container and delete the file
   `webauthn_stepup._credentials_path(TRIAL_PRINCIPAL)` resolves to in the volume. The next start
   prints a new code. This goes in the docs.
-- **Audit.** Sign-in successes and failures are audit-logged like `routes_org_identity`'s, with
-  decisions `trial_setup_signin`, `trial_setup_refused`, `trial_passkey_signin` and
-  `trial_passkey_refused`. A refusal never records the code typed.
+- **Audit.** Sign-in outcomes are audit-logged the way `routes_security._audit`
+  (`routes_security.py:452`) writes them: an `AuditEntry` under `principal_scope`. The decisions
+  are `trial_setup_signin`, `trial_setup_refused`, `trial_passkey_signin` and
+  `trial_passkey_refused`. A refusal never records the typed code.
 
 ### D11. Local mode is deprecated in 7.x
 
@@ -1065,7 +1118,8 @@ to `http://localhost:<port>`.
   will be removed in PrivacyFence 8. Move to an organization server, or try the Docker image on
   this computer: https://privacyfence.eu/docs/moving-to-organization-mode/`
 - **Daemon log.** `run_app` logs it at WARNING at every local-mode start.
-- **`privacyfence_status`.** `mcp_dispatch`'s status result (`web/mcp_dispatch.py:511-537`) gains
+- **`privacyfence_status`.** `mcp_dispatch`'s status result, where `result` is built
+  (`web/mcp_dispatch.py:506-508`) so all three return paths carry it, gains
   `"deprecation": LOCAL_MODE_DEPRECATION` in local mode and `null` in org mode. The tool
   description in `web/mcp_tools.py:257` adds "deprecation (local mode: a notice to relay to the
   human once)". Regenerate `docs/tools-reference.md` with `scripts/generate_tools_reference.py` if
@@ -1147,8 +1201,9 @@ signs in during 7.x would keep old data.
   2. **Rules.** Run `policy_upgrade.ensure_scope_rows`. When it returns `False`, the section stayed
      version 2, and the problem is `"<principal id>: rules are still in the version-2 format"`.
   3. **Tokens.** Run `policy_upgrade.ensure_token_rules`, with `{}` when there is no settings
-     file, as `_upgrade_all_principals` does. Afterwards, any token in the principal's store that
-     still has `legacy_raw` adds the problem `"<principal id>: scoped token <id> still names
+     file, as `_upgrade_all_principals` does. Afterwards, read the principal's
+     `authority_dir(principal) / "scoped_tokens.json"` directly. Every entry that has a `rule_ids`
+     key and no `rules` key adds the problem `"<principal id>: scoped token <id> still names
      rules"`.
   4. **Verb names.** The new `policy_upgrade.ensure_canonical_verbs(config, resolved, principal,
      *, log) -> bool` rewrites stored rows whose `verbs` use a name from
@@ -1624,7 +1679,7 @@ phases:
     2. routes_settings.py: add the keyword `sensitive: bool | None = None` to _needs_step_up and _apply_step_up_gate per D6; existing callers are unchanged. Test in test_routes_settings.py that sensitive=True gates an action not in _SENSITIVE_ACTIONS, and sensitive=False skips one that is.
     3. Create src/privacyfence/web/routes_admin.py:
        - AdminAction and ADMIN_ACTIONS per D6's table, excluding the four privacy actions (p9a), and RESTART_LABELS per D6.
-       - A mode-independent core: `_dispatch(principal, action, body, *, mode, bundle, org_config, refresh_live, ...) -> Response`. It covers coercion (reuse routes_settings._coerce), the step-up gate with sensitive=, apply_change (passing bundle, mode and trial=org_mode.is_trial(bundle) if that function exists yet, else False), the audit under principal_scope, the `applies` handling, and the page-state response.
+       - A mode-independent core: `_dispatch(principal, action, body, *, mode, bundle, org_config, refresh_live, ...) -> Response`. It covers coercion (reuse routes_settings._coerce), the step-up gate with sensitive=, apply_change (passing bundle, mode and trial=False; p15 changes it), the audit under principal_scope, the `applies` handling, and the page-state response.
        - `_admin_state(*, mode, bundle, org_config, startup_admin, principal) -> dict` per D6's "Page state". Leave out privacy and stats; p9a adds them.
        - build_org_routes(*, sessions, step_up, step_up_origin, connector_registry, org_config, bundle, startup_admin): `POST /api/admin/{action}` and `GET /api/admin/state`, with D6's 401/403/404 rules and CSRF and origin checks copied from routes_settings.build_org_routes' settings_action.
        - ROUTE_CLASSIFICATION mapping each POST path to "action-dispatcher" or "bespoke-sensitive", and a RuntimeError at build time for an unclassified POST route, as routes_settings does (ADR 0014).
@@ -1664,12 +1719,11 @@ phases:
        - build_routes(*, controller, sessions, step_up, step_up_origin, require_human_session, startup_admin, org_config) for local mode. It reuses p7a's core with D6's local rules: the bundle per request, require_human_session for sensitive actions, and the local live refresh (refresh_in_place on the startup org_config plus controller.refresh_connectors()). The state carries "error": controller.error.
        - POST /api/admin/rooms/upload in both builders, per D6, classified "bespoke-sensitive".
     2. routes_settings.py:
-       - Refactor org_config_upload's body into handle_org_config_upload(request, *, controller, ..., state_builder) with unchanged checks.
-       - Remove /api/settings/org_config/upload and its _BESPOKE_SENSITIVE_ROUTE_PATHS entry.
-       - In _settings_bridge_shim, change install_org_config's fetch path to /api/admin/org_config/upload, and add an intercepted upload_rooms action posting to /api/admin/rooms/upload, the same way.
+       - Refactor org_config_upload's body into handle_org_config_upload(request, *, controller, ..., state_builder) with unchanged checks. /api/settings/org_config/upload stays, with state_builder returning the settings snapshot as today; p8b removes it.
        - routes_admin's local builder mounts POST /api/admin/org_config/upload with state_builder returning the admin state.
-       - Move the existing org_config_upload tests in test_routes_settings.py to the new path, changing only the URL and the response-state assertions.
-    3. web/server.py and daemon_main.py: add `startup_admin` and `org_config` keywords to WebServer.__init__, build_app and _maybe_start_web_server, passed from run_app (org_config is the same dict object the new-principal factory closes over). Mount build_routes in local mode wrapped in _owner_only_routes, next to build_settings_routes, only when a controller exists.
+       - In _settings_bridge_shim, add an intercepted upload_rooms action posting to /api/admin/rooms/upload, the same way install_org_config is intercepted. Leave install_org_config's path alone.
+       - Add tests for the new admin path; the existing settings-path tests stay unchanged.
+    3. web/server.py: add `startup_admin` and `org_config` keywords to WebServer.__init__ and build_app only. daemon_main.py passes them from _maybe_start_web_server's existing `org_config` keyword and the `startup_admin` keyword p4 added; org_config is the same dict object the new-principal factory closes over. Mount build_routes in local mode wrapped in _owner_only_routes, next to build_settings_routes, only when a controller exists.
     4. Tests:
        - test_routes_admin.py, local:
          - owner-only: a non-owner principal gets 404, as Settings does;
@@ -1682,7 +1736,7 @@ phases:
     5. Run ruff check . and python3 -m pytest tests/unit -q.
   acceptance:
   - python3 -m pytest tests/unit -q passes
-  - grep -rn "/api/settings/org_config/upload" src/privacyfence finds nothing
+  - grep -n "/api/admin/org_config/upload" src/privacyfence/web/routes_admin.py matches
   - grep -n "upload_rooms" src/privacyfence/web/routes_settings.py matches
   - ruff check . passes
 - id: p8a-admin-page-and-services
@@ -1709,11 +1763,11 @@ phases:
     2. settings_window_html.py:
        - build_html gains `surface` and `_capabilities_for` gains the surface argument, per D6, with "surface" in the capabilities.
        - The admin surface's sections are services and, in local mode, org_config. Features is p8b; the org-only sections are p9b.
-       - render() branches to renderAdmin(state) per D6.
+       - render() branches to renderAdmin(state) per D6. renderAdmin draws its own nav and section switch, with D6's keys and labels, and never calls renderNav or renderSection.
        - Add renderServices(state): toggleHtml for offer/withdraw, the D6 status lines and doc links, and the relay status line in org mode.
        - The admin surface gets its own not_applicable_actions per D6.
        - The settings surface is unchanged in this phase.
-    3. routes_settings.py: give _settings_bridge_shim an `endpoint` parameter (default "/api/settings"); the admin surface passes "/api/admin".
+    3. routes_settings.py: give _settings_bridge_shim an `endpoint` parameter (default "/api/settings"); the admin surface passes "/api/admin". The intercepted uploads post to `<endpoint>/org_config/upload` and `<endpoint>/rooms/upload`.
     4. routes_admin.py: add GET /admin in both builders. It renders web_shell.wrap(build_html(state, surface="admin", initial_section="services", mode=..., is_admin=...)) with active="admin", copying how routes_settings renders GET /settings in each mode. In org mode, no session redirects to /login?next=/admin and a non-admin gets a 403 page saying "Only administrators can open this page.".
     5. Tests:
        - test_settings_window_html.py: the admin surface's section sets for local, org admin and org non-admin; every D6 services status line renders for its row; the relay line appears only in org mode; initial_section "services" is used.
@@ -1732,6 +1786,9 @@ phases:
   touches:
   - src/privacyfence/settings_window_html.py
   - tests/unit/test_settings_window_html.py
+  - src/privacyfence/web/routes_settings.py
+  - tests/unit/web/test_routes_settings.py
+  - tests/unit/web/test_routes_admin.py
   brief: |-
     Read "Design → D6": the Features actions, "Room directory upload", "Bundle upload (local mode)" and "Rendering".
     1. settings_window_html.py:
@@ -1742,15 +1799,17 @@ phases:
          - the room directory: count and synced date, a file input dispatching the intercepted upload_rooms action, and a Clear control (clear_rooms).
          For the forms, copy the structure of the Grist API-key modal at settings_window_html.py:1970-2020.
        - Move the Organization Configuration card (renderGeneral, :705-712) from the local settings surface to the admin surface's org_config section. Change its description to "Your own app credentials, and the server and identity-provider settings, from your IT administrator." It keeps dispatching install_org_config, and shows state.error when set.
-    2. tests/unit/test_settings_window_html.py:
+    2. routes_settings.py: now that no settings surface dispatches install_org_config, remove /api/settings/org_config/upload and its _BESPOKE_SENSITIVE_ROUTE_PATHS entry. Move the remaining settings-path upload tests in test_routes_settings.py to /api/admin/org_config/upload (in test_routes_settings.py or test_routes_admin.py), keeping their assertions.
+    3. tests/unit/test_settings_window_html.py:
        - The features section renders each form prefilled from a sample state.
        - A locked grist shows no form.
        - The rooms control dispatches upload_rooms.
        - The local settings surface no longer contains "Organization Configuration", and the admin surface does.
-    3. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q, and fix any smoke test that looked for the Organization Configuration card on /settings so it looks on /admin.
+    4. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q, and fix any smoke test that looked for the Organization Configuration card on /settings so it looks on /admin.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - grep -n "function renderFeatures" src/privacyfence/settings_window_html.py matches
+  - grep -rn "/api/settings/org_config/upload" src/privacyfence finds nothing
   - ruff check . passes
 - id: p9a-org-settings-becomes-personal
   title: 'Org Settings becomes personal: privacy, stats and the PII gate move to the Admin dispatcher'
@@ -1772,7 +1831,7 @@ phases:
   - tests/integration/test_browser_smoke.py
   brief: |-
     Read "Design → D6": the privacy-actions row and paragraph, "Page state" (privacy, stats), and "Rendering" (what the org settings surface loses). After this phase an org admin's /settings is the same as a normal user's. The Admin page renders privacy and stats in p9b.
-    1. org_settings_scope.py: change toggle_pii_detection, toggle_pii_category, set_default_policy and set_category_policy to `ActionScope(frozenset({LOCAL_MODE}))`. In local mode they stay the owner's own settings.
+    1. org_settings_scope.py: change toggle_pii_detection, toggle_pii_category, set_default_policy and set_category_policy to `ActionScope(frozenset({LOCAL_MODE}), admin_only=True)`, matching toggle_calendar_free_busy (:96). In local mode they stay the owner's own settings.
     2. routes_settings.py:
        - Remove those four from _ORG_ALLOWED_ACTIONS and from _apply_org_action.
        - Remove the admin-only privacy and stats data and the PII general fields (_pii_general_fields) from _org_state.
@@ -1795,11 +1854,11 @@ phases:
          - test_org_admin_sees_general_and_privacy (:927) and test_stats_page_is_org_admin_only (:963) assert the new layout: no privacy or stats on org settings for anyone.
        - test_routes_org_settings.py:
          - test_admin_sees_privacy_capabilities_non_admin_does_not (:326-347) asserts privacy is false for both.
-         - The privacy-action, privacy-route and stats tests (:157, :178-194 and others) move to test_routes_admin.py against /api/admin/..., with the same assertions.
+         - The privacy-action and stats tests (:178-194 and others) move to test_routes_admin.py against /api/admin/..., with the same assertions. The page tests for /settings/privacy (such as :157) assert the 302 to /admin instead.
          - POST /api/settings/toggle_pii_detection in org mode is 404.
-       - test_routes_settings.py:449 and test_server_org_mode.py:120: /settings/privacy is a 302 to /admin.
+       - test_routes_settings.py:449 (test_org_snapshot_carries_the_peek_auth_stub): change its URL to /settings so it keeps checking the stub, and add a separate test that /settings/privacy is a 302 to /admin. test_server_org_mode.py:120: the same 302.
        - tests/integration/test_browser_smoke.py:
-         - test_org_settings_page_renders_for_admin (:2626-2643) asserts the org admin's Settings nav has no Privacy Filter or Stats.
+         - test_org_settings_page_renders_for_admin (around :2654) asserts the org admin's Settings nav has no Privacy Filter or Stats.
          - TestPhoneLayout's _ADMIN_SECTIONS and the settings-privacy-route case (:2839, :2941-2950) drop privacy and stats from Settings. p9b adds the Admin cases.
     6. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q. Otherwise state in the phase result that the browser tests were edited but not run here, so the PR's CI run is their check.
   acceptance:
@@ -1930,20 +1989,33 @@ phases:
   - src/privacyfence/daemon_main.py
   - tests/unit/test_daemon_main.py
   - src/privacyfence/web/routes_admin.py
+  - src/privacyfence/web/server.py
+  - tests/unit/web/test_server_org_mode.py
+  - src/privacyfence/web/oauth_provider.py
+  - tests/unit/web/test_oauth_provider.py
   - tests/conftest.py
   - deploy/docker/Dockerfile
   - deploy/docker/docker-entrypoint.sh
+  - deploy/docker/healthcheck.py
   - tests/integration/test_org_docker_image.py
   brief: |-
-    Read "Design → D9", except "The relay on localhost", which p5 and p11 already did. The trial sign-in is p16; this phase makes a trial start, with routes_org_identity still mounted.
+    Read "Design → D9", except "The relay on localhost", which p5 and p11 already did. The trial sign-in is p16; after this phase a trial starts and serves its pages but nobody can sign in yet, which is expected.
     1. org_mode.py: resolve_mode's environment order and conflict error, the ServerConfig environment fallbacks, and is_trial, exactly per D9.
     2. tests/conftest.py: add an autouse fixture that runs monkeypatch.delenv(name, raising=False) for PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL, so a developer's environment never leaks into tests.
-    3. daemon_main.py load_admin_config: pass trial=org_mode.is_trial(bundle) instead of False (D3). routes_admin's apply_change call passes trial the same way, if p7a left False there. Then in _start_org_web_server: in trial mode, replace the "requires an idp section" raise with D9's loopback check and message. Pass idp=None through, and do not mount routes_org_identity or the IdP step-up routes when idp is None (p16 mounts the trial routes). Log D9's trial warning in run_app.
-       - Stop condition: if something other than routes_org_identity, routes_org_stepup and OrgOAuthProvider dereferences idp, so a trial cannot start, stop with status=blocked and list the call sites. Read web/server.py's org assembly and OrgAuth first.
-    4. deploy/docker/Dockerfile and docker-entrypoint.sh per D9. tests/integration/test_org_docker_image.py: add a test that the image without a bundle starts, answers the healthcheck, and logs the trial line. Copy the existing tests' container-run helper.
+    3. daemon_main.py load_admin_config: pass trial=org_mode.is_trial(bundle) instead of False (D3). routes_admin's apply_change and replace_rooms calls pass trial the same way, replacing the False p7a and p7b used.
+       Then in _start_org_web_server:
+       - In trial mode, replace the "requires an idp section" raise with D9's loopback check and message, and with D9's "a real server never falls back to a trial" check (a pinned signing key, or a non-empty imported_from_bundle_sha256).
+       - Apply D9's "Types" bullet: OrgAuth.idp and OrgOAuthProvider's idp become Optional, authorize is guarded, routes_org_identity and routes_org_stepup are mounted only when idp is not None (web/server.py:1349, :1373), and the issuer log line (daemon_main.py:1253-1255) handles None.
+       - Log D9's trial warning in run_app.
+       - Stop condition: if anything besides those call sites dereferences idp in a way a trial start reaches, stop with status=blocked and list the call sites.
+    4. deploy/docker/Dockerfile, docker-entrypoint.sh and healthcheck.py per D9. tests/integration/test_org_docker_image.py: replace test_refuses_to_start_without_a_bundle (:185) with a test that the image without a bundle starts, is healthy, and logs the trial line. Copy the existing tests' container-run helper.
     5. Tests:
        - tests/unit/test_org_mode.py: resolve_mode with bundle only, env only, neither, both equal, both different, and an invalid env value; each ServerConfig env fallback, with the bundle winning; is_trial.
-       - tests/unit/test_daemon_main.py: an unsigned bundle without mode under PRIVACYFENCE_MODE=org is refused by load_org_config; a trial with issuer http://localhost:8765 builds the org app (monkeypatch the server start as the existing org tests do); a trial with issuer https://pf.example.com raises D9's message.
+         - tests/unit/test_daemon_main.py:
+           - an unsigned bundle without mode under PRIVACYFENCE_MODE=org is refused by load_org_config;
+           - a trial with issuer http://localhost:8765 builds the org app (monkeypatch the server start as the existing org tests do);
+           - a trial with issuer https://pf.example.com raises D9's message;
+           - a trial over a data directory with a pinned signing key, or with an imported admin config, raises the "belonged to an organization server" message.
     6. Run ruff check . and python3 -m pytest tests/unit -q.
     7. Push the phase branch, then dispatch build.yml on it (ci.dispatchable; this container cannot build images) and check that the build-org-image job's image tests pass, including the new one.
   acceptance:
@@ -1968,14 +2040,35 @@ phases:
   - src/privacyfence/web/server.py
   - tests/unit/web/test_server_org_mode.py
   - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  - src/privacyfence/web/org_session.py
+  - tests/unit/web/test_org_session.py
+  - src/privacyfence/web/routes_security.py
+  - tests/unit/web/test_routes_security.py
+  - scripts/check_coverage_floor.py
   brief: |-
     Read "Design → D10" in full, and ADR 0177 (consent) and ADR 0178 (finish in the starting session).
     1. web/oauth_provider.py: split handle_idp_callback into _pop_pending, the claims step and _finish_for_principal, with no behaviour change. The existing tests in tests/unit/web/test_oauth_provider.py must pass unchanged before you go on. Then add trial: bool and an optional idp, the trial authorize return value, and handle_trial_continue, per D10.
-    2. Create web/trial_auth.py per D10: the setup code (generation, attempt counter, discard after enrollment), the cookie-bound GET /login, POST /login/setup, POST /login/passkey/options, POST /login/passkey/verify and GET /logout, and the audit decisions. Use org_session's existing session-creation and cookie helpers; read routes_org_identity.login_callback for how a session is created and the cookie set, and do the same.
-    3. GET /oauth/trial/continue goes with the other OAuth routes. Find where routes_mcp.py mounts /oauth/idp/callback and add it next to that, mounted only in trial mode.
-    4. web/server.py and daemon_main.py: in trial mode, mount trial_auth's routes where routes_org_identity's would be, construct OrgOAuthProvider with trial=True, and generate and log the setup code at startup per D10.
-    5. tests/unit/web/test_trial_auth.py:
+    2. org_session.set_session_cookie gains `secure: bool = True` per D10, with a test in tests/unit/web/test_org_session.py.
+    3. Create web/trial_auth.py per D10:
+       - the setup code: generated and logged in build_routes, normalized comparison, the attempt limit, consumed on success, has_credentials checked on every request;
+       - the cookie-bound GET /login (plain_page), POST /login/setup, POST /login/passkey/options and POST /login/passkey/verify;
+       - POST /logout and GET /signed-out, as routes_org_identity's;
+       - the audit decisions, written the routes_security._audit way;
+       - the Secure flag rule.
+       Use org_session's existing session-creation and cookie helpers, as routes_org_identity.login_callback does.
+    4. routes_security.py: the "Continue" link after enrollment when a safe `next` is present, per D10, with a test in tests/unit/web/test_routes_security.py.
+    5. routes_mcp.mount_org_oauth: add the `sessions` keyword, mount /oauth/trial/continue only for a trial provider, and mount the IdP callback only for a non-trial one, per D10. Update the call at web/server.py:1335.
+    6. web/server.py and daemon_main.py: in trial mode, mount trial_auth.build_routes where routes_org_identity's would be, and construct OrgOAuthProvider with trial=True.
+    7. scripts/check_coverage_floor.py: add "src/privacyfence/web/trial_auth.py" to MODULE_FLOORS at 100. routes_mcp.py already has a floor of 100, so the new route needs full tests.
+    8. tests/unit/web/test_trial_auth.py:
        - The code is logged once and never appears in any response or audit summary.
+       - A lowercase code and one without the dash are accepted; a non-ASCII value counts as a wrong attempt and gives no 500.
+       - After a successful setup the code no longer works.
+       - When a passkey is enrolled and then wiped, the old code does not come back.
+       - Cookies are not Secure for an http issuer, and are Secure for an https issuer.
+       - The setup redirect carries next through to /security?next=...
+       - POST /logout ends the session and redirects to /signed-out.
        - A right code gives a session for trial-admin and redirects to /security.
        - A wrong code gives the message; the fifth wrong code uses the code up, and even the right code is then refused.
        - A missing or mismatched pf_trial_setup cookie is refused, as is a foreign Origin.
@@ -1983,12 +2076,12 @@ phases:
        - The passkey options and verify flow: monkeypatch webauthn_stepup.verify_assertion to succeed or fail, giving a session or a refusal.
        - next is sanitized: //evil.example is refused.
        - Each audit decision is recorded.
-    6. tests/unit/web/test_oauth_provider.py and test_routes_mcp.py:
+    9. tests/unit/web/test_oauth_provider.py and test_routes_mcp.py:
        - A trial authorize returns the /login?next=/oauth/trial/continue... URL.
        - /oauth/trial/continue without a session goes to /login, with a session finishes through consent exactly like the IdP path (copy the IdP-path consent tests), and refuses a state that is unknown or expired.
-       - A non-trial server has no /oauth/trial/continue route.
-    7. tests/unit/web/test_server_org_mode.py: in trial mode /login is the trial page and /oauth/idp/login-callback does not exist.
-    8. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
+       - A non-trial server has no /oauth/trial/continue route, and a trial server has no IdP callback route.
+    10. tests/unit/web/test_server_org_mode.py: in trial mode /login is the trial page and /oauth/idp/login-callback does not exist.
+    11. Run ruff check . and python3 -m pytest tests/unit -q. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_browser_smoke.py -q.
     Stop condition: if session creation in routes_org_identity cannot be reused without copying private code that carries security checks (for example session fixation handling), stop with status=blocked and describe what would have to be duplicated.
   acceptance:
   - python3 -m pytest tests/unit -q passes
@@ -2021,7 +2114,7 @@ phases:
   brief: |-
     Read "Design → D11".
     1. org_mode.py: add LOCAL_MODE_DEPRECATION with the exact text. daemon_main.run_app logs it at WARNING in local mode.
-    2. web/mcp_dispatch.py: add the "deprecation" field to the status result. web/mcp_tools.py: extend the privacyfence_status description per D11. If a test pins docs/tools-reference.md to the generator's output, run python3 scripts/generate_tools_reference.py and commit the result.
+    2. web/mcp_dispatch.py: add the "deprecation" field where `result` is built (:506-508), so all three return paths carry it. web/mcp_tools.py: extend the privacyfence_status description per D11. If a test pins docs/tools-reference.md to the generator's output, run python3 scripts/generate_tools_reference.py and commit the result.
     3. web_shell.py: add the deprecation_html keyword and strip per D11, styled with the existing notice strip's CSS. Pass it from every local-mode wrap call site: grep `web_shell.wrap(` and `wrap(` in src/privacyfence/web; the local sites are those using the default or local nav items.
     4. companion.py: add _notice_state_path() and the one-time notice in _run_tray (after the icon starts, on the UI thread, as _notify does) and in _run_serve (_notify_send), per D11.
     5. Tests:
@@ -2065,7 +2158,7 @@ phases:
     7. Run ruff check ., python3 -m pytest tests/unit -q, and, per the sync/** rule in .claude/toolkit.yaml: pip install -e "./sync[test]", then pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100, mypy sync/src and bandit -r sync/src.
   acceptance:
   - python3 -m pytest tests/unit -q passes
-  - grep -rn "organization config bundle" src/privacyfence finds nothing
+  - grep -rnE "in the organization config bundle|install it first from the General page|isn't enabled in your organization config" src/privacyfence finds nothing
   - pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-fail-under=100 passes
   - ruff check . passes
 - id: p19a-migration-checkpoint
@@ -2215,7 +2308,7 @@ phases:
        - Outbound HTTPS to oauth.privacyfence.eu when using built-in apps.
        - admin_config.json lives in the data volume and is part of the backup.
        - The bundle is credentials-only.
-       - A new first section, "Try it on this computer": the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from the trial to a real server (an idp section and a public address).
+       - A new first section, "Try it on this computer" (open it at http://localhost:8765, not 127.0.0.1, because the Host allowlist and the passkey's rp_id are localhost): the D9 docker run command with the 127.0.0.1 publish and why it matters; the setup code in `docker logs`; passkey enrollment; connecting a service through the relay; adding http://localhost:8765/mcp to an AI client; the lost-passkey recovery from D10; and how to go from the trial to a real server (an idp section and a public address).
        - The PRIVACYFENCE_MODE, PRIVACYFENCE_BIND_HOST, PRIVACYFENCE_PORT and PRIVACYFENCE_ISSUER_URL variables.
     3. configuration-reference.md: the D9 environment variables and their precedence; org_config.json's remaining keys (D2); org/admin_config.json (D3 schema; written by the Admin page; hand-edit only to relax step-up, then restart); org/relay_token.txt; the PRIVACYFENCE_BUILTIN_APPS development variable and its JSON shape.
     4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.
