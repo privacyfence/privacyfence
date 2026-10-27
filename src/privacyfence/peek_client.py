@@ -38,6 +38,9 @@ _GRANT_EMAIL_MAX = 254
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 _LOGIN_STATUSES = ("pending", "approved", "denied", "expired", "consumed")
 _REAUTH = "Use Authenticate… in PrivacyFence Settings"
+_SOURCE_DEVICE = "device"
+_SOURCE_PROVISIONED = "provisioned"
+_PROVISIONING_ID_RE = re.compile(r"[A-Za-z0-9._@-]{1,200}")
 _UNEXPECTED_SHAPE = "Peek answered with something unexpected. Check the Peek server address."
 
 
@@ -269,8 +272,13 @@ def poll_device_login(base_url: str, device_code: str) -> PeekLoginPoll:
 # --- credential file --------------------------------------------------------------
 
 
-def save_token_file(path: str, base_url: str, token: str) -> None:
-    secure_files.atomic_write_json(path, {"base_url": base_url, "token": token})
+def save_token_file(path: str, base_url: str, token: str, *, source: str = "device", expires_at: int = 0) -> None:
+    """Write the credential file. Only a provisioned token carries ``source`` and ``expires_at``."""
+    record: dict[str, Any] = {"base_url": base_url, "token": token}
+    if source == _SOURCE_PROVISIONED:
+        record["source"] = _SOURCE_PROVISIONED
+        record["expires_at"] = int(expires_at)
+    secure_files.atomic_write_json(path, record)
 
 
 def load_token_file(path: str) -> dict[str, str]:
@@ -289,8 +297,17 @@ def load_token_file(path: str) -> dict[str, str]:
     token = record.get("token") if isinstance(record, dict) else None
     if not (isinstance(base_url, str) and base_url and isinstance(token, str) and token):
         raise _unreadable()
+    source = record.get("source", _SOURCE_DEVICE)
+    if source not in (_SOURCE_DEVICE, _SOURCE_PROVISIONED):
+        raise _unreadable()
+    expires_at = record.get("expires_at")
     try:
-        return {"base_url": normalize_base_url(base_url), "token": token}
+        return {
+            "base_url": normalize_base_url(base_url),
+            "token": token,
+            "source": source,
+            "expires_at": str(expires_at) if isinstance(expires_at, int) and not isinstance(expires_at, bool) else "0",
+        }
     except PeekClientError as exc:
         raise _unreadable() from exc
 
@@ -651,3 +668,128 @@ def _raise_grant_error(exc: PeekClientError) -> NoReturn:
             detail=exc.detail,
         ) from exc
     raise exc
+
+
+# --- provisioning ------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PeekProvisionedAccount:
+    external_id: str
+    account_id: int
+    created: bool
+    adopted: bool
+    disabled: bool
+    has_token: bool
+    token_expires_at: int
+
+
+@dataclass(frozen=True)
+class PeekMintedToken:
+    token: str = field(repr=False)
+    token_id: int
+    expires_at: int
+
+
+class PeekProvisioningClient:
+    """Peek's provisioning API, called with the organization's scoped provisioning key."""
+
+    def __init__(self, base_url: str, key: str) -> None:
+        self._base_url = base_url
+        self._key = key
+        self._session = requests.Session()
+
+    @property
+    def host(self) -> str:
+        return _host_of(self._base_url)
+
+    def __repr__(self) -> str:
+        return f"PeekProvisioningClient({self.host})"
+
+    def _call(self, name: str, method: str, path: str, external_id: str = "", **kwargs: Any) -> Any:
+        headers = {"Authorization": f"Bearer {self._key}"}
+        logger.info("Peek provisioning at %s: %s %s", self.host, name, external_id)
+        try:
+            return _send(self._session, method, self._base_url + path, self.host, headers=headers, **kwargs).json()
+        except PeekClientError as exc:
+            raise self._mapped(exc, name) from exc
+
+    @staticmethod
+    def _mapped(exc: PeekClientError, name: str) -> PeekClientError:
+        status, detail = exc.status, exc.detail
+        if status == 401:
+            message = "Peek refused the provisioning key (HTTP 401). Check the key in the daemon's environment."
+        elif status == 404 and detail == "no detail":
+            message = (
+                "This Peek server has no provisioning API (HTTP 404). "
+                "Update Peek, or turn off Peek auto-provisioning."
+            )
+        elif status == 404 and name == "mint_token":
+            message = "Peek has no provisioned account for this person (HTTP 404)."
+        elif status in (403, 409):
+            message = f"Peek refused to provision this account (HTTP {status}): {detail}"
+        else:
+            return exc
+        return PeekClientError(message, status=status, detail=detail)
+
+    @staticmethod
+    def _valid_id(external_id: str) -> str:
+        if not _PROVISIONING_ID_RE.fullmatch(external_id):
+            raise PeekClientError(f"Not a Peek provisioning id: {external_id!r}")
+        return external_id
+
+    def check(self) -> int:
+        """The number of accounts this key manages."""
+        data = _as_dict(self._call("check", "GET", "/api/provisioning/self"))
+        accounts = data.get("accounts")
+        return accounts if isinstance(accounts, int) and not isinstance(accounts, bool) else 0
+
+    def upsert_account(self, external_id: str, email: str, name: str) -> PeekProvisionedAccount:
+        self._valid_id(external_id)
+        data = _as_dict(
+            self._call(
+                "upsert_account",
+                "PUT",
+                f"/api/provisioning/accounts/{external_id}",
+                external_id,
+                json={"email": email, "name": name},
+            )
+        )
+        return PeekProvisionedAccount(
+            external_id=_str(data, "external_id"),
+            account_id=_int(data, "account_id"),
+            created=_bool(data, "created"),
+            adopted=_bool(data, "adopted"),
+            disabled=_bool(data, "disabled"),
+            has_token=_bool(data, "has_token"),
+            token_expires_at=_int(data, "token_expires_at"),
+        )
+
+    def mint_token(self, external_id: str, expires_days: int = 90) -> PeekMintedToken:
+        self._valid_id(external_id)
+        data = _as_dict(
+            self._call(
+                "mint_token",
+                "POST",
+                f"/api/provisioning/accounts/{external_id}/token",
+                external_id,
+                json={"expires_days": expires_days},
+            )
+        )
+        token = _str(data, "token")
+        if not token:
+            raise PeekClientError(_UNEXPECTED_SHAPE)
+        return PeekMintedToken(token=token, token_id=_int(data, "token_id"), expires_at=_int(data, "expires_at"))
+
+    def release_account(self, external_id: str) -> bool:
+        """Whether Peek had a link to release (``False``: it had none)."""
+        self._valid_id(external_id)
+        try:
+            data = _as_dict(
+                self._call("release_account", "DELETE", f"/api/provisioning/accounts/{external_id}", external_id)
+            )
+        except PeekClientError as exc:
+            if exc.status == 404 and exc.detail != "no detail":
+                return False
+            raise
+        return _bool(data, "released")
