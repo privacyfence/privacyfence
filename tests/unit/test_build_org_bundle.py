@@ -1114,8 +1114,16 @@ class TestGristAutoProvisionFlags:
         assert self._bundle(tmp_path)["grist"]["auto_provision"]["trust_unverified_email"] is True
 
     def test_no_flag_writes_enabled_false(self, tmp_path):
+        build_org_bundle.main(
+            self._args(tmp_path, "--grist-server-url", "https://grist.example.com", "--no-grist-auto-provision")
+        )
+        grist = self._bundle(tmp_path)["grist"]
+        assert grist["auto_provision"] == {"enabled": False}
+        assert grist["server_url"].startswith("https://grist.example.com")
+
+    def test_no_flag_without_grist_section_writes_nothing(self, tmp_path):
         build_org_bundle.main(self._args(tmp_path, "--no-grist-auto-provision"))
-        assert self._bundle(tmp_path)["grist"] == {"auto_provision": {"enabled": False}}
+        assert "grist" not in self._bundle(tmp_path)
 
     def test_refuses_without_mode_org(self, tmp_path):
         message = self._exit(tmp_path, *self._on(), mode=False)

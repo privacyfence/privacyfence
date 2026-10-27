@@ -209,6 +209,21 @@ class TestProvisionPrincipal:
         assert ("issue", "alice") not in client.calls
         assert changes == []
 
+    def test_release_before_final_status_is_not_overwritten(self, data, client, changes):
+        write_state()
+        write_token("provisioned", managed=True, expires_at=int(NOW) + 31 * 86400)
+        client.account = account(has_key=True, managed=True, key_id=key_id(KEY))
+        original = client.upsert_account
+
+        def upsert(external_id: str, email: str) -> GristProvisionedAccount:
+            result = original(external_id, email)
+            write_state(status="released", email="")
+            return result
+
+        client.upsert_account = upsert  # type: ignore[method-assign]
+        assert run(client, changes) == "released"
+        assert state_of()["status"] == "released"
+
     def test_managed_key_within_30_days_is_reissued(self, data, client, changes):
         write_state()
         write_token("provisioned", managed=True, expires_at=int(NOW) + 29 * 86400)
@@ -307,6 +322,28 @@ class TestProvisionPrincipal:
         assert json.loads(token_path().read_text())["api_key"] == "mine"
         assert changes == []
         assert state_of()["status"] == "user_connected"
+
+    def test_release_during_upsert_stops_before_issuing(self, data, client, changes):
+        write_state()
+        original = client.upsert_account
+
+        def upsert(external_id: str, email: str) -> GristProvisionedAccount:
+            result = original(external_id, email)
+            write_state(status="released", email="")
+            return result
+
+        client.upsert_account = upsert  # type: ignore[method-assign]
+        assert run(client, changes) == "released"
+        assert not any(call[0] == "issue" for call in client.calls)
+        assert not token_path().exists() and changes == []
+        assert state_of()["status"] == "released"
+
+    def test_release_during_issue_skips_save_and_keeps_released(self, data, client, changes):
+        write_state()
+        client.on_issue = lambda: write_state(status="released", email="")
+        assert run(client, changes) == "released"
+        assert not token_path().exists() and changes == []
+        assert state_of()["status"] == "released"
 
     def test_unreadable_or_foreign_token_files_are_not_usable(self, data, client, changes):
         write_state()

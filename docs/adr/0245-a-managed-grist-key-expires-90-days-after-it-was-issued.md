@@ -25,8 +25,8 @@ the person. People leave, and PrivacyFence may not be told. Rotation is not an o
    ([`grist_provisioning.py`](../../src/privacyfence/grist_provisioning.py)).
 3. A six-hourly sweep re-queues people whose last sign-in is within 90 days (`INACTIVE_AFTER_SECONDS`).
    After that PrivacyFence stops renewing, and the key lapses.
-4. So a managed key lives at most about 150 days after the person's last sign-in (a renewal near day 60
-   lasts to about day 150). For anything sooner, `privacyfence-app --grist-release PRINCIPAL_ID` deletes it
+4. So a managed key lives at most about 180 days after the person's last sign-in (a renewal near day 89
+   lasts to about day 180). For anything sooner, `privacyfence-app --grist-release PRINCIPAL_ID` deletes it
    in Grist right away.
 
 ## Alternatives considered
