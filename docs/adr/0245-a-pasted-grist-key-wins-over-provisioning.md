@@ -1,4 +1,4 @@
-# ADR 0242: A Grist key the person pasted on /connect wins over provisioning
+# ADR 0245: A Grist key the person pasted on /connect wins over provisioning
 
 ## Status
 

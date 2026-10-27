@@ -1,4 +1,4 @@
-# ADR 0241: Grist API keys come from a Grist-side provisioner that PrivacyFence only calls
+# ADR 0244: Grist API keys come from a Grist-side provisioner that PrivacyFence only calls
 
 ## Status
 

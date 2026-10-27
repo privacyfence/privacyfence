@@ -35,6 +35,7 @@ from privacyfence import (
     grist_auth,
     grist_provisioning,
     local_files,
+    peek_provisioning,
     pii_detector,
     privacy_filter,
     privilege_separation,
@@ -147,6 +148,10 @@ def _reset() -> None:
     audit_log.set_released_request_id("")
     # The scoped-token store is a process-wide singleton over the data dir (ADR 0164).
     scoped_tokens.set_store(None)
+    # The Peek provisioner (organization mode) is a process-wide singleton; its per-person locks
+    # are keyed by principal id and must not carry over.
+    peek_provisioning._INSTANCE = None
+    peek_provisioning._LOCKS.clear()
 
 
 @pytest.fixture(autouse=True)

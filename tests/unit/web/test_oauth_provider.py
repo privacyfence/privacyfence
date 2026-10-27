@@ -237,6 +237,43 @@ class TestAuthorizeAndIdpCallback:
         redirect_url = await provider.handle_idp_callback(state=state, code="idp-code")
         assert "code=" in redirect_url
 
+    async def test_handle_idp_callback_calls_notify_sign_in(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        calls = []
+        monkeypatch.setattr(
+            op.peek_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: calls.append((principal.id, email_verified)),
+        )
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        _remember_consent(provider, client, "alice")
+        _patch_idp_exchange(
+            monkeypatch, claims={"sub": "alice", "email": "alice@acme.com", "email_verified": "true"},
+        )
+        auth_url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
+
+        await provider.handle_idp_callback(state=state, code="idp-code")
+
+        assert calls == [("alice", True)]
+
+    async def test_authorization_denied_does_not_call_notify_sign_in(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        calls = []
+        monkeypatch.setattr(op.peek_provisioning, "notify_sign_in", lambda *a, **kw: calls.append(a))
+        provider = _provider(tmp_path, monkeypatch, policy=AuthzPolicyConfig(allowed_domains=("acme.com",)))
+        client = _client_info()
+        await provider.register_client(client)
+        _patch_idp_exchange(monkeypatch, claims={"sub": "mallory", "email": "mallory@evil.example.com"})
+        auth_url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
+
+        with pytest.raises(oi.AuthorizationDenied):
+            await provider.handle_idp_callback(state=state, code="idp-code")
+
+        assert calls == []
+
 
 class TestGristNotifySignIn:
     async def test_handle_idp_callback_calls_grist_notify_sign_in(self, tmp_path, monkeypatch):

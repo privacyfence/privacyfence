@@ -17,7 +17,16 @@ from starlette.testclient import TestClient
 
 import json
 
-from privacyfence import apps_script_client, grist_auth, grist_provisioning, miro_auth, paths, peek_client, slack_client
+from privacyfence import (
+    apps_script_client,
+    grist_auth,
+    grist_provisioning,
+    miro_auth,
+    paths,
+    peek_client,
+    peek_provisioning,
+    slack_client,
+)
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_connect as rc
@@ -752,6 +761,21 @@ class TestPeekBox:
         assert "Connected" in row and "Not connected" not in row
         assert "Reconnect Peek" in row
 
+    def test_provisioned_file_shows_the_automatic_line(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        peek_client.save_token_file(
+            str(_peek_token_path(principal)), _PEEK_SERVER, _PEEK_SECRET_TOKEN, source="provisioned", expires_at=1,
+        )
+        row = self._peek_row(self._page(principal, _PEEK_ORG))
+        assert "Your organization connected your Peek account automatically." in row
+        assert "Reconnect Peek" in row
+
+    def test_device_file_does_not_show_the_automatic_line(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        _write_peek_token(principal)
+        row = self._peek_row(self._page(principal, _PEEK_ORG))
+        assert "connected your Peek account automatically" not in row
+
     def test_token_for_another_server_is_not_connected(self):
         principal = Principal(id="alice", email="alice@example.com")
         _write_peek_token(principal, "https://other.example.com")
@@ -863,6 +887,37 @@ class TestPeekFlow:
         page = self._page(client, session_id)
         assert "Connected" in page.split('<li class="service peek card stack">', 1)[1]
         assert _PEEK_SECRET_TOKEN not in page and _PEEK_SECRET_CODE not in page
+
+    def test_finish_saves_the_token_under_the_principal_lock(self, monkeypatch):
+        app, sessions, _unused = _app(org_config=_PEEK_ORG)
+        client, session_id, principal = self._start(monkeypatch, app, sessions)
+        events = []
+
+        class RecordingLock:
+            def __enter__(self):
+                events.append("enter")
+
+            def __exit__(self, *exc):
+                events.append("exit")
+
+        locked_ids = []
+        monkeypatch.setattr(
+            peek_provisioning, "principal_lock", lambda principal_id: locked_ids.append(principal_id) or RecordingLock(),
+        )
+        real_save = peek_client.save_token_file
+
+        def save(*args, **kwargs):
+            events.append("save")
+            return real_save(*args, **kwargs)
+
+        monkeypatch.setattr(peek_client, "save_token_file", save)
+        monkeypatch.setattr(
+            peek_client, "poll_device_login",
+            lambda base, code: peek_client.PeekLoginPoll(status="approved", token=_PEEK_SECRET_TOKEN),
+        )
+        self._post(client, session_id, "finish")
+        assert locked_ids == [principal.id]
+        assert events == ["enter", "save", "exit"]
 
     @pytest.mark.parametrize("status,message", [
         ("pending", "Peek has not recorded your approval yet."),

@@ -1,4 +1,4 @@
-# ADR 0244: Grist provisioning needs a verified email
+# ADR 0247: Grist provisioning needs a verified email
 
 ## Status
 

@@ -1,4 +1,4 @@
-# ADR 0243: An existing Grist key is adopted and never revoked by PrivacyFence
+# ADR 0246: An existing Grist key is adopted and never revoked by PrivacyFence
 
 ## Status
 

@@ -34,6 +34,62 @@ again. Peek appears there only when the organization's bundle names the Peek ser
 The token Peek issues is saved in `credentials/peek_token.json` with the server it belongs to, and
 is used only with that server (ADR [0152](adr/0152-which-peek-server-is-used-and-a-token-stays-with-it.md)).
 
+## Automatic accounts (organization mode)
+
+With Peek auto-provisioning, each person who signs in to PrivacyFence gets a Peek account on your
+organization's Peek server, or keeps their existing one, and PrivacyFence connects it for them: no
+**Connect Peek** clicks. PrivacyFence makes every call; Peek never connects to PrivacyFence, so the two
+can stay in separate network zones.
+
+**Set it up.**
+
+1. A Peek admin creates a scoped provisioning key on the Peek server:
+   `peek provisioner create --name PrivacyFence`. The key starts with `peekprov_`. It can create and
+   release accounts and mint tokens for them; it never reaches an admin account.
+2. Put the key in the PrivacyFence daemon's environment as `PRIVACYFENCE_PEEK_PROVISIONING_KEY`, or under
+   the name you give with `--peek-provisioning-key-env`. The bundle never holds the key. With systemd,
+   add it to the unit's `EnvironmentFile`; with Docker, add it to `privacyfence.env`
+   ([organization setup guide](org-mode-setup-guide.md), [Docker guide](org-mode-docker.md)).
+3. Rebuild the bundle with `--peek-base-url URL --peek-auto-provision` (see
+   [Build and distribute the bundle](#build-and-distribute-the-bundle)) and restart the daemon.
+
+**What happens.** When a person signs in, in the browser or through an AI client, PrivacyFence queues
+them and a single background worker creates or looks up their Peek account, by their PrivacyFence id
+and email, and mints a Peek token for it. Sign-in never waits for Peek. The token lives in the same
+`credentials/peek_token.json` as a hand-made connection, marked as provisioned, and **/connect** says
+that your organization connected the account automatically.
+
+**Who is provisioned.**
+
+- *A verified email.* Only a person whose ID token says `email_verified` is true is provisioned.
+  Without that check, anyone who can set their own email at the identity provider could take over
+  another person's Peek account. `--peek-trust-unverified-email` skips the check. Use it only when your
+  identity provider never sends the claim but issues only verified, organization-owned addresses,
+  such as Microsoft Entra ID work accounts.
+- *A person's own sign-in wins.* Someone who connected Peek by hand on **/connect** keeps that
+  connection; Peek is not called for them. **Reconnect Peek** replaces a provisioned token with their
+  own, and the provisioned one stays valid in Peek until it expires.
+- *Peek admins are not adopted.* If the person's Peek account is an admin, Peek refuses, and they
+  connect by hand.
+- *No email.* A person whose ID token carries no email is skipped.
+
+**Renewal.** Tokens last 90 days and are renewed in the background when 30 days or fewer are left, for
+as long as the person has signed in to PrivacyFence within the last 90 days. PrivacyFence keeps the
+person's email in `users/<id>/credentials/peek_provisioning.json` for this. Someone who stops signing
+in loses the Peek token when it expires, up to about 150 days after their last sign-in (a token
+renewed just inside the 90 days lives another 90).
+
+**When someone leaves.** Remove them from the identity provider first, then run
+`privacyfence-app --peek-release PRINCIPAL_ID` (with the provisioning key in the environment). It
+revokes PrivacyFence's token for the person and stops renewing it. Their Peek account and pages stay;
+disabling the account is the Peek admin's decision. Someone who can still sign in is provisioned
+again, so release is for people who can no longer sign in.
+
+**When one product is down.** PrivacyFence sign-in never needs Peek: if Peek is down, only the
+provisioning is delayed, and it is retried by a sweep every six hours and at the next sign-in. Peek
+and the tokens already issued keep working while PrivacyFence is down. Peek keeps its own users and
+sign-in, including people who do not use PrivacyFence.
+
 ## Values
 
 | Value | Where it comes from |
@@ -52,6 +108,17 @@ connect again. Organization mode offers Peek only when the bundle has it. Withou
 in either mode, Peek is not listed at all; `--enable-peek` writes the bare switch for local mode when
 you do not want to pin a server ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
 Peek needs no other entry: there is no callback URL and no client secret.
+
+For [automatic accounts](#automatic-accounts-organization-mode), add these (organization mode only;
+they need `--peek-base-url`, and `--mode local` drops them):
+
+- `--peek-auto-provision` (or `--no-peek-auto-provision`) writes `peek.auto_provision.enabled`.
+- `--peek-provisioning-key-env NAME` names the environment variable the daemon reads the key from
+  (default `PRIVACYFENCE_PEEK_PROVISIONING_KEY`). It goes with `--peek-auto-provision`.
+- `--peek-trust-unverified-email` provisions people whose ID token lacks `email_verified`. It goes with
+  `--peek-auto-provision`; see the rule above for when this is safe.
+
+`--merge --peek-base-url NEW` keeps an existing `auto_provision` entry.
 
 ## What the assistant can do
 
@@ -204,3 +271,60 @@ longer than 200 characters.
 
 **`Peek API error (HTTP 400): file too large or invalid form`** (or HTTP 413) — the page is larger
 than the Peek server accepts (2 MiB by default); PrivacyFence itself stops at 10 MB.
+
+### Automatic accounts
+
+**`org_config.json's "peek"."auto_provision"."enabled" must be true or false, got …`** (also for
+`trust_unverified_email`), **`… "key_env" must be an environment variable name, got …`**,
+**`… "peek"."auto_provision" needs "mode": "org"`**, **`… needs "peek"."base_url"`**,
+**`org_config.json's "peek"."base_url" is not usable: …`** — the daemon refuses to start with a bad
+entry. Rebuild the bundle with `--peek-base-url` and `--peek-auto-provision` in organization mode.
+
+**`--peek-auto-provision/--no-peek-auto-provision require --mode org (or --merge against an
+existing org-mode bundle).`**, **`--peek-auto-provision requires --peek-base-url (or --merge against a
+bundle that has one).`**, **`--peek-provisioning-key-env and --peek-trust-unverified-email go with
+--peek-auto-provision.`** — the builder refused; add the missing flag.
+
+**`Peek auto-provisioning is on, but … is not set; people connect Peek by hand on /connect.`** —
+the daemon's environment lacks the key. Set the variable named in the message (see the setup above)
+and restart.
+
+**`Peek provisioning ready at <host> (N accounts managed)`** — the startup check passed.
+**`Peek provisioning check failed: …`** — the message after the colon says why, and is one of the
+errors below. Provisioning is retried by the six-hourly sweep.
+
+**`Peek refused the provisioning key (HTTP 401). Check the key in the daemon's environment.`** — the
+key is wrong, revoked or expired. Create a new one with `peek provisioner create` and restart.
+
+**`This Peek server has no provisioning API (HTTP 404). Update Peek, or turn off Peek
+auto-provisioning.`** — the server is too old or the address is not a Peek server.
+
+**`Peek refused to provision this account (HTTP 409): account is a Peek admin; connect it by hand`** —
+the person is a Peek admin. They connect on **/connect**.
+
+**`Peek refused to provision this account (HTTP 409): account is linked to another external id or
+email`** — the email already belongs to a Peek account linked to a different PrivacyFence person.
+Fix the account in Peek.
+
+**`Peek refused to provision this account (HTTP 403): account email domain is not allowed`** — the
+Peek server does not allow that email domain. Allow it in Peek, or the person connects by hand.
+**`… (HTTP 403): account disabled`** — the Peek admin disabled the account; enable it in Peek.
+
+**`Peek has no provisioned account for this person (HTTP 404).`** — Peek lost the link between the
+person and the account. It is retried at the person's next sign-in.
+
+**`Not a Peek provisioning id: …`** — the PrivacyFence account id has characters Peek's external id
+does not allow. That person connects by hand.
+
+**`Peek provisioning queue is full; <id> waits for the next sweep or sign-in`** — more than 1000 people
+are waiting, which only happens when Peek has been slow or down for a long time. Nothing is lost;
+the sweep or the person's next sign-in queues them again.
+
+**`Peek provisioning sweep failed (will retry): …`**, **`Peek provisioning for <id> failed: …`**,
+**`Peek provisioning worker error: …`** — an unexpected failure; the next sweep tries again. If it
+repeats, check that Peek is reachable from the daemon.
+
+**`No such account.`**, **`Peek auto-provisioning is not enabled in the organization config.`**,
+**`Set <name> to the Peek provisioning key first.`** — messages of `--peek-release`. Check the
+account id (a directory under `users/`), that the bundle has `--peek-auto-provision`, and that the
+key variable is set in the shell that runs the command. A Peek error is printed as it is; see above.

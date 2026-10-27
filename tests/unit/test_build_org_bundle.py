@@ -1022,6 +1022,109 @@ class TestPeekFlags:
         message = self._exit_message(tmp_path, "--peek-base-url", url)
         assert message == "--peek-base-url must not contain a user name, password, query or fragment."
 
+    # --peek-auto-provision (organization mode)
+
+    def _org_args(self, tmp_path, *extra):
+        key_path = tmp_path / "key.pem"
+        if not key_path.exists():
+            build_org_bundle._generate_signing_key(str(key_path))
+        return [
+            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path), *extra,
+        ]
+
+    def _org_bundle(self, tmp_path, *extra):
+        assert build_org_bundle.main(self._org_args(tmp_path, *extra)) == 0
+        return json.loads((tmp_path / "org_config.json").read_text())
+
+    def test_auto_provision_writes_the_section_with_the_default_env(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+        )
+        assert bundle["peek"] == {
+            "base_url": "https://peek.example.com",
+            "auto_provision": {
+                "enabled": True, "key_env": "PRIVACYFENCE_PEEK_PROVISIONING_KEY", "trust_unverified_email": False,
+            },
+        }
+
+    def test_auto_provision_writes_a_custom_env(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+            "--peek-provisioning-key-env", "MY_PEEK_KEY",
+        )
+        assert bundle["peek"]["auto_provision"]["key_env"] == "MY_PEEK_KEY"
+
+    def test_auto_provision_writes_trust_unverified_email(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+            "--peek-trust-unverified-email",
+        )
+        assert bundle["peek"]["auto_provision"]["trust_unverified_email"] is True
+
+    def test_no_auto_provision_writes_enabled_false(self, tmp_path):
+        bundle = self._org_bundle(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--no-peek-auto-provision",
+        )
+        assert bundle["peek"]["auto_provision"]["enabled"] is False
+
+    def test_auto_provision_requires_org_mode(self, tmp_path):
+        message = self._exit_message(
+            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
+        )
+        assert message == (
+            "--peek-auto-provision/--no-peek-auto-provision require --mode org (or --merge against an "
+            "existing org-mode bundle)."
+        )
+
+    def test_auto_provision_requires_a_base_url(self, tmp_path):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(self._org_args(tmp_path, "--peek-auto-provision"))
+        assert str(exc.value) == (
+            "--peek-auto-provision requires --peek-base-url (or --merge against a bundle that has one)."
+        )
+
+    @pytest.mark.parametrize("flag", [["--peek-provisioning-key-env", "K"], ["--peek-trust-unverified-email"]])
+    def test_auto_provision_options_alone_exit(self, tmp_path, flag):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(self._org_args(tmp_path, "--peek-base-url", "https://peek.example.com", *flag))
+        assert str(exc.value) == (
+            "--peek-provisioning-key-env and --peek-trust-unverified-email go with --peek-auto-provision."
+        )
+
+    def test_mode_local_strips_auto_provision(self, tmp_path):
+        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(["-o", str(out_path), "--merge", "--mode", "local"]) == 0
+        assert json.loads(out_path.read_text())["peek"] == {"base_url": "https://peek.example.com"}
+
+    def test_merge_with_a_new_base_url_keeps_auto_provision(self, tmp_path):
+        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(
+            ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"),
+             "--peek-base-url", "https://peek2.example.com"]
+        ) == 0
+        peek = json.loads(out_path.read_text())["peek"]
+        assert peek["base_url"] == "https://peek2.example.com"
+        assert peek["auto_provision"]["enabled"] is True
+
+    def test_merge_can_add_auto_provision_to_an_existing_bundle(self, tmp_path):
+        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com")
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(
+            ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"), "--peek-auto-provision"]
+        ) == 0
+        assert json.loads(out_path.read_text())["peek"]["auto_provision"]["enabled"] is True
+
+    def test_enable_peek_keeps_the_section(self, tmp_path):
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(["-o", str(out_path), "--enable-peek"]) == 0
+        assert json.loads(out_path.read_text())["peek"] == {"enabled": True}
+
 
 class TestScopedTokenFlags:
     """--enable/--disable-scoped-tokens and --scoped-token-max-days write the bundle's

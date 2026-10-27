@@ -137,6 +137,36 @@ class TestLoginCallback:
         session_id = cb.cookies[org_session.SESSION_COOKIE]
         assert sessions.get(session_id).id == "alice"
 
+    def test_login_callback_calls_notify_sign_in_with_email_verified(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            roi.peek_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: calls.append((principal.id, email_verified)),
+        )
+        app, _sessions = _app()
+
+        self._drive_login(
+            _client(app), monkeypatch,
+            claims={"sub": "alice", "email": "alice@example.com", "email_verified": True},
+        )
+        self._drive_login(
+            _client(app), monkeypatch, claims={"sub": "bob", "email": "bob@example.com"},
+        )
+
+        assert calls == [("alice", True), ("bob", False)]
+
+    def test_failed_login_callback_does_not_call_notify_sign_in(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(roi.peek_provisioning, "notify_sign_in", lambda *a, **kw: calls.append(a))
+        app, _sessions = _app(policy=AuthzPolicyConfig(allowed_domains=("acme.com",)))
+
+        cb = self._drive_login(
+            _client(app), monkeypatch, claims={"sub": "mallory", "email": "mallory@evil.example.com"},
+        )
+
+        assert cb.status_code == 400
+        assert calls == []
+
     def test_the_session_cookie_it_mints_is_usable_on_the_page_it_redirects_to(self, monkeypatch):
         # The regression a real browser found and no test here could: this
         # callback is reached by a top-level navigation the IdP initiated,

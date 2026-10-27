@@ -1,4 +1,4 @@
-# ADR 0245: A managed Grist key expires 90 days after it was issued
+# ADR 0248: A managed Grist key expires 90 days after it was issued
 
 ## Status
 
@@ -14,7 +14,7 @@ Account settings → Developer → API Key and paste it into /connect. Grist's h
 reachable only inside Grist's own network zone.
 
 A managed key is plaintext in Grist's database and, once PrivacyFence has it, anyone with it can act as
-the person. People leave, and PrivacyFence may not be told. Rotation is not an option (ADR 0243).
+the person. People leave, and PrivacyFence may not be told. Rotation is not an option (ADR 0246).
 
 ## Decision
 
