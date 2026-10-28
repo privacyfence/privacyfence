@@ -214,7 +214,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0102](0102-an-upload-slot-is-consumed-after-the-gate-not-before.md) | An upload slot is consumed after the gate, not before it | Accepted |
 | [0103](0103-chatgpt-is-matched-by-its-registered-name.md) | ChatGPT is matched by the name it registers with, and the `openai-mcp` guess is removed | Accepted |
 | [0104](0104-the-companion-copies-the-ai-client-token.md) | The companion copies the AI client token to the clipboard, with no passkey; Settings reaches it only through the companion | Accepted |
-| [0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md) | A Google API read is retried once when its connection drops; PrivacyFence never retries a write | Accepted |
+| [0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md) | A Google API read is retried once when its connection drops; PrivacyFence never retries a write | Accepted; amended by 0249 |
 | [0106](0106-google-not-found-and-not-shared-errors-reach-the-agent.md) | A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic | Accepted |
 | [0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md) | Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise | Accepted |
 | [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted; amended by 0177 |
@@ -340,3 +340,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0246](0246-an-existing-grist-key-is-adopted-and-never-revoked.md) | An existing Grist key is adopted and never revoked by PrivacyFence | Accepted; relates to 0142, 0143 |
 | [0247](0247-grist-provisioning-needs-a-verified-email.md) | Grist provisioning needs a verified email | Accepted; relates to 0142, 0143 |
 | [0248](0248-a-managed-grist-key-expires-90-days-after-it-was-issued.md) | A managed Grist key expires 90 days after it was issued | Accepted; relates to 0142, 0143 |
+| [0249](0249-a-timed-out-google-request-discards-its-pooled-connection.md) | A timed-out Google request discards its pooled connection | Accepted; amends 0105 |
