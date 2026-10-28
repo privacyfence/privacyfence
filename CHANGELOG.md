@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Audit Log names a scoped token's calls.** Rows made with a scoped token showed "Unrecognised AI system" (Unknown); they now show the token's name, as the attested requester.
+
 ## [6.11.0] — 2026-10-27
 
 ### Added
