@@ -40,6 +40,7 @@ from privacyfence import (
     privacy_filter,
     privilege_separation,
     resource_names,
+    scoped_token_proposals,
     scoped_tokens,
     settings_controller,
     upload_staging,
@@ -148,6 +149,7 @@ def _reset() -> None:
     audit_log.set_released_request_id("")
     # The scoped-token store is a process-wide singleton over the data dir (ADR 0164).
     scoped_tokens.set_store(None)
+    scoped_token_proposals.set_registry(None)
     # The Peek provisioner (organization mode) is a process-wide singleton; its per-person locks
     # are keyed by principal id and must not carry over.
     peek_provisioning._INSTANCE = None

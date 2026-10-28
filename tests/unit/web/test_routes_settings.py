@@ -24,7 +24,11 @@ import sys
 import pytest
 from starlette.testclient import TestClient
 
-from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, update_checker
+from privacyfence import (
+    auto_accept, daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, scoped_token_proposals, scoped_tokens,
+    update_checker,
+)
+from privacyfence.agent_identity import AgentIdentity, AgentSource
 from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import scope_rows
@@ -1616,8 +1620,8 @@ class TestScopedTokenRoutes:
     def test_the_fingerprint_covers_the_rule_requests(self):
         base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
         other = {**base, "rules": [{"kind": "new", "group": "drive.folder", "value": "f", "verbs": ["read"]}]}
-        assert rs._scoped_create_fingerprint_body(base)["rules"] == base["rules"]
-        assert rs._scoped_create_fingerprint_body(base) != rs._scoped_create_fingerprint_body(other)
+        assert scoped_tokens.normalise_create_request(base)["rules"] == base["rules"]
+        assert scoped_tokens.normalise_create_request(base) != scoped_tokens.normalise_create_request(other)
 
     def test_a_body_with_rule_ids_and_no_rules_is_a_400(self, controller, sessions):
         client, calls = self._client(controller, sessions)
@@ -1637,11 +1641,11 @@ class TestScopedTokenRoutes:
 
     def test_fingerprint_covers_the_reads_flag(self):
         base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
-        off = rs._scoped_create_fingerprint_body(base)
-        on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data_reads": True})
+        off = scoped_tokens.normalise_create_request(base)
+        on = scoped_tokens.normalise_create_request({**base, "allow_personal_data_reads": True})
         assert off["allow_personal_data_reads"] is False and on["allow_personal_data_reads"] is True
         assert off != on
-        assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data_reads": "yes"}) is None
+        assert scoped_tokens.normalise_create_request({**base, "allow_personal_data_reads": "yes"}) is None
 
     @pytest.mark.parametrize("value", ["true", 1, None, []])
     def test_a_non_bool_personal_data_flag_is_a_400(self, controller, sessions, value):
@@ -1653,11 +1657,11 @@ class TestScopedTokenRoutes:
 
     def test_the_fingerprint_covers_the_personal_data_flag(self):
         base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
-        off = rs._scoped_create_fingerprint_body(base)
-        on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data": True})
+        off = scoped_tokens.normalise_create_request(base)
+        on = scoped_tokens.normalise_create_request({**base, "allow_personal_data": True})
         assert off["allow_personal_data"] is False and on["allow_personal_data"] is True
         assert off != on
-        assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data": "yes"}) is None
+        assert scoped_tokens.normalise_create_request({**base, "allow_personal_data": "yes"}) is None
 
     @pytest.mark.usefixtures("_data_dir")
     @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL, RENAME])
@@ -2036,6 +2040,324 @@ class TestHumanSessionRequiredForSensitiveActions:
         csrf = _authed(client, sessions)
         r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
         assert r.status_code == 200
+
+
+class TestScopedTokenProposalRoutes:
+    """The local review page and the two proposal routes: accepting goes through create's gates,
+    bound to the proposal, and takes the proposal exactly once."""
+
+    CREATE = "/api/settings/scoped_tokens/create_from_proposal"
+    DECLINE = "/api/settings/scoped_tokens/decline_proposal"
+    SECRET = "pfst_" + "A" * 43
+    AGENT = AgentIdentity(id="claude-code", name="Claude Code", version="1", source=AgentSource.NONE)
+    REQUEST = {
+        "label": "sales-sync", "days": 90,
+        "rules": [
+            {"kind": "new", "group": "drive.folder", "value": "F1", "verbs": ["download", "read"]},
+            {"kind": "copy", "rule_id": "r1"},
+        ],
+        "tools": ["drive_download_file", "gmail_list_messages"],
+        "allow_personal_data": False, "allow_personal_data_reads": False,
+    }
+
+    def _client(self, controller, sessions, *, wiring_kwargs=None, **kwargs):
+        calls: list = []
+        app = create_app(
+            controller, sessions=sessions, scoped_tokens=_scoped_wiring(calls, **(wiring_kwargs or {})), **kwargs,
+        )
+        return TestClient(app, base_url=ORIGIN), calls
+
+    def _propose(self, **over):
+        request = scoped_tokens.normalise_create_request({**self.REQUEST, **over})
+        proposal = scoped_token_proposals.new_proposal(
+            principal=LOCAL_PRINCIPAL, request=request, source="bundle", agent=self.AGENT, reason="a weekly job",
+        )
+        scoped_token_proposals.get_registry().add(proposal)
+        return proposal
+
+    def _body(self, proposal, csrf, **over):
+        body = {
+            **proposal.request, "proposal_id": proposal.id, "typed_label": proposal.request["label"],
+            "confirmed": True, "csrf": csrf,
+        }
+        return {**body, **over}
+
+    @staticmethod
+    def _live(proposal) -> bool:
+        return scoped_token_proposals.get_registry().get(LOCAL_PRINCIPAL.id, proposal.id) is not None
+
+    @pytest.fixture
+    def _data_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    @pytest.fixture
+    def recorded(self, monkeypatch):
+        seen: list = []
+        monkeypatch.setattr(
+            scoped_token_proposals, "record", lambda decision, proposal, summary: seen.append((decision, proposal, summary)),
+        )
+        return seen
+
+    def test_scoped_tokens_page_opens_the_section(self, controller, sessions):
+        client, _calls = self._client(controller, sessions)
+        _authed(client, sessions)
+        r = client.get("/settings/scoped_tokens")
+        assert r.status_code == 200
+        assert 'window.__pfInitialSection = "scoped_tokens"' in r.text
+        assert "window.__pfScopedProposal = " not in r.text
+
+    def test_the_pages_need_a_session(self, controller, sessions):
+        client, _calls = self._client(controller, sessions)
+        proposal = self._propose()
+        assert client.get("/settings/scoped_tokens").status_code == 401
+        assert client.get(f"/settings/scoped_tokens/proposals/{proposal.id}").status_code == 401
+
+    def test_review_page_embeds_the_proposal(self, controller, sessions, monkeypatch):
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
+        client, _calls = self._client(controller, sessions)
+        _authed(client, sessions)
+        proposal = self._propose()
+        r = client.get(f"/settings/scoped_tokens/proposals/{proposal.id}")
+        assert r.status_code == 200
+        assert 'window.__pfInitialSection = "scoped_tokens"' in r.text
+        assert "window.__pfScopedProposal = " in r.text
+        assert proposal.id in r.text and "sales-sync" in r.text and "a weekly job" in r.text
+        assert self._live(proposal)
+
+    def test_review_page_for_unknown_id_says_missing(self, controller, sessions):
+        client, _calls = self._client(controller, sessions)
+        _authed(client, sessions)
+        r = client.get("/settings/scoped_tokens/proposals/stp-nope")
+        assert r.status_code == 200
+        assert 'window.__pfScopedProposal = {"missing": true}' in r.text
+
+    def test_create_from_proposal_creates_and_delivers_through_the_companion(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+        assert r.status_code == 200
+        assert r.json() == {"created": {"id": "st-0123456789ab", "label": "sales-sync", "expires_at": 2.0}}
+        assert self.SECRET not in r.text
+        assert [c[0] for c in calls] == ["create", "send"]
+        assert calls[0][1:3] == ("sales-sync", 90)
+        assert calls[1] == ("send", self.SECRET)
+        assert not self._live(proposal)
+
+    def test_typed_label_must_match(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        for typed in ("sales-syn", "Sales-Sync", "", None):
+            r = client.post(self.CREATE, json=self._body(proposal, csrf, typed_label=typed))
+            assert r.status_code == 400
+            assert r.json() == {"error": "Type the token's name exactly to confirm."}
+        assert calls == [] and self._live(proposal)
+
+    def test_a_renamed_token_is_confirmed_by_its_own_name(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        r = client.post(self.CREATE, json=self._body(proposal, csrf, label="shorter", typed_label="shorter"))
+        assert r.status_code == 200
+        assert calls[0][1] == "shorter"
+
+    @pytest.mark.parametrize("change", [
+        {"days": 91},
+        {"tools": ["drive_download_file", "gmail_list_messages", "tasks_list_tasks"]},
+        {"allow_personal_data": True},
+        {"allow_personal_data_reads": True},
+        {"rules": [{"kind": "copy", "rule_id": "r2"}]},
+        {"rules": [{"kind": "new", "group": "drive.folder", "value": "F2", "verbs": ["read"]}]},
+        {"rules": [{"kind": "new", "group": "drive.folder", "value": "F1", "verbs": ["read", "update"]}]},
+        {"rules": [{"kind": "duplicate", "token_id": "st-1", "rule_id": "r1"}]},
+    ])
+    def test_widening_is_refused(self, controller, sessions, change):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        r = client.post(self.CREATE, json=self._body(proposal, csrf, **change))
+        assert r.status_code == 400
+        assert r.json() == {"error": scoped_token_proposals.WIDENED_MESSAGE}
+        assert calls == [] and self._live(proposal)
+
+    def test_narrowing_is_accepted(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        narrowed = {
+            "days": 30, "tools": ["gmail_list_messages"],
+            "rules": [{"kind": "new", "group": "drive.folder", "value": "F1", "verbs": ["read"]}],
+        }
+        r = client.post(self.CREATE, json=self._body(proposal, csrf, **narrowed))
+        assert r.status_code == 200
+        assert calls[0][2:5] == (30, narrowed["rules"], ["gmail_list_messages"])
+
+    def test_expired_proposal_is_gone(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        scoped_token_proposals.get_registry().take(LOCAL_PRINCIPAL.id, proposal.id)
+        for body in (self._body(proposal, csrf), self._body(dataclasses.replace(proposal, id="stp-unknown"), csrf)):
+            r = client.post(self.CREATE, json=body)
+            assert r.status_code == 410
+            assert r.json() == {"error": scoped_token_proposals.GONE_MESSAGE}
+        assert calls == []
+
+    def test_proposal_is_single_use(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        assert client.post(self.CREATE, json=self._body(proposal, csrf)).status_code == 200
+        again = client.post(self.CREATE, json=self._body(proposal, csrf))
+        assert again.status_code == 410
+        assert [c[0] for c in calls] == ["create", "send"]
+
+    def test_create_failure_restores_the_proposal(self, controller, sessions):
+        client, calls = self._client(controller, sessions, wiring_kwargs={"create_error": "That name is taken."})
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+        assert r.status_code == 400
+        assert r.json() == {"error": "That name is taken."}
+        assert self._live(proposal)
+        assert [c[0] for c in calls] == ["create"]
+
+    def test_companion_failure_restores_the_proposal(self, controller, sessions, recorded):
+        client, calls = self._client(controller, sessions, wiring_kwargs={"ok": False, "reason": "no companion"})
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+        assert r.status_code == 503
+        assert r.json() == {"error": "The token was not created: no companion"}
+        assert self._live(proposal)
+        assert [c[0] for c in calls] == ["create", "send", "revoke"]
+        assert recorded == []
+
+    @pytest.mark.usefixtures("_data_dir")
+    def test_passkey_is_bound_to_the_proposal(self, controller, sessions):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client, calls = self._client(
+            controller, sessions,
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True), step_up_origin=ORIGIN,
+        )
+        csrf = _authed(client, sessions)
+        first, second = self._propose(), self._propose()
+        narrowed = {"tools": ["gmail_list_messages"]}
+        verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+
+        def _retry(asserted_for, submitted_for, **over):
+            """An assertion obtained for one request, replayed for another."""
+            assert client.post(self.CREATE, json=self._body(asserted_for[0], csrf, **asserted_for[1])).status_code == 428
+            with patch.object(wa.webauthn, "verify_authentication_response", return_value=verified):
+                return client.post(self.CREATE, json={
+                    **self._body(submitted_for[0], csrf, **submitted_for[1]), "webauthn_assertion": {"id": "Y3JlZC0x"},
+                })
+
+        # Obtained for another proposal, or for the un-narrowed request: refused for this one.
+        assert _retry((first, narrowed), (second, narrowed)).status_code != 200
+        assert _retry((second, {}), (second, narrowed)).status_code != 200
+        assert calls == []
+        # Obtained for exactly this request: accepted.
+        assert _retry((second, narrowed), (second, narrowed)).status_code == 200
+        assert [c[0] for c in calls] == ["create", "send"]
+
+    @pytest.mark.usefixtures("_data_dir")
+    def test_checks_run_before_step_up(self, controller, sessions):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client, calls = self._client(
+            controller, sessions,
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True), step_up_origin=ORIGIN,
+        )
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        assert client.post(self.CREATE, json=self._body(proposal, csrf, typed_label="nope")).status_code == 400
+        assert client.post(self.CREATE, json=self._body(proposal, csrf, days=91)).status_code == 400
+        gone = dataclasses.replace(proposal, id="stp-unknown")
+        assert client.post(self.CREATE, json=self._body(gone, csrf)).status_code == 410
+        assert client.post(self.CREATE, json=self._body(proposal, csrf)).status_code == 428
+        assert calls == []
+
+    def test_confirmation_and_human_session_required(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        unconfirmed = {k: v for k, v in self._body(proposal, csrf).items() if k != "confirmed"}
+        r = client.post(self.CREATE, json=unconfirmed)
+        assert r.status_code == 400 and r.json() == {"error": "confirmation required"}
+        r = client.post(self.CREATE, json=self._body(proposal, "wrong-csrf"))
+        assert r.status_code == 401
+
+        client, calls = self._client(controller, sessions, require_human_session=True)
+        session_id = sessions.create(provenance=PROVENANCE_UNATTESTED)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        r = client.post(self.CREATE, json=self._body(proposal, session_id))
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+        assert calls == [] and self._live(proposal)
+
+    def test_accept_is_audited_with_the_agent(self, controller, sessions, recorded, monkeypatch):
+        settings_audit: list = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: settings_audit.append((p, s)))
+        client, _calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        assert client.post(self.CREATE, json=self._body(proposal, csrf, label="shorter", typed_label="shorter")).status_code == 200
+        [(decision, taken, summary)] = recorded
+        assert decision == "scoped_token_proposal_accepted"
+        assert taken.agent == self.AGENT and taken.id == proposal.id
+        assert summary == "Token proposal 'sales-sync' accepted as 'shorter' (st-0123456789ab)"
+        [(principal, text)] = settings_audit
+        assert principal == LOCAL_PRINCIPAL
+        assert text.startswith("Created scoped token 'shorter' (st-0123456789ab), 90 days")
+        assert text.endswith(" from a proposal")
+        assert self.SECRET not in text
+
+    def test_decline_takes_and_audits(self, controller, sessions, recorded):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        proposal = self._propose()
+        r = client.post(self.DECLINE, json={"proposal_id": proposal.id, "csrf": csrf})
+        assert r.status_code == 200 and r.json() == {"declined": True}
+        assert not self._live(proposal)
+        [(decision, taken, summary)] = recorded
+        assert (decision, taken.agent, summary) == (
+            "scoped_token_proposal_declined", self.AGENT, "Token proposal 'sales-sync' declined",
+        )
+        assert calls == []
+
+    def test_decline_needs_a_session_and_csrf(self, controller, sessions):
+        client, _calls = self._client(controller, sessions)
+        proposal = self._propose()
+        assert client.post(self.DECLINE, json={"proposal_id": proposal.id, "csrf": "x"}).status_code == 401
+        _authed(client, sessions)
+        assert client.post(self.DECLINE, json={"proposal_id": proposal.id, "csrf": "x"}).status_code == 401
+        assert self._live(proposal)
+
+    def test_decline_unknown_is_410(self, controller, sessions, recorded):
+        client, _calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.DECLINE, json={"proposal_id": "stp-unknown", "csrf": csrf})
+        assert r.status_code == 410
+        assert r.json() == {"error": scoped_token_proposals.GONE_MESSAGE}
+        assert recorded == []
+
+    def test_shim_maps_the_two_actions_and_goes_to_the_section(self, controller, sessions):
+        client, _calls = self._client(controller, sessions)
+        _authed(client, sessions)
+        text = client.get("/settings").text
+        assert "create_proposed_scoped_token: ['create_from_proposal', null]" in text
+        assert "decline_scoped_token_proposal: ['decline_proposal', 'Decline this token proposal?']" in text
+        assert "window.location.assign('/settings/scoped_tokens')" in text
+        # The org secret dialog's close callback goes to the section too, not back to a spent page.
+        assert "window.__pfShowScopedSecret(res.state.secret, toSection)" in text
+        assert text.index("if (res.ok && proposalAction)") < text.index("if (res.ok && scopedAction) { window.location.reload(); }")
 
 
 class TestBespokeRoutesAreClassified:

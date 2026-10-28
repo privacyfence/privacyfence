@@ -9,6 +9,7 @@ AI system is calling, and what that knowledge is allowed to be used for. Impleme
 Amended by [ADR 0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md), which answers the open questions in *Verification* below.
 Amended by [ADR 0037](0037-a-local-override-is-a-relabel-and-never-attests.md): a local `agent_overrides:` match is a relabel recorded as `client_info`, never `override`, until per-credential local tokens exist.
 Amended by [ADR 0224](0224-an-org-registration-is-attested-by-its-redirect-uris.md): in organization mode a registration is attested by its redirect URIs.
+Amended by [ADR 0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md): a token proposal is attributed to its client.
 
 The `mcp` range quoted below (`>=1.28,<3.0`) was already stale the day this was written:
 `pyproject.toml` had required `mcp>=2.2,<3.0.0` since issue #250, three days before this ADR's own

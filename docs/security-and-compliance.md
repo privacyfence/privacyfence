@@ -254,9 +254,24 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
 - **Deleting a rule.** A token's rules cannot be edited. Deleting or changing an Auto-accept rule,
   in Settings or through `privacyfence_propose_policy_change`, does not change any token; revoke
   the token to take its access away ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)).
+- **AI-proposed tokens.** A client can call `privacyfence_propose_scoped_token`; it creates nothing and
+  returns only a review link ([ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md), [ADR 0251](adr/0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md)).
+  - The tool is not offered to a scoped token, and is refused in an unattended session. Locally only
+    the computer's owner can use it.
+  - A proposal is single use and lasts one hour. The review can only narrow it (rules, verbs, tools,
+    days); the personal-data boxes start unticked and only the person can tick them.
+  - Creating needs the token's name typed exactly. Passkey step-up, where in force, is bound to the
+    request and the proposal, so it cannot be replayed for another.
+  - The client never receives the token or the outcome. The review page names the proposing client and
+    says that name is the client's own claim.
+  - `from_session` builds the proposal from a ledger of the session's approved calls, kept in memory
+    only and dropped when the session ends ([ADR 0252](adr/0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md)).
+  - Every step is audited (`scoped_token_proposed`, `_accepted`, `_declined`, `_expired`).
 - **Local mode** copies the secret to the clipboard through the companion once. **Organization
   mode** shows it once in the browser, and only after the administrator turns scoped tokens on
-  (`scoped_tokens.enabled`) and sets the longest lifetime (`scoped_tokens.max_days`).
+  (`scoped_tokens.enabled`) and sets the longest lifetime (`scoped_tokens.max_days`). Token proposals
+  are a further opt-in, `scoped_tokens.allow_ai_proposals`, off by default and only effective when
+  scoped tokens are on ([ADR 0253](adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md)).
 - **Revoking.** A person revokes one token, or all, in Settings (with a passkey wherever the
   install requires one). An administrator revokes every token of one person with
   `privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`. A scoped token outlives an OAuth sign-in
