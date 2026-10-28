@@ -354,6 +354,8 @@ _JS = r"""
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
     stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stPersonalDataReads: false, stDuplicateOf: null,
     stNewGroup: null, stNewValue: '', stNewVerbs: {}, stNewRules: [], stDupRules: {},
+    // Review panel for an AI-proposed token (window.__pfScopedProposal); spLabel === null until first drawn.
+    spLabel: null, spDays: null, spRules: {}, spVerbs: {}, spTools: {}, spPersonalData: false, spPersonalDataReads: false, spTyped: '',
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -1465,6 +1467,9 @@ _JS = r"""
     }
     html += '</div>';
 
+    html += scopedProposalWaitingHtml();
+    if (window.__pfScopedProposal) { return html + scopedProposalPanelHtml(window.__pfScopedProposal) + '</div>'; }
+
     if (ui.stDays === null) { ui.stDays = SCOPED.default_days; }
     html += '<h2 class="pf-group-title">New token</h2><div class="card pf-card pf-st-form">';
     var dupOf = ui.stDuplicateOf
@@ -1601,6 +1606,198 @@ _JS = r"""
     html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';
     html += '</div></div>';
     return html;
+  }
+
+  // ---- AI-proposed token: waiting list, review panel, delegation dialog (D6) ---- //
+
+  var SP_PD_LABEL = 'Let exports, downloads and page uploads carry personal data';
+  var SP_PDR_LABEL = 'Let reads return personal data';
+
+  function scopedProposalWaitingHtml() {
+    var list = SCOPED.proposals || [];
+    if (!list.length) { return ''; }
+    var html = '<h2 class="pf-group-title">Waiting for review</h2><div class="card pf-card" data-sp-waiting="1">';
+    list.forEach(function (p) {
+      html += rowHtml(p.label + ' — proposed by ' + p.agent_label, '',
+        '<a class="button" role="button" aria-label="Review ' + esc(p.label) + '" href="/settings/scoped_tokens/proposals/' + esc(encodeURIComponent(p.id)) + '">Review</a>');
+    });
+    return html + '</div>';
+  }
+
+  function spChip(on, label, attr, value) {
+    return '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
+      '" tabindex="0" aria-label="' + esc(label) + '" ' + attr + '="' + esc(value) + '"><span>' + esc(label) + '</span></div>';
+  }
+
+  function scopedProposalInit(p) {
+    if (ui.spLabel !== null) { return; }
+    ui.spLabel = p.label;
+    ui.spDays = p.days;
+    ui.spRules = {};
+    ui.spVerbs = {};
+    p.rules.forEach(function (r, i) {
+      ui.spRules[i] = true;
+      if (r.request.kind === 'new') {
+        ui.spVerbs[i] = {};
+        r.request.verbs.forEach(function (v) { ui.spVerbs[i][v] = true; });
+      }
+    });
+    ui.spTools = {};
+    p.tools.forEach(function (name) { ui.spTools[name] = true; });
+    ui.spPersonalData = false;
+    ui.spPersonalDataReads = false;
+    ui.spTyped = '';
+  }
+
+  function scopedProposalPanelHtml(p) {
+    var html = '<h2 class="pf-group-title">Review proposed token</h2><div class="card pf-card pf-st-form" data-sp-panel="1">';
+    if (p.missing) {
+      return html + '<div class="pf-hint" data-sp-missing="1">This token proposal has expired, was declined or was already used.</div></div>';
+    }
+    scopedProposalInit(p);
+    html += '<div class="pf-hint">An AI client proposed this token. Untick anything the job does not need. You can only narrow it here; to add more, use New token.</div>';
+    html += '<div class="pf-hint" data-sp-agent="1">Proposed by: ' + esc(p.agent_label) + '. The AI client reports this name itself; PrivacyFence does not verify it.</div>';
+    html += '<div class="pf-hint" data-sp-reason="1">Reason given: ' + esc(p.reason) + '</div>';
+    html += '<label><span class="field-label">Name</span><input type="text" class="field" aria-label="Token name" data-sp-label="1" maxlength="60" value="' + esc(ui.spLabel) + '"/></label>';
+    html += '<label><span class="field-label">Days valid</span><input type="number" class="field" aria-label="Days valid" data-sp-days="1" min="1" max="' +
+      esc(p.days) + '" value="' + esc(ui.spDays) + '"/></label>';
+    html += '<div class="pf-row-title">Rules</div><div class="pf-chips pf-st-rules">';
+    p.rules.forEach(function (r, i) {
+      html += spChip(!!ui.spRules[i], r.sentence, 'data-sp-rule', i);
+      if (r.request.kind === 'new' && r.request.verbs.length > 1) {
+        r.request.verbs.forEach(function (v) {
+          html += spChip(!!(ui.spVerbs[i] || {})[v], v, 'data-sp-verb', i + ':' + v);
+        });
+      }
+    });
+    html += '</div><div class="pf-row-title">Tools</div><div class="pf-chips">';
+    p.tools.forEach(function (name) { html += spChip(!!ui.spTools[name], name, 'data-sp-tool', name); });
+    html += '</div>';
+    if (p.uncovered_tools.length) {
+      html += '<div class="pf-st-notice" role="status" data-sp-uncovered="1">No rule covers these tools, so the token\'s calls to them will be denied: ' +
+        esc(p.uncovered_tools.join(', ')) + '.</div>';
+    }
+    if (p.allow_personal_data) {
+      html += '<div class="pf-chips pf-caps-row">' + spChip(!!ui.spPersonalData, SP_PD_LABEL, 'data-sp-pd', '1') + '</div>' +
+        '<div class="pf-hint">The AI client asked for this.</div>';
+    }
+    if (p.allow_personal_data_reads) {
+      html += '<div class="pf-chips pf-caps-row">' + spChip(!!ui.spPersonalDataReads, SP_PDR_LABEL, 'data-sp-pdr', '1') + '</div>' +
+        '<div class="pf-hint">The AI client asked for this.</div>';
+    }
+    html += '<div class="pf-chips"><div class="button danger" role="button" tabindex="0" aria-label="Decline" data-sp-decline="1">Decline</div>' +
+      '<div class="button primary" role="button" tabindex="0" aria-label="Continue" data-sp-continue="1">Continue</div></div>';
+    return html + '</div>';
+  }
+
+  // What the panel would send: only ticked rules, only ticked verbs of a new rule, only ticked tools.
+  function scopedProposalRequest() {
+    var p = window.__pfScopedProposal;
+    var rules = [];
+    var sentences = [];
+    p.rules.forEach(function (r, i) {
+      if (!ui.spRules[i]) { return; }
+      if (r.request.kind === 'new') {
+        var verbs = r.request.verbs.filter(function (v) { return (ui.spVerbs[i] || {})[v]; });
+        if (!verbs.length) { return; }
+        rules.push(Object.assign({}, r.request, {verbs: verbs}));
+      } else {
+        rules.push(r.request);
+      }
+      sentences.push(r.sentence);
+    });
+    var tools = p.tools.filter(function (name) { return ui.spTools[name]; });
+    return {
+      proposal_id: p.id, label: ui.spLabel,
+      days: Math.min(p.days, Math.max(1, parseInt(ui.spDays, 10) || p.days)),
+      rules: rules, tools: tools,
+      allow_personal_data: !!(p.allow_personal_data && ui.spPersonalData),
+      allow_personal_data_reads: !!(p.allow_personal_data_reads && ui.spPersonalDataReads),
+      sentences: sentences
+    };
+  }
+
+  function openProposalDialog() {
+    var req = scopedProposalRequest();
+    var overlay = document.createElement('div');
+    overlay.className = 'pf-modal-overlay';
+    overlay.setAttribute('role', 'presentation');
+    overlay.setAttribute('data-sp-dialog', '1');
+    var box = document.createElement('div');
+    box.className = 'pf-modal';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Delegate access to this token?');
+    function div(cls, text) {
+      var d = document.createElement('div');
+      d.className = cls;
+      if (text !== undefined) { d.textContent = text; }
+      return d;
+    }
+    box.appendChild(div('pf-modal-title', 'Delegate access to this token?'));
+    box.appendChild(div('pf-modal-desc', 'You are delegating access. Anything that holds this token can act as you within these rules, for ' +
+      req.days + ' days, with no approval card and no prompt. PrivacyFence cannot tell who is using it. ' +
+      'Revoke it in Settings → Scoped tokens if it leaks or the job is retired.'));
+    if (req.allow_personal_data || req.allow_personal_data_reads) {
+      box.appendChild(div('pf-modal-desc', 'This token may also return or upload personal data.'));
+    }
+    var list = document.createElement('ul');
+    list.className = 'pf-st-list';
+    req.sentences.concat(req.tools).forEach(function (text) {
+      var li = document.createElement('li');
+      li.textContent = text;
+      list.appendChild(li);
+    });
+    box.appendChild(list);
+    var field = document.createElement('input');
+    field.type = 'text';
+    field.className = 'field';
+    field.setAttribute('aria-label', 'Type the token name to confirm');
+    field.setAttribute('autocomplete', 'off');
+    field.setAttribute('data-sp-typed', '1');
+    field.value = '';
+    var fieldLabel = document.createElement('label');
+    fieldLabel.appendChild(div('field-label', 'Type the token name to confirm'));
+    fieldLabel.appendChild(field);
+    box.appendChild(fieldLabel);
+    var buttons = div('pf-modal-buttons');
+    function btn(cls, label) {
+      var b = div('button' + cls, label);
+      b.setAttribute('role', 'button');
+      b.setAttribute('tabindex', '0');
+      b.setAttribute('aria-label', label);
+      return b;
+    }
+    var cancel = btn('', 'Cancel');
+    var go = btn(' primary', 'Delegate access');
+    function close() { overlay.remove(); document.removeEventListener('keydown', onEsc, true); }
+    function onEsc(ev) { if (ev.key === 'Escape') { ev.preventDefault(); close(); } }
+    function sync() {
+      ui.spTyped = field.value;
+      var ok = field.value === req.label;
+      go.setAttribute('aria-disabled', ok ? 'false' : 'true');
+      if (ok) { go.removeAttribute('disabled'); } else { go.setAttribute('disabled', 'disabled'); }
+    }
+    sync();
+    field.addEventListener('input', sync);
+    cancel.addEventListener('click', close);
+    // The body keydown handler clicks any focused role="button" on Enter/Space.
+    go.addEventListener('click', function () {
+      if (field.value !== req.label) { return; }
+      close();
+      post('create_proposed_scoped_token', {
+        proposal_id: req.proposal_id, label: req.label, days: req.days, rules: req.rules, tools: req.tools,
+        allow_personal_data: req.allow_personal_data, allow_personal_data_reads: req.allow_personal_data_reads,
+        typed_label: field.value
+      });
+    });
+    document.addEventListener('keydown', onEsc, true);
+    buttons.appendChild(cancel);
+    buttons.appendChild(go);
+    box.appendChild(buttons);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    cancel.focus();
   }
 
   // The scope group the New rule select shows: the chosen one, else the first.
@@ -2281,6 +2478,22 @@ _JS = r"""
     if (e.target.closest('[data-st-clear]')) { clearScopedForm(); return; }
     if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
     if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }
+    var spRuleEl = e.target.closest('[data-sp-rule]');
+    if (spRuleEl) { var sri = spRuleEl.getAttribute('data-sp-rule'); ui.spRules[sri] = !ui.spRules[sri]; render(pyState); return; }
+    var spVerbEl = e.target.closest('[data-sp-verb]');
+    if (spVerbEl) {
+      var spv = spVerbEl.getAttribute('data-sp-verb'); var spc = spv.indexOf(':');
+      var spi = spv.slice(0, spc); var spn = spv.slice(spc + 1);
+      ui.spVerbs[spi] = ui.spVerbs[spi] || {};
+      ui.spVerbs[spi][spn] = !ui.spVerbs[spi][spn];
+      render(pyState); return;
+    }
+    var spToolEl = e.target.closest('[data-sp-tool]');
+    if (spToolEl) { var spt = spToolEl.getAttribute('data-sp-tool'); ui.spTools[spt] = !ui.spTools[spt]; render(pyState); return; }
+    if (e.target.closest('[data-sp-pd]')) { ui.spPersonalData = !ui.spPersonalData; render(pyState); return; }
+    if (e.target.closest('[data-sp-pdr]')) { ui.spPersonalDataReads = !ui.spPersonalDataReads; render(pyState); return; }
+    if (e.target.closest('[data-sp-decline]')) { post('decline_scoped_token_proposal', { proposal_id: window.__pfScopedProposal.id }); return; }
+    if (e.target.closest('[data-sp-continue]')) { openProposalDialog(); return; }
 
     var repoEl = e.target.closest('[data-action="open_repo"]');
     if (repoEl) { post('open_repo', {}); return; }
@@ -2409,6 +2622,8 @@ _JS = r"""
   function onInput(e) {
     var el = e.target;
     if (el.hasAttribute('data-st-label')) { ui.stLabel = el.value; return; }
+    if (el.hasAttribute('data-sp-label')) { ui.spLabel = el.value; return; }
+    if (el.hasAttribute('data-sp-days')) { ui.spDays = el.value; return; }
     if (el.hasAttribute('data-st-days')) { ui.stDays = el.value; return; }
     if (el.hasAttribute('data-st-new-value')) {
       ui.stNewValue = el.value;
