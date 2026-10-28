@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.12.0] — 2026-10-28
+
 ### Added
 
 - **Claude can propose a scoped token for a routine.** Claude can now propose a scoped token for a routine with `privacyfence_propose_scoped_token`, built from what you approved in the session or from rules it names. You review and narrow it in **Settings → Scoped tokens**, confirm by typing its name, and copy the token yourself; Claude never receives it. Organization installs turn this on with `--enable-scoped-token-proposals`.
@@ -3517,7 +3519,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...HEAD
+[6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0
 [6.11.0]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...v6.11.0
 [6.10.0]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...v6.10.0
 [6.9.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.2...v6.9.1
