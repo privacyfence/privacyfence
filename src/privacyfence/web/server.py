@@ -95,7 +95,10 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import __version__, auto_accept, latency, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
+from .. import (
+    __version__, agent_label, auto_accept, latency, paths, privilege_separation, scoped_token_proposals, scoped_tokens,
+    web_shell, webauthn_stepup,
+)
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
@@ -398,8 +401,14 @@ def scoped_token_page_data(
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
         })
+    proposals = [
+        {"id": p.id, "label": p.request["label"], "agent_label": agent_label.label_for(p.agent).text,
+         "expires_at": p.expires_at}
+        for p in scoped_token_proposals.get_registry().pending_for(principal.id)
+    ]
     return {
-        "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
+        "delivery": delivery, "proposals": proposals, "proposals_enabled": policy.allow_ai_proposals,
+        "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
         "auto_tools": sorted(
             name for name, gate in auto_accept.TOOL_TO_GATE.items()
