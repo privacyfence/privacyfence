@@ -1227,3 +1227,221 @@ class TestAwaitApprovalDenialFeedback:
             "how to proceed unless denial_feedback says otherwise)"
         ) in description
         assert "denial_feedback holds the user's instruction for a denial: follow it." in description
+
+
+# --------------------------------------------------------------------------- #
+# privacyfence_propose_scoped_token + the session ledger (ADR 0251)
+# --------------------------------------------------------------------------- #
+
+_LOCAL_POLICY = scoped_tokens.policy_from_org_config({}, org_mode=False)
+_RULE = {"kind": "new", "group": "gmail.label", "value": "Receipts", "verbs": ["update"]}
+_SUGGESTION = {
+    "group": "gmail.label", "label": "Gmail -- label", "value": ["Receipts"], "value_known": True,
+    "verb": "update", "operation": "gmail.update_label",
+}
+
+
+class ReleasingConnector(FakeConnector):
+    """Behaves like a connector whose gate approved the call: records a released request id."""
+
+    async def call(self, tool: str, args: dict) -> object:
+        set_released_request_id("req-1")
+        return await super().call(tool, args)
+
+
+class TestProposeScopedToken:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, paths
+        from privacyfence.policy import suggest
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
+        monkeypatch.setattr(mcp_dispatch, "get_policy_rows", lambda: [])
+        monkeypatch.setattr(suggest, "suggested_rules", lambda tool, args, my_email: [dict(_SUGGESTION)])
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+        self.store = scoped_tokens.ScopedTokenStore(lambda: [Principal(id="local")])
+        scoped_tokens.set_store(self.store)
+
+    def _entries(self):
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    def _dispatcher(self, connector=None, policy=_LOCAL_POLICY, **kwargs):
+        return _dispatcher(
+            {"gmail": connector or FakeConnector("gmail")}, scoped_token_policy=policy, **kwargs,
+        )
+
+    @staticmethod
+    def _params(**overrides):
+        params = {"reason": "nightly job", "label": "nightly", "rules": [dict(_RULE)], "tools": ["gmail_get_message"]}
+        params.update(overrides)
+        return params
+
+    async def _propose(self, dispatcher, params=None, session="s1"):
+        return await dispatcher.propose_scoped_token(session, params or self._params(), "http://127.0.0.1:9/")
+
+    @staticmethod
+    def _pending():
+        from privacyfence import scoped_token_proposals
+
+        return scoped_token_proposals.get_registry().pending_for("local")
+
+    async def test_bundle_proposal_returns_a_review_url_and_no_secret(self):
+        result = await self._propose(self._dispatcher())
+
+        assert result["review_url"] == f"http://127.0.0.1:9/settings/scoped_tokens/proposals/{result['proposal_id']}"
+        assert result["label"] == "nightly" and result["days"] == scoped_tokens.DEFAULT_DAYS
+        assert result["tools"] == ["gmail_get_message"]
+        assert len(result["rules"]) == 1 and result["uncovered_tools"] == []
+        assert "pfst_" not in json.dumps(result)
+        assert self.store.tokens_for(Principal(id="local")) == []
+
+    async def test_proposal_is_registered_and_audited(self):
+        result = await self._propose(self._dispatcher())
+
+        [proposal] = self._pending()
+        assert proposal.id == result["proposal_id"] and proposal.source == "bundle"
+        [entry] = [e for e in self._entries() if e["decision"] == "scoped_token_proposed"]
+        assert entry["tool"] == "privacyfence_propose_scoped_token"
+        assert entry["claude_reason"] == "nightly job"
+        assert entry["request_id"] == proposal.id
+
+    async def test_missing_tools_or_rules_default_to_empty(self):
+        result = await self._propose(self._dispatcher(), {"reason": "r", "label": "tools-only", "tools": ["gmail_get_message"]})
+        assert result["rules"] == []
+        result = await self._propose(self._dispatcher(), {"reason": "r", "label": "rules-only", "rules": [dict(_RULE)]})
+        assert result["tools"] == []
+
+    async def test_refused_when_proposals_disabled(self):
+        for policy in (None, scoped_tokens.ScopedTokenPolicy(True, 90, False), scoped_tokens.ScopedTokenPolicy(False, 90, True)):
+            dispatcher = self._dispatcher(policy=policy)
+            assert dispatcher.scoped_token_proposals_enabled() is False
+            with pytest.raises(ValueError, match="Token proposals are not enabled"):
+                await self._propose(dispatcher)
+        assert self._pending() == []
+
+    async def test_refused_for_a_local_non_owner(self):
+        with principal_scope(Principal(id="alice")), pytest.raises(ValueError, match="this computer's owner"):
+            await self._propose(self._dispatcher())
+
+    async def test_refused_in_an_unattended_session_and_audited(self):
+        dispatcher = self._dispatcher(unattended_sessions_enabled=True)
+        dispatcher.begin_unattended_session("s1", "scheduled")
+
+        with pytest.raises(GateDeniedError, match="unattended session"):
+            await self._propose(dispatcher)
+
+        assert self._pending() == []
+        [entry] = [e for e in self._entries() if e["decision"] == "denied_unattended"]
+        assert entry["tool"] == "privacyfence_propose_scoped_token"
+        assert entry["claude_reason"] == "nightly job"
+
+    async def test_refused_under_a_scoped_token(self):
+        with scoped_tokens.token_scope(_SCOPE), pytest.raises(GateDeniedError, match="cannot propose tokens"):
+            await self._propose(self._dispatcher())
+        assert self._pending() == []
+
+    async def test_duplicate_rule_kind_is_refused(self):
+        rules = [{"kind": "duplicate", "token_id": "st-1", "rule_id": "r-1"}]
+        with pytest.raises(ValueError, match="A proposed rule is"):
+            await self._propose(self._dispatcher(), self._params(rules=rules))
+        assert self._pending() == []
+
+    async def test_from_session_and_rules_together_are_refused(self):
+        with pytest.raises(ValueError, match="either from_session or rules and tools"):
+            await self._propose(self._dispatcher(), self._params(from_session=True))
+
+    async def test_days_are_capped_at_the_policy_max(self):
+        dispatcher = self._dispatcher(policy=scoped_tokens.ScopedTokenPolicy(True, 30, True))
+        result = await self._propose(dispatcher, self._params(days=365))
+        assert result["days"] == 30
+
+    async def test_invalid_request_errors_before_registering(self):
+        with pytest.raises(scoped_tokens.ScopedTokenError):
+            await self._propose(self._dispatcher(), self._params(label="not a valid label!!"))
+        assert self._pending() == []
+
+    async def test_reproposing_an_existing_label_is_not_refused(self):
+        self.store.create(
+            Principal(id="local"), label="nightly", days=30, rules=[dict(_RULE)], tools=["gmail_get_message"],
+            policy=_LOCAL_POLICY,
+        )
+        result = await self._propose(self._dispatcher())
+        assert result["label"] == "nightly"
+
+
+    def _ledger_dispatcher(self):
+        class Pending(FakeConnector):
+            async def call(self, tool, args):
+                raise ApprovalPending({"status": "approval_pending", "approval_id": "a1"})
+
+        return _dispatcher(
+            {
+                "ok": ReleasingConnector("ok", result="data"),
+                "denied": FakeConnector("denied", error=GateDeniedError("Request denied")),
+                "pending": Pending("pending"),
+                "auto": FakeConnector("auto", result="listed"),
+            },
+            scoped_token_policy=_LOCAL_POLICY,
+        )
+
+    async def test_from_session_builds_from_approved_calls_only(self):
+        dispatcher = self._ledger_dispatcher()
+        await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m1"})
+        with pytest.raises(GateDeniedError):
+            await dispatcher.call("s1", "denied", "drive_read_file", {"file_id": "f1"})
+        await dispatcher.call("s1", "pending", "calendar_get_event", {"event_id": "e1"})
+
+        result = await self._propose(dispatcher, {"reason": "r", "label": "from-calls", "from_session": True})
+
+        assert result["tools"] == ["gmail_get_message"]
+        assert len(result["rules"]) == 1
+        [proposal] = self._pending()
+        assert proposal.source == "session"
+        assert [r["group"] for r in proposal.request["rules"]] == ["gmail.label"]
+
+    async def test_from_session_includes_auto_tools(self):
+        dispatcher = self._ledger_dispatcher()
+        await dispatcher.call("s1", "auto", "gmail_list_messages", {"query": "x"})
+
+        result = await self._propose(dispatcher, {"reason": "r", "label": "listing", "from_session": True})
+
+        assert result["tools"] == ["gmail_list_messages"] and result["rules"] == []
+
+    async def test_from_session_with_no_calls_is_refused(self):
+        with pytest.raises(ValueError, match="no approved calls"):
+            await self._propose(self._ledger_dispatcher(), {"reason": "r", "label": "empty", "from_session": True})
+
+    async def test_ledger_drops_computed_args(self):
+        dispatcher = self._ledger_dispatcher()
+        await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m1", "is_self_dm": True})
+
+        assert dispatcher._session_calls["s1"] == [("gmail_get_message", {"message_id": "m1"}, "")]
+
+    async def test_session_ledger_is_dropped_on_end_session(self):
+        dispatcher = self._ledger_dispatcher()
+        await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m1"})
+        dispatcher.end_session("s1")
+
+        assert "s1" not in dispatcher._session_calls
+
+    async def test_session_ledger_keeps_the_newest_200(self):
+        dispatcher = self._ledger_dispatcher()
+        for i in range(205):
+            await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": f"m{i}"})
+
+        calls = dispatcher._session_calls["s1"]
+        assert len(calls) == 200
+        assert calls[0][1] == {"message_id": "m5"} and calls[-1][1] == {"message_id": "m204"}
+
+    async def test_scoped_token_calls_are_not_recorded(self):
+        dispatcher = self._ledger_dispatcher()
+        with scoped_tokens.token_scope(_SCOPE):
+            await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m1"})
+            await dispatcher.call("s1", "auto", "gmail_list_messages", {"query": "x"})
+
+        assert dispatcher._session_calls == {}

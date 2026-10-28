@@ -102,6 +102,7 @@ from . import (
     peek_provisioning,
     policy_upgrade,
     privilege_separation,
+    scoped_tokens,
     step_up_config,
 )
 from .policy import store as policy_store
@@ -898,6 +899,7 @@ def _maybe_start_web_server(
         mcp_dispatcher = McpDispatcher(
             _connectors, unattended_sessions_enabled=unattended_sessions_enabled,
             registry=registry,
+            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
         )
         if controller is not None:
             # The direct successor of ipc_server.py's own constructor-time
@@ -1235,6 +1237,7 @@ def _start_org_web_server(
         mode="org",
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
+        scoped_token_policy=scoped_tokens.policy_from_org_config(org_config, org_mode=True),
     )
 
     push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)

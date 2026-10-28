@@ -449,8 +449,11 @@ def build_mcp_server(
                 for spec in connector.tool_specs()
                 if scope is None or spec.name in scope.tools
             ]
+        proposals_enabled = dispatcher.scoped_token_proposals_enabled()
         tools.extend(
-            tool for tool in mcp_tools.META_TOOLS if scope is None or tool.name in SCOPED_META_TOOLS
+            tool for tool in mcp_tools.META_TOOLS
+            if (scope is None or tool.name in SCOPED_META_TOOLS)
+            and (proposals_enabled or tool.name != mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.name)
         )
         return types.ListToolsResult(tools=tools)
 
@@ -477,7 +480,9 @@ def build_mcp_server(
         # principal for everything downstream (audit rows, a pending
         # approval's captured identity) to read back via current_agent().
         # Meta-tools stay unattributed (ADR 0006, Consequences): they are not
-        # gated calls. Never read from the request body -- see
+        # gated calls. The one exception is privacyfence_propose_scoped_token (ADR 0251): a person
+        # reviews its proposal and needs to see which AI client made it, so it is attributed like a
+        # connector tool. Never read from the request body -- see
         # _is_initialize for why that line is drawn.
         is_meta_tool = name in mcp_tools.META_TOOL_NAMES
         # A scoped token's call, meta-tools included, is attributed to the token itself
@@ -486,7 +491,7 @@ def build_mcp_server(
         if scope is not None:
             agent = _scoped_agent(scope)
         else:
-            agent = UNKNOWN_AGENT if is_meta_tool else _resolve_agent(
+            agent = UNKNOWN_AGENT if is_meta_tool and name != mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.name else _resolve_agent(
                 ctx, access_token, client_names, attested_agents=attested_agents, overrides=overrides,
             )
         bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
@@ -590,6 +595,8 @@ async def _dispatch_meta_tool(
         return dispatcher.list_policy(reason)
     if name == mcp_tools.PROPOSE_POLICY_CHANGE_TOOL.name:
         return await dispatcher.propose_policy_change(session_key, arguments)
+    if name == mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.name:
+        return await dispatcher.propose_scoped_token(session_key, arguments, base_url)
     if name == mcp_tools.BEGIN_UNATTENDED_SESSION_TOOL.name:
         return dispatcher.begin_unattended_session(session_key, reason)
     if name == mcp_tools.END_UNATTENDED_SESSION_TOOL.name:

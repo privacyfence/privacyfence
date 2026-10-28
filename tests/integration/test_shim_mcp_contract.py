@@ -36,6 +36,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client  # noqa: E402
 
 from privacyfence import local_files as local_files_module  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
+from privacyfence import scoped_tokens  # noqa: E402
 from privacyfence.connector import Connector, ToolParam, ToolSpec  # noqa: E402
 from privacyfence.web import mcp_tools as mcp_tools_module  # noqa: E402
 from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
@@ -221,7 +222,7 @@ async def running_mcp_server(shim_home, monkeypatch):
     monkeypatch.setattr(paths_module, "data_dir", lambda: _shim_data_dir(shim_home))
 
     connector = EchoConnector()
-    dispatcher = McpDispatcher(lambda: {"contract_test": connector})
+    dispatcher = McpDispatcher(lambda: {"contract_test": connector}, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False))
     port = _free_port()
     server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
     server.start()
@@ -236,7 +237,9 @@ async def running_mcp_server(shim_home, monkeypatch):
 async def running_annotations_server(shim_home, monkeypatch):
     """Same shape as running_mcp_server, registering ReadWriteDeleteConnector."""
     monkeypatch.setattr(paths_module, "data_dir", lambda: _shim_data_dir(shim_home))
-    dispatcher = McpDispatcher(lambda: {"annotations_test": ReadWriteDeleteConnector()})
+    dispatcher = McpDispatcher(
+        lambda: {"annotations_test": ReadWriteDeleteConnector()}, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+    )
     port = _free_port()
     server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
     server.start()
@@ -258,7 +261,7 @@ async def running_file_bridge_server(shim_home, monkeypatch):
     local_files_module.force_bridge_for_tests(True)
 
     connector = FileBridgeTestConnector()
-    dispatcher = McpDispatcher(lambda: {"file_bridge_test": connector})
+    dispatcher = McpDispatcher(lambda: {"file_bridge_test": connector}, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False))
     port = _free_port()
     server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
     server.start()
