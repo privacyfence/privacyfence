@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Claude can propose a scoped token for a routine.** Claude can now propose a scoped token for a routine with `privacyfence_propose_scoped_token`, built from what you approved in the session or from rules it names. You review and narrow it in **Settings → Scoped tokens**, confirm by typing its name, and copy the token yourself; Claude never receives it. Organization installs turn this on with `--enable-scoped-token-proposals`.
+
 ### Fixed
 
 - **A stalled Google connection no longer breaks every later call.** When a Gmail, Drive, Calendar, Contacts, Tasks or Apps Script request timed out because the network had silently dropped an idle connection, every following request reused that dead connection and timed out too until PrivacyFence was restarted. The timed-out request still fails, but the next one now opens a fresh connection.

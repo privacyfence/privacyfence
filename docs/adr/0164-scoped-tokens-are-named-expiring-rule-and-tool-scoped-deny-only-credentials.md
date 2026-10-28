@@ -7,6 +7,7 @@ Amends [ADR 0037](0037-a-local-override-is-a-relabel-and-never-attests.md), [ADR
 Amended by ADR 0173.
 Amended by [ADR 0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md): a deleted rule's id is dropped from every scoped token.
 Amended by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of its rules.
+Related: [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) — an AI client can propose a token for a person to create.
 
 ## Context
 
