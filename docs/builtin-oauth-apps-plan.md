@@ -1585,22 +1585,47 @@ points here.
 **SEC-23: every new registration emails the maintainers.** (p11, p13c, manual mb2, ma0) There
 is no waiting period: a new host is served at once, and the maintainers hear about it right away.
 
-- **Sending.** The Worker sends through Cloudflare Email Routing, with no third-party mail
-  provider and no API key.
-  - `wrangler.toml` has a `[[send_email]]` binding `name = "NOTIFY"` and
-    `destination_address = "info@privacyfence.eu"`. The binding can only deliver to that address,
-    which must be a verified destination in Email Routing.
-  - The sender comes from the `wrangler.toml` variable `NOTIFY_FROM` (in `[vars]`, not a secret). It
-    is `relay-notify@<domain>`, where `<domain>` is a top-level domain in the same Cloudflare
-    account that **already** has Email Routing enabled. Cloudflare's dashboard does not offer
-    Email Routing on a subdomain for this account, so a `relay.` subdomain is not used.
-    - `privacyfence.eu` is the default, when its mail already runs through Email Routing (its MX
-      records point at `route1/2/3.mx.cloudflare.net`). Enabling Email Routing on a domain whose
-      mail is hosted elsewhere replaces its MX records and breaks that mail, so mb2 never does it.
-    - If `privacyfence.eu` mail is hosted elsewhere, `NOTIFY_FROM` uses another domain in the
-      account that already has Email Routing.
-    - With `NOTIFY_FROM = ""`, the Worker sends nothing and counts `notify_skipped`. The weekly
-      `/registrations` review (SEC-02) is then the only check, and the runbook says so.
+- **Sending: the Gmail API, as a send-only alias of the QA Workspace account.** `privacyfence.eu`
+  mail is on Google Workspace, so Cloudflare Email Routing cannot be enabled on it without
+  breaking that mail. The Worker therefore sends through Gmail.
+  - **The sender.** `relay-notify@privacyfence.eu`, an alias of `test@privacyfence.eu`, set up as
+    a Gmail "Send mail as" address. `NOTIFY_FROM` (a `[vars]` entry in `wrangler.toml`) holds it.
+    The recipient is the constant `NOTIFY_TO = "info@privacyfence.eu"` in `src/notify.ts`, never
+    taken from a request.
+  - **The credential.** An OAuth client of type Web application, with audience **Internal**, in a
+    Google Cloud project of the `privacyfence.eu` Workspace. An Internal app needs no verification
+    and its refresh tokens do not expire after seven days. Its refresh token is minted for
+    `test@privacyfence.eu` with the single scope `https://www.googleapis.com/auth/gmail.send`, so it
+    can send but never read mail. Three Worker secrets hold it: `GMAIL_CLIENT_ID`,
+    `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`.
+  - **The deploy.** The deploy workflow sets the three secrets with `wrangler secret put`, from the
+    `oauth-relay-worker` environment secrets `CF_OAUTH_RELAY_GMAIL_CLIENT_ID`, `..._CLIENT_SECRET`
+    and `..._REFRESH_TOKEN`, as it does `REVOKE_TOKEN`.
+  - **The calls (`src/notify.ts`).**
+    - It exchanges the refresh token at `https://oauth2.googleapis.com/token`
+      (`grant_type=refresh_token`), and keeps the access token in memory until 60 seconds before
+      its `expires_in`.
+    - It then POSTs `{"raw": <base64url RFC 5322 message>}` to
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/send`.
+    - Both calls use `fetch` with a 10-second `AbortSignal.timeout`. There is no SDK and no new
+      dependency.
+  - **Missing configuration.** When any of the three secrets or `NOTIFY_FROM` is empty, the Worker
+    sends nothing and counts `notify_skipped`.
+  - **Failures.**
+    - Each failure increments `notify_failures` and records `notify_last_error`. That is a short
+      code, never a secret or a response body: `token_invalid_grant`, `token_http_<status>`,
+      `send_http_<status>` or `network`.
+    - `token_invalid_grant` means the refresh token was revoked, for example after a password
+      change on `test@`. The runbook explains how to mint a new one.
+  - **Containing a stolen token.** Whoever holds the token can send mail as
+    `relay-notify@privacyfence.eu`. So `test@privacyfence.eu` sits in its own organizational unit
+    with a Gmail **Restrict delivery** rule (Admin console → Apps → Gmail → Compliance). It may
+    only send to `privacyfence.eu` and `tkcs.name`, so a leaked token cannot phish anyone outside.
+    - The QA account never sends mail through PrivacyFence; its tests only draft.
+    - The deploy path is guarded by the same required reviewers as the relay itself (SEC-05).
+    - ADR 0254 and the runbook record this residual risk and the rotation steps: revoke the token
+      at myaccount.google.com/permissions as `test@`, mint a new one, update the environment
+      secret, redeploy.
 - **When.**
   - An email is sent when a host is verified for the first time, which inserts its row.
   - Re-verification of a known host sends nothing.
@@ -1626,17 +1651,24 @@ is no waiting period: a new host is served at once, and the maintainers hear abo
   counted in the Durable Object (`notify_failures`, `last_notify_failure_at`). Both are shown in
   the maintainer-only `/registrations` response, so failures are visible although the Worker
   keeps no logs.
-- **Tests** (stub `NOTIFY` by passing `{...env, NOTIFY: stub}` to the fetch handler):
-  - a first registration sends exactly one message with the host, IP and revoke command;
+- **Tests** (stub `globalThis.fetch` with `vi.spyOn` for the token and send endpoints):
+  - a first registration sends exactly one message: decoding `raw` gives `From:
+    relay-notify@privacyfence.eu`, `To: info@privacyfence.eu`, the host, the IP and the revoke
+    command;
+  - the access token is reused within its lifetime and refreshed after it;
   - a re-verification sends none;
   - the 51st first registration of a day sends the one over-the-limit message, and the 52nd
     sends nothing;
-  - a throwing `NOTIFY` still returns 200 and increments `notify_failures`;
+  - an `invalid_grant` token response, a 500 from either endpoint, a timeout and a thrown `fetch`
+    each still return 200 to `/register`, increment `notify_failures` and set the matching
+    `notify_last_error`, and no secret appears in `/registrations` or any response;
+  - a missing secret counts `notify_skipped` and makes no outbound call;
   - a header value with a newline is refused.
 - **The weekly review stays** (SEC-02). The email is the prompt to act on a suspicious host the
   same day.
 - **Privacy.** The privacy page (p13c) says the relay emails the maintainers the registering
-  server's host name, the request's IP address and country when a new server registers.
+  server's host name, the request's IP address and country when a new server registers, through
+  PrivacyFence's Google Workspace mail.
 
 **SEC-03: registration denial and storage flooding.** (p11, p5)
 
@@ -1871,7 +1903,8 @@ stable tag (ADRs 0052, 0099). The relay also goes live on merge. So the website 
        PrivacyFence maintainers (SEC-09);
      - writes no logs (SEC-15);
      - emails the maintainers the host name, the IP address and the country of the request when a
-       new server registers (SEC-23), kept in that mailbox for up to 12 months;
+       new server registers (SEC-23), through PrivacyFence's Google Workspace mail (Google is the
+       processor), kept in that mailbox for up to 12 months;
      - is used only by organization servers and single-user installs that use the built-in apps;
        an organization's own apps never touch it.
      Legal basis Art. 6(1)(f) (operating and securing the service). Cloudflare is the processor,
@@ -2331,7 +2364,8 @@ gets no built-in apps.
   and its contract only grows. It forwards only to hosts that proved control of their domain, keeps no
   logs, shows registrations only to maintainers, and maintainers can revoke a host. It runs in the
   existing Cloudflare account, with required reviewers on deploys. It forwards to a loopback
-  host without registration. It is offered as is, under the published relay terms, with no
+  host without registration. New registrations are emailed to the maintainers through the
+  Gmail API with a send-only token, from an account restricted to internal delivery. It is offered as is, under the published relay terms, with no
   warranty and liability limited as far as the law allows (D16). Relates to 0011, 0186.
 - **0255** — `mode` and the server address may come from environment variables. Organization mode
   without an IdP is single-user mode, with one administrator,, allowed only on `http://localhost` or
@@ -2513,9 +2547,9 @@ manual_before:
   why: p1 bakes them into the org image and the PyPI wheel (and its dispatched build.yml check looks for them); ma2 and ma4 sign in with them
   done_when: Settings → Secrets and variables → Actions lists the 10 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, and the Slack, Atlassian and Miro apps are set to public distribution
 - id: mb2-relay-worker-cloudflare
-  title: Create the Cloudflare API token and the oauth-relay-worker GitHub environment for the relay Worker
+  title: Create the Cloudflare API token, the relay's Gmail sender (alias, delivery restriction, Internal OAuth client and send-only refresh token) and the oauth-relay-worker GitHub environment
   why: the relay's deploy workflow (p11) uses them once the PR reaches main, and ma2 deploys from the branch by hand with the same token
-  done_when: the repository has an environment named oauth-relay-worker, restricted to main, holding secrets CF_OAUTH_RELAY_WORKER_API_TOKEN, CF_OAUTH_RELAY_WORKER_ACCOUNT_ID and CF_OAUTH_RELAY_REVOKE_TOKEN, and the API token verifies with the curl in the page
+  done_when: the repository has an environment named oauth-relay-worker, restricted to main, holding secrets CF_OAUTH_RELAY_WORKER_API_TOKEN, CF_OAUTH_RELAY_WORKER_ACCOUNT_ID, CF_OAUTH_RELAY_REVOKE_TOKEN, CF_OAUTH_RELAY_GMAIL_CLIENT_ID, CF_OAUTH_RELAY_GMAIL_CLIENT_SECRET and CF_OAUTH_RELAY_GMAIL_REFRESH_TOKEN; the API token verifies with the curl in the page; and test@privacyfence.eu has the relay-notify@ alias in its own organizational unit with a Restrict delivery rule
 - id: mb4-live-runner-host
   title: 'Build runner.privacyfence.eu: the Hetzner server, Tailscale, the Cloudflare DNS record, origin certificate and firewall, the pfrunner user, Peek, and the GitHub runner registered in the new privacyfence-live group; copy over the QA state that does not change'
   why: p21 switches the live-check workflows to the privacyfence-live label at merge; without a registered runner in that group they would queue forever, and ma2 needs the host's public name for the QA org server
@@ -3225,7 +3259,7 @@ phases:
 
     Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands, and links to https://privacyfence.eu/relay-terms/ and https://privacyfence.eu/privacy/#relay), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
-    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (the NOTIFY send_email binding with the NOTIFY_FROM var, src/notify.ts, the daily cap, failure and skip counters on /registrations, an empty NOTIFY_FROM sending nothing, and every listed test; the runbook explains which domain may carry Email Routing and that one whose mail is hosted elsewhere must not), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry.
+    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (Gmail API sending in src/notify.ts with fetch only: the NOTIFY_FROM var, the NOTIFY_TO constant, the GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN Worker secrets set by the deploy workflow from the CF_OAUTH_RELAY_GMAIL_* environment secrets, the cached access token, the daily cap, notify_failures/notify_last_error/notify_skipped on /registrations, and every listed test; no [[send_email]] binding; the runbook covers minting and rotating the refresh token and the Restrict delivery rule), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
