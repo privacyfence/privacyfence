@@ -56,7 +56,7 @@ _REGISTRY_IDS = frozenset(entry.agent_id for entry in REGISTRY)
 # Prefix of the agent_id a scoped token's calls are recorded under (ADR 0164): an override-attested
 # identity named after the token. It is not a registry entry, but it is a credential the person
 # created, so it is shown by name, in either mode.
-SCOPED_TOKEN_ID_PREFIX = "scoped-token:"
+SCOPED_TOKEN_ID_PREFIX = "scoped-token:"  # nosec B105  # an agent_id prefix, not a credential
 
 _local_mode = True
 
