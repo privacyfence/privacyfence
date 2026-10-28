@@ -3,7 +3,8 @@
 googleapiclient reuses a pooled keep-alive TLS connection between calls. When Google or a network
 device has already closed that connection, the next request on it fails with an error such as
 ``EOF occurred in violation of protocol`` even though a fresh connection would succeed. This module
-retries such a read once, on a new connection.
+retries such a read once, on a new connection. A request that times out is not retried, but the
+connection it ran on is discarded so the next request starts on a fresh one.
 
 The retry sits in the transport, below the approval gate, so it is invisible to approvals and the
 audit log: no second approval and no second audit row.
@@ -11,7 +12,8 @@ audit log: no second approval and no second audit row.
 Only ``GET`` is retried. A write may already have been applied by the time its connection dropped,
 so PrivacyFence never retries one (a read-only ``POST`` stays unretried too). Timeouts, TLS
 certificate failures, refused connections, DNS failures and HTTP error responses are not retried
-either.
+either. A timeout of any method closes the pooled connection (see
+docs/adr/0249-a-timed-out-google-request-discards-its-pooled-connection.md).
 
 googleapiclient's ``execute(num_retries=...)`` is deliberately not used: see
 docs/adr/0105-a-google-read-is-retried-once-when-its-connection-drops.md.
@@ -52,6 +54,26 @@ class RetryOnceAuthorizedHttp(google_auth_httplib2.AuthorizedHttp):
         method: str = "GET",
         body: Any = None,
         headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> tuple[httplib2.Response, bytes]:
+        try:
+            return self._request_retrying_drops(uri, method, body, headers, **kwargs)
+        except TimeoutError as exc:
+            # httplib2 leaves a connection that timed out waiting for the response in its pool, so
+            # without this every later request reuses the dead connection and times out too.
+            logger.info(
+                "Google API %s to %s timed out (%s); discarding the pooled connection",
+                method.upper(), urllib.parse.urlsplit(uri).hostname, type(exc).__name__,
+            )
+            self.close()
+            raise
+
+    def _request_retrying_drops(
+        self,
+        uri: str,
+        method: str,
+        body: Any,
+        headers: dict[str, str] | None,
         **kwargs: Any,
     ) -> tuple[httplib2.Response, bytes]:
         # The 401-refresh re-entry from AuthorizedHttp.request carries

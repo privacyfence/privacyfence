@@ -106,7 +106,6 @@ def test_writes_are_never_retried(method, caplog):
 @pytest.mark.parametrize(
     "error",
     [
-        TimeoutError(),
         ssl.SSLCertVerificationError(),
         ConnectionRefusedError(),
         httplib2.ServerNotFoundError("x"),
@@ -122,6 +121,34 @@ def test_non_transport_errors_are_not_retried(error, caplog):
 
     assert inner.request.call_count == 1
     assert "secret-query-xyz" not in caplog.text
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_timeout_is_not_retried_but_discards_the_connection(method, caplog):
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    transport, inner = _transport([TimeoutError("The read operation timed out"), _ok()])
+
+    with pytest.raises(TimeoutError):
+        transport.request(URI, method, body=b"{}")
+
+    assert inner.request.call_count == 1
+    assert inner.close.call_count == 1
+    records = _infos(caplog)
+    assert len(records) == 1
+    assert "gmail.googleapis.com" in records[0].getMessage()
+    assert "secret-query-xyz" not in caplog.text
+    assert "read operation" not in caplog.text
+
+
+def test_request_after_a_timeout_goes_out_normally():
+    ok = _ok()
+    transport, inner = _transport([TimeoutError(), ok])
+
+    with pytest.raises(TimeoutError):
+        transport.request(URI, "GET")
+
+    assert transport.request(URI, "GET") == ok
+    assert inner.request.call_count == 2
 
 
 @pytest.mark.parametrize("status", [429, 500, 503])
