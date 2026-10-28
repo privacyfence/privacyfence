@@ -33,6 +33,10 @@ docs/how-it-works.md's "Unattended sessions" section.
 Settings (--scoped-token-max-days N caps how long one lasts, 1-365); without
 it the feature is off in organization mode (ADR 0165).
 
+--enable-scoped-token-proposals also lets an AI client propose a scoped token for
+a person to review and create (--disable-scoped-token-proposals turns it off);
+it has no effect unless --enable-scoped-tokens is set (ADR 0253).
+
 --sign-key also signs a "serial" into the bundle (--serial N, default: the
 current Unix time); an install refuses a bundle whose serial is lower than the
 highest it has accepted, so a later build always wins.

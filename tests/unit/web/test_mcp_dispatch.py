@@ -1308,6 +1308,7 @@ class TestProposeScopedToken:
         [entry] = [e for e in self._entries() if e["decision"] == "scoped_token_proposed"]
         assert entry["tool"] == "privacyfence_propose_scoped_token"
         assert entry["claude_reason"] == "nightly job"
+        assert entry["sender"] == "local"
         assert entry["request_id"] == proposal.id
 
     async def test_missing_tools_or_rules_default_to_empty(self):
@@ -1420,23 +1421,34 @@ class TestProposeScopedToken:
         dispatcher = self._ledger_dispatcher()
         await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m1", "is_self_dm": True})
 
-        assert dispatcher._session_calls["s1"] == [("gmail_get_message", {"message_id": "m1"}, "")]
+        assert dispatcher._session_calls[("local", "s1")] == [("gmail_get_message", {"message_id": "m1"}, "")]
 
     async def test_session_ledger_is_dropped_on_end_session(self):
         dispatcher = self._ledger_dispatcher()
         await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m1"})
         dispatcher.end_session("s1")
 
-        assert "s1" not in dispatcher._session_calls
+        assert dispatcher._session_calls == {}
 
     async def test_session_ledger_keeps_the_newest_200(self):
         dispatcher = self._ledger_dispatcher()
         for i in range(205):
             await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": f"m{i}"})
 
-        calls = dispatcher._session_calls["s1"]
+        calls = dispatcher._session_calls[("local", "s1")]
         assert len(calls) == 200
         assert calls[0][1] == {"message_id": "m5"} and calls[-1][1] == {"message_id": "m204"}
+
+    async def test_session_ledger_is_per_principal(self):
+        dispatcher = self._ledger_dispatcher()
+        await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m1"})
+        with principal_scope(Principal(id="alice")):
+            await dispatcher.call("s1", "ok", "gmail_get_message", {"message_id": "m2"})
+
+        assert dispatcher._session_calls[("local", "s1")][0][1] == {"message_id": "m1"}
+        assert dispatcher._session_calls[("alice", "s1")][0][1] == {"message_id": "m2"}
+        dispatcher.end_session("s1")
+        assert dispatcher._session_calls == {}
 
     async def test_scoped_token_calls_are_not_recorded(self):
         dispatcher = self._ledger_dispatcher()

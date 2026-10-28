@@ -148,7 +148,7 @@ class McpDispatcher:
         # The approved (or auto-gated) calls each MCP session has made, newest last, as
         # (tool, agent args, my_email) -- what privacyfence_propose_scoped_token's from_session
         # builds a bundle from. In memory only; end_session() drops it.
-        self._session_calls: dict[Hashable, list[tuple[str, dict[str, Any], str]]] = {}
+        self._session_calls: dict[tuple[str, Hashable], list[tuple[str, dict[str, Any], str]]] = {}
         # The deferred-approval registry privacyfence_await_approval polls
         # -- None when nothing in this install can ever produce a
         # pending approval (native-only local mode with /mcp still enabled),
@@ -336,7 +336,7 @@ class McpDispatcher:
         return result
 
     def _note_session_call(self, session_key: Hashable, tool: str, args: dict, connector: Connector) -> None:
-        calls = self._session_calls.setdefault(session_key, [])
+        calls = self._session_calls.setdefault((current_principal().id, session_key), [])
         agent_args = {k: v for k, v in args.items() if k not in _CONNECTOR_COMPUTED_ARGS}
         calls.append((tool, agent_args, getattr(connector, "my_email", "") or ""))
         del calls[:-self.MAX_SESSION_CALLS]
@@ -538,7 +538,7 @@ class McpDispatcher:
             if rules or tools:
                 raise ValueError("Pass either from_session or rules and tools, not both.")
             from ..scoped_token_proposals import bundle_from_calls
-            rules, tools, uncovered = bundle_from_calls(self._session_calls.get(session_key, []))
+            rules, tools, uncovered = bundle_from_calls(self._session_calls.get((current_principal().id, session_key), []))
             if not rules and not tools:
                 raise ValueError("This session has no approved calls to build a token from.")
         elif any(not isinstance(rule, dict) or rule.get("kind") not in ("new", "copy") for rule in rules):
@@ -600,7 +600,7 @@ class McpDispatcher:
                 tool="privacyfence_propose_scoped_token",
                 tool_name="privacyfence_propose_scoped_token",
                 summary="Token proposal refused in an unattended session",
-                sender="",
+                sender=current_principal().email or current_principal().id,
                 decision="denied_unattended",
                 auto_accept_rule="",
                 latency_seconds=0.0,
@@ -799,7 +799,8 @@ class McpDispatcher:
         dies with it."""
         had_unattended = session_key in self._unattended_sessions
         self._unattended_sessions.discard(session_key)
-        self._session_calls.pop(session_key, None)
+        for key in [k for k in self._session_calls if k[1] == session_key]:
+            del self._session_calls[key]
         if had_unattended:
             self._audit_unattended_session_event("unattended_session_ended")
             self._fire_unattended_changed()

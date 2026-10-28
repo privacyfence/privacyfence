@@ -2153,26 +2153,27 @@ def build_org_routes(
             return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
         return await _wrap_org_settings(request, principal, initial_section="privacy")
 
-    def _scoped_tokens_page_principal(request: Request) -> Principal | Response:
-        """The signed-in principal, or the redirect that sends the page elsewhere: to login when
-        signed out, to ``/settings`` when scoped tokens or AI proposals are switched off."""
+    def _scoped_tokens_page_principal(request: Request, *, proposals: bool) -> Principal | Response:
+        """The signed-in principal, or the redirect that sends the page elsewhere: to login (and
+        back to this page) when signed out, to ``/settings`` when scoped tokens are switched off
+        or, for a proposal's review page, when AI proposals are."""
         principal = _current_principal(request)
         if principal is None:
             return RedirectResponse(
-                "/login?next=/settings/scoped_tokens", status_code=302, headers={"Cache-Control": "no-store"},
+                f"/login?next={request.url.path}", status_code=302, headers={"Cache-Control": "no-store"},
             )
-        if not token_policy.enabled or not token_policy.allow_ai_proposals:
+        if not token_policy.enabled or (proposals and not token_policy.allow_ai_proposals):
             return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
         return principal
 
     async def scoped_tokens_page(request: Request) -> Response:
-        principal = _scoped_tokens_page_principal(request)
+        principal = _scoped_tokens_page_principal(request, proposals=False)
         if isinstance(principal, Response):
             return principal
         return await _wrap_org_settings(request, principal, initial_section="scoped_tokens")
 
     async def scoped_token_proposal_page(request: Request) -> Response:
-        principal = _scoped_tokens_page_principal(request)
+        principal = _scoped_tokens_page_principal(request, proposals=True)
         if isinstance(principal, Response):
             return principal
         shown: dict[str, Any] = {"missing": True}
