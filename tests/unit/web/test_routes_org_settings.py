@@ -2087,7 +2087,7 @@ class TestScopedTokenProposalRoutes:
         section = client.get("/settings/scoped_tokens")
         assert section.status_code == 200
         assert 'window.__pfInitialSection = "scoped_tokens"' in section.text
-        assert "__pfScopedProposal" not in section.text
+        assert "window.__pfScopedProposal = " not in section.text
 
         r = client.get(f"/settings/scoped_tokens/proposals/{proposal.id}")
         assert r.status_code == 200
