@@ -1155,6 +1155,25 @@ class TestScopedTokenFlags:
             "enabled": False, "max_days": 60,
         }
 
+    def test_enable_and_disable_scoped_token_proposals_flags(self, tmp_path):
+        on = self._build(tmp_path, "--enable-scoped-tokens", "--enable-scoped-token-proposals")
+        assert on["scoped_tokens"] == {"enabled": True, "allow_ai_proposals": True}
+        off = self._build(tmp_path, "--disable-scoped-token-proposals")
+        assert off["scoped_tokens"] == {"allow_ai_proposals": False}
+        assert "scoped_tokens" not in self._build(tmp_path, "--enable-unattended-sessions")
+        with pytest.raises(SystemExit):
+            build_org_bundle.main([
+                "-o", str(tmp_path / "x.json"),
+                "--enable-scoped-token-proposals", "--disable-scoped-token-proposals",
+            ])
+
+    def test_merge_keeps_allow_ai_proposals(self, tmp_path):
+        self._build(tmp_path, "--enable-scoped-tokens", "--enable-scoped-token-proposals")
+        merged = self._build(tmp_path, "--merge", "--scoped-token-max-days", "30")
+        assert merged["scoped_tokens"] == {"enabled": True, "allow_ai_proposals": True, "max_days": 30}
+        merged = self._build(tmp_path, "--merge", "--disable-scoped-token-proposals")
+        assert merged["scoped_tokens"] == {"enabled": True, "allow_ai_proposals": False, "max_days": 30}
+
     @pytest.mark.parametrize("value,ok", [("1", True), ("365", True), ("0", False), ("366", False), ("many", False)])
     def test_scoped_token_max_days_range(self, tmp_path, value, ok):
         args = ["-o", str(tmp_path / "org_config.json"), "--enable-scoped-tokens", "--scoped-token-max-days", value]

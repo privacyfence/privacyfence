@@ -24,7 +24,7 @@ import sys
 import pytest
 from starlette.testclient import TestClient
 
-from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, update_checker
+from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, scoped_tokens, update_checker
 from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import scope_rows
@@ -1616,8 +1616,8 @@ class TestScopedTokenRoutes:
     def test_the_fingerprint_covers_the_rule_requests(self):
         base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
         other = {**base, "rules": [{"kind": "new", "group": "drive.folder", "value": "f", "verbs": ["read"]}]}
-        assert rs._scoped_create_fingerprint_body(base)["rules"] == base["rules"]
-        assert rs._scoped_create_fingerprint_body(base) != rs._scoped_create_fingerprint_body(other)
+        assert scoped_tokens.normalise_create_request(base)["rules"] == base["rules"]
+        assert scoped_tokens.normalise_create_request(base) != scoped_tokens.normalise_create_request(other)
 
     def test_a_body_with_rule_ids_and_no_rules_is_a_400(self, controller, sessions):
         client, calls = self._client(controller, sessions)
@@ -1637,11 +1637,11 @@ class TestScopedTokenRoutes:
 
     def test_fingerprint_covers_the_reads_flag(self):
         base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
-        off = rs._scoped_create_fingerprint_body(base)
-        on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data_reads": True})
+        off = scoped_tokens.normalise_create_request(base)
+        on = scoped_tokens.normalise_create_request({**base, "allow_personal_data_reads": True})
         assert off["allow_personal_data_reads"] is False and on["allow_personal_data_reads"] is True
         assert off != on
-        assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data_reads": "yes"}) is None
+        assert scoped_tokens.normalise_create_request({**base, "allow_personal_data_reads": "yes"}) is None
 
     @pytest.mark.parametrize("value", ["true", 1, None, []])
     def test_a_non_bool_personal_data_flag_is_a_400(self, controller, sessions, value):
@@ -1653,11 +1653,11 @@ class TestScopedTokenRoutes:
 
     def test_the_fingerprint_covers_the_personal_data_flag(self):
         base = {"label": "a", "days": 1, "rules": [{"kind": "copy", "rule_id": "r"}], "tools": ["t"]}
-        off = rs._scoped_create_fingerprint_body(base)
-        on = rs._scoped_create_fingerprint_body({**base, "allow_personal_data": True})
+        off = scoped_tokens.normalise_create_request(base)
+        on = scoped_tokens.normalise_create_request({**base, "allow_personal_data": True})
         assert off["allow_personal_data"] is False and on["allow_personal_data"] is True
         assert off != on
-        assert rs._scoped_create_fingerprint_body({**base, "allow_personal_data": "yes"}) is None
+        assert scoped_tokens.normalise_create_request({**base, "allow_personal_data": "yes"}) is None
 
     @pytest.mark.usefixtures("_data_dir")
     @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL, RENAME])
