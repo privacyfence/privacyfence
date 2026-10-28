@@ -19,8 +19,10 @@ After this plan:
 - **`org_config.json` holds only the startup settings and app credentials.** These are `mode`,
   `server`, `idp`, and the client IDs and secrets for Google, Slack, Salesforce, Atlassian, Miro and
   a Grist OAuth app. It stays a signed bundle (ADR 0016, 0200). A provider the bundle does not
-  carry uses the **built-in PrivacyFence-owned app** baked into every distribution, as Telegram's
-  app credentials are (ADR 0040).
+  carry uses the **built-in PrivacyFence-owned app** baked into the server distributions (the
+  org image and the PyPI wheel), as Telegram's app credentials are (ADR 0040). Built-in apps are
+  for organization mode only, including single-user mode; desktop mode, deprecated in 7, gets none
+  (D19).
 - **Everything operational moves to a new admin config**, `org/admin_config.json`. The daemon
   writes it, and administrators edit it on a new top-level **Admin** page:
   - which services are offered;
@@ -38,8 +40,8 @@ After this plan:
   that list offered.
 - **Org servers use the built-in apps through a relay.** They go through a new PrivacyFence-hosted
   OAuth redirect relay at `https://oauth.privacyfence.eu`. It forwards a provider's redirect only to
-  a server that has proven it controls its own domain. Desktop installs use the built-in apps
-  directly through their fixed loopback redirects.
+  a server that has proven it controls its own domain. Desktop installs do not use built-in apps
+  (D19).
 
 - **The Docker image starts in organization mode on its own.** With no bundle and no IdP it runs
   as single-user mode, with one administrator, on `http://localhost`. Sign-in uses a one-time setup code from the
@@ -168,17 +170,18 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
 
 ### D1. Built-in app credentials
 
-Seven built-in app keys:
+Five built-in app keys, all for organization mode and all on the relay (D19):
 
 | Key | Used for | Redirects registered on the app (manual step mb1) |
 |---|---|---|
-| `google_desktop` | Google, local mode | none (Desktop app client) |
-| `google_web` | Google, org mode via relay | `https://oauth.privacyfence.eu/callback/<g>` for `g` in gmail, drive, calendar, contacts, tasks, apps_script |
-| `slack` | Slack, both modes (desktop through the relay's loopback forwarding, D19) | `https://oauth.privacyfence.eu/callback/slack` only: Slack refuses public distribution with an `http` redirect |
-| `salesforce` | Salesforce, both modes | `http://localhost:53683/callback`, `https://oauth.privacyfence.eu/callback/salesforce` |
-| `atlassian_local` | Atlassian, local mode | `http://127.0.0.1:53684/callback` |
-| `atlassian_relay` | Atlassian, org mode via relay | `https://oauth.privacyfence.eu/callback/atlassian` |
-| `miro` | Miro, both modes | `http://localhost:53686/callback`, `https://oauth.privacyfence.eu/callback/miro` |
+| `google_web` | Google | `https://oauth.privacyfence.eu/callback/<g>` for `g` in gmail, drive, calendar, contacts, tasks, apps_script (a Web client) |
+| `slack` | Slack | `https://oauth.privacyfence.eu/callback/slack` |
+| `salesforce` | Salesforce | `https://oauth.privacyfence.eu/callback/salesforce` |
+| `atlassian_relay` | Atlassian | `https://oauth.privacyfence.eu/callback/atlassian` |
+| `miro` | Miro | `https://oauth.privacyfence.eu/callback/miro` |
+
+No app carries an `http` redirect: Slack, Miro and Atlassian refuse to distribute an app that does.
+The key names keep `_web` and `_relay` so the repository secrets named in mb1 stay as they are.
 
 Every app has two fields, `client_id` and `client_secret`.
 
@@ -186,7 +189,7 @@ Every app has two fields, `client_id` and `client_secret`.
 
 - `write` reads, for each key `K` above, the environment variables
   `PF_APP_<K upper>_CLIENT_ID` and `PF_APP_<K upper>_CLIENT_SECRET`, for example
-  `PF_APP_GOOGLE_DESKTOP_CLIENT_ID`. Its behaviour:
+  `PF_APP_GOOGLE_WEB_CLIENT_ID`. Its behaviour:
   - It writes the git-ignored `src/privacyfence/_builtin_apps.py`, containing exactly one
     assignment: `APPS = <repr of a dict>`. The dict maps each key that has *both* values non-empty to
     `{"client_id": ..., "client_secret": ...}`, with the keys sorted.
@@ -212,7 +215,7 @@ Every app has two fields, `client_id` and `client_secret`.
 - On `ImportError` it falls back to the env var `PRIVACYFENCE_BUILTIN_APPS`: the path of a JSON
   file with the same `{key: {"client_id", "client_secret"}}` shape, for development. A missing,
   unreadable or malformed file returns `None` and logs one warning without the file content.
-- It also exposes `BUILTIN_APP_KEYS: tuple[str, ...]`, the seven keys in the table order above.
+- It also exposes `BUILTIN_APP_KEYS: tuple[str, ...]`, the five keys in the table order above.
 
 The built-in client secrets are public in effect, just as Telegram's hash is (ADR 0040). This is
 accepted: each one identifies the PrivacyFence app, and every sign-in still needs the person's own
@@ -296,8 +299,10 @@ Schema, version 1:
   - **`offered`, when the bundle has a non-empty section for any service in `SERVICES`:** each
     service's `offered` is whether its section is non-empty, as ADR 0196 had it.
   - **`offered`, otherwise:**
-    - In local mode, and in an org-mode single-user install (D9), google, slack, salesforce, atlassian, miro and
+    - In an org-mode single-user install (D9), google, slack, salesforce, atlassian, miro and
       telegram are `true`.
+    - In local mode only telegram is `true`: desktop mode has no built-in apps (D19), so the other
+      services need a bundle section, as in 6.x.
     - On a multi-user org server they are all `false`. The first service an admin offers on the
       Admin page is the opt-in, and that is what starts relay registration.
     - grist and peek are always `false` here, because they need a server address.
@@ -358,21 +363,15 @@ composed from the bundle, the admin config and the built-in apps.
 - `RELAY_BASE_URL = "https://oauth.privacyfence.eu"`, `RELAY_MARKER = "relay"`,
   `GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"`,
   `GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"`.
-- `BUILTIN_KEY`, mapping `(service, mode)` to a built-in app key:
-
-  | Service | local | org |
-  |---|---|---|
-  | `google` | `google_desktop` | `google_web` |
-  | `slack` | `slack` | `slack` |
-  | `salesforce` | `salesforce` | `salesforce` |
-  | `atlassian` | `atlassian_local` | `atlassian_relay` |
-  | `miro` | `miro` | `miro` |
+- `BUILTIN_KEY = {"google": "google_web", "slack": "slack", "salesforce": "salesforce",
+  "atlassian": "atlassian_relay", "miro": "miro"}`. It is used in organization mode only (D19).
 
 - `AppSource = Literal["bundle", "builtin", "none"]`.
 - `credentials_source(bundle, service, *, mode) -> AppSource` is defined for the five services
   above:
   - `"bundle"` when the bundle section has a `client_id`, or a `consumer_key` for salesforce;
-  - `"builtin"` when `app_credentials.builtin_app(BUILTIN_KEY[(service, mode)])` is not None;
+  - `"builtin"` when `mode == "org"` and `app_credentials.builtin_app(BUILTIN_KEY[service])` is not
+    None;
   - `"none"` otherwise.
 - `effective_org_config(bundle, admin, *, mode) -> dict[str, Any]` returns a new dict and mutates
   neither input:
@@ -436,7 +435,7 @@ composed from the bundle, the admin config and the built-in apps.
   - that stores it in a new `OrgAuth` field, `bundle: dict[str, Any]`.
 
   The Admin dispatcher (D6) needs it to recompute the effective config.
-- The QA scripts (`scripts/qa_*.py`) move to the effective config and a new runner; see D17.
+- The QA scripts (`scripts/qa_*.py`) keep reading the runner's own bundle and move to a new runner; see D17.
 
 ### D5. Org mode through the relay
 
@@ -915,7 +914,6 @@ like `org_config_upload` does.
   `endpoint` parameter, default `/api/settings`.
 - **Services status lines:**
   - bundle: `Uses your organization's own app (client <client_id>), from the configuration file.`
-  - builtin, local: `Uses the built-in PrivacyFence app.`
   - builtin with relay: `Uses the built-in PrivacyFence app through oauth.privacyfence.eu.`
   - none, offered: `No app is available for this service. Add your organization's own app to the
     configuration file.`
@@ -1170,8 +1168,10 @@ to `http://localhost:<port>`.
 ### D11. Local mode is deprecated in 7.x
 
 - **The text.** One constant, `org_mode.LOCAL_MODE_DEPRECATION`: `Desktop mode is deprecated and
-  will be removed in PrivacyFence 8. Move to an organization server, or try the Docker image on
-  this computer: https://privacyfence.eu/docs/moving-to-organization-mode/`
+  will be removed in PrivacyFence 8. PrivacyFence's built-in sign-in for Google, Slack, Salesforce,
+  Atlassian and Miro works only in organization mode and the Docker image. Move to an organization
+  server, or try the Docker image on this computer:
+  https://privacyfence.eu/docs/moving-to-organization-mode/`
 - **Daemon log.** `run_app` logs it at WARNING at every local-mode start.
 - **`privacyfence_status`.** `mcp_dispatch`'s status result, where `result` is built
   (`web/mcp_dispatch.py:506-508`) so all three return paths carry it, gains
@@ -1745,10 +1745,9 @@ The `ensure` re-import is a merge, not a replacement:
 
 **SEC-13: built-in secrets: fewer copies and a rotation plan.** (p1, p12, p11)
 
-- **Desktop installers ship no `google_web`.** `scripts/builtin_apps.py write` gains
-  `--exclude KEY` (repeatable). `build_dmg.sh`, `build_deb.sh` and `build_installer.ps1` call it
-  with `--exclude google_web`. The org image's wheel and the PyPI build include it, because
-  servers use them.
+- **Desktop installers ship no built-in app credentials (D19).** `build_dmg.sh`, `build_deb.sh` and
+  `build_installer.ps1` do not call `scripts/builtin_apps.py write`. Only the org image's wheel and
+  the PyPI build include the module, because servers use them.
 - **Rotation.** ADR 0250 and `docs/oauth-relay.md` (a "Rotating a built-in app secret" section)
   describe rotation: add the new secret alongside the old where the provider allows two (Google
   and Salesforce do), release, then retire the old one after the release is adopted.
@@ -1865,9 +1864,8 @@ stable tag (ADRs 0052, 0099). The relay also goes live on merge. So the website 
      - writes no logs (SEC-15);
      - emails the maintainers the host name, the IP address and the country of the request when a
        new server registers (SEC-23), kept in that mailbox for up to 12 months;
-     - is used only by organization servers and single-user installs that use the built-in apps,
-       and by desktop installs signing in to Slack with the built-in app (D19); an organization's
-       own apps never touch it.
+     - is used only by organization servers and single-user installs that use the built-in apps;
+       an organization's own apps never touch it.
      Legal basis Art. 6(1)(f) (operating and securing the service). Cloudflare is the processor,
      as for the download service.
    - A new section `<h2 id="google-user-data">Google user data in the PrivacyFence app</h2>`,
@@ -1945,9 +1943,9 @@ self-hosted runner labelled `privacyfence-test` in the runner group of the same 
 0181). Every token on it was minted with the QA bundle's own OAuth apps
 (`scripts/qa_authenticate_connectors.py`, `docs/connector-qa.md:42-49`), and the recorder reads the
 raw bundle (`daemon_main.load_org_config()`, for example `scripts/qa_fixture_recorder.py:863-870`,
-`:1526-1534`). With built-in apps, the path most people take no longer goes through that bundle, so
-the live checks would test the wrong clients. The current host also runs unrelated test services.
-A new host replaces it rather than reworking it in place.
+`:1526-1534`). The current host also runs unrelated test services, and the built-in apps need a
+public QA organization server to be tested at all. A new host replaces the old one rather than
+reworking it in place.
 
 **The host.**
 
@@ -1988,32 +1986,18 @@ A new host replaces it rather than reworking it in place.
   workflows, and the new one sits idle. Afterwards the old runner, its group and its QA state
   are removed.
 
-**What the live checks test: the built-in apps.**
+**What the live checks test.** The QA bundle's own apps, as today. The built-in apps have no
+loopback redirect, and desktop mode never uses them (D19), so the local-mode recorder cannot use
+them either. The built-in apps are exercised on the QA organization server below (ma2, ma8).
 
-- `scripts/qa_fixture_recorder.py` builds its configuration the way the CLI does (D4):
-  `oauth_apps.effective_org_config(bundle, admin_config.config_for(bundle, mode="local", single_user=False), mode="local")`,
-  with `bundle = daemon_main.load_org_config()`. It does this in one helper,
-  `_qa_org_config()`, replacing each direct `load_org_config()` call.
-- A provider the runner's bundle does not carry uses its built-in app. The runner's bundle
-  becomes optional: by default it is absent, and a maintainer may add a provider section to test
-  an own app.
-- Both workflows gain a step "Write built-in app credentials", before the QA state is copied in.
-  - It runs `python3 scripts/builtin_apps.py write --exclude google_web --exclude atlassian_relay`
-    with the ten needed `PF_APP_*` secrets in step-level `env:` only. The runner uses loopback
-    apps only.
-  - A final step, `if: always()`, deletes `src/privacyfence/_builtin_apps.py` from the workspace,
-    because the runner is not ephemeral.
-- The copy-in step requires `credentials/` and `tests/fixtures/qa_environment.yaml`. It copies
-  `org/org_bundle.json` only when present, and no longer reads `org/org_config.json`.
-- `scripts/qa_authenticate_connectors.py` mints tokens with whatever the effective config names,
-  so on a checkout with the built-in apps it mints built-in-app tokens. It gains
-  `--builtin-apps-json PATH`: it sets `PRIVACYFENCE_BUILTIN_APPS` for its child processes, so a
-  maintainer can mint from a source checkout with a local JSON file instead of a generated module.
-  The file is never committed (it lives outside the repository).
+- `scripts/qa_fixture_recorder.py` and `scripts/qa_authenticate_connectors.py` keep reading the
+  runner's bundle through `daemon_main.load_org_config()`. That bundle is now
+  `org/org_bundle.json`, adopted from `org_config.json` (p0).
+- The copy-in step in both workflows requires `credentials/`, `org/org_bundle.json` and
+  `tests/fixtures/qa_environment.yaml`, and no longer names `org/org_config.json`.
 - `connector-live-check.yml` adds a step `curl -fsSI https://oauth.privacyfence.eu/health`
   (continue-on-error, reported in the summary as `relay: up` or `relay: down`). That gives a
   weekly external check of the relay.
-- D4's line "The QA scripts are not changed" no longer holds; this section replaces it.
 
 **The QA organization server.** `https://runner.privacyfence.eu` serves a PrivacyFence
 organization server from `deploy/docker/`. Its only users are the maintainer and the QA Google
@@ -2046,7 +2030,7 @@ ma2's revocation test on the long-lived QA host, could not be undone.
   requirements and adds:
   - the Hetzner, Cloudflare and Tailscale setup;
   - the `pfrunner` and Docker separation;
-  - minting with built-in apps;
+  - the QA state copied over from the old runner;
   - the QA org server;
   - the cutover and decommissioning.
 - It fixes the stale "not registered to this repository" line (`:574`).
@@ -2256,76 +2240,63 @@ domains are not locked out:
 (after the Peek, Grist and 6.10.0 merges). Phases still locate code by the names given next to each
 reference.
 
-### D19. Desktop Slack sign-in goes through the relay
+### D19. Built-in apps are for organization mode only, and the Slack Marketplace listing
 
-**Why.** Slack only activates public distribution when every redirect URL is `https://`. The
-built-in Slack app must be distributed to work in any workspace, so it cannot carry the desktop
-loopback redirect `http://127.0.0.1:53682/callback`. The built-in app therefore has exactly one
-redirect URL, `https://oauth.privacyfence.eu/callback/slack`, and desktop installs reach it
-through the relay's loopback forwarding (D9, "The relay on localhost"). That forwarding needs no
-registration and sends the browser straight back to the person's own machine.
+**Organization mode only.** Desktop (local) mode is deprecated in 7 and removed in 8 (D11), so it
+gets no built-in apps.
 
-**Which apps.** `oauth_apps.LOCAL_VIA_RELAY: frozenset[str] = frozenset({"slack"})` lists the
-built-in keys whose local-mode flow goes through the relay. If another provider also refuses an
-`http` redirect when distributing (mb1 checks Miro and Atlassian), adding its key there is the
-whole change. A workspace's own Slack app in the bundle is unchanged: it stays an internal app,
-with its own `http` loopback redirect.
+- Built-in apps serve organization servers and single-user installs (D9), always through the
+  relay. Desktop installs keep working exactly as in 6.x: a provider is available only when the
+  bundle carries the organization's own app.
+- **Five apps, all on the relay.** Every built-in app has only `https://oauth.privacyfence.eu/...`
+  redirects. Slack, Miro and Atlassian all refuse to distribute an app that has an `http` redirect,
+  so this is what lets their apps be distributed. Google needs only a Web client.
+- **Desktop installers ship no built-in credentials (SEC-13).** `build_dmg.sh`, `build_deb.sh` and
+  `build_installer.ps1` do not call `scripts/builtin_apps.py write`. The org image and the PyPI
+  wheel do, because they run servers.
+- **The deprecation notice says what desktop users miss (D11).** `LOCAL_MODE_DEPRECATION` gains
+  the sentence: `PrivacyFence's built-in sign-in for Google, Slack, Salesforce, Atlassian and Miro
+  works only in organization mode and the Docker image.`
+- **Tests.** In local mode, `credentials_source` never returns `"builtin"`, even when
+  `builtin_app` returns a value.
+- **The live-check runner (D17).** It still runs local-mode flows with the QA bundle's own apps,
+  because the built-in apps have no loopback redirect. Its tokens are copied from the old runner,
+  not re-minted. The built-in apps are exercised on the QA org server at `runner.privacyfence.eu`
+  (ma2, ma8).
+- **What this replaces.** It reverts the earlier idea of sending desktop Slack sign-ins through the
+  relay. There is no `LOCAL_VIA_RELAY`, no `relay_grant` in `oauth_loopback`, and no phase for it.
 
-**Effective config (D3).** In local mode, a built-in section whose key is in `LOCAL_VIA_RELAY`
-also gets `"relay": True`. In org mode nothing changes.
+**The Slack Marketplace listing (manual step ma9).**
 
-**The loopback flow (`oauth_loopback.run_browser_oauth`).** It gains a keyword argument,
-`relay_grant: str | None = None`. With a grant:
+- **The limit.** A distributed Slack app that is not in the Slack Marketplace gets 1 request per
+  minute and 15 messages per call on `conversations.history` and `conversations.replies`
+  (`docs/slack-setup.md:28-33`). Until PrivacyFence is listed, every server using the built-in
+  Slack app gets slow, truncated channel and thread reads.
+- **The listing.** It needs:
+  - the short and long descriptions;
+  - icons and screenshots;
+  - a landing page (`https://privacyfence.eu/connectors/slack/`);
+  - the privacy policy;
+  - a support contact;
+  - Slack's review.
 
-- The local server binds `127.0.0.1:<port>` as today, and accepts only the path
-  `/oauth/callback/<grant>`, the path the Worker forwards a loopback host to.
-- The `redirect_uri` sent to the provider, and to its token exchange, is
-  `oauth_apps.relay_redirect_uri(grant)`.
-- `state` is `f"127.0.0.1:{port}~{secrets.token_urlsafe(32)}"` (the D5 format). The handler
-  compares the whole value.
-- Everything else is unchanged: the PKCE pair (Slack ignores it), the timeout, the printed URL and
-  the error pages.
-
-**Slack.**
-
-- `slack_client.authorize_interactive` gains `via_relay: bool = False` and passes
-  `relay_grant="slack"` when it is set.
-- `daemon_main.run_slack_oauth` (`:1893`) and the Settings connect flow
-  (`settings_controller.py`, the Slack branch of `authenticate_connector`) pass
-  `via_relay=oauth_apps.uses_relay(section)`.
-- The QA minting script (D17) goes through `--slack-oauth`, so it needs no change.
-
-**What follows.**
-
-- **The relay must be up.** A desktop install's built-in Slack sign-in depends on the relay. When
-  the relay is down, the browser shows the Worker's error page or a connection error, and
-  PrivacyFence times out with its usual message. Existing Slack tokens keep working, because
-  Slack never refreshes (D0).
-- **No PKCE.** The Slack code passes through `oauth.privacyfence.eu` without PKCE, as it does for
-  org servers (SEC-05). The Admin page's Slack line from SEC-05 now shows in local mode too:
-  `service_rows`' `relay` is `app_source == "builtin" and (mode == "org" or key in
-  LOCAL_VIA_RELAY)`.
-- **Privacy and docs.**
-  - The privacy page's relay section (D16 item 3) says the relay is also used by desktop installs
-    signing in to Slack with the built-in app.
-  - `slack-setup.md` gains the same sentence, and keeps the loopback redirect for an
-    organization's own internal app.
-- **The guide (mb1).** The built-in Slack app is registered with the one `https` redirect URL.
-  Step ma1 (desktop sign-in) needs the relay deployed in ma0.
-- **Tests (p5b).**
-  - With `relay_grant`, the redirect URI is the relay's.
-  - The state carries `127.0.0.1:<port>~`.
-  - A callback on `/callback` is refused with 404, while one on `/oauth/callback/slack` with the
-    right state completes.
-  - `authorize_interactive(via_relay=True)` passes the grant.
-  - The local effective config marks built-in Slack, and not a bundle Slack app.
-  - `run_slack_oauth` follows the marker.
+  Slack's current requirements decide when it can be submitted, such as a minimum number of active
+  installs. ma9 checks them.
+- **Until it is listed:**
+  - **Admin page.** The built-in Slack row's status line adds `Slack limits channel and thread
+    reads for apps outside the Slack Marketplace until PrivacyFence is listed. Your own internal
+    Slack app avoids it.`
+  - **The flag.** The line is driven by `oauth_apps.SLACK_MARKETPLACE_LISTED: bool = False`. A
+    one-line PR flips it after approval, and the next release drops the line.
+  - **Docs.** `slack-setup.md` and the 7.0 release notes say the same.
 
 ## ADRs
 
 - **0250** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
-  ship in every distribution, baked in from CI secrets by `scripts/builtin_apps.py`. Relates to
-  0040: same mechanism, new apps; 0040 gets no status line.
+  ship in the server distributions (the org image and the PyPI wheel), baked in from CI secrets by
+  `scripts/builtin_apps.py`. They serve organization mode only, always through the relay; desktop
+  mode, deprecated in 7, gets none (D19). Relates to 0040: same mechanism, new apps; 0040 gets no
+  status line.
 - **0251** — `org_config.json` holds only the startup settings (`mode`, `server`, `idp`) and app
   credentials, stays signed, and a provider it does not carry uses the built-in app. Amends 0196
   (which services are offered is no longer read from the bundle) and 0016 (the signature no longer
@@ -2351,8 +2322,7 @@ also gets `"relay": True`. In org mode nothing changes.
   `oauth.privacyfence.eu`. It is deployed from `main` on its own track, never by a release tag,
   and its contract only grows. It forwards only to hosts that proved control of their domain, keeps no
   logs, shows registrations only to maintainers, and maintainers can revoke a host. It runs in the
-  existing Cloudflare account, with required reviewers on deploys. Desktop installs use it for the
-  built-in Slack app, which Slack allows only `https` redirects for (D19). It forwards to a loopback
+  existing Cloudflare account, with required reviewers on deploys. It forwards to a loopback
   host without registration. It is offered as is, under the published relay terms, with no
   warranty and liability limited as far as the law allows (D16). Relates to 0011, 0186.
 - **0255** — `mode` and the server address may come from environment variables. Organization mode
@@ -2392,30 +2362,40 @@ also gets `"relay": True`. In org mode nothing changes.
 Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 
 - **Before:**
-  - (mb1) Register the seven PrivacyFence-owned apps and store their 14 values as repository
-    secrets.
+  - (mb1) Register the five PrivacyFence-owned apps, each with only its relay redirect, and store
+    their 10 values as repository secrets.
   - (mb2) Create the Cloudflare token and the relay Worker's GitHub environment.
   - (mb4) Build the new live-check runner, `runner.privacyfence.eu` (D17): Hetzner, Tailscale,
     the Cloudflare record and origin certificate, the `privacyfence-live` runner group and the
     runner itself.
 - **After:**
-  - (ma1) Sign in with the built-in apps on a desktop build.
+  - (ma1) Check that a desktop build with an own-app bundle still connects as in 6.x, and offers no
+    built-in app.
   - (ma2) Deploy the relay from the branch and connect through it from an org server.
   - (ma3) Upgrade an org server with an old-style bundle, then use the Admin page and check that
     Settings looks the same for an admin and a normal user.
   - (ma4) Run the branch's Docker image in single-user mode: setup code, passkey, a connector
     through the relay, and an MCP client signing in. Check that a desktop install shows the
     deprecation notices.
-  - (ma6) Re-mint the QA tokens with the built-in apps, install them on the new runner, and
-    start the QA org server there. ma2 uses that server.
+  - (ma6) Copy the QA tokens and bundle from the old runner to the new one, and start the QA org
+    server there. ma2 uses that server.
   - (ma8) After the merge, record the demo video on a build of `main` and submit the built-in Google
     app for verification, with the scope justifications from the guide.
+  - (ma9) After the merge, submit the built-in Slack app to the Slack Marketplace (D19), once Slack's
+    requirements are met.
   - (ma7) After the merge, run the live check on `main` on the new runner, then retire the old
     runner and wipe its QA state.
   - (ma5) After tagging 7.0.0, run the follow-up website session from the guide; have the relay
     terms reviewed by a lawyer.
 
 ## Risks and open questions
+
+- **The built-in Slack app is rate-limited until it is in the Slack Marketplace.** Channel history
+  and thread reads drop to 1 request per minute and 15 messages per call (D19). Slack's review takes
+  time and may need a minimum number of active installs first. Until then, the Admin page and the
+  docs recommend a workspace's own internal Slack app.
+- **Desktop users get no built-in apps.** That is deliberate: desktop mode ends in 8 (D19). The
+  deprecation notice says the built-in sign-in is one more reason to move.
 
 - **Automatic accounts are unit-tested only.** No manual step runs a real Peek or Grist
   provisioner. The composed section goes through main's unchanged `from_org_config` validation,
@@ -2483,8 +2463,8 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   `worker_model_reason`).
 
 - **Fresh org servers start with built-in services off.** Relay registration starts only once an
-  admin offers a built-in service. Single-user mode and a desktop install
-  start with them on.
+  admin offers a built-in service. Single-user mode starts with them on; a desktop install has
+  none (D19).
 - **A bundle that adds a provider later** does not offer it by itself after the import. An admin
   switches it on, and the docs say so.
 - **Desktop installs lose bundle enforcement of the offered services.** An IT-distributed bundle
@@ -2521,9 +2501,9 @@ manual_steps_artifact: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 manual_steps_source: docs/builtin-oauth-apps-plan-manual-steps.html
 manual_before:
 - id: mb1-register-builtin-apps
-  title: Register the seven PrivacyFence-owned OAuth apps and store their credentials as repository secrets
-  why: p1 bakes them into every build (and its dispatched build.yml check looks for them); ma1 and ma2 sign in with them
-  done_when: Settings → Secrets and variables → Actions lists the 14 repository secrets PF_APP_GOOGLE_DESKTOP_CLIENT_ID/_SECRET, PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_LOCAL_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET
+  title: Register the five PrivacyFence-owned OAuth apps (Google Web client, Slack, Salesforce, Atlassian, Miro), each with only its oauth.privacyfence.eu redirect, distribute them, and store their credentials as repository secrets
+  why: p1 bakes them into the org image and the PyPI wheel (and its dispatched build.yml check looks for them); ma2 and ma4 sign in with them
+  done_when: Settings → Secrets and variables → Actions lists the 10 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, and the Slack, Atlassian and Miro apps are set to public distribution
 - id: mb2-relay-worker-cloudflare
   title: Create the Cloudflare API token and the oauth-relay-worker GitHub environment for the relay Worker
   why: the relay's deploy workflow (p11) uses them once the PR reaches main, and ma2 deploys from the branch by hand with the same token
@@ -2536,9 +2516,9 @@ manual_after:
 - id: ma0-relay-first-deploy
   title: Deploy the relay Worker for the first time from the feature branch, set its revoke token, and run the runbook's smoke tests
   why: the deploy workflow deploys only main, and ma2 and ma4 need the real relay at oauth.privacyfence.eu before the PR merges
-- id: ma1-desktop-builtin-signin
-  title: Install a desktop build of the feature branch (from a dispatched build.yml run) with no organization bundle, and sign in to Gmail, Slack, Salesforce, Jira and Miro with the built-in apps
-  why: real provider consent screens and loopback redirects cannot run in CI
+- id: ma1-desktop-unchanged
+  title: Install a desktop build of the feature branch with an own-app bundle, connect Gmail and Slack as in 6.x, and check that without a bundle no built-in app is offered
+  why: D19 keeps desktop mode on own apps only; a real install with real consent screens is the only check that nothing regressed
 - id: ma2-org-relay-signin
   title: On a test org server whose bundle has only mode/server/idp, offer the built-in services, register with the relay (deployed in ma0) and connect Gmail, Slack, Salesforce, Jira and Miro through it
   why: the relay round trip needs a public domain, the real Worker and real providers; the deploy workflow only deploys main
@@ -2548,9 +2528,12 @@ manual_after:
 - id: ma4-docker-single-user-and-deprecation
   title: Run the branch's Docker image in single-user mode (setup code, passkey, a connector through the relay, an MCP client), and check a desktop install's deprecation notices
   why: single-user mode's browser ceremonies, the real relay and a real MCP client cannot run in CI
-- id: ma6-live-runner-builtin-tokens
-  title: Mint built-in-app tokens for the QA accounts from the feature branch and install them on runner.privacyfence.eu; deploy the branch's image as the QA org server there (ma2 uses it)
-  why: token minting needs real consent screens in a browser, and the runner group admits only main's workflows, so nothing in CI can do it before the merge
+- id: ma6-live-runner-state-and-qa-server
+  title: Copy the QA tokens and the QA bundle (as org/org_bundle.json) from the old runner to runner.privacyfence.eu, and deploy the branch's image as the QA org server there (ma2 uses it)
+  why: the runner group admits only main's workflows, so the new runner first runs after the merge; its state and the QA server must be in place by then
+- id: ma9-slack-marketplace
+  title: After the merge, submit the built-in Slack app to the Slack Marketplace with the listing texts in the guide, once Slack's submission requirements are met; after approval, flip oauth_apps.SLACK_MARKETPLACE_LISTED in a one-line PR
+  why: a distributed Slack app outside the Marketplace is limited to 1 request per minute on channel history and thread reads (D19); the listing needs a released app and Slack's review
 - id: ma7-live-runner-cutover
   title: 'After the merge, dispatch connector-live-check on main, confirm it ran on runner-privacyfence-eu with every connector green and relay: up, then decommission the old privacyfence-test runner, its group and its QA state'
   why: the cutover happens only when main's workflows carry the new label; the old host holds live tokens until it is wiped
@@ -2644,30 +2627,28 @@ phases:
   - tests/unit/test_app_credentials.py
   - .gitignore
   - MANIFEST.in
-  - scripts/build_dmg.sh
-  - scripts/build_deb.sh
-  - scripts/build_installer.ps1
   - .github/workflows/build.yml
   - .github/workflows/publish-pypi.yml
   brief: |-
     Read the plan's "Design → D1" section first; every name, env var, message and module format is there.
-    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_desktop", "google_web", "slack", "salesforce", "atlassian_local", "atlassian_relay", "miro"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0250); ASCII only.
+    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_web", "slack", "salesforce", "atlassian_relay", "miro"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0250); ASCII only.
     2. Add `src/privacyfence/_builtin_apps.py` to .gitignore directly below the `_telegram_credentials.py` line, and `include src/privacyfence/_builtin_apps.py` to MANIFEST.in directly below line 6, extending the comment above it to name both generated modules.
     3. In src/privacyfence/app_credentials.py add BUILTIN_APP_KEYS and builtin_app(key) per D1 (a literal `from . import _builtin_apps` with the same `# type: ignore[attr-defined]` comment the Telegram import carries; the PRIVACYFENCE_BUILTIN_APPS JSON-file fallback; one logger.warning naming only the env var on a bad file). Extend the module docstring by one paragraph naming ADR 0250.
-    4. Call the generator next to every Telegram generator call: scripts/build_dmg.sh (after line 109: `"$PYTHON" scripts/builtin_apps.py write`), scripts/build_deb.sh (after line 95), scripts/build_installer.ps1 (after lines 94-95, followed by `if ($LASTEXITCODE -ne 0) { throw "Writing built-in app credentials failed" }`).
-    5. .github/workflows/build.yml: add the 14 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries to the step-level `env:` of the `build` job's "Build .app, .pkg, .mcpb and DMG" step, the `build-windows` "Build installer" step and the `build-deb` "Build .deb" step. In `build-org-image`, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 14 env entries, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (same REQUIRE logic, `python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`).
+    4. Do not call the generator from the desktop installers (scripts/build_dmg.sh, build_deb.sh, build_installer.ps1): desktop mode gets no built-in apps (D19).
+    5. .github/workflows/build.yml: in `build-org-image` only, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 10 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries in that step's env only, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (same REQUIRE logic, `python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`). The desktop build jobs get no PF_APP_ entry.
     6. .github/workflows/publish-pypi.yml `build` job: the same two steps next to the Telegram ones, with check-dist over `dist/*.whl dist/*.tar.gz`. The secrets go only to the write step's env, never to the job.
-    7. Tests. tests/unit/test_builtin_apps_script.py mirrors every test in tests/unit/test_telegram_credentials.py: it generates an importable module whose APPS equals the input; a value with quotes and backslashes stays inert (ast.literal_eval of the right-hand side equals the input); one-of-two set warns and skips; none set deletes a stale module; a newline in a value returns 2 and writes nothing; output is ASCII; check-dist pass, require-fail, warn, no files and unknown archive; main dispatch; git-ignored but packaged; build_dmg.sh, build_deb.sh, build_installer.ps1, build.yml and publish-pypi.yml call `scripts/builtin_apps.py write`, build.yml and publish-pypi.yml call `scripts/builtin_apps.py check-dist`, and none contains `APPS = `. tests/unit/test_app_credentials.py: builtin_app returns the generated module's entry (monkeypatch sys.modules["privacyfence._builtin_apps"]), returns a copy, falls back to the JSON file, returns None and warns once for a missing or malformed file without logging its content; and BUILTIN_APP_KEYS order.
+    7. Tests. tests/unit/test_builtin_apps_script.py mirrors every test in tests/unit/test_telegram_credentials.py: it generates an importable module whose APPS equals the input; a value with quotes and backslashes stays inert (ast.literal_eval of the right-hand side equals the input); one-of-two set warns and skips; none set deletes a stale module; a newline in a value returns 2 and writes nothing; output is ASCII; check-dist pass, require-fail, warn, no files and unknown archive; main dispatch; git-ignored but packaged; build.yml's build-org-image job and publish-pypi.yml call `scripts/builtin_apps.py write`, while build_dmg.sh, build_deb.sh, build_installer.ps1 and build.yml's desktop jobs contain neither `builtin_apps.py` nor `PF_APP_`, build.yml and publish-pypi.yml call `scripts/builtin_apps.py check-dist`, and none contains `APPS = `. tests/unit/test_app_credentials.py: builtin_app returns the generated module's entry (monkeypatch sys.modules["privacyfence._builtin_apps"]), returns a copy, falls back to the JSON file, returns None and warns once for a missing or malformed file without logging its content; and BUILTIN_APP_KEYS order.
     8. Run ruff check . and python3 -m pytest tests/unit/test_builtin_apps_script.py tests/unit/test_app_credentials.py tests/unit/test_telegram_credentials.py tests/unit/test_org_image_workflows.py -q.
-    9. After pushing the phase branch, dispatch build.yml on it (it is in ci.dispatchable; mb1's secrets are in place by now). In the run, the "Build .deb" step's log and the build-org-image "Write built-in app credentials" step's log must each show `built-in app google_desktop: included`. If they show `not set`, check the env wiring of step 5; if the secrets themselves are missing, stop with status=blocked naming mb1.
+    9. After pushing the phase branch, dispatch build.yml on it (it is in ci.dispatchable; mb1's secrets are in place by now). In the run, the build-org-image "Write built-in app credentials" step's log must show `built-in app <key>: included` for all five keys. If they show `not set`, check the env wiring of step 5; if the secrets themselves are missing, stop with status=blocked naming mb1.
     Stop condition: if `git grep -n "_telegram_credentials" setup.py` shows that setup.py handles the Telegram module, mirror it for _builtin_apps; if the Telegram module reaches the wheel by a mechanism you cannot mirror, stop with status=blocked.
 
-    Also apply D15 SEC-13 (desktop installers): add `--exclude KEY` to scripts/builtin_apps.py write, and pass `--exclude google_web` in build_dmg.sh, build_deb.sh and build_installer.ps1, with a test that the excluded key is absent from the module and that those three scripts pass it.
+    Also apply D15 SEC-13 / D19: the desktop installers ship no built-in app module; the test in step 7 pins it.
   acceptance:
   - python3 -m pytest tests/unit/test_builtin_apps_script.py tests/unit/test_app_credentials.py tests/unit/test_telegram_credentials.py tests/unit/test_org_image_workflows.py -q passes
-  - grep -c "scripts/builtin_apps.py write" .github/workflows/build.yml .github/workflows/publish-pypi.yml scripts/build_dmg.sh scripts/build_deb.sh scripts/build_installer.ps1 reports at least 1 for each file
+  - grep -c "scripts/builtin_apps.py write" .github/workflows/build.yml .github/workflows/publish-pypi.yml reports at least 1 for each file
+  - grep -n "builtin_apps.py" scripts/build_dmg.sh scripts/build_deb.sh scripts/build_installer.ps1 finds nothing
   - grep -n "src/privacyfence/_builtin_apps.py" .gitignore MANIFEST.in matches in both files
-  - 'the dispatched build.yml run''s "Build .deb" log contains "built-in app google_desktop: included"'
+  - 'the dispatched build.yml run''s build-org-image "Write built-in app credentials" log contains "built-in app google_web: included"'
   - ruff check . passes
 - id: p2-admin-config-store
   title: 'The admin config file: schema, load/save and the one-time import from a bundle'
@@ -2693,7 +2674,7 @@ phases:
        - Normalization fills a missing service and a missing key.
        - The saved file has mode 0o600 on POSIX; skip on Windows the way the existing secure_files tests do.
        - import_from_bundle:
-         - an empty bundle in local mode, and in org single-user mode, offers google, slack, salesforce, atlassian, miro and telegram;
+         - an empty bundle in org single-user mode offers google, slack, salesforce, atlassian, miro and telegram; in local mode it offers only telegram (D19);
          - an empty bundle on a multi-user org server offers none;
          - grist and peek are never offered from an empty bundle;
          - a bundle with only slack and peek sections offers exactly those two and copies peek.base_url;
@@ -2734,7 +2715,7 @@ phases:
     3. tests/unit/test_oauth_apps.py:
        - Legacy keys are dropped: every LEGACY_BUNDLE_KEYS key, atlassian.assets/assets_workspace_id and the API-key grist.server_url are absent from the result even when present in the bundle.
        - A withdrawn service's section is removed even when the bundle carries its credentials, and a service missing from admin["services"] counts as not offered.
-       - Parametrized over google, slack, salesforce and miro × local and org × (bundle credentials, built-in present, built-in absent): the exact section, with relay True only for built-in in org mode; google carries auth_uri/token_uri; salesforce built-in uses consumer_key/consumer_secret.
+       - Parametrized over google, slack, salesforce and miro × local and org × (bundle credentials, built-in present, built-in absent): the exact section, with relay True for every built-in section; in local mode a present built-in gives no section and credentials_source "none" (D19); google carries auth_uri/token_uri; salesforce built-in uses consumer_key/consumer_secret.
        - atlassian combines credentials with the admin assets values, and has no section without credentials.
        - telegram gets {"enabled": True} only when telegram_app_credentials() is not None.
        - grist: a bundle OAuth app beats the admin server_url; the admin server_url alone; local with neither gives {"enabled": True}; org with neither gives no section.
@@ -2793,12 +2774,12 @@ phases:
          - A malformed admin_config.json raises ConfigurationError.
        - test_daemon_main.py, a class TestEffectiveOrgConfigWiring:
          - log_org_config_bundle_hash receives the raw bundle (monkeypatch it).
-         - With no bundle and a built-in slack app, build_connectors(config, org_config) reaches the Slack branch.
-         - The CLI form uses google_desktop even when the bundle says mode org.
+         - With an org-mode bundle that has no slack section and a built-in slack app, build_connectors(config, org_config) reaches the Slack branch; in local mode it does not (D19).
+         - The CLI form never uses a built-in app, even when the bundle says mode org.
          - _start_org_web_server stores bundle and startup_admin on OrgAuth.
        - test_settings_controller.py:
          - The existing ORG_CONFIG_ENABLING_EVERY_CONNECTOR tests keep passing unchanged, because config_for imports from that bundle.
-         - With no bundle and a built-in miro app, the snapshot lists Miro and authenticate_connector("miro") succeeds past the org check.
+         - With no bundle and a built-in miro app, the local snapshot does not list Miro (desktop mode has no built-in apps, D19).
          - With miro withdrawn in admin_config.json, it is refused.
          - A bundle upload carrying "authz" over an imported config installs and sets the "are ignored" message.
        - Do not weaken any assertion.
@@ -2865,41 +2846,10 @@ phases:
   - python3 -m pytest tests/unit/web/test_routes_connect.py -q -k TestRelay passes and selects at least 6 tests
   - python3 -m pytest tests/unit/test_relay_client.py -q --cov=privacyfence.relay_client --cov-branch --cov-report=term-missing passes and reports 100%
   - ruff check . passes
-- id: p5b-desktop-slack-via-relay
-  title: Desktop Slack sign-in with the built-in app goes through the relay's loopback forwarding
-  depends_on:
-  - p5-org-relay-client
-  complexity: S
-  touches:
-  - src/privacyfence/oauth_apps.py
-  - tests/unit/test_oauth_apps.py
-  - src/privacyfence/oauth_loopback.py
-  - tests/unit/test_oauth_loopback.py
-  - src/privacyfence/slack_client.py
-  - tests/unit/test_slack_client.py
-  - src/privacyfence/daemon_main.py
-  - tests/unit/test_daemon_main.py
-  - src/privacyfence/settings_controller.py
-  - tests/unit/test_settings_controller.py
-  brief: |-
-    Read "Design → D19" and D9's "The relay on localhost". Every name and rule is there.
-    1. oauth_apps.py: add LOCAL_VIA_RELAY = frozenset({"slack"}); in local mode effective_org_config adds RELAY_MARKER: True to a built-in section whose key is in LOCAL_VIA_RELAY (never to a bundle section).
-    2. oauth_loopback.run_browser_oauth: add the keyword-only relay_grant per D19 (path /oauth/callback/<grant>, redirect_uri oauth_apps.relay_redirect_uri(grant) for both the authorize URL and the exchange, state "127.0.0.1:<port>~<token_urlsafe(32)>"). Import oauth_apps inside the function if a module-level import would cycle.
-    3. slack_client.authorize_interactive: add via_relay: bool = False, passing relay_grant="slack" when set.
-    4. daemon_main.run_slack_oauth (~:1893) and the Slack branch of settings_controller.authenticate_connector: pass via_relay=oauth_apps.uses_relay(section).
-    5. Tests per D19 "Tests (p5b)". In test_oauth_loopback.py drive the real local server with a request to the bound port, as the existing tests do.
-    6. Run ruff check ., python3 -m pytest tests/unit/test_oauth_loopback.py tests/unit/test_slack_client.py tests/unit/test_oauth_apps.py tests/unit/test_settings_controller.py tests/unit/test_daemon_main.py -q, then python3 -m pytest tests/unit -q.
-  acceptance:
-  - python3 -m pytest tests/unit/test_oauth_loopback.py tests/unit/test_slack_client.py tests/unit/test_oauth_apps.py -q passes
-  - grep -n "LOCAL_VIA_RELAY" src/privacyfence/oauth_apps.py matches
-  - grep -n "relay_grant" src/privacyfence/oauth_loopback.py src/privacyfence/slack_client.py matches in both
-  - python3 -m pytest tests/unit -q passes
-  - ruff check . passes
 - id: p6-admin-config-changes
   title: Validated admin config changes and the Admin page's service rows
   depends_on:
   - p3-effective-config
-  - p5b-desktop-slack-via-relay
   complexity: M
   touches:
   - src/privacyfence/admin_config.py
@@ -2932,7 +2882,7 @@ phases:
        - No row, summary or log record (caplog) contains a client_secret or a bearer-token env var's value. Set a fake env var to a sentinel and assert it never appears.
     3. Run ruff check ., python3 -m pytest tests/unit/test_admin_config.py -q and python3 -m mypy src/privacyfence/admin_config.py.
     Also apply D15: SEC-18 (the apply_change(action, params, *, bundle, mode, single_user) signature, replacing the payload keys), SEC-06 (bearer env dropped on a URL or kind change), SEC-04's org server-address rule, and SEC-20 (no control characters in rooms), each with tests.
-    Also apply D19: service_rows' relay is app_source == "builtin" and (mode == "org" or key in oauth_apps.LOCAL_VIA_RELAY), with a test for local Slack. Also apply D18 (Admin actions and rows): add set_auto_provisioning (org only, refused with D18's texts when unavailable); set_server_address is refused while the address comes from the environment or is an imported locked address (D18); service_rows gains options.address_source, options.locked and options.auto_provision {enabled, trust_unverified_email, available, reason, key_set} for peek and grist (key_set from org_mode.provisioning_key once p20c adds it; until then os.environ.get(key_env) is acceptable and p20c switches it). Never put the key in a row. Test each.
+    Also apply D19: the built-in Slack row adds the Slack Marketplace line while oauth_apps.SLACK_MARKETPLACE_LISTED is False (define it in oauth_apps.py), with a test. Also apply D18 (Admin actions and rows): add set_auto_provisioning (org only, refused with D18's texts when unavailable); set_server_address is refused while the address comes from the environment or is an imported locked address (D18); service_rows gains options.address_source, options.locked and options.auto_provision {enabled, trust_unverified_email, available, reason, key_set} for peek and grist (key_set from org_mode.provisioning_key once p20c adds it; until then os.environ.get(key_env) is acceptable and p20c switches it). Never put the key in a row. Test each.
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/admin_config.py passes
@@ -3840,7 +3790,7 @@ phases:
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
     8. Run the docs tests below and ruff check ..
-    Also apply D19 (slack-setup.md: a desktop install's built-in Slack sign-in passes through oauth.privacyfence.eu because Slack allows only https redirects for a distributed app; an organization's own internal app keeps its loopback redirect). Also apply D18 (user docs): peek-setup.md and grist-setup.md describe automatic accounts as "set the address variables and the key on the server, then turn them on under Admin → Services", and the manual address as either the Admin page or the environment variable; the CHANGELOG notes under Changed, as breaking, that 6.11's --peek-auto-provision/--grist-auto-provision bundle flags became an Admin-page switch with the addresses from the environment, and that upgraded 6.11 servers keep their automatic accounts with the old addresses locked; it also notes that the built-in Google app shows an unverified-app screen and a 100-user cap until Google verifies it, and points organizations to their own Google app; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
+    Also apply D19 (docs): the built-in apps work only in organization mode and the Docker image; slack-setup.md explains the Slack Marketplace rate limit and recommends a workspace's own internal app until PrivacyFence is listed; the CHANGELOG and moving-to-organization-mode.md name the built-in sign-in as available only outside desktop mode. Also apply D18 (user docs): peek-setup.md and grist-setup.md describe automatic accounts as "set the address variables and the key on the server, then turn them on under Admin → Services", and the manual address as either the Admin page or the environment variable; the CHANGELOG notes under Changed, as breaking, that 6.11's --peek-auto-provision/--grist-auto-provision bundle flags became an Admin-page switch with the addresses from the environment, and that upgraded 6.11 servers keep their automatic accounts with the old addresses locked; it also notes that the built-in Google app shows an unverified-app screen and a 100-user cap until Google verifies it, and points organizations to their own Google app; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - grep -n "Admin page" docs/connecting-a-service.md docs/slack-setup.md docs/grist-setup.md matches in each
@@ -3884,7 +3834,7 @@ phases:
   - grep -rln "there are none" website --include=*.html --exclude-dir=_docs finds nothing
   - grep -n "PrivacyFence 8 removes it" website/download/index.html website/faq/index.html matches in both
 - id: p21-live-runner
-  title: Live checks on the new runner (runner.privacyfence.eu) with the built-in apps
+  title: Live checks on the new runner (runner.privacyfence.eu), with the bundle's new file name and a relay health check
   depends_on:
   - p13a-docs-operator
   - p13b-docs-user
@@ -3893,9 +3843,6 @@ phases:
   - .github/workflows/connector-live-check.yml
   - .github/workflows/qa-record-fixture.yml
   - scripts/qa_fixture_recorder.py
-  - scripts/qa_authenticate_connectors.py
-  - tests/unit/test_qa_fixture_recorder.py
-  - tests/unit/test_qa_authenticate_connectors.py
   - tests/unit/test_live_check_workflows.py
   - docs/connector-qa.md
   - docs/testing-policy.md
@@ -3909,26 +3856,23 @@ phases:
   - tests/fixtures/live/README.md
   - CHANGELOG.md
   brief: |-
-    Read "Design → D17" and ADR 0261 (written in p12). The runner itself is set up by hand (manual mb4); this phase changes only the repository.
-    1. scripts/qa_fixture_recorder.py: add _qa_org_config() per D17 (effective_org_config over load_org_config() and admin_config.config_for(..., mode="local", single_user=False), mode="local") and use it at every daemon_main.load_org_config() call (~:864, :945, :1283, :1323, :1527, :1790, :1880, :1937, :1984, :2042, :2093, :2171). Update the module docstring's runner name and label (:4-6) and the label text near :2528-2538 and :2601.
-    2. scripts/qa_authenticate_connectors.py: add --builtin-apps-json PATH (sets PRIVACYFENCE_BUILTIN_APPS in the env passed to every child subprocess.run; refuses a path inside the repository with exit 2 and "Keep the built-in apps file outside the repository."). Update the docstring (:12-14) for built-in apps and the optional bundle.
-    3. Both workflows, per D17:
+    Read "Design → D17" and D19 (the runner keeps the QA bundle's own apps), and ADR 0261 (written in p12). The runner itself is set up by hand (manual mb4); this phase changes only the repository. The QA scripts keep reading the bundle through daemon_main.load_org_config(); do not add built-in app credentials to the runner.
+    1. Both workflows, per D17:
        - runs-on: [self-hosted, privacyfence-live]; the header comments name runner.privacyfence.eu and the privacyfence-live group.
-       - A "Write built-in app credentials" step before the QA-state copy-in: `python3 scripts/builtin_apps.py write --exclude google_web --exclude atlassian_relay`, with exactly the ten PF_APP_GOOGLE_DESKTOP_*, PF_APP_SLACK_*, PF_APP_SALESFORCE_*, PF_APP_ATLASSIAN_LOCAL_*, PF_APP_MIRO_* secrets in that step's env only.
-       - The copy-in requires credentials/ and tests/fixtures/qa_environment.yaml, copies org/org_bundle.json only if present, and no longer mentions org/org_config.json.
-       - A last step with if: always() runs `rm -f src/privacyfence/_builtin_apps.py`.
+       - The QA-state copy-in requires credentials/, org/org_bundle.json and tests/fixtures/qa_environment.yaml, and no longer mentions org/org_config.json.
        - connector-live-check.yml: the relay health step (continue-on-error) and its line in the job summary.
        - qa-record-fixture.yml's commit message (:247) names the privacyfence-live runner.
-    4. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; the builtin step's run line and its env keys are exactly the ten secrets; no PF_APP_ secret appears in workflow-level or job-level env; the cleanup step exists with if: always() and comes last in the runner job; no step references org/org_config.json; the refusal step of qa-record-fixture.yml is unchanged (it still checks refs/heads/main).
-    5. Tests for 1 and 2: _qa_org_config fills a provider absent from the bundle from a stubbed builtin_app and keeps a bundle section that is present; --builtin-apps-json passes the env var to the child and refuses an in-repo path.
-    6. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, minting with built-in apps, the optional bundle, the QA org server, the cutover and decommissioning), fix :574, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
-    7. CHANGELOG.md under ## [Unreleased]: one line that live checks moved to a new runner and test the built-in apps (contributor-facing).
-    8. Run ruff check ., python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_qa_authenticate_connectors.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
+    2. scripts/qa_fixture_recorder.py: only the runner name and label in the module docstring (:4-6) and the label text near :2528-2538 and :2601.
+    3. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; no step references org/org_config.json and the copy-in names org/org_bundle.json; no PF_APP_ variable appears anywhere in either file; the refusal step of qa-record-fixture.yml is unchanged (it still checks refs/heads/main).
+    4. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, the QA state copied from the old runner, the QA org server where the built-in apps are tested by hand, the cutover and decommissioning), fix :574, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
+    5. CHANGELOG.md under ## [Unreleased]: one contributor-facing line that the live checks moved to a new runner and also check the relay's health.
+    6. Run ruff check ., python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
   acceptance:
-  - python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_qa_authenticate_connectors.py -q passes
+  - python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py -q passes
   - grep -rn "privacyfence-test" .github/workflows .claude docs/connector-qa.md docs/testing-policy.md finds nothing
   - grep -c "privacyfence-live" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml reports at least 1 for each file
   - grep -n "org/org_config.json" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml finds nothing
+  - grep -n "PF_APP_" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml finds nothing
   - python3 -m pytest tests/unit -q passes
   - ruff check . passes
 - id: p14-retire-plan
