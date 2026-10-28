@@ -435,7 +435,7 @@ composed from the bundle, the admin config and the built-in apps.
   - that stores it in a new `OrgAuth` field, `bundle: dict[str, Any]`.
 
   The Admin dispatcher (D6) needs it to recompute the effective config.
-- The QA scripts (`scripts/qa_*.py`) keep reading the runner's own bundle and move to a new runner; see D17.
+- The QA recorder moves to organization mode and a new runner; see D17.
 
 ### D5. Org mode through the relay
 
@@ -2027,18 +2027,55 @@ reworking it in place.
   workflows, and the new one sits idle. Afterwards the old runner, its group and its QA state
   are removed.
 
-**What the live checks test.** The QA bundle's own apps, as today. The built-in apps have no
-loopback redirect, and desktop mode never uses them (D19), so the local-mode recorder cannot use
-them either. The built-in apps are exercised on the QA organization server below (ma2, ma8).
+**What the live checks test: organization mode and the built-in apps.** 8.x removes local mode
+(D11), so the runner is built on organization mode now and needs no change then. It also tests the
+apps most people use.
 
-- `scripts/qa_fixture_recorder.py` and `scripts/qa_authenticate_connectors.py` keep reading the
-  runner's bundle through `daemon_main.load_org_config()`. That bundle is now
-  `org/org_bundle.json`, adopted from `org_config.json` (p0).
-- The copy-in step in both workflows requires `credentials/`, `org/org_bundle.json` and
-  `tests/fixtures/qa_environment.yaml`, and no longer names `org/org_config.json`.
+- **One QA principal.** The recorder runs as the fixed principal `qa-live`. It enters
+  `principal.principal_scope(Principal(id="qa-live", ...))` once, in a new helper
+  `_qa_context()`. Every token path then resolves through `daemon_main._resolve_path` to
+  `<checkout>/users/qa-live/credentials/`, in the same file formats as today.
+- **Organization-mode configuration.** Each `daemon_main.load_org_config()` call in the recorder
+  (`:864`, `:945`, `:1283`, `:1323`, `:1527`, `:1790`, `:1880`, `:1937`, `:1984`, `:2042`,
+  `:2093`, `:2171`) is replaced by `_qa_org_config()`, which returns
+  `oauth_apps.effective_org_config({"mode": "org", **bundle}, QA_ADMIN, mode="org")`.
+  - `bundle` is `load_org_config()`, usually empty.
+  - `QA_ADMIN` offers every service in `admin_config.SERVICES`.
+  - The Google, Slack, Salesforce, Atlassian and Miro sections are therefore the built-in apps,
+    unless the runner's optional bundle carries an organization's own app to test.
+  - Peek's and Grist's addresses come from `PRIVACYFENCE_PEEK_BASE_URL=http://localhost:7700` and
+    `PRIVACYFENCE_GRIST_SERVER_URL=https://docs.getgrist.com` in the workflow env (D18).
+- **Built-in credentials on the runner.**
+  - Both workflows gain a step "Write built-in app credentials" before the recorder. It runs
+    `python3 scripts/builtin_apps.py write` with the ten `PF_APP_*` secrets in that step's `env:`
+    only.
+  - A last step, `if: always()`, deletes `src/privacyfence/_builtin_apps.py`, because the runner
+    is not ephemeral.
+  - Only the client ID and secret are used: refreshing a token needs no redirect.
+- **Minting the tokens on the QA org server (ma6).**
+  - `test@privacyfence.eu` signs in to `https://runner.privacyfence.eu` and connects Google
+    (all six), Slack, Salesforce, Atlassian and Miro on `/connect`, through the relay, with the
+    built-in apps.
+  - The maintainer copies that principal's `users/<id>/credentials/*` from the QA server's data
+    directory to the runner's `~/privacyfence/users/qa-live/credentials/`.
+  - The maintainer then deletes those files from the server's data directory, without
+    disconnecting, because a disconnect would revoke them. From then on only the runner refreshes
+    them, which matters for Atlassian's rotating refresh tokens.
+  - Telegram (`telegram.session`), Grist (`grist_token.json`, an API key) and Peek
+    (`peek_token.json` for the local QA Peek) are not OAuth. They are placed in the same folder by
+    hand, as today.
+- **Re-minting later** is the same procedure. `scripts/qa_authenticate_connectors.py` and its
+  loopback CLI flows are no longer used by the runner; 8.x can remove them with local mode.
+- **The copy-in step** in both workflows copies `~/privacyfence/users/qa-live/` into the
+  checkout's `users/qa-live/`, plus `tests/fixtures/qa_environment.yaml`, and an optional
+  `org/org_bundle.json`. The copy-back step (`if: always()`) returns
+  `users/qa-live/credentials/`. Neither names `credentials/` at the checkout root or
+  `org/org_config.json` any more.
 - `connector-live-check.yml` adds a step `curl -fsSI https://oauth.privacyfence.eu/health`
   (continue-on-error, reported in the summary as `relay: up` or `relay: down`). That gives a
   weekly external check of the relay.
+- **What is not live-tested any more.** Local-mode loopback sign-in, and own apps, unless the
+  optional bundle carries one. Both stay covered by unit tests, and desktop mode by ma1.
 
 **The QA organization server.** `https://runner.privacyfence.eu` serves a PrivacyFence
 organization server from `deploy/docker/`. Its only users are the maintainer and the QA Google
@@ -2071,7 +2108,7 @@ ma2's revocation test on the long-lived QA host, could not be undone.
   requirements and adds:
   - the Hetzner, Cloudflare and Tailscale setup;
   - the `pfrunner` and Docker separation;
-  - the QA state copied over from the old runner;
+  - the organization-mode QA principal `qa-live`, and minting its tokens on the QA org server;
   - the QA org server;
   - the cutover and decommissioning.
 - It fixes the stale "not registered to this repository" line (`:574`).
@@ -2300,10 +2337,9 @@ gets no built-in apps.
   works only in organization mode and the Docker image.`
 - **Tests.** In local mode, `credentials_source` never returns `"builtin"`, even when
   `builtin_app` returns a value.
-- **The live-check runner (D17).** It still runs local-mode flows with the QA bundle's own apps,
-  because the built-in apps have no loopback redirect. Its tokens are copied from the old runner,
-  not re-minted. The built-in apps are exercised on the QA org server at `runner.privacyfence.eu`
-  (ma2, ma8).
+- **The live-check runner (D17).** It runs in organization mode as the principal `qa-live`, with the
+  built-in apps. Its tokens are minted on the QA org server at `runner.privacyfence.eu` and moved
+  to the runner, so nothing changes when 8.x removes local mode.
 - **What this replaces.** It reverts the earlier idea of sending desktop Slack sign-ins through the
   relay. There is no `LOCAL_VIA_RELAY`, no `relay_grant` in `oauth_loopback`, and no phase for it.
 
@@ -2395,8 +2431,9 @@ gets no built-in apps.
   `idp.admin_emails`), alongside the group claim. Relates to 0011.
 - **0261** — Live connector checks run on a dedicated runner, `runner.privacyfence.eu`
   (Hetzner, behind the Cloudflare proxy, administered only over Tailscale), labelled
-  `privacyfence-live` in its own runner group. They test the built-in apps, and the runner's bundle
-  is optional. The host also serves a QA organization server for relay testing. Amends 0019 (the
+  `privacyfence-live` in its own runner group. They run in organization mode as the principal
+  `qa-live` and test the built-in apps, so 8.x needs no runner change; the runner's bundle is
+  optional. The host also serves a QA organization server for relay testing. Amends 0019 (the
   host) and 0181 (the group and label); relates to 0250, 0254.
 
 ## Manual steps
@@ -2419,8 +2456,9 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - (ma4) Run the branch's Docker image in single-user mode: setup code, passkey, a connector
     through the relay, and an MCP client signing in. Check that a desktop install shows the
     deprecation notices.
-  - (ma6) Copy the QA tokens and bundle from the old runner to the new one, and start the QA org
-    server there. ma2 uses that server.
+  - (ma6) Start the QA org server on the new runner host, sign in there as `test@privacyfence.eu`,
+    connect every service with the built-in apps, and move those tokens to the runner's `qa-live`
+    principal. ma2 uses that server.
   - (ma8) After the merge, record the demo video on a build of `main` and submit the built-in Google
     app for verification, with the scope justifications from the guide.
   - (ma9) After the merge, submit the built-in Slack app to the Slack Marketplace (D19), once Slack's
@@ -2571,7 +2609,7 @@ manual_after:
   title: Run the branch's Docker image in single-user mode (setup code, passkey, a connector through the relay, an MCP client), and check a desktop install's deprecation notices
   why: single-user mode's browser ceremonies, the real relay and a real MCP client cannot run in CI
 - id: ma6-live-runner-state-and-qa-server
-  title: Copy the QA tokens and the QA bundle (as org/org_bundle.json) from the old runner to runner.privacyfence.eu, and deploy the branch's image as the QA org server there (ma2 uses it)
+  title: Deploy the branch's image as the QA org server on runner.privacyfence.eu, sign in as test@privacyfence.eu, connect every service with the built-in apps, and move those tokens to the runner's qa-live principal (ma2 uses the server)
   why: the runner group admits only main's workflows, so the new runner first runs after the merge; its state and the QA server must be in place by then
 - id: ma9-slack-marketplace
   title: After the merge, submit the built-in Slack app to the Slack Marketplace with the listing texts in the guide, once Slack's submission requirements are met; after approval, flip oauth_apps.SLACK_MARKETPLACE_LISTED in a one-line PR
@@ -3876,7 +3914,7 @@ phases:
   - grep -rln "there are none" website --include=*.html --exclude-dir=_docs finds nothing
   - grep -n "PrivacyFence 8 removes it" website/download/index.html website/faq/index.html matches in both
 - id: p21-live-runner
-  title: Live checks on the new runner (runner.privacyfence.eu), with the bundle's new file name and a relay health check
+  title: Live checks in organization mode on the new runner (runner.privacyfence.eu), with the built-in apps and a relay health check
   depends_on:
   - p13a-docs-operator
   - p13b-docs-user
@@ -3885,6 +3923,7 @@ phases:
   - .github/workflows/connector-live-check.yml
   - .github/workflows/qa-record-fixture.yml
   - scripts/qa_fixture_recorder.py
+  - tests/unit/test_qa_fixture_recorder.py
   - tests/unit/test_live_check_workflows.py
   - docs/connector-qa.md
   - docs/testing-policy.md
@@ -3898,23 +3937,29 @@ phases:
   - tests/fixtures/live/README.md
   - CHANGELOG.md
   brief: |-
-    Read "Design → D17" and D19 (the runner keeps the QA bundle's own apps), and ADR 0261 (written in p12). The runner itself is set up by hand (manual mb4); this phase changes only the repository. The QA scripts keep reading the bundle through daemon_main.load_org_config(); do not add built-in app credentials to the runner.
-    1. Both workflows, per D17:
+    Read "Design → D17" ("What the live checks test: organization mode and the built-in apps"), D18's environment addresses, and ADR 0261 (written in p12). The runner itself is set up by hand (manual mb4, ma6); this phase changes only the repository.
+    1. scripts/qa_fixture_recorder.py:
+       - Add QA_PRINCIPAL_ID = "qa-live", QA_ADMIN (every admin_config.SERVICES entry offered), _qa_context() (enters principal.principal_scope for that principal once, before any connector is built) and _qa_org_config() per D17.
+       - Replace every daemon_main.load_org_config() call (~:864, :945, :1283, :1323, :1527, :1790, :1880, :1937, :1984, :2042, :2093, :2171) with _qa_org_config(); where a helper passes org_mode=False to peek_client.bundle_base_url or grist_auth.bundle_settings, pass org_mode=True.
+       - main() runs every mode inside _qa_context().
+       - Update the module docstring (:1-60): organization mode, the qa-live principal, the token folder users/qa-live/credentials/, minting on the QA org server; and the runner name and label (:4-6, ~:2528-2538, ~:2601).
+    2. Both workflows, per D17:
        - runs-on: [self-hosted, privacyfence-live]; the header comments name runner.privacyfence.eu and the privacyfence-live group.
-       - The QA-state copy-in requires credentials/, org/org_bundle.json and tests/fixtures/qa_environment.yaml, and no longer mentions org/org_config.json.
+       - Workflow-level env PRIVACYFENCE_PEEK_BASE_URL=http://localhost:7700 and PRIVACYFENCE_GRIST_SERVER_URL=https://docs.getgrist.com.
+       - A "Write built-in app credentials" step before the recorder: `python3 scripts/builtin_apps.py write` with exactly the ten PF_APP_* secrets in that step's env only; and a last step with if: always() running `rm -f src/privacyfence/_builtin_apps.py`.
+       - The copy-in copies ~/privacyfence/users/qa-live/ to the checkout's users/qa-live/, tests/fixtures/qa_environment.yaml, and org/org_bundle.json only if present; the copy-back (if: always()) returns users/qa-live/credentials/. Neither names a root-level credentials/ or org/org_config.json.
        - connector-live-check.yml: the relay health step (continue-on-error) and its line in the job summary.
        - qa-record-fixture.yml's commit message (:247) names the privacyfence-live runner.
-    2. scripts/qa_fixture_recorder.py: only the runner name and label in the module docstring (:4-6) and the label text near :2528-2538 and :2601.
-    3. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; no step references org/org_config.json and the copy-in names org/org_bundle.json; no PF_APP_ variable appears anywhere in either file; the refusal step of qa-record-fixture.yml is unchanged (it still checks refs/heads/main).
-    4. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, the QA state copied from the old runner, the QA org server where the built-in apps are tested by hand, the cutover and decommissioning), fix :574, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
-    5. CHANGELOG.md under ## [Unreleased]: one contributor-facing line that the live checks moved to a new runner and also check the relay's health.
-    6. Run ruff check ., python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
+    3. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; the builtin step's env keys are exactly the ten PF_APP_* secrets and no PF_APP_ secret appears in workflow-level or job-level env; the cleanup step has if: always() and comes last in the runner job; the copy steps name users/qa-live and no step names org/org_config.json or a root-level credentials/; the refusal step of qa-record-fixture.yml still checks refs/heads/main.
+    4. tests/unit/test_qa_fixture_recorder.py: _qa_org_config gives the built-in section for a provider the bundle lacks (stub app_credentials.builtin_app) and keeps a bundle section that is present; inside _qa_context, daemon_main._resolve_path(TOKEN_FILES["slack"]) resolves under users/qa-live/credentials/; the Peek and Grist sections take the environment addresses.
+    5. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, organization mode with the qa-live principal, minting on the QA org server and moving the tokens, the hand-placed Telegram/Grist/Peek files, the cutover and decommissioning), fix :574, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
+    6. CHANGELOG.md under ## [Unreleased]: one contributor-facing line that the live checks moved to a new runner, run in organization mode with the built-in apps, and check the relay's health.
+    7. Run ruff check ., python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
   acceptance:
   - python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py -q passes
+  - grep -n "qa-live" scripts/qa_fixture_recorder.py .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml matches in all three
   - grep -rn "privacyfence-test" .github/workflows .claude docs/connector-qa.md docs/testing-policy.md finds nothing
-  - grep -c "privacyfence-live" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml reports at least 1 for each file
   - grep -n "org/org_config.json" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml finds nothing
-  - grep -n "PF_APP_" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml finds nothing
   - python3 -m pytest tests/unit -q passes
   - ruff check . passes
 - id: p14-retire-plan

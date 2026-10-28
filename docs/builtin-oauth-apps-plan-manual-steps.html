@@ -203,7 +203,7 @@ PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE=/run/secrets/grist_provisioning_key</pr
     <h3>The new live-check runner: runner.privacyfence.eu</h3>
     <ul>
       <li><strong>A fresh host.</strong> A Hetzner Cloud server that does nothing but PrivacyFence's live checks. The weekly <code>connector-live-check</code> and <code>qa-record-fixture</code> move to it, under a new label and runner group, <code>privacyfence-live</code>. The old runner keeps serving <code>main</code> until the merge switches the label. Then you remove it.</li>
-      <li><strong>It tests the built-in apps.</strong> The QA tokens are re-minted with PrivacyFence's own apps, and the runner's bundle becomes optional. The workflows write the built-in credentials into the checkout from repository secrets, and delete them again at the end of each run.</li>
+      <li><strong>Organization mode, built-in apps.</strong> The live checks run in organization mode as one QA person, <code>qa-live</code>, so nothing changes when 8.0 removes desktop mode. Their tokens are minted on the QA org server with PrivacyFence's own apps (step 5), and the runner's bundle becomes optional. The workflows write the built-in credentials into the checkout from repository secrets, and delete them again at the end of each run.</li>
       <li><strong>Behind Cloudflare, administered over Tailscale.</strong> <code>runner.privacyfence.eu</code> is a proxied DNS record. The server's firewall accepts only HTTPS from Cloudflare. SSH is closed: you reach the box with Tailscale SSH.</li>
       <li><strong>Separation.</strong> The GitHub runner runs as <code>pfrunner</code>, which has no sudo and is not in the <code>docker</code> group. Peek and the QA org server are containers that cannot see its files.</li>
       <li><strong>A QA organization server.</strong> <code>https://runner.privacyfence.eu</code> serves a PrivacyFence org server signed in with the QA Google Workspace. It is the public host the relay test needs, and it stays for later manual QA.</li>
@@ -356,12 +356,12 @@ mkdir actions-runner &amp;&amp; cd actions-runner
 # paste the Download commands from the GitHub page here</pre>Then configure it, with the token from that page's <em>Configure</em> section:<pre>./config.sh --url https://github.com/privacyfence --token &lt;from the page&gt; \
   --runnergroup privacyfence-live --labels privacyfence-live \
   --name runner-privacyfence-eu --unattended</pre>Install it as a service, as root:<pre>ssh root@pf-runner 'cd /home/pfrunner/actions-runner &amp;&amp; ./svc.sh install pfrunner &amp;&amp; ./svc.sh start &amp;&amp; ./svc.sh status'</pre>The runner list should show <code>runner-privacyfence-eu</code> <strong>Idle</strong> in <code>privacyfence-live</code>. It stays idle until the merge.</div></li>
-      <li><label><input type="checkbox" id="mb4-13"></label><div><strong>QA state that does not change.</strong> Copy three things from the old runner, by way of your computer, then delete the local copies. They are <code>tests/fixtures/qa_environment.yaml</code>, <code>credentials/telegram.session</code> and <code>credentials/grist_token.json</code>. The Google, Slack, Salesforce, Atlassian and Miro tokens and the QA bundle follow in step 5, after you stop the old runner.<pre>ssh pfrunner@pf-runner 'mkdir -p -m 700 privacyfence/credentials privacyfence/tests/fixtures privacyfence/org'
+      <li><label><input type="checkbox" id="mb4-13"></label><div><strong>QA files that are not OAuth.</strong> The runner works in organization mode as the QA principal <code>qa-live</code>, so its files live in <code>~/privacyfence/users/qa-live/credentials/</code>. Copy three things from the old runner, by way of your computer, then delete the local copies: <code>tests/fixtures/qa_environment.yaml</code>, <code>credentials/telegram.session</code> and <code>credentials/grist_token.json</code>. The Google, Slack, Salesforce, Atlassian and Miro tokens are minted fresh in step 5.<pre>ssh pfrunner@pf-runner 'mkdir -p -m 700 privacyfence/users/qa-live/credentials privacyfence/tests/fixtures'
 scp qa_environment.yaml pfrunner@pf-runner:privacyfence/tests/fixtures/
-scp telegram.session grist_token.json pfrunner@pf-runner:privacyfence/credentials/
-ssh pfrunner@pf-runner 'chmod 600 privacyfence/credentials/*'</pre></div></li>
+scp telegram.session grist_token.json pfrunner@pf-runner:privacyfence/users/qa-live/credentials/
+ssh pfrunner@pf-runner 'chmod 600 privacyfence/users/qa-live/credentials/*'</pre></div></li>
       <li><label><input type="checkbox" id="mb4-14"></label><div><strong>Peek token.</strong> Open a tunnel to the new Peek, and sign in from your computer:<pre>ssh -N -L 7700:localhost:7700 root@pf-runner &amp;
-peek login --host http://localhost:7700</pre>Write <code>{"base_url": "http://localhost:7700", "token": "…"}</code> to <code>~pfrunner/privacyfence/credentials/peek_token.json</code> (mode 600), as <code>docs/connector-qa.md</code> describes.</div></li>
+peek login --host http://localhost:7700</pre>Write <code>{"base_url": "http://localhost:7700", "token": "…"}</code> to <code>~pfrunner/privacyfence/users/qa-live/credentials/peek_token.json</code> (mode 600), as <code>docs/connector-qa.md</code> describes.</div></li>
       <li><label><input type="checkbox" id="mb4-15"></label><div><strong>Clean up.</strong> Delete the auth key in Tailscale if it is still listed, and close the GitHub runner page.</div></li>
     </ol>
     <p class="done-when"><strong>Done when:</strong> the organization's runner list shows <code>runner-privacyfence-eu</code> online in <code>privacyfence-live</code>, <code>ssh root@pf-runner</code> works over Tailscale, <code>nc -vz -w 5 &lt;public IPv4&gt; 22</code> times out, and <code>curl -sI https://runner.privacyfence.eu</code> answers from Cloudflare (a 52x error is expected until the QA server runs in step 5).</p>
@@ -410,18 +410,10 @@ curl -s  'https://oauth.privacyfence.eu/callback/slack?state=unregistered.exampl
   </section>
 
   <section class="item" id="ma6">
-    <h3>5. Move the QA state to the new runner, and start the QA org server</h3>
+    <h3>5. Start the QA org server, and mint the runner's tokens on it</h3>
     <div class="meta"><span>ma6-live-runner-state-and-qa-server</span><span>about 1 hour</span></div>
     <p class="note">This needs the feature branch, with p21 done, and the runner from step 3. The runner group admits only <code>main</code>'s workflows, so the branch's live check first runs on the new runner after the merge (step 10). Here you prepare everything it needs.</p>
     <ol class="steps">
-      <li><label><input type="checkbox" id="ma6-1"></label><div><strong>Copy the QA tokens and bundle from the old runner.</strong> The live checks keep using the QA bundle's own apps: the built-in apps have no localhost redirect, so the runner's local-mode recorder cannot use them. Step 3 already copied the Telegram, Grist and Peek files. Copy the rest by way of your computer, then delete the local copies:<pre>scp '&lt;old runner&gt;:privacyfence/credentials/{token,drive_token,calendar_token,contacts_token,tasks_token,apps_script_token,slack_token,salesforce_token,atlassian_token,miro_token}.json' .
-scp '&lt;old runner&gt;:privacyfence/org/org_config.json' org_bundle.json
-scp token.json drive_token.json calendar_token.json contacts_token.json tasks_token.json \
-    apps_script_token.json slack_token.json salesforce_token.json atlassian_token.json \
-    miro_token.json pfrunner@pf-runner:privacyfence/credentials/
-scp org_bundle.json pfrunner@pf-runner:privacyfence/org/
-ssh pfrunner@pf-runner 'chmod 600 privacyfence/credentials/* privacyfence/org/org_bundle.json; ls privacyfence/credentials privacyfence/org'
-rm ./*token.json org_bundle.json</pre>The bundle goes in under its 7.x name, <code>org_bundle.json</code>. Stop the old runner's service first (<code>sudo ./svc.sh stop</code> in its runner directory), so Atlassian's rotating refresh token is not used on both hosts. Start it again only if you need to roll back before the merge.</div></li>
       <li><label><input type="checkbox" id="ma6-4"></label><div><strong>A sign-in app for the QA org server.</strong> In the QA Workspace's Google Cloud project, open <a href="https://console.cloud.google.com/auth/clients">Google Auth Platform → Clients → Create client</a>:<ul><li>Type: <strong>Web application</strong>, named <code>PrivacyFence QA server</code>.</li><li>Authorised redirect URIs: <code>https://runner.privacyfence.eu/oauth/idp/callback</code>, <code>https://runner.privacyfence.eu/oauth/idp/login-callback</code> and <code>https://runner.privacyfence.eu/oauth/stepup/callback</code>.</li><li>Audience: <strong>Internal</strong>.</li></ul>Keep the client secret in your password manager.</div></li>
       <li><label><input type="checkbox" id="ma6-5"></label><div><strong>QA org server files.</strong> On the host, as root:<pre>ssh root@pf-runner
 git clone --depth 1 -b feature/builtin-oauth-apps https://github.com/privacyfence/privacyfence /opt/pf-qa/src
@@ -458,8 +450,19 @@ PRIVACYFENCE_ADMIN_EMAILS=&lt;your QA Workspace address&gt;
 PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2
 EOF</pre>Turn on the <code>idp_client_secret</code> secret, following the commented <code>secrets:</code> example in the branch's <code>compose.yaml</code> (point its <code>file:</code> at <code>./idp_client_secret</code>). Then run <code>docker compose up -d</code>.</div></li>
       <li><label><input type="checkbox" id="ma6-7"></label><div><strong>Check.</strong> <code>https://runner.privacyfence.eu/login</code> should offer Google sign-in. Sign in with your QA admin address; <strong>Admin</strong> should be in the nav. <code>curl -sI https://runner.privacyfence.eu/.well-known/privacyfence-relay</code> should answer 404: nothing is offered yet. Step 7 uses this server.</div></li>
+      <li><label><input type="checkbox" id="ma6-8"></label><div><strong>Mint the runner's tokens.</strong> The live checks run in organization mode with the built-in apps, so their tokens come from this server. In a private window, sign in at <code>https://runner.privacyfence.eu/login</code> as <code>test@privacyfence.eu</code>. Offer every service under <strong>Admin → Services</strong> first, if you have not. Then on <code>/connect</code>, connect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira (one sign-in covers Confluence and Assets) and Miro, each with its QA account.</div></li>
+      <li><label><input type="checkbox" id="ma6-9"></label><div><strong>Move them to the runner.</strong> Stop the server first, so it does not refresh a token it is about to hand over. Atlassian's refresh tokens rotate, so only one place may use them. Then copy that person's token files to <code>qa-live</code>, and delete them from the server <em>without</em> disconnecting, because a disconnect would revoke them:<pre>ssh root@pf-runner
+cd /opt/pf-qa/run &amp;&amp; docker compose stop privacyfence
+V=/var/lib/docker/volumes/privacyfence-org_pf-data/_data
+ls -lt $V/users/                       # the folder with the newest change is test@'s
+U=$V/users/&lt;that folder&gt;/credentials
+cd $U &amp;&amp; F="token.json drive_token.json calendar_token.json contacts_token.json tasks_token.json apps_script_token.json slack_token.json salesforce_token.json atlassian_token.json miro_token.json"
+cp $F /home/pfrunner/privacyfence/users/qa-live/credentials/
+chown pfrunner: /home/pfrunner/privacyfence/users/qa-live/credentials/* &amp;&amp; chmod 600 /home/pfrunner/privacyfence/users/qa-live/credentials/*
+rm $F
+cd /opt/pf-qa/run &amp;&amp; docker compose start privacyfence</pre>The runner's folder should now hold those ten files, plus <code>telegram.session</code>, <code>grist_token.json</code> and <code>peek_token.json</code> from step 3. On the server, <code>test@</code>'s services now show as not connected. That is expected; reconnect there only for manual tests.</div></li>
     </ol>
-    <p class="done-when"><strong>Report back:</strong> paste <code>ma6: QA state copied to runner-privacyfence-eu, QA org server up at runner.privacyfence.eu</code> into the PR.</p>
+    <p class="done-when"><strong>Report back:</strong> paste <code>ma6: QA org server up at runner.privacyfence.eu, qa-live tokens minted there with the built-in apps and moved to runner-privacyfence-eu</code> into the PR.</p>
   </section>
 
   <section class="item" id="ma1">
