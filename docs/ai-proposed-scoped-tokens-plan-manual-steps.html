@@ -1,0 +1,143 @@
+<title>Token Proposal Checks</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow reading column; each check is a numbered section with a checklist of steps. */
+:root {
+  --bg: #f6f7f5;
+  --surface: #ffffff;
+  --fg: #1d2420;
+  --muted: #5b665f;
+  --line: #d9dfda;
+  --accent: #2f6b4f;
+  --warn: #8a5a12;
+  --code-bg: #eef1ee;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141816; --surface: #1c211e; --fg: #e4e9e5; --muted: #9aa69e; --line: #2e3631;
+    --accent: #7fc3a0; --warn: #e0b46a; --code-bg: #232a26; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141816; --surface: #1c211e; --fg: #e4e9e5; --muted: #9aa69e; --line: #2e3631;
+  --accent: #7fc3a0; --warn: #e0b46a; --code-bg: #232a26; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 46rem; margin: 0 auto; padding-block: 32px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 8px; text-wrap: balance; }
+h2 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 40px 0 12px; }
+h3 { font-size: 1.1rem; font-weight: 600; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 65ch; }
+.lede { color: var(--muted); }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.item-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; }
+.time { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: s; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; counter-increment: s; }
+ol.steps label { display: flex; flex-direction: column; gap: 4px; min-width: 0; cursor: pointer; }
+ol.steps label::before { content: counter(s) "."; font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+input[type="checkbox"] { width: 18px; height: 18px; margin-top: 22px; accent-color: var(--accent); }
+.see { color: var(--muted); font-size: 0.92rem; }
+code, pre { font-family: var(--font-mono); font-size: 0.86rem; background: var(--code-bg); border-radius: 4px; }
+code { padding: 1px 5px; overflow-wrap: anywhere; }
+pre { padding: 10px 12px; margin: 4px 0 0; overflow-x: auto; white-space: pre; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note { border-left: 3px solid var(--warn); padding: 4px 0 4px 12px; color: var(--fg); }
+.report { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.report pre { white-space: pre-wrap; }
+</style>
+
+<div class="wrap">
+  <h1>Token proposal checks</h1>
+  <p class="lede">Two hands-on checks for <code>privacyfence_propose_scoped_token</code>, done after the last phase merges into <code>feature/ai-proposed-scoped-tokens</code> and before that pull request merges. CI covers the logic and the page; these cover what it cannot: a real AI client, the companion's clipboard, a real passkey and a real organization bundle.</p>
+
+  <h2>Before implementation</h2>
+  <p>Nothing to do. You can run <code>/implement</code> straight away.</p>
+
+  <h2>After implementation</h2>
+  <div class="stack">
+
+    <section class="item" id="ma1">
+      <div class="item-head"><h3>ma1 · Local install, end to end</h3><span class="time">about 20 min</span></div>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><label for="ma1-1"><span>On the computer where PrivacyFence runs, install the feature branch into the environment PrivacyFence runs from, then quit and restart PrivacyFence from the companion.</span>
+          <pre>git fetch origin feature/ai-proposed-scoped-tokens
+git checkout feature/ai-proposed-scoped-tokens
+python3 -m pip install -e .</pre>
+          <span class="see">You should see: the companion shows PrivacyFence running again.</span></label></li>
+        <li><input type="checkbox" id="ma1-2"><label for="ma1-2"><span>In Claude Code connected to PrivacyFence, do a small task you would later turn into a routine, for example listing a Drive folder and reading one file in it. Approve the cards.</span>
+          <span class="see">You should see: the calls succeed after your approvals.</span></label></li>
+        <li><input type="checkbox" id="ma1-3"><label for="ma1-3"><span>Ask Claude: <em>"Propose a scoped token from this session for a weekly routine."</em></span>
+          <span class="see">You should see: Claude gives you a link ending in <code>/settings/scoped_tokens/proposals/stp-…</code>. It never shows a token starting with <code>pfst_</code>, and it does not say whether a token was created.</span></label></li>
+        <li><input type="checkbox" id="ma1-4"><label for="ma1-4"><span>Open the link.</span>
+          <span class="see">You should see: <strong>Review proposed token</strong> in place of the New token form, the rules as sentences, the tools, "Proposed by: …", and Claude's reason shown as plain text.</span></label></li>
+        <li><input type="checkbox" id="ma1-5"><label for="ma1-5"><span>Untick one tool, then choose <strong>Continue</strong>.</span>
+          <span class="see">You should see: the <strong>Delegate access to this token?</strong> dialog, with the warning text and Cancel focused.</span></label></li>
+        <li><input type="checkbox" id="ma1-6"><label for="ma1-6"><span>Type the token's name with one letter in the wrong case.</span>
+          <span class="see">You should see: <strong>Delegate access</strong> stays disabled.</span></label></li>
+        <li><input type="checkbox" id="ma1-7"><label for="ma1-7"><span>Correct the name exactly, then choose <strong>Delegate access</strong>.</span>
+          <span class="see">You should see: the token is copied to your clipboard by the companion, and Settings → Scoped tokens lists it without the tool you unticked.</span></label></li>
+        <li><input type="checkbox" id="ma1-8"><label for="ma1-8"><span>Open the same review link again.</span>
+          <span class="see">You should see: "This token proposal has expired, was declined or was already used."</span></label></li>
+        <li><input type="checkbox" id="ma1-9"><label for="ma1-9"><span>Use the token from a second Claude Code MCP entry. Paste the token from your clipboard into your own terminal only, never into a chat. Use the same <code>/mcp</code> URL your normal entry uses (<a href="https://github.com/privacyfence/privacyfence/blob/plan/ai-proposed-scoped-tokens/docs/connect-claude-code.md">docs/connect-claude-code.md</a> shows where it is).</span>
+          <pre>claude mcp add --transport http pf-proposal-test &lt;your /mcp URL&gt; --header "Authorization: Bearer &lt;paste the token&gt;"</pre>
+          <span class="see">You should see: in a new Claude Code session, a call the token covers runs without a card, and the tool you unticked is not offered.</span></label></li>
+        <li><input type="checkbox" id="ma1-10"><label for="ma1-10"><span>In that token session, ask Claude to propose another token.</span>
+          <span class="see">You should see: the tool is not available to it.</span></label></li>
+        <li><input type="checkbox" id="ma1-11"><label for="ma1-11"><span>Back in your normal session, ask for one more proposal, open its link, and choose <strong>Decline</strong>.</span>
+          <span class="see">You should see: the page returns to Settings, and the proposal is no longer under "Waiting for review".</span></label></li>
+        <li><input type="checkbox" id="ma1-12"><label for="ma1-12"><span>Check PrivacyFence's audit log for this hour.</span>
+          <span class="see">You should see: <code>scoped_token_proposed</code>, <code>scoped_token_proposal_accepted</code> and <code>scoped_token_proposal_declined</code> entries, each naming the AI client and Claude's reason.</span></label></li>
+        <li><input type="checkbox" id="ma1-13"><label for="ma1-13"><span>Clean up: revoke the test token in Settings → Scoped tokens, then remove the MCP entry.</span>
+          <pre>claude mcp remove pf-proposal-test</pre></label></li>
+      </ol>
+      <div class="report"><p>Paste into the pull request when done:</p>
+        <pre>ma1 local end to end: PASS / FAIL (step number and what you saw)</pre></div>
+    </section>
+
+    <section class="item" id="ma2">
+      <div class="item-head"><h3>ma2 · Organization test install, passkey and bundle flag</h3><span class="time">about 30 min</span></div>
+      <p class="note">Use a test install and two test people, not production. Build and deploy the bundle the way <a href="https://github.com/privacyfence/privacyfence/blob/plan/ai-proposed-scoped-tokens/docs/org-mode-setup-guide.md">docs/org-mode-setup-guide.md</a> describes. The test person must have a passkey enrolled, and step-up must require it.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma2-1"><label for="ma2-1"><span>Deploy the feature branch to the test install with a bundle that has <code>--enable-scoped-tokens</code> but not <code>--enable-scoped-token-proposals</code>.</span>
+          <span class="see">You should see: PrivacyFence starts normally.</span></label></li>
+        <li><input type="checkbox" id="ma2-2"><label for="ma2-2"><span>As test person A, connect Claude and ask it which PrivacyFence tools it has.</span>
+          <span class="see">You should see: no <code>privacyfence_propose_scoped_token</code>.</span></label></li>
+        <li><input type="checkbox" id="ma2-3"><label for="ma2-3"><span>Rebuild the bundle with <code>--merge --enable-scoped-token-proposals</code> and redeploy it.</span>
+          <span class="see">You should see: the tool is now listed for person A.</span></label></li>
+        <li><input type="checkbox" id="ma2-4"><label for="ma2-4"><span>As person A, have Claude propose a token with one rule, and open the link while signed in as A.</span>
+          <span class="see">You should see: the review panel.</span></label></li>
+        <li><input type="checkbox" id="ma2-5"><label for="ma2-5"><span>In another browser profile, sign in as test person B and open person A's link.</span>
+          <span class="see">You should see: the "expired, was declined or was already used" notice, not A's proposal.</span></label></li>
+        <li><input type="checkbox" id="ma2-6"><label for="ma2-6"><span>As person A, choose Continue, type the name and choose <strong>Delegate access</strong>.</span>
+          <span class="see">You should see: a passkey prompt, then the one-time dialog showing the token. Close it without copying.</span></label></li>
+        <li><input type="checkbox" id="ma2-7"><label for="ma2-7"><span>Reload Settings → Scoped tokens.</span>
+          <span class="see">You should see: the token is listed and its secret is not shown anywhere. Revoke it.</span></label></li>
+      </ol>
+      <div class="report"><p>Paste into the pull request when done:</p>
+        <pre>ma2 org passkey and flag: PASS / FAIL (step number and what you saw)</pre></div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  var KEY = "pf-token-proposal-checks";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  document.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+    box.checked = !!state[box.id];
+    box.addEventListener("change", function () {
+      state[box.id] = box.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
+    });
+  });
+})();
+</script>
