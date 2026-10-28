@@ -156,7 +156,8 @@ from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
 from ..scoped_tokens import (
-    DEFAULT_DAYS, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, get_store, normalise_create_request,
+    DEFAULT_DAYS, PROPOSALS_DISABLED_MESSAGE, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore,
+    get_store, normalise_create_request,
 )
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
@@ -1875,12 +1876,15 @@ def build_org_routes(
 
     async def _org_scoped_token_request(
         request: Request, action: str, fingerprint_body: Callable[[dict[str, Any]], dict[str, Any] | None],
+        *, precheck: Callable[[Principal, dict[str, Any], dict[str, Any]], Response | None] | None = None,
     ) -> tuple[Principal, dict[str, Any]] | Response:
-        """The gates the four org scoped token routes share (ADR 0165), in
+        """The gates the org scoped token routes share (ADR 0165), in
         ``settings_action``'s order: session, CSRF, origin, the administrator's
         opt-in, confirmation, then the passkey step-up when the org requires
         one. Returns the principal and the step-up fingerprint body, or the
-        response that refuses the request."""
+        response that refuses the request. ``precheck`` runs after the
+        fingerprint body and before step-up, so a request that is refused
+        anyway never asks for a passkey."""
         principal = _current_principal(request)
         if principal is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -1899,6 +1903,10 @@ def build_org_routes(
         bound = fingerprint_body(payload)
         if bound is None:
             return JSONResponse({"error": "invalid request"}, status_code=400)
+        if precheck is not None:
+            refused = precheck(principal, payload, bound)
+            if refused is not None:
+                return refused
         if step_up is not None and step_up.enabled and step_up.require_passkey:
             confirmed_step_up: StepUpConfig = step_up
             response = _verify_or_challenge(
@@ -1917,17 +1925,17 @@ def build_org_routes(
                 return response
         return principal, bound
 
-    async def scoped_token_create(request: Request) -> Response:
-        gated = await _org_scoped_token_request(request, "create_scoped_token", normalise_create_request)
-        if isinstance(gated, Response):
-            return gated
-        principal, bound = gated
+    async def _create_and_deliver(
+        principal: Principal, bound: dict[str, Any], *, audit_suffix: str = "",
+    ) -> tuple[ScopedToken | None, Response]:
+        """Mint the token and answer with its secret, once. Returns the token (``None`` when
+        nothing was created) and the response to give."""
         store = scoped_token_store or get_store()
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
             except policy_store.V1PolicyConfigError as exc:
-                return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
+                return None, JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
             try:
                 token, secret = await run_in_threadpool(
                     lambda: store.create(
@@ -1938,7 +1946,7 @@ def build_org_routes(
                     ),
                 )
             except ScopedTokenError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=400)
+                return None, JSONResponse({"error": str(exc)}, status_code=400)
             # The summary names the token, never the secret (ADR 0165).
             _record_settings_audit(
                 principal,
@@ -1946,13 +1954,86 @@ def build_org_routes(
                 f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)"
                 + (", personal data allowed" if token.allow_personal_data else "")
                 + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
+                + audit_suffix
                 + f" (principal={principal.id})",
             )
         # The only place the secret ever leaves the server: this one answer.
-        return JSONResponse(
+        return token, JSONResponse(
             {"created": {"id": token.id, "label": token.label, "expires_at": token.expires_at}, "secret": secret},
             headers={"Cache-Control": "no-store"},
         )
+
+    async def scoped_token_create(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "create_scoped_token", normalise_create_request)
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        _token, response = await _create_and_deliver(principal, bound)
+        return response
+
+    def _proposal_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+        body = normalise_create_request(payload)
+        proposal_id = payload.get("proposal_id")
+        if body is None or not isinstance(proposal_id, str):
+            return None
+        return {**body, "proposal_id": proposal_id}
+
+    def _proposal_precheck(principal: Principal, payload: dict[str, Any], bound: dict[str, Any]) -> Response | None:
+        if not token_policy.allow_ai_proposals:
+            return JSONResponse({"error": PROPOSALS_DISABLED_MESSAGE}, status_code=403)
+        if payload.get("typed_label") != bound["label"]:
+            return JSONResponse({"error": "Type the token's name exactly to confirm."}, status_code=400)
+        proposal = scoped_token_proposals.get_registry().get(principal.id, bound["proposal_id"])
+        if proposal is None:
+            return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
+        if scoped_token_proposals.narrowing_error(proposal.request, bound) is not None:
+            return JSONResponse({"error": scoped_token_proposals.WIDENED_MESSAGE}, status_code=400)
+        return None
+
+    async def scoped_token_create_from_proposal(request: Request) -> Response:
+        gated = await _org_scoped_token_request(
+            request, "create_proposed_scoped_token", _proposal_fingerprint_body, precheck=_proposal_precheck,
+        )
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        registry = scoped_token_proposals.get_registry()
+        proposal = registry.take(principal.id, bound["proposal_id"])
+        if proposal is None:
+            return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
+        token, response = await _create_and_deliver(principal, bound, audit_suffix=" from a proposal")
+        if token is None:
+            registry.restore(proposal)
+            return response
+        scoped_token_proposals.record(
+            "scoped_token_proposal_accepted", proposal,
+            f"Token proposal '{proposal.request['label']}' accepted as '{token.label}' ({token.id})",
+        )
+        return response
+
+    async def scoped_token_decline_proposal(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(payload, dict) or not org_session.check_csrf(request, payload.get("csrf")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        proposal_id = payload.get("proposal_id")
+        if not isinstance(proposal_id, str):
+            return JSONResponse({"error": "invalid request"}, status_code=400)
+        proposal = scoped_token_proposals.get_registry().take(principal.id, proposal_id)
+        if proposal is None:
+            return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
+        scoped_token_proposals.record(
+            "scoped_token_proposal_declined", proposal,
+            f"Token proposal '{proposal.request['label']}' declined",
+        )
+        return JSONResponse({"declined": True})
 
     async def scoped_token_revoke(request: Request) -> Response:
         gated = await _org_scoped_token_request(request, "revoke_scoped_token", _scoped_revoke_fingerprint_body)
@@ -2002,7 +2083,10 @@ def build_org_routes(
             _record_settings_audit(principal, f"Revoked all scoped tokens ({count}) (principal={principal.id})")
         return JSONResponse({"revoked": count})
 
-    async def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
+    async def _wrap_org_settings(
+        request: Request, principal: Principal, *, initial_section: str,
+        scoped_proposal: dict[str, Any] | None = None,
+    ) -> Response:
         nonce = _csp_nonce_for(request)
         with principal_scope(principal):
             try:
@@ -2026,6 +2110,7 @@ def build_org_routes(
             state, nonce=nonce, initial_section=initial_section,
             mode=ORG_MODE, is_admin=principal.is_admin,
             scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
+            scoped_proposal=scoped_proposal,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         whats_new_version = await asyncio.to_thread(whats_new.pending_version, principal)
@@ -2067,6 +2152,42 @@ def build_org_routes(
         if not principal.is_admin:
             return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
         return await _wrap_org_settings(request, principal, initial_section="privacy")
+
+    def _scoped_tokens_page_principal(request: Request) -> Principal | Response:
+        """The signed-in principal, or the redirect that sends the page elsewhere: to login when
+        signed out, to ``/settings`` when scoped tokens or AI proposals are switched off."""
+        principal = _current_principal(request)
+        if principal is None:
+            return RedirectResponse(
+                "/login?next=/settings/scoped_tokens", status_code=302, headers={"Cache-Control": "no-store"},
+            )
+        if not token_policy.enabled or not token_policy.allow_ai_proposals:
+            return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
+        return principal
+
+    async def scoped_tokens_page(request: Request) -> Response:
+        principal = _scoped_tokens_page_principal(request)
+        if isinstance(principal, Response):
+            return principal
+        return await _wrap_org_settings(request, principal, initial_section="scoped_tokens")
+
+    async def scoped_token_proposal_page(request: Request) -> Response:
+        principal = _scoped_tokens_page_principal(request)
+        if isinstance(principal, Response):
+            return principal
+        shown: dict[str, Any] = {"missing": True}
+        proposal = scoped_token_proposals.get_registry().get(principal.id, request.path_params["proposal_id"])
+        if proposal is not None:
+            with principal_scope(principal):
+                try:
+                    _ensure_principal_settings_loaded()
+                except policy_store.V1PolicyConfigError:
+                    pass  # _wrap_org_settings meets the same error and renders it
+                else:
+                    shown = scoped_token_proposals.review_data(proposal, auto_accept.get_policy_rows())
+        return await _wrap_org_settings(
+            request, principal, initial_section="scoped_tokens", scoped_proposal=shown,
+        )
 
     def _current_pii_flag(action: str, body: dict[str, Any]) -> bool:
         """toggle_pii_detection/toggle_pii_category flip the *current*
@@ -2222,6 +2343,13 @@ def build_org_routes(
         Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
         Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
+        Route("/settings/scoped_tokens", scoped_tokens_page),
+        Route("/settings/scoped_tokens/proposals/{proposal_id}", scoped_token_proposal_page),
+        Route(
+            "/api/settings/scoped_tokens/create_from_proposal", scoped_token_create_from_proposal,
+            methods=["POST"],
+        ),
+        Route("/api/settings/scoped_tokens/decline_proposal", scoped_token_decline_proposal, methods=["POST"]),
         *build_personal_routes(personal_hooks),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]
