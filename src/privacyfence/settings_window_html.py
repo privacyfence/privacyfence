@@ -1608,7 +1608,7 @@ _JS = r"""
     return html;
   }
 
-  // ---- AI-proposed token: waiting list, review panel, delegation dialog (D6) ---- //
+  // ---- AI-proposed token: waiting list, review panel, delegation dialog ---- //
 
   var SP_PD_LABEL = 'Let exports, downloads and page uploads carry personal data';
   var SP_PDR_LABEL = 'Let reads return personal data';

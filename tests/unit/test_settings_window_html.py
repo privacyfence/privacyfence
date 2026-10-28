@@ -894,7 +894,7 @@ class TestScopedTokensSection:
 
 
 class TestScopedTokenProposal:
-    """The review panel for an AI-proposed token: embedded escaped, with D6's strings in the page."""
+    """The review panel for an AI-proposed token: embedded escaped, with its review strings in the page."""
 
     HOSTILE = "</script><img src=x onerror=alert(1)>"
     PROPOSAL = {
