@@ -2265,6 +2265,16 @@ class TestMaybeStartWebServerOrgMode:
                 org_config={"mode": "org", "server": {"issuer_url": "https://pf.example.com"}},
             )
 
+    def test_local_mcp_dispatcher_gets_the_local_scoped_token_policy(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
+        )
+
+        assert result.mcp_dispatcher._scoped_token_policy.allow_ai_proposals is True
+        assert result.mcp_dispatcher.scoped_token_proposals_enabled() is True
+
     def test_org_mode_without_server_section_raises(self, monkeypatch, tmp_path):
         # An org config with an incomplete IdP or server section.
         self._no_bind(monkeypatch, tmp_path)
@@ -2284,6 +2294,20 @@ class TestMaybeStartWebServerOrgMode:
             unattended_sessions_enabled=False, org_config=self._org_config(),
         )
         assert result.mcp_dispatcher.status("checking")["mode"] == "org"
+
+    def test_org_mcp_dispatcher_gets_the_policy_from_org_config(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        off = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        on = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
+            org_config={**self._org_config(), "scoped_tokens": {"enabled": True, "allow_ai_proposals": True}},
+        )
+
+        assert off.mcp_dispatcher.scoped_token_proposals_enabled() is False
+        assert on.mcp_dispatcher.scoped_token_proposals_enabled() is True
 
     def test_no_org_config_defaults_to_local_mode(self, monkeypatch, tmp_path):
         # Omitting org_config entirely (every local-mode call site, and

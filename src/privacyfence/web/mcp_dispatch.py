@@ -23,19 +23,23 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger, released_req
 from ..auto_accept import (
     PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
 )
-from .. import local_files
+from .. import audit_log, local_files, scoped_tokens
 from ..connector import Connector
 from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
-from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, unattended_scope
+from ..gate import (
+    GateDeniedError, preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, unattended_scope,
+)
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe as policy_describe
 from ..policy import propose as policy_propose
 from ..policy import scope_rows
 from ..policy import registry as policy_registry
 from ..policy.suggest import suggested_rules
-from ..principal import current_principal
-from ..scoped_tokens import REVOKED_SCOPE, current_token_scope
+from ..principal import LOCAL_PRINCIPAL, current_principal
+from ..scoped_token_proposals import REVIEW_PATH, get_registry, new_proposal, review_data
+from ..scoped_token_proposals import record as record_proposal
+from ..scoped_tokens import REVOKED_SCOPE, ScopedTokenPolicy, current_token_scope
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +119,7 @@ class McpDispatcher:
     _AWAIT_APPROVAL_MIN_TIMEOUT = 1
     _AWAIT_APPROVAL_MAX_TIMEOUT = 120
     _AWAIT_APPROVAL_POLL_SECONDS = 0.5
+    MAX_SESSION_CALLS = 200
 
     def __init__(
         self,
@@ -123,6 +128,7 @@ class McpDispatcher:
         mode: str = "local",
         unattended_sessions_enabled: bool = False,
         registry: PendingApprovalRegistry | None = None,
+        scoped_token_policy: ScopedTokenPolicy | None = None,
     ) -> None:
         self._connectors_provider = connectors_provider
         # "local" or "org" -- privacyfence_status's own mode field, and what
@@ -137,6 +143,12 @@ class McpDispatcher:
         self._unattended_sessions_enabled = unattended_sessions_enabled
         self._unattended_sessions: set[Hashable] = set()
         self._unattended_changed_listener: Callable[[], None] | None = None
+        # None in a test that never wires one: scoped_token_proposals_enabled() is then False.
+        self._scoped_token_policy = scoped_token_policy
+        # The approved (or auto-gated) calls each MCP session has made, newest last, as
+        # (tool, agent args, my_email) -- what privacyfence_propose_scoped_token's from_session
+        # builds a bundle from. In memory only; end_session() drops it.
+        self._session_calls: dict[Hashable, list[tuple[str, dict[str, Any], str]]] = {}
         # The deferred-approval registry privacyfence_await_approval polls
         # -- None when nothing in this install can ever produce a
         # pending approval (native-only local mode with /mcp still enabled),
@@ -278,6 +290,8 @@ class McpDispatcher:
                 request_args_scope(args), released_request_scope(),
             ):
                 result = await connector.call(tool, args)
+                if scope is None and (audit_log.current_released_request_id() or TOOL_TO_GATE.get(tool) == "auto"):
+                    self._note_session_call(session_key, tool, args, connector)
         except ApprovalPending as pending:
             # The one place a pending gate becomes a tool result (ADR 0093):
             # the connector stopped at gated_call, so nothing was fetched,
@@ -320,6 +334,12 @@ class McpDispatcher:
         if not self._is_read_only(connector, tool):
             self._last_write_at[(principal_id, connector_name)] = time.time()
         return result
+
+    def _note_session_call(self, session_key: Hashable, tool: str, args: dict, connector: Connector) -> None:
+        calls = self._session_calls.setdefault(session_key, [])
+        agent_args = {k: v for k, v in args.items() if k not in _CONNECTOR_COMPUTED_ARGS}
+        calls.append((tool, agent_args, getattr(connector, "my_email", "") or ""))
+        del calls[:-self.MAX_SESSION_CALLS]
 
     def _prune_stale(self, now: float) -> None:
         stale = [
@@ -487,6 +507,108 @@ class McpDispatcher:
                 value=params.get("value"),
                 verbs=params.get("verbs"),
             )
+
+    def scoped_token_proposals_enabled(self) -> bool:
+        policy = self._scoped_token_policy
+        return policy is not None and policy.enabled and policy.allow_ai_proposals
+
+    async def propose_scoped_token(self, session_key: Hashable, params: dict, base_url: str) -> dict:
+        """privacyfence_propose_scoped_token's handler (ADR 0251): validates, registers a
+        proposal for a person to review in Settings and returns its link. Never mints a token."""
+        if current_token_scope() is not None:
+            raise GateDeniedError("Request denied: a scoped token cannot propose tokens.")
+        if self._mode == "local" and current_principal().id != LOCAL_PRINCIPAL.id:
+            raise ValueError(
+                "Token proposals are reviewed by this computer's owner; this account has no Scoped tokens page."
+            )
+        policy = self._scoped_token_policy
+        if policy is None or not self.scoped_token_proposals_enabled():
+            raise ValueError(scoped_tokens.PROPOSALS_DISABLED_MESSAGE)
+        if session_key in self._unattended_sessions:
+            self._audit_unattended_proposal(params.get("reason", ""))
+            raise GateDeniedError(
+                "Request denied: this connection is in an unattended session, so nobody is there "
+                "to review a token proposal."
+            )
+        rules = params.get("rules", [])
+        tools = params.get("tools", [])
+        uncovered: list[str] = []
+        from_session = params.get("from_session") is True
+        if from_session:
+            if rules or tools:
+                raise ValueError("Pass either from_session or rules and tools, not both.")
+            from ..scoped_token_proposals import bundle_from_calls
+            rules, tools, uncovered = bundle_from_calls(self._session_calls.get(session_key, []))
+            if not rules and not tools:
+                raise ValueError("This session has no approved calls to build a token from.")
+        elif any(not isinstance(rule, dict) or rule.get("kind") not in ("new", "copy") for rule in rules):
+            raise ValueError("A proposed rule is {kind:'new', group, value, verbs} or {kind:'copy', rule_id}.")
+        days = params.get("days", scoped_tokens.DEFAULT_DAYS)
+        if isinstance(days, int) and not isinstance(days, bool):
+            days = min(days, policy.max_days)
+        body = scoped_tokens.normalise_create_request({
+            "label": params.get("label"), "days": days, "rules": rules, "tools": tools,
+            "allow_personal_data": params.get("allow_personal_data", False),
+            "allow_personal_data_reads": params.get("allow_personal_data_reads", False),
+        })
+        if body is None:
+            raise ValueError("The proposal is not a valid token request.")
+        _ = self.connectors
+        principal = current_principal()
+        await asyncio.to_thread(
+            scoped_tokens.get_store().check_request,
+            principal, label=body["label"], days=body["days"], rules=body["rules"], tools=body["tools"],
+            policy=policy, check_existing=False,
+        )
+        proposal = new_proposal(
+            principal=principal, request=body, source="session" if from_session else "bundle",
+            agent=current_agent(), reason=str(params.get("reason", "")), uncovered_tools=uncovered,
+        )
+        get_registry().add(proposal)
+        record_proposal(
+            "scoped_token_proposed", proposal,
+            f"Token '{body['label']}' proposed: {len(body['rules'])} rule(s), {len(body['tools'])} tool(s), "
+            f"{body['days']} days",
+        )
+        # Only a copy rule's sentence reads the person's Auto-accept rows.
+        own_rows = get_policy_rows() if any(rule["kind"] == "copy" for rule in body["rules"]) else []
+        data = review_data(proposal, own_rows)
+        return {
+            "proposal_id": proposal.id,
+            "review_url": base_url.rstrip("/") + REVIEW_PATH.format(proposal_id=proposal.id),
+            "expires_at": datetime.fromtimestamp(proposal.expires_at, timezone.utc).isoformat(),
+            "label": body["label"],
+            "days": body["days"],
+            "tools": list(body["tools"]),
+            "rules": [rule["sentence"] for rule in data["rules"]],
+            "uncovered_tools": list(proposal.uncovered_tools),
+            "message": (
+                "Give the person this link. They review the token in PrivacyFence Settings, can narrow it, "
+                "and confirm it themselves; you will not receive the token or learn whether it was created. "
+                "Tools in uncovered_tools have no rule, so the token's calls to them will be denied."
+            ),
+        }
+
+    @staticmethod
+    def _audit_unattended_proposal(claude_reason: str) -> None:
+        try:
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id=uuid.uuid4().hex[:12],
+                connector="policy",
+                tool="privacyfence_propose_scoped_token",
+                tool_name="privacyfence_propose_scoped_token",
+                summary="Token proposal refused in an unattended session",
+                sender="",
+                decision="denied_unattended",
+                auto_accept_rule="",
+                latency_seconds=0.0,
+                pii_detected=False,
+                claude_reason=claude_reason,
+            ))
+        except Exception as exc:
+            logger.warning("Audit log write failed for refused token proposal: %s", exc)
 
     def status(self, claude_reason: str = "") -> dict:
         """privacyfence_status's handler: the one
@@ -677,6 +799,7 @@ class McpDispatcher:
         dies with it."""
         had_unattended = session_key in self._unattended_sessions
         self._unattended_sessions.discard(session_key)
+        self._session_calls.pop(session_key, None)
         if had_unattended:
             self._audit_unattended_session_event("unattended_session_ended")
             self._fire_unattended_changed()

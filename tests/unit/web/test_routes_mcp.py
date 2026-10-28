@@ -28,6 +28,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.connection import Connection
 
 from privacyfence import local_files, scoped_tokens
+from privacyfence.agent_identity import UNKNOWN_AGENT
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
@@ -158,6 +159,7 @@ class ReadWriteDeleteConnector(Connector):
 
 def _dispatcher(connectors: dict[str, Connector] | None = None, **kwargs) -> McpDispatcher:
     store = dict(connectors or {})
+    kwargs.setdefault("scoped_token_policy", scoped_tokens.policy_from_org_config({}, org_mode=False))
     return McpDispatcher(lambda: store, **kwargs)
 
 
@@ -351,7 +353,9 @@ class TestListTools:
 
     async def test_reflects_a_live_connector_set_change_between_calls(self):
         store: dict[str, Connector] = {}
-        dispatcher = McpDispatcher(lambda: store)
+        dispatcher = McpDispatcher(
+            lambda: store, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+        )
         async with _connected_session(dispatcher) as session:
             first = await session.list_tools()
             assert "echo_say" not in {t.name for t in first.tools}
@@ -381,7 +385,10 @@ class TestListTools:
             "alice": {"echo": EchoConnector()},
             LOCAL_PRINCIPAL.id: {},  # an org server's local principal: nothing authorized
         }
-        dispatcher = McpDispatcher(lambda: per_principal.get(current_principal().id, {}))
+        dispatcher = McpDispatcher(
+            lambda: per_principal.get(current_principal().id, {}),
+            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+        )
 
         async with _connected_session(dispatcher, verifier=_OrgVerifier("alice")) as session:
             result = await session.list_tools()
@@ -400,7 +407,10 @@ class TestListTools:
             LOCAL_PRINCIPAL.id: {"echo": EchoConnector()},
             "bob": {},
         }
-        dispatcher = McpDispatcher(lambda: per_principal.get(current_principal().id, {}))
+        dispatcher = McpDispatcher(
+            lambda: per_principal.get(current_principal().id, {}),
+            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+        )
 
         async with _connected_session(dispatcher, verifier=_OrgVerifier("bob")) as session:
             result = await session.list_tools()
@@ -666,6 +676,61 @@ class _ScopedVerifier(TokenVerifier):
         )
 
 
+class TestProposeScopedTokenOverTheWire:
+    @pytest.fixture(autouse=True)
+    def _audit(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        init_audit_logger(str(tmp_path))
+        self._audit_dir = tmp_path
+        scoped_tokens.set_store(ScopedTokenStore(lambda: [LOCAL_PRINCIPAL]))
+
+    def _audit_entries(self) -> list[dict]:
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    async def test_propose_scoped_token_is_listed_only_when_enabled(self):
+        enabled = _dispatcher({"echo": EchoConnector()})
+        disabled = _dispatcher(
+            {"echo": EchoConnector()}, scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, False),
+        )
+        unset = McpDispatcher(lambda: {})
+        names = {}
+        for key, dispatcher in (("enabled", enabled), ("disabled", disabled), ("unset", unset)):
+            async with _connected_session(dispatcher) as session:
+                names[key] = {t.name for t in (await session.list_tools()).tools}
+
+        assert "privacyfence_propose_scoped_token" in names["enabled"]
+        assert "privacyfence_propose_scoped_token" not in names["disabled"]
+        assert "privacyfence_propose_scoped_token" not in names["unset"]
+        assert names["enabled"] - {"privacyfence_propose_scoped_token"} == names["disabled"]
+
+    async def test_propose_scoped_token_is_attributed_to_the_client(self):
+        dispatcher = _dispatcher({"echo": EchoConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_propose_scoped_token", {
+                "reason": "nightly", "label": "nightly", "tools": ["gmail_list_messages"],
+            })
+
+        assert result.is_error is False
+        assert result.structured_content["review_url"].startswith("http://testserver/settings/scoped_tokens/proposals/stp-")
+        [entry] = [e for e in self._audit_entries() if e["decision"] == "scoped_token_proposed"]
+        assert entry["agent_id"] != UNKNOWN_AGENT.id and entry["agent_source"] == "client_info"
+
+    async def test_other_meta_tools_stay_unattributed(self):
+        dispatcher = _dispatcher({"echo": EchoConnector()})
+        async with _connected_session(dispatcher) as session:
+            await session.call_tool(
+                "privacyfence_check_policy",
+                {"connector": "echo", "tool": "gmail_list_messages", "reason": "planning"},
+            )
+
+        [entry] = [e for e in self._audit_entries() if e["decision"] == "policy_check"]
+        assert entry["agent_id"] == "" and entry["agent_source"] == ""
+
+
 class TestScopedTokens:
     @pytest.fixture(autouse=True)
     def _audit(self, tmp_path, monkeypatch):
@@ -780,6 +845,7 @@ class TestScopedTokens:
 
     @pytest.mark.parametrize("name", [
         "privacyfence_list_policy", "privacyfence_propose_policy_change", "privacyfence_await_approval",
+        "privacyfence_propose_scoped_token",
     ])
     async def test_list_policy_and_propose_are_not_offered_and_are_refused(self, name):
         dispatcher = _dispatcher({"echo": TwoToolConnector()})
