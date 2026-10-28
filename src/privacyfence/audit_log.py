@@ -152,7 +152,9 @@ class AuditEntry:
                             # "webauthn_enrollment_refused" | "webauthn_recovery_code_used" |
                             # "webauthn_recovery_refused" |
                             # "sign_in_code_minted" |
-                            # "step_up_requirement_enabled" | "step_up_requirement_disabled"
+                            # "step_up_requirement_enabled" | "step_up_requirement_disabled" |
+                            # "scoped_token_proposed" | "scoped_token_proposal_accepted" |
+                            # "scoped_token_proposal_declined" | "scoped_token_proposal_expired"
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
                             #  web/routes_security.py's register_verify/delete_credential,
                             #  recorded for either mode's own passkey enrollment surface. Tamper-
