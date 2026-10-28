@@ -2582,6 +2582,7 @@ def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
     mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
     scoped_tokens: dict[str, Any] | None = None, personal_transfer: bool = False,
+    scoped_proposal: dict[str, Any] | None = None,
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
@@ -2655,6 +2656,11 @@ def build_html(
         # Rule sentences carry user-chosen values: no "</script>" may end the tag early.
         scoped_json = json_for_script(scoped_tokens)
         scoped_tokens_script = f'<script nonce="{nonce}">window.__pfScopedTokens = {scoped_json};</script>'
+        if scoped_proposal is not None:
+            # The agent's label, reason and rule sentences are untrusted text: same escaping as above.
+            scoped_tokens_script += (
+                f'<script nonce="{nonce}">window.__pfScopedProposal = {json_for_script(scoped_proposal)};</script>'
+            )
     section_script = ""
     if initial_section is not None:
         section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json_for_script(initial_section)};</script>'
