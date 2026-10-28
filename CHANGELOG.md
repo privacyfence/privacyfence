@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stalled Google connection no longer breaks every later call.** When a Gmail, Drive, Calendar, Contacts, Tasks or Apps Script request timed out because the network had silently dropped an idle connection, every following request reused that dead connection and timed out too until PrivacyFence was restarted. The timed-out request still fails, but the next one now opens a fresh connection.
+
 ## [6.11.0] — 2026-10-27
 
 ### Added
