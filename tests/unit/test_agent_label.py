@@ -129,3 +129,20 @@ class TestLocalMode:
         assert label_for(UNKNOWN_AGENT).tier == TIER_UNKNOWN
         agent_label.set_local_mode(True)
         assert label_for(UNKNOWN_AGENT).tier == TIER_UNDETECTED
+
+
+class TestScopedToken:
+    """ADR 0164: a scoped token's calls are an override-attested identity named after the token."""
+
+    TOKEN = AgentIdentity(id="scoped-token:st-1", name="sales-sync", version="", source=AgentSource.OVERRIDE)
+
+    @pytest.mark.parametrize("local", [True, False])
+    def test_named_after_the_token_in_either_mode(self, monkeypatch, local):
+        monkeypatch.setattr(agent_label, "_local_mode", local)
+        label = label_for(self.TOKEN)
+        assert (label.tier, label.headline, label.icon_id) == (TIER_ATTESTED, "sales-sync", "")
+
+    def test_a_claimed_scoped_id_is_not_attested(self, monkeypatch):
+        monkeypatch.setattr(agent_label, "_local_mode", False)
+        claimed = AgentIdentity(id="scoped-token:x", name="sales-sync", version="", source=AgentSource.CLIENT_INFO)
+        assert label_for(claimed).tier == TIER_UNKNOWN

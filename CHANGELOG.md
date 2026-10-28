@@ -43,6 +43,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stalled Google connection no longer breaks every later call.** When a Gmail, Drive, Calendar, Contacts, Tasks or Apps Script request timed out because the network had silently dropped an idle connection, every following request reused that dead connection and timed out too until PrivacyFence was restarted. The timed-out request still fails, but the next one now opens a fresh connection.
+- **The Audit Log names a scoped token's calls.** Rows made with a scoped token showed "Unrecognised AI system" (Unknown); they now show the token's name, as the attested requester.
+
+## [6.11.0] — 2026-10-27
+
 ### Added
 
 - **Peek accounts for everyone, in organization mode.** With `--peek-auto-provision` and a Peek provisioning key, each person who signs in gets a Peek account (or keeps their existing one) connected for them; their own Peek sign-in still wins, and `privacyfence-app --peek-release` revokes PrivacyFence's token when someone leaves.
@@ -3505,7 +3512,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...HEAD
+[6.11.0]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...v6.11.0
 [6.10.0]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...v6.10.0
 [6.9.1]: https://github.com/privacyfence/privacyfence/compare/v6.8.2...v6.9.1
 [6.8.2]: https://github.com/privacyfence/privacyfence/compare/v6.8.1...v6.8.2

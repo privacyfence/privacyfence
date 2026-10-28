@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-09-29. Fixes [issue 800](https://github.com/privacyfence/privacyfence/issues/800).
+Amended by 0249.
 
 ## Context
 

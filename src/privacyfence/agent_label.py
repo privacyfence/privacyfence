@@ -53,6 +53,11 @@ NOT_VERIFIED = "Not verified"
 
 _REGISTRY_IDS = frozenset(entry.agent_id for entry in REGISTRY)
 
+# Prefix of the agent_id a scoped token's calls are recorded under (ADR 0164): an override-attested
+# identity named after the token. It is not a registry entry, but it is a credential the person
+# created, so it is shown by name, in either mode.
+SCOPED_TOKEN_ID_PREFIX = "scoped-token:"  # nosec B105  # an agent_id prefix, not a credential
+
 _local_mode = True
 
 
@@ -107,7 +112,10 @@ def label_for(agent: AgentIdentity) -> AgentLabel:
     """The tiered label for ``agent``. A registry match is required for the attested and claimed
     tiers: an attested signal naming something the registry does not know still renders as
     unknown, because there is no display name or mark to give it. On a local install every
-    identity is undetected, whatever it claims."""
+    identity is undetected, whatever it claims, except a scoped token's own calls: the person made
+    that credential, so it is named after the token (no brand mark, since it is no registry entry)."""
+    if agent.id.startswith(SCOPED_TOKEN_ID_PREFIX) and agent.name and agent.is_attested():
+        return AgentLabel(tier=TIER_ATTESTED, name=agent.name, subject=agent.name, icon_id="")
     if _local_mode:
         return AgentLabel(tier=TIER_UNDETECTED, name="", subject=NEUTRAL_SUBJECT, icon_id="")
     if agent.id in _REGISTRY_IDS and agent.source.value:
