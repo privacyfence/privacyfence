@@ -132,7 +132,7 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
   Observability is off (ADR 0186).
 - **Privacy page.** `website/privacy/index.html:26-27` and `:45-54` say the policy covers only the
   site and `downloads.privacyfence.eu`, and that the software "sends nothing to the project".
-- **ADR numbers.** The highest accepted ADR on main is 0249 (after the Peek, Grist and Google-timeout ADRs), so this plan takes 0250 to 0261.
+- **ADR numbers.** The highest accepted ADR on main is 0249 (after the Peek, Grist and Google-timeout ADRs), so this plan takes 0250 to 0262.
 - **Operational sections and their parsers.** Each takes the whole org config dict:
   - `download_delivery`: `org_mode.DownloadDeliveryConfig.from_org_config`
   - `audit_forwarding`: `org_mode.AuditForwardingConfig.from_org_config`
@@ -170,7 +170,7 @@ Grist and Peek have no built-in app. Their servers and OAuth apps belong to each
 
 ### D1. Built-in app credentials
 
-Five built-in app keys, all for organization mode and all on the relay (D19):
+Six built-in app keys, all for organization mode and all on the relay (D19, D20):
 
 | Key | Used for | Redirects registered on the app (manual step mb1) |
 |---|---|---|
@@ -179,6 +179,7 @@ Five built-in app keys, all for organization mode and all on the relay (D19):
 | `salesforce` | Salesforce | `https://oauth.privacyfence.eu/callback/salesforce` |
 | `atlassian_relay` | Atlassian | `https://oauth.privacyfence.eu/callback/atlassian` |
 | `miro` | Miro | `https://oauth.privacyfence.eu/callback/miro` |
+| `google_signin` | the opt-in built-in Google sign-in (D20), in its own project `privacyfence-signin` | `https://oauth.privacyfence.eu/callback/idp`, `/callback/idp-login`, `/callback/stepup` |
 
 No app carries an `http` redirect: Slack, Miro and Atlassian refuse to distribute an app that does.
 The key names keep `_web` and `_relay` so the repository secrets named in mb1 stay as they are.
@@ -215,7 +216,7 @@ Every app has two fields, `client_id` and `client_secret`.
 - On `ImportError` it falls back to the env var `PRIVACYFENCE_BUILTIN_APPS`: the path of a JSON
   file with the same `{key: {"client_id", "client_secret"}}` shape, for development. A missing,
   unreadable or malformed file returns `None` and logs one warning without the file content.
-- It also exposes `BUILTIN_APP_KEYS: tuple[str, ...]`, the five keys in the table order above.
+- It also exposes `BUILTIN_APP_KEYS: tuple[str, ...]`, the six keys in the table order above.
 
 The built-in client secrets are public in effect, just as Telegram's hash is (ADR 0040). This is
 accepted: each one identifies the PrivacyFence app, and every sign-in still needs the person's own
@@ -2367,6 +2368,124 @@ gets no built-in apps.
     one-line PR flips it after approval, and the next release drops the line.
   - **Docs.** `slack-setup.md` and the 7.0 release notes say the same.
 
+### D20. Built-in Google sign-in, opt-in
+
+**What it is.** An organization server may use PrivacyFence's own Google OAuth client as its IdP.
+That makes the env-only bootstrap (D14) register no app at all: DNS, `PRIVACYFENCE_ISSUER_URL`,
+`PRIVACYFENCE_IDP=builtin-google`, `PRIVACYFENCE_ADMIN_EMAILS`, then `docker compose up -d`. It
+is **opt-in**: nothing switches it on without that setting, and a bundle or environment IdP of the
+organization's own always wins.
+
+**The client.**
+
+- It lives in its own Google Cloud project, `privacyfence-signin`, separate from
+  `privacyfence-builtin`. A suspension or abuse report against one project then cannot take down
+  both sign-in and the Gmail and Drive connectors.
+- It is a Web client with audience External, In production, and the scopes `openid email profile`
+  only. Those are not sensitive, so there is no 100-user cap and no security assessment. Brand
+  verification still applies (ma8).
+- Its redirect URIs are on the relay:
+  - `https://oauth.privacyfence.eu/callback/idp`
+  - `https://oauth.privacyfence.eu/callback/idp-login`
+  - `https://oauth.privacyfence.eu/callback/stepup`
+- It is the sixth built-in key, `google_signin`, with the repository secrets
+  `PF_APP_GOOGLE_SIGNIN_CLIENT_ID` and `..._SECRET` (p1, mb1). Like the others, it ships only in
+  the org image and the PyPI wheel.
+
+**Configuration (`org_mode.idp_section`, D14).**
+
+- `PRIVACYFENCE_IDP=builtin-google`, or a bundle `"idp": {"builtin": "google"}`, gives the section
+  `{"issuer": "https://accounts.google.com", "client_id": <built-in>, "client_secret":
+  <built-in>, "relay": true, "builtin": true, "admin_emails": [...], "trust_unverified_email":
+  false}`.
+- **`ConfigurationError` cases:**
+  - Built-in Google combined with `PRIVACYFENCE_IDP_ISSUER`, `..._CLIENT_ID` or
+    `..._CLIENT_SECRET[_FILE]`: `PRIVACYFENCE_IDP=builtin-google cannot be combined with your own
+    IdP settings.`
+  - No admin email: `The built-in Google sign-in needs PRIVACYFENCE_ADMIN_EMAILS.`
+  - The built-in `google_signin` app is absent from this build: `This build has no built-in
+    Google sign-in; use your own IdP app.`
+  - An `http://` or loopback issuer: `The built-in Google sign-in needs a public https://
+    server address.` Single-user mode remains the localhost path.
+- SEC-14 still holds. A signed bundle without an `idp` section refuses the environment setting
+  unless it sets `idp.from_environment`.
+
+**Who may sign in: default deny.** With the built-in client, any Google account in the world can
+complete Google's side, so the server decides alone. `org_identity.check_authz_policy`, when
+`idp.builtin` is true:
+
+- **Admins.** Admins named in `admin_emails` may sign in. SEC-07 applies: `email_verified` must
+  be true, and the `hd` claim must equal the email's domain.
+- **Allowed domains.** People whose verified email is in an allowed domain may sign in, with `hd`
+  equal to that domain. The domains come from the admin config's `authz.allowed_domains`, edited
+  on Admin → Sign-in. `PRIVACYFENCE_ALLOWED_DOMAINS` (comma-separated) seeds them on the first
+  import (D3), and is ignored afterwards with a log line.
+- **Everyone else** is refused with the existing denial page, even when `authz` is empty. Without
+  the built-in client, an empty `authz` keeps today's meaning.
+- **No `trust_unverified_email`.** The flag cannot be set with the built-in client (D18).
+  Personal Gmail accounts have no `hd`, so they can never sign in this way. The docs say so: use
+  your own IdP app for them.
+- **Admin rights.** The group claim is unavailable (Google sends no groups), so admins are named
+  by email only.
+
+**Through the relay.**
+
+- **The Worker (p11).** Three grants with fixed paths:
+  - `idp` → `/oauth/idp/callback`
+  - `idp-login` → `/oauth/idp/login-callback`
+  - `stepup` → `/oauth/stepup/callback`
+
+  They follow the same host rules, registration check and parameter rules as the connector
+  grants. A loopback host is refused for them (400 `invalid_request`).
+- **The server.** The three places that build an IdP `redirect_uri` use
+  `oauth_apps.relay_redirect_uri(<grant>)` and a `host~nonce` state (D5) when `idp.relay` is true:
+  `daemon_main` (`idp_callback_url`, `:1230`), `routes_org_identity` (`LOGIN_CALLBACK_PATH`) and
+  `routes_org_stepup` (`:144`, `:169`). The pending attempt stores that `redirect_uri` for the code
+  exchange.
+- **Registration.** `relay_client.status()["needed"]` is true from the first start when the IdP is
+  built-in. Registration then starts at once, and the well-known token is served (SEC-09).
+- **Before registration succeeds,** `/login` shows `Sign-in is starting up: this server is
+  registering with the PrivacyFence relay. Try again in a minute.` It does not send the person to
+  Google.
+
+**Cross-server safety.** Every server shares one client, so Google issues sign-in tokens addressed
+to all of them alike. A server must accept only a sign-in it started:
+
+- the code flow with PKCE and `nonce` stays mandatory (`org_identity.py:196-260`);
+- the server never accepts an ID token that it did not obtain from its own code exchange;
+- `state` is single-use and bound to the pending attempt.
+
+p20e's tests cover each point:
+
+- a code issued for another server's PKCE challenge fails the exchange;
+- an ID token whose `nonce` belongs to another attempt is refused;
+- a replayed `state` is refused.
+
+**Step-up.** The IdP step-up for approvals goes through the same client and the `stepup` grant.
+Passkey step-up is unaffected.
+
+**Admin page (D6).** The Sign-in section's first line reads `Sign-in: PrivacyFence's built-in
+Google sign-in, through oauth.privacyfence.eu. Only the admins below and people in the allowed
+domains can sign in.` It lists `admin_emails` read-only (they come from the environment).
+
+**Privacy and terms (D16, p13c).**
+
+- The relay section of the privacy page adds that servers using the built-in Google sign-in send
+  their sign-in redirects through the relay, which sees a one-time code only.
+- The relay terms add that the sign-in client may be suspended or withdrawn like the rest.
+
+**Risks.**
+
+- **Every login depends on the relay and the `privacyfence-signin` project.** If either is down
+  or suspended, nobody can sign in to any server using it. Passkey sign-in for existing sessions
+  is not a fallback, because sign-in itself is the IdP. The docs present the built-in sign-in as
+  the quick start for small Google Workspace teams. They recommend an organization's own IdP app
+  for anyone who needs Workspace-level control (an Internal app, groups) or independence from
+  PrivacyFence's services.
+- **Brand misuse.** A malicious operator could show "PrivacyFence" on its own server's Google
+  sign-in. Only name and email are at stake. Registration emails (SEC-23) and revocation cover
+  it, as for the connectors.
+
 ## ADRs
 
 - **0250** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -2436,13 +2555,18 @@ gets no built-in apps.
   optional. The host also serves a QA organization server for relay testing. Amends 0019 (the
   host) and 0181 (the group and label); relates to 0250, 0254.
 
+- **0262** — An organization server may opt in to PrivacyFence's built-in Google sign-in
+  (`PRIVACYFENCE_IDP=builtin-google`): a separate `privacyfence-signin` client through the relay,
+  default-deny (only admins by verified email and allowed Workspace domains with `hd`), and never
+  the default. Relates to 0258, 0259, 0254.
 ## Manual steps
 
 Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 
 - **Before:**
-  - (mb1) Register the five PrivacyFence-owned apps, each with only its relay redirect, and store
-    their 10 values as repository secrets.
+  - (mb1) Register the six PrivacyFence-owned apps (including the Google sign-in client in its own
+    project, D20), each with only its relay redirects, and store their 12 values as repository
+    secrets.
   - (mb2) Create the Cloudflare token and the relay Worker's GitHub environment.
   - (mb4) Build the new live-check runner, `runner.privacyfence.eu` (D17): Hetzner, Tailscale,
     the Cloudflare record and origin certificate, the `privacyfence-live` runner group and the
@@ -2461,6 +2585,7 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
     principal. ma2 uses that server.
   - (ma8) After the merge, record the demo video on a build of `main` and submit the built-in Google
     app for verification, with the scope justifications from the guide.
+    Also submit the `privacyfence-signin` project for brand verification (D20).
   - (ma9) After the merge, submit the built-in Slack app to the Slack Marketplace (D19), once Slack's
     requirements are met.
   - (ma7) After the merge, run the live check on `main` on the new runner, then retire the old
@@ -2469,6 +2594,10 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
     terms reviewed by a lawyer.
 
 ## Risks and open questions
+
+- **The built-in Google sign-in is a single point of failure for servers that choose it.** D20
+  keeps it opt-in, in a separate Google project, and documents an organization's own IdP app as
+  the robust choice.
 
 - **The built-in Slack app is rate-limited until it is in the Slack Marketplace.** Channel history
   and thread reads drop to 1 request per minute and 15 messages per call (D19). Slack's review takes
@@ -2581,9 +2710,9 @@ manual_steps_artifact: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 manual_steps_source: docs/builtin-oauth-apps-plan-manual-steps.html
 manual_before:
 - id: mb1-register-builtin-apps
-  title: Register the five PrivacyFence-owned OAuth apps (Google Web client, Slack, Salesforce, Atlassian, Miro), each with only its oauth.privacyfence.eu redirect, distribute them, and store their credentials as repository secrets
+  title: Register the six PrivacyFence-owned OAuth apps (Google Web client, Slack, Salesforce, Atlassian, Miro, and the Google sign-in client in its own project), each with only its oauth.privacyfence.eu redirects, distribute them, and store their credentials as repository secrets
   why: p1 bakes them into the org image and the PyPI wheel (and its dispatched build.yml check looks for them); ma2 and ma4 sign in with them
-  done_when: Settings → Secrets and variables → Actions lists the 10 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, and the Slack, Atlassian and Miro apps are set to public distribution
+  done_when: Settings → Secrets and variables → Actions lists the 12 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, PF_APP_GOOGLE_SIGNIN_CLIENT_ID/_SECRET, and the Slack, Atlassian and Miro apps are set to public distribution
 - id: mb2-relay-worker-cloudflare
   title: Create the Cloudflare API token, the relay's Gmail sender (alias, delivery restriction, Internal OAuth client and send-only refresh token) and the oauth-relay-worker GitHub environment
   why: the relay's deploy workflow (p11) uses them once the PR reaches main, and ma2 deploys from the branch by hand with the same token
@@ -2711,15 +2840,15 @@ phases:
   - .github/workflows/publish-pypi.yml
   brief: |-
     Read the plan's "Design → D1" section first; every name, env var, message and module format is there.
-    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_web", "slack", "salesforce", "atlassian_relay", "miro"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0250); ASCII only.
+    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_web", "slack", "salesforce", "atlassian_relay", "miro", "google_signin"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0250); ASCII only.
     2. Add `src/privacyfence/_builtin_apps.py` to .gitignore directly below the `_telegram_credentials.py` line, and `include src/privacyfence/_builtin_apps.py` to MANIFEST.in directly below line 6, extending the comment above it to name both generated modules.
     3. In src/privacyfence/app_credentials.py add BUILTIN_APP_KEYS and builtin_app(key) per D1 (a literal `from . import _builtin_apps` with the same `# type: ignore[attr-defined]` comment the Telegram import carries; the PRIVACYFENCE_BUILTIN_APPS JSON-file fallback; one logger.warning naming only the env var on a bad file). Extend the module docstring by one paragraph naming ADR 0250.
     4. Do not call the generator from the desktop installers (scripts/build_dmg.sh, build_deb.sh, build_installer.ps1): desktop mode gets no built-in apps (D19).
-    5. .github/workflows/build.yml: in `build-org-image` only, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 10 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries in that step's env only, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (same REQUIRE logic, `python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`). The desktop build jobs get no PF_APP_ entry.
+    5. .github/workflows/build.yml: in `build-org-image` only, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 12 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries in that step's env only, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (same REQUIRE logic, `python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`). The desktop build jobs get no PF_APP_ entry.
     6. .github/workflows/publish-pypi.yml `build` job: the same two steps next to the Telegram ones, with check-dist over `dist/*.whl dist/*.tar.gz`. The secrets go only to the write step's env, never to the job.
     7. Tests. tests/unit/test_builtin_apps_script.py mirrors every test in tests/unit/test_telegram_credentials.py: it generates an importable module whose APPS equals the input; a value with quotes and backslashes stays inert (ast.literal_eval of the right-hand side equals the input); one-of-two set warns and skips; none set deletes a stale module; a newline in a value returns 2 and writes nothing; output is ASCII; check-dist pass, require-fail, warn, no files and unknown archive; main dispatch; git-ignored but packaged; build.yml's build-org-image job and publish-pypi.yml call `scripts/builtin_apps.py write`, while build_dmg.sh, build_deb.sh, build_installer.ps1 and build.yml's desktop jobs contain neither `builtin_apps.py` nor `PF_APP_`, build.yml and publish-pypi.yml call `scripts/builtin_apps.py check-dist`, and none contains `APPS = `. tests/unit/test_app_credentials.py: builtin_app returns the generated module's entry (monkeypatch sys.modules["privacyfence._builtin_apps"]), returns a copy, falls back to the JSON file, returns None and warns once for a missing or malformed file without logging its content; and BUILTIN_APP_KEYS order.
     8. Run ruff check . and python3 -m pytest tests/unit/test_builtin_apps_script.py tests/unit/test_app_credentials.py tests/unit/test_telegram_credentials.py tests/unit/test_org_image_workflows.py -q.
-    9. After pushing the phase branch, dispatch build.yml on it (it is in ci.dispatchable; mb1's secrets are in place by now). In the run, the build-org-image "Write built-in app credentials" step's log must show `built-in app <key>: included` for all five keys. If they show `not set`, check the env wiring of step 5; if the secrets themselves are missing, stop with status=blocked naming mb1.
+    9. After pushing the phase branch, dispatch build.yml on it (it is in ci.dispatchable; mb1's secrets are in place by now). In the run, the build-org-image "Write built-in app credentials" step's log must show `built-in app <key>: included` for all six keys. If they show `not set`, check the env wiring of step 5; if the secrets themselves are missing, stop with status=blocked naming mb1.
     Stop condition: if `git grep -n "_telegram_credentials" setup.py` shows that setup.py handles the Telegram module, mirror it for _builtin_apps; if the Telegram module reaches the wheel by a mechanism you cannot mirror, stop with status=blocked.
 
     Also apply D15 SEC-13 / D19: the desktop installers ship no built-in app module; the test in step 7 pins it.
@@ -3297,7 +3426,7 @@ phases:
 
     Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands, and links to https://privacyfence.eu/relay-terms/ and https://privacyfence.eu/privacy/#relay), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
-    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (Gmail API sending in src/notify.ts with fetch only: the NOTIFY_FROM var, the NOTIFY_TO constant, the GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN Worker secrets set by the deploy workflow from the CF_OAUTH_RELAY_GMAIL_* environment secrets, the cached access token, the daily cap, notify_failures/notify_last_error/notify_skipped on /registrations, and every listed test; no [[send_email]] binding; the runbook covers minting and rotating the refresh token and the Restrict delivery rule), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry.
+    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (Gmail API sending in src/notify.ts with fetch only: the NOTIFY_FROM var, the NOTIFY_TO constant, the GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN Worker secrets set by the deploy workflow from the CF_OAUTH_RELAY_GMAIL_* environment secrets, the cached access token, the daily cap, notify_failures/notify_last_error/notify_skipped on /registrations, and every listed test; no [[send_email]] binding; the runbook covers minting and rotating the refresh token and the Restrict delivery rule), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry. Also apply D20 "Through the relay": the idp, idp-login and stepup grants with their fixed forward paths (/oauth/idp/callback, /oauth/idp/login-callback, /oauth/stepup/callback), the same registration and parameter rules, and a loopback host refused for them; test each.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
@@ -3677,10 +3806,71 @@ phases:
   - grep -n "PRIVACYFENCE_GRIST_PROVISIONER_URL" deploy/docker/privacyfence.env.example matches
   - python3 -m pytest tests/unit -q passes
   - ruff check . passes
-- id: p12-adrs
-  title: ADRs 0250-0261 and the status lines on the ADRs they amend
+- id: p20d-builtin-signin-config
+  title: 'Built-in Google sign-in: the opt-in setting and the default-deny sign-in rule'
   depends_on:
   - p20c-provisioning-keys-and-docker
+  complexity: M
+  worker_model: opus
+  worker_model_reason: it changes who can sign in to an organization server; the default-deny and hd rules are security-critical
+  touches:
+  - src/privacyfence/org_mode.py
+  - tests/unit/test_org_mode.py
+  - src/privacyfence/org_identity.py
+  - tests/unit/test_org_identity.py
+  - src/privacyfence/admin_config.py
+  - tests/unit/test_admin_config.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/test_settings_window_html.py
+  - deploy/docker/privacyfence.env.example
+  brief: |-
+    Read "Design → D20" ("The client", "Configuration", "Who may sign in", "Admin page"), D14 (idp_section) and SEC-07, SEC-14. The relay wiring is p20e; do not change redirect URIs here.
+    1. org_mode.idp_section: PRIVACYFENCE_IDP=builtin-google and the bundle form "idp": {"builtin": "google"} build D20's section from app_credentials.builtin_app("google_signin"); raise D20's four ConfigurationErrors; keep SEC-14's signed-bundle rule. Any other PRIVACYFENCE_IDP value raises ConfigurationError naming the accepted value.
+    2. org_identity: IdpConfig gains builtin: bool and relay: bool from the section; check_authz_policy applies D20's default-deny when builtin (admins by verified email with hd, allowed domains with hd, everyone else refused even with empty authz); trust_unverified_email is refused with builtin.
+    3. admin_config: import_from_bundle seeds authz.allowed_domains from PRIVACYFENCE_ALLOWED_DOMAINS (comma-separated, lower-cased, each a valid domain, otherwise ConfigurationError naming the variable) on the first import only; later starts log once that it is ignored.
+    4. settings_window_html: the Admin page's Sign-in section shows D20's first line and the read-only admin list when the IdP is built-in.
+    5. deploy/docker/privacyfence.env.example: a commented "Built-in Google sign-in (opt-in)" block with PRIVACYFENCE_IDP=builtin-google, PRIVACYFENCE_ADMIN_EMAILS and PRIVACYFENCE_ALLOWED_DOMAINS, saying the own-IdP block is the alternative and the two cannot be combined.
+    6. Tests: each ConfigurationError; default-deny for an outside Google account with empty authz; an allowed-domain account with matching hd allowed and with a different hd refused; a consumer account (no hd) refused even when listed in admin_emails; trust_unverified_email refused with builtin; the seed happens once; the Sign-in line renders only for builtin.
+    7. Run ruff check ., python3 -m pytest tests/unit/test_org_mode.py tests/unit/test_org_identity.py tests/unit/test_admin_config.py tests/unit/test_settings_window_html.py -q, then python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_org_mode.py tests/unit/test_org_identity.py tests/unit/test_admin_config.py -q passes
+  - grep -n "builtin-google" src/privacyfence/org_mode.py deploy/docker/privacyfence.env.example matches in both
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
+- id: p20e-builtin-signin-relay
+  title: 'Built-in Google sign-in through the relay: redirects, state, registration and the cross-server checks'
+  depends_on:
+  - p20d-builtin-signin-config
+  complexity: M
+  worker_model: opus
+  worker_model_reason: it routes IdP sign-in and step-up of every opted-in server through one shared client; the PKCE, nonce and state binding must hold across servers
+  touches:
+  - src/privacyfence/web/routes_org_identity.py
+  - tests/unit/web/test_routes_org_identity.py
+  - src/privacyfence/web/routes_org_stepup.py
+  - tests/unit/web/test_routes_org_approvals.py
+  - src/privacyfence/web/oauth_provider.py
+  - tests/unit/web/test_oauth_provider.py
+  - src/privacyfence/relay_client.py
+  - tests/unit/test_relay_client.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  brief: |-
+    Read "Design → D20" ("Through the relay", "Cross-server safety", "Step-up") and D5 (the relay contract and state format).
+    1. In daemon_main (idp_callback_url, ~:1230), routes_org_identity (LOGIN_CALLBACK_PATH) and routes_org_stepup (~:144, ~:169), when idp.relay is true use oauth_apps.relay_redirect_uri("idp" | "idp-login" | "stepup") and a "<netloc>~<token_urlsafe(32)>" state; store that redirect_uri on the pending attempt and use it for the code exchange. Without relay nothing changes.
+    2. relay_client: status()["needed"] is true when the IdP is built-in, so registration and the well-known token start at once; /login renders D20's "Sign-in is starting up" page while registration has not succeeded, and does not redirect to Google.
+    3. Tests (step-up ones in tests/unit/web/test_routes_org_approvals.py, next to the existing step-up tests): the relay redirect_uri is used for both authorize and exchange in all three flows; a code exchanged with another attempt's code_verifier fails; an ID token whose nonce belongs to another attempt is refused; a replayed or unknown state is refused; the starting-up page shows before registration and the Google redirect after; a non-builtin IdP keeps today's redirect URIs byte for byte.
+    4. Run ruff check ., python3 -m pytest tests/unit/web/test_routes_org_identity.py tests/unit/web/test_routes_org_approvals.py tests/unit/web/test_oauth_provider.py tests/unit/test_relay_client.py tests/unit/test_daemon_main.py -q, then python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/web/test_routes_org_identity.py tests/unit/web/test_routes_org_approvals.py tests/unit/web/test_oauth_provider.py tests/unit/test_relay_client.py -q passes
+  - grep -n "idp-login" src/privacyfence/web/routes_org_identity.py matches
+  - grep -n "stepup" src/privacyfence/web/routes_org_stepup.py matches
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
+- id: p12-adrs
+  title: ADRs 0250-0262 and the status lines on the ADRs they amend
+  depends_on:
+  - p20e-builtin-signin-relay
   - p10-bundle-tooling
   - p11-relay-worker
   complexity: M
@@ -3697,6 +3887,7 @@ phases:
   - docs/adr/0259-an-organization-server-can-start-from-environment-variables.md
   - docs/adr/0260-admins-can-be-named-by-verified-email.md
   - docs/adr/0261-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md
+  - docs/adr/0262-an-organization-server-may-opt-in-to-the-built-in-google-sign-in.md
   - docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md
   - docs/adr/0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md
   - docs/adr/0011-org-mode-runs-its-own-oauth-authorization-server.md
@@ -3706,8 +3897,8 @@ phases:
   - docs/adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md
   - docs/adr/0217-the-org-admin-stats-page-shows-counts-only.md
   brief: |-
-    1. Check `ls docs/adr | tail -3` first. If 0250-0261 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
-    2. Write the twelve ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
+    1. Check `ls docs/adr | tail -3` first. If 0250-0262 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
+    2. Write the thirteen ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
        - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, the Design (D1-D17), "Accepted risks" and "Risks".
        - Alternatives to record:
          - 0250: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
@@ -3720,8 +3911,10 @@ phases:
          - 0257: keeping every converter forever; a per-file version check in 8 instead of one marker; migrating lazily per principal as before.
          - 0259: keeping a signed bundle mandatory for org mode; reading every bundle key from the environment (only the IdP and server need it); mixing bundle and environment fields within the idp section.
          - 0260: the group claim only; any email claim without email_verified; the first person to sign in becomes admin.
+         - 0262: no built-in sign-in (every server registers its own IdP app); built-in sign-in on by default; the same Google project as the connector apps; allowing personal Gmail accounts.
          - 0261: reworking the existing runner in place; keeping the live checks on own QA apps; a GitHub-hosted runner with credentials as secrets (ADR 0019 rejected it); opening SSH to the internet instead of Tailscale.
          - 0258: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
+       - 0262 records D20, including its single-point-of-failure risk and the default-deny rule.
        - Fold in D15 where it names an ADR: 0250 (SEC-02 threat, SEC-13 rotation, SEC-22), 0252 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0261 (D17: the firewall, Tailscale-only administration, pfrunner outside the docker group, secrets only in step env and the generated module deleted after each run), 0254 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0255 (SEC-01: single-user mode is no protection against an agent that can run docker), 0257 (SEC-21), 0259 (SEC-14).
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
@@ -3733,7 +3926,7 @@ phases:
        - 0217: "Amended by [0253](...): the Stats section is on the Admin page."
        - 0019: "Amended by [0261](...): the runner host. The setup doc this ADR cites is now docs/connector-qa.md."
        - 0181: "Amended by [0261](...): the runner group and label are privacyfence-live."
-    4. docs/adr/README.md: add twelve index rows in the existing format:
+    4. docs/adr/README.md: add thirteen index rows in the existing format:
        - 0250: "Accepted; relates to 0040"
        - 0251: "Accepted; amends 0016, 0196"
        - 0252: "Accepted; amends 0196; relates to 0016, 0034, 0068, 0070, 0200"
@@ -3746,9 +3939,10 @@ phases:
        - 0259: "Accepted; amends 0011, 0016"
        - 0260: "Accepted; relates to 0011"
        - 0261: "Accepted; amends 0019, 0181; relates to 0250, 0254"
+       - 0262: "Accepted; relates to 0254, 0258, 0259"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0250-*.md docs/adr/0251-*.md docs/adr/0252-*.md docs/adr/0253-*.md docs/adr/0254-*.md docs/adr/0255-*.md docs/adr/0256-*.md docs/adr/0257-*.md docs/adr/0258-*.md docs/adr/0259-*.md docs/adr/0260-*.md docs/adr/0261-*.md lists twelve files (or the renumbered twelve)
+  - ls docs/adr/0250-*.md docs/adr/0251-*.md docs/adr/0252-*.md docs/adr/0253-*.md docs/adr/0254-*.md docs/adr/0255-*.md docs/adr/0256-*.md docs/adr/0257-*.md docs/adr/0258-*.md docs/adr/0259-*.md docs/adr/0260-*.md docs/adr/0261-*.md docs/adr/0262-*.md lists thirteen files (or the renumbered thirteen)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -3793,7 +3987,7 @@ phases:
     4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.
     5. how-it-works.md (:277-278), connector-qa.md (:153): where they say operational settings live in the bundle, point to the Admin page and admin_config.json instead. testing-policy.md (:183): add the Admin page to the phone-layout list of app surfaces.
     6. Run the docs tests below, python3 -m pytest tests/unit/test_docs_configuration_reference.py -q, and ruff check ..
-    Also apply D18 (operator docs): the configuration reference moves the auto-provisioning rows from the bundle flags to the admin config (Admin → Services) and the environment variables PRIVACYFENCE_PEEK_BASE_URL, PRIVACYFENCE_GRIST_SERVER_URL, PRIVACYFENCE_GRIST_PROVISIONER_URL and <key_env>/<key_env>_FILE; org-mode-docker.md's environment-only quick start shows Peek and Grist as an optional step with the provisioning keys as Docker secrets.
+    Also apply D20 (operator docs): org-mode-docker.md and org-mode-setup-guide.md present the built-in Google sign-in as the opt-in quick start for small Google Workspace teams (PRIVACYFENCE_IDP=builtin-google, admin emails, allowed domains), state the default-deny rule, that personal Gmail accounts and groups are not supported with it, and the dependency on the relay and the privacyfence-signin project, and recommend the organization's own IdP app otherwise; the configuration reference lists the three variables. Also apply D18 (operator docs): the configuration reference moves the auto-provisioning rows from the bundle flags to the admin config (Admin → Services) and the environment variables PRIVACYFENCE_PEEK_BASE_URL, PRIVACYFENCE_GRIST_SERVER_URL, PRIVACYFENCE_GRIST_PROVISIONER_URL and <key_env>/<key_env>_FILE; org-mode-docker.md's environment-only quick start shows Peek and Grist as an optional step with the provisioning keys as Docker secrets.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - python3 -m pytest tests/unit/test_docs_configuration_reference.py -q passes
@@ -3905,6 +4099,7 @@ phases:
     6. Add D16 item 5's deprecation notice to website/download/index.html and the FAQ's #modes answer. Use the page's existing notice or callout class if it has one; otherwise a <p class="page-copy"> with <strong>.
     7. Tests per D16 item 6, plus: the privacy page has id="google-user-data" and the exact Limited Use sentence.
     8. Run python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_links.py tests/unit/test_website_canonical_description.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py -q, then python3 -m pytest tests/unit -q -k website and ruff check .. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_website_layout.py tests/integration/test_website_consent.py -q.
+    Also apply D20 (privacy and terms): the privacy page's relay section adds that servers using the built-in Google sign-in send their sign-in redirects through the relay, which sees a one-time code only; the relay terms add that the built-in sign-in client may be suspended or withdrawn like the rest.
   acceptance:
   - python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_links.py tests/unit/test_website_canonical_description.py -q passes
   - grep -n "relay-terms" scripts/build_site.py website/_partials/footer.html matches in both
