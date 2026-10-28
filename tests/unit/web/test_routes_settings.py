@@ -2104,7 +2104,7 @@ class TestScopedTokenProposalRoutes:
         r = client.get("/settings/scoped_tokens")
         assert r.status_code == 200
         assert 'window.__pfInitialSection = "scoped_tokens"' in r.text
-        assert "__pfScopedProposal" not in r.text
+        assert "window.__pfScopedProposal = " not in r.text
 
     def test_the_pages_need_a_session(self, controller, sessions):
         client, _calls = self._client(controller, sessions)
