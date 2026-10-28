@@ -2072,13 +2072,21 @@ class TestScopedTokenProposalRoutes:
         for policy in (proposals_off, tokens_off):
             client, _csrf, _store = self._setup(tmp_path, monkeypatch, policy=policy)
             proposal = self._propose()
-            for path in ("/settings/scoped_tokens", f"/settings/scoped_tokens/proposals/{proposal.id}"):
-                r = client.get(path)
-                assert r.status_code == 303, path
-                assert r.headers["location"] == "/settings"
-        # Signed out: to the login page.
+            r = client.get(f"/settings/scoped_tokens/proposals/{proposal.id}")
+            assert r.status_code == 303 and r.headers["location"] == "/settings"
+        # The section itself only needs scoped tokens, not proposals.
+        client, _csrf, _store = self._setup(tmp_path, monkeypatch, policy=proposals_off)
+        assert client.get("/settings/scoped_tokens").status_code == 200
+        client, _csrf, _store = self._setup(tmp_path, monkeypatch, policy=tokens_off)
+        r = client.get("/settings/scoped_tokens")
+        assert r.status_code == 303 and r.headers["location"] == "/settings"
+
+    def test_signed_out_review_link_returns_to_the_review_page(self):
         anonymous = _client(_app(scoped_token_policy=self.ON)[0])
-        assert anonymous.get("/settings/scoped_tokens").status_code == 302
+        r = anonymous.get("/settings/scoped_tokens/proposals/stp-abc")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/login?next=/settings/scoped_tokens/proposals/stp-abc"
+        assert anonymous.get("/settings/scoped_tokens").headers["location"] == "/login?next=/settings/scoped_tokens"
 
     def test_review_page_embeds_the_proposal(self, tmp_path, monkeypatch):
         client, _csrf, _store = self._setup(tmp_path, monkeypatch)

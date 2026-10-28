@@ -89,5 +89,5 @@ so a proposal flow must not let a client obtain one, widen one, or learn that on
 [ADR 0013](0013-no-mcp-tool-mints-a-sign-in-credential.md) (no MCP tool mints a sign-in credential)
 still holds: the tool mints nothing, and only a signed-in person in Settings creates the token.
 ADR 0104, ADR 0164, [ADR 0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md),
-[ADR 0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md), [ADR 0195](0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md), ADR 0220,
+[ADR 0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md), [ADR 0195](0195-importing-personal-settings-is-merge-only-previewed-and-step-up-gated-on-the-file-hash.md) (a precedent for a passkey bound to the exact content), ADR 0220,
 [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md); 0251, 0252, 0253.

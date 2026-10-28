@@ -113,8 +113,8 @@ that PrivacyFence is irrelevant), and to call `privacyfence_status` before the f
 PrivacyFence-governed action. It also advertises tool-list change notifications: when you connect,
 disable or re-enable a service in Settings, connected clients are told to refresh their tool list.
 
-The tool list holds one tool per enabled, signed-in connector tool, plus the eight `privacyfence_*`
-tools below (the ninth, `privacyfence_propose_scoped_token`, only where token proposals are on: always on a local install, by the administrator's choice in organization mode). Each connector tool carries MCP annotations that say what it does: a read is
+The tool list holds one tool per enabled, signed-in connector tool, plus the `privacyfence_*`
+tools below: eight always, and `privacyfence_propose_scoped_token` only where token proposals are on (always on a local install, by the administrator's choice in organization mode). Each connector tool carries MCP annotations that say what it does: a read is
 read-only and idempotent; a write is neither. Only the three tools that delete something,
 `calendar_delete_event` (an event), `drive_sheets_delete_dimensions` (rows or columns of a
 spreadsheet) and `peek_delete_page` (a Peek page with its comments and visit history), are marked
@@ -173,7 +173,7 @@ rules are in [Approvals and policy](approvals-and-policy.md).
 
 ## PrivacyFence's own tools
 
-PrivacyFence adds eight tools of its own (the ninth, `privacyfence_propose_scoped_token`, only where token proposals are on: always on a local install, by the administrator's choice in organization mode). They are not connector tools and have no gate. Unlike
+PrivacyFence adds eight tools of its own, plus `privacyfence_propose_scoped_token` where token proposals are on (always on a local install, by the administrator's choice in organization mode). They are not connector tools and have no gate. Unlike
 connector tools, each carries its real MCP annotations.
 
 | Tool | What it does | Required arguments | Annotations |
