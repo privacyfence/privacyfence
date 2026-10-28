@@ -1590,9 +1590,17 @@ is no waiting period: a new host is served at once, and the maintainers hear abo
   - `wrangler.toml` has a `[[send_email]]` binding `name = "NOTIFY"` and
     `destination_address = "info@privacyfence.eu"`. The binding can only deliver to that address,
     which must be a verified destination in Email Routing.
-  - The sender is `relay-notify@relay.privacyfence.eu`. Email Routing is enabled on the subdomain
-    `relay.privacyfence.eu` only, so the MX records of `privacyfence.eu` and its existing mail are
-    not touched.
+  - The sender comes from the `wrangler.toml` variable `NOTIFY_FROM` (in `[vars]`, not a secret). It
+    is `relay-notify@<domain>`, where `<domain>` is a top-level domain in the same Cloudflare
+    account that **already** has Email Routing enabled. Cloudflare's dashboard does not offer
+    Email Routing on a subdomain for this account, so a `relay.` subdomain is not used.
+    - `privacyfence.eu` is the default, when its mail already runs through Email Routing (its MX
+      records point at `route1/2/3.mx.cloudflare.net`). Enabling Email Routing on a domain whose
+      mail is hosted elsewhere replaces its MX records and breaks that mail, so mb2 never does it.
+    - If `privacyfence.eu` mail is hosted elsewhere, `NOTIFY_FROM` uses another domain in the
+      account that already has Email Routing.
+    - With `NOTIFY_FROM = ""`, the Worker sends nothing and counts `notify_skipped`. The weekly
+      `/registrations` review (SEC-02) is then the only check, and the runbook says so.
 - **When.**
   - An email is sent when a host is verified for the first time, which inserts its row.
   - Re-verification of a known host sends nothing.
@@ -1610,7 +1618,7 @@ is no waiting period: a new host is served at once, and the maintainers hear abo
     - the revoke command, `curl -X POST -H "Authorization: Bearer $REVOKE_TOKEN" -H
       "Content-Type: application/json" -d '{"host":"<host>"}'
       https://oauth.privacyfence.eu/admin/revoke`.
-  - Headers are `From`, `To`, `Subject`, `Date`, `Message-ID` (`<uuid@relay.privacyfence.eu>`),
+  - Headers are `From`, `To`, `Subject`, `Date`, `Message-ID` (`<uuid@<NOTIFY_FROM's domain>>`),
     `MIME-Version`, and `Content-Type: text/plain; charset=utf-8`.
   - The host is already validated as ASCII by the host rules, so no header injection is possible.
     The code still refuses to send if any header value contains `\r` or `\n`.
@@ -3217,7 +3225,7 @@ phases:
 
     Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands, and links to https://privacyfence.eu/relay-terms/ and https://privacyfence.eu/privacy/#relay), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
-    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (the NOTIFY send_email binding, src/notify.ts, the daily cap, failure counters on /registrations, and every listed test; the runbook explains the Email Routing setup), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry.
+    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (the NOTIFY send_email binding with the NOTIFY_FROM var, src/notify.ts, the daily cap, failure and skip counters on /registrations, an empty NOTIFY_FROM sending nothing, and every listed test; the runbook explains which domain may carry Email Routing and that one whose mail is hosted elsewhere must not), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
