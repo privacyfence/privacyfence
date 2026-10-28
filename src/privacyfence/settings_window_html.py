@@ -174,10 +174,14 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-chip[aria-pressed="true"]::before, .pf-chip[aria-checked="true"]::before { content: "\\2713"; margin-right: 6px; }
 
 /* ---- Scoped tokens ---- */
-.pf-st-row .pf-row-desc { display: flex; flex-direction: column; gap: var(--space-2xs); }
+/* A token row keeps its buttons level with the title when "Rules and tools" opens. */
+.pf-st-row { align-items: flex-start; }
+.pf-st-row + .pf-st-row { padding-top: var(--space-s); border-top: 1px solid var(--line); }
+.pf-st-row .pf-row-desc { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2xs); }
 .pf-st-list { margin: 0 0 var(--space-xs); padding-left: var(--space-s); }
 .pf-st-form { display: flex; flex-direction: column; gap: var(--space-xs); }
-.pf-st-chip { cursor: default; }
+/* Status badges on a token row: read-only, so smaller than a tappable chip. */
+.pf-st-chip { cursor: default; min-height: 0; padding: 2px 10px; font-weight: 500; }
 /* Rule picker: one rule per line; a rule with long verbs wraps and grows taller instead of overflowing. */
 .pf-st-rules { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
 /* Tool picker: the status text can list many rule titles, so the chip wraps instead of running off the page. */
@@ -1373,11 +1377,12 @@ _JS = r"""
     if (t.tools.length === 0) { detail += '<li>None</li>'; }
     t.tools.forEach(function (name) { detail += '<li><code>' + esc(name) + '</code></li>'; });
     detail += '</ul></details>';
-    var control = chips + '<div class="button" role="button" tabindex="0" aria-label="Duplicate ' + esc(t.label) + '" data-st-duplicate="' +
+    var badges = chips ? '<div class="pf-chips pf-st-badges">' + chips + '</div>' : '';
+    var control = '<div class="pf-row-controls"><div class="button" role="button" tabindex="0" aria-label="Duplicate ' + esc(t.label) + '" data-st-duplicate="' +
       esc(t.id) + '">Duplicate</div><div class="button" role="button" tabindex="0" aria-label="Rename ' + esc(t.label) +
       '" data-st-rename="' + esc(t.id) + '">Rename</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
-      dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div>';
-    return rowHtml(t.label, esc(scopedExpiryText(t)) + activityHtml + detail, control, 'pf-st-row');
+      dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div></div>';
+    return rowHtml(t.label, badges + esc(scopedExpiryText(t)) + activityHtml + detail, control, 'pf-st-row');
   }
 
   // "Daily sync" -> "Daily sync 2", "Daily sync 2" -> "Daily sync 3"; skips
