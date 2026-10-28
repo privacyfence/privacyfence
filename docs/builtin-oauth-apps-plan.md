@@ -174,7 +174,7 @@ Seven built-in app keys:
 |---|---|---|
 | `google_desktop` | Google, local mode | none (Desktop app client) |
 | `google_web` | Google, org mode via relay | `https://oauth.privacyfence.eu/callback/<g>` for `g` in gmail, drive, calendar, contacts, tasks, apps_script |
-| `slack` | Slack, both modes | `http://127.0.0.1:53682/callback`, `https://oauth.privacyfence.eu/callback/slack` |
+| `slack` | Slack, both modes (desktop through the relay's loopback forwarding, D19) | `https://oauth.privacyfence.eu/callback/slack` only: Slack refuses public distribution with an `http` redirect |
 | `salesforce` | Salesforce, both modes | `http://localhost:53683/callback`, `https://oauth.privacyfence.eu/callback/salesforce` |
 | `atlassian_local` | Atlassian, local mode | `http://127.0.0.1:53684/callback` |
 | `atlassian_relay` | Atlassian, org mode via relay | `https://oauth.privacyfence.eu/callback/atlassian` |
@@ -1865,8 +1865,9 @@ stable tag (ADRs 0052, 0099). The relay also goes live on merge. So the website 
      - writes no logs (SEC-15);
      - emails the maintainers the host name, the IP address and the country of the request when a
        new server registers (SEC-23), kept in that mailbox for up to 12 months;
-     - is used only by organization servers and single-user installs that use the built-in apps;
-       an organization's own apps never touch it.
+     - is used only by organization servers and single-user installs that use the built-in apps,
+       and by desktop installs signing in to Slack with the built-in app (D19); an organization's
+       own apps never touch it.
      Legal basis Art. 6(1)(f) (operating and securing the service). Cloudflare is the processor,
      as for the download service.
    - A new section `<h2 id="google-user-data">Google user data in the PrivacyFence app</h2>`,
@@ -2255,6 +2256,71 @@ domains are not locked out:
 (after the Peek, Grist and 6.10.0 merges). Phases still locate code by the names given next to each
 reference.
 
+### D19. Desktop Slack sign-in goes through the relay
+
+**Why.** Slack only activates public distribution when every redirect URL is `https://`. The
+built-in Slack app must be distributed to work in any workspace, so it cannot carry the desktop
+loopback redirect `http://127.0.0.1:53682/callback`. The built-in app therefore has exactly one
+redirect URL, `https://oauth.privacyfence.eu/callback/slack`, and desktop installs reach it
+through the relay's loopback forwarding (D9, "The relay on localhost"). That forwarding needs no
+registration and sends the browser straight back to the person's own machine.
+
+**Which apps.** `oauth_apps.LOCAL_VIA_RELAY: frozenset[str] = frozenset({"slack"})` lists the
+built-in keys whose local-mode flow goes through the relay. If another provider also refuses an
+`http` redirect when distributing (mb1 checks Miro and Atlassian), adding its key there is the
+whole change. A workspace's own Slack app in the bundle is unchanged: it stays an internal app,
+with its own `http` loopback redirect.
+
+**Effective config (D3).** In local mode, a built-in section whose key is in `LOCAL_VIA_RELAY`
+also gets `"relay": True`. In org mode nothing changes.
+
+**The loopback flow (`oauth_loopback.run_browser_oauth`).** It gains a keyword argument,
+`relay_grant: str | None = None`. With a grant:
+
+- The local server binds `127.0.0.1:<port>` as today, and accepts only the path
+  `/oauth/callback/<grant>`, the path the Worker forwards a loopback host to.
+- The `redirect_uri` sent to the provider, and to its token exchange, is
+  `oauth_apps.relay_redirect_uri(grant)`.
+- `state` is `f"127.0.0.1:{port}~{secrets.token_urlsafe(32)}"` (the D5 format). The handler
+  compares the whole value.
+- Everything else is unchanged: the PKCE pair (Slack ignores it), the timeout, the printed URL and
+  the error pages.
+
+**Slack.**
+
+- `slack_client.authorize_interactive` gains `via_relay: bool = False` and passes
+  `relay_grant="slack"` when it is set.
+- `daemon_main.run_slack_oauth` (`:1893`) and the Settings connect flow
+  (`settings_controller.py`, the Slack branch of `authenticate_connector`) pass
+  `via_relay=oauth_apps.uses_relay(section)`.
+- The QA minting script (D17) goes through `--slack-oauth`, so it needs no change.
+
+**What follows.**
+
+- **The relay must be up.** A desktop install's built-in Slack sign-in depends on the relay. When
+  the relay is down, the browser shows the Worker's error page or a connection error, and
+  PrivacyFence times out with its usual message. Existing Slack tokens keep working, because
+  Slack never refreshes (D0).
+- **No PKCE.** The Slack code passes through `oauth.privacyfence.eu` without PKCE, as it does for
+  org servers (SEC-05). The Admin page's Slack line from SEC-05 now shows in local mode too:
+  `service_rows`' `relay` is `app_source == "builtin" and (mode == "org" or key in
+  LOCAL_VIA_RELAY)`.
+- **Privacy and docs.**
+  - The privacy page's relay section (D16 item 3) says the relay is also used by desktop installs
+    signing in to Slack with the built-in app.
+  - `slack-setup.md` gains the same sentence, and keeps the loopback redirect for an
+    organization's own internal app.
+- **The guide (mb1).** The built-in Slack app is registered with the one `https` redirect URL.
+  Step ma1 (desktop sign-in) needs the relay deployed in ma0.
+- **Tests (p5b).**
+  - With `relay_grant`, the redirect URI is the relay's.
+  - The state carries `127.0.0.1:<port>~`.
+  - A callback on `/callback` is refused with 404, while one on `/oauth/callback/slack` with the
+    right state completes.
+  - `authorize_interactive(via_relay=True)` passes the grant.
+  - The local effective config marks built-in Slack, and not a bundle Slack app.
+  - `run_slack_oauth` follows the marker.
+
 ## ADRs
 
 - **0250** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -2285,7 +2351,8 @@ reference.
   `oauth.privacyfence.eu`. It is deployed from `main` on its own track, never by a release tag,
   and its contract only grows. It forwards only to hosts that proved control of their domain, keeps no
   logs, shows registrations only to maintainers, and maintainers can revoke a host. It runs in the
-  existing Cloudflare account, with required reviewers on deploys. It forwards to a loopback
+  existing Cloudflare account, with required reviewers on deploys. Desktop installs use it for the
+  built-in Slack app, which Slack allows only `https` redirects for (D19). It forwards to a loopback
   host without registration. It is offered as is, under the published relay terms, with no
   warranty and liability limited as far as the law allows (D16). Relates to 0011, 0186.
 - **0255** — `mode` and the server address may come from environment variables. Organization mode
@@ -2798,10 +2865,41 @@ phases:
   - python3 -m pytest tests/unit/web/test_routes_connect.py -q -k TestRelay passes and selects at least 6 tests
   - python3 -m pytest tests/unit/test_relay_client.py -q --cov=privacyfence.relay_client --cov-branch --cov-report=term-missing passes and reports 100%
   - ruff check . passes
+- id: p5b-desktop-slack-via-relay
+  title: Desktop Slack sign-in with the built-in app goes through the relay's loopback forwarding
+  depends_on:
+  - p5-org-relay-client
+  complexity: S
+  touches:
+  - src/privacyfence/oauth_apps.py
+  - tests/unit/test_oauth_apps.py
+  - src/privacyfence/oauth_loopback.py
+  - tests/unit/test_oauth_loopback.py
+  - src/privacyfence/slack_client.py
+  - tests/unit/test_slack_client.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  - src/privacyfence/settings_controller.py
+  - tests/unit/test_settings_controller.py
+  brief: |-
+    Read "Design → D19" and D9's "The relay on localhost". Every name and rule is there.
+    1. oauth_apps.py: add LOCAL_VIA_RELAY = frozenset({"slack"}); in local mode effective_org_config adds RELAY_MARKER: True to a built-in section whose key is in LOCAL_VIA_RELAY (never to a bundle section).
+    2. oauth_loopback.run_browser_oauth: add the keyword-only relay_grant per D19 (path /oauth/callback/<grant>, redirect_uri oauth_apps.relay_redirect_uri(grant) for both the authorize URL and the exchange, state "127.0.0.1:<port>~<token_urlsafe(32)>"). Import oauth_apps inside the function if a module-level import would cycle.
+    3. slack_client.authorize_interactive: add via_relay: bool = False, passing relay_grant="slack" when set.
+    4. daemon_main.run_slack_oauth (~:1893) and the Slack branch of settings_controller.authenticate_connector: pass via_relay=oauth_apps.uses_relay(section).
+    5. Tests per D19 "Tests (p5b)". In test_oauth_loopback.py drive the real local server with a request to the bound port, as the existing tests do.
+    6. Run ruff check ., python3 -m pytest tests/unit/test_oauth_loopback.py tests/unit/test_slack_client.py tests/unit/test_oauth_apps.py tests/unit/test_settings_controller.py tests/unit/test_daemon_main.py -q, then python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_oauth_loopback.py tests/unit/test_slack_client.py tests/unit/test_oauth_apps.py -q passes
+  - grep -n "LOCAL_VIA_RELAY" src/privacyfence/oauth_apps.py matches
+  - grep -n "relay_grant" src/privacyfence/oauth_loopback.py src/privacyfence/slack_client.py matches in both
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
 - id: p6-admin-config-changes
   title: Validated admin config changes and the Admin page's service rows
   depends_on:
   - p3-effective-config
+  - p5b-desktop-slack-via-relay
   complexity: M
   touches:
   - src/privacyfence/admin_config.py
@@ -2834,7 +2932,7 @@ phases:
        - No row, summary or log record (caplog) contains a client_secret or a bearer-token env var's value. Set a fake env var to a sentinel and assert it never appears.
     3. Run ruff check ., python3 -m pytest tests/unit/test_admin_config.py -q and python3 -m mypy src/privacyfence/admin_config.py.
     Also apply D15: SEC-18 (the apply_change(action, params, *, bundle, mode, single_user) signature, replacing the payload keys), SEC-06 (bearer env dropped on a URL or kind change), SEC-04's org server-address rule, and SEC-20 (no control characters in rooms), each with tests.
-    Also apply D18 (Admin actions and rows): add set_auto_provisioning (org only, refused with D18's texts when unavailable); set_server_address is refused while the address comes from the environment or is an imported locked address (D18); service_rows gains options.address_source, options.locked and options.auto_provision {enabled, trust_unverified_email, available, reason, key_set} for peek and grist (key_set from org_mode.provisioning_key once p20c adds it; until then os.environ.get(key_env) is acceptable and p20c switches it). Never put the key in a row. Test each.
+    Also apply D19: service_rows' relay is app_source == "builtin" and (mode == "org" or key in oauth_apps.LOCAL_VIA_RELAY), with a test for local Slack. Also apply D18 (Admin actions and rows): add set_auto_provisioning (org only, refused with D18's texts when unavailable); set_server_address is refused while the address comes from the environment or is an imported locked address (D18); service_rows gains options.address_source, options.locked and options.auto_provision {enabled, trust_unverified_email, available, reason, key_set} for peek and grist (key_set from org_mode.provisioning_key once p20c adds it; until then os.environ.get(key_env) is acceptable and p20c switches it). Never put the key in a row. Test each.
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/admin_config.py passes
@@ -3742,7 +3840,7 @@ phases:
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
     8. Run the docs tests below and ruff check ..
-    Also apply D18 (user docs): peek-setup.md and grist-setup.md describe automatic accounts as "set the address variables and the key on the server, then turn them on under Admin → Services", and the manual address as either the Admin page or the environment variable; the CHANGELOG notes under Changed, as breaking, that 6.11's --peek-auto-provision/--grist-auto-provision bundle flags became an Admin-page switch with the addresses from the environment, and that upgraded 6.11 servers keep their automatic accounts with the old addresses locked; it also notes that the built-in Google app shows an unverified-app screen and a 100-user cap until Google verifies it, and points organizations to their own Google app; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
+    Also apply D19 (slack-setup.md: a desktop install's built-in Slack sign-in passes through oauth.privacyfence.eu because Slack allows only https redirects for a distributed app; an organization's own internal app keeps its loopback redirect). Also apply D18 (user docs): peek-setup.md and grist-setup.md describe automatic accounts as "set the address variables and the key on the server, then turn them on under Admin → Services", and the manual address as either the Admin page or the environment variable; the CHANGELOG notes under Changed, as breaking, that 6.11's --peek-auto-provision/--grist-auto-provision bundle flags became an Admin-page switch with the addresses from the environment, and that upgraded 6.11 servers keep their automatic accounts with the old addresses locked; it also notes that the built-in Google app shows an unverified-app screen and a 100-user cap until Google verifies it, and points organizations to their own Google app; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
   - grep -n "Admin page" docs/connecting-a-service.md docs/slack-setup.md docs/grist-setup.md matches in each
