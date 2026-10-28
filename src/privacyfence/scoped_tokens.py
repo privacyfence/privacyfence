@@ -163,6 +163,13 @@ REVOKED_SCOPE = ScopedToken(
 class ScopedTokenPolicy:
     enabled: bool
     max_days: int
+    allow_ai_proposals: bool = False
+
+
+PROPOSALS_DISABLED_MESSAGE = (
+    "Token proposals are not enabled on this install. "
+    "Your administrator turns them on in the organization config bundle."
+)
 
 
 class ScopedTokenError(ValueError):
@@ -179,7 +186,7 @@ def _digest(secret: str) -> str:
 
 def policy_from_org_config(org_config: dict, *, org_mode: bool) -> ScopedTokenPolicy:
     if not org_mode:
-        return ScopedTokenPolicy(True, LOCAL_MAX_DAYS)
+        return ScopedTokenPolicy(True, LOCAL_MAX_DAYS, True)
     section = org_config.get("scoped_tokens")
     if not isinstance(section, dict):
         section = {}
@@ -188,7 +195,34 @@ def policy_from_org_config(org_config: dict, *, org_mode: bool) -> ScopedTokenPo
     if isinstance(max_days, bool) or not isinstance(max_days, int) or not 1 <= max_days <= LOCAL_MAX_DAYS:
         logger.warning("scoped_tokens.max_days must be an integer from 1 to %d; using %d", LOCAL_MAX_DAYS, DEFAULT_DAYS)
         max_days = DEFAULT_DAYS
-    return ScopedTokenPolicy(enabled, max_days)
+    raw_proposals = section.get("allow_ai_proposals", False)
+    if not isinstance(raw_proposals, bool):
+        logger.warning("scoped_tokens.allow_ai_proposals must be true or false; using false")
+        raw_proposals = False
+    return ScopedTokenPolicy(enabled, max_days, raw_proposals and enabled)
+
+
+def normalise_create_request(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """What a create-token step-up ceremony is bound to, or ``None`` for a
+    malformed body. Shared by both modes' routes (ADR 0164, ADR 0165)."""
+    label, days = payload.get("label"), payload.get("days")
+    rules, tools = normalise_rule_requests(payload.get("rules")), payload.get("tools")
+    if not isinstance(label, str) or isinstance(days, bool) or not isinstance(days, int):
+        return None
+    if rules is None or not isinstance(tools, list):
+        return None
+    if not all(isinstance(name, str) for name in tools):
+        return None
+    allow_personal_data = payload.get("allow_personal_data", False)
+    if not isinstance(allow_personal_data, bool):
+        return None
+    allow_personal_data_reads = payload.get("allow_personal_data_reads", False)
+    if not isinstance(allow_personal_data_reads, bool):
+        return None
+    return {
+        "label": label, "days": days, "rules": rules, "tools": sorted(tools),
+        "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
+    }
 
 
 def _to_json(token: ScopedToken) -> dict[str, Any]:
@@ -509,7 +543,66 @@ class ScopedTokenStore:
         """Create a token holding its own rules, built from ``rules`` (``normalise_rule_requests``'s
         output): a ``new`` rule, a ``copy`` of one of the person's Auto-accept rows, or a
         ``duplicate`` of a row of one of their tokens (ADR 0236)."""
-        from .policy import catalogue, scope_rows
+        from .policy import scope_rows
+
+        tool_set = frozenset(tools)
+        new_rules, own_rows = self._prepare(label=label, rules=rules, policy=policy)
+        with self._lock:
+            self._refresh(principal)
+            existing = self._tokens[principal.id]
+            base_rows = self._check_locked(
+                existing, label=label, days=days, rules=rules, tool_set=tool_set,
+                own_rows=own_rows, policy=policy,
+            )
+            token_rows, _ = scope_rows.add_rules(base_rows, new_rules)
+            created = time.time() if now is None else now
+            secret = mint_secret()
+            token = ScopedToken(
+                id="st-" + secrets.token_hex(6),
+                label=label,
+                digest=_digest(secret),
+                principal_id=principal.id,
+                principal_email=principal.email,
+                principal_display_name=principal.display_name,
+                created_at=created,
+                expires_at=created + days * _SECONDS_PER_DAY,
+                tools=tool_set,
+                allow_personal_data=allow_personal_data,
+                allow_personal_data_reads=allow_personal_data_reads,
+                rules=tuple(token_rows),
+            )
+            self._tokens[principal.id] = [*existing, token]
+            self._write(principal)
+            self._index[token.digest] = (principal.id, token.id)
+            return token, secret
+
+    def check_request(
+        self,
+        principal: Principal,
+        *,
+        label: str,
+        days: int,
+        rules: Sequence[dict[str, Any]],
+        tools: Iterable[str],
+        policy: ScopedTokenPolicy,
+        check_existing: bool = True,
+    ) -> None:
+        """Run ``create``'s validation and raise its ``ScopedTokenError``; writes nothing.
+        ``check_existing=False`` skips the duplicate-label and token-limit checks."""
+        _, own_rows = self._prepare(label=label, rules=rules, policy=policy)
+        with self._lock:
+            self._refresh(principal)
+            self._check_locked(
+                self._tokens[principal.id], label=label, days=days, rules=rules,
+                tool_set=frozenset(tools), own_rows=own_rows, policy=policy, check_existing=check_existing,
+            )
+
+    def _prepare(
+        self, *, label: str, rules: Sequence[dict[str, Any]], policy: ScopedTokenPolicy,
+    ) -> tuple[list[PolicyRule], dict[str, ScopeRow]]:
+        """No lock: the policy, label and rule-count checks, the compiled ``new`` rules (request
+        order) and the person's Auto-accept rows a ``copy`` rule may name."""
+        from .policy import catalogue
         from .policy.value_format import RuleValueError
 
         if not policy.enabled:
@@ -521,7 +614,6 @@ class ScopedTokenStore:
             raise ScopedTokenError(_LABEL_MESSAGE)
         if len(rules) > MAX_RULES_PER_TOKEN:
             raise ScopedTokenError(f"A token has at most {MAX_RULES_PER_TOKEN} rules.")
-        tool_set = frozenset(tools)
         # Read before the store lock: get_policy_rows takes the Auto-accept write lock, and
         # ensure_scope_rows takes that lock and then this one.
         own_rows = (
@@ -545,54 +637,47 @@ class ScopedTokenStore:
                     "A new rule needs a scope, at least one of its verbs, and a value if the scope takes one."
                 )
             new_rules.extend(built)
-        with self._lock:
-            self._refresh(principal)
-            existing = self._tokens[principal.id]
-            if any(t.label == label for t in existing):
-                raise ScopedTokenError("You already have a token with that name.")
-            if not 1 <= days <= policy.max_days:
-                raise ScopedTokenError(f"A token lasts 1 to {policy.max_days} days.")
-            if not rules and not tool_set:
-                raise ScopedTokenError("Choose at least one tool for the token.")
-            for name in sorted(tool_set):
-                if name not in auto_accept.TOOL_TO_GATE:
-                    raise ScopedTokenError(f"{name} is not a PrivacyFence tool.")
-            base_rows: list[ScopeRow] = []
-            for entry in rules:
-                if entry["kind"] == "new":
-                    continue
-                if entry["kind"] == "copy":
-                    base = own_rows.get(entry["rule_id"])
-                else:
-                    source = next((t for t in existing if t.id == entry["token_id"]), None)
-                    base = next((r for r in source.rules if r.id == entry["rule_id"]), None) if source else None
-                if base is None:
-                    raise ScopedTokenError("One of the chosen rules no longer exists; reload the page.")
-                if all(row.id != base.id for row in base_rows):
-                    base_rows.append(replace(base, former_ids=()))
-            if len(existing) >= MAX_TOKENS_PER_PRINCIPAL:
-                raise ScopedTokenError(f"You have {MAX_TOKENS_PER_PRINCIPAL} tokens already; revoke one first.")
-            token_rows, _ = scope_rows.add_rules(base_rows, new_rules)
-            created = time.time() if now is None else now
-            secret = mint_secret()
-            token = ScopedToken(
-                id="st-" + secrets.token_hex(6),
-                label=label,
-                digest=_digest(secret),
-                principal_id=principal.id,
-                principal_email=principal.email,
-                principal_display_name=principal.display_name,
-                created_at=created,
-                expires_at=created + days * _SECONDS_PER_DAY,
-                tools=tool_set,
-                allow_personal_data=allow_personal_data,
-                allow_personal_data_reads=allow_personal_data_reads,
-                rules=tuple(token_rows),
-            )
-            self._tokens[principal.id] = [*existing, token]
-            self._write(principal)
-            self._index[token.digest] = (principal.id, token.id)
-            return token, secret
+        return new_rules, own_rows
+
+    def _check_locked(
+        self,
+        existing: list[ScopedToken],
+        *,
+        label: str,
+        days: int,
+        rules: Sequence[dict[str, Any]],
+        tool_set: frozenset[str],
+        own_rows: dict[str, ScopeRow],
+        policy: ScopedTokenPolicy,
+        check_existing: bool = True,
+    ) -> list[ScopeRow]:
+        """Caller holds ``self._lock``. Returns the rows the token takes over from ``copy`` and
+        ``duplicate`` rules. ``check_existing=False`` skips the duplicate-label and 50-tokens checks."""
+        if check_existing and any(t.label == label for t in existing):
+            raise ScopedTokenError("You already have a token with that name.")
+        if not 1 <= days <= policy.max_days:
+            raise ScopedTokenError(f"A token lasts 1 to {policy.max_days} days.")
+        if not rules and not tool_set:
+            raise ScopedTokenError("Choose at least one tool for the token.")
+        for name in sorted(tool_set):
+            if name not in auto_accept.TOOL_TO_GATE:
+                raise ScopedTokenError(f"{name} is not a PrivacyFence tool.")
+        base_rows: list[ScopeRow] = []
+        for entry in rules:
+            if entry["kind"] == "new":
+                continue
+            if entry["kind"] == "copy":
+                base = own_rows.get(entry["rule_id"])
+            else:
+                source = next((t for t in existing if t.id == entry["token_id"]), None)
+                base = next((r for r in source.rules if r.id == entry["rule_id"]), None) if source else None
+            if base is None:
+                raise ScopedTokenError("One of the chosen rules no longer exists; reload the page.")
+            if all(row.id != base.id for row in base_rows):
+                base_rows.append(replace(base, former_ids=()))
+        if check_existing and len(existing) >= MAX_TOKENS_PER_PRINCIPAL:
+            raise ScopedTokenError(f"You have {MAX_TOKENS_PER_PRINCIPAL} tokens already; revoke one first.")
+        return base_rows
 
     def revoke(self, principal: Principal, token_id: str) -> bool:
         with self._lock:

@@ -154,7 +154,7 @@ from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
 from ..scoped_tokens import (
-    DEFAULT_DAYS, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, get_store, normalise_rule_requests,
+    DEFAULT_DAYS, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, get_store, normalise_create_request,
 )
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
@@ -363,29 +363,6 @@ class ScopedTokenWiring:
     store_revoke_all: Callable[[], int]
     send_secret: Callable[[str], tuple[bool, str]]
     page_data: Callable[[], dict[str, Any]]
-
-
-def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """What a create-token step-up ceremony is bound to, or ``None`` for a
-    malformed body. Shared by both modes' routes (ADR 0164, ADR 0165)."""
-    label, days = payload.get("label"), payload.get("days")
-    rules, tools = normalise_rule_requests(payload.get("rules")), payload.get("tools")
-    if not isinstance(label, str) or isinstance(days, bool) or not isinstance(days, int):
-        return None
-    if rules is None or not isinstance(tools, list):
-        return None
-    if not all(isinstance(name, str) for name in tools):
-        return None
-    allow_personal_data = payload.get("allow_personal_data", False)
-    if not isinstance(allow_personal_data, bool):
-        return None
-    allow_personal_data_reads = payload.get("allow_personal_data_reads", False)
-    if not isinstance(allow_personal_data_reads, bool):
-        return None
-    return {
-        "label": label, "days": days, "rules": rules, "tools": sorted(tools),
-        "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
-    }
 
 
 def _scoped_revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1208,7 +1185,7 @@ def build_routes(
     async def scoped_token_create(request: Request) -> Response:
         assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
         gated = await _scoped_token_request(
-            request, "create_scoped_token", "create a scoped token", _scoped_create_fingerprint_body,
+            request, "create_scoped_token", "create a scoped token", normalise_create_request,
         )
         if isinstance(gated, Response):
             return gated
@@ -1826,7 +1803,7 @@ def build_org_routes(
         return principal, bound
 
     async def scoped_token_create(request: Request) -> Response:
-        gated = await _org_scoped_token_request(request, "create_scoped_token", _scoped_create_fingerprint_body)
+        gated = await _org_scoped_token_request(request, "create_scoped_token", normalise_create_request)
         if isinstance(gated, Response):
             return gated
         principal, bound = gated
