@@ -1112,7 +1112,7 @@ class TestAdminSurfaceCapabilities:
     def test_local_mode_gets_services_and_the_bundle_upload(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin"))
         assert (caps["surface"], caps["mode"]) == ("admin", "local")
-        assert caps["sections"] == {"services": True, "org_config": True}
+        assert caps["sections"] == {"services": True, "features": True, "org_config": True}
 
     def test_local_mode_suppresses_the_org_only_admin_actions(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin"))
@@ -1120,9 +1120,9 @@ class TestAdminSurfaceCapabilities:
         assert {"set_auto_provisioning", "set_web_push", "set_authz", "tighten_step_up"} <= suppressed
         assert not suppressed & {"offer_service", "withdraw_service", "set_server_address", "clear_rooms"}
 
-    def test_an_org_admin_gets_services_only_and_nothing_is_suppressed(self):
+    def test_an_org_admin_gets_services_and_features_and_nothing_is_suppressed(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin", mode="org", is_admin=True))
-        assert caps["sections"] == {"services": True}
+        assert caps["sections"] == {"services": True, "features": True}
         assert caps["not_applicable_actions"] == []
 
     def test_an_org_non_admin_gets_no_section(self):
@@ -1178,10 +1178,13 @@ console.log(app.innerHTML);
 """
 
 
-def _render_admin(state, *, mode="local", is_admin=False):
+def _render_admin(state, *, mode="local", is_admin=False, section="services"):
     """The Admin page's markup as the browser would draw it: the page's own scripts run in node
     against a stub document that keeps what the renderer writes."""
-    html = build_html(state, surface="admin", initial_section="services", mode=mode, is_admin=is_admin)
+    return _render(build_html(state, surface="admin", initial_section=section, mode=mode, is_admin=is_admin))
+
+
+def _render(html):
     scripts = re.findall(r"<script nonce=\"[^\"]+\">(.*?)</script>", html, re.DOTALL)
     done = subprocess.run(
         ["node", "-e", _RENDER_HARNESS], input=json.dumps(scripts),
@@ -1198,9 +1201,9 @@ needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not o
 class TestServicesSection:
     def test_the_nav_shows_only_the_sections_the_capabilities_include(self):
         local = _render_admin(_admin_state(_row("google", "Google")))
-        assert re.findall(r'aria-label="([^"]+)" data-nav', local) == ["Services", "Organization configuration"]
+        assert re.findall(r'aria-label="([^"]+)" data-nav', local) == ["Services", "Features", "Organization configuration"]
         org = _render_admin(_admin_state(_row("google", "Google")), mode="org", is_admin=True)
-        assert re.findall(r'aria-label="([^"]+)" data-nav', org) == ["Services"]
+        assert re.findall(r'aria-label="([^"]+)" data-nav', org) == ["Services", "Features"]
         assert 'aria-selected="true"' in org
 
     def test_a_bundle_app_names_its_client_and_warns_about_reconnecting(self):
@@ -1404,3 +1407,77 @@ class TestServerAndAutomaticAccounts:
         assert 'data-admin-address="peek"' in page
         assert "Automatic accounts" not in page
         assert "Set the server address below." not in page
+
+
+def _features_state(**overrides):
+    state = _admin_state(
+        _row("atlassian", "Atlassian", options={"assets": True, "assets_workspace_id": "ws-1"}),
+        _row("grist", "Grist", app_source="server", options={"server_url": "https://grist.example.com", "locked": False}),
+        _row("peek", "Peek", app_source="server", options={"base_url": "https://peek.example.com", "locked": False}),
+        rooms={"count": 3, "synced_at": "2026-10-01T08:00:00Z"}, unattended_sessions={"enabled": True},
+    )
+    state.update(overrides)
+    return state
+
+
+@needs_node
+class TestFeaturesSection:
+    def _page(self, state=None, **kwargs):
+        return _render_admin(state or _features_state(), section="features", **kwargs)
+
+    def test_each_form_is_prefilled_from_the_state(self):
+        page = self._page()
+        assert 'data-admin-assets-enabled="1" checked' in page
+        assert 'value="ws-1" data-admin-assets-workspace="1"' in page
+        assert 'value="https://grist.example.com" data-admin-address="grist"' in page
+        assert 'value="https://peek.example.com" data-admin-address="peek"' in page
+        assert 'aria-checked="true"' in page and "set_unattended_sessions" in page
+
+    def test_the_unattended_switch_posts_the_opposite_value(self):
+        assert '"enabled":false' in self._page()
+        off = self._page(_features_state(unattended_sessions={"enabled": False}))
+        assert '"enabled":true' in off
+
+    def test_a_locked_server_has_no_form(self):
+        state = _features_state()
+        for row in state["services"]:
+            if row["key"] in ("grist", "peek"):
+                row["options"]["locked"] = True
+        page = self._page(state)
+        assert "data-admin-address" not in page
+        assert "cannot be changed here" in page
+        state = _features_state()
+        state["services"][1]["options"]["locked"] = True
+        page = self._page(state)
+        assert 'data-admin-address="grist"' not in page and 'data-admin-address="peek"' in page
+
+    def test_the_rooms_control_uploads_and_clears(self):
+        page = self._page()
+        assert "3 rooms, synced 2026-10-01T08:00:00Z." in page
+        assert 'data-action="upload_rooms"' in page
+        assert 'data-action="clear_rooms"' in page
+        empty = self._page(_features_state(rooms={"count": 0, "synced_at": ""}))
+        assert "No room directory uploaded." in empty
+        assert 'data-action="upload_rooms"' in empty and "clear_rooms" not in empty
+
+    def test_org_mode_shows_the_same_section(self):
+        page = self._page(mode="org", is_admin=True)
+        assert "data-admin-assets-save" in page and 'data-action="upload_rooms"' in page
+
+
+@needs_node
+class TestOrganizationConfigurationCard:
+    def test_the_admin_surface_has_the_card_with_the_new_description(self):
+        page = _render_admin(_admin_state(), section="org_config")
+        assert "Organization Configuration" in page
+        assert "Your own app credentials, and the server and identity-provider settings, from your IT administrator." in page
+        assert 'data-action="install_org_config"' in page
+
+    def test_the_error_banner_shows_when_the_state_has_one(self):
+        page = _render_admin(_admin_state(error="Settings in this file are ignored."), section="org_config")
+        assert "Settings in this file are ignored." in page
+
+    def test_the_local_settings_surface_no_longer_has_the_card(self):
+        page = _render(build_html(_make_state(), initial_section="general"))
+        assert "Check for Updates" in page
+        assert "Organization Configuration" not in page and "install_org_config" not in page

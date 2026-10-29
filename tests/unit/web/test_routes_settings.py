@@ -1021,11 +1021,56 @@ class TestConnectorToggleDirectional:
         assert r.json()["error"] == "passkey_enrollment_required"
 
 
+ADMIN_UPLOAD_URL = "/api/admin/org_config/upload"
+_VERIFIED = type("V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False})()
+
+
+def _admin_app(controller, sessions, *, step_up: StepUpConfig | None = None, require_human_session: bool = False):
+    """The local Admin routes over the same controller, which is where the bundle upload lives."""
+    from starlette.applications import Starlette
+
+    from privacyfence import admin_config, oauth_apps
+    from privacyfence.web import routes_admin
+
+    bundle = daemon_main.load_org_config()
+    startup_admin = admin_config.ensure(bundle, mode="local", single_user=False)[0]
+    routes = routes_admin.build_routes(
+        controller=controller, sessions=sessions, step_up=step_up or StepUpConfig(rp_id="localhost"),
+        step_up_origin=ORIGIN, require_human_session=require_human_session, startup_admin=startup_admin,
+        org_config=oauth_apps.effective_org_config(bundle, startup_admin, mode="local"),
+    )
+    return TestClient(Starlette(routes=routes), base_url=ORIGIN)
+
+
+def _enroll_passkey():
+    wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+        credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+    ))
+
+
+@pytest.fixture
+def admin_client(controller, sessions, monkeypatch, tmp_path):
+    """An Admin client whose owner has a passkey; the Admin upload always asks for one."""
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    _enroll_passkey()
+    monkeypatch.setattr(wa.webauthn, "verify_authentication_response", lambda **kw: _VERIFIED)
+    return _admin_app(controller, sessions)
+
+
+def _admin_upload(client, data=None, files=None):
+    """Posts the bundle and, when the server asks for the passkey, answers the challenge."""
+    r = client.post(ADMIN_UPLOAD_URL, data=data, files=files)
+    if r.status_code != 428:
+        return r
+    return client.post(
+        ADMIN_UPLOAD_URL, data={**data, "webauthn_assertion": json.dumps({"id": "Y3JlZC0x"})}, files=files,
+    )
+
+
 class TestOrgConfigUpload:
-    def test_a_csrf_sent_as_a_file_is_unauthorized(self, client, sessions):
-        _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload",
+    def test_a_csrf_sent_as_a_file_is_unauthorized(self, admin_client, sessions):
+        _authed(admin_client, sessions)
+        r = _admin_upload(admin_client,
             files={
                 "csrf": ("csrf.txt", b"x", "text/plain"),
                 "file": ("org_config.json", b'{"version": 1}', "application/json"),
@@ -1033,10 +1078,9 @@ class TestOrgConfigUpload:
         )
         assert r.status_code == 401
 
-    def test_valid_bundle_is_installed(self, client, controller, sessions, tmp_path):
-        csrf = _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload",
+    def test_valid_bundle_is_installed(self, admin_client, controller, sessions, tmp_path):
+        csrf = _authed(admin_client, sessions)
+        r = _admin_upload(admin_client,
             data={"csrf": csrf},
             files={"file": ("org_config.json", b'{"version": 1, "google": {}}', "application/json")},
         )
@@ -1044,10 +1088,9 @@ class TestOrgConfigUpload:
         assert (sc.org_dir() / "org_bundle.json").exists()
         assert r.json()["error"] == ""
 
-    def test_non_json_is_rejected_with_an_error_not_installed(self, client, sessions):
-        csrf = _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload",
+    def test_non_json_is_rejected_with_an_error_not_installed(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
+        r = _admin_upload(admin_client,
             data={"csrf": csrf},
             files={"file": ("x.json", b"not json at all", "application/json")},
         )
@@ -1055,10 +1098,9 @@ class TestOrgConfigUpload:
         assert r.json()["error"]
         assert not (sc.org_dir() / "org_bundle.json").exists()
 
-    def test_json_without_version_key_is_rejected(self, client, sessions):
-        csrf = _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload",
+    def test_json_without_version_key_is_rejected(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
+        r = _admin_upload(admin_client,
             data={"csrf": csrf},
             files={"file": ("x.json", b'{"google": {}}', "application/json")},
         )
@@ -1068,31 +1110,28 @@ class TestOrgConfigUpload:
     @pytest.mark.skipif(
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
-    def test_installed_file_is_0600(self, client, sessions):
-        csrf = _authed(client, sessions)
-        client.post(
-            "/api/settings/org_config/upload",
+    def test_installed_file_is_0600(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
+        _admin_upload(admin_client,
             data={"csrf": csrf},
             files={"file": ("org_config.json", b'{"version": 1}', "application/json")},
         )
         mode = (sc.org_dir() / "org_bundle.json").stat().st_mode & 0o777
         assert mode == 0o600
 
-    def test_oversized_upload_is_rejected(self, client, sessions, monkeypatch):
+    def test_oversized_upload_is_rejected(self, admin_client, sessions, monkeypatch):
         from privacyfence.web import routes_settings
         monkeypatch.setattr(routes_settings, "MAX_ORG_CONFIG_BYTES", 10)
-        csrf = _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload",
+        csrf = _authed(admin_client, sessions)
+        r = _admin_upload(admin_client,
             data={"csrf": csrf},
             files={"file": ("x.json", b'{"version": 1, "padding": "xxxxxxxxxxxxxxxxxxxx"}', "application/json")},
         )
         assert r.status_code == 400
 
-    def test_missing_csrf_is_401(self, client, sessions):
-        _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload",
+    def test_missing_csrf_is_401(self, admin_client, sessions):
+        _authed(admin_client, sessions)
+        r = _admin_upload(admin_client,
             files={"file": ("x.json", b'{"version": 1}', "application/json")},
         )
         assert r.status_code == 401
@@ -1111,12 +1150,11 @@ class TestOrgConfigUploadPinConfirmation:
     for an explicit ``confirm_pin`` first rather than letting the TOFU
     pin happen silently as a side effect of an upload."""
 
-    def test_first_signed_bundle_without_confirmation_is_409_and_not_installed(self, client, sessions):
-        csrf = _authed(client, sessions)
+    def test_first_signed_bundle_without_confirmation_is_409_and_not_installed(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
         bundle = _signed_org_bundle()
 
-        r = client.post(
-            "/api/settings/org_config/upload",
+        r = _admin_upload(admin_client,
             data={"csrf": csrf},
             files={"file": ("org_config.json", json.dumps(bundle).encode(), "application/json")},
         )
@@ -1126,12 +1164,11 @@ class TestOrgConfigUploadPinConfirmation:
         assert not (sc.org_dir() / "org_bundle.json").exists()
         assert org_bundle_signing.load_pinned_public_key(sc.org_dir()) is None
 
-    def test_confirmed_upload_installs_and_pins(self, client, sessions):
-        csrf = _authed(client, sessions)
+    def test_confirmed_upload_installs_and_pins(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
         bundle = _signed_org_bundle()
 
-        r = client.post(
-            "/api/settings/org_config/upload",
+        r = _admin_upload(admin_client,
             data={"csrf": csrf, "confirm_pin": "true"},
             files={"file": ("org_config.json", json.dumps(bundle).encode(), "application/json")},
         )
@@ -1141,12 +1178,11 @@ class TestOrgConfigUploadPinConfirmation:
         assert (sc.org_dir() / "org_bundle.json").exists()
         assert org_bundle_signing.load_pinned_public_key(sc.org_dir()) is not None
 
-    def test_unconfirmed_flag_value_is_not_treated_as_consent(self, client, sessions):
-        csrf = _authed(client, sessions)
+    def test_unconfirmed_flag_value_is_not_treated_as_consent(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
         bundle = _signed_org_bundle()
 
-        r = client.post(
-            "/api/settings/org_config/upload",
+        r = _admin_upload(admin_client,
             data={"csrf": csrf, "confirm_pin": "false"},
             files={"file": ("org_config.json", json.dumps(bundle).encode(), "application/json")},
         )
@@ -1154,11 +1190,10 @@ class TestOrgConfigUploadPinConfirmation:
         assert r.status_code == 409
         assert not (sc.org_dir() / "org_bundle.json").exists()
 
-    def test_unsigned_bundle_never_needs_confirmation(self, client, sessions):
-        csrf = _authed(client, sessions)
+    def test_unsigned_bundle_never_needs_confirmation(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
 
-        r = client.post(
-            "/api/settings/org_config/upload",
+        r = _admin_upload(admin_client,
             data={"csrf": csrf},
             files={"file": ("org_config.json", b'{"version": 1, "google": {}}', "application/json")},
         )
@@ -1166,16 +1201,14 @@ class TestOrgConfigUploadPinConfirmation:
         assert r.status_code == 200
         assert (sc.org_dir() / "org_bundle.json").exists()
 
-    def test_a_bundle_matching_an_already_pinned_key_never_needs_confirmation(self, client, sessions):
-        csrf = _authed(client, sessions)
+    def test_a_bundle_matching_an_already_pinned_key_never_needs_confirmation(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
         bundle = _signed_org_bundle()
-        client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf, "confirm_pin": "true"},
+        _admin_upload(admin_client, data={"csrf": csrf, "confirm_pin": "true"},
             files={"file": ("org_config.json", json.dumps(bundle).encode(), "application/json")},
         )
 
-        r = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
+        r = _admin_upload(admin_client, data={"csrf": csrf},
             files={"file": ("org_config.json", json.dumps(bundle).encode(), "application/json")},
         )
 
@@ -1184,17 +1217,14 @@ class TestOrgConfigUploadPinConfirmation:
 
 
 def _org_config_step_up_client(controller, sessions, *, step_up: StepUpConfig) -> TestClient:
-    app = create_app(controller, sessions=sessions, step_up=step_up, step_up_origin=ORIGIN)
-    return TestClient(app, base_url=ORIGIN)
+    return _admin_app(controller, sessions, step_up=step_up)
 
 
 class TestOrgConfigUploadStepUp:
-    """org_config_upload is the one
-    path in _BESPOKE_SENSITIVE_ROUTE_PATHS -- with step_up.require_passkey
-    on, it needs a fresh WebAuthn assertion the same two-round-trip way a
-    _SENSITIVE_ACTIONS action does (mirrors TestSensitiveActionStepUp
-    above), bound to this exact file's content so a ceremony completed for
-    one upload can't authorize installing a different one."""
+    """The bundle upload asks for a fresh WebAuthn assertion the same two-round-trip way a
+    _SENSITIVE_ACTIONS action does, bound to this exact file's content so a ceremony completed for
+    one upload can't authorize installing a different one. On the Admin page it always asks,
+    whatever the step-up configuration says."""
 
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):
@@ -1202,20 +1232,7 @@ class TestOrgConfigUploadStepUp:
         return tmp_path
 
     def _enroll(self):
-        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
-            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
-        ))
-
-    def test_disabled_step_up_never_gates_the_upload(self, controller, sessions):
-        client = _org_config_step_up_client(
-            controller, sessions, step_up=StepUpConfig(enabled=False, require_passkey=True),
-        )
-        csrf = _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
-            files={"file": ("x.json", b'{"version": 1}', "application/json")},
-        )
-        assert r.status_code == 200
+        _enroll_passkey()
 
     def test_no_credential_hard_fails_the_upload(self, controller, sessions):
         client = _org_config_step_up_client(
@@ -1223,13 +1240,11 @@ class TestOrgConfigUploadStepUp:
         )
         csrf = _authed(client, sessions)
         r = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
+            ADMIN_UPLOAD_URL, data={"csrf": csrf},
             files={"file": ("x.json", b'{"version": 1}', "application/json")},
         )
         assert r.status_code == 403
-        body = r.json()
-        assert body["error"] == "passkey_enrollment_required"
-        assert body["enroll_url"] == "/security"
+        assert r.json()["error"] == "Add a passkey on /security first."
         assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_with_a_credential_offers_webauthn_options(self, controller, sessions):
@@ -1239,7 +1254,7 @@ class TestOrgConfigUploadStepUp:
         )
         csrf = _authed(client, sessions)
         r = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
+            ADMIN_UPLOAD_URL, data={"csrf": csrf},
             files={"file": ("x.json", b'{"version": 1}', "application/json")},
         )
         assert r.status_code == 428
@@ -1254,17 +1269,14 @@ class TestOrgConfigUploadStepUp:
         csrf = _authed(client, sessions)
         raw = b'{"version": 1}'
         first = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
+            ADMIN_UPLOAD_URL, data={"csrf": csrf},
             files={"file": ("x.json", raw, "application/json")},
         )
         assert first.status_code == 428
 
-        fake_verified = type(
-            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
-        )()
-        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=_VERIFIED):
             second = client.post(
-                "/api/settings/org_config/upload",
+                ADMIN_UPLOAD_URL,
                 data={"csrf": csrf, "webauthn_assertion": json.dumps({"id": "Y3JlZC0x"})},
                 files={"file": ("x.json", raw, "application/json")},
             )
@@ -1273,9 +1285,7 @@ class TestOrgConfigUploadStepUp:
         assert (sc.org_dir() / "org_bundle.json").exists()
 
     def test_an_assertion_bound_to_a_different_file_is_rejected(self, controller, sessions):
-        # Fingerprint binding, mirroring TestSensitiveActionStepUp's own
-        # test_an_assertion_for_a_different_action_is_rejected: a
-        # ceremony completed for one upload's bytes can't be replayed to
+        # Fingerprint binding: a ceremony completed for one upload's bytes can't be replayed to
         # install different bytes.
         self._enroll()
         client = _org_config_step_up_client(
@@ -1283,11 +1293,11 @@ class TestOrgConfigUploadStepUp:
         )
         csrf = _authed(client, sessions)
         client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
+            ADMIN_UPLOAD_URL, data={"csrf": csrf},
             files={"file": ("x.json", b'{"version": 1}', "application/json")},
         )
         r = client.post(
-            "/api/settings/org_config/upload",
+            ADMIN_UPLOAD_URL,
             data={"csrf": csrf, "webauthn_assertion": json.dumps({"id": "Y3JlZC0x"})},
             files={"file": ("x.json", b'{"version": 2}', "application/json")},
         )
@@ -1296,15 +1306,12 @@ class TestOrgConfigUploadStepUp:
 
 
 class TestOrgConfigUploadHumanSession:
-    """require_human_session on the bespoke-route half: an
-    organization config bundle changes *what gets gated* at least as much
-    as any _SENSITIVE_ACTIONS entry, so it needs a session PrivacyFence
-    can attribute to a person too. Mirrors
-    TestHumanSessionRequiredForSensitiveActions above."""
+    """require_human_session on the bespoke-route half: an organization config bundle changes
+    *what gets gated* at least as much as any _SENSITIVE_ACTIONS entry, so it needs a session
+    PrivacyFence can attribute to a person too."""
 
     def _client(self, controller, sessions):
-        app = create_app(controller, sessions=sessions, require_human_session=True)
-        return TestClient(app, base_url=ORIGIN)
+        return _admin_app(controller, sessions, require_human_session=True)
 
     def _sign_in(self, client, sessions, provenance):
         session_id = sessions.create(provenance=provenance)
@@ -1316,7 +1323,7 @@ class TestOrgConfigUploadHumanSession:
         csrf = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
 
         r = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
+            ADMIN_UPLOAD_URL, data={"csrf": csrf},
             files={"file": ("x.json", b'{"version": 1}', "application/json")},
         )
 
@@ -1324,22 +1331,21 @@ class TestOrgConfigUploadHumanSession:
         assert r.json()["error"] == "human_session_required"
         assert not (sc.org_dir() / "org_bundle.json").exists()
 
-    def test_an_attested_session_uploads_exactly_as_before(self, controller, sessions):
+    def test_an_attested_session_gets_past_the_human_check(self, controller, sessions, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        _enroll_passkey()
+        monkeypatch.setattr(wa.webauthn, "verify_authentication_response", lambda **kw: _VERIFIED)
         client = self._client(controller, sessions)
         csrf = self._sign_in(client, sessions, PROVENANCE_HUMAN)
 
-        r = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
-            files={"file": ("x.json", b'{"version": 1}', "application/json")},
-        )
+        r = _admin_upload(client, data={"csrf": csrf}, files={"file": ("x.json", b'{"version": 1}', "application/json")})
 
         assert r.status_code == 200
 
-    def test_the_gate_is_off_unless_the_install_asks_for_it(self, client, sessions):
-        csrf = _authed(client, sessions)
-        r = client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
-            files={"file": ("x.json", b'{"version": 1}', "application/json")},
+    def test_the_human_check_is_off_unless_the_install_asks_for_it(self, admin_client, sessions):
+        csrf = _authed(admin_client, sessions)
+        r = _admin_upload(
+            admin_client, data={"csrf": csrf}, files={"file": ("x.json", b'{"version": 1}', "application/json")},
         )
         assert r.status_code == 200
 
@@ -2047,10 +2053,6 @@ class TestNoSubprocessFromHttp:
 
         client.get("/settings")
         client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
-        client.post(
-            "/api/settings/org_config/upload", data={"csrf": csrf},
-            files={"file": ("x.json", b'{"version": 1}', "application/json")},
-        )
         client.get("/api/settings/audit_log/download")
 
 
@@ -2463,12 +2465,12 @@ class TestBespokeRoutesAreClassified:
         """The classification guard is an explicit `if ...: raise
         RuntimeError(...)`, not `assert`, precisely so it still fires under
         `python -O`/PYTHONOPTIMIZE (which strips assert statements). Drop
-        org_config_upload's own entry out of both sets so build_routes()
+        the personal import's own entry out of both sets so build_routes()
         hits its own bespoke route unclassified, and pin that this raises
         rather than silently mounting it."""
         routes_settings_module = sys.modules[build_routes.__module__]
         monkeypatch.setattr(routes_settings_module, "_BESPOKE_SENSITIVE_ROUTE_PATHS", frozenset())
-        with pytest.raises(RuntimeError, match=r"/api/settings/org_config/upload.*classification"):
+        with pytest.raises(RuntimeError, match=r"/api/settings/personal/import.*classification"):
             build_routes(controller, sessions=sessions)
 
     def test_classification_guard_fires_under_python_dash_o(self, tmp_path):
@@ -2485,7 +2487,7 @@ class TestBespokeRoutesAreClassified:
             "try:\n"
             "    rs.build_routes(None, sessions=LocalSessionStore())\n"
             "except RuntimeError as exc:\n"
-            "    assert '/api/settings/org_config/upload' in str(exc)\n"
+            "    assert '/api/settings/personal/import' in str(exc)\n"
             "    print('RAISED')\n"
             "else:\n"
             "    print('NOT-RAISED')\n"
