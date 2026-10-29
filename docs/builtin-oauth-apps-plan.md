@@ -2415,7 +2415,8 @@ complete Google's side, so the server decides alone. `org_identity.check_authz_p
 `idp.builtin` is true:
 
 - **Admins.** Admins named in `admin_emails` may sign in. SEC-07 applies: `email_verified` must
-  be true, and the `hd` claim must equal the email's domain.
+  be true, and the `hd` claim must equal the email's domain. That domain must also be DNS-verified
+  (below).
 - **Allowed domains.** People whose verified email is in an allowed domain may sign in, with `hd`
   equal to that domain. The domains come from the admin config's `authz.allowed_domains`, edited
   on Admin → Sign-in. `PRIVACYFENCE_ALLOWED_DOMAINS` (comma-separated) seeds them on the first
@@ -2448,6 +2449,64 @@ complete Google's side, so the server decides alone. `org_identity.check_authz_p
   registering with the PrivacyFence relay. Try again in a minute.` It does not send the person to
   Google.
 
+**Domain proof for sign-in (amends D5 and SEC-23).** Host proof shows that the operator controls
+the server's name. It does not show which organization's Google accounts that server may sign
+in. So a server using the built-in sign-in must also prove each Google Workspace domain it signs
+people in from, and the relay enforces it. The same registration, notification email and
+maintainer revocation then cover sign-in, as for the connectors.
+
+- **Which domains.** The sign-in domains are the domains of `admin_emails` plus
+  `authz.allowed_domains`, lower-cased and de-duplicated. `relay_client.register` sends them as
+  `"signin_domains": [...]` (at most 20) in the `/register` body. It does this only when the IdP
+  is built-in.
+- **The proof: one DNS TXT record per domain.** It goes at `_privacyfence-relay.<domain>`, with the
+  value `pf-relay=<hex sha256 of the server's relay token>`.
+  - The token is already public at `/.well-known/privacyfence-relay`, so its hash reveals nothing.
+  - DNS proves control of the domain itself. A server at `pf.acme.com` does not prove
+    `acme.com` by its host name alone: a subdomain can belong to someone else, such as a SaaS
+    vendor's customer.
+- **The Worker** checks each domain with DNS over HTTPS
+  (`https://cloudflare-dns.com/dns-query?name=_privacyfence-relay.<domain>&type=TXT`,
+  `accept: application/dns-json`) on every successful `/register`.
+  - It stores the verified set in a new `signin_domains` column, a JSON array, on the
+    registration row.
+  - It answers with `"signin_domains_verified": [...]` and
+    `"signin_domains_missing": [{"domain", "txt_name", "txt_value"}]`.
+  - A domain whose record disappears drops out at the next daily re-registration.
+  - Domains that fail the host rules' syntax are refused with 400 `invalid_request`.
+  - A PSL public suffix is refused too, for example `gmail.com` or `co.uk` alone.
+- **The relay enforces it on every sign-in.** The Worker forwards a code on `idp`, `idp-login` or
+  `stepup` only when the redirect's `hd` query parameter is in the host's verified
+  `signin_domains`.
+  - Google appends `hd` to the redirect for Google Workspace accounts.
+  - A personal Google account has no `hd`, so it is refused here too.
+  - Otherwise the Worker returns 403 `text/plain`: `This Google account's organization is not
+    allowed to sign in to this PrivacyFence server.`, and the code is never forwarded.
+  - So a hostile or modified server can sign in only accounts of domains it proved in DNS. It
+    cannot use PrivacyFence's sign-in client against anyone else's users.
+  - **The kill switch.** The `hd` parameter is observed behaviour, not a documented contract. The
+    Worker variable `SIGNIN_REQUIRE_HD` (default `"true"`) can turn the relay-side check off if
+    Google ever stops sending it. The server-side check below still holds, and the runbook names
+    this switch.
+- **The server enforces it as well.** With the built-in IdP, `check_authz_policy` allows a sign-in
+  only when the account's `hd` is in the verified set from the last successful registration.
+  `relay_client` persists that set in `org/relay_status.json`. This is on top of D20's default-deny
+  rules.
+- **Bootstrap.** Admins cannot sign in before their domain is proven, so the server says what to
+  add without needing the Admin page.
+  - At every start, and after each registration, it logs one line per missing domain:
+    `Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.acme.com with the value
+    pf-relay=<hash>. Until then nobody from acme.com can sign in.`
+  - `privacyfence-app --relay-dns-records` prints the same lines and exits.
+  - The `/login` page shows `Sign-in is waiting for DNS: the administrator must publish the
+    record shown in the server log.` while no domain is verified.
+  - The Admin → Sign-in section lists each domain as verified or missing, with its record.
+- **The notification email (SEC-23)** for a new registration, and for a registration whose
+  verified sign-in domains change, says `Built-in Google sign-in: yes` and lists the verified
+  domains. That is the prompt to reject a server signing in a domain it should not.
+- **Revocation.** `/admin/revoke` stops a host's connectors and sign-in together. Rejecting is one
+  command, as for the connectors.
+
 **Cross-server safety.** Every server shares one client, so Google issues sign-in tokens addressed
 to all of them alike. A server must accept only a sign-in it started:
 
@@ -2471,7 +2530,9 @@ domains can sign in.` It lists `admin_emails` read-only (they come from the envi
 **Privacy and terms (D16, p13c).**
 
 - The relay section of the privacy page adds that servers using the built-in Google sign-in send
-  their sign-in redirects through the relay, which sees a one-time code only.
+  their sign-in redirects through the relay. The relay sees a one-time code and the account's
+  Workspace domain (`hd`), and stores each server's DNS-proven sign-in domains with its
+  registration.
 - The relay terms add that the sign-in client may be suspended or withdrawn like the rest.
 
 **Risks.**
@@ -2482,9 +2543,13 @@ domains can sign in.` It lists `admin_emails` read-only (they come from the envi
   the quick start for small Google Workspace teams. They recommend an organization's own IdP app
   for anyone who needs Workspace-level control (an Internal app, groups) or independence from
   PrivacyFence's services.
-- **Brand misuse.** A malicious operator could show "PrivacyFence" on its own server's Google
-  sign-in. Only name and email are at stake. Registration emails (SEC-23) and revocation cover
-  it, as for the connectors.
+- **Brand misuse is bounded by the domain proof.** A malicious operator could still show
+  "PrivacyFence" on its own server's Google sign-in page. But the relay forwards a code only for
+  accounts of domains that operator proved in DNS, so it cannot harvest anyone else's users.
+  Registration emails list those domains, and revocation stops the server.
+- **The relay-side check relies on Google's `hd` redirect parameter.** If Google drops it, built-in
+  sign-ins fail at the relay until a maintainer sets `SIGNIN_REQUIRE_HD = "false"`. The server-side
+  `hd` check from the ID token still applies.
 
 ## ADRs
 
@@ -2557,7 +2622,8 @@ domains can sign in.` It lists `admin_emails` read-only (they come from the envi
 
 - **0262** — An organization server may opt in to PrivacyFence's built-in Google sign-in
   (`PRIVACYFENCE_IDP=builtin-google`): a separate `privacyfence-signin` client through the relay,
-  default-deny (only admins by verified email and allowed Workspace domains with `hd`), and never
+  default-deny (only admins by verified email and allowed Workspace domains with `hd`), each
+  sign-in domain proven by a DNS TXT record and enforced by the relay on Google's `hd`, and never
   the default. Relates to 0258, 0259, 0254.
 ## Manual steps
 
@@ -3426,7 +3492,7 @@ phases:
 
     Then the release and operations side, per D5's "How the relay is released": write docs/oauth-relay.md (the maintainer runbook with every item D5 lists, including the exact smoke-test curl commands, and links to https://privacyfence.eu/relay-terms/ and https://privacyfence.eu/privacy/#relay), add it to scripts/build_site.py's CONTRIBUTOR_DOCS and to the contributor half of docs/README.md, add the relay rows to docs/downloads-and-release-kpi.md's Cloudflare resources and credentials tables, and add the health pre-flight line to docs/releasing.md and .claude/commands/cut-release.md. Run python3 -m pytest tests/unit/test_build_site.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q.
     Also implement D9's "The relay on localhost" rules: GET /callback/:grant forwards a loopback host (localhost or 127.0.0.1, optional port) to http://<host>/oauth/callback/<grant>?<query> without the registry, and POST /register still answers 400 host_not_public for it. Test both.
-    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (Gmail API sending in src/notify.ts with fetch only: the NOTIFY_FROM var, the NOTIFY_TO constant, the GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN Worker secrets set by the deploy workflow from the CF_OAUTH_RELAY_GMAIL_* environment secrets, the cached access token, the daily cap, notify_failures/notify_last_error/notify_skipped on /registrations, and every listed test; no [[send_email]] binding; the runbook covers minting and rotating the refresh token and the Restrict delivery rule), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry. Also apply D20 "Through the relay": the idp, idp-login and stepup grants with their fixed forward paths (/oauth/idp/callback, /oauth/idp/login-callback, /oauth/stepup/callback), the same registration and parameter rules, and a loopback host refused for them; test each.
+    Also apply D15: SEC-02 (the PSL private-section refusal, generated psl_private.ts from a pinned commit by scripts/update-psl.mjs, tests for x.github.io, a.pages.dev and a.workers.dev; the runbook's review step and revocation turnaround), SEC-03 (per-(host, IP) and per-IP limits, failures never block a later valid proof, an attempts table pruned hourly, no registrations row for unverified hosts), SEC-09 (/registrations needs the maintainer token, 401 otherwise), SEC-10 (the strict parsing rules and every listed negative test), SEC-15 (runbook Logpush/WAF/tail checks), SEC-23 (Gmail API sending in src/notify.ts with fetch only: the NOTIFY_FROM var, the NOTIFY_TO constant, the GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN Worker secrets set by the deploy workflow from the CF_OAUTH_RELAY_GMAIL_* environment secrets, the cached access token, the daily cap, notify_failures/notify_last_error/notify_skipped on /registrations, and every listed test; no [[send_email]] binding; the runbook covers minting and rotating the refresh token and the Restrict delivery rule), SEC-05 and SEC-13 (runbook: required reviewers, one-account note, the built-in secret rotation section). Each rule has a test in the Worker suite. Also apply D16 "The relay links its terms": GET and HEAD / and /terms answer 302 to https://privacyfence.eu/relay-terms/, the 400 texts end with the Terms sentence, and a successful /register response carries "terms"; test each. Also apply D17 "The relay gains a restore route": POST /admin/restore with its tests and the runbook entry. Also apply D20 "Through the relay": the idp, idp-login and stepup grants with their fixed forward paths (/oauth/idp/callback, /oauth/idp/login-callback, /oauth/stepup/callback), the same registration and parameter rules, and a loopback host refused for them; test each. Also apply D20 "Domain proof for sign-in": signin_domains in /register (at most 20, syntax and public-suffix checks), the DNS-over-HTTPS TXT check at _privacyfence-relay.<domain> against pf-relay=<sha256 of the token>, the signin_domains column, the signin_domains_verified/missing response fields, the hd check on idp, idp-login and stepup with its 403 text, the SIGNIN_REQUIRE_HD variable, and the email lines; stub fetch for DNS and test a verified domain, a missing record, a wrong value, a public suffix, a missing hd, a foreign hd, and the switch off.
   acceptance:
   - cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test && npm run dry-run passes
   - grep -n "oauth.privacyfence.eu" cloudflare/oauth-relay/wrangler.toml matches
@@ -3845,6 +3911,8 @@ phases:
   worker_model: opus
   worker_model_reason: it routes IdP sign-in and step-up of every opted-in server through one shared client; the PKCE, nonce and state binding must hold across servers
   touches:
+  - src/privacyfence/org_identity.py
+  - tests/unit/test_org_identity.py
   - src/privacyfence/web/routes_org_identity.py
   - tests/unit/web/test_routes_org_identity.py
   - src/privacyfence/web/routes_org_stepup.py
@@ -3858,9 +3926,10 @@ phases:
   brief: |-
     Read "Design → D20" ("Through the relay", "Cross-server safety", "Step-up") and D5 (the relay contract and state format).
     1. In daemon_main (idp_callback_url, ~:1230), routes_org_identity (LOGIN_CALLBACK_PATH) and routes_org_stepup (~:144, ~:169), when idp.relay is true use oauth_apps.relay_redirect_uri("idp" | "idp-login" | "stepup") and a "<netloc>~<token_urlsafe(32)>" state; store that redirect_uri on the pending attempt and use it for the code exchange. Without relay nothing changes.
-    2. relay_client: status()["needed"] is true when the IdP is built-in, so registration and the well-known token start at once; /login renders D20's "Sign-in is starting up" page while registration has not succeeded, and does not redirect to Google.
-    3. Tests (step-up ones in tests/unit/web/test_routes_org_approvals.py, next to the existing step-up tests): the relay redirect_uri is used for both authorize and exchange in all three flows; a code exchanged with another attempt's code_verifier fails; an ID token whose nonce belongs to another attempt is refused; a replayed or unknown state is refused; the starting-up page shows before registration and the Google redirect after; a non-builtin IdP keeps today's redirect URIs byte for byte.
-    4. Run ruff check ., python3 -m pytest tests/unit/web/test_routes_org_identity.py tests/unit/web/test_routes_org_approvals.py tests/unit/web/test_oauth_provider.py tests/unit/test_relay_client.py tests/unit/test_daemon_main.py -q, then python3 -m pytest tests/unit -q.
+    2. relay_client: status()["needed"] is true when the IdP is built-in, so registration and the well-known token start at once; register sends signin_domains (D20 "Domain proof for sign-in") and persists the verified set in org/relay_status.json; status() exposes it. /login renders D20's "Sign-in is starting up" page while registration has not succeeded and its "waiting for DNS" page while no domain is verified, and does not redirect to Google then. daemon_main logs one line per missing domain at start and after registration, and gains --relay-dns-records, which prints those lines and exits.
+    3. org_identity.check_authz_policy (built-in IdP only): the account's hd must also be in relay_client.status()'s verified sign-in domains.
+    4. Tests (step-up ones in tests/unit/web/test_routes_org_approvals.py, next to the existing step-up tests): signin_domains sent and the verified set persisted; an unverified domain's admin refused; the DNS log lines and --relay-dns-records output; the relay redirect_uri is used for both authorize and exchange in all three flows; a code exchanged with another attempt's code_verifier fails; an ID token whose nonce belongs to another attempt is refused; a replayed or unknown state is refused; the starting-up page shows before registration and the Google redirect after; a non-builtin IdP keeps today's redirect URIs byte for byte.
+    5. Run ruff check ., python3 -m pytest tests/unit/web/test_routes_org_identity.py tests/unit/web/test_routes_org_approvals.py tests/unit/web/test_oauth_provider.py tests/unit/test_relay_client.py tests/unit/test_daemon_main.py -q, then python3 -m pytest tests/unit -q.
   acceptance:
   - python3 -m pytest tests/unit/web/test_routes_org_identity.py tests/unit/web/test_routes_org_approvals.py tests/unit/web/test_oauth_provider.py tests/unit/test_relay_client.py -q passes
   - grep -n "idp-login" src/privacyfence/web/routes_org_identity.py matches
@@ -4099,7 +4168,7 @@ phases:
     6. Add D16 item 5's deprecation notice to website/download/index.html and the FAQ's #modes answer. Use the page's existing notice or callout class if it has one; otherwise a <p class="page-copy"> with <strong>.
     7. Tests per D16 item 6, plus: the privacy page has id="google-user-data" and the exact Limited Use sentence.
     8. Run python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_links.py tests/unit/test_website_canonical_description.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py -q, then python3 -m pytest tests/unit -q -k website and ruff check .. If the hook's Chromium line had no WARNING, also run python3 -m pytest tests/integration/test_website_layout.py tests/integration/test_website_consent.py -q.
-    Also apply D20 (privacy and terms): the privacy page's relay section adds that servers using the built-in Google sign-in send their sign-in redirects through the relay, which sees a one-time code only; the relay terms add that the built-in sign-in client may be suspended or withdrawn like the rest.
+    Also apply D20 (privacy and terms): the privacy page's relay section adds that servers using the built-in Google sign-in send their sign-in redirects through the relay, which sees a one-time code and the signing-in account's Google Workspace domain (hd), checks it against the server's DNS-proven sign-in domains, and stores those domains with the registration; the relay terms add that the built-in sign-in client may be suspended or withdrawn like the rest.
   acceptance:
   - python3 -m pytest tests/unit/test_website_claims.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_website_links.py tests/unit/test_website_canonical_description.py -q passes
   - grep -n "relay-terms" scripts/build_site.py website/_partials/footer.html matches in both
