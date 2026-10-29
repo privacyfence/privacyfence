@@ -1,12 +1,11 @@
 #!/bin/sh
-# Organization mode only: without an installed bundle the daemon would start in local mode,
-# listening on the container's own loopback where nothing can reach it.
+# The image always runs in organization mode (PRIVACYFENCE_MODE=org). Without an installed bundle
+# there is no identity provider, which makes it a single-user install reachable only on localhost.
 set -eu
 bundle="$HOME/.privacyfence/org/org_bundle.json"
 # A 6.x org_config.json counts too: the daemon copies it to org_bundle.json on start.
 legacy_bundle="$HOME/.privacyfence/org/org_config.json"
 if [ ! -f "$bundle" ] && [ ! -f "$legacy_bundle" ]; then
-    echo "No organization bundle at $bundle -- install one first (docs/org-mode-docker.md, \"Install the bundle\")." >&2
-    exit 78
+    echo "No organization bundle: starting in single-user mode at http://localhost:8765 (docs/org-mode-docker.md, \"Run it on this computer\")." >&2
 fi
 exec privacyfence-app "$@"

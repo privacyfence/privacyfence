@@ -239,6 +239,11 @@ def _privacy_rows(install_wide_settings: dict[str, Any]) -> dict[str, Any]:
     return privacy
 
 
+def _single_user(bundle: dict[str, Any]) -> bool:
+    """Whether the server is in single-user mode; the local Admin page never is."""
+    return org_mode.is_single_user(bundle)
+
+
 def _admin_state(
     *, mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None,
@@ -248,9 +253,9 @@ def _admin_state(
 
     An organization server also reports its install-wide privacy policy (``install_wide_settings``,
     when the caller has it) and the usage stats counted from every principal's files."""
-    admin = admin_config.config_for(bundle, mode=mode, single_user=False)
+    admin = admin_config.config_for(bundle, mode=mode, single_user=_single_user(bundle))
     state: dict[str, Any] = {
-        "services": admin_config.service_rows(bundle, admin, mode=mode),
+        "services": admin_config.service_rows(bundle, admin, mode=mode, single_user=_single_user(bundle)),
         "rooms": {"count": len(admin.get("rooms") or []), "synced_at": str(admin.get("rooms_synced_at") or "")},
         "unattended_sessions": admin.get("unattended_sessions", {}),
         "restart_needed": _restart_needed(admin, startup_admin),
@@ -321,7 +326,7 @@ def _dispatch(
     else:
         try:
             summary, changed = admin_config.apply_change(
-                action, params, bundle=bundle, mode=mode, single_user=False,
+                action, params, bundle=bundle, mode=mode, single_user=_single_user(bundle),
             )
         except admin_config.AdminConfigError as exc:
             return _error(str(exc))
@@ -387,7 +392,7 @@ async def _replace_rooms_from_upload(
         # Not JSON at all: replace_rooms words the refusal for anything that is not a room file.
         data = None
         try:
-            admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=False)
+            admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=_single_user(bundle))
         except admin_config.AdminConfigError as exc:
             return _error(str(exc))
     refusal = _gate_upload(
@@ -400,7 +405,7 @@ async def _replace_rooms_from_upload(
             _record_settings_audit(principal, f"Step-up required for 'upload_rooms', refused (principal={principal.id})")
         return refusal
     try:
-        summary = admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=False)
+        summary = admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=_single_user(bundle))
     except admin_config.AdminConfigError as exc:
         return _error(str(exc))
     except OSError as exc:
@@ -451,8 +456,10 @@ def build_org_routes(
         return principal
 
     def refresh_live(changed: list[str]) -> None:
+        single_user = _single_user(bundle)
         effective = oauth_apps.effective_org_config(
-            bundle, admin_config.config_for(bundle, mode="org", single_user=False), mode="org",
+            bundle, admin_config.config_for(bundle, mode="org", single_user=single_user), mode="org",
+            single_user=single_user,
         )
         oauth_apps.refresh_in_place(org_config, effective)
         if connector_registry is not None:

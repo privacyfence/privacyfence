@@ -313,6 +313,13 @@ class TestLoadOrgConfig:
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         assert daemon_main.load_org_config() == {}
 
+    def test_an_unsigned_bundle_without_mode_is_refused_under_the_org_mode_variable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+        with pytest.raises(org_mode.ConfigurationError, match="not signed"):
+            daemon_main.load_org_config()
+
     def test_returns_parsed_dict_when_valid_with_no_mode_key(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
@@ -2286,6 +2293,119 @@ class TestMaybeStartWebServerOrgMode:
                 org_config={"mode": "org", "server": {"issuer_url": "https://pf.example.com"}},
             )
 
+    @staticmethod
+    def _single_user_config(issuer_url="http://localhost:8765", **server):
+        return {"mode": "org", "server": {"issuer_url": issuer_url, "port": 8765, **server}}
+
+    def test_single_user_mode_on_localhost_builds_the_org_app_without_an_idp(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert started.get("called") is True
+        assert result.org.idp is None
+        assert result.base_url == "http://localhost:8765"
+
+    def test_single_user_mode_serves_no_identity_provider_routes(self, monkeypatch, tmp_path):
+        from starlette.testclient import TestClient
+
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        client = TestClient(result._server.config.app, base_url="http://localhost:8765")
+        assert client.get("/login", follow_redirects=False).status_code == 404
+        assert client.get("/oauth/idp/login-callback", follow_redirects=False).status_code == 404
+
+    def test_single_user_mode_logs_single_user_in_place_of_the_idp(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert "IdP single-user," in caplog.text
+
+    def test_single_user_mode_defaults_the_issuer_to_localhost_from_the_environment(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9100")
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config={},
+        )
+        assert result.base_url == "http://localhost:9100"
+
+    @pytest.mark.parametrize("issuer_url", ["https://pf.example.com", "http://pf.example.com", "https://localhost"])
+    def test_single_user_mode_refuses_an_address_that_is_not_plain_http_localhost(
+        self, monkeypatch, tmp_path, issuer_url,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(issuer_url),
+            )
+        assert str(excinfo.value) == (
+            "Organization mode without an identity provider is single-user mode and runs only at "
+            "http://localhost or http://127.0.0.1. Add an \"idp\" section to org_bundle.json to "
+            "serve any other address."
+        )
+
+    @pytest.mark.parametrize("pin", ["org_bundle_signing_pubkey.txt", "org_config_signing_pubkey.txt"])
+    def test_single_user_mode_refuses_a_data_directory_with_a_pinned_signing_key(
+        self, monkeypatch, tmp_path, pin,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / pin).write_text("a2V5\n")
+        with pytest.raises(org_mode.ConfigurationError, match="belonged to an organization server"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+
+    def test_single_user_mode_refuses_a_data_directory_with_an_imported_admin_config(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(admin_config, "load", lambda: {"imported_from_bundle_sha256": "ab" * 32})
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert str(excinfo.value) == (
+            "This data directory belonged to an organization server; restore org_bundle.json, or "
+            "use a new data directory for single-user mode."
+        )
+
+    def test_single_user_mode_with_an_empty_import_hash_is_a_fresh_install(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(admin_config, "load", lambda: {"imported_from_bundle_sha256": ""})
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert started.get("called") is True
+
+    def test_a_multi_user_server_ignores_a_pinned_signing_key(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_bundle_signing_pubkey.txt").write_text("a2V5\n")
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        assert started.get("called") is True
+
     def test_local_mcp_dispatcher_gets_the_local_scoped_token_policy(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
 
@@ -2552,6 +2672,8 @@ class TestPeekRelease:
         monkeypatch.setattr(daemon_main, "PeekProvisioningClient", fake)
         org_config = {
             "mode": "org",
+            # Without an idp this would be single-user mode, where auto-provisioning is off.
+            "idp": {"issuer": "https://idp.example.com", "client_id": "cid", "client_secret": "sec"},
             "peek": {"base_url": "https://peek.example.com", "auto_provision": {"enabled": True}},
         }
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: org_config)
@@ -3663,6 +3785,30 @@ class TestRunApp:
 
         assert build_calls == []
 
+    def test_single_user_mode_logs_its_warning_at_every_start(self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        monkeypatch.setattr(daemon_main, "load_admin_config", lambda bundle: ({}, False))
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+
+        assert "Single-user mode: one administrator, no identity provider, on this computer only." in caplog.text
+
+    def test_a_server_with_an_idp_does_not_log_the_single_user_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org", "idp": {"issuer": "https://i"}})
+        monkeypatch.setattr(daemon_main, "load_admin_config", lambda bundle: ({}, False))
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+
+        assert "Single-user mode" not in caplog.text
+
     def test_background_cache_warm_skipped_silently_when_no_web_server_at_all(self, monkeypatch, caplog):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
@@ -4716,6 +4862,8 @@ class TestGristRelease:
         monkeypatch.setenv(self.KEY_ENV, "prov-key")
         org_config = {
             "mode": "org",
+            # Without an idp this would be single-user mode, where auto-provisioning is off.
+            "idp": {"issuer": "https://idp.example.com", "client_id": "cid", "client_secret": "sec"},
             "grist": {
                 "server_url": "https://grist.example.com",
                 "auto_provision": {"enabled": True, "provisioner_url": "https://prov.example.com"},
@@ -5120,7 +5268,23 @@ class TestAdminConfigStartup:
         assert "Audit log write failed for the admin config import" in caplog.text
 
 
+class TestLoadAdminConfigSingleUser:
+    def test_a_single_user_install_gets_the_single_user_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(admin_config, "admin_config_path", lambda: tmp_path / "admin_config.json")
+        admin, imported = daemon_main.load_admin_config({"mode": "org"})
+        assert admin["step_up"] == {"enabled": True, "require_passkey": True, "scope": "writes_and_pii_reads"}
+        assert imported is True
+
+    def test_an_organization_server_does_not(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(admin_config, "admin_config_path", lambda: tmp_path / "admin_config.json")
+        idp = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+        admin, _ = daemon_main.load_admin_config({"mode": "org", "idp": idp})
+        assert admin["step_up"] != {"enabled": True, "require_passkey": True, "scope": "writes_and_pii_reads"}
+
+
 class TestEffectiveOrgConfigWiring:
+    # An organization bundle with no idp is single-user mode, where auto-provisioning is off.
+    IDP = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
     ORG_BUNDLE = {
         "mode": "org",
         "server": {"issuer_url": "https://pf.example.com"},
@@ -5241,7 +5405,7 @@ class TestEffectiveOrgConfigWiring:
     def test_a_withdrawn_peek_starts_no_provisioner(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
         monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "key")
-        bundle = {"mode": "org"}
+        bundle = {"mode": "org", "idp": self.IDP}
         admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
         admin["services"]["peek"]["offered"] = True
         admin["services"]["peek"]["auto_provision"]["enabled"] = True
@@ -5288,7 +5452,7 @@ class TestEffectiveOrgConfigWiring:
         (tmp_path / "users" / "alice").mkdir(parents=True)
         monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
         monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "peekprov_secret")
-        bundle = {"mode": "org"}
+        bundle = {"mode": "org", "idp": self.IDP}
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
         admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
         admin["services"]["peek"]["offered"] = True

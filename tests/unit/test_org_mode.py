@@ -28,6 +28,133 @@ class TestResolveMode:
             org_mode.resolve_mode({"mode": "something-else"})
 
 
+class TestResolveModeEnvironment:
+    def test_resolve_mode_bundle_only(self):
+        assert org_mode.resolve_mode({"mode": "org"}) == "org"
+
+    def test_resolve_mode_env_only(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.resolve_mode({}) == "org"
+
+    def test_resolve_mode_neither_is_local(self):
+        assert org_mode.resolve_mode({}) == "local"
+
+    def test_resolve_mode_empty_env_counts_as_unset(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "  ")
+        assert org_mode.resolve_mode({}) == "local"
+
+    def test_resolve_mode_bundle_and_env_equal(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.resolve_mode({"mode": "org"}) == "org"
+
+    def test_resolve_mode_bundle_and_env_differ(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.resolve_mode({"mode": "local"})
+        assert str(excinfo.value) == (
+            'org_config.json says "mode": "local" but PRIVACYFENCE_MODE says "org"; remove one of them'
+        )
+
+    def test_resolve_mode_invalid_env_value(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "cloud")
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.resolve_mode({})
+        assert str(excinfo.value) == 'PRIVACYFENCE_MODE must be "local" or "org", got cloud'
+
+    def test_resolve_mode_invalid_env_value_is_refused_even_with_a_bundle_mode(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "cloud")
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_MODE"):
+            org_mode.resolve_mode({"mode": "org"})
+
+
+class TestIsSingleUser:
+    IDP = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+
+    def test_is_single_user_org_without_idp(self):
+        assert org_mode.is_single_user({"mode": "org"}) is True
+
+    def test_is_single_user_org_with_idp(self):
+        assert org_mode.is_single_user({"mode": "org", "idp": self.IDP}) is False
+
+    def test_is_single_user_local_is_never(self):
+        assert org_mode.is_single_user({}) is False
+
+    def test_is_single_user_follows_the_mode_from_the_env(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.is_single_user({}) is True
+
+    @pytest.mark.parametrize("issuer_url, expected", [
+        ("http://localhost:8765", True),
+        ("http://127.0.0.1", True),
+        ("https://localhost", False),
+        ("http://pf.example.com", False),
+        ("http://localhost.evil.example", False),
+    ])
+    def test_is_loopback_issuer(self, issuer_url, expected):
+        assert org_mode.is_loopback_issuer(issuer_url) is expected
+
+
+class TestServerConfigEnvironment:
+    BUNDLE = {"server": {"issuer_url": "https://pf.example.com"}}
+
+    def test_env_fills_every_value_the_bundle_leaves_unset(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_BIND_HOST", "0.0.0.0")
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9000")
+        monkeypatch.setenv("PRIVACYFENCE_TRUSTED_PROXIES", "172.30.87.2, 10.0.0.1")
+        config = org_mode.ServerConfig.from_org_config({"server": {"issuer_url": "https://pf.example.com"}})
+        assert (config.bind_host, config.port) == ("0.0.0.0", 9000)
+        assert config.trusted_proxies == ("172.30.87.2", "10.0.0.1")
+
+    def test_env_issuer_url_when_the_bundle_has_none(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", " https://env.example.com ")
+        assert org_mode.ServerConfig.from_org_config({}).issuer_url == "https://env.example.com"
+
+    def test_bundle_wins_over_env(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_BIND_HOST", "0.0.0.0")
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9000")
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", "https://env.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_TRUSTED_PROXIES", "10.0.0.1")
+        config = org_mode.ServerConfig.from_org_config({"server": {
+            "issuer_url": "https://pf.example.com", "bind_host": "127.0.0.2", "port": 8000,
+            "trusted_proxies": ["172.30.87.2"],
+        }})
+        assert config.bind_host == "127.0.0.2"
+        assert config.port == 8000
+        assert config.issuer_url == "https://pf.example.com"
+        assert config.trusted_proxies == ("172.30.87.2",)
+
+    @pytest.mark.parametrize("value", ["0", "65536", "http", "-1"])
+    def test_env_port_must_be_a_valid_port(self, monkeypatch, value):
+        monkeypatch.setenv("PRIVACYFENCE_PORT", value)
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_PORT"):
+            org_mode.ServerConfig.from_org_config(self.BUNDLE)
+
+    def test_a_missing_issuer_is_still_an_error_outside_single_user_mode(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        idp = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+        with pytest.raises(org_mode.ConfigurationError, match="issuer_url"):
+            org_mode.ServerConfig.from_org_config({"idp": idp})
+
+    def test_single_user_issuer_defaults_to_localhost_on_the_port(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.ServerConfig.from_org_config({}).issuer_url == "http://localhost:8765"
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9100")
+        assert org_mode.ServerConfig.from_org_config({}).issuer_url == "http://localhost:9100"
+
+    @pytest.mark.parametrize("proxy", ["*", "0.0.0.0/0", "::/0"])
+    def test_trusted_proxies_refuse_a_wildcard_from_the_bundle(self, proxy):
+        with pytest.raises(org_mode.ConfigurationError, match="not a wildcard"):
+            org_mode.ServerConfig.from_org_config(
+                {"server": {"issuer_url": "https://pf.example.com", "trusted_proxies": ["10.0.0.1", proxy]}}
+            )
+
+    @pytest.mark.parametrize("proxy", ["*", "0.0.0.0/0", "::/0"])
+    def test_trusted_proxies_refuse_a_wildcard_from_the_env(self, monkeypatch, proxy):
+        monkeypatch.setenv("PRIVACYFENCE_TRUSTED_PROXIES", f"10.0.0.1,{proxy}")
+        with pytest.raises(org_mode.ConfigurationError, match="trusted_proxies must name specific proxies"):
+            org_mode.ServerConfig.from_org_config(self.BUNDLE)
+
+
 class TestServerConfigFromOrgConfig:
     def test_requires_issuer_url(self):
         with pytest.raises(org_mode.ConfigurationError):

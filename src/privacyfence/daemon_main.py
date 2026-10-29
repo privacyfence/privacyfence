@@ -643,7 +643,7 @@ def load_admin_config(bundle: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """
     try:
         admin, imported = admin_config.ensure(
-            bundle, mode=org_mode.resolve_mode(bundle), single_user=False,
+            bundle, mode=org_mode.resolve_mode(bundle), single_user=org_mode.is_single_user(bundle),
         )
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
@@ -686,7 +686,9 @@ def record_admin_config_import(bundle: dict[str, Any], imported: bool) -> None:
 
 def effective_org_config(bundle: dict[str, Any], admin: dict[str, Any]) -> dict[str, Any]:
     """The one dict every org-config reader sees: bundle, admin config and built-in apps composed."""
-    return oauth_apps.effective_org_config(bundle, admin, mode=org_mode.resolve_mode(bundle))
+    return oauth_apps.effective_org_config(
+        bundle, admin, mode=org_mode.resolve_mode(bundle), single_user=org_mode.is_single_user(bundle),
+    )
 
 
 def _local_effective_org_config() -> dict[str, Any]:
@@ -703,11 +705,12 @@ def _release_org_config() -> dict[str, Any]:
     """The effective config of the server the release commands act on."""
     bundle = load_org_config()
     mode = org_mode.resolve_mode(bundle)
+    single_user = org_mode.is_single_user(bundle)
     try:
-        admin = admin_config.config_for(bundle, mode=mode, single_user=False)
+        admin = admin_config.config_for(bundle, mode=mode, single_user=single_user)
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
-    return oauth_apps.effective_org_config(bundle, admin, mode=mode)
+    return oauth_apps.effective_org_config(bundle, admin, mode=mode, single_user=single_user)
 
 
 def _audit_org_bundle_adopted() -> None:
@@ -1270,6 +1273,31 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     return cfg
 
 
+def _require_single_user_start(server_config: org_mode.ServerConfig, startup_admin: dict[str, Any] | None) -> None:
+    """Refuse a single-user start that would expose a one-administrator server, or that would
+    quietly turn a former organization server into one.
+
+    The second check is what stops deleting org_bundle.json from downgrading a production
+    server: it would otherwise come back as single-user mode on whatever address it was bound to.
+    """
+    if not org_mode.is_loopback_issuer(server_config.issuer_url):
+        raise org_mode.ConfigurationError(
+            "Organization mode without an identity provider is single-user mode and runs only at "
+            "http://localhost or http://127.0.0.1. Add an \"idp\" section to org_bundle.json to "
+            "serve any other address."
+        )
+    admin = startup_admin if startup_admin is not None else (admin_config.load() or {})
+    pinned_keys = (
+        org_bundle_signing.pinned_public_key_path(org_dir()),
+        org_dir() / org_bundle_signing.LEGACY_PINNED_PUBKEY_FILENAME,
+    )
+    if any(path.exists() for path in pinned_keys) or admin.get("imported_from_bundle_sha256"):
+        raise org_mode.ConfigurationError(
+            "This data directory belonged to an organization server; restore org_bundle.json, or "
+            "use a new data directory for single-user mode."
+        )
+
+
 def _start_org_web_server(
     web_config: dict[str, Any], org_config: dict[str, Any], connector_host: ConnectorHost,
     *, unattended_sessions_enabled: bool, install_wide_config: dict[str, Any],
@@ -1329,10 +1357,9 @@ def _start_org_web_server(
     # itself re-reads it in grist_provisioning.start below.
     org_mode.GristProvisioningConfig.from_org_config(org_config)
     if idp is None:
-        raise org_mode.ConfigurationError(
-            "org mode (org_bundle.json \"mode\": \"org\") requires an \"idp\" section "
-            "(issuer, client_id, client_secret)"
-        )
+        # No identity provider: single-user mode, which is only safe where nothing but this
+        # computer can reach the listener.
+        _require_single_user_start(server_config, startup_admin)
 
     approvals_config = web_config.get("approvals", {}) or {}
     approval_registry = PendingApprovalRegistry(
@@ -1431,7 +1458,7 @@ def _start_org_web_server(
     logger.info(
         "Org mode active -- MCP-over-HTTP at %s (OAuth 2.1, DCR at %s/register), IdP %s, "
         "WebAuthn step-up %s, app-level authz policy %s, accepting Host %s",
-        server.mcp_url, server.base_url, idp.issuer,
+        server.mcp_url, server.base_url, idp.issuer if idp is not None else "single-user",
         f"enabled (scope={step_up.scope})" if step_up.enabled else "disabled",
         f"enabled ({len(authz_policy.allowed_domains)} allowed domain(s), "
         f"{len(authz_policy.required_groups)} required group(s))" if authz_policy.enabled else "disabled",
@@ -2280,6 +2307,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # From here on every reader gets the effective config; the raw bundle stays for the
     # signature, the hash and the mode checks above.
     org_config = effective_org_config(bundle, admin)
+    if org_mode.is_single_user(org_config):
+        logger.warning("Single-user mode: one administrator, no identity provider, on this computer only.")
     # ADR 0088: a local install shows every requester as "Undetected".
     agent_label.set_local_mode(org_mode.resolve_mode(bundle) == "local")
     for warning in check_consistency_warnings():

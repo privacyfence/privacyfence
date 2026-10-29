@@ -1,13 +1,15 @@
 """Docker HEALTHCHECK for the organization image.
 
 The probe docs/org-mode-setup-guide.md's Monitoring section names, made from inside the container
-to the port the installed bundle sets (``server.port``, default 8765). ``127.0.0.1`` is always in
-the daemon's Host allowlist.
+to the port the installed bundle sets (``server.port``). Without a bundle, or a port in it, the
+port is ``PRIVACYFENCE_PORT``, else 8765, so a single-user container reports healthy too.
+``127.0.0.1`` is always in the daemon's Host allowlist.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import sys
 import urllib.request
@@ -21,12 +23,17 @@ PROBE_PATH = "/.well-known/oauth-authorization-server"
 
 
 def main() -> int:
+    path = BUNDLE if BUNDLE.exists() else LEGACY_BUNDLE
+    server: dict = {}
+    if path.exists():
+        try:
+            server = json.loads(path.read_text(encoding="utf-8")).get("server") or {}
+        except (OSError, ValueError):
+            return 1
     try:
-        path = BUNDLE if BUNDLE.exists() else LEGACY_BUNDLE
-        server = json.loads(path.read_text(encoding="utf-8")).get("server") or {}
-    except (OSError, ValueError):
+        port = int(server.get("port") or os.environ.get("PRIVACYFENCE_PORT") or 8765)
+    except ValueError:
         return 1
-    port = int(server.get("port", 8765))
     tls = server.get("tls") or {}
     if tls.get("cert_file"):
         # The certificate names the public hostname, not 127.0.0.1; this checks liveness only.

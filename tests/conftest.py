@@ -170,6 +170,17 @@ def _reset_singletons():
 
 
 @pytest.fixture(autouse=True)
+def _clear_server_environment(monkeypatch):
+    # These variables choose the mode and the listener; a developer's shell must never change what
+    # a test sees.
+    for name in (
+        "PRIVACYFENCE_MODE", "PRIVACYFENCE_BIND_HOST", "PRIVACYFENCE_PORT",
+        "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_whats_new_state(monkeypatch, request):
     # whats_new writes per-principal state on page views; without this, any test that renders an
     # org page would write users/<id>/whats_new.json into the checkout (paths.data_dir() is the
