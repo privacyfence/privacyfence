@@ -773,6 +773,7 @@ the JSON body keys, with these types: `service: str`, `enabled: bool`, `value: s
 | `offer_service` | `service` | both | yes (ADR 0070) | live |
 | `withdraw_service` | `service` | both | no | live |
 | `set_atlassian_assets` | `enabled: bool, workspace_id: str = ""` | both | yes | live |
+| `set_salesforce_login_url` | `value: str` (D26) | both | yes | live |
 | `set_server_address` | `service: str` (`grist` or `peek`), `value: str` | both | yes | live (refused while the address comes from the environment, D18) |
 | `set_auto_provisioning` | `service: str` (`grist` or `peek`), `enabled: bool, trust_unverified_email: bool` | org (not single-user) | yes | restart (D18) |
 | `set_unattended_sessions` | `enabled: bool` | both | yes | restart |
@@ -3105,6 +3106,92 @@ until 8.x removes desktop mode.
 ADR 0268 records this. It amends 0016 and 0200 (organization mode no longer uses a bundle) and
 relates to 0255, 0263 and 0262.
 
+### D26. The built-in Salesforce app is a packaged External Client App
+
+This section overrides D1, D19 and mb1 where they say "Connected App" for Salesforce.
+
+**Why packaged.** Since Spring '26, Salesforce no longer lets an org create new Connected Apps;
+new integrations use External Client Apps. An External Client App whose distribution state is
+**Local** works only inside the org that created it. The built-in app serves users of every
+customer's org, so it is **Packaged**: it ships in a second-generation (2GP) managed package, which
+each customer org installs once.
+
+**What PrivacyFence owns (mb1).**
+- Two Developer Edition orgs, owned by `apps@privacyfence.eu` (Salesforce usernames
+  `apps@privacyfence.eu.devhub` and `apps@privacyfence.eu.ns`):
+  - the **Dev Hub**, non-ephemeral, which holds the External Client App's global OAuth settings
+    (the consumer key and secret);
+  - the **namespace org**, which registers the package namespace (`privacyfence`, or `pfence` if
+    taken) linked to the Dev Hub.
+- **The External Client App.**
+  - Name and API name `PrivacyFence`, distribution state Packaged, contact `info@privacyfence.eu`.
+  - Callback `https://oauth.privacyfence.eu/callback/salesforce`, scopes `api` and
+    `refresh_token, offline_access`.
+  - The authorization code flow, with PKCE and the client secret both required, and refresh token
+    rotation on.
+  - Its description, info URL, logo and icon are fixed in mb1. The logo and icon are served from
+    privacyfence.eu.
+- **The package.** A 2GP managed package `PrivacyFence` contains the app without its global OAuth
+  settings. So every subscriber org shares the one consumer key and secret, and those never leave
+  the Dev Hub.
+  - Versions are created with `--installation-key-bypass` and promoted, so anyone can install the
+    released version.
+  - Its source, minus the global OAuth settings, which hold the secret, is committed to
+    `salesforce/package/`, so later versions can be built from the repository.
+- **Two values come out of mb1:**
+  - the consumer key and secret, as `PF_APP_SALESFORCE_CLIENT_ID` and `..._SECRET`, as before;
+  - the install URL `https://login.salesforce.com/packaging/installPackage.apexp?p0=<04t version
+    id>`, as the repository **variable** (not a secret) `PF_APP_SALESFORCE_INSTALL_URL`.
+
+**The install URL ships with the built-in app (amends D1, p1).**
+- `scripts/builtin_apps.py write` also reads `PF_APP_SALESFORCE_INSTALL_URL`, and stores it as the
+  `install_url` field of the `salesforce` entry when it is an `https://login.salesforce.com/`
+  URL. Any other value is a warning, and the field is left out.
+- `build.yml` and `publish-pypi.yml` pass it from `vars.` in the same step env as the secrets.
+
+**What each customer org does once.**
+- Its Salesforce admin opens the install URL, installs the package for admins only, then opens
+  **Setup → External Client App Manager → PrivacyFence → Policies**:
+  - either **Permitted users: All users may self-authorize**;
+  - or **Admin approved users are pre-authorized**, plus the permission sets of the people who may
+    connect.
+- Until that is done, Salesforce refuses the sign-in. PrivacyFence then shows the existing
+  `/connect?error=salesforce` page, with the line `Your Salesforce administrator has to install
+  PrivacyFence in your org first.` when Salesforce's error says the app is not installed (OAuth
+  error `OAUTH_APP_ACCESS_DENIED` or `invalid_client_id`).
+- The Admin page's Salesforce row, when it uses the built-in app, says `Each Salesforce org
+  installs PrivacyFence once: send its Salesforce admin this link.` with the install URL and a copy
+  button.
+
+**Login URL (Admin page).**
+- The built-in app signs in at `https://login.salesforce.com`. An org that blocks that host (My
+  Domain's **Prevent login from https://login.salesforce.com**) needs its My Domain URL.
+- So `services.salesforce` in the admin config gains `login_url` (default `""`, which means
+  `https://login.salesforce.com`). A new action, `set_salesforce_login_url(value: str)`, sets it.
+  - Both modes, sensitive, applies live.
+  - It accepts only `https://login.salesforce.com`, `https://test.salesforce.com`, or an
+    `https://<name>.my.salesforce.com` or `https://<name>--<sandbox>.sandbox.my.salesforce.com`
+    origin with no path. Otherwise it refuses: `Use login.salesforce.com, test.salesforce.com or
+    your My Domain URL (…my.salesforce.com).`
+  - Limiting the host to Salesforce's own names keeps an admin from sending people's Salesforce
+    sign-in to another site.
+- The effective config puts it into the Salesforce section as `login_url`, for the built-in app
+  and for a connector config without one. A connector config's own `login_url` wins.
+
+**Own apps are unchanged.** An organization's own Salesforce app is a **Local** External Client App
+in its own org. It needs no package, and works for that org's users. On a server it is a connector
+config (D25); on a desktop install, a bundle section. `docs/salesforce-setup.md` already describes
+it, minus the "Connected App" alternative, which goes.
+
+**Known uncertainty.** A community report describes a subscriber's web server flow, with the
+packaging org's consumer key, failing with a cross-org error. Salesforce's Trailhead module says
+subscribers can share the original credentials. mb1 ends with a test install in the QA org and a
+real sign-in through the relay. If that fails, stop before p1 and decide with the maintainer: ship
+7.0 without a built-in Salesforce app (own app only), or follow Salesforce's guidance on
+subscriber credentials.
+
+ADR 0254 records this (p12 folds D26 into it).
+
 ## ADRs
 
 - **0254** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -3352,7 +3439,7 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - Google shows an unverified-app screen, and caps the app at 100 users, until it is verified.
     Gmail and Drive scopes are restricted, so verification includes an annual third-party
     security assessment (CASA).
-  - Salesforce orgs block uninstalled connected apps by default.
+  - Every Salesforce org's admin installs the PrivacyFence package once before its users can connect (D26).
   - Slack workspaces may need an admin's approval.
 - **Switching apps** (a bundle adding or removing a provider's credentials) makes people reconnect
   Salesforce, Atlassian and Miro, whose refresh uses the current app's credentials.
@@ -3369,7 +3456,7 @@ manual_before:
 - id: mb1-register-builtin-apps
   title: Register the six PrivacyFence-owned OAuth apps (Google Web client, Slack, Salesforce, Atlassian, Miro, and the Google sign-in client in its own project), each with only its oauth.privacyfence.eu redirects, distribute them, and store their credentials as repository secrets
   why: p1 bakes them into the org image and the PyPI wheel (and its dispatched build.yml check looks for them); ma2 and ma4 sign in with them
-  done_when: Settings → Secrets and variables → Actions lists the 12 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, PF_APP_GOOGLE_SIGNIN_CLIENT_ID/_SECRET, the Slack, Salesforce, Atlassian and Miro apps belong to apps@privacyfence.eu (an alias of andras@tkcs.name); the Google projects show info@privacyfence.eu as support and developer contact; and the Slack, Atlassian and Miro apps are set to public distribution
+  done_when: Settings → Secrets and variables → Actions lists the 12 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, PF_APP_GOOGLE_SIGNIN_CLIENT_ID/_SECRET, the Slack, Salesforce, Atlassian and Miro apps belong to apps@privacyfence.eu (an alias of andras@tkcs.name); the Google projects show info@privacyfence.eu as support and developer contact; the Salesforce app is a Packaged External Client App in a promoted 2GP managed package, its install URL is the repository variable PF_APP_SALESFORCE_INSTALL_URL, its source is committed to salesforce/package/ on the plan branch, and a test install in the QA org signed in through the relay (D26); and the Slack, Atlassian and Miro apps are set to public distribution
 - id: mb2-relay-worker-cloudflare
   title: Create the Cloudflare API token, the relay's Gmail sender (alias, delivery restriction, Internal OAuth client and send-only refresh token) and the oauth-relay-worker GitHub environment
   why: the relay's deploy workflow (p11) deploys from main with them when the PR merges (ma0), before the alpha that ma2 and ma4 test
@@ -3503,11 +3590,11 @@ phases:
   - .github/workflows/publish-pypi.yml
   brief: |-
     Read the plan's "Design → D1" section first; every name, env var, message and module format is there.
-    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_web", "slack", "salesforce", "atlassian_relay", "miro", "google_signin"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET. render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0254); ASCII only.
+    1. Create scripts/builtin_apps.py by copying the structure of scripts/telegram_credentials.py (stdlib only, REPO_ROOT, render(), write(creds_path, environ), archive_members/contains_credentials/check_dist, argparse main with `write` and `check-dist [--require] files*`). KEYS = ("google_web", "slack", "salesforce", "atlassian_relay", "miro", "google_signin"); env vars PF_APP_<KEY.upper()>_CLIENT_ID / _CLIENT_SECRET, plus PF_APP_SALESFORCE_INSTALL_URL for salesforce's optional install_url (D26: only an https://login.salesforce.com/ URL, otherwise a warning and no field). render(apps) returns exactly "APPS = " + repr(dict(sorted(apps.items()))) + "\n". Messages exactly as D1 says (check-dist's text is telegram_credentials.py:94-99's with "Telegram" replaced by "built-in OAuth apps" and ADR 0040 by ADR 0254); ASCII only.
     2. Add `src/privacyfence/_builtin_apps.py` to .gitignore directly below the `_telegram_credentials.py` line, and `include src/privacyfence/_builtin_apps.py` to MANIFEST.in directly below line 6, extending the comment above it to name both generated modules.
     3. In src/privacyfence/app_credentials.py add BUILTIN_APP_KEYS and builtin_app(key) per D1 (a literal `from . import _builtin_apps` with the same `# type: ignore[attr-defined]` comment the Telegram import carries; the PRIVACYFENCE_BUILTIN_APPS JSON-file fallback; one logger.warning naming only the env var on a bad file). Extend the module docstring by one paragraph naming ADR 0254.
     4. Do not call the generator from the desktop installers (scripts/build_dmg.sh, build_deb.sh, build_installer.ps1): desktop mode gets no built-in apps (D19).
-    5. .github/workflows/build.yml: in `build-org-image` only, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 12 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries in that step's env only, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (`python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`, where REQUIRE is --require on every release tag, stable or pre-release, because the alpha image is how 7.0 is tested (D23); only an untagged workflow_dispatch run warns). The desktop build jobs get no PF_APP_ entry.
+    5. .github/workflows/build.yml: in `build-org-image` only, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 12 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries plus `PF_APP_SALESFORCE_INSTALL_URL: ${{ vars.PF_APP_SALESFORCE_INSTALL_URL }}` in that step's env only, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (`python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`, where REQUIRE is --require on every release tag, stable or pre-release, because the alpha image is how 7.0 is tested (D23); only an untagged workflow_dispatch run warns). The desktop build jobs get no PF_APP_ entry.
     6. .github/workflows/publish-pypi.yml `build` job: the same two steps next to the Telegram ones, with check-dist over `dist/*.whl dist/*.tar.gz` and the same every-tag REQUIRE rule. The secrets go only to the write step's env, never to the job.
     7. Tests. tests/unit/test_builtin_apps_script.py mirrors every test in tests/unit/test_telegram_credentials.py: it generates an importable module whose APPS equals the input; a value with quotes and backslashes stays inert (ast.literal_eval of the right-hand side equals the input); one-of-two set warns and skips; none set deletes a stale module; a newline in a value returns 2 and writes nothing; output is ASCII; check-dist pass, require-fail, warn, no files and unknown archive; main dispatch; git-ignored but packaged; build.yml's build-org-image job and publish-pypi.yml call `scripts/builtin_apps.py write`, while build_dmg.sh, build_deb.sh, build_installer.ps1 and build.yml's desktop jobs contain neither `builtin_apps.py` nor `PF_APP_`, build.yml and publish-pypi.yml call `scripts/builtin_apps.py check-dist`, and none contains `APPS = `. tests/unit/test_app_credentials.py: builtin_app returns the generated module's entry (monkeypatch sys.modules["privacyfence._builtin_apps"]), returns a copy, falls back to the JSON file, returns None and warns once for a missing or malformed file without logging its content; and BUILTIN_APP_KEYS order.
     8. Run ruff check . and python3 -m pytest tests/unit/test_builtin_apps_script.py tests/unit/test_app_credentials.py tests/unit/test_telegram_credentials.py tests/unit/test_org_image_workflows.py -q.
@@ -4650,6 +4737,35 @@ phases:
   - python3 -m pytest tests/unit -q -k "slack" passes
   - grep -n "def slack_manifest" src/privacyfence/oauth_apps.py matches
   - ruff check . passes
+- id: p26-salesforce-package
+  title: 'Salesforce: the package install link and the login URL on the Admin page'
+  depends_on:
+  - p24-slack-limited-mode
+  complexity: S
+  touches:
+  - src/privacyfence/admin_config.py
+  - tests/unit/test_admin_config.py
+  - src/privacyfence/oauth_apps.py
+  - tests/unit/test_oauth_apps.py
+  - src/privacyfence/web/routes_admin.py
+  - tests/unit/web/test_routes_admin.py
+  - src/privacyfence/web/routes_connect.py
+  - tests/unit/web/test_routes_connect.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/test_settings_window_html.py
+  brief: |-
+    Read "Design → D26".
+    1. admin_config: services.salesforce.login_url (schema default ""), set_salesforce_login_url with D26's host rule and exact refusal text, summary `Set the Salesforce login URL to <value>` / `Cleared the Salesforce login URL`.
+    2. oauth_apps.effective_org_config: login_url into the Salesforce section per D26 (a connector config's own login_url wins).
+    3. routes_admin: the action in ADMIN_ACTIONS (both modes, sensitive, live).
+    4. settings_window_html: the Salesforce row's install-link line and copy button when the built-in app carries install_url, and the login URL form.
+    5. routes_connect: the "has to install PrivacyFence in your org first" line on /connect?error=salesforce for D26's two error codes.
+    6. Tests: each accepted and refused login URL (evil.com, http://, a path, my.salesforce.com.evil.com); precedence; the row renders the link only for the built-in app with install_url; the error line for both codes and not for others.
+    7. Run ruff check . and python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit -q -k "salesforce" passes
+  - grep -n "set_salesforce_login_url" src/privacyfence/admin_config.py src/privacyfence/web/routes_admin.py matches in both
+  - ruff check . passes
 - id: p12-adrs
   title: ADRs 0254-0267 and the status lines on the ADRs they amend
   depends_on:
@@ -4659,6 +4775,7 @@ phases:
   - p23-prerelease-org-image
   - p24-slack-limited-mode
   - p25c-connector-config-signing-tools
+  - p26-salesforce-package
   complexity: M
   touches:
   - docs/adr/0254-built-in-oauth-apps-ship-in-every-distribution.md
@@ -4709,7 +4826,7 @@ phases:
          - 0269: dropping the built-in Slack app (every workspace registers its own); keeping it with no fallback (history reads 1 per minute); waiting for the Marketplace listing before shipping Slack.
          - 0262: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
        - 0266 records D20, including its single-point-of-failure risk and the default-deny rule.
-       - Fold in D15 where it names an ADR: 0254 (SEC-02 threat, SEC-13 rotation, SEC-22), 0256 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0265 (D17 and D22: the firewall, Tailscale-only administration, pfrunner outside the docker group with one no-argument sudo rule, the shared data directory, /mcp blocked, secrets only in step env and the generated module deleted after each run, a new connector as two PRs), 0258 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0259 (SEC-01: single-user mode is no protection against an agent that can run docker), 0261 (SEC-21), 0263 (SEC-14).
+       - Fold in D15 where it names an ADR: 0254 (SEC-02 threat, SEC-13 rotation, SEC-22, and D26: the packaged Salesforce External Client App, its install link and the login URL), 0256 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0265 (D17 and D22: the firewall, Tailscale-only administration, pfrunner outside the docker group with one no-argument sudo rule, the shared data directory, /mcp blocked, secrets only in step env and the generated module deleted after each run, a new connector as two PRs), 0258 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0259 (SEC-01: single-user mode is no protection against an agent that can run docker), 0261 (SEC-21), 0263 (SEC-14).
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
        - 0016: "Amended by [0255](...): the signature no longer covers operational settings. Amended by [0262](...): the bundle and pin file names. Amended by [0268](...): organization servers read no bundle; own apps are signed connector configs."
@@ -4833,7 +4950,7 @@ phases:
        - Replace any advice to trust or pre-approve the client ID with D15 SEC-02's exact sentence; never tell anyone to trust the built-in app.
        - Give the provider caveat:
          - Google: an unverified-app screen and a 100-user cap until verification, which includes an annual security assessment for Gmail and Drive scopes; a Workspace admin may trust their organization's own client ID, never the built-in one (SEC-02's sentence); an org-mode override must be a Web application client.
-         - Salesforce: orgs that block uninstalled connected apps need an admin to install or approve it.
+         - Salesforce: each org's admin installs the PrivacyFence package once, from the install link on the Admin page, and sets its policy (D26); an org that blocks login.salesforce.com sets its My Domain URL on the Admin page; an organization's own app is a Local External Client App, and the Connected App instructions go.
          - Slack: workspaces that require app approval need an admin's approval once.
          - Atlassian and Miro: nothing extra.
        - Bundle flags only for credentials.
