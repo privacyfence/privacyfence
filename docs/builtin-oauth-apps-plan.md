@@ -23,6 +23,10 @@ After this plan:
   org image and the PyPI wheel), as Telegram's app credentials are (ADR 0040). Built-in apps are
   for organization mode only, including single-user mode; desktop mode, deprecated in 7, gets none
   (D19).
+  - **Organization servers go further (D25).** They read no bundle at all: their startup settings
+    come from the environment, and an organization's own app is a signed per-provider
+    **connector config** uploaded on the Admin page. An upgraded server reads its 6.x bundle,
+    read-only, until 8.x. Desktop installs keep the bundle until desktop mode is removed.
 - **Everything operational moves to a new admin config**, `org/admin_config.json`. The daemon
   writes it, and administrators edit it on a new top-level **Admin** page:
   - which services are offered;
@@ -2429,7 +2433,8 @@ gets no built-in apps.
 
   Slack's current requirements decide when it can be submitted, such as a minimum number of active
   installs. ma9 checks them.
-- **Until it is listed:**
+- **Until it is listed:** D24 replaces the line below with limited mode (search for history reads)
+  and the one-click own app.
   - **Admin page.** The built-in Slack row's status line adds `Slack limits channel and thread
     reads for apps outside the Slack Marketplace until PrivacyFence is listed. Your own internal
     Slack app avoids it.`
@@ -2843,6 +2848,220 @@ A release cut between the two never shows a half-built service.
   (Risks).
 - Fixes found on the alpha are fixed forward on `main`; nothing is reverted to retest a branch.
 
+### D24. Slack: the built-in app by default, search for throttled reads, and a one-click own app
+
+This section overrides D19's Slack Marketplace part where they differ.
+
+**The constraint.** Slack limits a distributed app that is not in the Slack Marketplace to 1
+request per minute, and 15 messages per call, on `conversations.history` and
+`conversations.replies`. The Marketplace accepts a submission only once the app has 10 installs on
+active workspaces, counted across every PrivacyFence server's users. 7.0 will not have them.
+Internal apps, installed only in the workspace that created them, keep Tier 3 (50 per minute).
+
+**The decision.** The built-in Slack app stays, so Slack connects with no setup like the other
+providers. While it is throttled, the connector avoids the two throttled methods where it can, and
+the Admin page offers a one-click switch to the workspace's own internal app at full speed.
+
+**Limited mode (p24).** `oauth_apps.slack_limited(section) -> bool` is true when the Slack section
+is the built-in app and `SLACK_MARKETPLACE_LISTED` is false.
+
+- **Channel history.** In limited mode `slack_get_channel_history` reads through `search.messages`
+  (Tier 2, 20 per minute, up to 100 matches a page). The query is the channel plus the time range,
+  for example `in:<#C123> after:2026-11-01`.
+  - The result says `Read through Slack search, because Slack limits history reads for this app;
+    an administrator can switch to your workspace's own app on the Admin page.`
+  - Search does not return everything history does: some message subtypes are missing, there is a
+    short indexing delay, and thread replies come back as top-level matches. The tool description
+    says so in limited mode.
+  - Stop condition: if search cannot be scoped to a channel id, use the channel's name from
+    `conversations.info` (Tier 3, unthrottled). If neither works, keep history and say why.
+- **Thread replies** have no good substitute. `slack_get_thread_replies` keeps
+  `conversations.replies` and reads at most 15 replies. In limited mode the result names the limit
+  and the own-app switch.
+- **Single-message lookups** (permalinks, and thread previews on approval cards) use the throttled
+  methods. In limited mode an approval card shows the message without its thread preview instead of
+  waiting up to a minute. A permalink lookup tries `search.messages` first.
+- **Routines** already read Slack through search (`docs/slack-setup.md`, "Rate limits and
+  routines"), so they are unaffected.
+
+**One-click own app (p24).** The Slack row on Admin → Services, when it uses the built-in app,
+shows `Slack limits channel history and thread reads for apps outside the Slack Marketplace. Your
+workspace's own app reads at full speed.` and a button **Create your workspace's own Slack app**.
+
+- The button opens `https://api.slack.com/apps?new_app=1&manifest_json=<url-encoded manifest>`.
+  The manifest comes from `oauth_apps.slack_manifest(issuer_url) -> dict`:
+  - `display_information.name` "PrivacyFence";
+  - `oauth_config.redirect_urls`: `[<issuer_url>/oauth/callback/slack]`;
+  - `oauth_config.scopes.user`: `slack_client.DEFAULT_USER_SCOPES`, and no bot scopes;
+  - `settings`: `org_deploy_enabled: false`, `socket_mode_enabled: false`,
+    `token_rotation_enabled: false`.
+  - Stop condition: if Slack's create page no longer takes `manifest_json`, show the manifest in a
+    copyable block with "Create New App → From an app manifest" instead.
+- Left undistributed, that app is internal, so it keeps Tier 3. The row's next two lines say what
+  to do next: copy the Client ID and Client Secret from Basic Information, sign them as a connector
+  config (D25), and upload the file on this row.
+- An internal Slack app works only in the workspace that created it. An organization with several
+  Slack workspaces keeps the built-in app, or uses an Enterprise Grid org-wide app; the docs say so.
+- Switching makes everyone who connected Slack connect again. The row says so, as for the other
+  providers.
+
+**Testing.** The live checks keep the built-in Slack app, so the default path, search fallback
+included, is what the weekly check tests. The own-app path is covered by unit tests and ma2.
+
+**The Marketplace listing (ma9)** stays the way out. When it is approved,
+`SLACK_MARKETPLACE_LISTED` flips and limited mode ends.
+
+ADR 0269 records this.
+
+### D25. Organization servers have no bundle; own apps are signed connector configs
+
+This section overrides D2, D4, D7, D13 and D14 for organization mode, including single-user mode,
+where they differ. Desktop (local) installs keep the bundle exactly as D2, D7 and D13 describe,
+until 8.x removes desktop mode.
+
+**What an organization server reads.**
+
+| What | From |
+|---|---|
+| `mode`, the server address, the identity provider | the environment (D9, D14), or, read-only until 8.x, an upgraded server's legacy bundle |
+| an organization's own app for a provider | a signed **connector config**, uploaded on Admin → Services |
+| a provider with no connector config | the built-in app (D1), or nothing for Grist and Peek |
+| everything operational | the admin config (D3) |
+
+**Connector configs.**
+
+- **One file per provider.** The providers are `google`, `slack`, `salesforce`, `atlassian`,
+  `miro` and `grist`.
+- **The format is signed text, not JSON,** so that Python and a browser produce exactly the same
+  bytes to sign:
+
+  ```text
+  privacyfence-connector-config v1
+  provider: slack
+  serial: 3
+  client_id: 1234.5678
+  client_secret: ...
+  signed_at: 2026-11-02T10:00:00Z
+  key: <base64 Ed25519 public key>
+  signature: <base64 Ed25519 signature>
+  ```
+
+  - The signed message is every line before `signature:`, each ending in `\n`, as UTF-8.
+  - Fields come in exactly this order. Salesforce adds an optional `login_url` before
+    `signed_at`; Grist adds `auth_server_url` and `server_url` there.
+  - Each value is printable ASCII without spaces at either end, at most 512 characters, with no
+    control character. A file is at most 8 KB.
+  - Field names stay those of the bundle sections (`consumer_key` and `consumer_secret` for
+    Salesforce), so the effective config is the same dict the connectors read today.
+- **The key** is Ed25519, the same kind `build_org_bundle.py` uses. An organization's existing
+  bundle signing key works unchanged.
+  - The first upload pins its key (TOFU) at `org/connector_config_signing_pubkey.txt`. The upload
+    asks for confirmation first, showing the key's fingerprint, as the bundle upload's 409 does.
+  - An upgraded server starts with its legacy bundle's pinned key as this pin, so IT keeps its key.
+  - A different key is refused. Rotation means deleting the pin file on the server, as for bundles,
+    and the docs say so.
+- **Serials.** Each provider's serial must be higher than any serial accepted before for that
+  provider. The highest accepted serials are kept in `org/connector_config_serials.json`, which
+  survives removal, so an older file can never be replayed.
+- **Storage.** An accepted file is stored unchanged at `org/connector_configs/<provider>.txt`,
+  mode 0600, and verified again against the pin at every start. A file that no longer verifies
+  refuses the start, naming the provider.
+- **Admin page.** The Services row shows the source (`Your organization's own app (client
+  <client_id>), connector config serial <n>, signed <date> with key <fingerprint>`). It has
+  **Upload a connector config** and **Remove our own app**. The second falls back to the built-in
+  app, or to none.
+  - Both are sensitive (a passkey always, SEC-04), CSRF-checked and audit-logged (`Set the <Label>
+    connector config (serial <n>)`, `Removed the <Label> connector config`).
+  - Neither the page nor any response or log ever shows the secret.
+  - Upload and removal apply live, as `offer_service` does (D6).
+- **Precedence in the effective config (amends D4).** In organization mode a provider's section is
+  its connector config, otherwise its built-in app, otherwise none. A legacy bundle's credential
+  sections are never read after their import.
+- **Module.** `src/privacyfence/connector_configs.py`, with `parse`, `verify`, `accept`,
+  `load_all`, `remove` and `import_from_legacy_bundle`, at 100 % coverage. It imports
+  `org_bundle_signing` for the Ed25519 primitives.
+
+**Upgraded servers: the legacy bundle (amends D13, D14).**
+- Adoption (D13) still copies `org_config.json` to `org_bundle.json`, so a downgrade keeps working.
+- In organization mode 7.x reads the adopted bundle only for `mode`, `server` and `idp`. A bundle
+  value wins over the environment, as D14 says, with SEC-14's rule kept.
+- At the first start, `connector_configs.import_from_legacy_bundle` stores each credential section
+  as `org/connector_configs/<provider>.json`, with `"source": "legacy-bundle"` and the bundle's
+  SHA-256. These are not re-signed: the bundle's verified signature covered them. A later upload
+  replaces one.
+- Every org-mode start with a bundle present logs at WARNING: `org/org_bundle.json is read only for
+  its server and identity-provider settings until PrivacyFence 8. Move them to privacyfence.env
+  (privacyfence-app --print-env-from-bundle), then run privacyfence-app --retire-bundle.` The Admin
+  page shows the same line.
+- **`privacyfence-app --print-env-from-bundle [--idp-secret-file PATH]`** prints the
+  `PRIVACYFENCE_*` lines equivalent to the bundle's `mode`, `server` and `idp`. It never prints the
+  IdP client secret: with `--idp-secret-file` it writes the secret to that file (mode 0600, refusing
+  to overwrite) and prints `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=<path>`. Without that option it
+  prints a placeholder line.
+- **`privacyfence-app --retire-bundle`** ends the legacy bundle. It runs only when the
+  environment yields the same `mode`, issuer URL and IdP issuer and client ID as the bundle, and
+  refuses otherwise, naming the first difference. Then it records `"retired": true` in
+  `org/org_bundle_adopted.json` and deletes `org/org_bundle.json`. Adoption (D13) never runs again
+  once `retired` is set, so 6.x's untouched `org_config.json` is not copied back. A downgrade to 6.x
+  still works, because 6.x reads that untouched file. To re-upgrade from 6.x later, the D13 list
+  (which deletes `org_bundle_adopted.json`) applies unchanged.
+- An org server installs no new bundle. There is no org-mode bundle upload, and a file at
+  `org/org_bundle.json` whose SHA-256 differs from the adopted one is refused at start:
+  `Organization servers no longer take a new org_bundle.json; set privacyfence.env and upload
+  connector configs on the Admin page.`
+
+**Tooling.**
+- **`build_org_bundle.py`** keeps building desktop (`--mode local`) bundles. `--mode org`, and every
+  `--server-*` and `--idp-*` option, are refused with: `Organization servers take their settings
+  from privacyfence.env and their own apps from signed connector configs (docs/org-mode-setup-guide.md).`
+  The `--idp-admin-email`, `--idp-from-environment` and `--idp-trust-unverified-email` options from
+  p20b are not added.
+- **`scripts/sign_connector_config.py`** (stdlib plus `cryptography`, like `build_org_bundle.py`'s
+  signing):
+  - `keygen --out KEY.pem` writes a PKCS#8 PEM private key (mode 0600, refusing to overwrite) and
+    prints the public key and its fingerprint;
+  - `sign --provider P --serial N --client-id ID --key KEY.pem [--login-url ...] [--auth-server-url
+    ... --server-url ...] --output FILE`;
+  - the client secret is read from `--client-secret-file` or prompted with `getpass`, never from
+    the command line, where `ps` and the shell history would show it.
+- **The browser tool: `website/tools/connector-config/index.html`**, on privacyfence.eu and as the
+  same single file in the repository for offline use.
+  - The fields:
+    - a provider select, and the provider-specific fields;
+    - the serial (prefilled from today's date as `YYYYMMDDnn`);
+    - your three text boxes: the client ID, the client secret and the signing key (a pasted
+      PKCS#8 PEM);
+    - a **Generate a new key** button, which downloads `privacyfence-connector-key.pem` and shows the
+      fingerprint.
+  - **Sign** downloads `<provider>.pfconnector`.
+  - It signs with WebCrypto Ed25519 (Chrome 137 or later, Firefox 129, Safari 17). Other browsers
+    get `This browser cannot sign Ed25519; use scripts/sign_connector_config.py.`
+  - **It sends nothing anywhere.** The page is self-contained, with no external script, style or
+    font. Its CSP meta tag is `default-src 'none'; script-src 'sha256-…'; style-src 'sha256-…';
+    connect-src 'none'; form-action 'none'; base-uri 'none'`, and it has no form submission.
+  - The page says it runs only in your browser, and that the offline file from the repository is
+    the choice when you would rather not trust a web page with your key.
+  - It is never served by a PrivacyFence server, because the server is what the signature
+    protects.
+  - It is linked from the Admin page and the docs, not from the site's navigation.
+- **Cross-language tests.** `tests/fixtures/connector_config/` holds a key, inputs and the expected
+  file. The Python tool must reproduce it byte for byte, and the server must verify it. A Node test
+  (`tests/unit/test_connector_config_web_tool.py`, which runs `node` on the page's extracted script
+  and fails rather than skips when `CI` is set) must produce the same signature. Ed25519 signatures
+  are deterministic, so the bytes match.
+
+**Security.**
+- A hijacked admin session, even with its passkey, cannot swap in an attacker's app: that needs
+  the signing key. It can remove an own app, which falls back to the built-in app and is audited.
+- The pin is trust on first use. The first upload on a new server decides the key, so the docs
+  tell admins to check the fingerprint shown before confirming.
+- The web tool is the soft spot. Whoever controls privacyfence.eu could change the page to steal
+  keys. The CSP, the single self-contained file, and the offline copy in the repository are the
+  mitigations, and ADR 0268 records the residual risk.
+
+ADR 0268 records this. It amends 0016 and 0200 (organization mode no longer uses a bundle) and
+relates to 0255, 0263 and 0262.
+
 ## ADRs
 
 - **0254** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -2923,6 +3142,16 @@ A release cut between the two never shows a half-built service.
   the default. Relates to 0262, 0263, 0258.
 - **0267** — Pre-releases publish the organization image too, under their exact version tag only;
   `X.Y`, `X` and `latest` move only for stable releases (D23). Amends 0208.
+- **0268** — Organization servers read no bundle: startup settings come from the environment, and
+  an organization's own app is a signed per-provider connector config uploaded on the Admin page.
+  Its format is signed text, its key is pinned on first use, and its serials only increase. It is
+  signed with `scripts/sign_connector_config.py` or a self-contained browser tool on
+  privacyfence.eu. An upgraded server reads its 6.x bundle's server and IdP settings read-only
+  until 8.x; desktop installs keep the bundle (D25). Amends 0016, 0200; relates to 0255, 0262,
+  0263.
+- **0269** — The built-in Slack app stays the default. While Slack throttles it outside the
+  Marketplace, channel history is read through search, and the Admin page offers a one-click
+  internal app for full speed (D24). Relates to 0254, 0268.
 
 ## Manual steps
 
@@ -2967,10 +3196,16 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   keeps it opt-in, in a separate Google project, and documents an organization's own IdP app as
   the robust choice.
 
-- **The built-in Slack app is rate-limited until it is in the Slack Marketplace.** Channel history
-  and thread reads drop to 1 request per minute and 15 messages per call (D19). Slack's review takes
-  time and may need a minimum number of active installs first. Until then, the Admin page and the
-  docs recommend a workspace's own internal Slack app.
+- **The built-in Slack app is throttled until it is in the Slack Marketplace, which needs 10
+  active workspace installs first.** Channel history goes through search, which misses some
+  message types and lags slightly, and thread replies stay at 15 per call and 1 call a minute
+  (D24). The Admin page's one-click internal app removes the limit for one workspace.
+- **Connector configs trust the first key uploaded (D25).** Whoever uploads first on a new server
+  pins the key, so the docs tell admins to check the fingerprint. The browser signing tool is only
+  as trustworthy as privacyfence.eu; the offline copy in the repository is the alternative.
+- **Organization-mode bundles are refused from 7.0 (D25).** An operator's script that builds or
+  installs a new org bundle stops working; the refusal names `privacyfence.env` and connector
+  configs, and `--print-env-from-bundle` writes the environment from an existing bundle.
 - **Desktop users get no built-in apps.** That is deliberate: desktop mode ends in 8 (D19). The
   deprecation notice says the built-in sign-in is one more reason to move.
 
@@ -3114,10 +3349,10 @@ manual_after:
   title: Cut 7.0.0a1 with /cut-release, and check that GHCR has ghcr.io/privacyfence/privacyfence-org:7.0.0a1 with its attestation, that latest and the floating tags did not move, and that the download page offers the desktop pre-release
   why: 'D23: every remaining check installs this alpha the regular way'
 - id: ma2-org-relay-signin
-  title: On a fresh test host, start an organization server from the 7.0.0a1 image exactly as docs/org-mode-docker.md's quick start says (env file, no bundle), offer the built-in services, register with the relay and connect Gmail, Slack, Salesforce, Jira and Miro; test revoke and restore; try the built-in Google sign-in
+  title: On a fresh test host, start an organization server from the 7.0.0a1 image exactly as docs/org-mode-docker.md's quick start says (env file, no bundle), offer the built-in services, register with the relay and connect Gmail, Slack, Salesforce, Jira and Miro; test revoke and restore; try the built-in Google sign-in; switch Slack to the workspace's own app with the Admin page's one-click manifest, sign it with the browser tool and upload the connector config
   why: the relay round trip, the env-only start and the built-in sign-in need a public domain, the real Worker and real providers, installed the way an operator installs
 - id: ma3-upgrade-and-admin-page
-  title: Upgrade a 6.x org server with an old-style bundle to the 7.0.0a1 image (PRIVACYFENCE_IMAGE_TAG, docker compose pull, up -d), check the one-time import, use the Admin page, compare Settings for an admin and a normal user, and go back to the 6.x tag
+  title: Upgrade a 6.x org server with an old-style bundle to the 7.0.0a1 image (PRIVACYFENCE_IMAGE_TAG, docker compose pull, up -d), check the one-time import, use the Admin page, compare Settings for an admin and a normal user, and go back to the 6.x tag; check that the bundle's credentials became connector configs, and move its server and IdP settings to privacyfence.env with --print-env-from-bundle
   why: checks the migration, the admin path with step-up, and the downgrade end to end on a regular Docker install
 - id: ma4-docker-single-user-and-deprecation
   title: Run the 7.0.0a1 image in single-user mode with the docs' docker run command (setup code, passkey, a connector through the relay, an MCP client)
@@ -3143,7 +3378,7 @@ verify_after_merge:
 - test ! -d cloudflare/oauth-relay || (cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test)
 final_checks:
 - docs/builtin-oauth-apps-plan.md and docs/builtin-oauth-apps-plan-manual-steps.html are deleted, and grep -rn "builtin-oauth-apps-plan" --exclude-dir=.git . finds nothing
-- ADRs 0254-0267 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0011, 0016, 0019, 0181, 0196, 0200, 0208, 0217 and 0253 carry new Status lines; ADR 0040 is unchanged
+- ADRs 0254-0269 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0011, 0016, 0019, 0181, 0196, 0200, 0208, 0217 and 0253 carry new Status lines; ADR 0040 is unchanged
 - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
 - cd cloudflare/oauth-relay && npm ci && npm test && npm run typecheck && npm run dry-run passes
 phases:
@@ -3477,7 +3712,7 @@ phases:
     3. Run ruff check ., python3 -m pytest tests/unit/test_admin_config.py -q and python3 -m mypy src/privacyfence/admin_config.py.
     Also apply D15: SEC-18 (the apply_change(action, params, *, bundle, mode, single_user) signature, replacing the payload keys), SEC-06 (bearer env dropped on a URL or kind change), SEC-04's org server-address rule, and SEC-20 (no control characters in rooms), each with tests.
     Also apply D21: set_scoped_tokens takes allow_ai_proposals: bool and stores it in scoped_tokens.allow_ai_proposals; test that it is stored, that policy_from_org_config over the result still needs enabled, and that an imported bundle's allow_ai_proposals survives the import.
-    Also apply D19: the built-in Slack row adds the Slack Marketplace line while oauth_apps.SLACK_MARKETPLACE_LISTED is False (define it in oauth_apps.py), with a test. Also apply D18 (Admin actions and rows): add set_auto_provisioning (org only, refused with D18's texts when unavailable); set_server_address is refused while the address comes from the environment or is an imported locked address (D18); service_rows gains options.address_source, options.locked and options.auto_provision {enabled, trust_unverified_email, available, reason, key_set} for peek and grist (key_set from org_mode.provisioning_key once p20c adds it; until then os.environ.get(key_env) is acceptable and p20c switches it). Never put the key in a row. Test each.
+    Also apply D19: define oauth_apps.SLACK_MARKETPLACE_LISTED = False in oauth_apps.py (D24's limited mode and Admin line, built in p24, read it). Also apply D18 (Admin actions and rows): add set_auto_provisioning (org only, refused with D18's texts when unavailable); set_server_address is refused while the address comes from the environment or is an imported locked address (D18); service_rows gains options.address_source, options.locked and options.auto_provision {enabled, trust_unverified_email, available, reason, key_set} for peek and grist (key_set from org_mode.provisioning_key once p20c adds it; until then os.environ.get(key_env) is acceptable and p20c switches it). Never put the key in a row. Test each.
   acceptance:
   - python3 -m pytest tests/unit/test_admin_config.py -q --cov=privacyfence.admin_config --cov-branch --cov-report=term-missing passes and reports 100%
   - python3 -m mypy src/privacyfence/admin_config.py passes
@@ -4147,7 +4382,7 @@ phases:
   brief: |-
     Read "Design → D14" ("Admins by email").
     1. org_identity.py: IdpConfig gains admin_emails (each ASCII .strip().lower(), from the section's admin_emails list; a non-ASCII entry never matches). principal_from_claims sets is_admin when the group rule matches, or when isinstance(claims.get("email"), str), the email is ASCII, its .strip().lower() is in admin_emails, and claims.get("email_verified") is True (D14 as amended by SEC-07; never casefold). The three callers (oauth_provider.py:470, routes_org_identity.py:222, routes_org_stepup.py:179) all pass verified ID-token claims and need no change.
-    2. scripts/build_org_bundle.py: add --idp-admin-email (repeatable, action="append"), writing idp.admin_emails, next to --idp-admin-group-value. tests/unit/test_build_org_bundle.py: the flag writes the list and the bundle still signs.
+    2. Admins by email come only from PRIVACYFENCE_ADMIN_EMAILS (D14): organization bundles are refused from 7.0 (D25), so build_org_bundle.py gains no --idp-admin-email option.
     3. tests/unit/test_org_identity.py:
        - A verified listed email is admin; matching is case-insensitive.
        - email_verified false, missing, or the string "true" is not admin.
@@ -4156,8 +4391,8 @@ phases:
        - A configured email with surrounding whitespace or different case still matches.
        - The group rule still works alone and together with the email list.
     4. Run ruff check . and python3 -m pytest tests/unit -q.
-    Also apply D15 SEC-07 (the Google hd rule, email_verified in check_authz_policy, ASCII lower with non-ASCII refused), SEC-08 (reserved subs hashed; the startup log line) and SEC-14's --idp-from-environment flag in build_org_bundle.py, each with tests. Add the SEC-07 behaviour change to the commit message so p13b can note it in the CHANGELOG.
-    Also apply D18's unverified-email rule: check_authz_policy trusts the email domain without email_verified only when IdpConfig.trust_unverified_email is true (the Google hd rule still applies); admins by email never use it; build_org_bundle.py gains --idp-trust-unverified-email. Tests: Entra-style claims without email_verified are denied by default and allowed with the flag; an email admin without email_verified is never admin, flag or not.
+    Also apply D15 SEC-07 (the Google hd rule, email_verified in check_authz_policy, ASCII lower with non-ASCII refused), SEC-08 (reserved subs hashed; the startup log line), each with tests. SEC-14's idp.from_environment needs no build_org_bundle.py flag (D25). Add the SEC-07 behaviour change to the commit message so p13b can note it in the CHANGELOG.
+    Also apply D18's unverified-email rule: check_authz_policy trusts the email domain without email_verified only when IdpConfig.trust_unverified_email is true (the Google hd rule still applies); admins by email never use it; it is set by PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL (or a legacy bundle's idp.trust_unverified_email), with no new build_org_bundle.py option (D25). Tests: Entra-style claims without email_verified are denied by default and allowed with the flag; an email admin without email_verified is never admin, flag or not.
   acceptance:
   - python3 -m pytest tests/unit -q passes
   - python3 -m pytest tests/unit/test_org_identity.py -q -k admin passes
@@ -4213,7 +4448,7 @@ phases:
   - deploy/docker/privacyfence.env.example
   brief: |-
     Read "Design → D20" ("The client", "Configuration", "Who may sign in", "Admin page"), D14 (idp_section) and SEC-07, SEC-14. The relay wiring is p20e; do not change redirect URIs here.
-    1. org_mode.idp_section: PRIVACYFENCE_IDP=builtin-google and the bundle form "idp": {"builtin": "google"} build D20's section from app_credentials.builtin_app("google_signin"); raise D20's four ConfigurationErrors; keep SEC-14's signed-bundle rule. Any other PRIVACYFENCE_IDP value raises ConfigurationError naming the accepted value.
+    1. org_mode.idp_section: PRIVACYFENCE_IDP=builtin-google builds D20's section (there is no bundle form: organization bundles are refused from 7.0, D25) from app_credentials.builtin_app("google_signin"); raise D20's four ConfigurationErrors; keep SEC-14's signed-bundle rule. Any other PRIVACYFENCE_IDP value raises ConfigurationError naming the accepted value.
     2. org_identity: IdpConfig gains builtin: bool and relay: bool from the section; check_authz_policy applies D20's default-deny when builtin (admins by verified email with hd, allowed domains with hd, everyone else refused even with empty authz); trust_unverified_email is refused with builtin.
     3. admin_config: import_from_bundle seeds authz.allowed_domains from PRIVACYFENCE_ALLOWED_DOMAINS (comma-separated, lower-cased, each a valid domain, otherwise ConfigurationError naming the variable) on the first import only; later starts log once that it is ignored.
     4. settings_window_html: the Admin page's Sign-in section shows D20's first line and the read-only admin list when the IdP is built-in.
@@ -4259,6 +4494,128 @@ phases:
   - grep -n "stepup" src/privacyfence/web/routes_org_stepup.py matches
   - python3 -m pytest tests/unit -q passes
   - ruff check . passes
+- id: p25a-connector-config-store
+  title: 'Connector configs: the signed per-provider format, the pinned key, serials, storage, the legacy-bundle import, and the effective config in organization mode'
+  depends_on:
+  - p20e-builtin-signin-relay
+  complexity: M
+  touches:
+  - src/privacyfence/connector_configs.py
+  - tests/unit/test_connector_configs.py
+  - tests/fixtures/connector_config/**
+  - src/privacyfence/oauth_apps.py
+  - tests/unit/test_oauth_apps.py
+  - src/privacyfence/daemon_main.py
+  - tests/unit/test_daemon_main.py
+  - tests/conftest.py
+  - scripts/check_coverage_floor.py
+  brief: |-
+    Read "Design → D25" in full, then D4 and D13.
+    1. src/privacyfence/connector_configs.py per D25: parse (strict line order and field rules, at most 8 KB), verify (Ed25519 over every line before "signature:", each ending "\n", via org_bundle_signing's primitives), accept (pin on first use only when the caller confirmed the fingerprint; refuse another key; per-provider serial strictly higher than org/connector_config_serials.json; store unchanged at org/connector_configs/<provider>.txt mode 0600), load_all (re-verify every stored file against the pin; a failure raises ConfigurationError naming the provider), remove (keeps the serials file), import_from_legacy_bundle (each credential section of the adopted bundle into org/connector_configs/<provider>.json with "source": "legacy-bundle" and the bundle's SHA-256, once). The pin starts as the legacy bundle's pinned key when one exists. No function puts a client secret in a message, log line or return value meant for display.
+    2. tests/fixtures/connector_config/: a test key (PKCS#8 PEM), inputs and the expected signed file for slack, salesforce (with login_url) and grist (with auth_server_url and server_url). The expected files are generated once by the test helper and checked in; p25c's tools must reproduce them byte for byte.
+    3. oauth_apps.effective_org_config: in organization mode a provider's section is its connector config, otherwise its built-in app, otherwise none (D25); the bundle's credential sections are ignored in organization mode. Local mode is unchanged (the bundle). credentials_source gains "connector" for organization mode.
+    4. daemon_main.run_app (organization mode): import_from_legacy_bundle on the first start with an adopted bundle; load_all at every start; the legacy-bundle WARNING line; refuse a bundle whose SHA-256 differs from org_bundle_adopted.json's (D25's message). Add --print-env-from-bundle [--idp-secret-file PATH] and --retire-bundle per D25, and make adopt_legacy_files skip when org_bundle_adopted.json records "retired": true.
+    5. tests/conftest.py: patch the connector-config paths in the D8 fixture (paths under tmp_path); test_connector_configs is exempt.
+    6. scripts/check_coverage_floor.py: src/privacyfence/connector_configs.py at 100.
+    7. Tests: every parse rule (order, unknown field, control character, length, size); a good file verifies, a changed byte does not; first upload pins only when confirmed; another key is refused; a lower or equal serial is refused, also after remove; a stored file that no longer verifies refuses the start; the legacy import stores each section once and is not repeated; effective config precedence in org mode (connector over built-in, built-in over none, bundle sections ignored) and unchanged in local mode; the refused new bundle; --print-env-from-bundle prints every variable, never the secret, writes the secret file 0600 and refuses to overwrite it; --retire-bundle refuses while the environment differs from the bundle, and once it succeeds a restart does not adopt org_config.json again while that file stays byte-identical. No caplog record and no output contains a sentinel secret.
+    8. Run ruff check ., python3 -m pytest tests/unit/test_connector_configs.py tests/unit/test_oauth_apps.py tests/unit/test_daemon_main.py -q, then python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_connector_configs.py -q --cov=privacyfence.connector_configs --cov-branch --cov-report=term-missing passes and reports 100%
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
+- id: p25b-connector-config-admin
+  title: Upload and remove connector configs on Admin → Services
+  depends_on:
+  - p25a-connector-config-store
+  complexity: M
+  touches:
+  - src/privacyfence/web/routes_admin.py
+  - tests/unit/web/test_routes_admin.py
+  - src/privacyfence/admin_config.py
+  - tests/unit/test_admin_config.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/test_settings_window_html.py
+  - src/privacyfence/web/routes_settings.py
+  brief: |-
+    Read "Design → D25" ("Admin page") and D6.
+    1. routes_admin (organization mode): POST /api/admin/connector_config/upload (multipart, one file, at most 8 KB; sensitive with always=True per SEC-04; CSRF; the TOFU confirmation answers 409 with the key fingerprint until the body confirms it, as org_config_upload does; classified bespoke-sensitive) and the action remove_connector_config(service) (sensitive, applies live). Both refresh the shared org_config in place and call connector_registry.evict_all() and relay_client.request_check(), as live actions do. Audit summaries per D25; never the secret.
+    2. admin_config.service_rows: app_source "connector" with client_id, serial, signed_at and the key fingerprint in options; never the secret.
+    3. settings_window_html: the Services row's source line, the "Upload a connector config" file control (an intercepted upload action in _settings_bridge_shim, like upload_rooms) and "Remove our own app", with the reconnect warning; a link to https://privacyfence.eu/tools/connector-config/ and to the Python tool's docs.
+    4. Tests: upload needs a passkey on the default step-up configuration; the 409 confirmation and its fingerprint; a wrong key, a lower serial and a malformed file give 400 with the parser's message; upload and remove change the shared org_config (is the same object) and evict connectors; the state never carries a sentinel secret; the row renders each source line.
+    5. Run ruff check . and python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/web/test_routes_admin.py -q -k connector_config passes and selects at least 6 tests
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
+- id: p25c-connector-config-signing-tools
+  title: Sign connector configs with a Python tool or a self-contained browser page
+  depends_on:
+  - p25a-connector-config-store
+  complexity: M
+  touches:
+  - scripts/sign_connector_config.py
+  - tests/unit/test_sign_connector_config.py
+  - website/tools/connector-config/index.html
+  - tests/unit/test_connector_config_web_tool.py
+  - scripts/build_site.py
+  - tests/unit/test_website_pages.py
+  brief: |-
+    Read "Design → D25" ("Tooling", "Cross-language tests", "Security").
+    1. scripts/sign_connector_config.py per D25 (keygen and sign; the secret from --client-secret-file or getpass, never argv; output mode 0600; refuse to overwrite). It reproduces p25a's fixtures byte for byte.
+    2. website/tools/connector-config/index.html per D25: one self-contained file, inline script and style with the CSP meta tag carrying their sha256 hashes, no external resource, no form submission, WebCrypto Ed25519 import of a PKCS#8 PEM, key generation with a PEM download and fingerprint, the provider-specific fields, the unsupported-browser message, and the "runs only in your browser; the offline copy is in the repository" text. Wire it into scripts/build_site.py's page map without a navigation or footer link, with noindex.
+    3. tests/unit/test_sign_connector_config.py: the fixtures reproduced; the secret never in argv (main refuses --client-secret); keygen output parses and refuses to overwrite.
+    4. tests/unit/test_connector_config_web_tool.py: the page has no http(s) URL in a src or href of script, link, img or iframe; the CSP meta exists with connect-src 'none' and hashes that match the inline blocks; extract the signing script and run it with node (shutil.which("node"); when missing, skip locally but fail when the CI environment variable is set) to sign the fixture inputs with the fixture key, asserting the output equals the expected file byte for byte.
+    5. Run ruff check . and python3 -m pytest tests/unit/test_sign_connector_config.py tests/unit/test_connector_config_web_tool.py tests/unit/test_website_pages.py tests/unit/test_build_site.py -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_sign_connector_config.py tests/unit/test_connector_config_web_tool.py -q passes
+  - grep -n "connect-src 'none'" website/tools/connector-config/index.html matches
+  - ruff check . passes
+- id: p25d-org-bundle-retired
+  title: build_org_bundle.py builds desktop bundles only; organization servers are documented without a bundle
+  depends_on:
+  - p25b-connector-config-admin
+  - p10-bundle-tooling
+  complexity: S
+  touches:
+  - scripts/build_org_bundle.py
+  - tests/unit/test_build_org_bundle.py
+  - tests/unit/test_docs_configuration_reference.py
+  brief: |-
+    Read "Design → D25" ("Tooling").
+    1. scripts/build_org_bundle.py: refuse --mode org and every --server-* and --idp-* option with D25's message and exit 2, writing nothing; hide them with help=argparse.SUPPRESS. Desktop (--mode local) bundles build and sign as before.
+    2. tests/unit/test_build_org_bundle.py: org-mode tests become one parametrized refusal test; every local-mode, signing and cross-check test still passes unchanged.
+    3. Run ruff check . and python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_docs_configuration_reference.py -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k refused passes
+  - ruff check . passes
+- id: p24-slack-limited-mode
+  title: 'Slack: search for throttled history reads, and the one-click own app on the Admin page'
+  depends_on:
+  - p25b-connector-config-admin
+  complexity: M
+  touches:
+  - src/privacyfence/oauth_apps.py
+  - tests/unit/test_oauth_apps.py
+  - src/privacyfence/connectors/slack.py
+  - tests/unit/connectors/test_slack_connector.py
+  - src/privacyfence/slack_client.py
+  - tests/unit/test_slack_client.py
+  - src/privacyfence/admin_config.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/test_settings_window_html.py
+  - scripts/qa_fixture_recorder.py
+  brief: |-
+    Read "Design → D24" in full, and docs/slack-setup.md's "Rate limits and routines".
+    1. oauth_apps.slack_limited(section) and slack_manifest(issuer_url) per D24.
+    2. The Slack connector in limited mode: channel history through search.messages per D24 (with its stop condition), the result and tool-description notes; thread replies capped with the note; approval cards without a thread preview; permalink lookups search first. Outside limited mode nothing changes; pin that with the existing tests unchanged.
+    3. The Admin page's built-in Slack row: D24's line and the "Create your workspace's own Slack app" button with the manifest link, then the copy-sign-upload lines pointing at p25b's upload control.
+    4. scripts/qa_fixture_recorder.py: the Slack history cases record the limited-mode (search) path, since the runner uses the built-in app.
+    5. Tests: slack_limited for built-in, connector and listed; the manifest's redirect URL and scopes equal slack_client.DEFAULT_USER_SCOPES with no bot scope; limited-mode history calls search.messages and never conversations.history; replies cap at 15; the card omits the preview; the row renders the button with a URL that decodes to the manifest.
+    6. Run ruff check . and python3 -m pytest tests/unit -q. Record the Slack fixtures again on the runner with /qa-record slack after the merge (ma7), not here.
+  acceptance:
+  - python3 -m pytest tests/unit -q -k "slack" passes
+  - grep -n "def slack_manifest" src/privacyfence/oauth_apps.py matches
+  - ruff check . passes
 - id: p12-adrs
   title: ADRs 0254-0267 and the status lines on the ADRs they amend
   depends_on:
@@ -4266,6 +4623,9 @@ phases:
   - p10-bundle-tooling
   - p11-relay-worker
   - p23-prerelease-org-image
+  - p24-slack-limited-mode
+  - p25c-connector-config-signing-tools
+  - p25d-org-bundle-retired
   complexity: M
   touches:
   - docs/adr/0254-built-in-oauth-apps-ship-in-every-distribution.md
@@ -4282,6 +4642,8 @@ phases:
   - docs/adr/0265-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md
   - docs/adr/0266-an-organization-server-may-opt-in-to-the-built-in-google-sign-in.md
   - docs/adr/0267-pre-releases-publish-the-organization-image-under-their-exact-version.md
+  - docs/adr/0268-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md
+  - docs/adr/0269-the-built-in-slack-app-reads-through-search-while-slack-throttles-it.md
   - docs/adr/0208-the-organization-image-is-published-to-ghcr-for-stable-releases-only.md
   - docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md
   - docs/adr/0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md
@@ -4294,7 +4656,7 @@ phases:
   - docs/adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md
   brief: |-
     1. Check `ls docs/adr | tail -3` first. If 0254-0266 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
-    2. Write the fourteen ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
+    2. Write the sixteen ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
        - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, the Design (D1-D21), "Accepted risks" and "Risks".
        - Alternatives to record:
          - 0254: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
@@ -4310,13 +4672,15 @@ phases:
          - 0266: no built-in sign-in (every server registers its own IdP app); built-in sign-in on by default; the same Google project as the connector apps; allowing personal Gmail accounts.
          - 0265: reworking the existing runner in place; keeping the live checks on own QA apps; a GitHub-hosted runner with credentials as secrets (ADR 0019 rejected it); opening SSH to the internet instead of Tailscale; minting tokens with loopback CLI flows over an SSH tunnel and copying them by hand (the old runner's way); a QA server with /mcp open; publishing a main-branch image to GHCR for the QA server to pull.
          - 0267: keeping images stable-only and testing each release candidate as a hand-built image; a moving "next" or "alpha" tag; publishing pre-release images to a separate package.
+         - 0268: keeping the signed org bundle for servers; client IDs and secrets typed on the Admin page, unsigned; signed JSON with canonicalization (Python and JavaScript must agree on every byte); a signing page served by the PrivacyFence server itself (a compromised server could steal the key); refusing upgraded 6.x servers until their IdP is in the environment.
+         - 0269: dropping the built-in Slack app (every workspace registers its own); keeping it with no fallback (history reads 1 per minute); waiting for the Marketplace listing before shipping Slack.
          - 0262: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
        - 0266 records D20, including its single-point-of-failure risk and the default-deny rule.
        - Fold in D15 where it names an ADR: 0254 (SEC-02 threat, SEC-13 rotation, SEC-22), 0256 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0265 (D17 and D22: the firewall, Tailscale-only administration, pfrunner outside the docker group with one no-argument sudo rule, the shared data directory, /mcp blocked, secrets only in step env and the generated module deleted after each run, a new connector as two PRs), 0258 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0259 (SEC-01: single-user mode is no protection against an agent that can run docker), 0261 (SEC-21), 0263 (SEC-14).
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
-       - 0016: "Amended by [0255](...): the signature no longer covers operational settings. Amended by [0262](...): the bundle and pin file names."
-       - 0200: "Amended by [0262](...): the serial pin file name."
+       - 0016: "Amended by [0255](...): the signature no longer covers operational settings. Amended by [0262](...): the bundle and pin file names. Amended by [0268](...): organization servers read no bundle; own apps are signed connector configs."
+       - 0200: "Amended by [0262](...): the serial pin file name. Amended by [0268](...): connector configs carry per-provider serials."
        - 0011: "Amended by [0263](...): the IdP may come from environment variables."
        - 0016's line also names 0263: "org mode no longer always needs a signed bundle".
        - 0196: "Amended by [0255](...) and [0256](...)."
@@ -4325,7 +4689,7 @@ phases:
        - 0217: "Amended by [0257](...): the Stats section is on the Admin page."
        - 0019: "Amended by [0265](...): the runner host. The setup doc this ADR cites is now docs/connector-qa.md."
        - 0181: "Amended by [0265](...): the runner group and label are privacyfence-live."
-    4. docs/adr/README.md: add fourteen index rows in the existing format:
+    4. docs/adr/README.md: add sixteen index rows in the existing format:
        - 0254: "Accepted; relates to 0040"
        - 0255: "Accepted; amends 0016, 0196"
        - 0256: "Accepted; amends 0196, 0253; relates to 0016, 0034, 0068, 0070, 0200"
@@ -4340,9 +4704,11 @@ phases:
        - 0265: "Accepted; amends 0019, 0181; relates to 0254, 0258"
        - 0266: "Accepted; relates to 0258, 0262, 0263"
        - 0267: "Accepted; amends 0208"
+       - 0268: "Accepted; amends 0016, 0200; relates to 0255, 0262, 0263"
+       - 0269: "Accepted; relates to 0254, 0268"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0254-*.md docs/adr/0255-*.md docs/adr/0256-*.md docs/adr/0257-*.md docs/adr/0258-*.md docs/adr/0259-*.md docs/adr/0260-*.md docs/adr/0261-*.md docs/adr/0262-*.md docs/adr/0263-*.md docs/adr/0264-*.md docs/adr/0265-*.md docs/adr/0266-*.md docs/adr/0267-*.md lists fourteen files (or the renumbered fourteen)
+  - ls docs/adr/0254-*.md docs/adr/0255-*.md docs/adr/0256-*.md docs/adr/0257-*.md docs/adr/0258-*.md docs/adr/0259-*.md docs/adr/0260-*.md docs/adr/0261-*.md docs/adr/0262-*.md docs/adr/0263-*.md docs/adr/0264-*.md docs/adr/0265-*.md docs/adr/0266-*.md docs/adr/0267-*.md docs/adr/0268-*.md docs/adr/0269-*.md lists sixteen files (or the renumbered sixteen)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -4387,6 +4753,7 @@ phases:
     4. configuration-reference.md: remove the moved build_org_bundle.py flags from its option list (p10 made the reference test skip refused flags) and add a short "Refused since 7.0" note naming them. Say that step_up.rp_id, rp_name and batch have no Admin control and are set by editing org/admin_config.json, then restarting.
     5. how-it-works.md (:277-278), connector-qa.md (:153): where they say operational settings live in the bundle, point to the Admin page and admin_config.json instead. testing-policy.md (:183): add the Admin page to the phone-layout list of app surfaces.
     6. Run the docs tests below, python3 -m pytest tests/unit/test_docs_configuration_reference.py -q, and ruff check ..
+    Also apply D25 (operator docs): org-mode-setup-guide.md and org-mode-docker.md describe an organization server with no bundle: privacyfence.env for the server and IdP, and signed connector configs (Admin → Services) for an organization's own apps, with both signing tools, the fingerprint check on the first upload, key rotation by deleting org/connector_config_signing_pubkey.txt, and the serial rule. §14 "Upgrade": a 6.x bundle keeps working read-only for its server and IdP settings, its credentials are imported as connector configs, and privacyfence-app --print-env-from-bundle --idp-secret-file writes the environment to move to before 8.x. The configuration reference lists the connector-config format and files, and marks the org-mode bundle options as refused since 7.0; desktop bundles are unchanged.
     Also apply D20 (operator docs): org-mode-docker.md and org-mode-setup-guide.md present the built-in Google sign-in as the opt-in quick start for small Google Workspace teams (PRIVACYFENCE_IDP=builtin-google, admin emails, allowed domains), state the default-deny rule, that personal Gmail accounts and groups are not supported with it, and the dependency on the relay and the privacyfence-signin project, and recommend the organization's own IdP app otherwise; the configuration reference lists the three variables. Also apply D21 (operator docs): the configuration reference moves --enable/--disable-scoped-token-proposals to the refused list and documents scoped_tokens.allow_ai_proposals in org/admin_config.json (Admin → Scoped tokens). Also apply D18 (operator docs): the configuration reference moves the auto-provisioning rows from the bundle flags to the admin config (Admin → Services) and the environment variables PRIVACYFENCE_PEEK_BASE_URL, PRIVACYFENCE_GRIST_SERVER_URL, PRIVACYFENCE_GRIST_PROVISIONER_URL and <key_env>/<key_env>_FILE; org-mode-docker.md's environment-only quick start shows Peek and Grist as an optional step with the provisioning keys as Docker secrets.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
@@ -4464,6 +4831,7 @@ phases:
        - a line at the top of the Unreleased section: "Breaking changes; this release is 7.0.0."
        - No version heading.
     8. Run the docs tests below and ruff check ..
+    Also apply D24 (docs): slack-setup.md leads with the built-in app, explains limited mode (history through search, replies capped, why), and makes the workspace's own internal app the full-speed option through the Admin page's one-click manifest and a signed connector config; it keeps "never activate public distribution" for an own app, and says an internal app serves one workspace. The provider setup docs say an organization's own app is a signed connector config on organization servers and a bundle section on desktop installs (D25).
     Also apply D19 (docs): the built-in apps work only in organization mode and the Docker image; slack-setup.md explains the Slack Marketplace rate limit and recommends a workspace's own internal app until PrivacyFence is listed; the CHANGELOG and moving-to-organization-mode.md name the built-in sign-in as available only outside desktop mode. Also apply D18 (user docs): peek-setup.md and grist-setup.md describe automatic accounts as "set the address variables and the key on the server, then turn them on under Admin → Services", and the manual address as either the Admin page or the environment variable; the CHANGELOG notes under Changed, as breaking, that 6.12's --enable/--disable-scoped-token-proposals flags are refused and AI token proposals are switched on Admin → Scoped tokens (D21), and that 6.11's --peek-auto-provision/--grist-auto-provision bundle flags became an Admin-page switch with the addresses from the environment, and that upgraded 6.11 servers keep their automatic accounts with the old addresses locked; it also notes that the built-in Google app shows an unverified-app screen and a 100-user cap until Google verifies it, and points organizations to their own Google app; the CHANGELOG line for SEC-07 names idp.trust_unverified_email / PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL as the setting for Entra ID organizations that use allowed domains.
   acceptance:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_pages.py -q passes
