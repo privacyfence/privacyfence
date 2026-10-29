@@ -1,0 +1,313 @@
+"""The Admin JSON API: what an organization offers and how it is gated.
+
+``POST /api/admin/{action}`` changes one thing and answers with the page state; ``GET
+/api/admin/state`` answers with the state alone. This module is the organization-mode adapter
+(``build_org_routes``) around a mode-independent core (``_dispatch`` and ``_admin_state``), the
+way ``routes_settings`` keeps one route layer with an authentication adapter per mode (ADR 0033).
+
+Who may use it. A signed-in principal with ``is_admin``; anyone else gets a JSON 401 or 403. The
+CSRF and origin checks are the ones every organization route uses.
+
+How a change is gated. Every sensitive action needs a fresh WebAuthn assertion whatever the
+step-up configuration says (``always=True``): the Admin page decides which services an agent can
+reach and where audit records go, so it must not depend on an administrator having switched
+step-up on. A principal with no passkey is told to add one.
+
+What a request may carry. Only the action's declared parameters, plus ``csrf`` and
+``webauthn_assertion``. Anything else is a 400, so server state (the bundle, the mode) can never
+come from the request.
+
+How a change takes effect (``AdminAction.applies``):
+
+* ``live``: the shared organization config is refreshed in place, every principal's connectors
+  are dropped so they are rebuilt, and the relay is asked to re-check its registration;
+* ``restart``: the change is only saved, and the page state lists it in ``restart_needed``
+  until the server restarts;
+* ``self``: the action applies itself.
+
+A route that mutates must be listed in ``ROUTE_CLASSIFICATION``; ``build_org_routes`` raises for
+one that is not (ADR 0014).
+"""
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import BaseRoute, Route
+
+from .. import admin_config, oauth_apps, relay_client
+from ..connector_registry import ConnectorRegistry
+from ..org_mode import Mode
+from ..principal import Principal, principal_scope
+from ..step_up_config import StepUpConfig
+from ..webauthn_stepup import StepUpChallengeStore
+from . import org_session
+from .routes_settings import (
+    _apply_step_up_gate,
+    _BadAction,
+    _coerce,
+    _record_settings_audit,
+)
+
+logger = logging.getLogger(__name__)
+
+_LOCAL_AND_ORG: frozenset[str] = frozenset({"local", "org"})
+_ORG_ONLY: frozenset[str] = frozenset({"org"})
+
+# Keys every request may carry besides an action's own parameters.
+_ENVELOPE_KEYS = frozenset({"csrf", "webauthn_assertion"})
+
+
+@dataclass(frozen=True)
+class AdminAction:
+    modes: frozenset[str]
+    sensitive: bool
+    applies: Literal["live", "restart", "self"]
+
+
+ADMIN_ACTIONS: dict[str, AdminAction] = {
+    "offer_service": AdminAction(_LOCAL_AND_ORG, True, "live"),
+    "withdraw_service": AdminAction(_LOCAL_AND_ORG, False, "live"),
+    "set_atlassian_assets": AdminAction(_LOCAL_AND_ORG, True, "live"),
+    "set_server_address": AdminAction(_LOCAL_AND_ORG, True, "live"),
+    "set_auto_provisioning": AdminAction(_ORG_ONLY, True, "restart"),
+    "set_unattended_sessions": AdminAction(_LOCAL_AND_ORG, True, "restart"),
+    "clear_rooms": AdminAction(_LOCAL_AND_ORG, False, "live"),
+    "set_download_delivery": AdminAction(_ORG_ONLY, True, "restart"),
+    "set_web_push": AdminAction(_ORG_ONLY, True, "restart"),
+    "set_authz": AdminAction(_ORG_ONLY, True, "restart"),
+    "tighten_step_up": AdminAction(_ORG_ONLY, True, "restart"),
+    "set_scoped_tokens": AdminAction(_ORG_ONLY, True, "restart"),
+    "set_audit_forwarding": AdminAction(_ORG_ONLY, True, "restart"),
+}
+
+# (name, type, required) for each declared parameter, in the order the page posts them.
+_Param = tuple[str, type, bool]
+ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
+    "offer_service": (("service", str, True),),
+    "withdraw_service": (("service", str, True),),
+    "set_atlassian_assets": (("enabled", bool, True), ("workspace_id", str, False)),
+    "set_server_address": (("service", str, True), ("value", str, True)),
+    "set_auto_provisioning": (
+        ("service", str, True), ("enabled", bool, True), ("trust_unverified_email", bool, True),
+    ),
+    "set_unattended_sessions": (("enabled", bool, True),),
+    "clear_rooms": (),
+    "set_download_delivery": (
+        ("inline_max_bytes", int, True), ("link_ttl_seconds", int, True),
+        ("allow_disk_staging", bool, True), ("agent_links", bool, True), ("allow_exports", bool, True),
+    ),
+    "set_web_push": (("enabled", bool, True),),
+    "set_authz": (
+        ("allowed_domains", str, True), ("groups_claim", str, True), ("required_groups", str, True),
+    ),
+    "tighten_step_up": (("enabled", bool, True), ("require_passkey", bool, True), ("scope", str, True)),
+    "set_scoped_tokens": (("enabled", bool, True), ("max_days", int, True), ("allow_ai_proposals", bool, True)),
+    "set_audit_forwarding": (
+        ("enabled", bool, True), ("kind", str, True), ("syslog_host", str, True), ("syslog_port", int, True),
+        ("syslog_protocol", str, True), ("http_url", str, True),
+    ),
+}
+
+# The sections that take effect only when the server starts again, with the name the page shows.
+# ``auto_provision`` lives under each Peek or Grist service rather than at the top level.
+RESTART_LABELS: dict[str, str] = {
+    "unattended_sessions": "Unattended sessions",
+    "download_delivery": "File delivery",
+    "web_push": "Web push",
+    "authz": "Sign-in restrictions",
+    "step_up": "Step-up",
+    "scoped_tokens": "Scoped tokens",
+    "audit_forwarding": "Audit forwarding",
+    "auto_provision": "Automatic accounts",
+}
+
+# Every POST route this module builds, and how its request is gated (ADR 0014).
+ROUTE_CLASSIFICATION: dict[str, Literal["action-dispatcher", "bespoke-sensitive"]] = {
+    "/api/admin/{action}": "action-dispatcher",
+}
+
+# The sections only an organization server has.
+_ORG_STATE_KEYS = ("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding")
+
+
+def _error(message: str, status: int = 400) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status)
+
+
+def _restart_needed(admin: dict[str, Any], startup_admin: dict[str, Any]) -> list[str]:
+    """Labels of the restart-only sections whose stored value is not the one the server started
+    with. A section the startup copy does not have cannot be compared and is left out."""
+    changed: set[str] = set()
+    for key in RESTART_LABELS:
+        if key == "auto_provision":
+            continue
+        if key in startup_admin and admin.get(key) != startup_admin[key]:
+            changed.add(key)
+    started = startup_admin.get("services", {})
+    stored = admin.get("services", {})
+    for name in ("peek", "grist"):
+        before = started.get(name, {}).get("auto_provision") if isinstance(started.get(name), dict) else None
+        now = stored.get(name, {}).get("auto_provision") if isinstance(stored.get(name), dict) else None
+        if before is not None and now != before:
+            changed.add("auto_provision")
+    return [label for key, label in RESTART_LABELS.items() if key in changed]
+
+
+def _admin_state(
+    *, mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
+    principal: Principal,
+) -> dict[str, Any]:
+    """What the Admin page renders from. It carries no secret: service rows hold a client id at
+    most, and audit forwarding carries the name of its bearer-token variable, never the value."""
+    admin = admin_config.config_for(bundle, mode=mode, single_user=False)
+    state: dict[str, Any] = {
+        "services": admin_config.service_rows(bundle, admin, mode=mode),
+        "rooms": {"count": len(admin.get("rooms") or []), "synced_at": str(admin.get("rooms_synced_at") or "")},
+        "unattended_sessions": admin.get("unattended_sessions", {}),
+        "restart_needed": _restart_needed(admin, startup_admin),
+    }
+    if mode == "org":
+        for key in _ORG_STATE_KEYS:
+            state[key] = admin.get(key, {})
+        state["relay_status"] = relay_client.status()
+    return state
+
+
+def _dispatch(
+    principal: Principal, action: str, body: dict[str, Any], *,
+    mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
+    step_up: StepUpConfig, step_up_origin: str, challenges: StepUpChallengeStore,
+    refresh_live: Callable[[list[str]], None],
+) -> Response:
+    """Everything after the caller has authenticated the principal and checked CSRF and origin.
+
+    ``body`` is the request's JSON object with ``csrf`` already removed."""
+    spec = ADMIN_ACTIONS.get(action)
+    if spec is None or mode not in spec.modes:
+        return _error("Unknown action.", 404)
+    declared = ADMIN_PARAMS[action]
+    unknown = sorted(set(body) - {name for name, _, _ in declared} - _ENVELOPE_KEYS)
+    if unknown:
+        return _error(f"Unexpected field: {unknown[0]}.")
+    params: dict[str, Any] = {}
+    for name, kind, required in declared:
+        if name not in body:
+            if required:
+                return _error(f"Missing {name}.")
+            continue
+        try:
+            params[name] = _coerce(body[name], kind)
+        except _BadAction as exc:
+            return _error(f"{name}: {exc}.")
+    assertion = body.get("webauthn_assertion")
+    refusal = _apply_step_up_gate(
+        principal, action, body, assertion if isinstance(assertion, dict) else None,
+        step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
+        sensitive=spec.sensitive, always=True,
+    )
+    if refusal is not None:
+        with principal_scope(principal):
+            _record_settings_audit(principal, f"Step-up required for {action!r}, refused (principal={principal.id})")
+        return refusal
+    try:
+        summary, changed = admin_config.apply_change(
+            action, params, bundle=bundle, mode=mode, single_user=False,
+        )
+    except admin_config.AdminConfigError as exc:
+        return _error(str(exc))
+    except OSError as exc:
+        logger.error("Could not save the admin configuration: %s", exc)
+        return _error("Could not save the admin configuration.", 500)
+    if summary:
+        who = f"admin={principal.id}" if mode == "org" else "principal=local"
+        with principal_scope(principal):
+            _record_settings_audit(principal, f"{summary} ({who})")
+        if spec.applies == "live":
+            refresh_live(changed)
+    return JSONResponse(_admin_state(
+        mode=mode, bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+    ))
+
+
+def _check_classified(routes: list[BaseRoute]) -> None:
+    for route in routes:
+        if isinstance(route, Route) and "POST" in (route.methods or set()) and route.path not in ROUTE_CLASSIFICATION:
+            raise RuntimeError(
+                f"{route.path} is a new POST route with no ROUTE_CLASSIFICATION entry (ADR 0014) -- "
+                "say whether it is an action dispatcher or a bespoke sensitive route, and gate it to match."
+            )
+
+
+def build_org_routes(
+    *,
+    sessions: org_session.OrgSessionStore,
+    step_up: StepUpConfig,
+    step_up_origin: str,
+    connector_registry: ConnectorRegistry | None,
+    org_config: dict[str, Any],
+    bundle: dict[str, Any],
+    startup_admin: dict[str, Any],
+) -> list[BaseRoute]:
+    """The Admin API for an organization server. ``org_config`` is the shared effective config
+    every long-lived holder reads; a live change refreshes it in place."""
+    challenges = StepUpChallengeStore()
+
+    def _admin_principal(request: Request) -> Principal | Response:
+        principal = org_session.authenticated(request, sessions)
+        if principal is None:
+            return _error("Sign in first.", 401)
+        if not principal.is_admin:
+            return _error("Only administrators can do this.", 403)
+        return principal
+
+    def refresh_live(changed: list[str]) -> None:
+        effective = oauth_apps.effective_org_config(
+            bundle, admin_config.config_for(bundle, mode="org", single_user=False), mode="org",
+        )
+        oauth_apps.refresh_in_place(org_config, effective)
+        if connector_registry is not None:
+            connector_registry.evict_all()
+        if "services" in changed:
+            relay_client.request_check()
+
+    async def admin_state(request: Request) -> Response:
+        principal = _admin_principal(request)
+        if isinstance(principal, Response):
+            return principal
+        return JSONResponse(_admin_state(
+            mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+        ))
+
+    async def admin_action(request: Request) -> Response:
+        principal = _admin_principal(request)
+        if isinstance(principal, Response):
+            return principal
+        action = request.path_params["action"]
+        if action not in ADMIN_ACTIONS or "org" not in ADMIN_ACTIONS[action].modes:
+            return _error("Unknown action.", 404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error("Invalid JSON body.")
+        if not isinstance(payload, dict) or not org_session.check_csrf(request, payload.get("csrf")):
+            return _error("unauthorized", 401)
+        if not org_session.check_origin(request):
+            return _error("Cross-origin request rejected.", 403)
+        body = {key: value for key, value in payload.items() if key != "csrf"}
+        return _dispatch(
+            principal, action, body, mode="org", bundle=bundle, org_config=org_config,
+            startup_admin=startup_admin, step_up=step_up, step_up_origin=step_up_origin,
+            challenges=challenges, refresh_live=refresh_live,
+        )
+
+    routes: list[BaseRoute] = [
+        Route("/api/admin/state", admin_state),
+        Route("/api/admin/{action}", admin_action, methods=["POST"]),
+    ]
+    _check_classified(routes)
+    return routes

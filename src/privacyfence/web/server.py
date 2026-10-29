@@ -1325,7 +1325,9 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig
-    from . import routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new
+    from . import (
+        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new,
+    )
     from .routes_settings import build_org_routes
 
     extra_routes: list[BaseRoute] = []
@@ -1444,6 +1446,12 @@ def _build_org_app(
         scoped_token_page_data=org_scoped_token_page_data,
         # The admin's Stats page (ADR 0217) lists the connectors this bundle offers.
         org_config=org.org_config,
+    ))
+    # The Admin API shares the effective config dict, so a live change reaches every holder.
+    extra_routes.extend(routes_admin.build_org_routes(
+        sessions=org.sessions, step_up=step_up, step_up_origin=org.issuer_url,
+        connector_registry=org.connector_registry, org_config=org.org_config,
+        bundle=org.bundle, startup_admin=org.startup_admin,
     ))
 
     lifespan = None

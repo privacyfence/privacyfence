@@ -145,7 +145,7 @@ from starlette.responses import (
 from starlette.routing import BaseRoute, Route
 
 from .. import (
-    approval_icons, auto_accept, scoped_token_proposals, settings_window_html, webauthn_stepup, web_shell, whats_new,
+    approval_icons, auto_accept, oauth_apps, scoped_token_proposals, settings_window_html, webauthn_stepup, web_shell, whats_new,
 )
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
@@ -699,22 +699,27 @@ def _record_settings_audit(principal: Principal, summary: str) -> None:
         logger.warning("Audit log write failed for a settings change: %s", exc)
 
 
-def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
+def _needs_step_up(
+    action: str, step_up: StepUpConfig | None, *, sensitive: bool | None = None, always: bool = False,
+) -> bool:
     """Shared by both modes (ADR 0033) -- identical once parameterized by
     ``step_up``: local mode's own is optional (``None`` until web/server.py
     resolves one), org mode's is always given, but "no config yet" and "a
     config that hasn't turned require_passkey on" both mean the same thing
     here, so one optional-typed check covers both without either caller
     special-casing the other's default."""
-    return (
-        step_up is not None and step_up.enabled and step_up.require_passkey
-        and action in _SENSITIVE_ACTIONS
-    )
+    # A caller whose actions are not in _SENSITIVE_ACTIONS (the Admin page) says for itself
+    # whether this one is sensitive. ``always`` asks for an assertion whatever the step-up
+    # configuration says, so the default configuration cannot leave such an action unguarded.
+    is_sensitive = action in _SENSITIVE_ACTIONS if sensitive is None else sensitive
+    if step_up is None or not is_sensitive:
+        return False
+    return always or (step_up.enabled and step_up.require_passkey)
 
 
 def _settings_step_up_response(
     principal: Principal, action: str, fingerprint_body: dict[str, Any], *,
-    step_up: StepUpConfig, challenges: StepUpChallengeStore,
+    step_up: StepUpConfig, challenges: StepUpChallengeStore, always: bool = False,
 ) -> JSONResponse:
     """Shared by both modes (ADR 0033; formerly one near-identical copy each:
     local mode's own hardcoded ``LOCAL_PRINCIPAL``, the former
@@ -729,9 +734,8 @@ def _settings_step_up_response(
         principal, rp_id=step_up.rp_id, subject_key=action, fingerprint=fingerprint, challenges=challenges,
     )
     if options_json is None:
-        return JSONResponse(
-            {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
-        )
+        error = "Add a passkey on /security first." if always else "passkey_enrollment_required"
+        return JSONResponse({"error": error, "enroll_url": "/security"}, status_code=403)
     return JSONResponse(
         {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
     )
@@ -740,6 +744,7 @@ def _settings_step_up_response(
 def _apply_step_up_gate(
     principal: Principal, action: str, form_body: dict[str, Any], assertion: object, *,
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
+    sensitive: bool | None = None, always: bool = False,
 ) -> JSONResponse | None:
     """The one settings-action step-up check both modes' dispatch reduces
     to (ADR 0033): ``None`` when ``action`` doesn't need a fresh assertion at
@@ -759,7 +764,7 @@ def _apply_step_up_gate(
     (``_parse_form_assertion``) -- a difference in request shape the two
     modes still don't share, so left to each call site.
     """
-    if not _needs_step_up(action, step_up):
+    if not _needs_step_up(action, step_up, sensitive=sensitive, always=always):
         return None
     assert step_up is not None  # nosec B101  # _needs_step_up() already proved this before calling us
     # A fresh, non-Optional-typed name for the lambda below to close over --
@@ -772,7 +777,7 @@ def _apply_step_up_gate(
         principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"), subject_key=action,
         fingerprint=_action_fingerprint(action, fingerprint_body), assertion=assertion, challenges=challenges,
         step_up_response=lambda: _settings_step_up_response(
-            principal, action, fingerprint_body, step_up=confirmed_step_up, challenges=challenges,
+            principal, action, fingerprint_body, step_up=confirmed_step_up, challenges=challenges, always=always,
         ),
     )
 
@@ -1733,7 +1738,7 @@ def build_org_routes(
             ),
             "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
-            "stats": org_stats.collect(org_config or {}) if principal.is_admin else org_stats.empty(),
+            "stats": org_stats.collect(oauth_apps.snapshot(org_config or {})) if principal.is_admin else org_stats.empty(),
             "about": about,
         }
 

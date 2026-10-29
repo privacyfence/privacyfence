@@ -85,6 +85,18 @@ class TestConnectorRegistry:
         registry.get(Principal(id="alice"))  # cached, not a second entry
         assert registry.principal_count == 2
 
+    def test_evict_all_drops_every_principal(self):
+        registry = ConnectorRegistry(lambda p: [FakeConnector(f"c-{p.id}")])
+        alice = Principal(id="alice")
+        before = registry.get(alice)
+        registry.get(Principal(id="bob"))
+
+        registry.evict_all()
+
+        assert registry.principal_count == 0
+        assert registry._last_used == {}
+        assert registry.get(alice) is not before
+
     def test_evict_removes_one_principal_only(self):
         registry = ConnectorRegistry(lambda p: [FakeConnector(f"c-{p.id}")])
         alice = Principal(id="alice")

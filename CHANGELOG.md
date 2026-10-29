@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **An Admin API for organization servers.** Administrators can change which services the server offers, the Peek and Grist addresses, Jira Assets, unattended sessions, file delivery, web push, sign-in restrictions, step-up, scoped tokens and audit forwarding through `POST /api/admin/<action>`, and read the result from `GET /api/admin/state`. Every sensitive change asks for a passkey even when step-up is off, and a change is recorded in the audit log under the administrator. Changes to which services are offered take effect at once; the rest are saved and listed as waiting for a restart. The Admin page that uses it comes later.
+
 ### Changed
 
 - **Organization servers read `org/org_bundle.json`.** On the first start after the upgrade, PrivacyFence copies `org/org_config.json` and its two pin files (`org_config_signing_pubkey.txt`, `org_config_serial.txt`) to `org_bundle.json`, `org_bundle_signing_pubkey.txt` and `org_bundle_serial.txt`, and records the copy in `org/org_bundle_adopted.json`. The 6.x files are never changed, so going back to 6.x keeps working. If `org_config.json` is edited after the upgrade, the start logs a warning that it is ignored. The Docker image's health check and entrypoint accept either file name, and `scripts/build_org_bundle.py` now writes `org_bundle.json` by default.
