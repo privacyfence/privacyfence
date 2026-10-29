@@ -15,6 +15,7 @@ import pytest
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationParams,
+    AuthorizeError,
     IdentityAssertionParams,
     RefreshToken,
     TokenError,
@@ -122,6 +123,30 @@ class TestClientRegistration:
         (tmp_path / "oauth_clients.json").write_text("not valid json{{{")
         provider = _provider(tmp_path, monkeypatch)  # must not raise
         assert await provider.get_client("claude") is None
+
+
+class TestWithoutAnIdentityProvider:
+    """Single-user mode has no identity provider; the provider must refuse rather than dereference it."""
+
+    @staticmethod
+    def _single_user_provider(tmp_path, monkeypatch) -> op.OrgOAuthProvider:
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+        monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
+        return op.OrgOAuthProvider(None, idp_callback_url=IDP_CALLBACK_URL)
+
+    async def test_authorize_is_refused(self, tmp_path, monkeypatch):
+        provider = self._single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        with pytest.raises(AuthorizeError) as excinfo:
+            await provider.authorize(client, _params())
+        assert excinfo.value.error == "temporarily_unavailable"
+
+    async def test_an_idp_callback_is_refused(self, tmp_path, monkeypatch):
+        provider = self._single_user_provider(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="no identity provider"):
+            await provider.handle_idp_callback(state="s", code="c")
 
 
 class TestAuthorizeAndIdpCallback:

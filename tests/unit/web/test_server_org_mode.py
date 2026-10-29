@@ -6,6 +6,7 @@ which don't), TLS/trusted-proxies plumbing, and base_url/allowed_hosts.
 """
 from __future__ import annotations
 
+import pytest
 from starlette.testclient import TestClient
 
 from privacyfence import org_identity as oi
@@ -441,7 +442,20 @@ class TestWebServerOrgMode:
         org = _org_auth(tmp_path, monkeypatch)
         server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
         assert "pf.example.com" in server.allowed_hosts
-        assert {"0.0.0.0", "127.0.0.1", "::1"} <= server.allowed_hosts
+        assert {"127.0.0.1", "::1"} <= server.allowed_hosts
+
+    @pytest.mark.parametrize("bind_host", ["0.0.0.0", "::"])
+    def test_a_wildcard_bind_address_is_not_an_allowed_host(self, tmp_path, monkeypatch, bind_host):
+        org = _org_auth(tmp_path, monkeypatch)
+        server = WebServer(WebApprovalUI(), host=bind_host, port=443, org=org)
+        assert bind_host not in server.allowed_hosts
+
+    def test_a_request_addressed_to_the_wildcard_bind_address_is_refused(self, tmp_path, monkeypatch):
+        org = _org_auth(tmp_path, monkeypatch)
+        server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
+        client = TestClient(server._server.config.app, base_url=ISSUER)
+        r = client.get("/.well-known/oauth-authorization-server", headers={"Host": "0.0.0.0"})
+        assert r.status_code == 400
 
     def test_issuer_hostname_is_added_to_the_allowed_hosts(self, tmp_path, monkeypatch):
         # Bound to 0.0.0.0 (a real org deployment's own bind host), which

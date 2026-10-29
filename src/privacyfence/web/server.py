@@ -692,6 +692,9 @@ class _SecurityHeadersMiddleware:
         await self._app(scope, receive, send_with_headers)
 
 
+_WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})  # nosec B104  # names to keep out of the allowlist, not an address bound
+
+
 @dataclass(frozen=True)
 class OrgAuth:
     """Everything build_app()/WebServer need to run org mode -- one
@@ -704,7 +707,8 @@ class OrgAuth:
 
     provider: OrgOAuthProvider
     sessions: OrgSessionStore
-    idp: IdpConfig
+    # None in single-user mode, where there is no identity provider to sign in through.
+    idp: IdpConfig | None
     issuer_url: str
     # Per-user service
     # authorization (Google/Slack/Salesforce/Atlassian/Telegram) and the
@@ -1382,14 +1386,15 @@ def _build_org_app(
             org_config=org.org_config, issuer_url=org.issuer_url,
         ))
         default_next_path = "/connect"
-    extra_routes.extend(routes_org_identity.build_routes(
-        idp=org.idp, sessions=org.sessions, base_url=org.issuer_url, default_next_path=default_next_path,
-        # Derived from org.org_config directly here, the same
-        # "self-contained, cheap re-parse" pattern StepUpConfig below
-        # already uses -- see that call's own comment.
-        policy=AuthzPolicyConfig.from_org_config(org.org_config),
-        push_store=org.push_store,
-    ))
+    if org.idp is not None:
+        extra_routes.extend(routes_org_identity.build_routes(
+            idp=org.idp, sessions=org.sessions, base_url=org.issuer_url, default_next_path=default_next_path,
+            # Derived from org.org_config directly here, the same
+            # "self-contained, cheap re-parse" pattern StepUpConfig below
+            # already uses -- see that call's own comment.
+            policy=AuthzPolicyConfig.from_org_config(org.org_config),
+            push_store=org.push_store,
+        ))
 
     issuer_host = urlparse(org.issuer_url).hostname or ""
     step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)
@@ -1406,9 +1411,10 @@ def _build_org_app(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
         push_public_key=push_public_key, stopping=stopping,
     ))
-    extra_routes.extend(routes_org_stepup.build_routes(
-        web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
-    ))
+    if org.idp is not None:
+        extra_routes.extend(routes_org_stepup.build_routes(
+            web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
+        ))
     if step_up.rp_id:
         extra_routes.extend(routes_security.build_routes(
             resolve_principal=lambda request: org_session.authenticated(request, org.sessions),
@@ -1657,7 +1663,9 @@ class WebServer:
         # as) -- _parse_host_header normalizes every incoming Host header
         # the same way urlsplit's own .hostname does below, brackets
         # stripped, so the allowlist has to speak that same bare form.
-        allowed_hosts = frozenset({host, "127.0.0.1", "::1"})
+        # A wildcard bind address is where the socket listens, never a name a client addresses it
+        # by, so it stays out of the allowlist.
+        allowed_hosts = frozenset({host, "127.0.0.1", "::1"}) - _WILDCARD_BIND_HOSTS
         if org is not None:
             issuer_host = urlsplit(org.issuer_url).hostname
             if issuer_host:

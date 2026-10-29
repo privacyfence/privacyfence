@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -31,6 +32,16 @@ DEFAULT_MODE: Mode = "local"
 DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
+MODE_ENV = "PRIVACYFENCE_MODE"
+BIND_HOST_ENV = "PRIVACYFENCE_BIND_HOST"
+PORT_ENV = "PRIVACYFENCE_PORT"
+ISSUER_URL_ENV = "PRIVACYFENCE_ISSUER_URL"
+TRUSTED_PROXIES_ENV = "PRIVACYFENCE_TRUSTED_PROXIES"
+
+# Hostnames a single-user install may be served at: it has one administrator who signs in with a
+# setup code, which is only acceptable when nothing but this computer can reach it.
+SINGLE_USER_HOSTS = ("localhost", "127.0.0.1")
+
 
 class ConfigurationError(ValueError):
     """Raised for organization configuration that is present but broken --
@@ -45,11 +56,43 @@ class ConfigurationError(ValueError):
     distinction matters)."""
 
 
+def _env(name: str) -> str:
+    """An environment value, stripped; a variable that is set but empty counts as unset, so a
+    container that passes ``-e NAME=`` behaves like one that does not pass it."""
+    return os.environ.get(name, "").strip()
+
+
 def resolve_mode(org_config: dict[str, Any]) -> Mode:
-    mode = org_config.get("mode", DEFAULT_MODE)
-    if mode not in ("local", "org"):
-        raise ConfigurationError(f"org_bundle.json's \"mode\" must be \"local\" or \"org\", got {mode!r}")
-    return mode
+    """The bundle's ``mode``, else ``PRIVACYFENCE_MODE``, else ``"local"``.
+
+    A bundle and the variable that disagree refuse the start rather than letting either win
+    silently: the person who set the variable would otherwise get the other mode without a word.
+    """
+    env_mode = _env(MODE_ENV)
+    if env_mode and env_mode not in ("local", "org"):
+        raise ConfigurationError(f"{MODE_ENV} must be \"local\" or \"org\", got {env_mode}")
+    if "mode" in org_config:
+        mode = org_config["mode"]
+        if mode not in ("local", "org"):
+            raise ConfigurationError(f"org_bundle.json's \"mode\" must be \"local\" or \"org\", got {mode!r}")
+        if env_mode and env_mode != mode:
+            raise ConfigurationError(
+                f"org_config.json says \"mode\": \"{mode}\" but {MODE_ENV} says \"{env_mode}\"; "
+                "remove one of them"
+            )
+        return mode
+    return env_mode or DEFAULT_MODE  # type: ignore[return-value]  # validated against both literals above
+
+
+def is_single_user(org_config: dict[str, Any]) -> bool:
+    """Organization mode with no identity provider: one administrator, on this computer only."""
+    return resolve_mode(org_config) == "org" and not org_config.get("idp")
+
+
+def is_loopback_issuer(issuer_url: str) -> bool:
+    """Whether ``issuer_url`` is plain http at a name only this computer answers to."""
+    parsed = urlsplit(issuer_url)
+    return parsed.scheme == "http" and parsed.hostname in SINGLE_USER_HOSTS
 
 
 def reject_removed_tool_annotations(org_config: dict[str, Any]) -> None:
@@ -110,6 +153,15 @@ class ServerConfig:
         raw = raw if isinstance(raw, dict) else {}
         tls = raw.get("tls")
         tls = tls if isinstance(tls, dict) else {}
+        # Every value the bundle's "server" section leaves unset may come from the environment,
+        # which is how the Docker image configures a server that has no bundle. The bundle wins.
+        bind_host = raw.get("bind_host") or _env(BIND_HOST_ENV) or DEFAULT_BIND_HOST
+        if raw.get("port") is not None:
+            port = int(raw["port"])
+        elif _env(PORT_ENV):
+            port = _port_from_env()
+        else:
+            port = DEFAULT_PORT
         # Stripped before anything derives from it: web/server.py builds
         # the Host allowlist from urlsplit(issuer_url).hostname, which
         # keeps a stray trailing space *inside* the hostname
@@ -118,7 +170,9 @@ class ServerConfig:
         # then starts cleanly and rejects every single request with
         # "Invalid Host header" -- a message pointing at Host headers and
         # reverse proxies rather than at the one config value at fault.
-        issuer_url = str(raw.get("issuer_url") or "").strip()
+        issuer_url = str(raw.get("issuer_url") or "").strip() or _env(ISSUER_URL_ENV)
+        if not issuer_url and is_single_user(org_config):
+            issuer_url = f"http://localhost:{port}"
         if not issuer_url:
             raise ConfigurationError("org mode requires org_bundle.json's \"server\".\"issuer_url\"")
         # Fail here, naming the key, rather than several frames later
@@ -131,14 +185,35 @@ class ServerConfig:
                 "org_bundle.json's \"server\".\"issuer_url\" must be an absolute http(s) URL "
                 f"with a hostname (e.g. https://pf.acme.example.com), got {issuer_url!r}"
             )
+        trusted_proxies = tuple(raw.get("trusted_proxies") or ()) or tuple(
+            part.strip() for part in _env(TRUSTED_PROXIES_ENV).split(",") if part.strip()
+        )
+        if any(str(proxy).strip() in _WILDCARD_PROXIES for proxy in trusted_proxies):
+            raise ConfigurationError("trusted_proxies must name specific proxies, not a wildcard.")
         return ServerConfig(
-            bind_host=raw.get("bind_host", DEFAULT_BIND_HOST),
-            port=int(raw.get("port", DEFAULT_PORT)),
+            bind_host=bind_host,
+            port=port,
             issuer_url=issuer_url,
             cert_file=tls.get("cert_file", ""),
             key_file=tls.get("key_file", ""),
-            trusted_proxies=tuple(raw.get("trusted_proxies") or ()),
+            trusted_proxies=trusted_proxies,
         )
+
+
+# A trusted-proxy entry that would make every client a trusted proxy, so any caller could forge
+# X-Forwarded-For / X-Forwarded-Proto.
+_WILDCARD_PROXIES = frozenset({"*", "0.0.0.0/0", "::/0"})
+
+
+def _port_from_env() -> int:
+    raw = _env(PORT_ENV)
+    try:
+        port = int(raw)
+    except ValueError:
+        port = 0
+    if not 1 <= port <= 65535:
+        raise ConfigurationError(f"{PORT_ENV} must be an integer from 1 to 65535, got {raw!r}")
+    return port
 
 
 # A cap on the *tool result*, not on the file: the length of the JSON text

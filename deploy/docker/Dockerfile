@@ -17,6 +17,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PRIVACYFENCE_MODE=org \
+    PRIVACYFENCE_BIND_HOST=0.0.0.0 \
     PATH=/opt/privacyfence/venv/bin:$PATH
 
 COPY runtime.lock.txt /tmp/build/runtime.lock.txt

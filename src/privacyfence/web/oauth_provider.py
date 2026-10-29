@@ -248,7 +248,7 @@ class OrgOAuthProvider:
     bearer-auth middleware via ``verify_token``.
     """
 
-    def __init__(self, idp: IdpConfig, *, idp_callback_url: str, policy: AuthzPolicyConfig | None = None) -> None:
+    def __init__(self, idp: IdpConfig | None, *, idp_callback_url: str, policy: AuthzPolicyConfig | None = None) -> None:
         self._idp = idp
         self._idp_callback_url = idp_callback_url
         # The org's own sign-in policy (allowed domains, required groups):
@@ -398,6 +398,12 @@ class OrgOAuthProvider:
     # ------------------------------------------------------------------ #
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        if self._idp is None:
+            # Single-user mode has no identity provider to send the person to.
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="sign-in is not available on this server yet",
+            )
         self._prune_pending()
         own_state = secrets.token_urlsafe(32)
         idp_nonce = secrets.token_urlsafe(16)
@@ -455,6 +461,8 @@ class OrgOAuthProvider:
           they know which client is asking, so no code is minted until
           ``decide_consent`` hears "allow" (ADR 0177).
         """
+        if self._idp is None:
+            raise ValueError("this server has no identity provider")
         with self._lock:
             pending = self._pending.pop(state, None)
         if pending is None or (time.time() - pending.created_at) > _PENDING_AUTHORIZATION_TTL_SECONDS:
