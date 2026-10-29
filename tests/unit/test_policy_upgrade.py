@@ -315,3 +315,117 @@ class TestEnsureTokenRules:
 
         assert logged == [f"{LOCAL_PRINCIPAL.id}: could not give scoped tokens their own copy of their rules: {error}"]
 
+
+
+class TestEnsureCanonicalVerbs:
+    """``ensure_canonical_verbs``: retired verb names become current ones, nothing else moves."""
+
+    @staticmethod
+    def _row(row_id="r-1", verbs=("read", "copy", "archive"), **extra):
+        return {
+            "id": row_id, "scope": "drive.folder", "value": ["V1"], "verbs": list(verbs),
+            "operations": ["drive.download_file", "drive.copy_file"], "former_ids": ["old-1"], **extra,
+        }
+
+    def _write(self, config_path, rows, **top):
+        cfg = {"auto_accept": {"version": 3, "rules": rows}, "logging": {"level": "INFO"}, **top}
+        with open(config_path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(cfg, fh)
+        return cfg
+
+    def test_rewrites_only_verbs_and_backs_up_once_with_mode_0600(self, config_path):
+        keep = self._row("r-keep", verbs=("read",), mystery="x")
+        cfg = self._write(config_path, [self._row(mystery={"a": 1}), keep], pii_detection={"enabled": False})
+        original = open(config_path, "rb").read()
+
+        assert policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL) == []
+
+        written = yaml.safe_load(open(config_path, encoding="utf-8"))
+        assert written["pii_detection"] == {"enabled": False} and written["logging"] == {"level": "INFO"}
+        first, second = written["auto_accept"]["rules"]
+        assert first == self._row(verbs=("move", "read"), mystery={"a": 1})
+        assert second == keep
+        backup = config_path + ".pre-canonical-verbs.bak"
+        assert open(backup, "rb").read() == original
+        if os.name != "nt":
+            assert os.stat(backup).st_mode & 0o777 == 0o600
+
+        # A second pass finds nothing to do and keeps the first backup.
+        cfg2 = yaml.safe_load(open(config_path, encoding="utf-8"))
+        mtime = os.stat(config_path).st_mtime_ns
+        assert policy_upgrade.ensure_canonical_verbs(cfg2, config_path, LOCAL_PRINCIPAL) == []
+        assert os.stat(config_path).st_mtime_ns == mtime
+        assert open(backup, "rb").read() == original
+
+    def test_an_existing_backup_is_never_overwritten(self, config_path):
+        cfg = self._write(config_path, [self._row()])
+        with open(config_path + ".pre-canonical-verbs.bak", "w") as fh:
+            fh.write("older")
+
+        assert policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL) == []
+
+        assert open(config_path + ".pre-canonical-verbs.bak").read() == "older"
+
+    def test_a_canonical_file_is_not_written(self, config_path):
+        cfg = self._write(config_path, [self._row(verbs=("read", "move"))])
+        mtime = os.stat(config_path).st_mtime_ns
+
+        assert policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL) == []
+
+        assert os.stat(config_path).st_mtime_ns == mtime
+        assert not os.path.exists(config_path + ".pre-canonical-verbs.bak")
+
+    def test_an_unreadable_row_is_a_problem_and_left_alone(self, config_path):
+        bad = {"id": "r-bad", "verbs": ["copy"]}
+        cfg = self._write(config_path, [bad, "text", {"verbs": ["copy"]}, self._row()])
+
+        problems = policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL)
+
+        assert problems == [
+            "local: rule r-bad could not be read",
+            "local: rule without an id could not be read",
+            "local: rule without an id could not be read",
+        ]
+        rules = yaml.safe_load(open(config_path, encoding="utf-8"))["auto_accept"]["rules"]
+        assert rules[:3] == [bad, "text", {"verbs": ["copy"]}]
+        assert rules[3]["verbs"] == ["move", "read"]
+
+    @pytest.mark.parametrize("cfg", [{}, {"auto_accept": "x"}, {"auto_accept": {"version": 3}}])
+    def test_no_rows_means_nothing_to_do(self, config_path, cfg):
+        assert policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL) == []
+        assert not os.path.exists(config_path)
+
+    def test_a_version_2_section_is_not_touched(self, config_path):
+        cfg = _write_v2(config_path)
+        before = open(config_path, "rb").read()
+
+        assert policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL) == []
+        assert open(config_path, "rb").read() == before
+
+    @pytest.mark.parametrize("failing", ["atomic_write_bytes", "atomic_write_text"])
+    def test_a_failed_backup_or_write_is_a_problem(self, config_path, monkeypatch, failing):
+        cfg = self._write(config_path, [self._row()])
+        before = open(config_path, "rb").read()
+
+        def fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(policy_upgrade, failing, fail)
+
+        assert policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL) == [
+            "local: could not rewrite settings.yaml",
+        ]
+        assert open(config_path, "rb").read() == before
+
+    def test_tokens_rules_are_rewritten_too_and_their_problems_name_the_principal(self, tmp_path, config_path):
+        cfg = self._write(config_path, [])
+        path = _token_file(tmp_path)
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"version": 2, "tokens": [
+            {"id": "st-1", "rules": [self._row(), {"id": "r-bad"}]},
+        ]}))
+
+        problems = policy_upgrade.ensure_canonical_verbs(cfg, config_path, LOCAL_PRINCIPAL)
+
+        assert problems == ["local: scoped token st-1 rule r-bad could not be read"]
+        assert json.loads(path.read_text())["tokens"][0]["rules"][0]["verbs"] == ["move", "read"]

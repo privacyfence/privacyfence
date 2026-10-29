@@ -28,7 +28,7 @@ import sys
 import pytest
 import yaml
 
-from privacyfence import admin_config, app_credentials, daemon_main, org_mode
+from privacyfence import admin_config, app_credentials, daemon_main, data_format, org_mode
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.paths import data_dir
@@ -248,6 +248,19 @@ class TestLoadConfig:
         assert "'auto_accept_grants'" in err
         # And kept for a caller with no stderr: windows_service puts it in the Event Log.
         assert "'auto_accept_grants'" in daemon_main.last_startup_error()
+
+    def test_main_refuses_data_from_a_newer_format_before_reading_any_config(self, tmp_path, monkeypatch, capsys):
+        marker = tmp_path / "data_format.json"
+        marker.write_text(json.dumps({"format": 8, "written_by": "8.0.0", "completed_at": "2030-01-01T00:00:00+00:00"}))
+        monkeypatch.setattr(data_format, "marker_path", lambda: marker)
+        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", lambda: None)
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+
+        assert daemon_main.main([]) == 1
+
+        err = capsys.readouterr().err
+        assert "This data was last used by PrivacyFence 8.0.0 (data format 8)." in err
+        assert "Install 8.0.0 or newer." in daemon_main.last_startup_error()
 
     def test_main_keeps_a_runtime_identity_refusal_for_the_event_log(self, monkeypatch, capsys):
         def refuse():
@@ -2824,55 +2837,10 @@ class TestScopeRowsUpgrade:
         assert not (tmp_path / "settings.yaml.pre-scope-rules.bak").exists()
         assert daemon_main._deferred_warnings == []
 
-    def test_upgrade_all_principals_runs_before_the_token_store_loads(self, monkeypatch, tmp_path):
-        from privacyfence import org_identity, scoped_tokens
-        from privacyfence.web.server import WebServer
-
-        order: list[str] = []
-        real_upgrade = daemon_main._upgrade_all_principals
-        real_init = WebServer.__init__
-
-        def upgrade():
-            order.append("upgrade")
-            real_upgrade()
-
-        def server_init(self, *args, **kwargs):
-            order.append("server")
-            real_init(self, *args, **kwargs)
-
-        monkeypatch.setattr(daemon_main, "_upgrade_all_principals", upgrade)
-        monkeypatch.setattr(WebServer, "__init__", server_init)
-        monkeypatch.setattr(WebServer, "start", lambda self: None)
-        monkeypatch.setattr(
-            org_identity, "discover_idp",
-            lambda issuer: {
-                "authorization_endpoint": "https://idp.example.com/authorize",
-                "token_endpoint": "https://idp.example.com/token", "jwks_uri": "https://idp.example.com/jwks",
-            },
-        )
-        org_config = {
-            "mode": "org",
-            "server": {"issuer_url": "https://pf.example.com", "bind_host": "0.0.0.0", "port": 8765},
-            "idp": {"issuer": "https://idp.example.com", "client_id": "cid", "client_secret": "sec"},
-        }
-        alice_cfg = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
-        alice_cfg.parent.mkdir(parents=True)
-        self._write_v2(alice_cfg)
-
-        from privacyfence.connector_host import ConnectorHost
-        daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, ConnectorHost([]),
-            unattended_sessions_enabled=False, org_config=org_config,
-        )
-
-        assert order == ["upgrade", "server"]
-        assert yaml.safe_load(alice_cfg.read_text())["auto_accept"]["version"] == 3
-        assert scoped_tokens.current_store() is not None
-
-    def test_upgrade_all_principals_skips_a_principal_without_a_settings_file(self, tmp_path):
+    def test_migrate_everything_skips_a_principal_without_a_settings_file(self, tmp_path):
         (tmp_path / "users" / "bob").mkdir(parents=True)
 
-        daemon_main._upgrade_all_principals()
+        data_format.migrate_everything(log=daemon_main._deferred_warnings.append)
 
         assert not (tmp_path / "users" / "bob" / "authority" / "config" / "settings.yaml").exists()
 
@@ -2909,10 +2877,10 @@ class TestScopeRowsUpgrade:
             "Scoped token 'old' now holds its own copy of 1 rule(s); 0 rule(s) it named no longer existed",
         ]
 
-    def test_upgrade_all_principals_converts_a_token_of_a_principal_without_a_settings_file(self, tmp_path):
+    def test_migrate_everything_converts_a_token_of_a_principal_without_a_settings_file(self, tmp_path):
         token_file = self._legacy_token(tmp_path / "users" / "bob" / "authority", ["r-gone"])
 
-        daemon_main._upgrade_all_principals()
+        data_format.migrate_everything(log=daemon_main._deferred_warnings.append)
 
         (entry,) = json.loads(token_file.read_text())["tokens"]
         assert entry["rules"] == [] and "rule_ids" not in entry
@@ -2920,7 +2888,7 @@ class TestScopeRowsUpgrade:
             daemon_main._deferred_warnings
         )
 
-    def test_upgrade_all_principals_converts_a_principal_with_v3_rules(self, tmp_path):
+    def test_migrate_everything_converts_a_principal_with_v3_rules(self, tmp_path):
         from privacyfence.policy import scope_rows
 
         alice_cfg = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
@@ -2928,7 +2896,7 @@ class TestScopeRowsUpgrade:
         alice_cfg.write_text(yaml.safe_dump({"auto_accept": scope_rows.rows_to_config([])}))
         token_file = self._legacy_token(tmp_path / "users" / "alice" / "authority", ["r-gone"])
 
-        daemon_main._upgrade_all_principals()
+        data_format.migrate_everything(log=daemon_main._deferred_warnings.append)
 
         assert json.loads(token_file.read_text())["tokens"][0]["rules"] == []
 
@@ -3673,6 +3641,9 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
         monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
         monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
+        # run_app tests must never walk the source checkout's own data.
+        monkeypatch.setattr(data_format, "migrate_everything", lambda *, log: [])
+        monkeypatch.setattr(data_format, "check_not_newer", lambda marker: None)
 
         _FakeWebServer.instances = []
         self._web_server_calls: list[dict[str, Any]] = []
@@ -3706,6 +3677,30 @@ class TestRunApp:
         assert "already running" in capsys.readouterr().err
         assert "already running" in caplog.text
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+    @pytest.mark.parametrize("org", [False, True])
+    def test_run_app_migrates_before_the_web_server_is_built(self, monkeypatch, org):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        order: list[str] = []
+        real_start = daemon_main._maybe_start_web_server
+
+        def migrate(*, log):
+            order.append("migrate")
+            assert log == daemon_main.logger.warning
+            return []
+
+        monkeypatch.setattr(data_format, "migrate_everything", migrate)
+        monkeypatch.setattr(
+            daemon_main, "_maybe_start_web_server",
+            lambda *args, **kwargs: order.append("server") or real_start(*args, **kwargs),
+        )
+        if org:
+            monkeypatch.setattr(org_mode, "resolve_mode", lambda bundle: "org")
+
+        assert daemon_main.run_app({}, "config.yaml") == 0
+        assert order == ["migrate", "server"]
 
     def test_local_start_logs_the_deprecation_and_org_start_does_not(self, monkeypatch, caplog):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)

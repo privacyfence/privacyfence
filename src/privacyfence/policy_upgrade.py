@@ -19,15 +19,16 @@ from typing import Any, Callable
 
 import yaml
 
-from . import scoped_tokens
+from . import paths, scoped_tokens
 from .policy import scope_rows
 from .policy import store as policy_store
 from .principal import Principal
-from .secure_files import atomic_write_text
+from .secure_files import atomic_write_bytes, atomic_write_text
 
 logger = logging.getLogger(__name__)
 
 BACKUP_SUFFIX = ".pre-scope-rules.bak"
+VERBS_BACKUP_SUFFIX = scoped_tokens.CANONICAL_VERBS_BACKUP_SUFFIX
 
 
 def _v2_rules(section: Any) -> list[Any] | None:
@@ -114,3 +115,42 @@ def ensure_token_rules(
         )
     except (OSError, ValueError) as exc:
         log(f"{principal.id}: could not give scoped tokens their own copy of their rules: {exc}")
+
+
+def ensure_canonical_verbs(cfg: dict[str, Any], config_path: str, principal: Principal) -> list[str]:
+    """Rewrite retired verb names (``registry.LEGACY_VERB_ALIASES``) to their current names in
+    ``principal``'s version-3 rows of ``settings.yaml`` and in its scoped tokens' own rows, and
+    return the problems found (empty when all went well).
+
+    Only a row's ``verbs`` value changes; every other key and row stays as it is, and a row that
+    cannot be read is left alone and reported. The previous file is kept once beside the original
+    (never overwriting an earlier copy), and nothing is written when no row names a retired verb.
+    ``cfg`` is updated in place when the file is."""
+    problems: list[str] = []
+    section = cfg.get("auto_accept")
+    rows = section.get("rules") if isinstance(section, dict) and _v2_rules(section) is None else None
+    changed = False
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or scope_rows.row_from_dict(row) is None:
+            name = row.get("id") if isinstance(row, dict) else None
+            problems.append(f"{principal.id}: rule {name or 'without an id'} could not be read")
+            continue
+        verbs = scoped_tokens.renamed_verbs(row.get("verbs"))
+        if verbs is not None:
+            row["verbs"] = verbs
+            changed = True
+    if changed:
+        backup = f"{config_path}{VERBS_BACKUP_SUFFIX}"
+        try:
+            if not os.path.exists(backup):
+                with open(config_path, "rb") as fh:
+                    atomic_write_bytes(backup, fh.read())
+            atomic_write_text(config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
+        except OSError:
+            problems.append(f"{principal.id}: could not rewrite settings.yaml")
+
+    _, token_problems = scoped_tokens.canonicalize_verbs_in_file(
+        paths.authority_dir(principal) / scoped_tokens.STORE_FILE_NAME
+    )
+    problems.extend(f"{principal.id}: {p}" for p in token_problems)
+    return problems
