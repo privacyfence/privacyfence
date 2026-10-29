@@ -244,22 +244,37 @@ The built-in client secrets are public in effect, just as Telegram's hash is (AD
 accepted: each one identifies the PrivacyFence app, and every sign-in still needs the person's own
 consent.
 
-### D2. What stays in `org_config.json`
+### D2. What the bundle still holds
 
-From 7.x on, this file is `org/org_bundle.json`, adopted from `org_config.json` by copying (D13).
-"Bundle" and `org_config.json` elsewhere in this plan mean that file.
+From 7.x on, the bundle file is `org/org_bundle.json`, adopted from `org_config.json` by copying
+(D13). "Bundle" elsewhere in this plan means that file. It keeps its loading, signing, serial and
+hash-log rules (`daemon_main.load_org_config`, ADR 0016, 0200).
 
-`org_config.json` stays a signed bundle, with the same loading, signing, serial and hash-log rules
-(`daemon_main.load_org_config`, ADR 0016, 0200). Its meaningful keys are now:
+**What 7.x reads from it depends on the mode (D25).**
+
+| Install | What is read | How |
+|---|---|---|
+| Desktop (local) | the app credentials below, bookkeeping, the `mcp` check | at every start, as in 6.x; installed on the Admin page (D6) until 8.x removes desktop mode |
+| Organization server upgraded from 6.x | `mode`, `server`, `idp` | read-only at every start, until `privacyfence-app --retire-bundle` (D25); never replaced |
+| Organization server upgraded from 6.x | the app credentials below | imported once as connector configs (D25), then ignored |
+| New organization server, or single-user | nothing | there is no bundle, and a new one is refused (D25) |
+
+**App credentials and bookkeeping.** Field names are unchanged, and connector configs use the same
+names in organization mode (D25), so every connector reads the same section dict as today.
 
 | Key | Contents |
 |---|---|
-| `mode`, `server`, `idp` | unchanged (startup settings) |
-| `google`, `slack`, `salesforce`, `miro` | the app credentials, unchanged field names |
+| `google` | `client_id`, `client_secret`, `auth_uri`, `token_uri` |
+| `slack` | `client_id`, `client_secret`, optional `user_scopes` |
+| `salesforce` | `consumer_key`, `consumer_secret`, optional `login_url` |
 | `atlassian` | `client_id`, `client_secret` only |
+| `miro` | `client_id`, `client_secret` |
 | `grist` | the OAuth app only: `client_id`, `client_secret`, `auth_server_url`, `server_url` (the server the app belongs to, ADR 0143) |
 | bookkeeping | `version`, `org_name`, `serial`, `signature`, `signing_public_key`, and whatever `org_bundle_signing` adds |
 | `mcp` | still refused when it carries `tool_annotations` (ADR 0089) |
+
+A desktop bundle has no `mode: org`, `server` or `idp`; `build_org_bundle.py` no longer writes them
+(D7). A bundle that has them is an upgraded 6.x organization bundle.
 
 **Legacy operational keys.** `admin_config.LEGACY_BUNDLE_KEYS` is this tuple:
 `("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding",
@@ -271,9 +286,9 @@ From 7.x on, this file is `org/org_bundle.json`, adopted from `org_config.json` 
 - `grist.server_url` when `grist` has no `client_id` (the API-key server address)
 - `grist.auto_provision` (D18)
 
-All of these are imported once (D3) and afterwards ignored (D4). The function
-`admin_config.legacy_keys_in(bundle) -> list[str]` returns the ones present, as dotted names (for
-example `["authz", "atlassian.assets"]`).
+In both modes all of these are imported once into the admin config (D3) and afterwards ignored
+(D4). The function `admin_config.legacy_keys_in(bundle) -> list[str]` returns the ones present, as
+dotted names (for example `["authz", "atlassian.assets"]`).
 
 ### D3. The admin config
 
@@ -961,8 +976,24 @@ like `org_config_upload` does.
 
 ### D7. Bundle tooling
 
-- **`scripts/build_org_bundle.py`.** These flags write a legacy key. They are hidden with
-  `help=argparse.SUPPRESS` and stay parseable only to refuse:
+**`scripts/build_org_bundle.py` builds desktop bundles only:** app credentials (D2) and
+bookkeeping, signed as today. The script's own copy of the canonicalization and signing logic is
+unchanged (ADR 0016). It stays a release asset next to `sync_room_directory.py`, because desktop IT
+still runs it; `sign_connector_config.py` and the browser tool join them (D25).
+
+Every refused option is hidden with `help=argparse.SUPPRESS` and stays parseable only to be
+refused. The script prints one `error:` line for each refused option given, then exits 2 without
+writing anything.
+
+- **Organization-mode options (D25).** `--mode org`, and every option whose destination starts with
+  `server_` or `idp_` (`--server-issuer-url`, `--server-bind-host`, `--server-port`,
+  `--server-trusted-proxy`, `--idp-issuer`, `--idp-client-id`, `--idp-client-secret`,
+  `--idp-admin-group-claim`, `--idp-admin-group-value`, `--idp-step-up-acr-value`, and any other
+  `--idp-*`). The message is `error: <option>: organization servers take their settings from
+  privacyfence.env and their own apps from signed connector configs (docs/org-mode-setup-guide.md,
+  ADR 0268).` `--mode local` remains, and is the default.
+- **Operational options (D3).** They write a legacy key. The message is `error: <option> has moved
+  to the Admin page (ADR 0256); remove it.`
   - `--enable-telegram`, `--enable-peek`, `--enable-grist` and `--peek-base-url`;
   - `--grist-server-url` when given without `--grist-client-id`;
   - `--atlassian-assets` and `--atlassian-assets-workspace-id`;
@@ -976,28 +1007,37 @@ like `org_config_upload` does.
     `--agent-links`/`--no-agent-links` and `--exports`/`--no-exports`;
   - `--web-push`/`--no-web-push` (one `BooleanOptionalAction`);
   - `--enable-audit-forwarding`, `--disable-audit-forwarding` and every
-    `--audit-forwarding-*` option.
-
-  When any of them is given, the script prints `error: <flag> has moved to the Admin page (ADR
-  0256); remove it.` for each one and exits 2 without writing.
-
-  `--idp-step-up-acr-value` writes `idp.step_up_acr_values`, which stays: it is part of the IdP, so
-  it is **not** refused.
-
-  Also update:
-  - the "nothing to write" check (`build_org_bundle.py:1012-1020`), which names unattended sessions
-    and scoped tokens, so it names only what remains;
+    `--audit-forwarding-*` option;
+  - main's auto-provisioning options (D18): `--peek-auto-provision`, `--no-peek-auto-provision`,
+    `--peek-provisioning-key-env`, `--peek-trust-unverified-email`, `--grist-auto-provision`,
+    `--no-grist-auto-provision`, `--grist-provisioner-url`, `--grist-provisioning-key-env` and
+    `--grist-trust-unverified-email`. Their message also names the environment variables:
+    `error: <option> has moved to the Admin page and PRIVACYFENCE_PEEK_BASE_URL /
+    PRIVACYFENCE_GRIST_SERVER_URL / PRIVACYFENCE_GRIST_PROVISIONER_URL on the server (ADR 0256,
+    0263); remove it.`
+- **`--merge`.**
+  - It refuses an input that carries `mode: org`, `server` or `idp`: `error: <file> is an
+    organization bundle; organization servers no longer take bundles (ADR 0268).`
+  - It drops legacy operational keys from the merged bundle and prints `note: dropped <names>;
+    they are managed on the Admin page now.`
+- **Also update:**
+  - the "nothing to write" check (`build_org_bundle.py:1012-1020`), which names unattended
+    sessions and scoped tokens, so it names only app credentials;
   - `--mode local`'s popping of operational keys (`:819-829`), which now has nothing to pop;
+  - the module docstring and `--help` epilog: a desktop bundle builder, pointing organization
+    servers to `privacyfence.env` and connector configs;
   - `tests/unit/test_docs_configuration_reference.py:128-135`: `_bundle_options()` skips actions
-    whose `help is argparse.SUPPRESS`, so the reference no longer has to list refused flags.
-- `--merge` drops legacy keys from the merged bundle and prints `note: dropped <names>; they are
-  managed on the Admin page now.`
-- The script's own copy of the canonicalization and signing logic is unchanged (ADR 0016).
-- **`scripts/sync_room_directory.py`.** It now writes a standalone file: `--output rooms.json`
-  replaces `--org-config`, and so do the bundle-merge, signature and `--sign-key` logic. The file
-  is `{"rooms": [...], "rooms_synced_at": "<iso>"}`, mode 0600. The administrator uploads it on
-  the Admin page. Passing `--org-config` prints `error: --org-config has been replaced by --output;
-  upload the file on the Admin page (ADR 0256).` and exits 2.
+    whose `help is argparse.SUPPRESS`, so the reference no longer has to list refused options;
+  - `tests/unit/test_org_mode.py:98-99`'s comment and the test it names in
+    `test_build_org_bundle.py`, which pin the builder's default bind host to `ServerConfig`'s.
+    The builder no longer writes a `server` section, so that pin moves to
+    `deploy/docker/privacyfence.env.example`'s commented default instead.
+
+**`scripts/sync_room_directory.py`.** It now writes a standalone file: `--output rooms.json`
+replaces `--org-config`, and so do the bundle-merge, signature and `--sign-key` logic. The file is
+`{"rooms": [...], "rooms_synced_at": "<iso>"}`, mode 0600. The administrator uploads it on the
+Admin page. Passing `--org-config` prints `error: --org-config has been replaced by --output;
+upload the file on the Admin page (ADR 0256).` and exits 2.
 
 ### D8. Test isolation
 
@@ -1534,8 +1574,8 @@ returns the `idp` section `IdpConfig.from_org_config` reads.
 - An org server with no bundle at all, configured from the environment, is allowed. Its trust
   root is whoever controls the container's environment, the same party that chooses the image.
   ADR 0263 records this as an amendment to 0016.
-- A signed bundle **without** an `idp` section refuses an IdP from the environment, unless the
-  bundle carries `"idp": {"from_environment": true}` (D15 SEC-14).
+- An upgraded server's legacy bundle, whose `idp` wins over the environment, is the only signed
+  bundle an organization server reads (D25, D15 SEC-14).
 
 **A server stays a server.** The first start for which `_idp_present` is true sets
 `"org_server": true` in the admin config. It does this before IdP discovery, so a server whose IdP
@@ -1556,8 +1596,8 @@ section's `admin_emails` list.
   an Internal consent screen.
 - An IdP that does not send `email_verified` (Microsoft Entra ID, for example) cannot name admins
   by email. The docs tell those admins to use the group claim.
-- `scripts/build_org_bundle.py` gains `--idp-admin-email` (repeatable), writing `idp.admin_emails`.
-  This is IdP configuration, so it stays in the bundle.
+- Admins by email come from `PRIVACYFENCE_ADMIN_EMAILS` only. `build_org_bundle.py` writes no
+  `idp` section any more (D7, D25).
 
 **Docker.**
 
@@ -1825,10 +1865,12 @@ The `ensure` re-import is a merge, not a replacement:
 
 **SEC-14: a signed bundle locks the IdP; no wildcard proxies.** (p20a, p15)
 
-- **The IdP.** When a signed bundle is present without an `idp` section, `PRIVACYFENCE_IDP_*` and
-  `PRIVACYFENCE_ADMIN_EMAILS` are refused with a `ConfigurationError`, unless the bundle carries
-  `"idp": {"from_environment": true}`. `build_org_bundle.py` gains
-  `--idp-from-environment` (p20b) to write it.
+- **The IdP.** On an organization server, a legacy bundle's `idp` section wins over
+  `PRIVACYFENCE_IDP_*` and `PRIVACYFENCE_ADMIN_EMAILS`, which then log D14's warning. A legacy
+  organization bundle without an `idp` section (6.x never wrote one) refuses the start with
+  `ConfigurationError("org_bundle.json has no \"idp\" section; set PRIVACYFENCE_IDP_* and run
+  privacyfence-app --retire-bundle.")`. No bundle option exists to delegate the IdP to the
+  environment, because organization bundles can no longer be built (D7, D25).
 - **Trusted proxies.** `trusted_proxies` from any source refuses `*`, `0.0.0.0/0` and `::/0` with
   `trusted_proxies must name specific proxies, not a wildcard.`
 
@@ -2481,8 +2523,7 @@ organization's own always wins.
     Google sign-in; use your own IdP app.`
   - An `http://` or loopback issuer: `The built-in Google sign-in needs a public https://
     server address.` Single-user mode remains the localhost path.
-- SEC-14 still holds. A signed bundle without an `idp` section refuses the environment setting
-  unless it sets `idp.from_environment`.
+- SEC-14 still holds: a legacy bundle's `idp` section wins over the environment setting.
 
 **Who may sign in: default deny.** With the built-in client, any Google account in the world can
 complete Google's side, so the server decides alone. `org_identity.check_authz_policy`, when
@@ -3011,11 +3052,8 @@ until 8.x removes desktop mode.
   connector configs on the Admin page.`
 
 **Tooling.**
-- **`build_org_bundle.py`** keeps building desktop (`--mode local`) bundles. `--mode org`, and every
-  `--server-*` and `--idp-*` option, are refused with: `Organization servers take their settings
-  from privacyfence.env and their own apps from signed connector configs (docs/org-mode-setup-guide.md).`
-  The `--idp-admin-email`, `--idp-from-environment` and `--idp-trust-unverified-email` options from
-  p20b are not added.
+- **`build_org_bundle.py`** builds desktop bundles only and refuses every organization-mode
+  option; D7 lists them and the messages (p10).
 - **`scripts/sign_connector_config.py`** (stdlib plus `cryptography`, like `build_org_bundle.py`'s
   signing):
   - `keygen --out KEY.pem` writes a PKCS#8 PEM private key (mode 0600, refusing to overwrite) and
@@ -3044,6 +3082,11 @@ until 8.x removes desktop mode.
   - It is never served by a PrivacyFence server, because the server is what the signature
     protects.
   - It is linked from the Admin page and the docs, not from the site's navigation.
+  - **Release assets.** `scripts/sign_connector_config.py` and the page, as
+    `privacyfence-connector-config-tool.html`, are attached to each stable GitHub Release and
+    uploaded to the R2 archive, next to `build_org_bundle.py` and `sync_room_directory.py`
+    (`build.yml`'s "Publish release artifacts to Cloudflare R2" and "Attach release assets"
+    steps). That copy is the offline one, pinned to a release.
 - **Cross-language tests.** `tests/fixtures/connector_config/` holds a key, inputs and the expected
   file. The Python tool must reproduce it byte for byte, and the server must verify it. A Node test
   (`tests/unit/test_connector_config_web_tool.py`, which runs `node` on the page's extracted script
@@ -3118,9 +3161,9 @@ relates to 0255, 0263 and 0262.
   `org_bundle_serial.txt`) and never changes a 6.x file, so the latest 6.x keeps running after a
   downgrade. Amends 0016 and 0200 (the file names); relates to 0261.
 - **0263** — An organization server can take its IdP and server address, and the Peek, Grist and
-  Grist-provisioner addresses (D18), from environment variables, with no bundle. A bundle, when
-  present, must still be signed and wins for the IdP. A signed bundle without an `idp` section
-  refuses an environment IdP unless it sets `idp.from_environment`. Automatic Peek and Grist
+  Grist-provisioner addresses (D18), from environment variables, with no bundle. An upgraded
+  server's legacy bundle, the only bundle an organization server reads (0268), must still be signed
+  and wins for the IdP. Automatic Peek and Grist
   accounts send their key only to addresses from the environment. Amends 0016 (org mode no longer
   always needs a signed bundle) and 0011; relates to 0241, 0244.
 - **0264** — Admins can be named by IdP-verified email (`PRIVACYFENCE_ADMIN_EMAILS` or
@@ -3963,7 +4006,7 @@ phases:
   - grep -n "/admin" tests/integration/test_browser_smoke.py matches
   - ruff check . passes
 - id: p10-bundle-tooling
-  title: build_org_bundle.py writes only startup settings and credentials; the room sync writes a file to upload
+  title: build_org_bundle.py builds desktop bundles only; the room sync writes a file to upload
   depends_on:
   - p0-bundle-file-rename
   complexity: M
@@ -3973,27 +4016,33 @@ phases:
   - scripts/sync_room_directory.py
   - tests/unit/test_sync_room_directory.py
   - tests/unit/test_docs_configuration_reference.py
+  - tests/unit/test_org_mode.py
+  - deploy/docker/privacyfence.env.example
   brief: |-
-    Read "Design → D2" (which keys stay) and "D7". D7 lists every flag exactly.
+    Read "Design → D2" (what a bundle still holds, and in which mode) and "D7" (every refused option and message, exactly). D25 says why organization servers take no bundle; this phase only changes the tools.
     1. scripts/build_org_bundle.py:
-       - Hide every flag D7 lists with help=argparse.SUPPRESS, and after parsing refuse each one given, with D7's exact message and exit code 2, writing nothing. --idp-step-up-acr-value stays.
-       - --merge drops legacy keys with D7's note.
-       - Update the "nothing to write" check (:1012-1020) and --mode local's popping (:819-829) per D7.
+       - Hide every option D7 lists, both kinds, with help=argparse.SUPPRESS. After parsing, print D7's exact error line for each one given, in the order given, and exit 2 without writing. Find the organization-mode options by destination prefix (server_, idp_) plus --mode org, so an --idp-* option added later is refused too.
+       - --mode local stays and is the default.
+       - --merge refuses an organization bundle and drops legacy operational keys, with D7's messages.
+       - Update the "nothing to write" check (:1012-1020), --mode local's popping (:819-829), the module docstring and the --help epilog per D7.
        - Keep the signing code byte-identical (tests/unit/test_build_org_bundle.py cross-checks it).
     2. tests/unit/test_build_org_bundle.py:
-       - Rewrite the tests that built operational sections so they assert the refusal: one parametrized test named test_moved_flag_is_refused over every moved flag, with the exact message and exit code 2. Pass a valid minimal argument set in each case, so the refusal is what fails.
-       - A --merge of a bundle with authz and peek drops them and prints the note.
-       - A credentials-only bundle still builds and signs as before.
-       - Every signing and cross-check test still passes.
-    3. tests/unit/test_docs_configuration_reference.py: _bundle_options() skips actions whose help is argparse.SUPPRESS, per D7. Run it: docs/configuration-reference.md still lists the moved flags at this point, and the test only requires listed options to exist. If it also fails on extra documented flags, stop with status=blocked.
+       - One parametrized test, test_moved_flag_is_refused, over every operational option D7 lists, D18's and D21's included, with the exact message and exit code 2.
+       - One parametrized test, test_org_mode_option_is_refused, over --mode org and every server_/idp_ option, with D7's exact message and exit code 2, and a check that an option list built from the parser's server_/idp_ destinations matches the parametrization.
+       - Pass a valid minimal desktop argument set in each case, so the refusal is what fails; nothing is written.
+       - A --merge of a desktop bundle with authz and peek drops them and prints the note; a --merge of a bundle with "mode": "org" or an idp section is refused.
+       - A credentials-only desktop bundle still builds and signs as before; every signing and cross-check test still passes.
+       - Turn main's tests for the D18 and D21 options (test_enable_and_disable_scoped_token_proposals_flags, test_merge_keeps_allow_ai_proposals and the auto-provisioning builder tests) into refusal and merge-drops tests.
+       - The bind-host pin (test_org_mode.py:98-99's comment and the test it names): move it to deploy/docker/privacyfence.env.example's commented PRIVACYFENCE_BIND_HOST default against ServerConfig's, per D7. If that example file does not exist yet (p20a creates it), keep the pin as a test of ServerConfig's default alone and say so in the commit message.
+    3. tests/unit/test_docs_configuration_reference.py: _bundle_options() skips actions whose help is argparse.SUPPRESS, per D7. Run it: docs/configuration-reference.md still lists the refused options at this point (p13a rewrites it), and the test only requires listed options to exist. If it also fails on documented options that are now hidden, stop with status=blocked.
     4. scripts/sync_room_directory.py: --output replaces --org-config per D7. Remove the bundle-merge and signature handling, refuse --org-config with D7's message, write the rooms file with mode 0600, and update the module docstring and example.
     5. tests/unit/test_sync_room_directory.py: rewrite the merge and signing tests into output-file tests (the written file's shape, mode 0600, the --org-config refusal). Keep the directory-fetch tests unchanged.
-    6. Run ruff check . and python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py -q.
-    Also apply D21: --enable-scoped-token-proposals and --disable-scoped-token-proposals join the refused flags; main's test_enable_and_disable_scoped_token_proposals_flags and test_merge_keeps_allow_ai_proposals become a refusal test and a --merge-drops test.
-    Also apply D18 (bundle tooling): main's --peek-auto-provision/--no-peek-auto-provision, --peek-provisioning-key-env, --peek-trust-unverified-email, --grist-auto-provision/--no-grist-auto-provision, --grist-provisioner-url, --grist-provisioning-key-env and --grist-trust-unverified-email join the hidden, refused legacy flags, with a refusal naming the Admin page and the environment variables; turn main's builder tests for them into refusal tests.
+    6. Run ruff check . and python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py tests/unit/test_org_mode.py -q.
+    Stop condition: tests/integration/test_org_docker_image.py writes its own bundle dict and does not call the script; if any test or workflow outside the touched files runs build_org_bundle.py with --mode org or a server_/idp_ option, stop with status=blocked and name it.
   acceptance:
-  - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py -q passes
-  - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k test_moved_flag_is_refused passes and selects at least 30 tests
+  - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_sync_room_directory.py tests/unit/test_docs_configuration_reference.py tests/unit/test_org_mode.py -q passes
+  - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k test_moved_flag_is_refused passes and selects at least 40 tests
+  - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k test_org_mode_option_is_refused passes and selects at least 10 tests
   - ruff check . passes
 - id: p11-relay-worker
   title: The OAuth redirect relay Worker at oauth.privacyfence.eu and its deploy workflow
@@ -4360,7 +4409,7 @@ phases:
        - test_admin_config.py: apply_change cannot change org_server.
        - No log record (caplog) contains the secret in any test.
     7. Run ruff check . and python3 -m pytest tests/unit -q. Push, then dispatch build.yml on the phase branch (ci.dispatchable) and check that the build-org-image job's image tests pass.
-    Also apply D15 SEC-14 (a signed bundle without idp refuses the environment IdP unless idp.from_environment is true) and SEC-11's rule that a re-import keeps org_server, each with tests.
+    Also apply D15 SEC-14 (a legacy bundle's idp wins over the environment; a legacy org bundle without idp refuses the start with SEC-14's message) and SEC-11's rule that a re-import keeps org_server, each with tests.
     Also apply D18: PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL ("true" or "false", anything else is a ConfigurationError) maps to the idp section's trust_unverified_email; IdpConfig gains trust_unverified_email: bool = False, read from the section.
   acceptance:
   - python3 -m pytest tests/unit -q passes
@@ -4391,7 +4440,7 @@ phases:
        - A configured email with surrounding whitespace or different case still matches.
        - The group rule still works alone and together with the email list.
     4. Run ruff check . and python3 -m pytest tests/unit -q.
-    Also apply D15 SEC-07 (the Google hd rule, email_verified in check_authz_policy, ASCII lower with non-ASCII refused), SEC-08 (reserved subs hashed; the startup log line), each with tests. SEC-14's idp.from_environment needs no build_org_bundle.py flag (D25). Add the SEC-07 behaviour change to the commit message so p13b can note it in the CHANGELOG.
+    Also apply D15 SEC-07 (the Google hd rule, email_verified in check_authz_policy, ASCII lower with non-ASCII refused), SEC-08 (reserved subs hashed; the startup log line), each with tests. Add the SEC-07 behaviour change to the commit message so p13b can note it in the CHANGELOG.
     Also apply D18's unverified-email rule: check_authz_policy trusts the email domain without email_verified only when IdpConfig.trust_unverified_email is true (the Google hd rule still applies); admins by email never use it; it is set by PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL (or a legacy bundle's idp.trust_unverified_email), with no new build_org_bundle.py option (D25). Tests: Entra-style claims without email_verified are denied by default and allowed with the flag; an email admin without email_verified is never admin, flag or not.
   acceptance:
   - python3 -m pytest tests/unit -q passes
@@ -4559,34 +4608,19 @@ phases:
   - tests/unit/test_connector_config_web_tool.py
   - scripts/build_site.py
   - tests/unit/test_website_pages.py
+  - .github/workflows/build.yml
+  - tests/unit/test_org_image_workflows.py
   brief: |-
     Read "Design → D25" ("Tooling", "Cross-language tests", "Security").
     1. scripts/sign_connector_config.py per D25 (keygen and sign; the secret from --client-secret-file or getpass, never argv; output mode 0600; refuse to overwrite). It reproduces p25a's fixtures byte for byte.
     2. website/tools/connector-config/index.html per D25: one self-contained file, inline script and style with the CSP meta tag carrying their sha256 hashes, no external resource, no form submission, WebCrypto Ed25519 import of a PKCS#8 PEM, key generation with a PEM download and fingerprint, the provider-specific fields, the unsupported-browser message, and the "runs only in your browser; the offline copy is in the repository" text. Wire it into scripts/build_site.py's page map without a navigation or footer link, with noindex.
     3. tests/unit/test_sign_connector_config.py: the fixtures reproduced; the secret never in argv (main refuses --client-secret); keygen output parses and refuses to overwrite.
     4. tests/unit/test_connector_config_web_tool.py: the page has no http(s) URL in a src or href of script, link, img or iframe; the CSP meta exists with connect-src 'none' and hashes that match the inline blocks; extract the signing script and run it with node (shutil.which("node"); when missing, skip locally but fail when the CI environment variable is set) to sign the fixture inputs with the fixture key, asserting the output equals the expected file byte for byte.
-    5. Run ruff check . and python3 -m pytest tests/unit/test_sign_connector_config.py tests/unit/test_connector_config_web_tool.py tests/unit/test_website_pages.py tests/unit/test_build_site.py -q.
+    5. .github/workflows/build.yml: add scripts/sign_connector_config.py and the page (copied as privacyfence-connector-config-tool.html) to the R2 upload and the stable release assets, next to build_org_bundle.py, per D25's "Release assets". A test (in test_org_image_workflows.py, or a new test_release_assets.py if that file is image-only) pins both entries.
+    6. Run ruff check . and python3 -m pytest tests/unit/test_sign_connector_config.py tests/unit/test_connector_config_web_tool.py tests/unit/test_website_pages.py tests/unit/test_build_site.py tests/unit/test_org_image_workflows.py -q.
   acceptance:
   - python3 -m pytest tests/unit/test_sign_connector_config.py tests/unit/test_connector_config_web_tool.py -q passes
   - grep -n "connect-src 'none'" website/tools/connector-config/index.html matches
-  - ruff check . passes
-- id: p25d-org-bundle-retired
-  title: build_org_bundle.py builds desktop bundles only; organization servers are documented without a bundle
-  depends_on:
-  - p25b-connector-config-admin
-  - p10-bundle-tooling
-  complexity: S
-  touches:
-  - scripts/build_org_bundle.py
-  - tests/unit/test_build_org_bundle.py
-  - tests/unit/test_docs_configuration_reference.py
-  brief: |-
-    Read "Design → D25" ("Tooling").
-    1. scripts/build_org_bundle.py: refuse --mode org and every --server-* and --idp-* option with D25's message and exit 2, writing nothing; hide them with help=argparse.SUPPRESS. Desktop (--mode local) bundles build and sign as before.
-    2. tests/unit/test_build_org_bundle.py: org-mode tests become one parametrized refusal test; every local-mode, signing and cross-check test still passes unchanged.
-    3. Run ruff check . and python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/test_docs_configuration_reference.py -q.
-  acceptance:
-  - python3 -m pytest tests/unit/test_build_org_bundle.py -q -k refused passes
   - ruff check . passes
 - id: p24-slack-limited-mode
   title: 'Slack: search for throttled history reads, and the one-click own app on the Admin page'
@@ -4625,7 +4659,6 @@ phases:
   - p23-prerelease-org-image
   - p24-slack-limited-mode
   - p25c-connector-config-signing-tools
-  - p25d-org-bundle-retired
   complexity: M
   touches:
   - docs/adr/0254-built-in-oauth-apps-ship-in-every-distribution.md
