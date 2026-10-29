@@ -629,8 +629,9 @@ class TestStepUpCard:
         # On an organization server the PII gate is an Admin section, not a Settings one.
         fn = self._general_fn(build_html(_make_state()))
         guard = fn.index("CAPS.mode !== 'org')")
-        assert guard < fn.index("'PII Detection Gate'")
-        assert "CAPS.is_admin" not in fn[guard:fn.index("'PII Detection Gate'")]
+        assert guard < fn.index("piiGateCardHtml(g)")
+        assert "CAPS.is_admin" not in fn[guard:fn.index("piiGateCardHtml(g)")]
+        assert "'PII Detection Gate'" not in fn
 
 
 class TestAiClientSection:
@@ -1124,9 +1125,11 @@ class TestAdminSurfaceCapabilities:
         assert {"set_auto_provisioning", "set_web_push", "set_authz", "tighten_step_up"} <= suppressed
         assert not suppressed & {"offer_service", "withdraw_service", "set_server_address", "clear_rooms"}
 
-    def test_an_org_admin_gets_services_and_features_and_nothing_is_suppressed(self):
+    def test_an_org_admin_gets_every_section_and_nothing_is_suppressed(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin", mode="org", is_admin=True))
-        assert caps["sections"] == {"services": True, "features": True}
+        assert caps["sections"] == dict.fromkeys(
+            ("services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"), True,
+        )
         assert caps["not_applicable_actions"] == []
 
     def test_an_org_non_admin_gets_no_section(self):
@@ -1207,7 +1210,10 @@ class TestServicesSection:
         local = _render_admin(_admin_state(_row("google", "Google")))
         assert re.findall(r'aria-label="([^"]+)" data-nav', local) == ["Services", "Features", "Organization configuration"]
         org = _render_admin(_admin_state(_row("google", "Google")), mode="org", is_admin=True)
-        assert re.findall(r'aria-label="([^"]+)" data-nav', org) == ["Services", "Features"]
+        assert re.findall(r'aria-label="([^"]+)" data-nav', org) == [
+            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Audit forwarding",
+            "Privacy Filter", "Stats",
+        ]
         assert 'aria-selected="true"' in org
 
     def test_a_bundle_app_names_its_client_and_warns_about_reconnecting(self):
@@ -1485,3 +1491,191 @@ class TestOrganizationConfigurationCard:
         page = _render(build_html(_make_state(), initial_section="general"))
         assert "Check for Updates" in page
         assert "Organization Configuration" not in page and "install_org_config" not in page
+
+
+_SENTINEL = "sk-SENTINEL-secret-value"
+
+
+def _org_state(**overrides):
+    state = _features_state(
+        restart_needed=[],
+        download_delivery={
+            "inline_max_bytes": 262144, "link_ttl_seconds": 900, "allow_disk_staging": True,
+            "agent_links": False, "allow_exports": True,
+        },
+        web_push={"enabled": True},
+        authz={"allowed_domains": ["example.com", "example.org"], "groups_claim": "groups", "required_groups": ["pf-users"]},
+        step_up={"enabled": True, "require_passkey": False, "scope": "writes_and_pii_reads"},
+        scoped_tokens={"enabled": True, "max_days": 30, "allow_ai_proposals": True},
+        audit_forwarding={
+            "enabled": True, "kind": "http", "syslog": {"host": "logs.example.com", "port": 6514, "protocol": "tcp"},
+            "http": {"url": "https://siem.example.com/in", "bearer_token_env": "SIEM_TOKEN"},
+        },
+        privacy={
+            "groups": [{"key": "privacy", "label": "Gmail"}],
+            "default_policy": {"privacy": "block"},
+            "categories": {"privacy": [{"key": "body", "label": "Message body", "policy": "redact"}]},
+            "pii_enabled": True, "pii_ip": True, "pii_financial": False,
+        },
+        stats={
+            "users": {"total": 4, "with_connectors": 3, "with_rules": 1},
+            "connectors": [{"service": "gmail", "label": "Gmail", "configured": True, "users": 3}],
+            "rules": {"total": 2, "by_connector": []},
+        },
+    )
+    state.update(overrides)
+    return state
+
+
+def _render_org(section, state=None):
+    return _render_admin(state or _org_state(), mode="org", is_admin=True, section=section)
+
+
+@needs_node
+class TestOrgAdminSections:
+    def test_the_org_admin_surface_has_all_of_the_org_sections(self):
+        caps = _admin_caps(build_html(_org_state(), surface="admin", mode="org", is_admin=True))
+        keys = [k for k, v in caps["sections"].items() if v]
+        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"]
+        page = _render_org("services")
+        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Audit forwarding", "Privacy Filter", "Stats"):
+            assert f'aria-label="{label}"' in page
+
+    def test_the_local_admin_surface_has_none_of_them(self):
+        caps = _admin_caps(build_html(_admin_state(), surface="admin"))
+        assert not {"delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"} & set(caps["sections"])
+
+    def test_the_delivery_form_is_prefilled(self):
+        page = _render_org("delivery")
+        assert 'data-f="inline_max_bytes" data-t="int" aria-label="Largest file sent inline (bytes)" value="262144"' in page
+        assert 'data-f="link_ttl_seconds" data-t="int" aria-label="Download link lifetime (seconds)" value="900"' in page
+        assert 'data-f="allow_disk_staging" data-t="bool" checked' in page
+        assert 'data-f="agent_links" data-t="bool" aria-label' in page
+        assert 'data-f="allow_exports" data-t="bool" checked' in page
+        assert 'data-admin-form-save="delivery"' in page
+
+    def test_the_sign_in_form_is_prefilled_with_one_item_per_line(self):
+        page = _render_org("access")
+        assert ">example.com\nexample.org</textarea>" in page
+        assert 'data-f="groups_claim" data-t="text" aria-label="Groups claim" value="groups"' in page
+        assert ">pf-users</textarea>" in page
+
+    def test_the_step_up_form_offers_nothing_looser_than_the_current_value(self):
+        page = _render_org("step_up")
+        options = re.findall(r'<option value="(\w+)"', page)
+        assert options == ["writes_and_pii_reads", "writes_and_reads"]
+        assert 'data-f="enabled" data-t="bool" checked disabled' in page
+        assert 'data-f="require_passkey" data-t="bool" aria-label' in page and "disabled" not in page.split('data-f="require_passkey"')[1].split(">")[0]
+        assert "Relaxing step-up is a file edit (ADR 0068)." in page
+
+    def test_the_widest_step_up_scope_offers_only_itself(self):
+        state = _org_state(step_up={"enabled": False, "require_passkey": False, "scope": "writes_and_reads"})
+        page = _render_org("step_up", state)
+        assert re.findall(r'<option value="(\w+)"', page) == ["writes_and_reads"]
+        assert 'data-f="enabled" data-t="bool" aria-label' in page
+
+    def test_the_scoped_tokens_form_carries_the_ai_proposals_checkbox(self):
+        page = _render_org("tokens")
+        assert "Let AI clients propose a scoped token for a person to review and create." in page
+        assert 'data-f="allow_ai_proposals" data-t="bool" checked' in page
+        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime (days)" value="30"' in page
+        assert "Needs scoped tokens turned on." not in page
+        off = _render_org("tokens", _org_state(scoped_tokens={"enabled": False, "max_days": 30, "allow_ai_proposals": False}))
+        assert "Needs scoped tokens turned on." in off
+
+    def test_the_audit_form_is_prefilled_and_the_bearer_token_name_has_no_input(self):
+        page = _render_org("audit")
+        assert '<option value="http" selected>' in page and '<option value="tcp" selected>' in page
+        assert 'data-f="syslog_host" data-t="text" aria-label="Syslog host" value="logs.example.com"' in page
+        assert 'data-f="syslog_port" data-t="int" aria-label="Syslog port" value="6514"' in page
+        assert 'data-f="http_url" data-t="text" aria-label="HTTP URL" value="https://siem.example.com/in"' in page
+        assert "SIEM_TOKEN" in page and "Set by editing org/admin_config.json on the server." in page
+        assert "bearer" not in page.split("data-f=")[-1].split(">")[0].lower()
+        assert not re.search(r'data-f="[^"]*bearer', page) and 'value="SIEM_TOKEN"' not in page
+
+    def test_privacy_has_the_pii_gate_toggles_and_the_policy_editor(self):
+        page = _render_org("privacy")
+        assert 'aria-label="PII Detection Gate"' in page and "toggle_pii_detection" in page
+        assert "toggle_pii_category" in page and "detect_financial_figures" in page
+        assert "set_default_policy" in page and "set_category_policy" in page
+
+    def test_stats_renders_in_the_admin_surface(self):
+        page = _render_org("stats")
+        assert "data-stat-tile" in page and 'data-stat-connector="gmail"' in page
+
+    def test_the_web_push_switch_is_on_features_in_org_mode_only(self):
+        assert "set_web_push" in _render_org("features")
+        assert "set_web_push" not in _render_admin(_features_state(), section="features")
+
+    def test_the_restart_banner_renders(self):
+        page = _render_org("delivery", _org_state(restart_needed=["File delivery", "Step-up"]))
+        assert "Saved. Restart PrivacyFence for these changes to take effect: File delivery, Step-up." in page
+        assert "Restart PrivacyFence" not in _render_org("delivery")
+
+    def test_no_rendered_html_contains_a_secret_placed_in_the_state(self):
+        state = _org_state()
+        state["audit_forwarding"]["http"]["bearer_token"] = _SENTINEL
+        state["audit_forwarding"]["bearer_token_value"] = _SENTINEL
+        state["step_up"]["secret"] = _SENTINEL
+        state["authz"]["client_secret"] = _SENTINEL
+        for section in ("delivery", "access", "step_up", "tokens", "audit", "privacy", "stats", "features", "services"):
+            assert _SENTINEL not in _render_org(section, state)
+
+
+_SAVE_HARNESS = r"""
+const vm = require('vm');
+const input = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const posted = [];
+const handlers = {};
+const field = (f, t, extra) => Object.assign({ getAttribute: (n) => ({ 'data-f': f, 'data-t': t })[n] }, extra);
+const root = { querySelectorAll: () => input.fields.map((x) => field(x[0], x[1], { value: x[2], checked: x[2] })) };
+const saveButton = { getAttribute: () => input.form };
+const document = {
+  getElementById: () => ({ innerHTML: '' }), querySelectorAll: () => [],
+  querySelector: (sel) => (sel === '[data-admin-form="' + input.form + '"]' ? root : null),
+  addEventListener: (name, fn) => { if (name === 'DOMContentLoaded') fn(); },
+  body: { addEventListener: (name, fn) => { handlers[name] = fn; } }, activeElement: null,
+};
+const window = { addEventListener: () => {}, webkit: { messageHandlers: { pf: { postMessage: (m) => posted.push(m) } } } };
+window.window = window;
+vm.runInNewContext(input.scripts.join('\n'), { window, document, console, Date, JSON, Object, Array, String, parseInt });
+handlers.click({ target: { closest: (sel) => (sel === '[data-admin-form-save]' ? saveButton : null) } });
+console.log(JSON.stringify(posted));
+"""
+
+
+@needs_node
+class TestAdminFormSave:
+    def _save(self, form, fields):
+        html = build_html(_org_state(), surface="admin", mode="org", is_admin=True, initial_section=form)
+        scripts = re.findall(r"<script nonce=\"[^\"]+\">(.*?)</script>", html, re.DOTALL)
+        done = subprocess.run(
+            ["node", "-e", _SAVE_HARNESS], input=json.dumps({"scripts": scripts, "form": form, "fields": fields}),
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)
+
+    def test_a_form_posts_its_whole_section_with_typed_values(self):
+        posted = self._save("tokens", [["enabled", "bool", True], ["max_days", "int", "45"], ["allow_ai_proposals", "bool", False]])
+        assert posted == [{"action": "set_scoped_tokens", "enabled": True, "max_days": 45, "allow_ai_proposals": False}]
+
+    def test_a_number_field_that_is_not_a_number_is_sent_as_typed(self):
+        posted = self._save("delivery", [["inline_max_bytes", "int", "lots"], ["allow_exports", "bool", True]])
+        assert posted == [{"action": "set_download_delivery", "inline_max_bytes": "lots", "allow_exports": True}]
+
+    def test_each_form_names_its_action(self):
+        actions = {
+            "delivery": "set_download_delivery", "access": "set_authz", "step_up": "tighten_step_up",
+            "tokens": "set_scoped_tokens", "audit": "set_audit_forwarding",
+        }
+        for form, action in actions.items():
+            assert self._save(form, [])[0]["action"] == action
+
+
+@needs_node
+def test_a_fresh_server_shows_the_defaults_in_force():
+    page = _render_org("delivery", _org_state(download_delivery={}))
+    assert 'value="100000"' in page and 'value="300"' in page and 'data-f="agent_links" data-t="bool" checked' in page
+    assert 'value="90"' in _render_org("tokens", _org_state(scoped_tokens={}))
+    assert 'value="6514"' in _render_org("audit", _org_state(audit_forwarding={}))
