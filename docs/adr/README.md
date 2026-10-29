@@ -345,3 +345,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
 | [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165 |
+| [0254](0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md) | The reads flag of a scoped token covers Drive file content | Accepted; amends 0219 |

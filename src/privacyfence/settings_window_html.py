@@ -1599,8 +1599,8 @@ _JS = r"""
     var stPdrLabel = 'Let reads return personal data';
     html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdrOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
       (stPdrOn ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(stPdrLabel) + '" data-st-personal-data-reads="1">' + esc(stPdrLabel) + '</div></div>';
-    html += '<div class="pf-hint">Applies only to calls made with this token, and only to Gmail message and thread reads and Slack ' +
-      'channel, thread and search reads that one of the token\'s rules covers. The personal-data scan still runs and the audit log ' +
+    html += '<div class="pf-hint">Applies only to calls made with this token, and only to Gmail message and thread reads, Slack ' +
+      'channel, thread and search reads, and Drive file content reads that one of the token\'s rules covers. The personal-data scan still runs and the audit log ' +
       'records what it found, but the AI system receives the content. Other calls still stop for review when personal data is found.</div>';
     html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Add the tools these rules cover" data-st-add-covered="1">Add the tools these rules cover</div></div>';
     html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';

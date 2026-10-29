@@ -1689,7 +1689,7 @@ def _pii_denial_text(who: str, pii_categories: list[str]) -> str:
         f"Request denied: {who} and the result holds personal data ({', '.join(sorted(set(pii_categories)))}), "
         "which needs a person's confirmation even when a rule covers the call. A scoped token's "
         "personal-data allowances lift this only for Gmail message and thread reads, Slack channel, "
-        "thread and search reads, exports, downloads and page uploads."
+        "thread and search reads, Drive file content reads, exports, downloads and page uploads."
     )
 
 
