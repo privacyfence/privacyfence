@@ -221,6 +221,21 @@ Every app has two fields, `client_id` and `client_secret`.
   unreadable or malformed file returns `None` and logs one warning without the file content.
 - It also exposes `BUILTIN_APP_KEYS: tuple[str, ...]`, the six keys in the table order above.
 
+**Accounts (mb1).** The apps belong to PrivacyFence, and no `tkcs.name` address appears anywhere a
+provider shows or mails it.
+
+- Slack, Salesforce, Atlassian and Miro are registered under `apps@privacyfence.eu`, a role alias
+  on the maintainer's Workspace user `andras@tkcs.name`. The accounts are created by email, never
+  with "Sign in with Google", which would make them `andras@tkcs.name` accounts. They use
+  two-factor sign-in, and every support or vendor contact is `info@privacyfence.eu` (a Workspace
+  group).
+- The Google Cloud projects (`privacyfence-builtin`, `privacyfence-signin` and the relay's
+  notification project) must belong to a Workspace user, so `andras@tkcs.name` owns them, inside
+  the Workspace organization. Their user support email and developer contact are
+  `info@privacyfence.eu`.
+- `test@privacyfence.eu` stays the QA account and the relay's sender (`relay-notify@`, D15
+  SEC-23). It owns no app.
+
 The built-in client secrets are public in effect, just as Telegram's hash is (ADR 0040). This is
 accepted: each one identifies the PrivacyFence app, and every sign-in still needs the person's own
 consent.
@@ -3076,7 +3091,7 @@ manual_before:
 - id: mb1-register-builtin-apps
   title: Register the six PrivacyFence-owned OAuth apps (Google Web client, Slack, Salesforce, Atlassian, Miro, and the Google sign-in client in its own project), each with only its oauth.privacyfence.eu redirects, distribute them, and store their credentials as repository secrets
   why: p1 bakes them into the org image and the PyPI wheel (and its dispatched build.yml check looks for them); ma2 and ma4 sign in with them
-  done_when: Settings → Secrets and variables → Actions lists the 12 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, PF_APP_GOOGLE_SIGNIN_CLIENT_ID/_SECRET, and the Slack, Atlassian and Miro apps are set to public distribution
+  done_when: Settings → Secrets and variables → Actions lists the 12 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, PF_APP_GOOGLE_SIGNIN_CLIENT_ID/_SECRET, the Slack, Salesforce, Atlassian and Miro apps belong to apps@privacyfence.eu (an alias of andras@tkcs.name); the Google projects show info@privacyfence.eu as support and developer contact; and the Slack, Atlassian and Miro apps are set to public distribution
 - id: mb2-relay-worker-cloudflare
   title: Create the Cloudflare API token, the relay's Gmail sender (alias, delivery restriction, Internal OAuth client and send-only refresh token) and the oauth-relay-worker GitHub environment
   why: the relay's deploy workflow (p11) deploys from main with them when the PR merges (ma0), before the alpha that ma2 and ma4 test
