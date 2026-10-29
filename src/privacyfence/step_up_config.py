@@ -290,13 +290,13 @@ class StepUpConfig:
         scope = raw.get("scope", DEFAULT_STEP_UP_SCOPE)
         if scope not in STEP_UP_SCOPES:
             raise ConfigurationError(
-                f"org_config.json's \"step_up\".\"scope\" must be one of "
+                f"org_bundle.json's \"step_up\".\"scope\" must be one of "
                 f"{_SCOPE_CHOICES_TEXT}, got {scope!r}"
             )
         batch = raw.get("batch", DEFAULT_STEP_UP_BATCH_MODE)
         if batch not in ("single_assertion", "per_item"):
             raise ConfigurationError(
-                f"org_config.json's \"step_up\".\"batch\" must be \"single_assertion\" or "
+                f"org_bundle.json's \"step_up\".\"batch\" must be \"single_assertion\" or "
                 f"\"per_item\", got {batch!r}"
             )
         return StepUpConfig(

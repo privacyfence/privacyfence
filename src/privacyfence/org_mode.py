@@ -1,13 +1,13 @@
 """``mode: local`` vs. ``mode: org`` -- the one setting every other
 difference between the two operating modes follows from. Lives in
-``org_config.json`` (alongside the org server, TLS and IdP settings), not
+``org_bundle.json`` (alongside the org server, TLS and IdP settings), not
 settings.yaml: it's
-an install-wide decision, not a per-user preference, and org_config.json is
+an install-wide decision, not a per-user preference, and org_bundle.json is
 already the file daemon_main.py reads before it knows anything about a
 principal at all.
 
 Absent entirely, ``mode`` resolves to ``"local"`` -- an existing install's
-org_config.json (today only ever carrying Google/Slack/Salesforce/
+org_bundle.json (today only ever carrying Google/Slack/Salesforce/
 Atlassian app registrations, per daemon_main.py's own module docstring)
 keeps meaning exactly what it already means, with no migration.
 """
@@ -48,7 +48,7 @@ class ConfigurationError(ValueError):
 def resolve_mode(org_config: dict[str, Any]) -> Mode:
     mode = org_config.get("mode", DEFAULT_MODE)
     if mode not in ("local", "org"):
-        raise ConfigurationError(f"org_config.json's \"mode\" must be \"local\" or \"org\", got {mode!r}")
+        raise ConfigurationError(f"org_bundle.json's \"mode\" must be \"local\" or \"org\", got {mode!r}")
     return mode
 
 
@@ -64,7 +64,7 @@ def reject_removed_tool_annotations(org_config: dict[str, Any]) -> None:
     section = org_config.get("mcp")
     if isinstance(section, dict) and "tool_annotations" in section:
         raise ConfigurationError(
-            "org_config.json's \"mcp.tool_annotations\" has been removed: PrivacyFence always tells "
+            "org_bundle.json's \"mcp.tool_annotations\" has been removed: PrivacyFence always tells "
             "AI clients which tools are read-only and which write (ADR 0089). Rebuild the bundle "
             "without --tool-annotations."
         )
@@ -120,7 +120,7 @@ class ServerConfig:
         # reverse proxies rather than at the one config value at fault.
         issuer_url = str(raw.get("issuer_url") or "").strip()
         if not issuer_url:
-            raise ConfigurationError("org mode requires org_config.json's \"server\".\"issuer_url\"")
+            raise ConfigurationError("org mode requires org_bundle.json's \"server\".\"issuer_url\"")
         # Fail here, naming the key, rather than several frames later
         # inside mount_org_oauth's AnyHttpUrl() -- and, for a scheme that
         # parses but carries no hostname, rather than not at all (the
@@ -128,7 +128,7 @@ class ServerConfig:
         parsed = urlsplit(issuer_url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise ConfigurationError(
-                "org_config.json's \"server\".\"issuer_url\" must be an absolute http(s) URL "
+                "org_bundle.json's \"server\".\"issuer_url\" must be an absolute http(s) URL "
                 f"with a hostname (e.g. https://pf.acme.example.com), got {issuer_url!r}"
             )
         return ServerConfig(
@@ -210,7 +210,7 @@ class DownloadDeliveryConfig:
     staged behind a short-lived, single-claim link when it does not (ADR
     0092 for the limit's unit and default; see ADR 0017
     for the rationale and the inline/staging split). Lives in
-    ``org_config.json``'s ``download_delivery`` section, org-mode-only for
+    ``org_bundle.json``'s ``download_delivery`` section, org-mode-only for
     the same reason ``ServerConfig`` is -- local mode never reads this
     class. That doesn't mean local mode still writes straight to
     ``destination_dir`` unchanged: since ADR 0007, a privilege-separated
@@ -329,13 +329,13 @@ class DownloadDeliveryConfig:
         inline_max_bytes = int(raw.get("inline_max_bytes", DEFAULT_INLINE_MAX_BYTES))
         if inline_max_bytes < 0:
             raise ConfigurationError(
-                "org_config.json's \"download_delivery\".\"inline_max_bytes\" must be >= 0 "
+                "org_bundle.json's \"download_delivery\".\"inline_max_bytes\" must be >= 0 "
                 f"(0 forces every download through a staged link), got {inline_max_bytes}"
             )
         link_ttl_seconds = float(raw.get("link_ttl_seconds", DEFAULT_LINK_TTL_SECONDS))
         if link_ttl_seconds <= 0:
             raise ConfigurationError(
-                "org_config.json's \"download_delivery\".\"link_ttl_seconds\" must be > 0, "
+                "org_bundle.json's \"download_delivery\".\"link_ttl_seconds\" must be > 0, "
                 f"got {link_ttl_seconds}"
             )
         return DownloadDeliveryConfig(
@@ -362,7 +362,7 @@ DEFAULT_SYSLOG_PORT = 6514
 @dataclass(frozen=True)
 class AuditForwardingConfig:
     """Org mode's centralized audit-log forwarding destination. Lives in
-    ``org_config.json``'s ``audit_forwarding`` section, org-mode-only like
+    ``org_bundle.json``'s ``audit_forwarding`` section, org-mode-only like
     ``ServerConfig``/``DownloadDeliveryConfig`` above -- local mode never
     looks at this at all (there is no "centralize" to speak of for a single
     employee's own machine); see daemon_main.py's ``run_app`` for the
@@ -385,7 +385,7 @@ class AuditForwardingConfig:
     http_url: str = ""
     # Name of an environment variable *this daemon's own process*  reads a
     # bearer token from at forward-send time -- never itself stored in
-    # org_config.json, so a leaked or mis-shared bundle doesn't also leak
+    # org_bundle.json, so a leaked or mis-shared bundle doesn't also leak
     # the SIEM credential (the same reasoning behind every OAuth client
     # secret in this file being a real secret, just via env var since
     # there's no build-time secrets store equivalent for an IT-run
@@ -400,7 +400,7 @@ class AuditForwardingConfig:
         kind = raw.get("kind", DEFAULT_AUDIT_FORWARDING_KIND)
         if kind not in ("syslog", "http"):
             raise ConfigurationError(
-                f"org_config.json's \"audit_forwarding\".\"kind\" must be \"syslog\" or \"http\", "
+                f"org_bundle.json's \"audit_forwarding\".\"kind\" must be \"syslog\" or \"http\", "
                 f"got {kind!r}"
             )
         syslog_raw = raw.get("syslog")
@@ -411,13 +411,13 @@ class AuditForwardingConfig:
         syslog_protocol = syslog_raw.get("protocol", DEFAULT_SYSLOG_PROTOCOL)
         if syslog_protocol not in ("udp", "tcp"):
             raise ConfigurationError(
-                f"org_config.json's \"audit_forwarding\".\"syslog\".\"protocol\" must be \"udp\" "
+                f"org_bundle.json's \"audit_forwarding\".\"syslog\".\"protocol\" must be \"udp\" "
                 f"or \"tcp\", got {syslog_protocol!r}"
             )
         http_url = str(http_raw.get("url", "") or "")
         if enabled and kind == "http" and http_url and not http_url.startswith("https://"):
             raise ConfigurationError(
-                "org_config.json's \"audit_forwarding\".\"http\".\"url\" must use https:// -- "
+                "org_bundle.json's \"audit_forwarding\".\"http\".\"url\" must use https:// -- "
                 "audit entries are sensitive, and this endpoint is otherwise reached over "
                 "plaintext HTTP."
             )
@@ -448,7 +448,7 @@ class AuthzPolicyConfig:
     across a different IdP. docs/org-mode-setup-guide.md's "Who may sign in"
     documents the flags that populate it.
 
-    Lives in ``org_config.json``'s ``authz`` section, org-mode-only like
+    Lives in ``org_bundle.json``'s ``authz`` section, org-mode-only like
     every other org_mode.py config class. Absent entirely (or an ``authz``
     section with neither list set) means ``enabled`` is ``False`` -- "no
     additional restriction, every IdP-authenticated principal is admitted"
@@ -458,7 +458,7 @@ class AuthzPolicyConfig:
     """
 
     # Case-folded, leading-"@"-stripped at parse time (see from_org_config)
-    # so "acme.com", "Acme.com" and "@acme.com" in org_config.json all mean
+    # so "acme.com", "Acme.com" and "@acme.com" in org_bundle.json all mean
     # the same thing -- matched against the domain half of the principal's
     # own (IdP-asserted) email.
     allowed_domains: tuple[str, ...] = ()
@@ -484,7 +484,7 @@ class AuthzPolicyConfig:
         groups_claim = raw.get("groups_claim", "") or ""
         if required_groups and not groups_claim:
             raise ConfigurationError(
-                "org_config.json's \"authz\".\"required_groups\" is set but \"groups_claim\" is "
+                "org_bundle.json's \"authz\".\"required_groups\" is set but \"groups_claim\" is "
                 "empty -- PrivacyFence has no ID token claim to read group membership from"
             )
         return AuthzPolicyConfig(
@@ -496,7 +496,7 @@ class AuthzPolicyConfig:
 class WebPushConfig:
     """Whether org mode sends a web push notification when an approval is waiting (ADR 0081).
 
-    Lives in ``org_config.json``'s ``web_push`` section and is written by
+    Lives in ``org_bundle.json``'s ``web_push`` section and is written by
     ``scripts/build_org_bundle.py --no-web-push``. On by default: push is what lets a phone user
     learn about an approval at all, since mobile browsers suspend background tabs. Turning it off
     is the org-wide switch for an organization that does not want approval metadata, however
@@ -513,7 +513,7 @@ class WebPushConfig:
         enabled = raw.get("enabled", True)
         if not isinstance(enabled, bool):
             raise ConfigurationError(
-                f"org_config.json's \"web_push\".\"enabled\" must be true or false, got {enabled!r}"
+                f"org_bundle.json's \"web_push\".\"enabled\" must be true or false, got {enabled!r}"
             )
         return WebPushConfig(enabled=enabled)
 
@@ -527,7 +527,7 @@ _ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]{0,127}")
 class PeekProvisioningConfig:
     """Whether org mode creates a Peek account for each person at sign-in and connects it for them.
 
-    Lives in ``org_config.json``'s ``peek.auto_provision`` section and is written by
+    Lives in ``org_bundle.json``'s ``peek.auto_provision`` section and is written by
     ``scripts/build_org_bundle.py --peek-auto-provision``. Off by default. The provisioning key
     itself is never in the bundle: ``key_env`` names the environment variable the daemon reads it
     from, as ``AuditForwardingConfig.http_bearer_token_env`` does for the SIEM bearer token.
@@ -552,13 +552,13 @@ class PeekProvisioningConfig:
             value = raw.get(key, False)
             if not isinstance(value, bool):
                 raise ConfigurationError(
-                    f"org_config.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got {value!r}"
+                    f"org_bundle.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got {value!r}"
                 )
             flags[key] = value
         key_env = raw.get("key_env", DEFAULT_PEEK_PROVISIONING_KEY_ENV)
         if not isinstance(key_env, str) or not _ENV_NAME_RE.fullmatch(key_env):
             raise ConfigurationError(
-                "org_config.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable "
+                "org_bundle.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable "
                 f"name, got {key_env!r}"
             )
         if not flags["enabled"]:
@@ -566,13 +566,13 @@ class PeekProvisioningConfig:
                 key_env=key_env, trust_unverified_email=flags["trust_unverified_email"],
             )
         if resolve_mode(org_config) != "org":
-            raise ConfigurationError("org_config.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\"")
+            raise ConfigurationError("org_bundle.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\"")
         if not peek.get("base_url"):
-            raise ConfigurationError("org_config.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\"")
+            raise ConfigurationError("org_bundle.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\"")
         try:
             base_url = normalize_base_url(str(peek["base_url"]))
         except PeekClientError as exc:
-            raise ConfigurationError(f"org_config.json's \"peek\".\"base_url\" is not usable: {exc}") from exc
+            raise ConfigurationError(f"org_bundle.json's \"peek\".\"base_url\" is not usable: {exc}") from exc
         return PeekProvisioningConfig(
             enabled=True, key_env=key_env, trust_unverified_email=flags["trust_unverified_email"],
             base_url=base_url,
@@ -584,7 +584,7 @@ class GristProvisioningConfig:
     """Whether org mode registers a Grist API key for each person at sign-in through the Grist
     provisioner, a small service next to Grist.
 
-    Lives in ``org_config.json``'s ``grist.auto_provision`` section and is written by
+    Lives in ``org_bundle.json``'s ``grist.auto_provision`` section and is written by
     ``scripts/build_org_bundle.py --grist-auto-provision``. The provisioning key itself is never in
     the bundle: the daemon reads it from the environment variable ``key_env`` names, as it does
     for ``http_bearer_token_env``. ``provisioner_url`` and ``server_url`` are normalised and set
@@ -608,42 +608,42 @@ class GristProvisioningConfig:
             value = raw.get(key, False)
             if not isinstance(value, bool):
                 raise ConfigurationError(
-                    f"org_config.json's \"grist\".\"auto_provision\".\"{key}\" must be true or false, got {value!r}"
+                    f"org_bundle.json's \"grist\".\"auto_provision\".\"{key}\" must be true or false, got {value!r}"
                 )
         key_env = raw.get("key_env", DEFAULT_GRIST_PROVISIONING_KEY_ENV)
         if not isinstance(key_env, str) or not _ENV_NAME_RE.fullmatch(key_env):
             raise ConfigurationError(
-                f"org_config.json's \"grist\".\"auto_provision\".\"key_env\" must be an environment "
+                f"org_bundle.json's \"grist\".\"auto_provision\".\"key_env\" must be an environment "
                 f"variable name, got {key_env!r}"
             )
         if not raw.get("enabled", False):
             return GristProvisioningConfig(enabled=False)
         if resolve_mode(org_config) != "org":
-            raise ConfigurationError("org_config.json's \"grist\".\"auto_provision\" needs \"mode\": \"org\"")
+            raise ConfigurationError("org_bundle.json's \"grist\".\"auto_provision\" needs \"mode\": \"org\"")
         server_url = grist.get("server_url") or ""
         if not server_url:
             raise ConfigurationError(
-                "org_config.json's \"grist\".\"auto_provision\" needs \"grist\".\"server_url\""
+                "org_bundle.json's \"grist\".\"auto_provision\" needs \"grist\".\"server_url\""
             )
         if grist.get("client_id"):
             raise ConfigurationError(
-                "org_config.json's \"grist\".\"auto_provision\" works only with API keys; "
+                "org_bundle.json's \"grist\".\"auto_provision\" works only with API keys; "
                 "remove the Grist OAuth app or turn auto-provisioning off"
             )
         provisioner_url = raw.get("provisioner_url") or ""
         if not provisioner_url:
             raise ConfigurationError(
-                "org_config.json's \"grist\".\"auto_provision\" needs \"provisioner_url\""
+                "org_bundle.json's \"grist\".\"auto_provision\" needs \"provisioner_url\""
             )
         try:
             server_url = normalize_server_url(server_url)
         except GristClientError as exc:
-            raise ConfigurationError(f"org_config.json's \"grist\".\"server_url\" is not usable: {exc}") from exc
+            raise ConfigurationError(f"org_bundle.json's \"grist\".\"server_url\" is not usable: {exc}") from exc
         try:
             provisioner_url = normalize_server_url(provisioner_url)
         except GristClientError as exc:
             raise ConfigurationError(
-                f"org_config.json's \"grist\".\"auto_provision\".\"provisioner_url\" is not usable: {exc}"
+                f"org_bundle.json's \"grist\".\"auto_provision\".\"provisioner_url\" is not usable: {exc}"
             ) from exc
         return GristProvisioningConfig(
             enabled=True, key_env=key_env, trust_unverified_email=raw.get("trust_unverified_email", False),
@@ -651,7 +651,7 @@ class GristProvisioningConfig:
         )
 
 
-# Which org_config.json section switches each connector on (ADR 0196). A connector with no
+# Which org_bundle.json section switches each connector on (ADR 0196). A connector with no
 # non-empty section is not offered at all, whatever else is in place: Google's six share one
 # section, Jira, Confluence and Jira Assets share Atlassian's. Telegram, Peek and Grist carry
 # no secret an administrator must supply, so their section can be the bare marker

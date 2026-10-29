@@ -37,7 +37,7 @@ Threading model:
     few hours -- see _run_personal_data_sweep().
 
 Configuration is split into two files (see paths.py):
-  - ``org/org_config.json``    — organization-level app registrations (Google
+  - ``org/org_bundle.json``    — organization-level app registrations (Google
     OAuth client, Slack app, Salesforce Connected App, Atlassian OAuth app),
     installed via PrivacyFence Settings (``/settings``, or by hand-editing
     this file). Optional per service; a connector is offered only if its
@@ -109,7 +109,17 @@ from .policy import store as policy_store
 
 if TYPE_CHECKING:
     from .approvals import PendingApprovalRegistry
-from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, safe_principal_id, user_dir
+from .paths import (
+    LEGACY_ORG_CONFIG_FILENAME,
+    ORG_BUNDLE_FILENAME,
+    authority_dir,
+    authority_root,
+    data_dir,
+    handoff_dir,
+    org_dir,
+    safe_principal_id,
+    user_dir,
+)
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
 from .webauthn_stepup import StepUpRequirementChange, has_credentials as has_webauthn_credentials
@@ -451,6 +461,32 @@ def _upgrade_all_principals() -> None:
             policy_upgrade.ensure_token_rules(config, principal, log=_deferred_warnings.append)
 
 
+# True once any load_org_config() call in this process copied org_config.json
+# to org_bundle.json; run_app() then records the org_bundle_adopted audit
+# entry. tests/conftest.py::_reset puts it back to False.
+_bundle_adopted_this_start = False
+
+
+def _warn_if_legacy_bundle_changed() -> None:
+    """After adoption 7.x ignores org_config.json. An operator who followed 6.x
+    docs and copied a new bundle to the old name is told, not met with silence."""
+    record = org_bundle_signing.load_adopted_record(org_dir())
+    recorded = record.get("sha256")
+    legacy = org_dir() / LEGACY_ORG_CONFIG_FILENAME
+    if not recorded or not legacy.exists():
+        return
+    try:
+        current = org_bundle_signing.sha256_hex(legacy.read_bytes())
+    except OSError:
+        return
+    if current != recorded:
+        logger.warning(
+            "org/org_config.json changed after the upgrade and is ignored: PrivacyFence 7 reads "
+            "org/org_bundle.json. Install the new bundle on the Admin page, or copy it to "
+            "org/org_bundle.json."
+        )
+
+
 def load_org_config() -> dict[str, Any]:
     """Load the installed organization config bundle.
 
@@ -485,7 +521,11 @@ def load_org_config() -> dict[str, Any]:
     signing is unaffected — this call is then a no-op past the "no
     signing key pinned yet and no signature present" pass-through case.
     """
-    path = org_dir() / "org_config.json"
+    global _bundle_adopted_this_start
+    # Runs several times per process, so only ever set it to True.
+    _bundle_adopted_this_start |= org_bundle_signing.adopt_legacy_files(org_dir())
+    _warn_if_legacy_bundle_changed()
+    path = org_dir() / ORG_BUNDLE_FILENAME
     if not path.exists():
         return {}
     try:
@@ -533,7 +573,7 @@ def load_org_config() -> dict[str, Any]:
 
 
 def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
-    """Record a hash of the installed org_config.json at
+    """Record a hash of the installed org_bundle.json at
     every daemon startup, both to the regular log and to the audit trail,
     so tampering between one startup and the next is detectable by
     comparing hashes -- even for an install that hasn't adopted full
@@ -548,9 +588,9 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
     refreshing connector state) and shouldn't each add their own audit-log
     entry.
     """
-    path = org_dir() / "org_config.json"
+    path = org_dir() / ORG_BUNDLE_FILENAME
     if not path.exists():
-        logger.info("No organization config bundle installed (org_config.json absent)")
+        logger.info("No organization config bundle installed (org_bundle.json absent)")
         return
     try:
         raw = path.read_bytes()
@@ -580,6 +620,31 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
         ))
     except Exception as exc:
         logger.warning("Audit log write failed for organization config startup hash: %s", exc)
+
+
+def _audit_org_bundle_adopted() -> None:
+    """Audit record that this start copied the 6.x org_config.json to org_bundle.json."""
+    record = org_bundle_signing.load_adopted_record(org_dir())
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="",
+            tool="",
+            tool_name="",
+            summary=(
+                "Daemon startup: copied org/org_config.json to org/org_bundle.json for PrivacyFence 7 "
+                f"(sha256={record.get('sha256', '')}); the original is kept for a downgrade to 6.x"
+            ),
+            sender="",
+            decision="org_bundle_adopted",
+            auto_accept_rule="",
+            latency_seconds=0.0,
+            pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for organization bundle adoption: %s", exc)
 
 
 def _audit_step_up_requirement_change(change: StepUpRequirementChange) -> None:
@@ -1169,7 +1234,7 @@ def _start_org_web_server(
     org_mode.GristProvisioningConfig.from_org_config(org_config)
     if idp is None:
         raise org_mode.ConfigurationError(
-            "org mode (org_config.json \"mode\": \"org\") requires an \"idp\" section "
+            "org mode (org_bundle.json \"mode\": \"org\") requires an \"idp\" section "
             "(issuer, client_id, client_secret)"
         )
 
@@ -1291,7 +1356,7 @@ def _start_web_push(
     from . import web_push
 
     if not org_mode.WebPushConfig.from_org_config(org_config).enabled:
-        logger.info("Web push is off for this organization (org_config.json web_push.enabled: false)")
+        logger.info("Web push is off for this organization (org_bundle.json web_push.enabled: false)")
         return None, None
     store = web_push.PushSubscriptionStore()
     notifier = web_push.PushNotifier(
@@ -2148,6 +2213,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # already loaded earlier, ahead of init_privacy_filter(), so its
     # org_managed fail-safe default is known before that call.
     log_org_config_bundle_hash(org_config)
+    if _bundle_adopted_this_start:
+        _audit_org_bundle_adopted()
     connectors, connector_failures = build_connectors(config, org_config)
     if not connectors:
         logger.warning("No connectors could be initialized; daemon still starting.")

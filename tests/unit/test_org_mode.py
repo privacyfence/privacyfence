@@ -467,7 +467,7 @@ class TestPeekProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(self._cfg(**{key: "yes"}))
         assert str(exc.value) == (
-            f"org_config.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got 'yes'"
+            f"org_bundle.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got 'yes'"
         )
 
     @pytest.mark.parametrize("value", ["lower", "1ABC", "A-B", 5])
@@ -475,7 +475,7 @@ class TestPeekProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True, key_env=value))
         assert str(exc.value) == (
-            "org_config.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable name, "
+            "org_bundle.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable name, "
             f"got {value!r}"
         )
 
@@ -484,21 +484,21 @@ class TestPeekProvisioningConfigFromOrgConfig:
         cfg["mode"] = "local"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(cfg)
-        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
+        assert str(exc.value) == "org_bundle.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
 
     def test_enabled_without_base_url_raises(self):
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(
                 {"mode": "org", "peek": {"auto_provision": {"enabled": True}}}
             )
-        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\""
+        assert str(exc.value) == "org_bundle.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\""
 
     def test_unusable_base_url_raises(self):
         cfg = self._cfg(enabled=True)
         cfg["peek"]["base_url"] = "http://peek.example.com"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(cfg)
-        assert str(exc.value).startswith("org_config.json's \"peek\".\"base_url\" is not usable: ")
+        assert str(exc.value).startswith("org_bundle.json's \"peek\".\"base_url\" is not usable: ")
 
 
 class TestGristProvisioningConfigFromOrgConfig:
@@ -538,14 +538,14 @@ class TestGristProvisioningConfigFromOrgConfig:
     def test_non_bool_enabled(self):
         with pytest.raises(
             org_mode.ConfigurationError,
-            match=r'^org_config.json\'s "grist"."auto_provision"."enabled" must be true or false, got \'yes\'$',
+            match=r'^org_bundle.json\'s "grist"."auto_provision"."enabled" must be true or false, got \'yes\'$',
         ):
             org_mode.GristProvisioningConfig.from_org_config(self._org(enabled="yes"))
 
     def test_non_bool_trust_unverified_email(self):
         with pytest.raises(
             org_mode.ConfigurationError,
-            match=r'^org_config.json\'s "grist"."auto_provision"."trust_unverified_email" must be true or false, got 1$',
+            match=r'^org_bundle.json\'s "grist"."auto_provision"."trust_unverified_email" must be true or false, got 1$',
         ):
             org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(trust_unverified_email=1)))
 
@@ -554,7 +554,7 @@ class TestGristProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env=value)))
         assert str(exc.value) == (
-            'org_config.json\'s "grist"."auto_provision"."key_env" must be an environment variable name, '
+            'org_bundle.json\'s "grist"."auto_provision"."key_env" must be an environment variable name, '
             f"got {value!r}"
         )
 
@@ -573,14 +573,14 @@ class TestGristProvisioningConfigFromOrgConfig:
         org["mode"] = "local"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
-        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "mode": "org"'
+        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "mode": "org"'
 
     def test_enabled_without_server_url(self):
         org = self._org(**self._enabled())
         del org["grist"]["server_url"]
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
-        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "grist"."server_url"'
+        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "grist"."server_url"'
 
     def test_enabled_with_oauth_app(self):
         org = self._org(**self._enabled())
@@ -588,28 +588,28 @@ class TestGristProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
         assert str(exc.value) == (
-            'org_config.json\'s "grist"."auto_provision" works only with API keys; '
+            'org_bundle.json\'s "grist"."auto_provision" works only with API keys; '
             "remove the Grist OAuth app or turn auto-provisioning off"
         )
 
     def test_enabled_without_provisioner_url(self):
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(self._org(enabled=True))
-        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "provisioner_url"'
+        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "provisioner_url"'
 
     def test_bad_server_url(self):
         org = self._org(**self._enabled())
         org["grist"]["server_url"] = "http://grist.example.com"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
-        assert str(exc.value).startswith('org_config.json\'s "grist"."server_url" is not usable: ')
+        assert str(exc.value).startswith('org_bundle.json\'s "grist"."server_url" is not usable: ')
 
     def test_bad_provisioner_url(self):
         org = self._org(enabled=True, provisioner_url="http://prov.example.com")
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
         assert str(exc.value).startswith(
-            'org_config.json\'s "grist"."auto_provision"."provisioner_url" is not usable: '
+            'org_bundle.json\'s "grist"."auto_provision"."provisioner_url" is not usable: '
         )
 
 

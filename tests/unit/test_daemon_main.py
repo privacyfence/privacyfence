@@ -315,7 +315,7 @@ class TestLoadOrgConfig:
 
     def test_returns_parsed_dict_when_valid_with_no_mode_key(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
         assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
 
     def test_explicit_org_mode_unsigned_raises_configuration_error(self, tmp_path, monkeypatch):
@@ -323,25 +323,25 @@ class TestLoadOrgConfig:
         TestLoadOrgConfigSigning below for the signed-bundle path this
         gates behind."""
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"mode": "org"}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"mode": "org"}))
         with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle"):
             daemon_main.load_org_config()
 
     def test_raises_configuration_error_on_malformed_json(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text("{not valid json")
+        (tmp_path / "org_bundle.json").write_text("{not valid json")
         with pytest.raises(org_mode.ConfigurationError):
             daemon_main.load_org_config()
 
     def test_raises_configuration_error_when_top_level_not_an_object(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps(["not", "an", "object"]))
+        (tmp_path / "org_bundle.json").write_text(json.dumps(["not", "an", "object"]))
         with pytest.raises(org_mode.ConfigurationError):
             daemon_main.load_org_config()
 
     def test_raises_configuration_error_when_unreadable(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        path = tmp_path / "org_config.json"
+        path = tmp_path / "org_bundle.json"
         path.write_text(json.dumps({"mode": "org"}))
 
         real_open = open
@@ -356,12 +356,12 @@ class TestLoadOrgConfig:
             daemon_main.load_org_config()
 
     def test_a_broken_org_config_does_not_silently_fall_back_to_local_mode(self, tmp_path, monkeypatch):
-        """A corrupted org_config.json (e.g. tampering, a botched deploy,
+        """A corrupted org_bundle.json (e.g. tampering, a botched deploy,
         disk corruption) must not be indistinguishable from no org config
         at all, or an org-mode install would silently start with no
         IdP-backed auth wired up rather than refusing to start."""
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text('{"mode": "org", corrupted')
+        (tmp_path / "org_bundle.json").write_text('{"mode": "org", corrupted')
         with pytest.raises(org_mode.ConfigurationError):
             org_config = daemon_main.load_org_config()
             org_mode.resolve_mode(org_config)
@@ -370,14 +370,14 @@ class TestLoadOrgConfig:
 def _write_signed_bundle(tmp_path, bundle, private_key=None):
     """Signs ``bundle`` (with a fresh keypair, unless one is given) the
     same way scripts/build_org_bundle.py --sign-key does, and writes it
-    to tmp_path/org_config.json. Returns the private key used, so a test
+    to tmp_path/org_bundle.json. Returns the private key used, so a test
     can sign a second, deliberately different bundle with the same key."""
     from privacyfence import org_bundle_signing
 
     if private_key is None:
         private_key, _ = org_bundle_signing.generate_keypair()
     signed = org_bundle_signing.sign_bundle(bundle, private_key)
-    (tmp_path / "org_config.json").write_text(json.dumps(signed))
+    (tmp_path / "org_bundle.json").write_text(json.dumps(signed))
     return private_key
 
 
@@ -389,7 +389,7 @@ class TestLoadOrgConfigSigning:
 
     def test_unsigned_bundle_in_local_mode_is_unaffected(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
         assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
 
     def test_first_signed_bundle_is_accepted_and_pins_its_key(self, tmp_path, monkeypatch):
@@ -417,9 +417,9 @@ class TestLoadOrgConfigSigning:
         _write_signed_bundle(tmp_path, {"mode": "org", "server": {}, "idp": {}, "org_name": "Acme"})
         daemon_main.load_org_config()  # pins
 
-        data = json.loads((tmp_path / "org_config.json").read_text())
+        data = json.loads((tmp_path / "org_bundle.json").read_text())
         data["org_name"] = "Evil Corp"
-        (tmp_path / "org_config.json").write_text(json.dumps(data))
+        (tmp_path / "org_bundle.json").write_text(json.dumps(data))
 
         with pytest.raises(org_mode.ConfigurationError, match="signing-key verification"):
             daemon_main.load_org_config()
@@ -439,14 +439,14 @@ class TestLoadOrgConfigSigning:
         _write_signed_bundle(tmp_path, {"mode": "org", "server": {}, "idp": {}})
         daemon_main.load_org_config()  # pins
 
-        (tmp_path / "org_config.json").write_text(json.dumps({"mode": "org", "server": {}, "idp": {}}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"mode": "org", "server": {}, "idp": {}}))
 
         with pytest.raises(org_mode.ConfigurationError, match="signing-key verification"):
             daemon_main.load_org_config()
 
     def test_org_mode_still_rejected_when_unsigned(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"mode": "org"}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"mode": "org"}))
         with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle"):
             daemon_main.load_org_config()
 
@@ -483,7 +483,7 @@ class TestLogOrgConfigBundleHash:
 
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         raw = json.dumps({"slack": {"client_id": "abc"}}).encode("utf-8")
-        (tmp_path / "org_config.json").write_bytes(raw)
+        (tmp_path / "org_bundle.json").write_bytes(raw)
         init_audit_logger(str(tmp_path / "audit"))
 
         with caplog.at_level(logging.INFO):
@@ -506,7 +506,7 @@ class TestLogOrgConfigBundleHash:
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         private_key, _ = org_bundle_signing.generate_keypair()
         signed = org_bundle_signing.sign_bundle({"slack": {"client_id": "abc"}}, private_key)
-        (tmp_path / "org_config.json").write_text(json.dumps(signed))
+        (tmp_path / "org_bundle.json").write_text(json.dumps(signed))
         init_audit_logger(str(tmp_path / "audit"))
 
         daemon_main.log_org_config_bundle_hash(signed)
@@ -4860,3 +4860,97 @@ class TestPersonalDataSweep:
         with caplog.at_level(logging.WARNING):
             daemon_main._run_personal_data_sweep()
         assert "personal data sweep failed" in caplog.text
+
+
+class TestLoadOrgConfigAdoption:
+    """7.x reads org/org_bundle.json and adopts a 6.x org_config.json by copying it,
+    leaving every 6.x file untouched so a downgrade keeps working."""
+
+    @staticmethod
+    def _legacy_files(tmp_path):
+        return {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.iterdir() if p.name.startswith("org_config")}
+
+    def test_a_data_dir_with_only_org_config_json_loads_through_adoption(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+
+        assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
+        assert (tmp_path / "org_bundle.json").exists()
+        assert daemon_main._bundle_adopted_this_start is True
+
+    def test_the_flag_stays_true_across_later_loads(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text("{}")
+        daemon_main.load_org_config()
+        daemon_main.load_org_config()
+        assert daemon_main._bundle_adopted_this_start is True
+
+    def test_adoption_is_audited_once(self, tmp_path, monkeypatch):
+        from privacyfence.audit_log import init_audit_logger
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text("{}")
+        init_audit_logger(str(tmp_path / "audit"))
+        daemon_main.load_org_config()
+        daemon_main._audit_org_bundle_adopted()
+
+        entries = [
+            json.loads(line)
+            for f in (tmp_path / "audit").glob("*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+        assert [e["decision"] for e in entries] == ["org_bundle_adopted"]
+
+    def test_run_app_audits_adoption_right_after_the_bundle_hash(self):
+        import inspect
+
+        source = inspect.getsource(daemon_main.run_app)
+        assert source.index("log_org_config_bundle_hash(org_config)") < source.index("_audit_org_bundle_adopted()")
+        assert "if _bundle_adopted_this_start:" in source
+
+    def test_nothing_adopted_leaves_the_flag_false(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_bundle.json").write_text("{}")
+        daemon_main.load_org_config()
+        assert daemon_main._bundle_adopted_this_start is False
+
+    def test_a_changed_org_config_json_after_adoption_warns_and_is_not_read(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "old"}}))
+        daemon_main.load_org_config()
+        caplog.clear()
+
+        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "new"}}))
+        with caplog.at_level(logging.WARNING):
+            assert daemon_main.load_org_config() == {"slack": {"client_id": "old"}}
+        assert "org/org_config.json changed after the upgrade and is ignored" in caplog.text
+
+    def test_an_unchanged_org_config_json_does_not_warn(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text("{}")
+        daemon_main.load_org_config()
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            daemon_main.load_org_config()
+        assert "changed after the upgrade" not in caplog.text
+
+    def test_a_7x_bundle_install_leaves_the_6x_files_for_a_downgrade(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        private_key, _ = org_bundle_signing.generate_keypair()
+        old = org_bundle_signing.sign_bundle({"serial": 1, "slack": {"client_id": "a"}}, private_key)
+        (tmp_path / "org_config.json").write_text(json.dumps(old))
+        (tmp_path / "org_config_signing_pubkey.txt").write_text(old["signing_public_key"] + "\n")
+        (tmp_path / "org_config_serial.txt").write_text("1\n")
+        before = self._legacy_files(tmp_path)
+
+        daemon_main.load_org_config()
+        # What the Admin page / Settings upload does: install a newer bundle and advance the serial.
+        newer = org_bundle_signing.sign_bundle({"serial": 5, "slack": {"client_id": "b"}}, private_key)
+        (tmp_path / "org_bundle.json").write_text(json.dumps(newer))
+        assert daemon_main.load_org_config()["serial"] == 5
+
+        assert (tmp_path / "org_bundle_serial.txt").read_text().strip() == "5"
+        assert self._legacy_files(tmp_path) == before
+        assert (tmp_path / "org_config_serial.txt").read_text() == "1\n"

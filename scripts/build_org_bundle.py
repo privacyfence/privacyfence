@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a PrivacyFence organization config bundle (org_config.json).
+"""Build a PrivacyFence organization config bundle (org_bundle.json).
 
 Run this once per organization after registering each cloud app (see the
 "For IT admins" section of docs/google-cloud-setup.md, docs/slack-setup.md,
@@ -7,7 +7,7 @@ docs/salesforce-setup.md, and docs/atlassian-setup.md). For a local-mode
 bundle, the output file is what you distribute to your users — they install
 it via "Install/Update Organization Config…" on the General page of
 PrivacyFence Settings (the embedded web page). An org-mode bundle (--mode org)
-is installed on the server instead: copy it to <data>/org/org_config.json
+is installed on the server instead: copy it to <data>/org/org_bundle.json
 and restart the daemon (see docs/org-mode-setup-guide.md) — Settings has no
 install button in org mode.
 
@@ -48,7 +48,7 @@ Example:
         --slack-client-id 1234.5678 --slack-client-secret abcdef \\
         --salesforce-consumer-key 3MVG9... --salesforce-consumer-secret abc \\
         --atlassian-client-id abc123 --atlassian-client-secret def456 \\
-        -o org_config.json
+        -o org_bundle.json
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def _generate_signing_key(path: str) -> int:
         "bundle each install sees pins that key and rejects anything that doesn't verify against "
         "it afterwards, unsigned bundles included. Losing this key means every install that has "
         "already pinned it can't accept an update until an administrator deletes their pinned "
-        "org_config_signing_pubkey.txt by hand."
+        "org_bundle_signing_pubkey.txt (and, to go back to 6.x, org_config_signing_pubkey.txt) by hand."
     )
     return 0
 
@@ -243,12 +243,12 @@ def _load_google_client_secret(path: str) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build a PrivacyFence organization config bundle (org_config.json).",
+        description="Build a PrivacyFence organization config bundle (org_bundle.json).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("--org-name", default="", help="Shown to users after they install the bundle.")
-    parser.add_argument("-o", "--output", default="org_config.json", help="Output path (default: org_config.json).")
+    parser.add_argument("-o", "--output", default="org_bundle.json", help="Output path (default: org_bundle.json).")
     parser.add_argument(
         "--merge", action="store_true",
         help="Merge into an existing bundle at the output path instead of overwriting it "
@@ -1110,7 +1110,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if bundle.get("mode") == "org":
         print(
-            "Install it on the server: copy it to <data>/org/org_config.json (owner-only, mode 0600) "
+            "Install it on the server: copy it to <data>/org/org_bundle.json (owner-only, mode 0600) "
             "and restart the daemon. Settings has no install button in org mode."
         )
     else:

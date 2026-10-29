@@ -1018,7 +1018,7 @@ class TestOrgConfigUpload:
             files={"file": ("org_config.json", b'{"version": 1, "google": {}}', "application/json")},
         )
         assert r.status_code == 200
-        assert (sc.org_dir() / "org_config.json").exists()
+        assert (sc.org_dir() / "org_bundle.json").exists()
         assert r.json()["error"] == ""
 
     def test_non_json_is_rejected_with_an_error_not_installed(self, client, sessions):
@@ -1030,7 +1030,7 @@ class TestOrgConfigUpload:
         )
         assert r.status_code == 200
         assert r.json()["error"]
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_json_without_version_key_is_rejected(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -1040,7 +1040,7 @@ class TestOrgConfigUpload:
             files={"file": ("x.json", b'{"google": {}}', "application/json")},
         )
         assert r.json()["error"]
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
@@ -1052,7 +1052,7 @@ class TestOrgConfigUpload:
             data={"csrf": csrf},
             files={"file": ("org_config.json", b'{"version": 1}', "application/json")},
         )
-        mode = (sc.org_dir() / "org_config.json").stat().st_mode & 0o777
+        mode = (sc.org_dir() / "org_bundle.json").stat().st_mode & 0o777
         assert mode == 0o600
 
     def test_oversized_upload_is_rejected(self, client, sessions, monkeypatch):
@@ -1100,7 +1100,7 @@ class TestOrgConfigUploadPinConfirmation:
 
         assert r.status_code == 409
         assert r.json()["error"] == "pin_confirmation_required"
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
         assert org_bundle_signing.load_pinned_public_key(sc.org_dir()) is None
 
     def test_confirmed_upload_installs_and_pins(self, client, sessions):
@@ -1115,7 +1115,7 @@ class TestOrgConfigUploadPinConfirmation:
 
         assert r.status_code == 200
         assert r.json()["error"] == ""
-        assert (sc.org_dir() / "org_config.json").exists()
+        assert (sc.org_dir() / "org_bundle.json").exists()
         assert org_bundle_signing.load_pinned_public_key(sc.org_dir()) is not None
 
     def test_unconfirmed_flag_value_is_not_treated_as_consent(self, client, sessions):
@@ -1129,7 +1129,7 @@ class TestOrgConfigUploadPinConfirmation:
         )
 
         assert r.status_code == 409
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_unsigned_bundle_never_needs_confirmation(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -1141,7 +1141,7 @@ class TestOrgConfigUploadPinConfirmation:
         )
 
         assert r.status_code == 200
-        assert (sc.org_dir() / "org_config.json").exists()
+        assert (sc.org_dir() / "org_bundle.json").exists()
 
     def test_a_bundle_matching_an_already_pinned_key_never_needs_confirmation(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -1207,7 +1207,7 @@ class TestOrgConfigUploadStepUp:
         body = r.json()
         assert body["error"] == "passkey_enrollment_required"
         assert body["enroll_url"] == "/security"
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_with_a_credential_offers_webauthn_options(self, controller, sessions):
         self._enroll()
@@ -1221,7 +1221,7 @@ class TestOrgConfigUploadStepUp:
         )
         assert r.status_code == 428
         assert "webauthn_options" in r.json()
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_a_valid_assertion_completes_the_upload(self, controller, sessions):
         self._enroll()
@@ -1247,7 +1247,7 @@ class TestOrgConfigUploadStepUp:
             )
         assert second.status_code == 200
         assert second.json()["error"] == ""
-        assert (sc.org_dir() / "org_config.json").exists()
+        assert (sc.org_dir() / "org_bundle.json").exists()
 
     def test_an_assertion_bound_to_a_different_file_is_rejected(self, controller, sessions):
         # Fingerprint binding, mirroring TestSensitiveActionStepUp's own
@@ -1269,7 +1269,7 @@ class TestOrgConfigUploadStepUp:
             files={"file": ("x.json", b'{"version": 2}', "application/json")},
         )
         assert r.status_code == 400
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
 
 class TestOrgConfigUploadHumanSession:
@@ -1299,7 +1299,7 @@ class TestOrgConfigUploadHumanSession:
 
         assert r.status_code == 403
         assert r.json()["error"] == "human_session_required"
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_an_attested_session_uploads_exactly_as_before(self, controller, sessions):
         client = self._client(controller, sessions)

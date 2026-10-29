@@ -47,7 +47,7 @@ from .calendar_client import CalendarClient
 from .contacts_client import ContactsClient
 from .drive_client import DriveClient
 from .gmail_client import GmailClient
-from .paths import authority_root, data_dir, org_dir
+from .paths import LEGACY_ORG_CONFIG_FILENAME, ORG_BUNDLE_FILENAME, authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
@@ -1142,7 +1142,7 @@ class SettingsController:
                 "pinned to %s", org_bundle_signing.pinned_public_key_path(org_dir()),
             )
 
-        dest = org_dir() / "org_config.json"
+        dest = org_dir() / ORG_BUNDLE_FILENAME
         try:
             atomic_write_json(dest, data, indent=2)
         except OSError as exc:
@@ -1187,7 +1187,7 @@ class SettingsController:
 
     def _org_config_or_empty(self) -> dict[str, Any]:
         """load_org_config() now raises ``org_mode.ConfigurationError`` for
-        a present-but-broken org_config.json instead of silently
+        a present-but-broken org_bundle.json instead of silently
         treating it as absent -- exactly the fail-closed behavior daemon_
         main.py's startup path needs, since that's where "mode" gets
         resolved and org-mode auth gets wired from it. This settings
@@ -2101,16 +2101,32 @@ class SettingsController:
             "about": self._about_state(),
         }
 
+    @staticmethod
+    def _org_bundle_installed_mtime(bundle: Path) -> float:
+        """While the bundle still equals the copy adoption made from 6.x's
+        org_config.json, the date it was installed is that file's, not the
+        copy's."""
+        record = org_bundle_signing.load_adopted_record(org_dir())
+        legacy = org_dir() / LEGACY_ORG_CONFIG_FILENAME
+        recorded = record.get("sha256")
+        if recorded and legacy.exists():
+            try:
+                if org_bundle_signing.sha256_hex(bundle.read_bytes()) == recorded:
+                    return legacy.stat().st_mtime
+            except OSError:
+                pass
+        return bundle.stat().st_mtime
+
     def _general_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         update_cfg = cfg.get("update_check", {}) or {}
         notifications_cfg = (cfg.get("web", {}) or {}).get("notifications", {}) or {}
 
-        org_path = org_dir() / "org_config.json"
+        org_path = org_dir() / ORG_BUNDLE_FILENAME
         org_installed = org_path.exists()
         org_installed_date = ""
         if org_installed:
             try:
-                mtime = datetime.fromtimestamp(org_path.stat().st_mtime)
+                mtime = datetime.fromtimestamp(self._org_bundle_installed_mtime(org_path))
                 # Not strftime("%b %-d, %Y") -- %-d (no leading zero) is a
                 # glibc/macOS strftime extension; Windows' CRT raises
                 # ValueError: Invalid format string on it. Building the
