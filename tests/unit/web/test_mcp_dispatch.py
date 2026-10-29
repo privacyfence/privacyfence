@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from privacyfence import local_files, scoped_tokens
+from privacyfence import local_files, org_mode, scoped_tokens
 from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolSpec
@@ -947,6 +947,18 @@ class TestStatus:
         result = dispatcher.status("checking")
         assert result["sign_in_url"] is None
         assert result["next_step"] == "contact_your_administrator"
+
+    @pytest.mark.parametrize("authenticated", [False, True])
+    def test_local_status_carries_the_deprecation_on_every_path(self, authenticated):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
+        assert dispatcher.status("checking")["deprecation"] == org_mode.LOCAL_MODE_DEPRECATION
+
+    @pytest.mark.parametrize("authenticated", [False, True])
+    def test_org_status_has_a_null_deprecation(self, authenticated):
+        dispatcher = _dispatcher({}, mode="org")
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
+        assert dispatcher.status("checking")["deprecation"] is None
 
     def test_audits_status_checked_when_un_onboarded(self):
         dispatcher = _dispatcher({})

@@ -2311,6 +2311,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     org_config = effective_org_config(bundle, admin)
     if org_mode.is_single_user(org_config):
         logger.warning("Single-user mode: one administrator, no identity provider, on this computer only.")
+    if org_mode.resolve_mode(bundle) == "local":
+        logger.warning(org_mode.LOCAL_MODE_DEPRECATION)
     # ADR 0088: a local install shows every requester as "Undetected".
     agent_label.set_local_mode(org_mode.resolve_mode(bundle) == "local")
     for warning in check_consistency_warnings():

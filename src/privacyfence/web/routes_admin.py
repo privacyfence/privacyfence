@@ -629,6 +629,7 @@ def build_routes(
             title=_ADMIN_PAGE_TITLE, active="admin", nonce=nonce,
             notifications_enabled=general.get("notifications_enabled", True),
             notifications_detail=general.get("notifications_detail", "minimal"),
+            deprecation_html=web_shell.local_mode_deprecation_html(),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

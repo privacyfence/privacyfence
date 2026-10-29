@@ -3707,6 +3707,22 @@ class TestRunApp:
         assert "already running" in caplog.text
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
+    def test_local_start_logs_the_deprecation_and_org_start_does_not(self, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+        deprecation = [r for r in caplog.records if r.getMessage() == org_mode.LOCAL_MODE_DEPRECATION]
+        assert [r.levelno for r in deprecation] == [logging.WARNING]
+
+        caplog.clear()
+        monkeypatch.setattr(org_mode, "resolve_mode", lambda bundle: "org")
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+        assert org_mode.LOCAL_MODE_DEPRECATION not in caplog.text
+
     def test_successful_startup_waits_for_shutdown_and_releases_lock(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         release_calls = []

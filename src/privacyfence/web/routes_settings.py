@@ -1012,6 +1012,7 @@ def build_routes(
             notifications_enabled=general.get("notifications_enabled", notifications_enabled),
             notifications_detail=general.get("notifications_detail", notifications_detail),
             banner_html=_banner_html(),
+            deprecation_html=web_shell.local_mode_deprecation_html(),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

@@ -28,6 +28,7 @@ from pathlib import Path
 from . import approval_icons
 from .design_css import DOCUMENT_CSS
 from .html_embed import json_for_script
+from .org_mode import LOCAL_MODE_DEPRECATION
 
 # Browser-tab favicon -- the same bundled shield mark approval_icons.py
 # already hands the approval card (resources/icon_32.png, the
@@ -162,6 +163,12 @@ body {
   display: flex; align-items: center; justify-content: center; gap: 10px;
 }
 .pf-shell-notice a { color: inherit; font-weight: 600; }
+.pf-shell-deprecation {
+  padding: 8px 20px; font-size: 13px; text-align: center; flex-shrink: 0;
+  background: var(--accent-soft); color: var(--accent-dark);
+  border-bottom: 1px solid var(--line);
+}
+.pf-shell-deprecation a { color: inherit; font-weight: 600; overflow-wrap: anywhere; }
 .pf-shell-notice-close {
   background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1;
   color: inherit; opacity: .6; padding: 0; flex-shrink: 0; min-width: var(--tap); min-height: var(--tap);
@@ -624,6 +631,12 @@ def header_html(
     )
 
 
+def local_mode_deprecation_html() -> str:
+    """``LOCAL_MODE_DEPRECATION`` escaped, with its trailing address as a link."""
+    text, _, url = LOCAL_MODE_DEPRECATION.rpartition(" ")
+    return f'{_html_escape(text)} <a href="{_html_escape(url)}" target="_blank" rel="noopener">{_html_escape(url)}</a>'
+
+
 def wrap(
     body_html: str, *, title: str, active: str, nonce: str | None = None,
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
@@ -636,6 +649,7 @@ def wrap(
     push_public_key: str = "",
     csrf: str = "",
     whats_new_version: str = "",
+    deprecation_html: str = "",
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: the design files + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -702,6 +716,11 @@ def wrap(
     signs in from many browsers and devices (ADR 0238). It needs ``csrf``, and renders whether or
     not ``live_updates`` is on.
 
+    ``deprecation_html``: an already-escaped fragment shown as its own strip above
+    ``banner_html`` when non-empty. Not dismissible: it states a fact about the whole install, so
+    every page of that install repeats it. Local mode passes ``local_mode_deprecation_html()``;
+    org pages pass nothing.
+
     ``nav_items``/``principal_label``/``live_updates`` are what let org
     mode share this shell rather than serve a bare document. Local
     mode passes none of them.
@@ -765,6 +784,9 @@ def wrap(
         '<span class="pf-shell-live-label" id="pf-shell-live-label">connecting…</span>'
         "</div>"
     ) if live_updates else ""
+    deprecation = (
+        f'<div class="pf-shell-deprecation" role="note">{deprecation_html}</div>' if deprecation_html else ""
+    )
     banner = f'<div class="pf-shell-banner" role="alert">{banner_html}</div>' if banner_html else ""
     notice = ""
     if dismissible_notice_html:
@@ -803,7 +825,7 @@ def wrap(
 </head>
 <body>
 {header_html(active, nav_items, live_html=live_html, principal_label=principal_label)}
-{banner}
+{deprecation}{banner}
 {notice}{whats_new_strip}
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
