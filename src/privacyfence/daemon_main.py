@@ -76,6 +76,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
@@ -93,10 +94,12 @@ import yaml
 
 from . import (
     __version__,
+    admin_config,
     agent_label,
     agent_overrides,
     audit_forwarding,
     grist_provisioning,
+    oauth_apps,
     org_bundle_signing,
     org_mode,
     peek_provisioning,
@@ -622,6 +625,90 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
         logger.warning("Audit log write failed for organization config startup hash: %s", exc)
 
 
+def ignored_legacy_settings_message(names: list[str]) -> str:
+    """The notice for a bundle that still carries settings the Admin page now owns."""
+    return (
+        "org_config.json carries settings that are now managed on the Admin page and are ignored: "
+        f"{', '.join(names)}. Rebuild the bundle without them."
+    )
+
+
+def load_admin_config(bundle: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """The admin config for this start, importing the bundle's settings the first time.
+
+    Returns ``(admin, imported)``. Called once from run_app() right after the bundle is loaded;
+    a malformed admin_config.json refuses to start the same way a malformed bundle does. The
+    audit entry is written later by ``record_admin_config_import``, once the audit logger exists.
+    """
+    try:
+        admin, imported = admin_config.ensure(
+            bundle, mode=org_mode.resolve_mode(bundle), single_user=False,
+        )
+    except admin_config.AdminConfigError as exc:
+        raise org_mode.ConfigurationError(str(exc)) from exc
+    legacy = admin_config.legacy_keys_in(bundle)
+    if imported:
+        logger.warning(
+            "Imported %d settings from org_config.json into org/admin_config.json; "
+            "they are now managed on the Admin page", len(legacy),
+        )
+    elif legacy:
+        logger.warning(ignored_legacy_settings_message(legacy))
+    return admin, imported
+
+
+def record_admin_config_import(bundle: dict[str, Any], imported: bool) -> None:
+    """Audit record that this start imported the bundle's settings into the admin config."""
+    if not imported:
+        return
+    digest = hashlib.sha256(
+        json.dumps(bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="",
+            tool="",
+            tool_name="",
+            summary=f"Daemon startup: imported organization config settings into the admin config (bundle sha256={digest})",
+            sender="",
+            decision="admin_config_imported",
+            auto_accept_rule="",
+            latency_seconds=0.0,
+            pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for the admin config import: %s", exc)
+
+
+def effective_org_config(bundle: dict[str, Any], admin: dict[str, Any]) -> dict[str, Any]:
+    """The one dict every org-config reader sees: bundle, admin config and built-in apps composed."""
+    return oauth_apps.effective_org_config(bundle, admin, mode=org_mode.resolve_mode(bundle))
+
+
+def _local_effective_org_config() -> dict[str, Any]:
+    """The CLI sign-in commands run loopback flows, so they always use the local apps."""
+    bundle = load_org_config()
+    try:
+        admin = admin_config.config_for(bundle, mode="local", single_user=False)
+    except admin_config.AdminConfigError as exc:
+        raise org_mode.ConfigurationError(str(exc)) from exc
+    return oauth_apps.effective_org_config(bundle, admin, mode="local")
+
+
+def _release_org_config() -> dict[str, Any]:
+    """The effective config of the server the release commands act on."""
+    bundle = load_org_config()
+    mode = org_mode.resolve_mode(bundle)
+    try:
+        admin = admin_config.config_for(bundle, mode=mode, single_user=False)
+    except admin_config.AdminConfigError as exc:
+        raise org_mode.ConfigurationError(str(exc)) from exc
+    return oauth_apps.effective_org_config(bundle, admin, mode=mode)
+
+
 def _audit_org_bundle_adopted() -> None:
     """Audit record that this start copied the 6.x org_config.json to org_bundle.json."""
     record = org_bundle_signing.load_adopted_record(org_dir())
@@ -817,6 +904,8 @@ def _maybe_start_web_server(
     controller: Any = None,
     org_config: dict[str, Any] | None = None,
     config_path: str = "",
+    bundle: dict[str, Any] | None = None,
+    startup_admin: dict[str, Any] | None = None,
 ) -> Any:
     """Returns the started WebServer -- always, in local mode, since the
     web approval UI is the only one there is (see this section's own
@@ -887,6 +976,7 @@ def _maybe_start_web_server(
         return _start_org_web_server(
             web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
             install_wide_config=config, install_wide_config_path=config_path,
+            bundle=bundle, startup_admin=startup_admin,
         )
 
     use_web_settings = bool(settings_config.get("enabled", False)) and controller is not None
@@ -1179,6 +1269,7 @@ def _start_org_web_server(
     web_config: dict[str, Any], org_config: dict[str, Any], connector_host: ConnectorHost,
     *, unattended_sessions_enabled: bool, install_wide_config: dict[str, Any],
     install_wide_config_path: str = "",
+    bundle: dict[str, Any] | None = None, startup_admin: dict[str, Any] | None = None,
 ) -> Any:
     """org mode's own boot path -- a real OAuth 2.1 authorization server on ``/mcp``
     instead of the local shared-secret ``StaticTokenVerifier``. The
@@ -1321,6 +1412,7 @@ def _start_org_web_server(
             install_wide_settings=install_wide_config,
             install_wide_settings_path=install_wide_config_path,
             push_notifier=push_notifier, push_store=push_store,
+            bundle=bundle or {}, startup_admin=startup_admin or {},
         ),
         ssl_certfile=server_config.cert_file or None,
         ssl_keyfile=server_config.key_file or None,
@@ -2168,17 +2260,21 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # privacy group -- still the one load_org_config() call for this whole
     # function, its ConfigurationError still surfacing through the
     # same top-level "print and refuse to start" path in main().
-    org_config = load_org_config()
+    bundle = load_org_config()
     # ADR 0089: a 5.0.0a1 bundle that still names the removed mcp.tool_annotations raises
     # ConfigurationError -- refuse to start rather than quietly advertise something other than
     # what the administrator configured.
-    org_mode.reject_removed_tool_annotations(org_config)
+    org_mode.reject_removed_tool_annotations(bundle)
+    admin, admin_imported = load_admin_config(bundle)
     # Same "org mode fails closed, local mode warns" posture as the
     # rest of this function's fail-safe defaults now that mode is known.
-    check_storage_permissions(org_mode.resolve_mode(org_config) == "org")
-    init_privacy_filter(config, org_managed=org_mode.resolve_mode(org_config) == "org")
+    check_storage_permissions(org_mode.resolve_mode(bundle) == "org")
+    init_privacy_filter(config, org_managed=org_mode.resolve_mode(bundle) == "org")
+    # From here on every reader gets the effective config; the raw bundle stays for the
+    # signature, the hash and the mode checks above.
+    org_config = effective_org_config(bundle, admin)
     # ADR 0088: a local install shows every requester as "Undetected".
-    agent_label.set_local_mode(org_mode.resolve_mode(org_config) == "local")
+    agent_label.set_local_mode(org_mode.resolve_mode(bundle) == "local")
     for warning in check_consistency_warnings():
         logger.warning(warning)
 
@@ -2212,7 +2308,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # (it records to it, see its own docstring) -- org_config itself was
     # already loaded earlier, ahead of init_privacy_filter(), so its
     # org_managed fail-safe default is known before that call.
-    log_org_config_bundle_hash(org_config)
+    log_org_config_bundle_hash(bundle)
+    record_admin_config_import(bundle, admin_imported)
     if _bundle_adopted_this_start:
         _audit_org_bundle_adopted()
     connectors, connector_failures = build_connectors(config, org_config)
@@ -2241,7 +2338,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # _maybe_start_web_server's own docstring.
     server = _maybe_start_web_server(
         config, connector_host, unattended_sessions_enabled=unattended_enabled, controller=settings_controller,
-        org_config=org_config,
+        org_config=org_config, bundle=bundle, startup_admin=admin,
         # Resolved, not the raw --config argument -- org mode's
         # admin privacy page writes this file back, and it must land on the
         # same path run_app() read `config` from. Local mode ignores it;
@@ -2453,7 +2550,7 @@ def run_peek_release(principal_id: str) -> int:
         print("No such account.", file=sys.stderr)
         return 1
     try:
-        config = org_mode.PeekProvisioningConfig.from_org_config(load_org_config())
+        config = org_mode.PeekProvisioningConfig.from_org_config(_release_org_config())
     except org_mode.ConfigurationError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -2503,7 +2600,7 @@ def run_grist_release(principal_id: str) -> int:
         print("No such account.", file=sys.stderr)
         return 1
     try:
-        config = org_mode.GristProvisioningConfig.from_org_config(load_org_config())
+        config = org_mode.GristProvisioningConfig.from_org_config(_release_org_config())
     except org_mode.ConfigurationError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -2725,7 +2822,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if oauth_flag:
-            org_config = load_org_config()
+            org_config = _local_effective_org_config()
             if args.gmail_oauth:
                 return run_gmail_oauth(org_config)
             if args.drive_oauth:

@@ -741,6 +741,10 @@ class OrgAuth:
     # subscribe. The manifest is mounted either way.
     push_notifier: "PushNotifier | None" = None
     push_store: "PushSubscriptionStore | None" = None
+    # The raw signed bundle, and the admin config as loaded at startup. org_config above is
+    # composed from both; the Admin page recomputes it after a change and needs the inputs.
+    bundle: dict[str, Any] = field(default_factory=dict)
+    startup_admin: dict[str, Any] = field(default_factory=dict)
 
 
 def _local_principal_resolver(sessions: LocalSessionStore) -> Callable[[Request], Principal]:

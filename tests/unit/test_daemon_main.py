@@ -28,7 +28,7 @@ import sys
 import pytest
 import yaml
 
-from privacyfence import daemon_main, org_mode
+from privacyfence import admin_config, app_credentials, daemon_main, org_mode
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.paths import data_dir
@@ -2532,9 +2532,13 @@ class TestPeekRelease:
         assert capsys.readouterr().err == "No such account.\n"
 
     def test_configuration_error_is_printed(self, env, monkeypatch, capsys):
-        env.org_config["peek"]["auto_provision"]["enabled"] = "yes"
+        # The switch now lives in the admin config, whose key_env is validated when the
+        # provisioning settings are parsed.
+        admin = admin_config.import_from_bundle(env.org_config, mode="org", single_user=False)
+        admin["services"]["peek"]["auto_provision"]["key_env"] = "not a name"
+        admin_config.save(admin)
         assert daemon_main.run_peek_release("alice") == 1
-        assert "must be true or false" in capsys.readouterr().err
+        assert "environment variable name" in capsys.readouterr().err
         assert env.released == []
 
     def test_not_enabled(self, env, capsys):
@@ -3602,6 +3606,9 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        # Writing admin_config.json would tighten the directory this test deliberately loosens,
+        # and the import is not what is under test here.
+        monkeypatch.setattr(daemon_main, "load_admin_config", lambda bundle: ({}, False))
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         monkeypatch.setattr(daemon_main, "user_dir", lambda: tmp_path)
@@ -4905,7 +4912,7 @@ class TestLoadOrgConfigAdoption:
         import inspect
 
         source = inspect.getsource(daemon_main.run_app)
-        assert source.index("log_org_config_bundle_hash(org_config)") < source.index("_audit_org_bundle_adopted()")
+        assert source.index("log_org_config_bundle_hash(bundle)") < source.index("_audit_org_bundle_adopted()")
         assert "if _bundle_adopted_this_start:" in source
 
     def test_nothing_adopted_leaves_the_flag_false(self, tmp_path, monkeypatch):
@@ -4954,3 +4961,309 @@ class TestLoadOrgConfigAdoption:
         assert (tmp_path / "org_bundle_serial.txt").read_text().strip() == "5"
         assert self._legacy_files(tmp_path) == before
         assert (tmp_path / "org_config_serial.txt").read_text() == "1\n"
+
+
+# ---------------------------------------------------------------------------- #
+# run_app: the admin config import and the effective org config
+# ---------------------------------------------------------------------------- #
+
+def _patch_run_app(monkeypatch, bundle, *, audit=None):
+    """Stub everything run_app() touches except the admin config and the effective config."""
+    monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+    monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+    monkeypatch.setattr(daemon_main, "init_config_path", lambda path: None)
+    monkeypatch.setattr(daemon_main, "init_audit_logger", lambda path, **kwargs: MagicMock())
+    monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
+    monkeypatch.setattr(daemon_main, "check_storage_permissions", lambda org_active: None)
+    seen: dict[str, Any] = {}
+
+    def fake_build_connectors(config, org_config):
+        seen["org_config"] = org_config
+        return [], {}
+
+    monkeypatch.setattr(daemon_main, "build_connectors", fake_build_connectors)
+    monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
+    monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
+    monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
+    monkeypatch.setattr(
+        daemon_main, "_maybe_start_web_server", lambda config, host, **kwargs: seen.update(web=kwargs)
+    )
+    if audit is not None:
+        monkeypatch.setattr(daemon_main, "get_audit_logger", lambda: audit)
+    return seen
+
+
+class _RecordingAudit:
+    def __init__(self, events: list):
+        self.events = events
+
+    def record(self, entry):
+        self.events.append(entry.decision)
+
+
+class TestAdminConfigStartup:
+    BUNDLE = {
+        "slack": {"client_id": "s", "client_secret": "x"},
+        "authz": {"allowed_domains": ["example.com"]},
+    }
+
+    def test_first_start_imports_and_audits_after_the_bundle_hash(self, monkeypatch, tmp_path, caplog):
+        events: list = []
+        _patch_run_app(monkeypatch, self.BUNDLE, audit=_RecordingAudit(events))
+        monkeypatch.setattr(daemon_main, "log_org_config_bundle_hash", lambda b: events.append("bundle_hash"))
+
+        with caplog.at_level(logging.WARNING):
+            assert daemon_main.run_app({}, "config.yaml") == 0
+
+        stored = json.loads((tmp_path / "admin_config.json").read_text())
+        assert {name for name, row in stored["services"].items() if row["offered"]} == {"slack"}
+        assert stored["authz"] == {"allowed_domains": ["example.com"]}
+        assert "Imported 1 settings from org_config.json" in caplog.text
+        assert events == ["bundle_hash", "admin_config_imported"]
+
+    def test_second_start_does_not_import_again_and_says_the_settings_are_ignored(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        events: list = []
+        _patch_run_app(monkeypatch, self.BUNDLE, audit=_RecordingAudit(events))
+        daemon_main.run_app({}, "config.yaml")
+        stored = (tmp_path / "admin_config.json").read_text()
+        events.clear()
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+
+        assert (tmp_path / "admin_config.json").read_text() == stored
+        assert "Imported" not in caplog.text
+        assert "are now managed on the Admin page and are ignored: authz" in caplog.text
+        assert "admin_config_imported" not in events
+
+    def test_a_bundle_without_legacy_settings_logs_neither_notice(self, monkeypatch, caplog):
+        _patch_run_app(monkeypatch, {})
+        daemon_main.run_app({}, "config.yaml")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+        assert "are ignored" not in caplog.text
+
+    def test_a_malformed_admin_config_refuses_to_start(self, monkeypatch, tmp_path):
+        _patch_run_app(monkeypatch, {})
+        (tmp_path / "admin_config.json").write_text("{not json")
+
+        with pytest.raises(org_mode.ConfigurationError, match="admin_config.json"):
+            daemon_main.run_app({}, "config.yaml")
+
+    def test_record_admin_config_import_hashes_the_bundle(self, monkeypatch):
+        import hashlib
+
+        recorded: list = []
+        monkeypatch.setattr(daemon_main, "get_audit_logger", lambda: SimpleNamespace(record=recorded.append))
+        daemon_main.record_admin_config_import(self.BUNDLE, False)
+        assert recorded == []
+
+        daemon_main.record_admin_config_import(self.BUNDLE, True)
+
+        digest = hashlib.sha256(json.dumps(self.BUNDLE, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert [e.decision for e in recorded] == ["admin_config_imported"]
+        assert digest in recorded[0].summary
+
+    def test_record_admin_config_import_survives_an_audit_failure(self, monkeypatch, caplog):
+        def broken():
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(daemon_main, "get_audit_logger", broken)
+        with caplog.at_level(logging.WARNING):
+            daemon_main.record_admin_config_import({}, True)
+        assert "Audit log write failed for the admin config import" in caplog.text
+
+
+class TestEffectiveOrgConfigWiring:
+    ORG_BUNDLE = {
+        "mode": "org",
+        "server": {"issuer_url": "https://pf.example.com"},
+        "idp": {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"},
+    }
+
+    @staticmethod
+    def _builtin_slack(monkeypatch):
+        monkeypatch.setattr(
+            app_credentials, "builtin_app",
+            lambda key: {"client_id": "builtin", "client_secret": "secret"} if key == "slack" else None,
+        )
+
+    @staticmethod
+    def _offering_slack(bundle, mode):
+        admin = admin_config.import_from_bundle({}, mode=mode, single_user=False)
+        admin["services"]["slack"]["offered"] = True
+        return admin
+
+    def test_the_bundle_hash_is_logged_from_the_raw_bundle(self, monkeypatch):
+        bundle = {"slack": {"client_id": "s"}, "authz": {}}
+        seen = _patch_run_app(monkeypatch, bundle)
+        hashed: list = []
+        monkeypatch.setattr(daemon_main, "log_org_config_bundle_hash", hashed.append)
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert hashed == [bundle]
+        assert hashed[0] is bundle
+        # The effective config is what every other reader gets, and it is a different object.
+        assert seen["org_config"] is not bundle
+        assert "unattended_sessions" in seen["org_config"] and "unattended_sessions" not in bundle
+
+    def test_run_app_hands_the_bundle_and_startup_admin_to_the_web_server(self, monkeypatch):
+        bundle = {"slack": {"client_id": "s"}}
+        seen = _patch_run_app(monkeypatch, bundle)
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert seen["web"]["bundle"] is bundle
+        assert seen["web"]["startup_admin"]["services"]["slack"]["offered"] is True
+        assert seen["web"]["org_config"] is seen["org_config"]
+
+    def test_org_mode_reaches_the_slack_branch_through_a_builtin_app(self, monkeypatch):
+        self._builtin_slack(monkeypatch)
+        fake = fake_client_class(result="my-workspace")
+        monkeypatch.setattr(daemon_main, "SlackClient", fake)
+        monkeypatch.setattr(daemon_main, "load_slack_token", lambda path: {"access_token": "xoxp-1"})
+        org_config = daemon_main.effective_org_config(self.ORG_BUNDLE, self._offering_slack(self.ORG_BUNDLE, "org"))
+        assert org_config["slack"]["relay"] is True
+
+        connectors, _failures = daemon_main.build_connectors({}, org_config)
+
+        assert [c.name for c in connectors] == ["slack"]
+
+    def test_local_mode_does_not_use_a_builtin_app(self, monkeypatch):
+        self._builtin_slack(monkeypatch)
+        fake = fake_client_class(result="my-workspace")
+        monkeypatch.setattr(daemon_main, "SlackClient", fake)
+        monkeypatch.setattr(daemon_main, "load_slack_token", lambda path: {"access_token": "xoxp-1"})
+        org_config = daemon_main.effective_org_config({}, self._offering_slack({}, "local"))
+        assert "slack" not in org_config
+
+        connectors, _failures = daemon_main.build_connectors({}, org_config)
+
+        assert connectors == []
+        assert fake.instantiated is False
+
+    def test_the_cli_form_never_uses_a_builtin_app_even_in_an_org_bundle(self, monkeypatch):
+        self._builtin_slack(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: self.ORG_BUNDLE)
+        admin_config.save(self._offering_slack(self.ORG_BUNDLE, "org"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: {})
+        monkeypatch.setattr(daemon_main, "setup_logging", lambda cfg: None)
+        seen: list = []
+        monkeypatch.setattr(daemon_main, "run_slack_oauth", lambda org_config: seen.append(org_config) or 0)
+
+        assert daemon_main.main(["--slack-oauth"]) == 0
+
+        assert "slack" not in seen[0]
+
+    def test_a_malformed_admin_config_makes_the_cli_exit_non_zero(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+        (tmp_path / "admin_config.json").write_text("[]")
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: {})
+        monkeypatch.setattr(daemon_main, "setup_logging", lambda cfg: None)
+
+        assert daemon_main.main(["--slack-oauth"]) == 1
+        assert "admin_config.json" in capsys.readouterr().err
+
+    def test_the_org_web_server_keeps_the_bundle_and_startup_admin_on_org_auth(self, monkeypatch, tmp_path):
+        from privacyfence import paths
+        from privacyfence.connector_host import ConnectorHost
+        from privacyfence.web.server import WebServer
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(WebServer, "start", lambda self: None)
+        monkeypatch.setattr(
+            "privacyfence.org_identity.discover_idp",
+            lambda issuer: {
+                "authorization_endpoint": "https://idp.example.com/authorize",
+                "token_endpoint": "https://idp.example.com/token", "jwks_uri": "https://idp.example.com/jwks",
+            },
+        )
+        bundle = dict(self.ORG_BUNDLE, authz={})
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        org_config = daemon_main.effective_org_config(bundle, admin)
+
+        server = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, ConnectorHost([]), unattended_sessions_enabled=False,
+            org_config=org_config, bundle=bundle, startup_admin=admin,
+        )
+
+        assert server.org.bundle is bundle
+        assert server.org.startup_admin is admin
+        assert server.org.org_config is org_config
+
+    def test_a_withdrawn_peek_starts_no_provisioner(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "key")
+        bundle = {"mode": "org"}
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        admin["services"]["peek"]["offered"] = True
+        admin["services"]["peek"]["auto_provision"]["enabled"] = True
+        started = []
+        monkeypatch.setattr(
+            daemon_main.peek_provisioning, "PeekProvisioner", lambda **kw: SimpleNamespace(start=lambda: started.append(kw))
+        )
+
+        assert daemon_main.peek_provisioning.start(
+            daemon_main.effective_org_config(bundle, admin), on_change=lambda p: None, stop_event=threading.Event()
+        ) is not None
+        assert len(started) == 1
+
+        started.clear()
+        admin["services"]["peek"]["offered"] = False
+        withdrawn = daemon_main.effective_org_config(bundle, admin)
+        assert "peek" not in withdrawn
+        assert daemon_main.peek_provisioning.start(
+            withdrawn, on_change=lambda p: None, stop_event=threading.Event()
+        ) is None
+        assert started == []
+
+    def test_a_malformed_admin_config_makes_the_release_command_print_it_and_fail(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "alice").mkdir(parents=True)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        assert daemon_main.run_peek_release("alice") == 1
+        assert "admin_config.json" in capsys.readouterr().err
+
+    def test_peek_release_reads_the_switch_from_the_admin_config_and_the_address_from_the_environment(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "alice").mkdir(parents=True)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "peekprov_secret")
+        bundle = {"mode": "org"}
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        admin["services"]["peek"]["offered"] = True
+        admin["services"]["peek"]["auto_provision"]["enabled"] = True
+        admin_config.save(admin)
+        clients: list = []
+
+        class Client:
+            def __init__(self, base_url, key):
+                clients.append((base_url, key))
+
+            def release_account(self, principal_id):
+                return True
+
+        monkeypatch.setattr(daemon_main, "PeekProvisioningClient", Client)
+        monkeypatch.setattr(daemon_main.peek_provisioning, "release", lambda principal_id: None)
+
+        assert daemon_main.run_peek_release("alice") == 0
+        assert clients == [("https://peek.example.com", "peekprov_secret")]
+        assert "Released the Peek connection of alice" in capsys.readouterr().out

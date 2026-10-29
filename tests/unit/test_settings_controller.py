@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from privacyfence import auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, update_checker
+from privacyfence import admin_config, app_credentials, auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, update_checker
 from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
 from privacyfence import peek_client, policy_upgrade
@@ -76,6 +76,8 @@ def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
     monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
     monkeypatch.setattr(daemon_main, "load_org_config", lambda: dict(ORG_CONFIG_ENABLING_EVERY_CONNECTOR))
+    # Telegram is offered only where the build carries its app credentials.
+    monkeypatch.setattr(app_credentials, "telegram_app_credentials", lambda: (123, "hash"))
 
     org_dir_path = tmp_path / "org"
     org_dir_path.mkdir()
@@ -658,6 +660,108 @@ def stub_connector_build(monkeypatch):
 
 
 @pytest.mark.usefixtures("stub_connector_build")
+class TestAdminConfigWiring:
+    """The settings page reads the same effective config the daemon does: the bundle, the admin
+    config and, in organization mode only, the built-in apps."""
+
+    MIRO_APP = {"client_id": "builtin", "client_secret": "secret"}
+
+    def test_local_snapshot_does_not_list_miro_through_a_builtin_app(self, controller, monkeypatch):
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+        monkeypatch.setattr(
+            app_credentials, "builtin_app", lambda key: self.MIRO_APP if key == "miro" else None
+        )
+
+        keys = {row["key"] for row in controller.snapshot()["connectors"]}
+
+        assert "miro" not in keys
+
+    def test_a_service_withdrawn_in_the_admin_config_is_refused(self, controller, monkeypatch):
+        bundle = dict(ORG_CONFIG_ENABLING_EVERY_CONNECTOR)
+        admin = admin_config.import_from_bundle(bundle, mode="local", single_user=False)
+        admin["services"]["miro"]["offered"] = False
+        admin_config.save(admin)
+        monkeypatch.setattr(sc.miro_auth, "authorize_interactive", lambda *a: pytest.fail("must not run"))
+        monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
+
+        controller.authenticate_connector("miro")
+
+        assert controller.error == "Miro isn't enabled in your organization config."
+
+    def test_a_bundle_with_authz_over_an_imported_config_installs_and_says_it_is_ignored(self, controller):
+        admin_config.save(admin_config.import_from_bundle(
+            {"slack": {"client_id": "s"}}, mode="local", single_user=False,
+        ))
+        bundle = {"version": 1, "authz": {"allowed_domains": ["example.com"]}}
+
+        controller.install_org_config_bytes(json.dumps(bundle).encode())
+
+        assert json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8")) == bundle
+        assert "are now managed on the Admin page and are ignored: authz" in controller.error
+
+    def test_a_bundle_over_a_config_made_without_one_shows_nothing(self, controller):
+        admin_config.save(admin_config.import_from_bundle({}, mode="local", single_user=False))
+
+        controller.install_org_config_bytes(json.dumps({"version": 1, "authz": {}}).encode())
+
+        assert controller.error == ""
+
+    def test_a_bundle_without_an_admin_config_shows_nothing(self, controller):
+        controller.install_org_config_bytes(json.dumps({"version": 1, "authz": {}}).encode())
+
+        assert controller.error == ""
+
+    def test_a_bundle_without_legacy_settings_shows_nothing(self, controller):
+        admin_config.save(admin_config.import_from_bundle(
+            {"slack": {"client_id": "s"}}, mode="local", single_user=False,
+        ))
+
+        controller.install_org_config_bytes(json.dumps({"version": 1, "slack": {"client_id": "t"}}).encode())
+
+        assert controller.error == ""
+
+    def test_a_malformed_admin_config_does_not_block_the_install(self, controller, tmp_path):
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        controller.install_org_config_bytes(json.dumps({"version": 1, "authz": {}}).encode())
+
+        assert (sc.org_dir() / "org_bundle.json").exists()
+
+    def test_refresh_connectors_builds_from_the_effective_config(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        built = []
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: built.append(org) or ([], {}))
+        bundle = {"slack": {"client_id": "s"}, "authz": {"x": 1}}
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
+        admin = admin_config.import_from_bundle(bundle, mode="local", single_user=False)
+        admin["authz"] = {"y": 2}
+        admin_config.save(admin)
+
+        controller.refresh_connectors()
+        assert wait_until(lambda: len(recorded) == 1)
+        _drain_run_async(recorded)
+
+        assert built[0]["slack"] == {"client_id": "s"}
+        assert built[0]["authz"] == {"y": 2}
+
+    def test_refresh_connectors_with_a_malformed_admin_config_builds_from_an_empty_one(
+        self, controller, monkeypatch, tmp_path
+    ):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        built = []
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: built.append(org) or ([], {}))
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        controller.refresh_connectors()
+        assert wait_until(lambda: len(recorded) == 1)
+        _drain_run_async(recorded)
+
+        assert built == [{}]
+
+
+@pytest.mark.usefixtures("stub_connector_build")
 class TestOrgConfigInstall:
     """install_org_config_bytes is the validate-then-write step behind
     web/routes_settings.py's multipart upload."""
@@ -1046,9 +1150,21 @@ class TestOrgConfigOrEmpty:
         assert "not valid JSON" in controller.error
 
     def test_passes_through_the_parsed_config_when_valid(self, controller, monkeypatch):
-        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"slack": {"client_id": "abc"}})
+        bundle = {"slack": {"client_id": "abc"}}
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
 
-        assert controller._org_config_or_empty() == {"slack": {"client_id": "abc"}}
+        expected = daemon_main.effective_org_config(
+            bundle, admin_config.import_from_bundle(bundle, mode="local", single_user=False)
+        )
+        assert controller._org_config_or_empty() == expected
+        assert expected["slack"] == {"client_id": "abc"}
+        assert controller.error == ""
+
+    def test_a_malformed_admin_config_sets_the_error_and_returns_empty(self, controller, tmp_path):
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        assert controller._org_config_or_empty() == {}
+        assert "admin_config.json" in controller.error
 
     def test_snapshot_surfaces_the_error_instead_of_raising(self, controller, monkeypatch):
         monkeypatch.setattr(

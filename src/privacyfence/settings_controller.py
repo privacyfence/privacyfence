@@ -1151,10 +1151,30 @@ class SettingsController:
 
         org_bundle_signing.record_accepted_serial(trust, org_dir())
         self.error = ""
+        self._warn_if_bundle_settings_ignored(data)
         # The live connectors were built from the previous bundle's client
         # credentials and download settings; rebuild them now, or they keep
         # serving the old values until the next restart.
         self.refresh_connectors()
+
+    def _warn_if_bundle_settings_ignored(self, data: dict[str, Any]) -> None:
+        """Say so when an installed bundle carries settings the admin config now owns.
+
+        An admin config created with no bundle (empty recorded hash) imports the next start
+        instead, so nothing is ignored then and nothing is shown.
+        """
+        from . import admin_config
+        from .daemon_main import ignored_legacy_settings_message
+
+        legacy = admin_config.legacy_keys_in(data)
+        if not legacy:
+            return
+        try:
+            stored = admin_config.load()
+        except admin_config.AdminConfigError:
+            return
+        if stored is not None and stored["imported_from_bundle_sha256"] != "":
+            self.error = ignored_legacy_settings_message(legacy)
 
     def would_pin_new_org_signing_key(self, raw: bytes) -> bool:
         """Read-only precheck for web/routes_settings.py's org_config_
@@ -1198,10 +1218,15 @@ class SettingsController:
         surface it as this controller's usual error banner instead of
         taking the whole settings page down.
         """
-        from .daemon_main import load_org_config
+        from . import admin_config
+        from .daemon_main import effective_org_config, load_org_config
         try:
-            return load_org_config()
-        except org_mode.ConfigurationError as exc:
+            bundle = load_org_config()
+            admin = admin_config.config_for(
+                bundle, mode=org_mode.resolve_mode(bundle), single_user=False,
+            )
+            return effective_org_config(bundle, admin)
+        except (org_mode.ConfigurationError, admin_config.AdminConfigError) as exc:
             self.error = str(exc)
             return {}
 
@@ -1234,11 +1259,16 @@ class SettingsController:
         effect immediately instead of requiring a restart."""
 
         def work() -> tuple[list, dict[str, str]]:
-            from .daemon_main import build_connectors, load_org_config
+            from . import admin_config
+            from .daemon_main import build_connectors, effective_org_config, load_org_config
             cfg = self._load_config()
             try:
-                org_config = load_org_config()
-            except org_mode.ConfigurationError:
+                bundle = load_org_config()
+                admin = admin_config.config_for(
+                    bundle, mode=org_mode.resolve_mode(bundle), single_user=False,
+                )
+                org_config = effective_org_config(bundle, admin)
+            except (org_mode.ConfigurationError, admin_config.AdminConfigError):
                 # Reported to the user by snapshot()'s own call to
                 # _org_config_or_empty() right after -- work() itself must
                 # not touch self (see _run_async's own docstring).
