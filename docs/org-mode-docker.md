@@ -20,8 +20,8 @@ This page runs the organization-mode daemon and its reverse proxy as containers.
 | | |
 |---|---|
 | Image | `ghcr.io/privacyfence/privacyfence-org` |
-| Tags | `X.Y.Z` for every stable release. `X.Y`, `X` and `latest` move forward only: each follows the newest stable release in its scope, and a patch release on an older line never moves them back. Pin `X.Y` in production. |
-| Releases | Stable releases only. A pre-release has no image. |
+| Tags | A stable release gets `X.Y.Z`, `X.Y`, `X` and `latest`. `X.Y`, `X` and `latest` move forward only: each follows the newest stable release in its scope, and a patch release on an older line never moves them back. Pin `X.Y` in production. |
+| Releases | Every release. A pre-release (`X.Y.ZaN`, `bN`, `rcN`) gets only its exact version as a tag, so `X.Y`, `X` and `latest`, and with them any unattended upgrade, never reach a pre-release; to try one, set `PRIVACYFENCE_IMAGE_TAG` to its exact version (ADR 0267). |
 | Platforms | `linux/amd64`, `linux/arm64` |
 | User | `privacyfence-org`, uid and gid `10001` |
 | Data volume | `/var/lib/privacyfence-org/.privacyfence` |

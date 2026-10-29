@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Decide which image tags a stable release publishes for the organization Docker image.
+"""Decide which image tags a release publishes for the organization Docker image.
 
 `publish-org-image.yml` calls this with the release version and applies the tags it prints, one
-per line. `X.Y.Z` is always published; the floating tags `X.Y`, `X` and `latest` are included only
-when no already-tagged stable release is higher in that scope, so floating tags only move forward
--- re-running an older patch release never drags `latest` (or `6.5`) back.
+per line. For a stable `X.Y.Z`, the version is always published; the floating tags `X.Y`, `X` and
+`latest` are included only when no already-tagged stable release is higher in that scope, so
+floating tags only move forward -- re-running an older patch release never drags `latest` (or
+`6.5`) back.
 
-Pre-release and malformed git tags are ignored when comparing, and a version that is not a stable
-`MAJOR.MINOR.PATCH` is refused: org images are published for stable versions only.
+A pre-release (PEP 440 short form: `X.Y.ZaN`, `X.Y.ZbN`, `X.Y.ZrcN`) gets exactly its own version
+and nothing else, however high it is, so `latest` never points at a pre-release and the floating
+tags, and the unattended upgrades that follow them, never reach one (ADR 0267). Pre-release and
+malformed git tags are ignored when comparing stable versions, and any other version string is
+refused.
 
 Stdlib only, no PrivacyFence install required -- same as scripts/tag_release.py, and like it this
 imports no other script.
@@ -27,13 +31,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_PRE_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+(?:a|b|rc)\d+$")
 _TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
 
 def image_tags(version: str, known_tags: list[str]) -> list[str]:
+    if _PRE_RELEASE_RE.match(version):
+        return [version]
     match = _VERSION_RE.match(version)
     if match is None:
-        raise ValueError(f"org images are published for stable versions only, got {version}")
+        raise ValueError(f"not a release version (X.Y.Z, or X.Y.ZaN/bN/rcN), got {version}")
     major, minor, patch = (int(part) for part in match.groups())
     known = [
         (int(m.group(1)), int(m.group(2)), int(m.group(3)))

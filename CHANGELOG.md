@@ -50,6 +50,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Operational settings move to `org/admin_config.json`.** On the first start, PrivacyFence copies the settings an organization bundle carried (the services it offers, rooms, authz, step-up, scoped tokens, web push, download delivery, audit forwarding and the Peek and Grist options) into `org/admin_config.json`, logs how many it imported and records an `admin_config_imported` audit entry. Every reader, including the settings page and the `--*-oauth` and `--peek-release`/`--grist-release` commands, now sees the bundle, that file and the built-in apps composed together. A later start that finds the bundle still carrying those settings logs a warning that they are ignored, and installing such a bundle from the settings page says the same. A malformed `admin_config.json` refuses to start.
 
+- **Pre-releases publish the organization Docker image too.** An alpha, beta or release candidate now gets `ghcr.io/privacyfence/privacyfence-org:<exact version>` with the same build-provenance attestation. It gets no other tag, so `X.Y`, `X` and `latest`, and with them unattended upgrades, still only follow stable releases.
+
 ## [6.12.0] — 2026-10-28
 
 ### Added

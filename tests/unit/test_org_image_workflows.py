@@ -6,8 +6,8 @@ test noticing: the runners, the permissions, the artifact name, the strictness s
 that nothing in build.yml touches a registry (ADR 0209).
 
 It also covers publish-org-image.yml, the only workflow that pushes the image: its job chain, its
-permissions, that it pushes the images build.yml tested instead of building, and that a
-pre-release tag publishes nothing.
+permissions, that it pushes the images build.yml tested instead of building, and that no step
+is skipped for a pre-release (ADR 0267).
 """
 
 from __future__ import annotations
@@ -108,9 +108,6 @@ def test_every_action_is_pinned_to_a_commit_sha(workflow: str) -> None:
                 assert re.search(r"@[0-9a-f]{40}$", step["uses"]), (job_name, step["uses"])
 
 
-PUBLISH_STABLE = "steps.release.outputs.channel == 'stable'"
-
-
 @pytest.fixture(scope="module")
 def publish() -> dict[str, Any]:
     return _load("publish-org-image.yml")
@@ -152,16 +149,28 @@ def test_publish_downloads_the_images_of_the_run_it_waited_for(publish: dict[str
     assert downloads[0]["pattern"] == "org-image-*"
 
 
-def test_publish_steps_after_the_channel_check_run_for_stable_releases_only(publish: dict[str, Any]) -> None:
-    steps = _steps(publish["jobs"]["publish"])
-    names = [s.get("name") for s in steps]
-    after = steps[names.index("Determine version and release channel") + 1 :]
-    summary = [s for s in after if s.get("if") == "steps.release.outputs.channel != 'stable'"]
-    assert len(summary) == 1
-    assert "no org image is published" in summary[0]["run"]
-    for step in after:
-        if step is not summary[0]:
-            assert step.get("if") == PUBLISH_STABLE, step.get("name")
+def test_no_publish_step_is_gated_on_the_stable_channel(publish: dict[str, Any]) -> None:
+    for job_name, job in publish["jobs"].items():
+        for step in job.get("steps", []):
+            assert "channel" not in str(step.get("if", "")), (job_name, step.get("name"))
+    names = [s.get("name") for s in _steps(publish["jobs"]["publish"])]
+    assert "Note that a pre-release publishes no image" not in names
+
+
+def test_publish_summary_says_no_floating_tag_moved_for_a_pre_release(publish: dict[str, Any]) -> None:
+    step = _push_step(publish)
+    assert step["env"]["CHANNEL"] == "${{ steps.release.outputs.channel }}"
+    assert "no floating tag" in step["run"]
+
+
+def test_builtin_check_requires_the_apps_on_every_release_tag() -> None:
+    steps = _steps(_load("build.yml")["jobs"]["build-org-image"])
+    check = [s for s in steps if "builtin_apps.py check-dist" in s.get("run", "")]
+    assert len(check) == 1
+    run = check[0]["run"]
+    assert "REQUIRE=(--require)" in run
+    assert "refs/tags/*" in run
+    assert "channel" not in run and "stable" not in run
 
 
 def test_publish_pushes_the_tested_images_and_never_builds(publish: dict[str, Any]) -> None:
