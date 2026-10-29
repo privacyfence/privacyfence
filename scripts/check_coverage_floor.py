@@ -100,6 +100,7 @@ MODULE_FLOORS: dict[str, float] = {
     # The effective org config every connector reads: which app serves a service, and the
     # provisioning addresses that may receive a key.
     "src/privacyfence/oauth_apps.py": 100.0,
+    "src/privacyfence/relay_client.py": 100.0,
     # 91.0, not the ~93.2% the rest of this module would suggest: whether
     # coverage sees _resolve_names_async()'s done() callback body (fired
     # from a background thread started by _run_async(), not on the test's

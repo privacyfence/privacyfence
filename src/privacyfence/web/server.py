@@ -96,8 +96,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import (
-    __version__, agent_label, auto_accept, latency, paths, privilege_separation, scoped_token_proposals, scoped_tokens,
-    web_shell, webauthn_stepup,
+    __version__, agent_label, auto_accept, latency, paths, privilege_separation, relay_client,
+    scoped_token_proposals, scoped_tokens, web_shell, webauthn_stepup,
 )
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
@@ -1298,6 +1298,16 @@ def build_app(
     return _SecurityHeadersMiddleware(wrapped)
 
 
+async def _relay_well_known(request: Request) -> Response:
+    """The token the sign-in relay fetches to check that this server controls its host name.
+    Public by design: it grants nothing. It is withheld until a service actually uses the relay,
+    so nobody else can register a server whose administrator never offered a built-in service."""
+    if not relay_client.status()["needed"]:
+        return PlainTextResponse("Not Found", status_code=404, headers={"Cache-Control": "no-store"})
+    token = await asyncio.to_thread(relay_client.well_known_token)
+    return PlainTextResponse(token, headers={"Cache-Control": "no-store"})
+
+
 def _build_org_app(
     org: OrgAuth, *, web_ui: WebApprovalUI, mcp_dispatcher: McpDispatcher | None, allowed_hosts: frozenset[str],
     principal_resolver: Callable[[Request], Principal] | None, stopping: threading.Event | None = None,
@@ -1353,6 +1363,7 @@ def _build_org_app(
     # that surface alone, with /connect and /oauth/start|callback left out
     # (see test_server_org_mode.py's TestConnectSurfaceOrgMode).
     default_next_path = routes_org_identity.DEFAULT_NEXT_PATH
+    extra_routes.append(Route("/.well-known/privacyfence-relay", _relay_well_known, methods=["GET"]))
     if org.connector_registry is not None:
         extra_routes.extend(routes_connect.build_routes(
             sessions=org.sessions, connector_registry=org.connector_registry,

@@ -105,6 +105,7 @@ from . import (
     peek_provisioning,
     policy_upgrade,
     privilege_separation,
+    relay_client,
     scoped_tokens,
     step_up_config,
 )
@@ -1419,6 +1420,8 @@ def _start_org_web_server(
         trusted_proxies=server_config.trusted_proxies,
     )
     server.start()
+    relay_client.start_registration_loop(server_config.issuer_url, org_config, _shutdown_event)
+    relay_client.request_check()
     approval_registry.set_base_url(server.base_url)
     step_up = step_up_config.StepUpConfig.from_org_config(org_config)
     logger.info(

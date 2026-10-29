@@ -41,6 +41,7 @@ from privacyfence import (
     pii_detector,
     privacy_filter,
     privilege_separation,
+    relay_client,
     resource_names,
     scoped_token_proposals,
     scoped_tokens,
@@ -157,6 +158,8 @@ def _reset() -> None:
     # are keyed by principal id and must not carry over.
     peek_provisioning._INSTANCE = None
     peek_provisioning._LOCKS.clear()
+    # The relay registration state is process-wide.
+    relay_client.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)
@@ -195,6 +198,13 @@ def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
         admin_config, "admin_config_path", lambda: request.getfixturevalue("tmp_path") / "admin_config.json"
     )
     monkeypatch.setattr(app_credentials, "builtin_app", lambda key: None)
+    monkeypatch.setattr(relay_client, "relay_token_path", lambda: request.getfixturevalue("tmp_path") / "relay_token.txt")
+    monkeypatch.setattr(
+        relay_client, "relay_status_path", lambda: request.getfixturevalue("tmp_path") / "relay_status.json"
+    )
+    # An org server started by a test must not leave a registration thread behind that outlives
+    # the test's patched paths and could reach the real relay.
+    monkeypatch.setattr(relay_client, "start_registration_loop", lambda issuer_url, org_config, stop: None)
 
 
 # Stashes each phase's own outcome (setup/call/teardown) onto the test item
