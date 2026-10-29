@@ -2145,7 +2145,9 @@ reworking it in place.
 - It is registered as `runner-privacyfence-eu` with the labels `self-hosted,privacyfence-live`, in
   a new organization runner group `privacyfence-live`.
 - The group is set to "Selected workflows": `connector-live-check.yml`, `qa-record-fixture.yml`
-  and `deploy-qa-server.yml` (D22) on `main`, as ADR 0181 requires.
+  and `deploy-qa-server.yml` (D22) on `main`, as ADR 0181 requires. GitHub accepts only a
+  workflow that exists on `main`, so mb4 lists the first two and ma6 adds `deploy-qa-server.yml`
+  once the feature PR has merged.
 - It runs as a non-ephemeral systemd service (ADR 0019 Decision 4).
 - The workflows on `main` switch to `runs-on: [self-hosted, privacyfence-live]` when this plan
   merges. That is the cutover: until then the old runner keeps serving `main`'s current
@@ -3472,13 +3474,13 @@ manual_before:
 - id: mb4-live-runner-host
   title: 'Build runner.privacyfence.eu: the Hetzner server, Tailscale, the Cloudflare DNS records (runner and peek-qa), origin certificate, WAF rule blocking /mcp and firewall, the pfrunner user (uid 10001), and the GitHub runner registered in the new privacyfence-live group; place qa_environment.yaml'
   why: at merge p21 switches the live-check workflows and p22 adds the QA server deploy, all on the privacyfence-live label; without a registered runner in that group they would queue forever
-  done_when: 'the organization''s Actions runner list shows runner-privacyfence-eu online in group privacyfence-live (Selected workflows: connector-live-check.yml, qa-record-fixture.yml and deploy-qa-server.yml on main), tailscale ssh reaches the host, ssh to its public address times out, id pfrunner shows uid 10001, and https://runner.privacyfence.eu answers through Cloudflare'
+  done_when: 'the organization''s Actions runner list shows runner-privacyfence-eu online in group privacyfence-live (Selected workflows: connector-live-check.yml and qa-record-fixture.yml on main; deploy-qa-server.yml does not exist on main yet and is added in ma6), tailscale ssh reaches the host, ssh to its public address times out, id pfrunner shows uid 10001, and https://runner.privacyfence.eu answers through Cloudflare'
 manual_after:
 - id: ma0-relay-first-deploy
   title: After the merge, approve the deploy-oauth-relay-worker run on main (it sets the Worker's revoke and Gmail secrets), check the dashboard, and run the runbook's smoke tests
   why: 'D23: the relay deploys only from main, so its first deploy is the merge; the alpha (ma10) must find it live'
 - id: ma6-live-runner-state-and-qa-server
-  title: After the merge, install deploy/qa-runner/ on the runner host (deploy script, sudoers rule, compose override, Caddyfile, env file, IdP secret), let deploy-qa-server.yml deploy main, then sign in as test@privacyfence.eu and connect every service on /connect in a browser (Google, Slack, Salesforce, Atlassian, Miro, Telegram, Grist, Peek)
+  title: After the merge, install deploy/qa-runner/ on the runner host (deploy script, sudoers rule, compose override, Caddyfile, env file, IdP secret), add deploy-qa-server.yml@refs/heads/main to the privacyfence-live runner group's selected workflows, let deploy-qa-server.yml deploy main, then sign in as test@privacyfence.eu and connect every service on /connect in a browser (Google, Slack, Salesforce, Atlassian, Miro, Telegram, Grist, Peek)
   why: 'D22: the runner copies its tokens from the QA server, so they exist only once someone connects them there; the deploy files come from main'
 - id: ma7-live-runner-cutover
   title: 'After ma6, dispatch connector-live-check on main, confirm it ran on runner-privacyfence-eu with every connector green and relay: up, then decommission the old privacyfence-test runner, its group and its QA state'
