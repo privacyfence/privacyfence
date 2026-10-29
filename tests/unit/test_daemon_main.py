@@ -4863,7 +4863,7 @@ class TestPersonalDataSweep:
 
 
 class TestLoadOrgConfigAdoption:
-    """D13: 7.x reads org/org_bundle.json and adopts a 6.x org_config.json by copying it,
+    """7.x reads org/org_bundle.json and adopts a 6.x org_config.json by copying it,
     leaving every 6.x file untouched so a downgrade keeps working."""
 
     @staticmethod
