@@ -3,12 +3,13 @@ mode's ~30-action dispatcher and org mode's own settings surface (ADR 0033).
 ``build_routes()`` (below) is local mode's entry point;
 ``build_org_routes()`` is org mode's.
 
-In org mode, both ``GET /settings`` and
-``GET /settings/privacy`` serve settings_window_html.build_html(), the
+In org mode, ``GET /settings`` serves settings_window_html.build_html(), the
 exact same capability-filtered renderer local mode's own settings page uses
 (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's own
-docstring for exactly what each combination hides), and org mode's four
-former bespoke POST routes are one generic ``POST /api/settings/{action}``,
+docstring for exactly what each combination hides) -- the same page for an
+administrator as for anyone else, because the install-wide privacy policy and
+the usage stats are Admin sections now (``GET /settings/privacy`` forwards
+there) -- and org mode's four former bespoke POST routes are one generic ``POST /api/settings/{action}``,
 restricted to ``_ORG_ALLOWED_ACTIONS`` -- the same path and JSON body shape
 local mode's own dispatcher already answers, since it's the same JS bridge
 posting either way now.
@@ -140,12 +141,12 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import (
-    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response,
 )
 from starlette.routing import BaseRoute, Route
 
 from .. import (
-    approval_icons, auto_accept, oauth_apps, scoped_token_proposals, settings_window_html, webauthn_stepup, web_shell, whats_new,
+    approval_icons, auto_accept, scoped_token_proposals, settings_window_html, webauthn_stepup, web_shell, whats_new,
 )
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
@@ -161,12 +162,12 @@ from ..scoped_tokens import (
 )
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
-    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _rule_usage_map,
+    _parse_value_list, _rule_usage_map,
     audit_rows, cached_row_value, rule_resource_ids,
 )
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
-from . import org_install_policy, org_session, org_stats, step_up_decide
+from . import org_install_policy, org_session, step_up_decide
 from .personal_settings_shim import personal_transfer_shim
 from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks, build_personal_routes
 from .approval_step_up import _verify_or_challenge
@@ -1561,8 +1562,6 @@ _SCOPED_TOKENS_DISABLED = (
 
 _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
-    "toggle_pii_detection", "toggle_pii_category",
-    "set_default_policy", "set_category_policy",
     "set_step_up_scope",
 })
 
@@ -1571,21 +1570,22 @@ def build_org_routes(
     *,
     sessions: OrgSessionStore,
     install_wide_settings: dict[str, Any],
-    install_wide_settings_path: str = "",
     step_up: StepUpConfig,
     step_up_origin: str,
     connector_registry: ConnectorRegistry | None = None,
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
-    org_config: dict[str, Any] | None = None,
 ) -> list[BaseRoute]:
-    """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
-    ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
+    """Org mode's own settings route list (ADR 0032, ADR 0033) --
+    ``GET /settings`` serves the exact same
     settings_window_html.build_html() local mode's own
     ``_render_settings_page`` above does, capability-filtered for org mode
     (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's
-    own docstring).
+    own docstring). It is the same page for an administrator as for anyone
+    else: the install-wide privacy policy and the usage stats are Admin
+    sections (web/routes_admin.py), and ``GET /settings/privacy`` redirects
+    there.
 
     Writes go through one generic
     ``POST /api/settings/{action}`` -- the exact same path and JSON body
@@ -1604,21 +1604,13 @@ def build_org_routes(
     ``_settings_step_up_response``/``_apply_step_up_gate``,
     ``_record_settings_audit``, ``org_settings_scope.is_action_permitted``).
 
-    ``install_wide_settings_path`` is the resolved path of the *server's
-    own* settings.yaml -- the file ``install_wide_settings`` was loaded
-    from, threaded down from ``daemon_main.run_app``'s ``--config``. The
-    install-wide privacy/PII write routes need it and nothing else here
-    does, so it defaults to empty: a caller that only wants the read
-    surface (this module's own tests, a hand-built ``OrgAuth``) keeps
-    working, and a policy write attempted without one is rejected with a
-    400 explaining exactly that rather than guessing at a path to
-    overwrite.
+    ``install_wide_settings`` is the server's live install-wide config; the page only reads it
+    to load each signed-in principal's own settings on top of it.
 
     ``step_up``/``step_up_origin`` gate org mode the way local mode's own
     dispatch is gated (ADR 0034): every org-routed
     ``_SENSITIVE_ACTIONS`` member below (``add_policy_rule``,
-    ``remove_policy_rule``, and the two install-wide privacy/PII writes)
-    demands the same fresh WebAuthn assertion whenever
+    ``remove_policy_rule``) demands the same fresh WebAuthn assertion whenever
     ``step_up.require_passkey`` is on. Required, as
     ``routes_approvals.build_routes``'s own ``step_up``/``issuer_url`` pair
     already is: web/server.py resolves one ``StepUpConfig`` per org and
@@ -1638,10 +1630,6 @@ def build_org_routes(
     mounted and answer 403 until it is enabled. ``scoped_token_store`` is the process-wide
     store unless a test passes its own; ``scoped_token_page_data`` builds the Settings
     section's data for the signed-in principal (``None``: the section is not drawn).
-
-    ``org_config`` is the installed org config bundle; the admin-only Stats page (ADR 0217,
-    web/org_stats.py) reads it to tell which connectors the org offers. ``None`` counts every
-    connector as not offered, so only those someone has connected are listed.
     """
     challenges = StepUpChallengeStore()
     token_policy = scoped_token_policy or ScopedTokenPolicy(enabled=False, max_days=DEFAULT_DAYS)
@@ -1718,18 +1706,6 @@ def build_org_routes(
         principal's own on-disk files.
         """
         about = _about_state_dict()
-        privacy = _privacy_state_from_config(install_wide_settings, fail_safe_default="block")
-        # toggle_calendar_free_busy is LOCAL_MODE-only, admin_only, and
-        # hardcoded to a single desktop's own config (org_settings_scope.
-        # ACTION_SCOPES's own comment on it) -- Calendar has no install-
-        # wide/org-mode equivalent at all, so it's dropped from the group
-        # list entirely rather than rendered with a control that could
-        # only ever 404.
-        privacy["groups"] = [g for g in privacy["groups"] if g["key"] != "calendar"]
-        # Same for toggle_gmail_signature: the Gmail group stays (its
-        # category policy is install-wide), only the toggle card goes --
-        # settings_window_html renders it only when this key is present.
-        privacy.pop("gmail_append_signature", None)
 
         resolver = get_resolver()
         rows = auto_accept.get_policy_rows()
@@ -1746,7 +1722,6 @@ def build_org_routes(
         return {
             "error": "",
             "general": {
-                **_pii_general_fields(install_wide_settings),
                 "update_check_enabled": True, "update_check_beta": False,
                 "org_installed": False, "org_installed_date": "",
                 "org_button_label": "", "version": about["version"],
@@ -1766,9 +1741,7 @@ def build_org_routes(
                 rows, _rule_usage_map(), resolve_value=lambda row: cached_row_value(row, resolver),
                 resolver=resolver,
             ),
-            "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
-            "stats": org_stats.collect(oauth_apps.snapshot(org_config or {})) if principal.is_admin else org_stats.empty(),
             "about": about,
         }
 
@@ -2172,11 +2145,8 @@ def build_org_routes(
         principal = _current_principal(request)
         if principal is None:
             return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
-        # Auto-accept is the one section every org principal, admin or
-        # not, always gets (settings_window_html._capabilities_for) --
-        # General itself is empty (hidden entirely) for a non-admin.
-        initial_section = "general" if principal.is_admin else "auto_accept"
-        return await _wrap_org_settings(request, principal, initial_section=initial_section)
+        # An org admin's Settings is the same page as anyone else's: their own rules first.
+        return await _wrap_org_settings(request, principal, initial_section="auto_accept")
 
     async def privacy_page(request: Request) -> Response:
         principal = _current_principal(request)
@@ -2184,9 +2154,8 @@ def build_org_routes(
             return RedirectResponse(
                 "/login?next=/settings/privacy", status_code=302, headers={"Cache-Control": "no-store"},
             )
-        if not principal.is_admin:
-            return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
-        return await _wrap_org_settings(request, principal, initial_section="privacy")
+        # The install-wide privacy policy is an Admin section now.
+        return RedirectResponse("/admin", status_code=302, headers={"Cache-Control": "no-store"})
 
     def _scoped_tokens_page_principal(request: Request, *, proposals: bool) -> Principal | Response:
         """The signed-in principal, or the redirect that sends the page elsewhere: to login (and
@@ -2224,23 +2193,6 @@ def build_org_routes(
         return await _wrap_org_settings(
             request, principal, initial_section="scoped_tokens", scoped_proposal=shown,
         )
-
-    def _current_pii_flag(action: str, body: dict[str, Any]) -> bool:
-        """toggle_pii_detection/toggle_pii_category flip the *current*
-        value -- the same semantics local mode's own menu-item toggle
-        uses, and what the shared JS template's own toggleHtml() call
-        sites for these two actions already post (an empty payload,
-        exactly like local mode's), rather than org_install_policy.
-        apply_change's own explicit-``enabled``-field contract (right for
-        a plain HTML form that could be submitted stale or twice, see that
-        module's own ``_bool_field`` docstring -- not what this bridge-
-        driven control sends). Computing the flip here, once, keeps the
-        shared renderer's own JS unaware of this one mode-specific
-        difference."""
-        pii_cfg = install_wide_settings.get("pii_detection", {}) or {}
-        if action == "toggle_pii_detection":
-            return bool(pii_cfg.get("enabled", True))
-        return bool(pii_cfg.get(str(body.get("category_key", "")), True))
 
     def _apply_org_action(principal: Principal, action: str, body: dict[str, Any]) -> str | None:
         """Applies one ``_ORG_ALLOWED_ACTIONS`` mutation, scoped to
@@ -2298,14 +2250,7 @@ def build_org_routes(
             )
         if action == "set_step_up_scope":
             return _set_step_up_scope(principal, body)
-        # The remaining four actions are all install-wide admin writes,
-        # applied through org_install_policy.apply_change.
-        if action in ("toggle_pii_detection", "toggle_pii_category"):
-            body = {**body, "enabled": not _current_pii_flag(action, body)}
-        summary = org_install_policy.apply_change(
-            install_wide_settings, install_wide_settings_path, action=action, payload=body,
-        )
-        return f"{summary} (admin={principal.id})"
+        raise AssertionError(f"unrouted org action {action!r}")  # pragma: no cover -- _ORG_ALLOWED_ACTIONS gates it
 
     def _set_step_up_scope(principal: Principal, body: dict[str, Any]) -> str | None:
         """This principal's own step-up scope (ADR 0091): widens, never

@@ -625,10 +625,12 @@ class TestStepUpCard:
         for field in ("g.step_up_scope_floor", "g.step_up_scope"):
             assert field in fn
 
-    def test_pii_card_is_admin_only_in_org_mode(self):
+    def test_pii_card_is_local_mode_only(self):
+        # On an organization server the PII gate is an Admin section, not a Settings one.
         fn = self._general_fn(build_html(_make_state()))
-        guard = fn.index("CAPS.mode !== 'org' || CAPS.is_admin")
+        guard = fn.index("CAPS.mode !== 'org')")
         assert guard < fn.index("'PII Detection Gate'")
+        assert "CAPS.is_admin" not in fn[guard:fn.index("'PII Detection Gate'")]
 
 
 class TestAiClientSection:
@@ -982,18 +984,19 @@ class TestOrgCapabilities:
         html = build_html(state, mode="org", is_admin=True)
         assert _extract_initial_state(html) == state
 
-    def test_org_admin_sees_general_and_privacy(self):
+    def test_org_admin_sees_general_but_not_privacy(self):
+        # The install-wide Privacy Filter is an Admin section: an administrator's Settings is
+        # the same page as anyone else's.
         caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))
         assert caps["mode"] == "org"
         assert caps["is_admin"] is True
         assert caps["sections"]["general"] is True
-        assert caps["sections"]["privacy"] is True
+        assert caps["sections"]["privacy"] is False
         assert caps["sections"]["auto_accept"] is True
         assert caps["sections"]["about"] is True
 
     def test_org_non_admin_sees_general_but_not_privacy(self):
-        # General carries every principal's own passkey scope (ADR 0091);
-        # its install-wide PII card is drawn for an admin only (renderGeneral).
+        # General carries every principal's own passkey scope (ADR 0091).
         caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))
         assert caps["sections"]["general"] is True
         assert caps["sections"]["privacy"] is False
@@ -1018,9 +1021,9 @@ class TestOrgCapabilities:
         assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]
         assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="local"))["sections"]
 
-    def test_stats_page_is_org_admin_only(self):
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["stats"] is True
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["stats"] is False
+    def test_stats_is_not_a_settings_section_for_anyone(self):
+        for is_admin in (True, False):
+            assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=is_admin))["sections"]["stats"] is False
 
     def test_not_applicable_actions_match_org_settings_scope(self):
         from privacyfence.web.org_settings_scope import NOT_APPLICABLE_ACTIONS
@@ -1033,9 +1036,10 @@ class TestOrgCapabilities:
         # BESPOKE_ACTIONS) are also covered, open_repo deliberately excluded.
         assert {"install_org_config", "export_audit_log", "quit_app", "check_for_updates"} <= not_applicable
         assert "open_repo" not in not_applicable
+        # The install-wide privacy actions are the Admin dispatcher's now.
+        assert {"toggle_pii_detection", "toggle_pii_category", "set_default_policy", "set_category_policy"} <= not_applicable
         # Actions org mode genuinely keeps must never be marked inapplicable.
-        assert not {"add_policy_rule", "remove_policy_rule", "toggle_pii_detection",
-                    "toggle_pii_category", "set_default_policy", "set_category_policy"} & not_applicable
+        assert not {"add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs"} & not_applicable
 
     def test_nav_filters_hidden_sections(self):
         html_non_admin = build_html(_make_state(), mode="org", is_admin=False)
