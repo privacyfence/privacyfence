@@ -47,6 +47,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Organization servers read `org/org_bundle.json`.** On the first start after the upgrade, PrivacyFence copies `org/org_config.json` and its two pin files (`org_config_signing_pubkey.txt`, `org_config_serial.txt`) to `org_bundle.json`, `org_bundle_signing_pubkey.txt` and `org_bundle_serial.txt`, and records the copy in `org/org_bundle_adopted.json`. The 6.x files are never changed, so going back to 6.x keeps working. If `org_config.json` is edited after the upgrade, the start logs a warning that it is ignored. The Docker image's health check and entrypoint accept either file name, and `scripts/build_org_bundle.py` now writes `org_bundle.json` by default.
 
+- **Operational settings move to `org/admin_config.json`.** On the first start, PrivacyFence copies the settings an organization bundle carried (the services it offers, rooms, authz, step-up, scoped tokens, web push, download delivery, audit forwarding and the Peek and Grist options) into `org/admin_config.json`, logs how many it imported and records an `admin_config_imported` audit entry. Every reader, including the settings page and the `--*-oauth` and `--peek-release`/`--grist-release` commands, now sees the bundle, that file and the built-in apps composed together. A later start that finds the bundle still carrying those settings logs a warning that they are ignored, and installing such a bundle from the settings page says the same. A malformed `admin_config.json` refuses to start.
+
 ## [6.12.0] — 2026-10-28
 
 ### Added
