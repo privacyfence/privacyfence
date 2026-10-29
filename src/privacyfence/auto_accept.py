@@ -425,6 +425,7 @@ PERSONAL_DATA_READ_TOOLS: frozenset[str] = frozenset({
     "slack_get_channel_history",
     "slack_get_thread_replies",
     "slack_search_messages",
+    "drive_get_file_content",
 })
 
 # Popup-gate tools whose payload is scanned too (the gate's upload scan): drive_upload_file's can be

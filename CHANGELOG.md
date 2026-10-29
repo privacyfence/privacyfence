@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **A scoped token's "Let reads return personal data" box now covers Drive file content reads.** A routine whose token has the box ticked and a rule covering a Drive folder can read a file's text with `drive_get_file_content` even when the file holds personal data (a salary sheet, say); before, the call was denied with "needs a person's confirmation". The scan still runs and the audit log records what it found. Tokens without the box are unchanged ([ADR 0254](docs/adr/0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md)).
+
 ## [6.12.0] — 2026-10-28
 
 ### Added
