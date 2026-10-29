@@ -615,6 +615,22 @@ _JS = r"""
       seg, 'pf-row-sub');
   }
 
+  // The PII Detection Gate's switches: the owner's own on General in local mode, the install-wide
+  // policy on the Admin page's Privacy Filter in org mode. `g` carries pii_enabled/pii_ip/pii_financial.
+  function piiGateCardHtml(g) {
+    var html = '<div class="card pf-card pf-pii-gate">';
+    html += rowHtml('PII Detection Gate',
+      'Scans review-popup content for likely personal data (IBANs, national IDs, financial figures) before you approve it. A match requires a second confirmation.',
+      toggleHtml(g.pii_enabled, 'toggle_pii_detection', {}, false, 'PII Detection Gate'));
+    html += rowHtml('Detect IP addresses', '',
+      toggleHtml(g.pii_ip, 'toggle_pii_category', { category_key: 'detect_ip_addresses' }, !g.pii_enabled, 'Detect IP addresses'),
+      'pf-row-sub', !g.pii_enabled);
+    html += rowHtml('Detect financial figures', '',
+      toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures'),
+      'pf-row-sub', !g.pii_enabled);
+    return html + '</div>';
+  }
+
   function renderGeneral(state) {
     var g = state.general;
     var html = '<div class="pf-page">';
@@ -641,19 +657,7 @@ _JS = r"""
     // The PII gate is the owner's own setting in local mode. On an organization
     // server it is install-wide and an administrator changes it on the Admin page,
     // so General there is only each person's own notification and passkey settings.
-    if (CAPS.mode !== 'org') {
-    html += '<div class="card pf-card">';
-    html += rowHtml('PII Detection Gate',
-      'Scans review-popup content for likely personal data (IBANs, national IDs, financial figures) before you approve it. A match requires a second confirmation.',
-      toggleHtml(g.pii_enabled, 'toggle_pii_detection', {}, false, 'PII Detection Gate'));
-    html += rowHtml('Detect IP addresses', '',
-      toggleHtml(g.pii_ip, 'toggle_pii_category', { category_key: 'detect_ip_addresses' }, !g.pii_enabled, 'Detect IP addresses'),
-      'pf-row-sub', !g.pii_enabled);
-    html += rowHtml('Detect financial figures', '',
-      toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures'),
-      'pf-row-sub', !g.pii_enabled);
-    html += '</div>';
-    }
+    if (CAPS.mode !== 'org') { html += piiGateCardHtml(g); }
 
     // A plain same-origin <a>, not a data-action AJAX call --
     // /security is its own standalone page (web/routes_security.py), not
@@ -2252,9 +2256,169 @@ _JS = r"""
         dataAttr('clear_rooms', {}) + ' data-confirm="Clear the room directory?">Clear</div>' : '') + '</div>') + '</div>';
   }
 
+  // Organization servers only: the state carries web_push there and nowhere else.
+  function webPushCardHtml(state) {
+    if (!state.web_push || notApplicable('set_web_push')) { return ''; }
+    var on = !!state.web_push.enabled;
+    return '<div class="card pf-card">' + rowHtml('Web push',
+      'Sends approval requests to people\u2019s browsers and phones as push notifications.',
+      toggleHtml(on, 'set_web_push', { enabled: !on }, false, 'Web push')) + '</div>';
+  }
+
   function renderFeatures(state) {
     return '<div class="pf-page"><h1 class="pf-page-title">Features</h1>' + assetsCardHtml(state) +
-      serverAddressesCardHtml(state) + unattendedCardHtml(state) + roomsCardHtml(state) + '</div>';
+      serverAddressesCardHtml(state) + unattendedCardHtml(state) + webPushCardHtml(state) + roomsCardHtml(state) + '</div>';
+  }
+
+  // The org-only sections. Each is one form that posts its whole section: the inputs carry
+  // data-f (the action's parameter name), and `saveAdminForm` reads them back by type.
+  var ADMIN_FORMS = {
+    delivery: 'set_download_delivery', access: 'set_authz', step_up: 'tighten_step_up',
+    tokens: 'set_scoped_tokens', audit: 'set_audit_forwarding',
+  };
+  var AUDIT_KINDS = [['syslog', 'Syslog'], ['http', 'HTTP endpoint']];
+  var SYSLOG_PROTOCOLS = [['udp', 'UDP'], ['tcp', 'TCP']];
+
+  // A stored section holds only what the administrator has set; the rest is the default in force.
+  function sectionWithDefaults(state, key) {
+    var base = (CAPS.defaults || {})[key] || {};
+    var stored = state[key] || {};
+    var merged = Object.assign({}, base, stored);
+    Object.keys(base).forEach(function (k) {
+      if (base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])) {
+        merged[k] = Object.assign({}, base[k], stored[k] || {});
+      }
+    });
+    return merged;
+  }
+
+  function formCardHtml(form, rows, label) {
+    return '<div class="card pf-card pf-admin-form" data-admin-form="' + form + '">' + rows.join('') +
+      '<div class="pf-row"><div class="pf-row-controls"><div class="button primary" role="button" tabindex="0" ' +
+      'aria-label="Save ' + esc(label) + '" data-admin-form-save="' + form + '">Save</div></div></div></div>';
+  }
+
+  function numberFieldRow(title, desc, name, value, label) {
+    return rowHtml(title, desc, '<input class="field" type="number" autocomplete="off" data-f="' + name + '" data-t="int" ' +
+      'aria-label="' + esc(label || title) + '" value="' + esc(value) + '">');
+  }
+
+  function textFieldRow(title, desc, name, value, label, type) {
+    return rowHtml(title, desc, '<input class="field" type="' + (type || 'text') + '" autocomplete="off" spellcheck="false" ' +
+      'data-f="' + name + '" data-t="text" aria-label="' + esc(label || title) + '" value="' + esc(value) + '">');
+  }
+
+  function areaFieldRow(title, desc, name, items) {
+    return rowHtml(title, desc, '<textarea class="field" rows="3" spellcheck="false" data-f="' + name + '" data-t="text" ' +
+      'aria-label="' + esc(title) + '">' + esc((items || []).join('\n')) + '</textarea>');
+  }
+
+  function checkRow(desc, name, on, label, locked) {
+    return '<label class="pf-row pf-admin-check"><input type="checkbox" data-f="' + name + '" data-t="bool"' +
+      (on ? ' checked' : '') + (locked ? ' disabled' : '') + ' aria-label="' + esc(label) + '"> <span class="pf-row-desc">' +
+      esc(desc) + '</span></label>';
+  }
+
+  function selectFieldRow(title, name, options, current, label, desc) {
+    var html = '<select class="field" data-f="' + name + '" data-t="text" aria-label="' + esc(label || title) + '">';
+    options.forEach(function (o) {
+      html += '<option value="' + esc(o[0]) + '"' + (o[0] === current ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+    });
+    return rowHtml(title, desc || '', html + '</select>');
+  }
+
+  function renderDelivery(state) {
+    var d = sectionWithDefaults(state, 'download_delivery');
+    var rows = [
+      numberFieldRow('Largest file sent inline (bytes)', 'Files up to this size go straight to the AI client; larger ones use a download link.',
+        'inline_max_bytes', d.inline_max_bytes),
+      numberFieldRow('Download link lifetime (seconds)', 'How long a download link keeps working.', 'link_ttl_seconds', d.link_ttl_seconds),
+      checkRow('Let the server stage large files on its disk.', 'allow_disk_staging', d.allow_disk_staging, 'Allow disk staging'),
+      checkRow('Let AI clients hand out download links.', 'agent_links', d.agent_links, 'Allow agent links'),
+      checkRow('Let people export files from the server.', 'allow_exports', d.allow_exports, 'Allow exports'),
+    ];
+    return '<div class="pf-page"><h1 class="pf-page-title">File delivery</h1>' + formCardHtml('delivery', rows, 'file delivery') + '</div>';
+  }
+
+  function renderAccess(state) {
+    var a = sectionWithDefaults(state, 'authz');
+    var rows = [
+      areaFieldRow('Allowed email domains', 'One per line or separated by commas. Empty allows every domain the identity provider vouches for.',
+        'allowed_domains', a.allowed_domains),
+      textFieldRow('Groups claim', 'The claim in the identity provider’s token that lists a person’s groups.', 'groups_claim', a.groups_claim || ''),
+      areaFieldRow('Required groups', 'One per line or separated by commas. A person must be in at least one. Empty requires none.',
+        'required_groups', a.required_groups),
+    ];
+    return '<div class="pf-page"><h1 class="pf-page-title">Sign-in</h1>' + formCardHtml('access', rows, 'sign-in restrictions') + '</div>';
+  }
+
+  // Step-up can only get stricter here: a checkbox that is on stays on (disabled), and the scope
+  // choices start at the current scope.
+  function renderStepUp(state) {
+    var s = sectionWithDefaults(state, 'step_up');
+    var rank = -1;
+    STEP_UP_SCOPE_LABELS.forEach(function (it, i) { if (it[0] === s.scope) { rank = i; } });
+    var scopes = STEP_UP_SCOPE_LABELS.filter(function (it, i) { return i >= Math.max(rank, 0); });
+    var rows = [
+      checkRow('Ask for a passkey before approvals in the scope below.', 'enabled', s.enabled, 'Turn on step-up', !!s.enabled),
+      checkRow('Accept only a passkey, not another second factor.', 'require_passkey', s.require_passkey, 'Require a passkey', !!s.require_passkey),
+      selectFieldRow('Passkey required for', 'scope', scopes, s.scope, 'Step-up scope'),
+      rowHtml('', 'Relaxing step-up is a file edit (ADR 0068).', ''),
+    ];
+    return '<div class="pf-page"><h1 class="pf-page-title">Step-up</h1>' + formCardHtml('step_up', rows, 'step-up') + '</div>';
+  }
+
+  function renderTokens(state) {
+    var t = sectionWithDefaults(state, 'scoped_tokens');
+    var rows = [
+      checkRow('Let people create scoped tokens for AI clients.', 'enabled', t.enabled, 'Turn on scoped tokens'),
+      numberFieldRow('Longest lifetime (days)', 'From 1 to 365.', 'max_days', t.max_days),
+      checkRow('Let AI clients propose a scoped token for a person to review and create.', 'allow_ai_proposals',
+        t.allow_ai_proposals, 'Allow AI token proposals'),
+    ];
+    if (!t.enabled) { rows.splice(3, 0, rowHtml('', 'Needs scoped tokens turned on.', '')); }
+    return '<div class="pf-page"><h1 class="pf-page-title">Scoped tokens</h1>' + formCardHtml('tokens', rows, 'scoped tokens') + '</div>';
+  }
+
+  // The bearer token's variable name is shown, never an input: the server sends that variable's
+  // value to the URL above it, so a page that could set both could send any secret anywhere.
+  function renderAuditForwarding(state) {
+    var f = sectionWithDefaults(state, 'audit_forwarding');
+    var syslog = f.syslog || {};
+    var http = f.http || {};
+    var rows = [
+      checkRow('Send each audit entry to the destination below.', 'enabled', f.enabled, 'Turn on audit forwarding'),
+      selectFieldRow('Destination', 'kind', AUDIT_KINDS, f.kind, 'Destination kind'),
+      textFieldRow('Syslog host', '', 'syslog_host', syslog.host || ''),
+      numberFieldRow('Syslog port', '', 'syslog_port', syslog.port),
+      selectFieldRow('Syslog protocol', 'syslog_protocol', SYSLOG_PROTOCOLS, syslog.protocol, 'Syslog protocol'),
+      textFieldRow('HTTP URL', '', 'http_url', http.url || '', 'HTTP URL', 'url'),
+      rowHtml('Bearer token variable', esc(http.bearer_token_env || 'None set.') + ' Set by editing org/admin_config.json on the server.', ''),
+    ];
+    return '<div class="pf-page"><h1 class="pf-page-title">Audit forwarding</h1>' + formCardHtml('audit', rows, 'audit forwarding') + '</div>';
+  }
+
+  function renderAdminPrivacy(state) {
+    if (!state.privacy) { return '<div class="pf-page"><h1 class="pf-page-title">Privacy Filter</h1></div>'; }
+    return '<div class="pf-page"><h1 class="pf-page-title">Privacy Filter</h1>' + piiGateCardHtml(state.privacy) + '</div>' +
+      renderPrivacy(state);
+  }
+
+  function saveAdminForm(form) {
+    var root = document.querySelector('[data-admin-form="' + form + '"]');
+    if (!root) { return; }
+    var payload = {};
+    Array.prototype.forEach.call(root.querySelectorAll('[data-f]'), function (el) {
+      var type = el.getAttribute('data-t');
+      if (type === 'bool') { payload[el.getAttribute('data-f')] = !!el.checked; return; }
+      if (type === 'int') {
+        var n = parseInt(el.value, 10);
+        payload[el.getAttribute('data-f')] = isNaN(n) ? el.value : n;
+        return;
+      }
+      payload[el.getAttribute('data-f')] = el.value;
+    });
+    post(ADMIN_FORMS[form], payload);
   }
 
   function adminSection(state, key) {
@@ -2262,6 +2426,13 @@ _JS = r"""
       case 'services': return renderServices(state);
       case 'features': return renderFeatures(state);
       case 'org_config': return renderOrgConfig(state);
+      case 'delivery': return renderDelivery(state);
+      case 'access': return renderAccess(state);
+      case 'step_up': return renderStepUp(state);
+      case 'tokens': return renderTokens(state);
+      case 'audit': return renderAuditForwarding(state);
+      case 'privacy': return renderAdminPrivacy(state);
+      case 'stats': return renderStats(state);
       default: return '';
     }
   }
@@ -2638,6 +2809,9 @@ _JS = r"""
 
     if (e.target.closest('[data-admin-assets-save]')) { saveAssets(); return; }
 
+    var formSaveEl = e.target.closest('[data-admin-form-save]');
+    if (formSaveEl) { saveAdminForm(formSaveEl.getAttribute('data-admin-form-save')); return; }
+
     var addressSaveEl = e.target.closest('[data-admin-address-save]');
     if (addressSaveEl) { saveServerAddress(addressSaveEl.getAttribute('data-admin-address-save')); return; }
 
@@ -2938,6 +3112,8 @@ _JS = r"""
     // div-based switch it replaced did.
     if (el.getAttribute('role') === 'switch') { e.preventDefault(); el.click(); return; }
     if (el.hasAttribute('data-admin-assets-workspace')) { saveAssets(); return; }
+    var formEl = el.closest ? el.closest('[data-admin-form]') : null;
+    if (formEl && el.hasAttribute('data-f') && el.type !== 'checkbox') { saveAdminForm(formEl.getAttribute('data-admin-form')); return; }
     if (el.hasAttribute('data-admin-address')) { saveServerAddress(el.getAttribute('data-admin-address')); return; }
     if (el.hasAttribute('data-aa-value')) {
       submitAddPolicyRule();
@@ -2989,14 +3165,37 @@ _LOCAL_ONLY_BESPOKE_ACTIONS: frozenset[str] = frozenset({
 })
 
 
+def _admin_section_defaults() -> dict[str, dict[str, Any]]:
+    """What an org-only section holds while the admin config has not set it: the parsers' own
+    defaults, so a fresh server's forms show the values in force rather than empty fields."""
+    from . import org_mode, scoped_tokens
+    from .step_up_config import DEFAULT_STEP_UP_SCOPE
+
+    return {
+        "download_delivery": {
+            "inline_max_bytes": org_mode.DEFAULT_INLINE_MAX_BYTES, "link_ttl_seconds": int(org_mode.DEFAULT_LINK_TTL_SECONDS),
+            "allow_disk_staging": True, "agent_links": True, "allow_exports": True,
+        },
+        "authz": {"allowed_domains": [], "groups_claim": "", "required_groups": []},
+        "step_up": {"enabled": False, "require_passkey": False, "scope": DEFAULT_STEP_UP_SCOPE},
+        "scoped_tokens": {"enabled": False, "max_days": scoped_tokens.DEFAULT_DAYS, "allow_ai_proposals": False},
+        "audit_forwarding": {
+            "enabled": False, "kind": org_mode.DEFAULT_AUDIT_FORWARDING_KIND,
+            "syslog": {"host": "", "port": org_mode.DEFAULT_SYSLOG_PORT, "protocol": org_mode.DEFAULT_SYSLOG_PROTOCOL},
+            "http": {"url": ""},
+        },
+    }
+
+
 def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
     """The Admin page's sections and suppressed actions. It is a separate surface because its
     state is not the settings state: ``renderAdmin`` draws its own nav from these keys.
 
     Local mode has no administrator distinction (the install owner is the only caller), so it
     gets every section. In org mode only an administrator gets any: the route refuses anyone
-    else, and the same rule applies here to what is drawn. The sections that exist so far are
-    Services, Features and, for local mode, the bundle upload.
+    else, and the same rule applies here to what is drawn. Services and Features are in both modes,
+    the bundle upload only in local mode, and the delivery, sign-in, step-up, scoped-token,
+    audit-forwarding, privacy and stats sections only in org mode.
     """
     from .web.routes_admin import ADMIN_ACTIONS  # deferred: the route layer imports this module
 
@@ -3010,8 +3209,11 @@ def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
         }
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
-        "sections": {"services": is_admin, "features": is_admin},
+        "sections": dict.fromkeys(
+            ("services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"), is_admin,
+        ),
         "not_applicable_actions": [],
+        "defaults": _admin_section_defaults() if is_admin else {},
     }
 
 

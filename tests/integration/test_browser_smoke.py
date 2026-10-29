@@ -2672,6 +2672,23 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         assert page.url == f"{server.base_url}/admin"
 
+    def test_org_admin_page_renders_privacy_and_stats(self, page, context, org_server):
+        server, sessions = org_server
+        principal = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
+        _sign_in_org(context, server, sessions, principal=principal)
+        page.goto(f"{server.base_url}/admin")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        assert "Privacy Filter" in page.locator(".pf-navitem").all_inner_texts()
+        page.locator('.pf-navitem[data-nav="privacy"]').click()
+        page.wait_for_selector(".pf-privacy")
+        assert page.get_by_text("PII Detection Gate").first.is_visible()
+        self._screenshot(page, "org-admin-privacy")
+        page.locator('.pf-navitem[data-nav="stats"]').click()
+        page.wait_for_selector("[data-stat-tile]")
+        assert page.get_by_text("signed in").first.is_visible()
+        self._screenshot(page, "org-admin-stats")
+
 
 # --------------------------------------------------------------------- #
 # Phone layout: the shared rules (resources/design/base.css's header
@@ -2841,6 +2858,12 @@ def phone_page(browser, request):
 
 _ADMIN_SECTIONS = ("general", "auto_accept", "audit", "about")
 _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
+# The Admin page: every section an organization administrator sees, and the three a desktop
+# install's owner sees.
+_ORG_ADMIN_PAGE_SECTIONS = (
+    "services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats",
+)
+_LOCAL_ADMIN_PAGE_SECTIONS = ("services", "features", "org_config")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 
 def _phone_cases(case_ids):
@@ -2956,6 +2979,29 @@ class TestPhoneLayout:
         phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
         # A section renders into .pf-page (About into .pf-about-page).
         region = ".pf-page, .pf-detail-page, .pf-about-page"
+        phone_page.wait_for_selector(region)
+        _phone_screenshot(phone_page, f"{case}-{width}")
+        _assert_phone_layout(phone_page, width, main=region)
+
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"admin-org-{s}" for s in _ORG_ADMIN_PAGE_SECTIONS]
+                     + [f"admin-local-{s}" for s in _LOCAL_ADMIN_PAGE_SECTIONS]),
+    )
+    def test_admin(self, phone_page, org_server, local_server_with_settings, case, width):
+        mode, section = case.removeprefix("admin-").split("-", 1)
+        if mode == "org":
+            server, sessions = org_server
+            _sign_in_org(phone_page.context, server, sessions, principal=_ADMIN)
+        else:
+            server, _web_ui = local_server_with_settings
+            _sign_in_local(phone_page, server)
+        response = phone_page.goto(f"{server.base_url}/admin")
+        assert response.status == 200, f"/admin answered {response.status}"
+        phone_page.wait_for_selector(".pf-navitem")
+        # A script click, as for Settings: the tab strip's tap targets are checked by (c).
+        phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
+        region = ".pf-page, .pf-detail-page, .pf-privacy"
         phone_page.wait_for_selector(region)
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=region)
