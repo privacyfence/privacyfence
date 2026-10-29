@@ -1,12 +1,20 @@
 """The Admin JSON API: what an organization offers and how it is gated.
 
 ``POST /api/admin/{action}`` changes one thing and answers with the page state; ``GET
-/api/admin/state`` answers with the state alone. This module is the organization-mode adapter
-(``build_org_routes``) around a mode-independent core (``_dispatch`` and ``_admin_state``), the
-way ``routes_settings`` keeps one route layer with an authentication adapter per mode (ADR 0033).
+/api/admin/state`` answers with the state alone; ``POST /api/admin/rooms/upload`` replaces the
+room directory. ``build_org_routes`` and ``build_routes`` (local mode) are the two adapters around
+a mode-independent core (``_dispatch`` and ``_admin_state``), the way ``routes_settings`` keeps one
+route layer with an authentication adapter per mode (ADR 0033). Local mode also mounts
+``POST /api/admin/org_config/upload``, the bundle upload that used to live on Settings.
 
-Who may use it. A signed-in principal with ``is_admin``; anyone else gets a JSON 401 or 403. The
-CSRF and origin checks are the ones every organization route uses.
+Who may use it. In organization mode, a signed-in principal with ``is_admin``; anyone else gets a
+JSON 401 or 403. In local mode, the install owner (the caller mounts these routes behind the same
+owner-only wrapper as Settings), and sensitive actions and both uploads also need a session a
+person is behind where the install asks for one. The CSRF and origin checks are the ones each
+mode's other routes use.
+
+The bundle. Organization mode holds it in memory; local mode has no such holder and reads the
+installed file on each request, because a bundle can be installed while the daemon runs.
 
 How a change is gated. Every sensitive action needs a fresh WebAuthn assertion whatever the
 step-up configuration says (``always=True``): the Admin page decides which services an agent can
@@ -19,8 +27,10 @@ come from the request.
 
 How a change takes effect (``AdminAction.applies``):
 
-* ``live``: the shared organization config is refreshed in place, every principal's connectors
-  are dropped so they are rebuilt, and the relay is asked to re-check its registration;
+* ``live``: the shared organization config is refreshed in place and connectors are rebuilt
+  (organization mode: every principal's are dropped and the relay is asked to re-check its
+  registration; local mode: the owner's are rebuilt through the controller, and the dict other
+  OS accounts' connector factories read is the one refreshed);
 * ``restart``: the change is only saved, and the page state lists it in ``restart_needed``
   until the server restarts;
 * ``self``: the action applies itself.
@@ -30,6 +40,8 @@ one that is not (ADR 0014).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -39,10 +51,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import admin_config, oauth_apps, relay_client
+from .. import admin_config, oauth_apps, org_mode, relay_client
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
-from ..principal import Principal, principal_scope
+from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
+from ..settings_controller import SettingsController
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_session
@@ -50,8 +63,18 @@ from .routes_settings import (
     _apply_step_up_gate,
     _BadAction,
     _coerce,
+    _gate_upload,
+    _parse_form_assertion,
     _record_settings_audit,
+    handle_org_config_upload,
 )
+from .session_auth import LocalSessionStore
+from .session_auth import authenticated as _session_authenticated
+from .session_auth import check_csrf as _local_csrf_matches
+from .session_auth import check_origin as _local_origin_ok
+from .session_auth import human_session_required_json as _human_session_required_json
+from .session_auth import is_human_session as _is_human_session
+from .session_auth import unauthorized_html as _unauthorized_response
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +152,15 @@ RESTART_LABELS: dict[str, str] = {
 # Every POST route this module builds, and how its request is gated (ADR 0014).
 ROUTE_CLASSIFICATION: dict[str, Literal["action-dispatcher", "bespoke-sensitive"]] = {
     "/api/admin/{action}": "action-dispatcher",
+    # Room names become tool output an agent reads, so replacing them is gated like a sensitive
+    # action: a fresh assertion bound to the file's hash, and a human session in local mode.
+    "/api/admin/rooms/upload": "bespoke-sensitive",
+    # A bundle can rewrite the policy and every connector's OAuth client; local mode only.
+    "/api/admin/org_config/upload": "bespoke-sensitive",
 }
+
+# What the room directory upload accepts, in bytes.
+MAX_ROOMS_UPLOAD_BYTES = 2 * 1024 * 1024
 
 # The sections only an organization server has.
 _ORG_STATE_KEYS = ("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding")
@@ -181,12 +212,14 @@ def _admin_state(
 def _dispatch(
     principal: Principal, action: str, body: dict[str, Any], *,
     mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
-    step_up: StepUpConfig, step_up_origin: str, challenges: StepUpChallengeStore,
+    step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
     refresh_live: Callable[[list[str]], None],
+    state_extra: Callable[[], dict[str, Any]] | None = None,
 ) -> Response:
     """Everything after the caller has authenticated the principal and checked CSRF and origin.
 
-    ``body`` is the request's JSON object with ``csrf`` already removed."""
+    ``body`` is the request's JSON object with ``csrf`` already removed. ``state_extra`` adds
+    what only one mode's page state has."""
     spec = ADMIN_ACTIONS.get(action)
     if spec is None or mode not in spec.modes:
         return _error("Unknown action.", 404)
@@ -229,9 +262,58 @@ def _dispatch(
             _record_settings_audit(principal, f"{summary} ({who})")
         if spec.applies == "live":
             refresh_live(changed)
-    return JSONResponse(_admin_state(
-        mode=mode, bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
-    ))
+    return JSONResponse({
+        **_admin_state(
+            mode=mode, bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+        ),
+        **(state_extra() if state_extra is not None else {}),
+    })
+
+
+async def _replace_rooms_from_upload(
+    form: Any, principal: Principal, *,  # noqa: ANN401 -- starlette's FormData
+    mode: Mode, bundle: dict[str, Any], step_up: StepUpConfig | None, step_up_origin: str,
+    challenges: StepUpChallengeStore, refresh_live: Callable[[list[str]], None],
+    state: Callable[[], dict[str, Any]],
+) -> Response:
+    """Everything after the caller has authenticated the principal and checked CSRF, origin and,
+    in local mode, the human session: size, parse, step-up bound to the file's hash, replace."""
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return _error("Missing file.")
+    raw = await upload.read(MAX_ROOMS_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_ROOMS_UPLOAD_BYTES:
+        return _error("The file is larger than 2 MB.")
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        # Not JSON at all: replace_rooms words the refusal for anything that is not a room file.
+        data = None
+        try:
+            admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=False)
+        except admin_config.AdminConfigError as exc:
+            return _error(str(exc))
+    refusal = _gate_upload(
+        "upload_rooms", {"sha256": hashlib.sha256(raw).hexdigest()},
+        _parse_form_assertion(form.get("webauthn_assertion")),
+        principal=principal, step_up=step_up, step_up_origin=step_up_origin, challenges=challenges, always=True,
+    )
+    if refusal is not None:
+        with principal_scope(principal):
+            _record_settings_audit(principal, f"Step-up required for 'upload_rooms', refused (principal={principal.id})")
+        return refusal
+    try:
+        summary = admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=False)
+    except admin_config.AdminConfigError as exc:
+        return _error(str(exc))
+    except OSError as exc:
+        logger.error("Could not save the admin configuration: %s", exc)
+        return _error("Could not save the admin configuration.", 500)
+    who = f"admin={principal.id}" if mode == "org" else "principal=local"
+    with principal_scope(principal):
+        _record_settings_audit(principal, f"{summary} ({who})")
+    refresh_live(["rooms"])
+    return JSONResponse(state())
 
 
 def _check_classified(routes: list[BaseRoute]) -> None:
@@ -305,8 +387,150 @@ def build_org_routes(
             challenges=challenges, refresh_live=refresh_live,
         )
 
+    async def rooms_upload(request: Request) -> Response:
+        principal = _admin_principal(request)
+        if isinstance(principal, Response):
+            return principal
+        form = await request.form()
+        csrf = form.get("csrf")
+        if not isinstance(csrf, str) or not org_session.check_csrf(request, csrf):
+            return _error("unauthorized", 401)
+        if not org_session.check_origin(request):
+            return _error("Cross-origin request rejected.", 403)
+        return await _replace_rooms_from_upload(
+            form, principal, mode="org", bundle=bundle, step_up=step_up, step_up_origin=step_up_origin,
+            challenges=challenges, refresh_live=refresh_live,
+            state=lambda: _admin_state(
+                mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            ),
+        )
+
     routes: list[BaseRoute] = [
         Route("/api/admin/state", admin_state),
+        Route("/api/admin/rooms/upload", rooms_upload, methods=["POST"]),
+        Route("/api/admin/{action}", admin_action, methods=["POST"]),
+    ]
+    _check_classified(routes)
+    return routes
+
+
+def _local_bundle() -> dict[str, Any]:
+    """The installed bundle as it is now. Local mode has no ``OrgAuth`` to hold it, and a bundle
+    can be installed while the daemon runs, so each request reads it afresh."""
+    from ..daemon_main import load_org_config  # deferred: daemon_main imports the web layer
+
+    try:
+        return load_org_config()
+    except org_mode.ConfigurationError:
+        return {}
+
+
+def build_routes(
+    *,
+    controller: SettingsController,
+    sessions: LocalSessionStore,
+    step_up: StepUpConfig | None,
+    step_up_origin: str,
+    require_human_session: bool,
+    startup_admin: dict[str, Any],
+    org_config: dict[str, Any],
+) -> list[BaseRoute]:
+    """The Admin API for a local install. The caller mounts it behind the owner-only wrapper, as
+    it does the settings routes, so only the install owner gets here at all.
+
+    ``org_config`` is the startup dict other principals' connector factories close over: a live
+    change refreshes it in place so they see it too, and the owner's connectors are rebuilt
+    through the controller."""
+    challenges = StepUpChallengeStore()
+
+    def refresh_live(_changed: list[str]) -> None:
+        bundle = _local_bundle()
+        effective = oauth_apps.effective_org_config(
+            bundle, admin_config.config_for(bundle, mode="local", single_user=False), mode="local",
+        )
+        oauth_apps.refresh_in_place(org_config, effective)
+        controller.refresh_connectors()
+
+    def state_extra() -> dict[str, Any]:
+        # Set when an installed bundle carries settings this version ignores.
+        return {"error": controller.error}
+
+    def state() -> dict[str, Any]:
+        return {
+            **_admin_state(
+                mode="local", bundle=_local_bundle(), org_config=org_config, startup_admin=startup_admin,
+                principal=LOCAL_PRINCIPAL,
+            ),
+            **state_extra(),
+        }
+
+    def _human_session_refusal(request: Request, what: str) -> Response | None:
+        if require_human_session and not _is_human_session(request, sessions):
+            body, status = _human_session_required_json(what)
+            return JSONResponse(body, status_code=status)
+        return None
+
+    async def admin_state(request: Request) -> Response:
+        if not _session_authenticated(request, sessions):
+            return _unauthorized_response(request)
+        return JSONResponse(state())
+
+    async def admin_action(request: Request) -> Response:
+        if not _session_authenticated(request, sessions):
+            return _unauthorized_response(request)
+        action = request.path_params["action"]
+        spec = ADMIN_ACTIONS.get(action)
+        if spec is None or "local" not in spec.modes:
+            return _error("Unknown action.", 404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _error("Invalid JSON body.")
+        if not isinstance(payload, dict) or not _local_csrf_matches(request, payload.get("csrf")):
+            return _error("unauthorized", 401)
+        if not _local_origin_ok(request):
+            return _error("Cross-origin request rejected.", 403)
+        if spec.sensitive:
+            # Before the passkey ceremony, for the reason settings_action gives: a prompt for a
+            # change this session cannot make either way is a worse refusal than the refusal.
+            refused = _human_session_refusal(request, "change this setting")
+            if refused is not None:
+                return refused
+        body = {key: value for key, value in payload.items() if key != "csrf"}
+        return _dispatch(
+            LOCAL_PRINCIPAL, action, body, mode="local", bundle=_local_bundle(), org_config=org_config,
+            startup_admin=startup_admin, step_up=step_up, step_up_origin=step_up_origin,
+            challenges=challenges, refresh_live=refresh_live, state_extra=state_extra,
+        )
+
+    async def rooms_upload(request: Request) -> Response:
+        if not _session_authenticated(request, sessions):
+            return _unauthorized_response(request)
+        form = await request.form()
+        csrf = form.get("csrf")
+        if not isinstance(csrf, str) or not _local_csrf_matches(request, csrf):
+            return _error("unauthorized", 401)
+        if not _local_origin_ok(request):
+            return _error("Cross-origin request rejected.", 403)
+        refused = _human_session_refusal(request, "replace the room directory")
+        if refused is not None:
+            return refused
+        return await _replace_rooms_from_upload(
+            form, LOCAL_PRINCIPAL, mode="local", bundle=_local_bundle(), step_up=step_up,
+            step_up_origin=step_up_origin, challenges=challenges, refresh_live=refresh_live, state=state,
+        )
+
+    async def org_config_upload(request: Request) -> Response:
+        return await handle_org_config_upload(
+            request, controller=controller, sessions=sessions, step_up=step_up, step_up_origin=step_up_origin,
+            challenges=challenges, require_human_session=require_human_session, state_builder=state,
+            always=True,
+        )
+
+    routes: list[BaseRoute] = [
+        Route("/api/admin/state", admin_state),
+        Route("/api/admin/rooms/upload", rooms_upload, methods=["POST"]),
+        Route("/api/admin/org_config/upload", org_config_upload, methods=["POST"]),
         Route("/api/admin/{action}", admin_action, methods=["POST"]),
     ]
     _check_classified(routes)

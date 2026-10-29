@@ -1884,6 +1884,55 @@ class TestScopedTokenRoutes:
         assert page.index("window.__pfShowError(res.state.error)") < page.index("console.error('PrivacyFence action failed:'")
 
 
+class TestRoomsUploadShim:
+    def test_the_shim_intercepts_upload_rooms_and_posts_the_file_to_the_admin_route(self, client, sessions):
+        _authed(client, sessions)
+        page = client.get("/settings").text
+        assert "if (action === 'upload_rooms') { roomsInput.click(); return; }" in page
+        assert "bindUpload(roomsInput, '/api/admin/rooms/upload');" in page
+        # The bundle upload keeps its own path.
+        assert "bindUpload(fileInput, '/api/settings/org_config/upload');" in page
+
+
+class TestHandleOrgConfigUploadAlways:
+    """The Admin page passes ``always``: a passkey whatever the step-up configuration says."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    def _app(self, controller, sessions, *, always):
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+
+        from privacyfence.webauthn_stepup import StepUpChallengeStore
+
+        challenges = StepUpChallengeStore()
+
+        async def upload(request):
+            return await rs.handle_org_config_upload(
+                request, controller=controller, sessions=sessions,
+                step_up=StepUpConfig(enabled=False, rp_id="localhost"), step_up_origin=ORIGIN,
+                challenges=challenges, require_human_session=False, state_builder=lambda: {"ok": True},
+                always=always,
+            )
+
+        return TestClient(Starlette(routes=[Route("/up", upload, methods=["POST"])]), base_url=ORIGIN)
+
+    def test_always_gates_an_upload_the_configuration_would_not(self, controller, sessions):
+        client = self._app(controller, sessions, always=True)
+        csrf = _authed(client, sessions)
+        r = client.post("/up", data={"csrf": csrf}, files={"file": ("x.json", b'{"version": 1}', "application/json")})
+        assert (r.status_code, r.json()["error"]) == (403, "Add a passkey on /security first.")
+        assert not (sc.org_dir() / "org_bundle.json").exists()
+
+    def test_without_always_the_configuration_decides(self, controller, sessions):
+        client = self._app(controller, sessions, always=False)
+        csrf = _authed(client, sessions)
+        r = client.post("/up", data={"csrf": csrf}, files={"file": ("x.json", b'{"version": 1}', "application/json")})
+        assert (r.status_code, r.json()) == (200, {"ok": True})
+
+
 class TestAuditLogDownload:
     def test_nothing_to_export_is_404(self, client, sessions):
         _authed(client, sessions)

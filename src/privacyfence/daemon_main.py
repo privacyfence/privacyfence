@@ -1124,6 +1124,10 @@ def _maybe_start_web_server(
         step_up=cast(step_up_config.StepUpConfig, local_step_up),
         # ADR 0006 option D / ADR 0037: a relabel only, never an attested source.
         agent_overrides=agent_overrides.from_config(config),
+        # The Admin API compares the admin config against this one to list what waits for a
+        # restart, and refreshes org_config -- the dict the connector factory above closes over.
+        startup_admin=startup_admin,
+        org_config=org_config,
     )
     server.start()
     # The pending-result URL gate.py hands back to Claude is

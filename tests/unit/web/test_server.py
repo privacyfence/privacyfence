@@ -1309,6 +1309,37 @@ class TestSettingsFoldedIntoTheCombinedApp:
         assert r.status_code == 200
         assert "PrivacyFence — Settings" in r.text
 
+    def test_the_owner_reaches_the_admin_state(self, tmp_path, monkeypatch):
+        controller = _controller(tmp_path, monkeypatch)
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller, startup_admin={}, org_config={})
+        client = TestClient(app, base_url="http://localhost")
+        _signed_in(client, sessions)
+
+        r = client.get("/api/admin/state")
+
+        assert r.status_code == 200
+        assert "services" in r.json() and r.json()["error"] == ""
+
+    def test_a_non_owner_principal_gets_a_404_from_the_admin_api(self, tmp_path, monkeypatch):
+        controller = _controller(tmp_path, monkeypatch)
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller)
+        client = TestClient(app, base_url="http://localhost")
+        session_id = sessions.create(principal_id="os-1002")
+        client.cookies.set(SESSION_COOKIE, session_id)
+
+        assert client.get("/api/admin/state").status_code == 404
+        assert client.post("/api/admin/clear_rooms", json={"csrf": session_id}).status_code == 404
+
+    def test_no_controller_means_no_admin_api(self):
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions)
+        client = TestClient(app, base_url="http://localhost")
+        _signed_in(client, sessions)
+
+        assert client.get("/api/admin/state").status_code == 404
+
     def test_no_controller_means_no_settings_route(self):
         sessions = LocalSessionStore()
         app = build_app(WebApprovalUI(), sessions=sessions)
