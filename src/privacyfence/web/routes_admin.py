@@ -37,7 +37,10 @@ How a change takes effect (``AdminAction.applies``):
   OS accounts' connector factories read is the one refreshed);
 * ``restart``: the change is only saved, and the page state lists it in ``restart_needed``
   until the server restarts;
-* ``self``: the action applies itself.
+* ``self``: the action applies itself. The four install-wide privacy actions do: they rewrite the
+  server's settings.yaml and reload the privacy filter and PII detector for every principal
+  (``org_install_policy.apply_change``), so an organization's privacy policy is changed here by an
+  administrator and Settings stays the same page for everyone.
 
 A route that mutates must be listed in ``ROUTE_CLASSIFICATION``; ``build_org_routes`` raises for
 one that is not (ADR 0014).
@@ -59,10 +62,10 @@ from .. import admin_config, oauth_apps, org_mode, relay_client, settings_window
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
-from ..settings_controller import REPO_URL, SettingsController
+from ..settings_controller import REPO_URL, SettingsController, _pii_general_fields, _privacy_state_from_config
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
-from . import org_session
+from . import org_install_policy, org_session, org_stats
 from .csp import nonce_for as _csp_nonce_for
 from .routes_security import PF_WEBAUTHN_JS
 from .routes_settings import (
@@ -114,7 +117,14 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "tighten_step_up": AdminAction(_ORG_ONLY, True, "restart"),
     "set_scoped_tokens": AdminAction(_ORG_ONLY, True, "restart"),
     "set_audit_forwarding": AdminAction(_ORG_ONLY, True, "restart"),
+    "toggle_pii_detection": AdminAction(_ORG_ONLY, True, "self"),
+    "toggle_pii_category": AdminAction(_ORG_ONLY, True, "self"),
+    "set_default_policy": AdminAction(_ORG_ONLY, True, "self"),
+    "set_category_policy": AdminAction(_ORG_ONLY, True, "self"),
 }
+
+# The actions ``org_install_policy.apply_change`` carries out.
+_PRIVACY_ACTIONS = frozenset(org_install_policy.SUPPORTED_ACTIONS)
 
 # (name, type, required) for each declared parameter, in the order the page posts them.
 _Param = tuple[str, type, bool]
@@ -142,6 +152,10 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
         ("enabled", bool, True), ("kind", str, True), ("syslog_host", str, True), ("syslog_port", int, True),
         ("syslog_protocol", str, True), ("http_url", str, True),
     ),
+    "toggle_pii_detection": (),
+    "toggle_pii_category": (("category_key", str, True),),
+    "set_default_policy": (("group", str, True), ("policy", str, True)),
+    "set_category_policy": (("group", str, True), ("category", str, True), ("policy", str, True)),
 }
 
 # The sections that take effect only when the server starts again, with the name the page shows.
@@ -212,12 +226,28 @@ def _restart_needed(admin: dict[str, Any], startup_admin: dict[str, Any]) -> lis
     return [label for key, label in RESTART_LABELS.items() if key in changed]
 
 
+def _privacy_rows(install_wide_settings: dict[str, Any]) -> dict[str, Any]:
+    """The install-wide privacy policy as the page draws it. A group the file does not mention
+    reads as ``block``, the fail-closed default an organization server enforces."""
+    privacy = _privacy_state_from_config(install_wide_settings, fail_safe_default="block")
+    # Calendar's free/busy switch and the Gmail signature are one desktop's own settings; an
+    # organization server has neither, so they are not drawn rather than drawn to 404.
+    privacy["groups"] = [g for g in privacy["groups"] if g["key"] != "calendar"]
+    privacy.pop("gmail_append_signature", None)
+    # The PII Detection Gate's switches are part of the same install-wide policy.
+    privacy.update(_pii_general_fields(install_wide_settings))
+    return privacy
+
+
 def _admin_state(
     *, mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
-    principal: Principal,
+    principal: Principal, install_wide_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What the Admin page renders from. It carries no secret: service rows hold a client id at
-    most, and audit forwarding carries the name of its bearer-token variable, never the value."""
+    most, and audit forwarding carries the name of its bearer-token variable, never the value.
+
+    An organization server also reports its install-wide privacy policy (``install_wide_settings``,
+    when the caller has it) and the usage stats counted from every principal's files."""
     admin = admin_config.config_for(bundle, mode=mode, single_user=False)
     state: dict[str, Any] = {
         "services": admin_config.service_rows(bundle, admin, mode=mode),
@@ -229,6 +259,9 @@ def _admin_state(
         for key in _ORG_STATE_KEYS:
             state[key] = admin.get(key, {})
         state["relay_status"] = relay_client.status()
+        if install_wide_settings is not None:
+            state["privacy"] = _privacy_rows(install_wide_settings)
+        state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
     return state
 
 
@@ -238,11 +271,13 @@ def _dispatch(
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
     refresh_live: Callable[[list[str]], None],
     state_extra: Callable[[], dict[str, Any]] | None = None,
+    install_wide_settings: dict[str, Any] | None = None, install_wide_settings_path: str = "",
 ) -> Response:
     """Everything after the caller has authenticated the principal and checked CSRF and origin.
 
     ``body`` is the request's JSON object with ``csrf`` already removed. ``state_extra`` adds
-    what only one mode's page state has."""
+    what only one mode's page state has. ``install_wide_settings`` and its file's path are what
+    the privacy actions rewrite."""
     spec = ADMIN_ACTIONS.get(action)
     if spec is None or mode not in spec.modes:
         return _error("Unknown action.", 404)
@@ -270,15 +305,29 @@ def _dispatch(
         with principal_scope(principal):
             _record_settings_audit(principal, f"Step-up required for {action!r}, refused (principal={principal.id})")
         return refusal
-    try:
-        summary, changed = admin_config.apply_change(
-            action, params, bundle=bundle, mode=mode, single_user=False,
-        )
-    except admin_config.AdminConfigError as exc:
-        return _error(str(exc))
-    except OSError as exc:
-        logger.error("Could not save the admin configuration: %s", exc)
-        return _error("Could not save the admin configuration.", 500)
+    if action in _PRIVACY_ACTIONS:
+        try:
+            summary = _apply_privacy_action(
+                action, params, install_wide_settings if install_wide_settings is not None else {},
+                install_wide_settings_path,
+            )
+        except org_install_policy.PolicyChangeRejected as exc:
+            return _error(str(exc))
+        except OSError as exc:
+            # Writing settings.yaml failed, so nothing was applied: the policy is unchanged.
+            logger.error("Could not write the install-wide settings.yaml: %s", exc)
+            return _error("could not write settings.yaml", 500)
+        changed: list[str] = []
+    else:
+        try:
+            summary, changed = admin_config.apply_change(
+                action, params, bundle=bundle, mode=mode, single_user=False,
+            )
+        except admin_config.AdminConfigError as exc:
+            return _error(str(exc))
+        except OSError as exc:
+            logger.error("Could not save the admin configuration: %s", exc)
+            return _error("Could not save the admin configuration.", 500)
     if summary:
         who = f"admin={principal.id}" if mode == "org" else "principal=local"
         with principal_scope(principal):
@@ -288,9 +337,34 @@ def _dispatch(
     return JSONResponse({
         **_admin_state(
             mode=mode, bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            install_wide_settings=install_wide_settings,
         ),
         **(state_extra() if state_extra is not None else {}),
     })
+
+
+def _current_pii_flag(action: str, params: dict[str, Any], settings: dict[str, Any]) -> bool:
+    """toggle_pii_detection and toggle_pii_category flip the *current* value, as the menu toggle
+    in local mode does, and as the shared page's switches post (no value in the body).
+    ``org_install_policy.apply_change`` itself takes the wanted value, which suits a form that
+    could be submitted stale or twice but not this control; working out the flip here keeps the
+    page unaware of the difference."""
+    pii_cfg = settings.get("pii_detection", {}) or {}
+    if action == "toggle_pii_detection":
+        return bool(pii_cfg.get("enabled", True))
+    return bool(pii_cfg.get(str(params.get("category_key", "")), True))
+
+
+def _apply_privacy_action(
+    action: str, params: dict[str, Any], settings: dict[str, Any], settings_path: str,
+) -> str:
+    """Carries out one install-wide privacy action and returns its audit summary. May raise
+    ``org_install_policy.PolicyChangeRejected`` (a group, category or policy this install does not
+    have) or ``OSError`` (settings.yaml could not be written; nothing was applied)."""
+    payload = dict(params)
+    if action in ("toggle_pii_detection", "toggle_pii_category"):
+        payload["enabled"] = not _current_pii_flag(action, params, settings)
+    return org_install_policy.apply_change(settings, settings_path, action=action, payload=payload)
 
 
 async def _replace_rooms_from_upload(
@@ -357,9 +431,15 @@ def build_org_routes(
     org_config: dict[str, Any],
     bundle: dict[str, Any],
     startup_admin: dict[str, Any],
+    install_wide_settings: dict[str, Any],
+    install_wide_settings_path: str = "",
 ) -> list[BaseRoute]:
     """The Admin API for an organization server. ``org_config`` is the shared effective config
-    every long-lived holder reads; a live change refreshes it in place."""
+    every long-lived holder reads; a live change refreshes it in place.
+
+    ``install_wide_settings`` is the server's live settings.yaml dict and
+    ``install_wide_settings_path`` the file it was loaded from: the privacy actions rewrite both.
+    Without a path they are refused, so a caller that only reads cannot overwrite a guessed file."""
     challenges = StepUpChallengeStore()
 
     def _admin_principal(request: Request) -> Principal | Response:
@@ -386,6 +466,7 @@ def build_org_routes(
             return principal
         return JSONResponse(_admin_state(
             mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            install_wide_settings=install_wide_settings,
         ))
 
     async def admin_page(request: Request) -> Response:
@@ -405,6 +486,7 @@ def build_org_routes(
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         state = _admin_state(
             mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            install_wide_settings=install_wide_settings,
         )
         html = web_shell.wrap(
             _admin_page_body(state, mode="org", is_admin=True, csrf=csrf, nonce=nonce),
@@ -435,6 +517,7 @@ def build_org_routes(
             principal, action, body, mode="org", bundle=bundle, org_config=org_config,
             startup_admin=startup_admin, step_up=step_up, step_up_origin=step_up_origin,
             challenges=challenges, refresh_live=refresh_live,
+            install_wide_settings=install_wide_settings, install_wide_settings_path=install_wide_settings_path,
         )
 
     async def rooms_upload(request: Request) -> Response:
@@ -452,6 +535,7 @@ def build_org_routes(
             challenges=challenges, refresh_live=refresh_live,
             state=lambda: _admin_state(
                 mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            install_wide_settings=install_wide_settings,
             ),
         )
 

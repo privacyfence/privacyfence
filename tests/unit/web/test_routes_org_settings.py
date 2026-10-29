@@ -1,6 +1,7 @@
 """Tests for org mode's settings surface: every signed-in principal's
-own auto-accept rules (read + add + remove), and the admin-only install-wide
-PII/privacy policy, read and edited. Exercises web/routes_settings.py's
+own auto-accept rules (read + add + remove). The install-wide PII/privacy
+policy and the usage stats are Admin sections (tests/unit/web/test_routes_admin.py),
+so an administrator's Settings is the same page as anyone else's. Exercises web/routes_settings.py's
 ``build_org_routes``, which renders its pages with the exact same
 settings_window_html.build_html() local mode's own settings page uses and
 takes every write through one generic ``POST /api/settings/{action}``
@@ -17,17 +18,13 @@ What an org-mode settings write looks like:
 - ``add_policy_rule`` takes ``{group, value, verbs: [...]}`` (a list of
   verbs, matching the shared JS's own multi-verb-checkbox "Add a rule"
   form).
-- ``toggle_pii_detection``/``toggle_pii_category`` flip the *current*
-  value server-side (matching local mode's own toggle semantics, and what
-  the shared JS's toggle control actually posts -- an empty payload) --
-  they take no explicit ``enabled`` field, unlike
-  ``org_install_policy.apply_change``'s own contract;
-  see ``routes_settings.py``'s own ``_current_pii_flag``.
+- The four privacy actions have no route here at all: they are local-mode
+  settings, and an organization's administrator changes them through
+  ``POST /api/admin/<action>``.
 - An unauthenticated write gets a JSON ``401`` (the generic dispatcher
   is driven by ``fetch()``, not a real browser navigation, so a redirect
   to an HTML login page would break the bridge's own ``.json()`` parse) --
-  the GET pages (``/settings``/``/settings/privacy``) redirect to
-  ``/login``.
+  the GET page (``/settings``) redirects to ``/login``.
 
 The rules half of this page reads and writes the v2 ``auto_accept:``
 on-disk section (``policy/store.py``) exclusively, via
@@ -56,7 +53,7 @@ from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 from privacyfence import (
-    auto_accept, paths, personal_settings, privacy_filter, scoped_token_proposals, scoped_tokens, secure_files, step_up_config,
+    auto_accept, paths, personal_settings, scoped_token_proposals, scoped_tokens, secure_files, step_up_config,
 )
 from privacyfence.agent_identity import AgentIdentity, AgentSource
 from privacyfence import webauthn_stepup as wa
@@ -68,7 +65,6 @@ from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session
-from privacyfence.web import org_stats
 from privacyfence.web import routes_settings as ros
 
 
@@ -114,18 +110,17 @@ def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
 
 
 def _app(
-    *, install_wide_settings=None, sessions=None, install_wide_settings_path="",
+    *, install_wide_settings=None, sessions=None,
     step_up: StepUpConfig | None = None, connector_registry=None,
-    scoped_token_policy=None, scoped_token_store=None, scoped_token_page_data=None, org_config=None,
+    scoped_token_policy=None, scoped_token_store=None, scoped_token_page_data=None,
 ):
     sessions = sessions or org_session.OrgSessionStore()
     routes = ros.build_org_routes(
         sessions=sessions, install_wide_settings=install_wide_settings if install_wide_settings is not None else {},
-        install_wide_settings_path=install_wide_settings_path,
         step_up=step_up or StepUpConfig(), step_up_origin=BASE_URL,
         connector_registry=connector_registry,
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_token_store,
-        scoped_token_page_data=scoped_token_page_data, org_config=org_config,
+        scoped_token_page_data=scoped_token_page_data,
     )
     return Starlette(routes=routes), sessions
 
@@ -178,33 +173,27 @@ class TestAuthRequired:
         assert r.json() == {"error": "unauthorized"}
 
 
-class TestPrivacyPageAdminGating:
-    def test_non_admin_gets_403(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "bob")
+class TestPrivacyPageMovedToAdmin:
+    @pytest.mark.parametrize("principal", [BOB, ADMIN])
+    def test_signed_in_visitors_are_sent_to_the_admin_page(self, tmp_path, monkeypatch, principal):
+        # Who may open /admin is that page's own decision; this route no longer serves a page.
+        _seed(tmp_path, monkeypatch, principal.id)
         app, sessions = _app()
         client = _client(app)
-        _signed_in(client, sessions, BOB)
+        _signed_in(client, sessions, principal)
         r = client.get("/settings/privacy")
-        assert r.status_code == 403
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin"
 
-    def test_admin_gets_200(self, tmp_path, monkeypatch):
+    def test_the_settings_page_carries_no_privacy_or_stats_state(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "carol")
-        app, sessions = _app()
+        app, sessions = _app(install_wide_settings={"privacy": {"default_policy": "block"}})
         client = _client(app)
         _signed_in(client, sessions, ADMIN)
-        r = client.get("/settings/privacy")
-        assert r.status_code == 200
-
-    def test_gmail_signature_toggle_is_left_out_of_orgs_state(self, tmp_path, monkeypatch):
-        # toggle_gmail_signature is LOCAL_MODE-only, like the calendar
-        # toggle -- the page renders its card only when this key exists.
-        _seed(tmp_path, monkeypatch, "carol")
-        app, sessions = _app()
-        client = _client(app)
-        _signed_in(client, sessions, ADMIN)
-        body = client.get("/settings/privacy").text
-        assert '"gmail_append_signature"' not in body
-        assert '"calendar_free_busy"' in body
+        body = client.get("/settings").text
+        state = _initial_state(body)
+        assert "privacy" not in state and "stats" not in state
+        assert not {"pii_enabled", "pii_ip", "pii_financial"} & set(state["general"])
 
     def test_state_carries_the_grist_stub_keys_with_signin_unavailable(self, tmp_path, monkeypatch):
         # The page script reads these three keys unconditionally; org mode has no Grist sign-in
@@ -213,7 +202,7 @@ class TestPrivacyPageAdminGating:
         app, sessions = _app()
         client = _client(app)
         _signed_in(client, sessions, ADMIN)
-        body = client.get("/settings/privacy").text
+        body = client.get("/settings").text
         assert '"grist_signin": "unavailable"' in body
         assert '"grist_server_url_pinned": ""' in body
         assert '"grist_auth": {"error": ""}' in body
@@ -223,47 +212,6 @@ def _initial_state(body: str) -> dict:
     match = re.search(r"window\.__pfInitialState = (\{.*?\});</script>", body, re.DOTALL)
     assert match, "window.__pfInitialState assignment not found in the settings page"
     return json.loads(match.group(1))
-
-
-class TestStatsSection:
-    """The admin's Stats page (ADR 0217): install-wide counts for an admin, nothing for anyone
-    else -- not even the counts, since those describe other people's use."""
-
-    def test_admin_state_counts_every_principal(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "carol")
-        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("drive.folder", "read", ["folder-a"]))
-        (tmp_path / "users" / "alice" / "credentials").mkdir()
-        (tmp_path / "users" / "alice" / "credentials" / "slack_token.json").write_text("{}", encoding="utf-8")
-        app, sessions = _app(org_config={"slack": {"client_id": "scid"}})
-        client = _client(app)
-        _signed_in(client, sessions, ADMIN)
-        body = client.get("/settings").text
-        assert _capabilities(body)["sections"]["stats"] is True
-        stats = _initial_state(body)["stats"]
-        assert stats["users"] == {"total": 2, "with_connectors": 1, "with_rules": 1}
-        assert {"service": "slack", "label": "Slack", "configured": True, "users": 1} in stats["connectors"]
-        assert stats["rules"]["by_connector"] == [{"connector": "drive", "label": "Drive", "rules": 1, "users": 1}]
-
-    def test_stats_read_an_independent_copy_of_the_shared_config(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "carol")
-        shared = {"slack": {"client_id": "scid"}}
-        seen = []
-        monkeypatch.setattr(org_stats, "collect", lambda config: seen.append(config) or org_stats.empty())
-        app, sessions = _app(org_config=shared)
-        client = _client(app)
-        _signed_in(client, sessions, ADMIN)
-        client.get("/settings")
-        assert seen == [shared] and seen[0] is not shared
-
-    def test_non_admin_gets_no_counts_and_no_section(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "bob")
-        _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("drive.folder", "read", ["folder-a"]))
-        app, sessions = _app()
-        client = _client(app)
-        _signed_in(client, sessions, BOB)
-        body = client.get("/settings").text
-        assert _capabilities(body)["sections"]["stats"] is False
-        assert _initial_state(body)["stats"] == org_stats.empty()
 
 
 class TestPrivacyStateFromConfig:
@@ -337,9 +285,10 @@ class TestPrincipalScopedRules:
         assert r.status_code == 200
         assert policy_describe.rule_sentence(rules[0]) in r.text
 
-    def test_admin_sees_privacy_capabilities_non_admin_does_not(self, tmp_path, monkeypatch):
-        """General is every principal's (their own passkey scope lives there, ADR 0091); Privacy
-        Filter stays admin-only."""
+    def test_privacy_and_stats_are_not_settings_sections_for_anyone(self, tmp_path, monkeypatch):
+        """General is every principal's (their own passkey scope lives there, ADR 0091); the
+        install-wide Privacy Filter and Stats are Admin sections, so an administrator's Settings is
+        the same page as anyone else's."""
         _seed(tmp_path, monkeypatch, "alice")
         _seed(tmp_path, monkeypatch, "carol")
         app, sessions = _app()
@@ -350,6 +299,7 @@ class TestPrincipalScopedRules:
         assert caps["mode"] == "org"
         assert caps["is_admin"] is False
         assert caps["sections"]["privacy"] is False
+        assert caps["sections"]["stats"] is False
         assert caps["sections"]["general"] is True
         assert caps["sections"]["auto_accept"] is True
 
@@ -357,7 +307,8 @@ class TestPrincipalScopedRules:
         _signed_in(client2, sessions, ADMIN)
         caps2 = _capabilities(client2.get("/settings").text)
         assert caps2["is_admin"] is True
-        assert caps2["sections"]["privacy"] is True
+        assert caps2["sections"]["privacy"] is False
+        assert caps2["sections"]["stats"] is False
         assert caps2["sections"]["general"] is True
 
 
@@ -1108,146 +1059,17 @@ class TestRemoveRule:
         assert recorded == ["remove_policy_rule"]
 
 
-class TestInstallWidePolicyEditing:
-    """The admin-only write surface on /settings/privacy."""
-
-    @staticmethod
-    def _editable(tmp_path, monkeypatch, settings: dict):
-        _seed(tmp_path, monkeypatch, "carol")
-        path = tmp_path / "install-settings.yaml"
-        path.write_text(yaml.safe_dump(settings), encoding="utf-8")
-        app, sessions = _app(install_wide_settings=settings, install_wide_settings_path=str(path))
-        client = _client(app)
-        csrf = _signed_in(client, sessions, ADMIN)
-        return client, csrf, settings, path
-
-    def test_admin_sees_edit_controls(self, tmp_path, monkeypatch):
-        client, _csrf, _settings, _path = self._editable(tmp_path, monkeypatch, {})
-        body = client.get("/settings/privacy").text
-        assert "'set_default_policy'" in body
-        assert "'toggle_pii_detection'" in body
-
-    def test_admin_can_set_a_group_default_policy(self, tmp_path, monkeypatch):
-        client, csrf, settings, path = self._editable(
-            tmp_path, monkeypatch, {"privacy": {"default_policy": "block"}},
-        )
-        r = _post_action(client, "set_default_policy", {"group": "privacy", "policy": "redact"}, csrf)
-        assert r.status_code == 200
-        assert settings["privacy"]["default_policy"] == "redact"
-        assert yaml.safe_load(path.read_text())["privacy"]["default_policy"] == "redact"
-
-    def test_admin_can_set_a_category_policy(self, tmp_path, monkeypatch):
-        client, csrf, settings, _path = self._editable(
-            tmp_path, monkeypatch, {"privacy": {"default_policy": "allow"}},
-        )
-        r = _post_action(client, "set_category_policy", {"group": "privacy", "category": "body", "policy": "block"}, csrf)
-        assert r.status_code == 200
-        assert settings["privacy"]["categories"] == {"body": "block"}
-
-    def test_admin_can_toggle_the_pii_gate(self, tmp_path, monkeypatch):
-        client, csrf, settings, _path = self._editable(
-            tmp_path, monkeypatch, {"pii_detection": {"enabled": True}},
-        )
-        # No `enabled` field at all -- matches the shared JS toggle
-        # control's own empty payload; the dispatcher computes the flip.
-        r = _post_action(client, "toggle_pii_detection", {}, csrf)
-        assert r.status_code == 200
-        assert settings["pii_detection"]["enabled"] is False
-
-    def test_toggle_ignores_a_client_supplied_enabled_value(self, tmp_path, monkeypatch):
-        # A client-supplied `enabled` (org_install_policy.apply_change's
-        # own plain-form contract) must not let a hand-crafted request pin
-        # the toggle to whatever it wants -- the dispatcher always computes
-        # the flip itself, the same "current value, inverted" semantics
-        # local mode's own menu-item toggle has.
-        client, csrf, settings, _path = self._editable(
-            tmp_path, monkeypatch, {"pii_detection": {"enabled": True}},
-        )
-        r = _post_action(client, "toggle_pii_detection", {"enabled": True}, csrf)
-        assert r.status_code == 200
-        assert settings["pii_detection"]["enabled"] is False
-
-    def test_a_non_admin_cannot_write_even_with_a_valid_csrf(self, tmp_path, monkeypatch):
-        # The page's own 403 governs rendering; this is the one that governs
-        # doing. A hand-written POST from any signed-in principal must not
-        # reach org_install_policy at all.
-        _seed(tmp_path, monkeypatch, "bob")
-        settings = {"privacy": {"default_policy": "block"}}
-        path = tmp_path / "install-settings.yaml"
-        path.write_text(yaml.safe_dump(settings), encoding="utf-8")
-        app, sessions = _app(install_wide_settings=settings, install_wide_settings_path=str(path))
-        client = _client(app)
-        csrf = _signed_in(client, sessions, BOB)
-
-        r = _post_action(client, "set_default_policy", {"group": "privacy", "policy": "allow"}, csrf)
-        assert r.status_code == 403
-        assert settings["privacy"]["default_policy"] == "block"
-
-    def test_wrong_csrf_is_rejected(self, tmp_path, monkeypatch):
-        client, _csrf, settings, _path = self._editable(
-            tmp_path, monkeypatch, {"privacy": {"default_policy": "block"}},
-        )
-        r = _post_action(client, "set_default_policy", {"group": "privacy", "policy": "allow"}, "not-the-session")
-        assert r.status_code == 401
-        assert settings["privacy"]["default_policy"] == "block"
-
-    def test_cross_origin_is_rejected(self, tmp_path, monkeypatch):
-        client, csrf, settings, _path = self._editable(
-            tmp_path, monkeypatch, {"privacy": {"default_policy": "block"}},
-        )
-        r = _post_action(
-            client, "set_default_policy", {"group": "privacy", "policy": "allow"}, csrf,
-            headers={"Origin": "https://evil.example.com"},
-        )
-        assert r.status_code == 403
-        assert settings["privacy"]["default_policy"] == "block"
-
-    def test_a_bad_payload_is_a_400(self, tmp_path, monkeypatch):
-        client, csrf, _settings, _path = self._editable(tmp_path, monkeypatch, {})
-        r = _post_action(client, "set_default_policy", {"group": "privacy", "policy": "nope"}, csrf)
-        assert r.status_code == 400
-
-    def test_a_change_is_audit_logged_under_the_admin(self, tmp_path, monkeypatch):
-        client, csrf, _settings, _path = self._editable(
-            tmp_path, monkeypatch, {"privacy": {"default_policy": "block"}},
-        )
-        recorded = []
-        monkeypatch.setattr(ros, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
-
-        _post_action(client, "set_default_policy", {"group": "privacy", "policy": "allow"}, csrf)
-
-        assert len(recorded) == 1
-        principal, summary = recorded[0]
-        assert principal.id == ADMIN.id
-        assert "allow" in summary
-        assert "admin=carol" in summary
-
-    def test_the_change_is_live_for_another_principal_immediately(self, tmp_path, monkeypatch):
-        client, csrf, settings, _path = self._editable(
-            tmp_path, monkeypatch, {"privacy": {"default_policy": "allow"}},
-        )
-        with principal_scope(BOB):
-            privacy_filter.init_privacy_filter(settings, org_managed=True)
-            assert privacy_filter.category_policy("privacy", "body") == "allow"
-
-        _post_action(client, "set_default_policy", {"group": "privacy", "policy": "block"}, csrf)
-
-        with principal_scope(BOB):
-            assert privacy_filter.category_policy("privacy", "body") == "block"
-
-
 class TestCspNonce:
-    def test_both_pages_carry_the_response_nonce_on_their_style_element(self, tmp_path, monkeypatch):
+    def test_the_page_carries_the_response_nonce_on_its_style_element(self, tmp_path, monkeypatch):
         # Without it _SecurityHeadersMiddleware's style-src-elem drops the
         # whole <style> block and the page renders unstyled.
         _seed(tmp_path, monkeypatch, "carol")
         app, sessions = _app()
         client = _client(app)
         _signed_in(client, sessions, ADMIN)
-        for url in ("/settings", "/settings/privacy"):
-            body = client.get(url).text
-            assert "<style nonce=\"" in body, url
-            assert "<style>" not in body, url
+        body = client.get("/settings").text
+        assert "<style nonce=\"" in body
+        assert "<style>" not in body
 
 
 class TestPersistentNav:
@@ -1255,16 +1077,15 @@ class TestPersistentNav:
     header/nav every other org-mode page (/approvals, /connect, /security)
     carries."""
 
-    def test_settings_and_privacy_pages_both_carry_the_shell_nav(self, tmp_path, monkeypatch):
+    def test_the_settings_page_carries_the_shell_nav(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "carol")
         app, sessions = _app()
         client = _client(app)
         _signed_in(client, sessions, ADMIN)
-        for url in ("/settings", "/settings/privacy"):
-            body = client.get(url).text
-            assert 'class="pf-shell-nav-item active" href="/settings"' in body, url
-            for href in ("/approvals", "/connect", "/security"):
-                assert f'class="pf-shell-nav-item" href="{href}"' in body, url
+        body = client.get("/settings").text
+        assert 'class="pf-shell-nav-item active" href="/settings"' in body
+        for href in ("/approvals", "/connect", "/security"):
+            assert f'class="pf-shell-nav-item" href="{href}"' in body
 
     def test_signed_in_principal_is_shown_in_the_shell_header(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
@@ -1276,20 +1097,6 @@ class TestPersistentNav:
 
 
 class TestWriteFailures:
-    def test_an_unwritable_settings_yaml_is_a_500_with_the_policy_unchanged(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "carol")
-        settings = {"privacy": {"default_policy": "block"}}
-        # A directory where the file should be: atomic_write_text raises.
-        unwritable = tmp_path / "install-settings.yaml"
-        unwritable.mkdir()
-        app, sessions = _app(install_wide_settings=settings, install_wide_settings_path=str(unwritable))
-        client = _client(app)
-        csrf = _signed_in(client, sessions, ADMIN)
-
-        r = _post_action(client, "set_default_policy", {"group": "privacy", "policy": "allow"}, csrf)
-        assert r.status_code == 500
-        assert settings["privacy"]["default_policy"] == "block"
-
     def test_a_failing_audit_write_does_not_fail_the_request(self, tmp_path, monkeypatch):
         # The rule removal is already on disk by the time the audit entry is
         # written; losing the entry is worth a warning, not a 500 that tells
@@ -1312,11 +1119,10 @@ class TestWriteFailures:
 
 class TestStepUpRequirePasskey:
     """Every org-routed ``_SENSITIVE_ACTIONS`` member (``add_policy_rule``,
-    ``remove_policy_rule``, and the four install-wide privacy/PII writes)
-    requires step-up, the same as local mode's own generic dispatcher
-    (ADR 0034). An agent that cannot forge a WebAuthn assertion could
-    otherwise add an always-allow rule, or flip the install-wide PII/privacy
-    policy, while step-up is supposed to be in force. This page carries the
+    ``remove_policy_rule``) requires step-up, the same as local mode's own
+    generic dispatcher (ADR 0034). An agent that cannot forge a WebAuthn
+    assertion could otherwise add an always-allow rule while step-up is
+    supposed to be in force. This page carries the
     same PF_WEBAUTHN_JS/bridge-shim ceremony UI local mode's own settings
     page does, so a 428/403 here shows the same passkey prompt instead of a
     raw JSON body -- TestStepUpBridgeShim below covers that the shim is
@@ -1330,15 +1136,6 @@ class TestStepUpRequirePasskey:
     @staticmethod
     def _step_up(**overrides) -> StepUpConfig:
         return StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True, **overrides)
-
-    @staticmethod
-    def _install_wide_app(tmp_path, settings: dict, *, step_up: StepUpConfig):
-        settings_path = tmp_path / "install-settings.yaml"
-        settings_path.write_text(yaml.safe_dump(settings), encoding="utf-8")
-        app, sessions = _app(
-            install_wide_settings=settings, install_wide_settings_path=str(settings_path), step_up=step_up,
-        )
-        return app, sessions, settings_path
 
     @pytest.mark.parametrize("action,payload", [
         ("add_policy_rule", {"group": "gmail.sender", "value": "", "verbs": ["read"]}),
@@ -1357,29 +1154,6 @@ class TestStepUpRequirePasskey:
         assert r.status_code == 403
         assert r.json() == {"error": "passkey_enrollment_required", "enroll_url": "/security"}
         assert _on_disk_rules(tmp_path, "alice") == []
-
-    @pytest.mark.parametrize("action,payload", [
-        ("set_default_policy", {"group": "privacy", "policy": "redact"}),
-        ("set_category_policy", {"group": "privacy", "category": "body", "policy": "block"}),
-        ("toggle_pii_detection", {}),
-        ("toggle_pii_category", {"category_key": "medical"}),
-    ])
-    def test_admin_only_action_hard_fails_with_no_credential_and_writes_nothing(
-        self, tmp_path, monkeypatch, action, payload,
-    ):
-        _seed(tmp_path, monkeypatch, "carol")
-        settings = {"privacy": {"default_policy": "allow"}, "pii_detection": {"enabled": True}}
-        app, sessions, settings_path = self._install_wide_app(tmp_path, settings, step_up=self._step_up())
-        client = _client(app)
-        csrf = _signed_in(client, sessions, ADMIN)
-
-        r = _post_action(client, action, payload, csrf)
-
-        assert r.status_code == 403
-        assert r.json() == {"error": "passkey_enrollment_required", "enroll_url": "/security"}
-        assert settings["privacy"]["default_policy"] == "allow"
-        assert settings["pii_detection"]["enabled"] is True
-        assert yaml.safe_load(settings_path.read_text()) == settings
 
     def test_a_valid_assertion_completes_a_per_principal_action(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
@@ -1407,31 +1181,6 @@ class TestStepUpRequirePasskey:
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
 
-    def test_a_valid_assertion_completes_an_admin_only_action(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "carol")
-        settings = {"privacy": {"default_policy": "block"}}
-        app, sessions, settings_path = self._install_wide_app(tmp_path, settings, step_up=self._step_up())
-        wa.add_credential(ADMIN, wa.WebAuthnCredential(
-            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
-        ))
-        client = _client(app)
-        csrf = _signed_in(client, sessions, ADMIN)
-
-        first = _post_action(client, "set_default_policy", {"group": "privacy", "policy": "redact"}, csrf)
-        assert first.status_code == 428
-
-        fake_verified = type(
-            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
-        )()
-        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
-            second = _post_action(client, "set_default_policy", {
-                "group": "privacy", "policy": "redact",
-                "webauthn_assertion": {"id": "Y3JlZC0x"},
-            }, csrf)
-        assert second.status_code == 200
-        assert settings["privacy"]["default_policy"] == "redact"
-        assert yaml.safe_load(settings_path.read_text())["privacy"]["default_policy"] == "redact"
-
     def test_a_refusal_is_audit_logged_under_the_refused_principal(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "alice")
         app, sessions = _app(step_up=self._step_up())
@@ -1447,26 +1196,9 @@ class TestStepUpRequirePasskey:
         assert principal.id == "alice"
         assert "add_policy_rule" in summary
 
-    def test_a_non_admin_still_cannot_reach_an_admin_only_action_under_step_up(self, tmp_path, monkeypatch):
-        # Authorization is checked before step-up -- a non-admin gets the
-        # same 403 "forbidden" it always got, never a passkey prompt for an
-        # action it could never take either way.
-        _seed(tmp_path, monkeypatch, "bob")
-        settings = {"privacy": {"default_policy": "block"}}
-        app, sessions, settings_path = self._install_wide_app(tmp_path, settings, step_up=self._step_up())
-        client = _client(app)
-        csrf = _signed_in(client, sessions, BOB)
-
-        r = _post_action(client, "set_default_policy", {"group": "privacy", "policy": "allow"}, csrf)
-
-        assert r.status_code == 403
-        assert r.json() == {"error": "forbidden"}
-        assert settings["privacy"]["default_policy"] == "block"
-        assert yaml.safe_load(settings_path.read_text())["privacy"]["default_policy"] == "block"
-
     def test_step_up_off_does_not_change_existing_behavior(self, tmp_path, monkeypatch):
         # step_up.enabled=False (the _app() default) -- every existing
-        # TestAddRule/TestInstallWidePolicyEditing test already covers this
+        # TestAddRule test already covers this
         # implicitly; this is the explicit regression guard for the knob
         # itself, since _needs_step_up now gates on it.
         _seed(tmp_path, monkeypatch, "alice")
@@ -1482,23 +1214,22 @@ class TestStepUpRequirePasskey:
 
 
 class TestStepUpBridgeShim:
-    """Org mode's settings pages carry the WebAuthn ceremony UI, so a
+    """Org mode's settings page carries the WebAuthn ceremony UI, so a
     step-up refusal shows the same passkey prompt local mode's own page
-    does rather than raw JSON. Both pages carry the exact same shim local
+    does rather than raw JSON. It carries the exact same shim local
     mode's _render_settings_page does; this only asserts the shim itself is
     present (its own behavior -- retry-on-428, alert-on-403 -- is already
     covered by routes_settings.py's TestStepUpBridgeShim-equivalent for
     local mode and isn't mode-specific)."""
 
-    def test_both_pages_carry_the_webauthn_bridge_shim(self, tmp_path, monkeypatch):
+    def test_the_page_carries_the_webauthn_bridge_shim(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "carol")
         app, sessions = _app()
         client = _client(app)
         _signed_in(client, sessions, ADMIN)
-        for url in ("/settings", "/settings/privacy"):
-            body = client.get(url).text
-            assert "pfWebauthnGet" in body, url
-            assert "window.webkit.messageHandlers.pf" in body, url
+        body = client.get("/settings").text
+        assert "pfWebauthnGet" in body
+        assert "window.webkit.messageHandlers.pf" in body
 
 
 class TestV1PerUserSettings:
@@ -1540,7 +1271,7 @@ class TestV1PerUserSettings:
         app, sessions = _app()
         client = _client(app)
         csrf = _signed_in(client, sessions, ADMIN)
-        r = _post_action(client, "toggle_pii_detection", {}, csrf)
+        r = _post_action(client, "remove_policy_rule", {"rule_id": "r-whatever"}, csrf)
         assert r.status_code == 500
         assert "auto_accept_rules" in r.json()["error"]
 

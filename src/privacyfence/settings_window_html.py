@@ -638,10 +638,10 @@ _JS = r"""
       html += '</div>';
     }
 
-    // Install-wide and admin-only in org mode (toggle_pii_* are admin_only
-    // in ACTION_SCOPES); every other org principal sees General only for
-    // their own notification and passkey settings.
-    if (CAPS.mode !== 'org' || CAPS.is_admin) {
+    // The PII gate is the owner's own setting in local mode. On an organization
+    // server it is install-wide and an administrator changes it on the Admin page,
+    // so General there is only each person's own notification and passkey settings.
+    if (CAPS.mode !== 'org') {
     html += '<div class="card pf-card">';
     html += rowHtml('PII Detection Gate',
       'Scans review-popup content for likely personal data (IBANs, national IDs, financial figures) before you approve it. A match requires a second confirmation.',
@@ -3039,13 +3039,11 @@ def _capabilities_for(mode: str, *, is_admin: bool, surface: str = "settings") -
     hidden rather than rendered empty; Audit Log is shown to every
     principal as a read-only list of their own recent decisions, its
     local-only export and log-level controls suppressed through
-    ``not_applicable_actions``; Stats (ADR 0217) is
-    org-admin-only and never shown in local mode; General and Privacy
-    Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
-    split (every action either page
-    can post is itself ``admin_only`` in ``ACTION_SCOPES``, so a non-admin
-    who somehow reached one would have every mutation 403 anyway; hiding
-    the page is the same authorization decision, applied to rendering).
+    ``not_applicable_actions``. Privacy Filter and Stats (ADR 0217) are
+    not on the org settings surface for anyone: an administrator's install-wide
+    policy and the usage counts are Admin sections, so an administrator's
+    Settings is the same page as everyone else's. Stats is never shown in
+    local mode either; Privacy Filter there is the owner's own policy.
 
     ``surface="admin"`` is the Admin page instead (``_admin_capabilities``).
     """
@@ -3064,7 +3062,8 @@ def _capabilities_for(mode: str, *, is_admin: bool, surface: str = "settings") -
             # Org mode's clients connect with OAuth 2.1, not a local token
             # (ADR 0011), so the local "Connect an AI client" page is never shown.
             "general": True, "connectors": False, "ai_client": False, "scoped_tokens": False, "auto_accept": True,
-            "privacy": is_admin, "audit": True, "stats": is_admin, "about": True,
+            # The install-wide policy and the usage stats are Admin sections.
+            "privacy": False, "audit": True, "stats": False, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
     }
@@ -3078,12 +3077,11 @@ def build_html(
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
-    org mode's own ``GET /settings``/``GET /settings/privacy`` -- one
+    org mode's own ``GET /settings`` -- one
     implementation rendering a capability-filtered subset for each, not one
     page (see ADR 0033 and ADR 0032): the nav items and page content below
-    differ by mode/``is_admin``, but every section both modes keep
-    (Auto-accept; General/Privacy Filter
-    for an org admin) is the exact same template, reading the exact same
+    differ by mode, but every section both modes keep
+    (Auto-accept, General, Audit Log, About) is the exact same template, reading the exact same
     ``state`` shape, posting through the exact same bridge.
 
     ``state`` is embedded directly as ``window.__pfInitialState`` so the

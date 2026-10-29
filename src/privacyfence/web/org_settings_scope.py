@@ -79,14 +79,17 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     "set_step_up_scope": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE})),
 
     # ---------------------------------------------------------------- #
-    # Admin-only, routed in both modes: the install-wide PII/privacy
-    # policy (web/org_install_policy.py's own SUPPORTED_ACTIONS, a strict
-    # subset of the admin-only actions below, is exactly these four).
+    # The install-wide PII/privacy policy (web/org_install_policy.py's own
+    # SUPPORTED_ACTIONS is exactly these four). In local mode they are the
+    # owner's own settings. An organization server's administrator changes
+    # them through the Admin dispatcher (web/routes_admin.py), not through
+    # Settings, which is the same page for everyone -- so there is no
+    # ORG_MODE route here.
     # ---------------------------------------------------------------- #
-    "toggle_pii_detection": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
-    "toggle_pii_category": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
-    "set_default_policy": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
-    "set_category_policy": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
+    "toggle_pii_detection": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
+    "toggle_pii_category": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
+    "set_default_policy": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
+    "set_category_policy": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
 
     # Admin-only in concept -- install-wide, not per-principal -- but
     # neither is privacy policy, and each needs a reload path of its own

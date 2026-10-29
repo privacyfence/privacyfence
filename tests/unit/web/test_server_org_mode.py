@@ -118,16 +118,25 @@ class TestBuildAppOrgMode:
         assert client.get("/api/state/stream").status_code == 404
 
     def test_readonly_settings_surface_is_mounted(self, tmp_path, monkeypatch):
-        # /settings and /settings/privacy are real routes -- a
-        # small, purpose-built surface (web/routes_settings.py's build_org_routes),
-        # not the local-mode dispatcher above. An unauthenticated request is
-        # redirected to /login, same as /approvals.
+        # /settings is a real route -- a small, purpose-built surface
+        # (web/routes_settings.py's build_org_routes), not the local-mode
+        # dispatcher above. An unauthenticated request is redirected to
+        # /login, same as /approvals. /settings/privacy only forwards to the
+        # Admin page, where the install-wide privacy policy lives.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
         client = TestClient(app, base_url=ISSUER, follow_redirects=False)
         r = client.get("/settings")
         assert r.status_code == 302
         assert r.headers["location"] == "/login?next=/settings"
+        client.cookies.set(SESSION_COOKIE, org.sessions.create(Principal(id="alice", email="alice@example.com")))
+        r = client.get("/settings/privacy")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin"
+        # The install-wide privacy actions are Admin actions; Settings no longer answers them.
+        assert client.post(
+            "/api/settings/toggle_pii_detection", json={"csrf": client.cookies.get(SESSION_COOKIE)},
+        ).status_code == 404
 
     def test_local_mode_approval_surface_is_not_what_gets_mounted(self, tmp_path, monkeypatch):
         # /approvals exists, but it's web/routes_approvals.py's

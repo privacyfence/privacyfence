@@ -450,8 +450,19 @@ class TestPeekLoginActions:
         app, org_sessions = org._app()
         org_client = org._client(app)
         org._signed_in(org_client, org_sessions, org.ADMIN)
-        body = org_client.get("/settings/privacy").text
+        body = org_client.get("/settings").text
         assert '"peek_auth": {"step": null, "error": "", "user_code": "", "verification_url": "", "pinned_base_url": ""}' in body
+
+    def test_the_org_privacy_page_forwards_to_the_admin_page(self, tmp_path, monkeypatch):
+        from tests.unit.web import test_routes_org_settings as org
+
+        org._seed(tmp_path, monkeypatch, "carol")
+        app, org_sessions = org._app()
+        org_client = org._client(app)
+        org._signed_in(org_client, org_sessions, org.ADMIN)
+        r = org_client.get("/settings/privacy")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin"
 
 
 class TestSensitiveActionsCoverAllAllowedActions:

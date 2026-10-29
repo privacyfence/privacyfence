@@ -51,9 +51,9 @@ wholesale -- ``routes_settings.build_org_routes()`` mounts a
 capability-filtered subset instead,
 restricted to ``org_settings_scope.ACTION_SCOPES``'s own ``ORG_MODE``
 members: ``GET /settings``, every signed-in principal's own auto-accept
-rules, read-only except for adding or removing one; and ``GET
-/settings/privacy``, an admin-only (``Principal.is_admin``) view of the
-install-wide PII/privacy policy, editable through web/org_install_policy.py.
+rules, read-only except for adding or removing one. The install-wide PII/privacy
+policy (web/org_install_policy.py) is an administrator's, changed on the Admin page
+(web/routes_admin.py); ``GET /settings/privacy`` redirects there.
 That subset renders through the exact same settings_window_html.build_html()
 local mode's own settings page does (capability-filtered per
 mode/``is_admin``) and dispatches every write through the same generic
@@ -718,19 +718,19 @@ class OrgAuth:
     connector_registry: ConnectorRegistry | None = None
     org_config: dict = field(default_factory=dict)
     # The server's own install-wide settings.yaml (run_app()'s
-    # ``config``) -- routes_settings.build_org_routes()'s admin-only
-    # privacy-policy view reads this directly, and
+    # ``config``) -- routes_admin.build_org_routes()'s privacy section
+    # reads and rewrites this directly, and
     # daemon_main._start_org_web_server threads the
     # same dict into every org principal's own privacy-filter registration
     # (see _load_principal_settings()'s docstring). Defaults to {} for the
     # same "every existing OrgAuth() caller keeps working" reason
     # connector_registry/org_config already do.
     install_wide_settings: dict = field(default_factory=dict)
-    # Where that dict was loaded from, so the admin privacy page
-    # can write it back. Separate from the dict rather than derived from it
+    # Where that dict was loaded from, so the Admin page's privacy
+    # actions can write it back. Separate from the dict rather than derived from it
     # because nothing in a parsed settings.yaml records its own path.
-    # Empty means "read-only": routes_settings.build_org_routes() renders
-    # the policy without edit controls and rejects a hand-written write, which is
+    # Empty means "read-only": routes_admin.build_org_routes() shows
+    # the policy and rejects a write, which is
     # exactly what an OrgAuth built by a test that never had a real
     # settings.yaml on disk should do.
     install_wide_settings_path: str = ""
@@ -1443,7 +1443,6 @@ def _build_org_app(
     # -- see build_org_routes's own docstring.
     extra_routes.extend(build_org_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
-        install_wide_settings_path=org.install_wide_settings_path,
         # The same StepUpConfig/origin routes_approvals.build_routes
         # above already resolves from org.org_config -- see that call and
         # this function's own build_org_routes docstring.
@@ -1454,14 +1453,16 @@ def _build_org_app(
         # needs /mcp, so without a dispatcher the page offers none.
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
         scoped_token_page_data=org_scoped_token_page_data,
-        # The admin's Stats page (ADR 0217) lists the connectors this bundle offers.
-        org_config=org.org_config,
     ))
     # The Admin API shares the effective config dict, so a live change reaches every holder.
     extra_routes.extend(routes_admin.build_org_routes(
         sessions=org.sessions, step_up=step_up, step_up_origin=org.issuer_url,
         connector_registry=org.connector_registry, org_config=org.org_config,
         bundle=org.bundle, startup_admin=org.startup_admin,
+        # The privacy actions rewrite the server's settings.yaml; the Stats section (ADR 0217)
+        # lists the connectors org_config offers.
+        install_wide_settings=org.install_wide_settings,
+        install_wide_settings_path=org.install_wide_settings_path,
     ))
 
     lifespan = None

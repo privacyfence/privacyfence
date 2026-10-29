@@ -7,16 +7,17 @@ import re
 from unittest.mock import patch
 
 import pytest
+import yaml
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from privacyfence import admin_config, daemon_main, oauth_apps, paths, relay_client
+from privacyfence import admin_config, daemon_main, oauth_apps, paths, privacy_filter, relay_client
 from privacyfence import webauthn_stepup as wa
 from privacyfence.connector_registry import ConnectorRegistry
-from privacyfence.principal import Principal
+from privacyfence.principal import Principal, principal_scope
 from privacyfence.step_up_config import StepUpConfig
-from privacyfence.web import org_session, routes_admin
+from privacyfence.web import org_session, org_stats, routes_admin
 
 BASE_URL = "https://pf.example.com"
 ALICE = Principal(id="alice", email="alice@example.com", display_name="Alice")
@@ -50,6 +51,10 @@ ACTION_BODIES = {
         "enabled": False, "kind": "syslog", "syslog_host": "logs.example.com", "syslog_port": 514,
         "syslog_protocol": "udp", "http_url": "",
     },
+    "toggle_pii_detection": {},
+    "toggle_pii_category": {"category_key": "detect_ip_addresses"},
+    "set_default_policy": {"group": "privacy", "policy": "redact"},
+    "set_category_policy": {"group": "privacy", "category": "body", "policy": "block"},
 }
 
 
@@ -67,7 +72,8 @@ class Registry:
 
 
 class World:
-    def __init__(self, *, step_up=None, registry=None):
+    def __init__(self, *, step_up=None, registry=None, settings=None, settings_path=""):
+        self.settings = settings if settings is not None else {}
         self.bundle = json.loads(json.dumps(BUNDLE))
         self.admin = admin_config.ensure(self.bundle, mode="org", single_user=False)[0]
         self.org_config = oauth_apps.effective_org_config(self.bundle, self.admin, mode="org")
@@ -77,6 +83,7 @@ class World:
             sessions=self.sessions, step_up=step_up or StepUpConfig(rp_id="pf.example.com"),
             step_up_origin=BASE_URL, connector_registry=self.registry, org_config=self.org_config,
             bundle=self.bundle, startup_admin=self.admin,
+            install_wide_settings=self.settings, install_wide_settings_path=settings_path,
         )
         self.client = TestClient(Starlette(routes=self.routes), base_url=BASE_URL, follow_redirects=False)
 
@@ -136,11 +143,6 @@ class TestAccess:
         csrf = world.sign_in(ADMIN)
         assert world.post("set_salesforce_login_url", {"value": "x"}, csrf).status_code == 404
         assert world.post("not_an_action", {}, csrf).status_code == 404
-
-    def test_a_privacy_action_is_not_here_yet(self):
-        world = World()
-        csrf = world.sign_in(ADMIN)
-        assert world.post("set_default_policy", {}, csrf).status_code == 404
 
     def test_bad_csrf_origin_and_json(self):
         world = World()
@@ -257,6 +259,7 @@ class TestApplying:
         routes = routes_admin.build_org_routes(
             sessions=world.sessions, step_up=StepUpConfig(rp_id="pf.example.com"), step_up_origin=BASE_URL,
             connector_registry=None, org_config=world.org_config, bundle=world.bundle, startup_admin=world.admin,
+            install_wide_settings=world.settings,
         )
         client = TestClient(Starlette(routes=routes), base_url=BASE_URL)
         csrf = world.sessions.create(ADMIN)
@@ -343,11 +346,193 @@ class TestState:
         state = world.client.get("/api/admin/state").json()
         assert {"services", "rooms", "unattended_sessions", "download_delivery", "web_push", "authz",
                 "step_up", "scoped_tokens", "audit_forwarding", "restart_needed", "relay_status"} <= set(state)
-        assert "privacy" not in state and "stats" not in state
+        assert {"privacy", "stats"} <= set(state)
         assert state["restart_needed"] == []
 
     def test_a_section_the_startup_copy_lacks_is_not_compared(self):
         assert routes_admin._restart_needed({"web_push": {"enabled": True}}, {}) == []
+
+
+def _write_settings(tmp_path, settings):
+    path = tmp_path / "install-settings.yaml"
+    path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+    return path
+
+
+class TestPrivacyActions:
+    """The install-wide privacy policy and PII gate, which an organization's administrator changes
+    here rather than on Settings."""
+
+    @staticmethod
+    def _editable(tmp_path, settings):
+        path = _write_settings(tmp_path, settings)
+        world = World(settings=settings, settings_path=str(path))
+        _enrol(ADMIN)
+        return world, world.sign_in(ADMIN), path
+
+    def test_an_admin_sets_a_group_default_policy(self, tmp_path, audit):
+        world, csrf, path = self._editable(tmp_path, {"privacy": {"default_policy": "block"}})
+        r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "redact"}, csrf)
+        assert r.status_code == 200
+        assert world.settings["privacy"]["default_policy"] == "redact"
+        assert yaml.safe_load(path.read_text())["privacy"]["default_policy"] == "redact"
+        assert r.json()["privacy"]["default_policy"]["privacy"] == "redact"
+        assert audit[-1][0] == "carol" and "redact" in audit[-1][1] and audit[-1][1].endswith("(admin=carol)")
+
+    def test_an_admin_sets_a_category_policy(self, tmp_path):
+        world, csrf, _path = self._editable(tmp_path, {"privacy": {"default_policy": "allow"}})
+        r = _passkey_post(world, "set_category_policy", {"group": "privacy", "category": "body", "policy": "block"}, csrf)
+        assert r.status_code == 200
+        assert world.settings["privacy"]["categories"] == {"body": "block"}
+
+    def test_an_admin_toggles_the_pii_gate(self, tmp_path):
+        world, csrf, _path = self._editable(tmp_path, {"pii_detection": {"enabled": True}})
+        # No `enabled` field: the page's switch posts an empty body and the server works out the flip.
+        r = _passkey_post(world, "toggle_pii_detection", {}, csrf)
+        assert r.status_code == 200
+        assert world.settings["pii_detection"]["enabled"] is False
+        assert r.json()["privacy"]["pii_enabled"] is False
+
+    def test_an_admin_toggles_a_pii_category(self, tmp_path):
+        world, csrf, _path = self._editable(tmp_path, {"pii_detection": {"enabled": True}})
+        r = _passkey_post(world, "toggle_pii_category", {"category_key": "detect_ip_addresses"}, csrf)
+        assert r.status_code == 200
+        assert world.settings["pii_detection"]["detect_ip_addresses"] is False
+        assert r.json()["privacy"]["pii_ip"] is False
+
+    def test_a_client_supplied_enabled_value_is_not_a_parameter(self, tmp_path):
+        # The toggle always flips the current value; a request cannot pin it.
+        world, csrf, _path = self._editable(tmp_path, {"pii_detection": {"enabled": True}})
+        r = world.post("toggle_pii_detection", {"enabled": True}, csrf)
+        assert r.status_code == 400
+        assert world.settings["pii_detection"]["enabled"] is True
+
+    def test_a_non_admin_cannot_write_even_with_a_valid_csrf(self, tmp_path):
+        settings = {"privacy": {"default_policy": "block"}}
+        world = World(settings=settings, settings_path=str(_write_settings(tmp_path, settings)))
+        csrf = world.sign_in(ALICE)
+        r = world.post("set_default_policy", {"group": "privacy", "policy": "allow"}, csrf)
+        assert r.status_code == 403
+        assert settings["privacy"]["default_policy"] == "block"
+
+    def test_wrong_csrf_and_cross_origin_are_rejected(self, tmp_path):
+        world, csrf, _path = self._editable(tmp_path, {"privacy": {"default_policy": "block"}})
+        body = {"group": "privacy", "policy": "allow"}
+        assert world.post("set_default_policy", body, "not-the-session").status_code == 401
+        r = world.post("set_default_policy", body, csrf, headers={"Origin": "https://evil.example.com"})
+        assert r.status_code == 403
+        assert world.settings["privacy"]["default_policy"] == "block"
+
+    def test_a_passkey_is_needed_and_nothing_is_written_without_one(self, tmp_path):
+        settings = {"privacy": {"default_policy": "allow"}, "pii_detection": {"enabled": True}}
+        path = _write_settings(tmp_path, settings)
+        world = World(settings=settings, settings_path=str(path))
+        csrf = world.sign_in(ADMIN)
+        for action in ("set_default_policy", "set_category_policy", "toggle_pii_detection", "toggle_pii_category"):
+            r = world.post(action, ACTION_BODIES[action], csrf)
+            assert (r.status_code, r.json()) == (
+                403, {"error": "Add a passkey on /security first.", "enroll_url": "/security"},
+            )
+        assert settings == {"privacy": {"default_policy": "allow"}, "pii_detection": {"enabled": True}}
+        assert yaml.safe_load(path.read_text()) == settings
+
+    def test_a_bad_payload_is_a_400(self, tmp_path):
+        world, csrf, _path = self._editable(tmp_path, {})
+        r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "nope"}, csrf)
+        assert r.status_code == 400
+
+    def test_a_server_without_a_settings_path_refuses(self, tmp_path):
+        world = World(settings={})
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "allow"}, csrf)
+        assert r.status_code == 400 and "settings.yaml path" in r.json()["error"]
+
+    def test_an_unwritable_settings_yaml_is_a_500_with_the_policy_unchanged(self, tmp_path):
+        settings = {"privacy": {"default_policy": "block"}}
+        unwritable = tmp_path / "install-settings.yaml"
+        unwritable.mkdir()  # a directory where the file should be: the write raises
+        world = World(settings=settings, settings_path=str(unwritable))
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "allow"}, csrf)
+        assert r.status_code == 500
+        assert settings["privacy"]["default_policy"] == "block"
+
+    def test_the_change_is_live_for_another_principal_immediately(self, tmp_path):
+        world, csrf, _path = self._editable(tmp_path, {"privacy": {"default_policy": "allow"}})
+        with principal_scope(ALICE):
+            privacy_filter.init_privacy_filter(world.settings, org_managed=True)
+            assert privacy_filter.category_policy("privacy", "body") == "allow"
+        _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "block"}, csrf)
+        with principal_scope(ALICE):
+            assert privacy_filter.category_policy("privacy", "body") == "block"
+
+    def test_a_privacy_action_does_not_touch_connectors_or_the_relay(self, tmp_path, relay_checks):
+        world, csrf, _path = self._editable(tmp_path, {})
+        _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "block"}, csrf)
+        assert world.registry.evicted == 0 and relay_checks == []
+
+    def test_a_privacy_action_is_unknown_in_local_mode(self):
+        world = World()
+        r = routes_admin._dispatch(
+            ADMIN, "set_default_policy", {"group": "privacy", "policy": "allow"}, mode="local", bundle=world.bundle,
+            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
+            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
+        )
+        assert r.status_code == 404
+
+
+class TestPrivacyAndStatsState:
+    def test_privacy_rows_read_the_install_wide_settings(self, tmp_path):
+        world = World(settings={"privacy": {"default_policy": "allow"}})
+        world.sign_in(ADMIN)
+        privacy = world.client.get("/api/admin/state").json()["privacy"]
+        assert privacy["default_policy"]["privacy"] == "allow"
+        # A group the file does not mention is the fail-closed default an organization enforces.
+        assert privacy["default_policy"]["drive_privacy"] == "block"
+        assert (privacy["pii_enabled"], privacy["pii_ip"], privacy["pii_financial"]) == (True, True, True)
+
+    def test_calendar_and_the_gmail_signature_are_left_out(self):
+        # toggle_calendar_free_busy and toggle_gmail_signature are local-mode settings.
+        world = World()
+        world.sign_in(ADMIN)
+        privacy = world.client.get("/api/admin/state").json()["privacy"]
+        assert all(group["key"] != "calendar" for group in privacy["groups"])
+        assert "gmail_append_signature" not in privacy
+
+    def test_stats_count_every_principal(self, tmp_path):
+        for name in ("carol", "alice"):
+            (tmp_path / "users" / name / "authority" / "config").mkdir(parents=True)
+        (tmp_path / "users" / "alice" / "credentials").mkdir()
+        (tmp_path / "users" / "alice" / "credentials" / "slack_token.json").write_text("{}", encoding="utf-8")
+        world = World()
+        world.sign_in(ADMIN)
+        stats = world.client.get("/api/admin/state").json()["stats"]
+        assert stats["users"]["total"] == 2 and stats["users"]["with_connectors"] == 1
+        assert {"service": "slack", "label": "Slack", "configured": True, "users": 1} in stats["connectors"]
+
+    def test_stats_read_an_independent_copy_of_the_shared_config(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(org_stats, "collect", lambda config: seen.append(config) or org_stats.empty())
+        world = World()
+        world.sign_in(ADMIN)
+        world.client.get("/api/admin/state")
+        assert len(seen) == 1 and seen[0] == world.org_config and seen[0] is not world.org_config
+
+    def test_a_non_admin_gets_neither(self):
+        world = World()
+        world.sign_in(ALICE)
+        r = world.client.get("/api/admin/state")
+        assert r.status_code == 403 and "stats" not in r.text and "privacy" not in r.text
+
+    def test_a_response_to_an_action_carries_the_new_privacy_rows(self, tmp_path):
+        settings = {"privacy": {"default_policy": "block"}}
+        world = World(settings=settings, settings_path=str(_write_settings(tmp_path, settings)))
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "redact"}, csrf)
+        assert "stats" in r.json() and r.json()["privacy"]["default_policy"]["privacy"] == "redact"
 
 
 class TestRouteClassification:
@@ -811,7 +996,8 @@ class TestAdminPage:
         world.sign_in(ADMIN)
         r = world.client.get("/admin")
         assert '"restart_needed"' in r.text and '"relay_status"' in r.text
-        assert '"connectors"' not in r.text.split("window.__pfInitialState")[1].split("</script>")[0]
+        initial = r.text.split("window.__pfInitialState = ")[1].split(";</script>")[0]
+        assert not {"connectors", "telegram_auth", "peek_auth"} & set(json.loads(initial))
 
     def test_a_local_visitor_with_no_session_is_refused(self, local_controller, monkeypatch):
         world = LocalWorld(local_controller, monkeypatch)
