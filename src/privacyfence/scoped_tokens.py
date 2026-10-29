@@ -168,7 +168,7 @@ class ScopedTokenPolicy:
 
 PROPOSALS_DISABLED_MESSAGE = (
     "Token proposals are not enabled on this install. "
-    "Your administrator turns them on in the organization config bundle."
+    "Your administrator turns them on on the Admin page (Scoped tokens)."
 )
 
 
@@ -608,7 +608,7 @@ class ScopedTokenStore:
         if not policy.enabled:
             raise ScopedTokenError(
                 "Scoped tokens are not enabled on this install. "
-                "Your administrator turns them on in the organization config bundle."
+                "Your administrator turns them on on the Admin page."
             )
         if not LABEL_RE.match(label):
             raise ScopedTokenError(_LABEL_MESSAGE)

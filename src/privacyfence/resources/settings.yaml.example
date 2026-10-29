@@ -173,10 +173,8 @@ update_check:
 
 # Note: unattended_sessions.enabled (privacyfence_begin_unattended_session's
 # opt-in gate) is NOT set here. It's a deliberate per-organization choice,
-# not a per-user setting, so it lives in the organization config bundle
-# (org_config.json, installed via "Install/Update Organization Config…" in
-# PrivacyFence Settings) — see docs/how-it-works.md's "Unattended
-# sessions" section.
+# not a per-user setting, so an administrator sets it on the Admin page
+# (Features) — see docs/how-it-works.md's "Unattended sessions" section.
 
 # Auto-accept rules: requests PrivacyFence approves without showing you a
 # card. Managed from PrivacyFence Settings' "Auto-accept" page, the approval

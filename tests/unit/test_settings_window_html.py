@@ -262,7 +262,7 @@ class TestWelcomeBanner:
     def test_explains_what_privacyfence_does_and_the_setup_order(self):
         html = build_html(_make_state())
         assert "Welcome to PrivacyFence" in html
-        assert "organization config bundle" in html
+        assert "Admin page" in html
 
 
 class TestAutoAcceptTemplate:

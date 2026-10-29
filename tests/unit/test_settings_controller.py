@@ -686,7 +686,7 @@ class TestAdminConfigWiring:
 
         controller.authenticate_connector("miro")
 
-        assert controller.error == "Miro isn't enabled in your organization config."
+        assert controller.error == "Miro isn't offered on this install. Turn it on on the Admin page (Services)."
 
     def test_a_bundle_with_authz_over_an_imported_config_installs_and_says_it_is_ignored(self, controller):
         admin_config.save(admin_config.import_from_bundle(
@@ -1526,7 +1526,7 @@ class TestAuthenticateMiro:
         monkeypatch.setattr(sc.miro_auth, "authorize_interactive", lambda *a: pytest.fail("must not run"))
         monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
         controller.authenticate_connector("miro")
-        assert controller.error == "Miro isn't enabled in your organization config."
+        assert controller.error == "Miro isn't offered on this install. Turn it on on the Admin page (Services)."
 
     def test_row_has_org_follows_the_bundle(self, controller, monkeypatch):
         row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "miro")
@@ -3104,7 +3104,7 @@ class TestSnapshotStructure:
         controller.peek_start_login("https://peek.example.com")
         controller.grist_connect("key", "https://docs.getgrist.com")
         assert calls == []
-        assert "isn't enabled in your organization config" in controller.error
+        assert "isn't offered on this install" in controller.error
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()
