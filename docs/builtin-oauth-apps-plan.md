@@ -4207,6 +4207,7 @@ phases:
   title: Mode and server address from the environment, single-user mode on localhost, and a Docker image that starts in org mode
   depends_on:
   - p9b-admin-org-sections-ui
+  - p10-bundle-tooling
   complexity: M
   touches:
   - src/privacyfence/org_mode.py
@@ -4697,6 +4698,7 @@ phases:
   title: Sign connector configs with a Python tool or a self-contained browser page
   depends_on:
   - p25a-connector-config-store
+  - p23-prerelease-org-image
   complexity: M
   touches:
   - scripts/sign_connector_config.py
