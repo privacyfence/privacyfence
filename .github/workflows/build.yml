@@ -795,6 +795,25 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: python3 scripts/telegram_credentials.py write
 
+      # The org image carries the built-in OAuth apps its servers sign in with (ADR 0254). The
+      # desktop jobs get none: desktop mode has no built-in apps. Secrets reach only this step.
+      - name: Write built-in app credentials
+        env:
+          PF_APP_GOOGLE_WEB_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_ID }}
+          PF_APP_GOOGLE_WEB_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_SECRET }}
+          PF_APP_SLACK_CLIENT_ID: ${{ secrets.PF_APP_SLACK_CLIENT_ID }}
+          PF_APP_SLACK_CLIENT_SECRET: ${{ secrets.PF_APP_SLACK_CLIENT_SECRET }}
+          PF_APP_SALESFORCE_CLIENT_ID: ${{ secrets.PF_APP_SALESFORCE_CLIENT_ID }}
+          PF_APP_SALESFORCE_CLIENT_SECRET: ${{ secrets.PF_APP_SALESFORCE_CLIENT_SECRET }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_ID: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_ID }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET }}
+          PF_APP_MIRO_CLIENT_ID: ${{ secrets.PF_APP_MIRO_CLIENT_ID }}
+          PF_APP_MIRO_CLIENT_SECRET: ${{ secrets.PF_APP_MIRO_CLIENT_SECRET }}
+          PF_APP_GOOGLE_SIGNIN_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_SIGNIN_CLIENT_ID }}
+          PF_APP_GOOGLE_SIGNIN_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_SIGNIN_CLIENT_SECRET }}
+          PF_APP_SALESFORCE_INSTALL_URL: ${{ vars.PF_APP_SALESFORCE_INSTALL_URL }}
+        run: python3 scripts/builtin_apps.py write
+
       - name: Build wheel
         run: python -m build --wheel --no-isolation
 
@@ -804,6 +823,14 @@ jobs:
           REQUIRE=()
           if [[ "${{ steps.release.outputs.channel }}" == "stable" ]]; then REQUIRE=(--require); fi
           python3 scripts/telegram_credentials.py check-dist "${REQUIRE[@]}" dist/*.whl
+
+      # Every release tag, pre-release included, must ship the apps: the alpha image is how 7.0 is
+      # tested (ADR 0254). Only an untagged workflow_dispatch run warns.
+      - name: Check built-in app credentials are packaged
+        run: |
+          REQUIRE=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then REQUIRE=(--require); fi
+          python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl
 
       - name: Build org image
         run: |
