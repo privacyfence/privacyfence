@@ -24,6 +24,7 @@ from ..auto_accept import (
     PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
 )
 from .. import audit_log, local_files, scoped_tokens
+from ..org_mode import LOCAL_MODE_DEPRECATION
 from ..connector import Connector
 from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
@@ -627,6 +628,7 @@ class McpDispatcher:
         setup_complete = any(c["authenticated"] for c in connectors)
         result: dict[str, Any] = {
             "mode": self._mode, "setup_complete": setup_complete, "connectors": connectors,
+            "deprecation": LOCAL_MODE_DEPRECATION if self._mode == "local" else None,
         }
 
         if setup_complete:

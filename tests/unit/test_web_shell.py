@@ -8,6 +8,22 @@ import pytest
 from privacyfence import web_shell
 
 
+class TestDeprecationStrip:
+    def test_renders_with_deprecation_html_and_not_without(self):
+        with_strip = web_shell.wrap(
+            "<p>x</p>", title="t", active="settings", deprecation_html=web_shell.local_mode_deprecation_html(),
+        )
+        assert '<div class="pf-shell-deprecation" role="note">Desktop mode is deprecated' in with_strip
+        assert 'href="https://privacyfence.eu/docs/moving-to-organization-mode/"' in with_strip
+        assert 'class="pf-shell-deprecation"' not in web_shell.wrap("<p>x</p>", title="t", active="settings")
+
+    def test_sits_above_the_banner(self):
+        html = web_shell.wrap(
+            "", title="t", active="settings", banner_html="alarm", deprecation_html="old",
+        )
+        assert html.index('<div class="pf-shell-deprecation"') < html.index('<div class="pf-shell-banner"')
+
+
 class TestWrap:
     def test_returns_one_well_formed_document(self):
         html = web_shell.wrap("<p>hello</p>", title="Test Page", active="approvals")

@@ -118,6 +118,12 @@ class TestSettingsPage:
         r = client.get("/settings")
         assert r.status_code == 401
 
+    def test_local_page_carries_the_deprecation_strip(self, client, sessions):
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert 'class="pf-shell-deprecation"' in r.text
+        assert "removed in PrivacyFence 8" in r.text
+
     def test_authenticated_renders_the_shell_and_the_settings_document(self, client, sessions):
         _authed(client, sessions)
         r = client.get("/settings")

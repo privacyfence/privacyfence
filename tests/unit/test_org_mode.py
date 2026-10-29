@@ -9,6 +9,14 @@ import pytest
 from privacyfence import org_mode
 
 
+class TestLocalModeDeprecation:
+    def test_names_the_release_that_removes_desktop_mode(self):
+        assert "PrivacyFence 8" in org_mode.LOCAL_MODE_DEPRECATION
+
+    def test_points_at_the_migration_guide(self):
+        assert org_mode.LOCAL_MODE_DEPRECATION.endswith("https://privacyfence.eu/docs/moving-to-organization-mode/")
+
+
 class TestResolveMode:
     def test_absent_key_defaults_to_local(self):
         assert org_mode.resolve_mode({}) == "local"

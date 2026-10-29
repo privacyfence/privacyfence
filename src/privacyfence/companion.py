@@ -90,7 +90,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import logging
+import os
 import shutil
 import subprocess  # nosec B404  # fixed argv (notify-send) below, no shell
 import sys
@@ -194,6 +196,42 @@ _NOTIFY_AFTER_SECONDS = 15.0
 _NOTIFY_SUPPRESS_AFTER_START_SECONDS = 60.0
 _NOTIFY_STATES = frozenset({"stopped", "failed"})
 _NOTIFY_TEXT = "PrivacyFence isn't running. Click the menu-bar icon to start it."
+
+
+_NOTICE_MARKER_KEY = "local_mode_deprecated_7"
+
+
+def _notice_state_path() -> Path:
+    """Where the "notice already shown" marker lives: per OS user, outside the daemon's data
+    directory, which a separated install keeps out of this account's reach."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "PrivacyFence Companion" / "notices.json"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else home / "AppData" / "Roaming"
+        return base / "PrivacyFence Companion" / "notices.json"
+    state_home = os.environ.get("XDG_STATE_HOME")
+    base = Path(state_home) if state_home else home / ".local" / "state"
+    return base / "privacyfence-companion" / "notices.json"
+
+
+def _show_deprecation_notice_once(show: Callable[[str], None]) -> None:
+    """Show the desktop-mode deprecation notice through ``show`` unless this OS user has seen it.
+    A marker that cannot be read or written only means the notice shows again next start."""
+    from .org_mode import LOCAL_MODE_DEPRECATION
+
+    path = _notice_state_path()
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(path.read_text(encoding="utf-8")).get(_NOTICE_MARKER_KEY) is True:
+            return
+    with contextlib.suppress(Exception):
+        show(LOCAL_MODE_DEPRECATION)
+    tmp = path.with_name(path.name + ".tmp")
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps({_NOTICE_MARKER_KEY: True}), encoding="utf-8")
+        os.replace(tmp, path)
 
 
 @dataclass
@@ -837,8 +875,13 @@ def _run_tray(initial_path: str | None = None) -> int:
 
     threading.Thread(target=_poll_loop, name="privacyfence-status-poll", daemon=True).start()
 
+    def _setup(_icon: "pystray.Icon") -> None:
+        # Passing ``setup`` replaces pystray's default, which is what makes the icon visible.
+        icon.visible = True
+        _show_deprecation_notice_once(lambda text: _on_ui_thread(lambda: icon.notify(text)))
+
     try:
-        icon.run()
+        icon.run(setup=_setup)
     finally:
         poll_stop.set()
         _channel_running.clear()
@@ -894,6 +937,8 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
         return 1
     _channel_running.set()
     logger.info("Companion channel listening on %s", channel.address)
+
+    _show_deprecation_notice_once(_notify_send)
 
     notify_state = _NotificationState()
     started_at = time.monotonic()

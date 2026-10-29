@@ -42,6 +42,14 @@ TRUSTED_PROXIES_ENV = "PRIVACYFENCE_TRUSTED_PROXIES"
 # setup code, which is only acceptable when nothing but this computer can reach it.
 SINGLE_USER_HOSTS = ("localhost", "127.0.0.1")
 
+# Shown in the daemon log, privacyfence_status, every desktop page and (once) the companion.
+LOCAL_MODE_DEPRECATION = (
+    "Desktop mode is deprecated and will be removed in PrivacyFence 8. PrivacyFence's built-in "
+    "sign-in for Google, Slack, Salesforce, Atlassian and Miro works only in organization mode "
+    "and the Docker image. Move to an organization server, or try the Docker image on this "
+    "computer: https://privacyfence.eu/docs/moving-to-organization-mode/"
+)
+
 
 class ConfigurationError(ValueError):
     """Raised for organization configuration that is present but broken --

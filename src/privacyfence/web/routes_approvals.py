@@ -974,6 +974,7 @@ def create_app(
             notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
             banner_html=_banner_html(principal),
             dismissible_notice_html=_off_notice_html(), dismissible_notice_key="pf_step_up_off_dismissed",
+            deprecation_html=web_shell.local_mode_deprecation_html(),
         )
 
     def _unauthenticated_page(request: Request, next_path: str) -> Response:
