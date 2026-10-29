@@ -25,7 +25,9 @@ from pathlib import Path
 import pytest
 
 from privacyfence import (
+    admin_config,
     agent_label,
+    app_credentials,
     approval_ui,
     auto_accept,
     audit_log,
@@ -174,6 +176,25 @@ def _isolate_whats_new_state(monkeypatch, request):
         whats_new, "state_path",
         lambda principal: request.getfixturevalue("tmp_path") / "whats_new_state" / principal.id / whats_new.STATE_FILENAME,
     )
+
+
+# Modules that test the real functions below patch paths.data_dir to tmp_path themselves, so the
+# real path functions run and count toward their coverage.
+_ADMIN_CONFIG_FIXTURE_EXEMPT = ("test_app_credentials", "test_admin_config", "test_relay_client")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
+    # In a source checkout paths.data_dir() is the repository root, so a test that forgot to patch
+    # it would write org/admin_config.json into the checkout; and a developer with a generated
+    # _builtin_apps.py or PRIVACYFENCE_BUILTIN_APPS set would see unrelated tests change. Any test
+    # that needs built-in apps patches app_credentials.builtin_app itself.
+    if request.module.__name__.endswith(_ADMIN_CONFIG_FIXTURE_EXEMPT):
+        return
+    monkeypatch.setattr(
+        admin_config, "admin_config_path", lambda: request.getfixturevalue("tmp_path") / "admin_config.json"
+    )
+    monkeypatch.setattr(app_credentials, "builtin_app", lambda key: None)
 
 
 # Stashes each phase's own outcome (setup/call/teardown) onto the test item

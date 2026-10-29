@@ -94,6 +94,9 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/grist_provisioner_api.py": 100.0,
     # Org bundle trust.
     "src/privacyfence/org_bundle_signing.py": 99.0,
+    # The admin config: what an administrator offers, and the one-time import that must never
+    # overwrite an Admin-page decision.
+    "src/privacyfence/admin_config.py": 100.0,
     # 91.0, not the ~93.2% the rest of this module would suggest: whether
     # coverage sees _resolve_names_async()'s done() callback body (fired
     # from a background thread started by _run_async(), not on the test's
