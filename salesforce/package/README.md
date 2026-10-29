@@ -36,6 +36,6 @@ sf package version promote --package 04t... --target-dev-hub pf-devhub
 ```
 
 A promoted version's install URL is
-`https://login.salesforce.com/packaging/installPackage.apexp?p0=<04t version id>`. Set it as the
-repository variable `PF_APP_SALESFORCE_INSTALL_URL`, so the next release's built-in app shows it on
-the Admin page. Commit the changed files and `sfdx-project.json`'s new alias.
+`https://login.salesforce.com/packaging/installPackage.apexp?p0=<04t version id>`. Keep it in the
+repository variable `PF_APP_SALESFORCE_INSTALL_URL`, and commit the changed files and
+`sfdx-project.json`'s new alias.

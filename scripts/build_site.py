@@ -141,6 +141,10 @@ STATIC: dict[str, str] = {
     "assets/architecture.svg": "website/assets/architecture.svg",
     "assets/architecture-narrow.svg": "website/assets/architecture-narrow.svg",
     "assets/icon.png": "src/privacyfence/resources/icon_512.png",
+    # Logo and icon for the Salesforce External Client App's listing: Salesforce wants a logo of at
+    # most 125 px high and 100 KB, which the 512 px icon.png is not.
+    "assets/salesforce-app-logo.png": "website/assets/salesforce-app-logo.png",
+    "assets/salesforce-app-icon.png": "website/assets/salesforce-app-icon.png",
     "assets/gmail-read-thread.png": "docs/images/screenshots/gmail-read-thread.png",
     "assets/sheets-write.png": "docs/images/screenshots/sheets-write.png",
     "assets/slack-read-thread.png": "docs/images/screenshots/slack-read-thread.png",
