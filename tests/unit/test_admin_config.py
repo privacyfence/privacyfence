@@ -498,3 +498,716 @@ class TestConfigFor:
 def test_service_labels_cover_every_service():
     assert set(admin_config.SERVICE_LABELS) == set(admin_config.SERVICES)
     assert set(admin_config.OPERATIONAL_SECTIONS) <= set(admin_config.LEGACY_BUNDLE_KEYS)
+
+
+# --------------------------------------------------------------------------- #
+# apply_change, replace_rooms, service_rows
+# --------------------------------------------------------------------------- #
+
+SENTINEL = "SENTINEL-bearer-value-9f3a"
+BUNDLE: dict = {}
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    for variable in (
+        "PRIVACYFENCE_PEEK_BASE_URL",
+        "PRIVACYFENCE_GRIST_SERVER_URL",
+        "PRIVACYFENCE_GRIST_PROVISIONER_URL",
+        "PRIVACYFENCE_PEEK_PROVISIONING_KEY",
+        "PRIVACYFENCE_GRIST_PROVISIONING_KEY",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+
+
+@pytest.fixture
+def public_dns(monkeypatch):
+    """Every host name resolves to a public address."""
+    monkeypatch.setattr(
+        admin_config.socket, "getaddrinfo", lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))]
+    )
+
+
+def _change(action, params=None, *, bundle=None, mode="org", single_user=False):
+    return admin_config.apply_change(
+        action, params or {}, bundle=BUNDLE if bundle is None else bundle, mode=mode, single_user=single_user
+    )
+
+
+def _stored():
+    config = admin_config.load()
+    assert config is not None
+    return config
+
+
+def _delivery(**overrides):
+    params = {
+        "inline_max_bytes": 1000,
+        "link_ttl_seconds": 600,
+        "allow_disk_staging": True,
+        "agent_links": True,
+        "allow_exports": True,
+    }
+    return {**params, **overrides}
+
+
+def _audit(**overrides):
+    params = {
+        "enabled": True,
+        "kind": "http",
+        "syslog_host": "",
+        "syslog_port": 6514,
+        "syslog_protocol": "tcp",
+        "http_url": "https://siem.example.com/ingest",
+    }
+    return {**params, **overrides}
+
+
+class TestServiceToggles:
+    def test_offer_and_withdraw(self, clean_env):
+        assert _change("offer_service", {"service": "slack"}) == ("Offered Slack", ["services"])
+        assert _stored()["services"]["slack"]["offered"] is True
+        assert _change("withdraw_service", {"service": "slack"}) == ("Stopped offering Slack", ["services"])
+        assert _stored()["services"]["slack"]["offered"] is False
+
+    def test_no_op_saves_nothing(self, tmp_path, clean_env):
+        assert _change("withdraw_service", {"service": "slack"}) == ("", [])
+        assert not (tmp_path / "org" / "admin_config.json").exists()
+
+    def test_unknown_service(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match=r"^Unknown service\.$"):
+            _change("offer_service", {"service": "nope"})
+
+    def test_unknown_action(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match="Unknown action"):
+            _change("toggle_pii_detection", {})
+
+    def test_org_only_action_in_local_mode(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match="organization servers only"):
+            _change("set_web_push", {"enabled": True}, mode="local")
+
+    @pytest.mark.parametrize("params", [{}, {"service": 3}])
+    def test_bad_parameters(self, clean_env, params):
+        with pytest.raises(admin_config.AdminConfigError):
+            _change("offer_service", params)
+
+    def test_a_bool_is_not_an_int(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match="wrong type"):
+            _change("set_scoped_tokens", {"enabled": True, "max_days": True, "allow_ai_proposals": False})
+
+    def test_applies_on_top_of_the_bundle_import_when_there_is_no_file(self, clean_env):
+        summary, _ = _change("offer_service", {"service": "slack"}, bundle={"telegram": {"x": 1}})
+        assert summary == "Offered Slack"
+        assert _stored()["services"]["telegram"]["offered"] is True
+
+
+class TestAtlassianAssets:
+    def test_stores_assets_and_workspace(self, clean_env):
+        params = {"enabled": True, "workspace_id": " ws-1 "}
+        assert _change("set_atlassian_assets", params) == ("Set Jira Assets to on", ["services"])
+        service = _stored()["services"]["atlassian"]
+        assert (service["assets"], service["assets_workspace_id"]) == (True, "ws-1")
+        assert _change("set_atlassian_assets", params) == ("", [])
+        assert _change("set_atlassian_assets", {"enabled": False}) == ("Set Jira Assets to off", ["services"])
+        assert _stored()["services"]["atlassian"]["assets_workspace_id"] == ""
+
+    def test_refuses_control_characters_and_long_ids(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match="control characters"):
+            _change("set_atlassian_assets", {"enabled": True, "workspace_id": "a\u0000b"})
+        with pytest.raises(admin_config.AdminConfigError, match="too long"):
+            _change("set_atlassian_assets", {"enabled": True, "workspace_id": "a" * 201})
+
+
+class TestServerAddress:
+    def test_normalizes_and_clears(self, clean_env, public_dns):
+        summary, sections = _change("set_server_address", {"service": "peek", "value": " https://Peek.Example.com/ "})
+        assert (summary, sections) == ("Set the Peek server to https://peek.example.com", ["services"])
+        assert _stored()["services"]["peek"]["base_url"] == "https://peek.example.com"
+        assert _change("set_server_address", {"service": "peek", "value": "https://peek.example.com"}) == ("", [])
+        assert _change("set_server_address", {"service": "peek", "value": ""}) == ("Cleared the Peek server", ["services"])
+        assert _stored()["services"]["peek"]["base_url"] == ""
+
+    def test_grist_uses_its_own_field(self, clean_env, public_dns):
+        _change("set_server_address", {"service": "grist", "value": "https://docs.example.com"})
+        assert _stored()["services"]["grist"]["server_url"] == "https://docs.example.com"
+
+    def test_client_errors_are_mapped(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match="Peek server address must start with https"):
+            _change("set_server_address", {"service": "peek", "value": "ftp://x"})
+        with pytest.raises(admin_config.AdminConfigError, match="without /api"):
+            _change("set_server_address", {"service": "grist", "value": "https://g.example.com/api"})
+
+    def test_only_peek_and_grist_have_an_address(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match=r"^Unknown service\.$"):
+            _change("set_server_address", {"service": "slack", "value": "https://x.example.com"})
+
+    @pytest.mark.parametrize(
+        "value", ["http://localhost:8080", "https://10.0.0.5", "https://[::1]"]
+    )
+    def test_org_mode_refuses_http_and_ip_literals(self, clean_env, value):
+        with pytest.raises(admin_config.AdminConfigError, match="public host name"):
+            _change("set_server_address", {"service": "peek", "value": value})
+
+    @pytest.mark.parametrize("resolved", ["127.0.0.1", "10.1.2.3", "169.254.169.254", "::1"])
+    def test_org_mode_refuses_hosts_resolving_to_private_addresses(self, clean_env, monkeypatch, resolved):
+        monkeypatch.setattr(admin_config.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", (resolved, 0))])
+        with pytest.raises(admin_config.AdminConfigError, match="public host name"):
+            _change("set_server_address", {"service": "grist", "value": "https://internal.example.com"})
+
+    def test_org_mode_refuses_unresolvable_hosts(self, clean_env, monkeypatch):
+        def fail(*args, **kwargs):
+            raise OSError("no such host")
+
+        monkeypatch.setattr(admin_config.socket, "getaddrinfo", fail)
+        with pytest.raises(admin_config.AdminConfigError, match="public host name"):
+            _change("set_server_address", {"service": "peek", "value": "https://nowhere.example.com"})
+
+    def test_local_mode_accepts_loopback_http_without_resolving(self, clean_env, monkeypatch):
+        monkeypatch.setattr(admin_config.socket, "getaddrinfo", lambda *a, **k: pytest.fail("resolved"))
+        summary, _ = _change("set_server_address", {"service": "peek", "value": "http://localhost:8080"}, mode="local")
+        assert summary == "Set the Peek server to http://localhost:8080"
+
+    def test_refused_while_the_environment_sets_it(self, clean_env, monkeypatch, public_dns):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://env.example.com")
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_server_address", {"service": "peek", "value": "https://other.example.com"})
+        assert str(excinfo.value) == "This address is set by PRIVACYFENCE_PEEK_BASE_URL on the server."
+
+    def test_refused_while_the_address_is_imported_and_locked(self, clean_env, public_dns):
+        config = _import({"peek": {"base_url": "https://peek.example.com", "auto_provision": {"enabled": True}}})
+        assert config["services"]["peek"]["address_locked"] is True
+        admin_config.save(config)
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_server_address", {"service": "peek", "value": ""})
+        assert str(excinfo.value) == (
+            "This address came from the signed configuration file; "
+            "set PRIVACYFENCE_PEEK_BASE_URL on the server to change it."
+        )
+
+    def test_refused_while_a_bundle_grist_app_owns_it(self, clean_env, public_dns):
+        bundle = {"grist": {"client_id": "id", "client_secret": "s", "server_url": "https://g.example.com"}}
+        with pytest.raises(admin_config.AdminConfigError, match="Grist app in the configuration file"):
+            _change("set_server_address", {"service": "grist", "value": "https://x.example.com"}, bundle=bundle)
+
+
+class TestAutoProvisioning:
+    PEEK = {"service": "peek", "enabled": True, "trust_unverified_email": False}
+
+    def _with_env_address(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
+
+    def test_turns_on_with_an_environment_address(self, clean_env, monkeypatch):
+        self._with_env_address(monkeypatch)
+        assert _change("set_auto_provisioning", self.PEEK) == ("Turned automatic Peek accounts on", ["auto_provision"])
+        assert _stored()["services"]["peek"]["auto_provision"]["enabled"] is True
+        assert _change("set_auto_provisioning", self.PEEK) == ("", [])
+        changed = {**self.PEEK, "trust_unverified_email": True}
+        assert _change("set_auto_provisioning", changed) == ("Changed automatic Peek accounts", ["auto_provision"])
+        off = {**self.PEEK, "enabled": False}
+        assert _change("set_auto_provisioning", off) == ("Turned automatic Peek accounts off", ["auto_provision"])
+
+    def test_turning_off_needs_no_address(self, clean_env):
+        assert _change("set_auto_provisioning", {**self.PEEK, "enabled": False}) == ("", [])
+
+    def test_refused_without_an_environment_address(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_auto_provisioning", self.PEEK)
+        assert str(excinfo.value) == (
+            "Automatic accounts need the Peek address from PRIVACYFENCE_PEEK_BASE_URL on the server, "
+            "so the provisioning key only goes where the server's operator points it."
+        )
+
+    def test_refused_for_an_address_typed_on_the_page(self, clean_env, public_dns):
+        _change("set_server_address", {"service": "peek", "value": "https://peek.example.com"})
+        with pytest.raises(admin_config.AdminConfigError, match="PRIVACYFENCE_PEEK_BASE_URL"):
+            _change("set_auto_provisioning", self.PEEK)
+
+    def test_grist_needs_both_environment_addresses(self, clean_env, monkeypatch):
+        params = {"service": "grist", "enabled": True, "trust_unverified_email": False}
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://docs.example.com")
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_auto_provisioning", params)
+        assert str(excinfo.value) == (
+            "Automatic accounts need PRIVACYFENCE_GRIST_SERVER_URL and PRIVACYFENCE_GRIST_PROVISIONER_URL on the server."
+        )
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://prov.example.com")
+        assert _change("set_auto_provisioning", params)[0] == "Turned automatic Grist accounts on"
+
+    def test_grist_with_a_bundle_oauth_app(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://docs.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://prov.example.com")
+        params = {"service": "grist", "enabled": True, "trust_unverified_email": False}
+        with pytest.raises(admin_config.AdminConfigError, match="work only with API keys"):
+            _change("set_auto_provisioning", params, bundle={"grist": {"client_id": "x", "client_secret": "y"}})
+
+    def test_imported_locked_addresses_count_as_trusted(self, clean_env):
+        grist = {
+            "server_url": "https://docs.example.com",
+            "auto_provision": {"enabled": True, "provisioner_url": "https://prov.example.com"},
+        }
+        admin_config.save(_import({"grist": grist}))
+        params = {"service": "grist", "enabled": True, "trust_unverified_email": True}
+        assert _change("set_auto_provisioning", params)[0] == "Changed automatic Grist accounts"
+
+    def test_refused_in_single_user_mode_and_for_other_services(self, clean_env, monkeypatch):
+        self._with_env_address(monkeypatch)
+        with pytest.raises(admin_config.AdminConfigError, match="identity provider"):
+            _change("set_auto_provisioning", self.PEEK, single_user=True)
+        with pytest.raises(admin_config.AdminConfigError, match=r"^Unknown service\.$"):
+            _change("set_auto_provisioning", {**self.PEEK, "service": "slack"})
+        with pytest.raises(admin_config.AdminConfigError, match="organization servers only"):
+            _change("set_auto_provisioning", self.PEEK, mode="local")
+
+
+class TestPlainSections:
+    def test_unattended_sessions(self, clean_env):
+        assert _change("set_unattended_sessions", {"enabled": True}) == (
+            "Turned unattended sessions on",
+            ["unattended_sessions"],
+        )
+        assert _stored()["unattended_sessions"] == {"enabled": True}
+        assert _change("set_unattended_sessions", {"enabled": True}) == ("", [])
+        assert _change("set_unattended_sessions", {"enabled": False})[0] == "Turned unattended sessions off"
+
+    def test_unattended_sessions_work_in_local_mode(self, clean_env):
+        assert _change("set_unattended_sessions", {"enabled": True}, mode="local")[1] == ["unattended_sessions"]
+
+    def test_clear_rooms(self, clean_env):
+        assert _change("clear_rooms") == ("", [])
+        replace = {"rooms": [{"resource_email": "a@x.com"}], "rooms_synced_at": "2026-01-01T00:00:00Z"}
+        admin_config.replace_rooms(replace, bundle=BUNDLE, mode="org", single_user=False)
+        assert _change("clear_rooms") == ("Cleared the room directory", ["rooms"])
+        assert _stored()["rooms"] == [] and _stored()["rooms_synced_at"] == ""
+
+    def test_web_push(self, clean_env):
+        assert _change("set_web_push", {"enabled": False}) == ("Turned web push off", ["web_push"])
+        assert _stored()["web_push"] == {"enabled": False}
+        assert _change("set_web_push", {"enabled": False}) == ("", [])
+        assert _change("set_web_push", {"enabled": True})[0] == "Turned web push on"
+
+    def test_download_delivery(self, clean_env):
+        assert _change("set_download_delivery", _delivery()) == ("Changed file delivery", ["download_delivery"])
+        assert _stored()["download_delivery"] == _delivery()
+        assert _change("set_download_delivery", _delivery()) == ("", [])
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"inline_max_bytes": -1}, 'must be >= 0'),
+            ({"link_ttl_seconds": 0}, "must be > 0"),
+        ],
+    )
+    def test_download_delivery_parser_errors_lose_the_bundle_prefix(self, clean_env, overrides, message):
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_download_delivery", _delivery(**overrides))
+        assert message in str(excinfo.value)
+        assert "org_bundle.json's " not in str(excinfo.value)
+        assert not (admin_config.admin_config_path()).exists()
+
+    def test_authz_splits_lists(self, clean_env):
+        params = {
+            "allowed_domains": "acme.com, @Beta.org\n\n gamma.net ,",
+            "groups_claim": " groups ",
+            "required_groups": "staff\nadmins",
+        }
+        assert _change("set_authz", params) == ("Changed sign-in restrictions", ["authz"])
+        assert _stored()["authz"] == {
+            "allowed_domains": ["acme.com", "@Beta.org", "gamma.net"],
+            "groups_claim": "groups",
+            "required_groups": ["staff", "admins"],
+        }
+        assert _change("set_authz", params) == ("", [])
+
+    def test_authz_required_groups_need_a_claim(self, clean_env):
+        params = {"allowed_domains": "", "groups_claim": "", "required_groups": "staff"}
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_authz", params)
+        assert "required_groups" in str(excinfo.value) and "org_bundle.json's " not in str(excinfo.value)
+
+    def test_scoped_tokens_store_proposals(self, clean_env):
+        from privacyfence import scoped_tokens
+
+        params = {"enabled": True, "max_days": 30, "allow_ai_proposals": True}
+        assert _change("set_scoped_tokens", params) == ("Changed scoped tokens", ["scoped_tokens"])
+        stored = _stored()["scoped_tokens"]
+        assert stored == {"enabled": True, "max_days": 30, "allow_ai_proposals": True}
+        assert _change("set_scoped_tokens", params) == ("", [])
+        assert scoped_tokens.policy_from_org_config({"scoped_tokens": stored}, org_mode=True).allow_ai_proposals is True
+        off = _change("set_scoped_tokens", {**params, "enabled": False})
+        assert off == ("Changed scoped tokens", ["scoped_tokens"])
+        policy = scoped_tokens.policy_from_org_config({"scoped_tokens": _stored()["scoped_tokens"]}, org_mode=True)
+        assert policy.allow_ai_proposals is False
+
+    def test_imported_proposals_survive_the_import(self, clean_env):
+        bundle = {"scoped_tokens": {"enabled": True, "max_days": 7, "allow_ai_proposals": True}}
+        config = _import(bundle)
+        assert config["scoped_tokens"]["allow_ai_proposals"] is True
+        admin_config.save(config)
+        _change("set_scoped_tokens", {"enabled": True, "max_days": 8, "allow_ai_proposals": True}, bundle=bundle)
+        assert _stored()["scoped_tokens"]["allow_ai_proposals"] is True
+
+    @pytest.mark.parametrize("days", [0, 366, -3])
+    def test_scoped_token_days_out_of_range(self, clean_env, days):
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_scoped_tokens", {"enabled": True, "max_days": days, "allow_ai_proposals": False})
+        assert str(excinfo.value) == "Scoped tokens can last from 1 to 365 days."
+
+    @pytest.mark.parametrize("days", [1, 365])
+    def test_scoped_token_days_at_the_edges(self, clean_env, days):
+        assert _change("set_scoped_tokens", {"enabled": True, "max_days": days, "allow_ai_proposals": False})[0]
+
+
+class TestTightenStepUp:
+    def _set(self, **section):
+        admin_config.save({**_import({}), "step_up": section})
+
+    def _tighten(self, enabled, require_passkey, scope):
+        return _change("tighten_step_up", {"enabled": enabled, "require_passkey": require_passkey, "scope": scope})
+
+    def test_enabling_is_accepted(self, clean_env):
+        self._set(rp_id="example.com", batch="per_item")
+        assert self._tighten(True, False, "writes_and_pii_reads") == ("Made step-up stricter", ["step_up"])
+        assert _stored()["step_up"] == {
+            "rp_id": "example.com",
+            "batch": "per_item",
+            "enabled": True,
+            "require_passkey": False,
+            "scope": "writes_and_pii_reads",
+        }
+
+    def test_requiring_a_passkey_and_a_wider_scope_are_accepted(self, clean_env):
+        self._set(enabled=True, scope="writes")
+        assert self._tighten(True, True, "writes")[0] == "Made step-up stricter"
+        assert self._tighten(True, True, "writes_and_reads")[0] == "Made step-up stricter"
+        assert _stored()["step_up"]["scope"] == "writes_and_reads"
+
+    @pytest.mark.parametrize(
+        ("current", "submitted"),
+        [
+            ({"enabled": True}, (False, False, "writes_and_pii_reads")),
+            ({"enabled": True, "scope": "writes_and_reads"}, (True, False, "writes")),
+            ({"enabled": True, "require_passkey": True}, (True, False, "writes_and_pii_reads")),
+            ({"enabled": True, "scope": "writes_and_reads"}, (True, False, "writes_and_pii_reads")),
+        ],
+    )
+    def test_relaxing_is_refused(self, clean_env, current, submitted):
+        self._set(**current)
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            self._tighten(*submitted)
+        assert str(excinfo.value) == (
+            "Step-up can only be made stricter here. To relax it, edit org/admin_config.json "
+            "and restart PrivacyFence (ADR 0068)."
+        )
+        assert _stored()["step_up"] == current
+
+    def test_unchanged_submission_is_a_no_op_even_against_defaults(self, clean_env):
+        self._set(enabled=True, require_passkey=True, scope="writes_and_reads")
+        assert self._tighten(True, True, "writes_and_reads") == ("", [])
+        self._set()
+        assert self._tighten(False, False, "writes_and_pii_reads") == ("", [])
+        assert _stored()["step_up"] == {}
+
+    def test_unknown_scope_is_a_parser_error(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            self._tighten(True, False, "everything")
+        assert "scope" in str(excinfo.value) and "org_bundle.json's " not in str(excinfo.value)
+
+
+class TestAuditForwarding:
+    @pytest.fixture(autouse=True)
+    def _bearer(self, monkeypatch):
+        monkeypatch.setenv("SIEM_TOKEN", SENTINEL)
+
+    def _start(self, bearer="SIEM_TOKEN", url="https://siem.example.com/ingest", kind="http"):
+        config = _import({})
+        config["audit_forwarding"] = {
+            "enabled": True,
+            "kind": kind,
+            "http": {"url": url, "bearer_token_env": bearer},
+            "syslog": {"host": "log.example.com", "port": 6514, "protocol": "tcp"},
+        }
+        admin_config.save(config)
+
+    def test_stores_the_section(self, clean_env):
+        assert _change("set_audit_forwarding", _audit()) == ("Changed audit forwarding", ["audit_forwarding"])
+        assert _stored()["audit_forwarding"] == {
+            "enabled": True,
+            "kind": "http",
+            "syslog": {"host": "", "port": 6514, "protocol": "tcp"},
+            "http": {"url": "https://siem.example.com/ingest", "bearer_token_env": ""},
+        }
+        assert _change("set_audit_forwarding", _audit()) == ("", [])
+
+    def test_the_bearer_name_is_never_taken_from_the_request(self, clean_env):
+        self._start()
+        summary, _ = _change("set_audit_forwarding", {**_audit(syslog_host="log.example.com"), "bearer_token_env": "HOME", "http": {"bearer_token_env": "HOME"}})
+        assert summary == ""
+        assert _stored()["audit_forwarding"]["http"]["bearer_token_env"] == "SIEM_TOKEN"
+
+    def test_a_changed_syslog_target_keeps_the_bearer_name(self, clean_env):
+        self._start()
+        summary, _ = _change("set_audit_forwarding", _audit(syslog_host="other.example.com"))
+        assert summary == "Changed audit forwarding"
+        assert _stored()["audit_forwarding"]["http"]["bearer_token_env"] == "SIEM_TOKEN"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://siem.example.com/ingest",
+            "https://evil.example.org/ingest",
+            "https://siem.example.com:8443/ingest",
+        ],
+    )
+    def test_a_moved_url_drops_the_bearer(self, clean_env, caplog, url):
+        self._start()
+        caplog.set_level("DEBUG")
+        summary, sections = _change("set_audit_forwarding", _audit(http_url=url, enabled=False))
+        assert summary == (
+            "Changed audit forwarding; the bearer token was removed. Set it again in org/admin_config.json."
+        )
+        assert sections == ["audit_forwarding"]
+        assert _stored()["audit_forwarding"]["http"]["bearer_token_env"] == ""
+        assert SENTINEL not in summary and SENTINEL not in caplog.text
+        assert SENTINEL not in admin_config.admin_config_path().read_text()
+
+    def test_a_changed_path_or_credentials_in_the_same_endpoint_keeps_the_bearer(self, clean_env):
+        self._start()
+        _change("set_audit_forwarding", _audit(http_url="https://SIEM.example.com/other/path"))
+        assert _stored()["audit_forwarding"]["http"]["bearer_token_env"] == "SIEM_TOKEN"
+
+    def test_a_changed_kind_drops_the_bearer(self, clean_env):
+        self._start()
+        summary, _ = _change("set_audit_forwarding", _audit(kind="syslog", syslog_host="log.example.com"))
+        assert "bearer token was removed" in summary
+
+    def test_no_bearer_no_mention(self, clean_env):
+        self._start(bearer="")
+        summary, _ = _change("set_audit_forwarding", _audit(http_url="https://elsewhere.example.com"))
+        assert summary == "Changed audit forwarding"
+
+    def test_an_unparseable_url_counts_as_moved(self, clean_env):
+        self._start()
+        summary, _ = _change("set_audit_forwarding", _audit(http_url="https://siem.example.com:notaport/", enabled=False))
+        assert "bearer token was removed" in summary
+
+    def test_http_url_must_be_https(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            _change("set_audit_forwarding", _audit(http_url="http://siem.example.com"))
+        assert "must use https://" in str(excinfo.value) and "org_bundle.json's " not in str(excinfo.value)
+
+    def test_bad_protocol_and_port(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError, match="protocol"):
+            _change("set_audit_forwarding", _audit(syslog_protocol="icmp"))
+        with pytest.raises(admin_config.AdminConfigError, match="port from 1 to 65535"):
+            _change("set_audit_forwarding", _audit(syslog_port=0))
+        with pytest.raises(admin_config.AdminConfigError, match="must be"):
+            _change("set_audit_forwarding", _audit(kind="smoke"))
+
+
+class TestReplaceRooms:
+    def _replace(self, data):
+        return admin_config.replace_rooms(data, bundle=BUNDLE, mode="org", single_user=False)
+
+    def test_happy_path(self, clean_env):
+        rooms = [
+            {"resource_email": "a@x.com", "name": "Room A", "capacity": 8, "ratio": 0.5, "av": True, "notes": None},
+            {"resource_email": "b@x.com"},
+        ]
+        assert self._replace({"rooms": rooms, "rooms_synced_at": "2026-01-01T00:00:00Z"}) == (
+            "Replaced the room directory (2 rooms)"
+        )
+        stored = _stored()
+        assert stored["rooms"] == rooms and stored["rooms_synced_at"] == "2026-01-01T00:00:00Z"
+
+    def test_missing_sync_time_is_empty(self, clean_env):
+        self._replace({"rooms": []})
+        assert _stored()["rooms_synced_at"] == ""
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            [],
+            {"rooms": "x"},
+            {"rooms": ["x"]},
+            {"rooms": [{"name": "no email"}]},
+            {"rooms": [{"resource_email": ""}]},
+            {"rooms": [{"resource_email": 3}]},
+            {"rooms": [{"resource_email": "a@x.com", "name": "x" * 501}]},
+            {"rooms": [{"resource_email": "a@x.com", "meta": {"nested": 1}}]},
+            {"rooms": [{"resource_email": "a@x.com", "meta": ["a"]}]},
+            {"rooms": [{"resource_email": "a@x.com", "n": float("nan")}]},
+            {"rooms": [{"resource_email": "a@x.com", "name": "line\nbreak"}]},
+            {"rooms": [{"resource_email": "a@x.com", "name": "tab\there"}]},
+            {"rooms": [{"resource_email": "a@x.com", "name": "esc\u001b[0m"}]},
+            {"rooms": [{"resource_email": "a@x.com", "name": "sep x"}]},
+            {"rooms": [{"resource_email": "a@x\r.com"}]},
+            {"rooms": [{"resource_email": "a@x.com", "bad\nkey": 1}]},
+            {"rooms": [], "rooms_synced_at": 5},
+            {"rooms": [], "rooms_synced_at": "x\ny"},
+        ],
+    )
+    def test_rule_violations(self, clean_env, data):
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            self._replace(data)
+        assert str(excinfo.value) == "The file is not a room directory written by sync_room_directory.py."
+        assert not admin_config.admin_config_path().exists()
+
+    def test_a_500_character_name_is_fine(self, clean_env):
+        self._replace({"rooms": [{"resource_email": "a@x.com", "name": "x" * 500}]})
+
+    def test_too_many_rooms(self, clean_env):
+        rooms = [{"resource_email": f"r{i}@x.com"} for i in range(5001)]
+        with pytest.raises(admin_config.AdminConfigError) as excinfo:
+            self._replace({"rooms": rooms})
+        assert str(excinfo.value) == "A room directory can hold at most 5000 rooms."
+        assert self._replace({"rooms": rooms[:5000]}).endswith("(5000 rooms)")
+
+
+class TestServiceRows:
+    @pytest.fixture(autouse=True)
+    def _apps(self, monkeypatch, clean_env):
+        apps = {
+            "google_web": {"client_id": "g-id", "client_secret": "g-secret-VALUE"},
+            "slack": {"client_id": "s-id", "client_secret": "s-secret-VALUE"},
+            "salesforce": {"client_id": "sf-id", "client_secret": "sf-secret-VALUE"},
+        }
+        monkeypatch.setattr(admin_config.app_credentials, "builtin_app", lambda key: apps.get(key))
+        monkeypatch.setattr(admin_config.app_credentials, "telegram_app_credentials", lambda: (1, "hash-VALUE"))
+
+    def _rows(self, bundle=None, admin=None, *, mode="org", single_user=False):
+        rows = admin_config.service_rows(
+            bundle or {}, admin or _import({}, mode=mode), mode=mode, single_user=single_user
+        )
+        return {row["key"]: row for row in rows}
+
+    def test_one_row_per_service_with_exact_fields(self):
+        rows = admin_config.service_rows({}, _import({}), mode="org")
+        assert [row["key"] for row in rows] == list(admin_config.SERVICES)
+        assert all(set(row) == {"key", "label", "offered", "app_source", "client_id", "relay", "options"} for row in rows)
+        assert rows[0]["label"] == "Google" and rows[0]["offered"] is False
+
+    def test_builtin_apps_use_the_relay_in_org_mode(self):
+        rows = self._rows()
+        assert (rows["google"]["app_source"], rows["google"]["client_id"], rows["google"]["relay"]) == ("builtin", "g-id", True)
+        assert rows["telegram"]["app_source"] == "builtin" and rows["telegram"]["relay"] is False
+        assert rows["miro"]["app_source"] == "none" and rows["miro"]["relay"] is False
+        assert rows["salesforce"]["client_id"] == "sf-id"
+
+    def test_local_mode_has_no_builtin_apps_and_no_relay(self):
+        rows = self._rows(mode="local")
+        assert rows["google"]["app_source"] == "none" and rows["google"]["relay"] is False
+        assert rows["telegram"]["app_source"] == "builtin" and rows["telegram"]["relay"] is False
+
+    def test_bundle_apps_win_and_are_not_relayed(self):
+        bundle = {"slack": {"client_id": "own-slack", "client_secret": "x"}, "salesforce": {"consumer_key": "own-sf"}}
+        rows = self._rows(bundle)
+        assert (rows["slack"]["app_source"], rows["slack"]["client_id"], rows["slack"]["relay"]) == ("bundle", "own-slack", False)
+        assert (rows["salesforce"]["app_source"], rows["salesforce"]["client_id"]) == ("bundle", "own-sf")
+
+    def test_telegram_without_credentials(self, monkeypatch):
+        monkeypatch.setattr(admin_config.app_credentials, "telegram_app_credentials", lambda: None)
+        assert self._rows()["telegram"]["app_source"] == "none"
+
+    def test_offered_follows_the_admin_config(self):
+        admin = _import({})
+        admin["services"]["slack"]["offered"] = True
+        rows = self._rows(admin=admin)
+        assert rows["slack"]["offered"] is True and rows["google"]["offered"] is False
+
+    def test_a_missing_service_in_the_admin_config(self):
+        admin = _import({})
+        admin["services"] = {}
+        assert self._rows(admin=admin)["slack"]["offered"] is False
+
+    def test_atlassian_options(self):
+        admin = _import({})
+        admin["services"]["atlassian"].update(assets=True, assets_workspace_id="ws")
+        assert self._rows(admin=admin)["atlassian"]["options"] == {"assets": True, "assets_workspace_id": "ws"}
+
+    def test_grist_and_peek_are_server_rows(self):
+        rows = self._rows()
+        for key, field in (("grist", "server_url"), ("peek", "base_url")):
+            assert rows[key]["app_source"] == "server" and rows[key]["relay"] is False
+            assert rows[key]["client_id"] == ""
+            options = rows[key]["options"]
+            assert options[field] == "" and options["address_source"] == "admin" and options["locked"] is False
+
+    def test_grist_bundle_oauth_app_locks_the_row(self):
+        bundle = {"grist": {"client_id": "grist-id", "client_secret": "s", "server_url": "https://g.example.com"}}
+        row = self._rows(bundle)["grist"]
+        assert row["client_id"] == "grist-id"
+        assert row["options"]["address_source"] == "bundle" and row["options"]["locked"] is True
+        assert row["options"]["server_url"] == "https://g.example.com"
+        assert row["options"]["auto_provision"]["available"] is False
+        assert "API keys" in row["options"]["auto_provision"]["reason"]
+
+    def test_environment_addresses_win_and_lock(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://env.example.com/")
+        admin = _import({})
+        admin["services"]["peek"]["base_url"] = "https://admin.example.com"
+        options = self._rows(admin=admin)["peek"]["options"]
+        assert options["base_url"] == "https://env.example.com"
+        assert (options["address_source"], options["locked"]) == ("environment", True)
+        assert options["auto_provision"]["available"] is True and options["auto_provision"]["reason"] == ""
+
+    def test_an_unusable_environment_address_is_ignored_by_the_page(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "ftp://nope")
+        assert self._rows()["peek"]["options"]["address_source"] == "admin"
+
+    def test_imported_locked_address(self):
+        admin = _import({"peek": {"base_url": "https://peek.example.com", "auto_provision": {"enabled": True}}})
+        options = self._rows(admin=admin)["peek"]["options"]
+        assert (options["address_source"], options["locked"]) == ("imported", True)
+        assert options["auto_provision"]["enabled"] is True and options["auto_provision"]["available"] is True
+
+    def test_grist_auto_provisioning_availability(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://docs.example.com")
+        auto = self._rows()["grist"]["options"]["auto_provision"]
+        assert auto["available"] is False and "PRIVACYFENCE_GRIST_PROVISIONER_URL" in auto["reason"]
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://prov.example.com")
+        assert self._rows()["grist"]["options"]["auto_provision"]["available"] is True
+
+    def test_auto_provisioning_is_unavailable_in_local_and_single_user_mode(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://env.example.com")
+        local = self._rows(mode="local")["peek"]["options"]["auto_provision"]
+        assert local["available"] is False and "organization server" in local["reason"]
+        single = self._rows(single_user=True)["peek"]["options"]["auto_provision"]
+        assert single["available"] is False and "identity provider" in single["reason"]
+
+    def test_key_set_reports_presence_never_the_key(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", SENTINEL)
+        monkeypatch.setenv("CUSTOM_GRIST_KEY", " ")
+        admin = _import({})
+        admin["services"]["grist"]["auto_provision"]["key_env"] = "CUSTOM_GRIST_KEY"
+        rows = self._rows(admin=admin)
+        assert rows["peek"]["options"]["auto_provision"]["key_set"] is True
+        assert rows["grist"]["options"]["auto_provision"]["key_set"] is False
+        assert SENTINEL not in json.dumps(rows)
+
+    def test_no_row_carries_a_secret(self):
+        bundle = {
+            "slack": {"client_id": "own", "client_secret": "BUNDLE-SECRET-VALUE"},
+            "grist": {"client_id": "gid", "client_secret": "GRIST-SECRET-VALUE", "server_url": "https://g.example.com"},
+        }
+        text = json.dumps(self._rows(bundle))
+        for secret in ("BUNDLE-SECRET-VALUE", "GRIST-SECRET-VALUE", "g-secret-VALUE", "s-secret-VALUE", "sf-secret-VALUE", "hash-VALUE"):
+            assert secret not in text
+
+
+class TestNothingSecretLeaks:
+    def test_summaries_and_logs_never_carry_secrets(self, clean_env, monkeypatch, caplog, public_dns):
+        monkeypatch.setenv("SIEM_TOKEN", SENTINEL)
+        caplog.set_level("DEBUG")
+        bundle = {"slack": {"client_id": "x", "client_secret": "CLIENT-SECRET-VALUE"}}
+        config = _import(bundle)
+        config["audit_forwarding"] = {"http": {"url": "https://siem.example.com", "bearer_token_env": "SIEM_TOKEN"}}
+        admin_config.save(config)
+        summaries = [
+            _change("offer_service", {"service": "slack"}, bundle=bundle)[0],
+            _change("set_server_address", {"service": "peek", "value": "https://peek.example.com"}, bundle=bundle)[0],
+            _change("set_audit_forwarding", _audit(http_url="https://new.example.com"), bundle=bundle)[0],
+            _change("set_authz", {"allowed_domains": "a.com", "groups_claim": "", "required_groups": ""}, bundle=bundle)[0],
+        ]
+        everything = "\n".join(summaries) + caplog.text + admin_config.admin_config_path().read_text()
+        assert SENTINEL not in everything and "CLIENT-SECRET-VALUE" not in everything
+        assert summaries[3] == "Changed sign-in restrictions"

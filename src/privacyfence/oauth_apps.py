@@ -36,6 +36,11 @@ BUILTIN_KEY = {
     "miro": "miro",
 }
 
+# Whether the built-in Slack app is listed in the Slack Marketplace. Until it is, Slack limits an
+# unlisted app's search and history reads, which the Admin page says. Flipped by hand after
+# approval.
+SLACK_MARKETPLACE_LISTED: bool = False
+
 AppSource = Literal["bundle", "builtin", "none"]
 
 _ENV_PEEK_BASE_URL = "PRIVACYFENCE_PEEK_BASE_URL"
