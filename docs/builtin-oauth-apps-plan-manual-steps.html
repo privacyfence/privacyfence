@@ -298,17 +298,25 @@ PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE=/run/secrets/grist_provisioning_key</pr
           <li><strong>Namespace.</strong> In the namespace org, <strong>Setup → Package Manager → Namespace Settings → Edit</strong>: register <code>privacyfence</code> (or <code>pfence</code> if it is taken). In the Dev Hub, open the App Launcher → <strong>Namespace Registries → Link Namespace</strong> and sign in to the namespace org.</li>
           <li><strong>The app.</strong> Create the External Client App so that its <strong>global OAuth settings live in the Dev Hub</strong>, which never expires, and not in a scratch org. Use the values in the box below:<ul><li>Distribution State <strong>Packaged</strong>.</li><li>OAuth on, callback <code>https://oauth.privacyfence.eu/callback/salesforce</code>, scopes <strong>Manage user data via APIs (api)</strong> and <strong>Perform requests at any time (refresh_token, offline_access)</strong>.</li><li>Authorization code flow, <strong>Require PKCE</strong> and <strong>Require secret for Web Server Flow</strong> on, refresh token rotation on.</li></ul></li>
           <li><strong>The package.</strong> In your terminal, with the <a href="https://developer.salesforce.com/tools/salesforcecli">Salesforce CLI</a>:<pre>sf org login web --set-default-dev-hub --alias pf-devhub
-sf project generate --name privacyfence-package     # set "namespace": "privacyfence" in sfdx-project.json
-# retrieve the app's metadata into force-app/, leaving out its global OAuth settings
+sf project generate --name privacyfence-package
+cd privacyfence-package                             # set "namespace" in sfdx-project.json to the registered one
+
+# the app PrivacyFence_oauth is the only one in the Dev Hub, so the type names alone retrieve it
+sf project retrieve start --target-org pf-devhub \
+  --metadata ExternalClientApplication ExtlClntAppOauthSettings ExtlClntAppOauthConfigurablePolicies
+ls force-app/main/default                           # delete any global OAuth settings folder (e.g. extlClntAppGlobalOauthSets/): it holds the secret
+
 sf package create --name PrivacyFence --package-type Managed --path force-app --target-dev-hub pf-devhub
-sf package version create --package PrivacyFence --installation-key-bypass --code-coverage --wait 30
-sf package version promote --package "PrivacyFence@1.0.0-1"</pre>The promoted version prints an id starting with <code>04t</code>. Its install URL is <code>https://login.salesforce.com/packaging/installPackage.apexp?p0=04t…</code>.</li>
+sf package version create --package PrivacyFence --installation-key-bypass --code-coverage \
+  --wait 30 --target-dev-hub pf-devhub
+sf package version promote --package "PrivacyFence@1.0.0-1" --target-dev-hub pf-devhub</pre>The package's name (<code>PrivacyFence</code>) is separate from the app's and only has to be unique in your Dev Hub.The promoted version prints an id starting with <code>04t</code>. Its install URL is <code>https://login.salesforce.com/packaging/installPackage.apexp?p0=04t…</code>.</li>
           <li><strong>Keep the package source.</strong> Commit the project, without the global OAuth settings file (it holds the secret), to <code>salesforce/package/</code> on the <code>plan/builtin-oauth-apps</code> branch, so later versions build from the repository.</li>
           <li><strong>Values for GitHub.</strong> The consumer key and secret from the app's OAuth settings in the Dev Hub go into the secrets <code>PF_APP_SALESFORCE_CLIENT_ID</code> and <code>PF_APP_SALESFORCE_CLIENT_SECRET</code> (last step of this section). The install URL goes into a repository <strong>variable</strong>, not a secret: <a href="https://github.com/privacyfence/privacyfence/settings/variables/actions/new">Settings → Secrets and variables → Actions → Variables → New repository variable</a>, named <code>PF_APP_SALESFORCE_INSTALL_URL</code>.</li>
           <li><strong>Test install.</strong> Sign in to the QA Salesforce org as its admin and open the install URL. Install for admins only. Then <strong>Setup → External Client App Manager → PrivacyFence → Policies</strong>: <strong>Permitted users: All users may self-authorize</strong>. That org is the one the live checks connect in step 5. The real sign-in through the relay only works after the merge. If it then fails with a cross-org or invalid-client error, stop and decide: ship 7.0 without a built-in Salesforce app, or follow Salesforce's guidance on subscriber credentials (D26, "Known uncertainty").</li>
         </ol>
         <div class="note"><p><strong>Values for the External Client App</strong></p><div class="tbl"><table><tbody>
-          <tr><th>Name / API name</th><td><code>PrivacyFence</code></td></tr>
+          <tr><th>Name</th><td><code>PrivacyFence (oauth.privacyfence.eu)</code> (plain <code>PrivacyFence</code> is taken on Salesforce)</td></tr>
+          <tr><th>API name</th><td><code>PrivacyFence_oauth</code></td></tr>
           <tr><th>Contact email</th><td><code>info@privacyfence.eu</code></td></tr>
           <tr><th>Info URL</th><td><code>https://privacyfence.eu/connectors/salesforce/</code></td></tr>
           <tr><th>Logo image URL</th><td><code>https://privacyfence.eu/assets/salesforce-app-logo.png</code> (125 × 125 PNG, 9 KB; Salesforce allows at most 125 px high, 200 px wide, 100 KB)</td></tr>
