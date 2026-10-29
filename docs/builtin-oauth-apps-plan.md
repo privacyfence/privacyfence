@@ -59,7 +59,10 @@ After this plan:
   the marker, with "install 7.x first". The Admin page says whether an install is ready for 8.
 - **Desktop (local) mode is deprecated.** 7.x says so in the daemon log, in `privacyfence_status`,
   on every local page and once from the companion. 8.x removes it, in a separate plan written after
-  7.0 ships. The release is cut as 7.0.0 by the maintainer after this plan's PR merges.
+  7.0 ships.
+- **7.0 is tested as an alpha.** After this plan's PR merges, the maintainer cuts `7.0.0a1` and
+  tests it installed the regular way: the published Docker image and the pre-release installers.
+  7.0.0 follows once those checks pass (D23).
 
 An organization that wants its own app for a provider puts the credentials in the bundle, as today.
 The Admin page shows, for each service, which app is in use and how to switch.
@@ -614,7 +617,7 @@ releases.
 - **Tags do not deploy it.** A release tag never changes the relay, and a relay change never needs
   an app release.
 - **Order.** The relay must be live before the first release whose org servers use built-in apps,
-  7.0.0. The feature PR merging to `main` deploys it, and `/cut-release` and `docs/releasing.md`
+  7.0.0a1 (D23). The feature PR merging to `main` deploys it, and `/cut-release` and `docs/releasing.md`
   gain a pre-flight line: `curl -fsSI https://oauth.privacyfence.eu/health` must return 200 before
   tagging.
 - **Compatibility rule.** Every relay version must keep serving every released 7.x server. The D5
@@ -1209,8 +1212,8 @@ to `http://localhost:<port>`.
   bringing rules along per the existing "Moving a person from a desktop install" section) and marks
   the install guides as deprecated.
 - **Changelog.** The changelog says so under a breaking-changes note.
-- **Release.** The release itself is cut as 7.0.0 by the maintainer after merge, per
-  `docs/releasing.md`. No phase tags anything.
+- **Release.** The maintainer cuts 7.0.0a1 after the merge, and 7.0.0 once the manual checks pass
+  on the alpha (D23), per `docs/releasing.md`. No phase tags anything.
 
 ### D12. 7.x is the migration checkpoint for 8.x
 
@@ -2013,7 +2016,7 @@ stable tag (ADRs 0052, 0099). The relay also goes live on merge. So the website 
 - `GET /` and `GET /terms` (and HEAD) answer 302 to `https://privacyfence.eu/relay-terms/`.
 - The 400 texts end with ` Terms: https://privacyfence.eu/relay-terms/`.
 - A successful `/register` response adds `"terms": "https://privacyfence.eu/relay-terms/"`.
-- The first deploy from the branch (ma0) comes before the pages deploy, so the terms link 404s
+- The relay and the pages both deploy on merge (D23), so the terms link can 404 for the few minutes
   until the merge. That window is the maintainer's own test.
 
 **The product can see the terms (p8a, p13a).** The Admin page's relay status line ends with
@@ -2058,24 +2061,25 @@ reworking it in place.
   - cloud-init joins the tailnet at first boot with a one-off, pre-approved auth key and runs
     `tailscale up --ssh`.
   - The tailnet ACL lets only the maintainer reach it.
-  - OpenSSH is disabled (`systemctl disable --now ssh`). `peek login` and file copies go over
-    Tailscale (`ssh -L 7700:localhost:7700 <tailnet name>`, `scp`).
+  - OpenSSH is disabled (`systemctl disable --now ssh`). Administration goes over Tailscale SSH;
+    no token is ever moved by hand (D22).
 - **Users.**
-  - `pfrunner` runs the GitHub runner service. It holds the QA state in `~/privacyfence` (mode 700)
-    and has no sudo.
+  - `pfrunner` (uid and gid 10001, D22) runs the GitHub runner service. It holds the QA
+    configuration in `~/privacyfence` (mode 700). Its only sudo right is the no-argument deploy
+    script of D22.
   - `pfrunner` is not in the `docker` group, which is root-equivalent. The live checks need no
     Docker.
-  - Peek (`ghcr.io/privacyfence/peek:main`, as `docs/connector-qa.md:39` names it since main moved
-    the QA image) and the QA org server run as containers started by the admin account, with no mount of
-    `/home/pfrunner`.
+  - Peek (`ghcr.io/privacyfence/peek:main`, as `docs/connector-qa.md:39` names it) and the QA org
+    server run as containers of one compose project (D22). They share exactly one directory with
+    `pfrunner`: the QA server's data directory.
 - Unattended upgrades are on, and the runner binary updates itself (GitHub's default).
 
 **The runner.**
 
 - It is registered as `runner-privacyfence-eu` with the labels `self-hosted,privacyfence-live`, in
   a new organization runner group `privacyfence-live`.
-- The group is set to "Selected workflows": `connector-live-check.yml` and `qa-record-fixture.yml`
-  on `main`, as ADR 0181 requires.
+- The group is set to "Selected workflows": `connector-live-check.yml`, `qa-record-fixture.yml`
+  and `deploy-qa-server.yml` (D22) on `main`, as ADR 0181 requires.
 - It runs as a non-ephemeral systemd service (ADR 0019 Decision 4).
 - The workflows on `main` switch to `runs-on: [self-hosted, privacyfence-live]` when this plan
   merges. That is the cutover: until then the old runner keeps serving `main`'s current
@@ -2098,8 +2102,9 @@ apps most people use.
   - `QA_ADMIN` offers every service in `admin_config.SERVICES`.
   - The Google, Slack, Salesforce, Atlassian and Miro sections are therefore the built-in apps,
     unless the runner's optional bundle carries an organization's own app to test.
-  - Peek's and Grist's addresses come from `PRIVACYFENCE_PEEK_BASE_URL=http://localhost:7700` and
-    `PRIVACYFENCE_GRIST_SERVER_URL=https://docs.getgrist.com` in the workflow env (D18).
+  - Peek's and Grist's addresses come from
+    `PRIVACYFENCE_PEEK_BASE_URL=https://peek-qa.privacyfence.eu` and
+    `PRIVACYFENCE_GRIST_SERVER_URL=https://docs.getgrist.com` in the workflow env (D18, D22).
 - **Built-in credentials on the runner.**
   - Both workflows gain a step "Write built-in app credentials" before the recorder. It runs
     `python3 scripts/builtin_apps.py write` with the ten connector `PF_APP_*` secrets (the five
@@ -2108,25 +2113,16 @@ apps most people use.
   - A last step, `if: always()`, deletes `src/privacyfence/_builtin_apps.py`, because the runner
     is not ephemeral.
   - Only the client ID and secret are used: refreshing a token needs no redirect.
-- **Minting the tokens on the QA org server (ma6).**
-  - `test@privacyfence.eu` signs in to `https://runner.privacyfence.eu` and connects Google
-    (all six), Slack, Salesforce, Atlassian and Miro on `/connect`, through the relay, with the
-    built-in apps.
-  - The maintainer copies that principal's `users/<id>/credentials/*` from the QA server's data
-    directory to the runner's `~/privacyfence/users/qa-live/credentials/`.
-  - The maintainer then deletes those files from the server's data directory, without
-    disconnecting, because a disconnect would revoke them. From then on only the runner refreshes
-    them, which matters for Atlassian's rotating refresh tokens.
-  - Telegram (`telegram.session`), Grist (`grist_token.json`, an API key) and Peek
-    (`peek_token.json` for the local QA Peek) are not OAuth. They are placed in the same folder by
-    hand, as today.
-- **Re-minting later** is the same procedure. `scripts/qa_authenticate_connectors.py` and its
-  loopback CLI flows are no longer used by the runner; 8.x can remove them with local mode.
-- **The copy-in step** in both workflows copies `~/privacyfence/users/qa-live/` into the
-  checkout's `users/qa-live/`, plus `tests/fixtures/qa_environment.yaml`, and an optional
-  `org/org_bundle.json`. The copy-back step (`if: always()`) returns
-  `users/qa-live/credentials/`. Neither names `credentials/` at the checkout root or
-  `org/org_config.json` any more.
+- **Connecting the QA accounts (ma6), in a browser.** Every token, OAuth or not, is connected on
+  the QA org server's `/connect` page, and the runner copies it from there (D22). Nobody copies an
+  authorization URL, opens a tunnel or places a token file by hand.
+  `scripts/qa_authenticate_connectors.py` and its loopback CLI flows are no longer used by the
+  runner; 8.x can remove them with local mode.
+- **The copy steps** (D22) copy the QA principal's `credentials/` from the QA server's data
+  directory into the checkout's `users/qa-live/credentials/` before the recorder, and write
+  changed files back after it (`if: always()`). They also copy
+  `~/privacyfence/tests/fixtures/qa_environment.yaml` and an optional `org/org_bundle.json`.
+  Neither names `credentials/` at the checkout root or `org/org_config.json` any more.
 - `connector-live-check.yml` adds a step `curl -fsSI https://oauth.privacyfence.eu/health`
   (continue-on-error, reported in the summary as `relay: up` or `relay: down`). That gives a
   weekly external check of the relay.
@@ -2137,16 +2133,16 @@ apps most people use.
 organization server from `deploy/docker/`. Its only users are the maintainer and the QA Google
 Workspace accounts, through a QA Google OIDC app.
 
-- It is the public host the relay round trip needs (ma2), and stays for later manual QA.
-- Its Caddyfile uses the Origin CA certificate (`tls /etc/caddy/origin.pem /etc/caddy/origin.key`)
-  instead of ACME.
+- It is deployed from `main` automatically and exists to connect the QA accounts; `/mcp` is not
+  reachable from the internet (D22).
+- Its Caddyfile, `deploy/qa-runner/Caddyfile` (D22), uses the Origin CA certificate instead of
+  ACME.
 - `PRIVACYFENCE_TRUSTED_PROXIES` names the Caddy container only. Caddy takes the client address
   from `CF-Connecting-IP` with `trusted_proxies` set to Cloudflare's ranges.
 - Cloudflare's Bot Fight Mode is off for the zone, or a WAF skip rule covers
   `/.well-known/privacyfence-relay` and `/oauth/callback/*` on this host. Otherwise the relay's proof
   fetch and the redirects are challenged.
-- It runs whatever image the maintainer loads: the feature branch's image for ma2, released
-  images afterwards.
+- It runs the image built from the latest `main` (D22), never a hand-loaded one.
 
 **The relay gains a restore route (p11).** A revocation (D5) is permanent today. A mistaken one, or
 ma2's revocation test on the long-lived QA host, could not be undone.
@@ -2164,8 +2160,9 @@ ma2's revocation test on the long-lived QA host, could not be undone.
   requirements and adds:
   - the Hetzner, Cloudflare and Tailscale setup;
   - the `pfrunner` and Docker separation;
-  - the organization-mode QA principal `qa-live`, and minting its tokens on the QA org server;
-  - the QA org server;
+  - the organization-mode QA principal `qa-live`, and connecting its accounts on the QA org
+    server in a browser (D22);
+  - the QA org server, its deploy from `main` and its blocked `/mcp`;
   - the cutover and decommissioning.
 - It fixes the stale "not registered to this repository" line (`:574`).
 - `docs/testing-policy.md`, `.claude/commands/qa-record.md`, `.claude/toolkit.yaml`,
@@ -2655,6 +2652,182 @@ holds.
 - **Messages (p18).** `PROPOSALS_DISABLED_MESSAGE` names the Admin page.
 - **ADR.** 0256 amends 0253: the switch lives in `org/admin_config.json` and on the Admin page.
 
+### D22. The QA server is deployed from main, and its accounts are connected in a browser
+
+This section overrides D17 where they differ.
+
+**What it is.** `https://runner.privacyfence.eu` runs the organization server built from the latest
+`main`, redeployed automatically. It exists so the maintainer can connect the QA accounts in a
+browser, which organization mode makes possible for every service. `/mcp` and every MCP OAuth
+endpoint are blocked at its proxy. The live checks copy the QA principal's tokens from its data
+directory.
+
+**Why `/mcp` is blocked.**
+- Nobody can point an AI client at a public server holding live QA tokens by accident.
+- With no MCP, nothing on the server ever builds the QA principal's connectors, so nothing there
+  uses or refreshes its tokens. The runner is then their only user. That matters for Atlassian's
+  rotating refresh tokens and for Telegram, whose session must not be used from two places at once.
+
+**The deploy: `.github/workflows/deploy-qa-server.yml` (p22).**
+- **Triggers.** A push to `main` touching `src/**`, `deploy/docker/**`, `deploy/qa-runner/**`,
+  `pyproject.toml`, `setup.py`, `MANIFEST.in`, `requirements/**` or the workflow itself; and
+  `workflow_dispatch` on `main`. `concurrency: {group: qa-server-deploy, cancel-in-progress:
+  true}`. The runner runs one job at a time, so a deploy never overlaps a live check on the host.
+- **Job `build`** (`ubuntu-latest`): the same steps as `build.yml`'s `build-org-image` for amd64:
+  - write the Telegram and built-in app credentials, with the secrets in those steps' `env:` only;
+  - build the wheel and the image;
+  - tag the image `privacyfence-org:qa-main`;
+  - upload it with `docker save | gzip` as the artifact `qa-server-image`, kept for 3 days.
+- **Job `deploy`** (`needs: build`, `runs-on: [self-hosted, privacyfence-live]`): downloads the
+  artifact to `$HOME/qa-deploy/privacyfence-org-qa.tar.gz`, then runs
+  `sudo -n /usr/local/sbin/pf-qa-deploy`. It checks out nothing and holds no secret.
+- **Job `verify`** (`needs: deploy`, `ubuntu-latest`, so from the public internet):
+  - `/login` answers 200 or a redirect;
+  - `/mcp`, `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource/mcp`,
+    `/authorize`, `/register`, and a POST to `/token`, each answer 404.
+
+**On the host: `deploy/qa-runner/` (p22), installed once by hand (ma6).**
+- **`pf-qa-deploy`**, a POSIX shell script installed root-owned, mode 0755, at
+  `/usr/local/sbin/`. It takes no arguments.
+  - It reads only `/home/pfrunner/qa-deploy/privacyfence-org-qa.tar.gz`, refusing a symlink or a
+    non-regular file, and checks it with `gunzip -t`.
+  - It runs `docker load`, and refuses unless the loaded reference is `privacyfence-org:qa-main`.
+  - It runs `docker compose --project-directory /opt/pf-qa/run up -d --no-build`, waits up to 120 s
+    for the `privacyfence` service to report healthy, and fails the job otherwise.
+  - Then `docker image prune -f`, and it deletes the tarball.
+- **`sudoers.pf-qa-deploy`**: `pfrunner ALL=(root) NOPASSWD: /usr/local/sbin/pf-qa-deploy ""`. The
+  empty argument list forbids any argument.
+- **`compose.override.yaml`**, used with `deploy/docker/compose.yaml`:
+  - `privacyfence`: `image: privacyfence-org:qa-main`, `pull_policy: never`, `user: "10001:10001"`,
+    the data directory as a bind mount of `/home/pfrunner/qa-org-data` (in place of the named
+    volume), and the `idp_client_secret` secret.
+    - The compose file, not the image, fixes the user, the read-only root, the dropped
+      capabilities and `no-new-privileges`. So an image built from `main` cannot run as root on
+      the host.
+  - `caddy`: this directory's Caddyfile and `/etc/pf-qa` (the origin certificate), read-only.
+  - `peek`: `ghcr.io/privacyfence/peek:main` on the same network, with its own volume and
+    `PEEK_BASE_URL=https://peek-qa.privacyfence.eu`.
+- **`Caddyfile`**:
+  - global `trusted_proxies static {$PF_CF_RANGES}` and `client_ip_headers CF-Connecting-IP`;
+  - the site `runner.privacyfence.eu`: the origin certificate, then a matcher `@mcp` answering 404
+    for `/mcp`, `/mcp/*`, `/authorize`, `/token`, `/register`, `/revoke`, `/oauth/idp/callback`,
+    `/oauth/consent/*`, `/.well-known/oauth-authorization-server*` and
+    `/.well-known/oauth-protected-resource*`, then `reverse_proxy privacyfence:8765`;
+  - the site `peek-qa.privacyfence.eu` → `peek:7700`. Peek needs a public `https` address,
+    because its device sign-in opens in the maintainer's browser and its addresses must be `https`
+    or loopback (`peek_client.normalize_base_url`).
+- **`privacyfence.env.example`**: `PRIVACYFENCE_ISSUER_URL`, the QA IdP variables,
+  `PRIVACYFENCE_ADMIN_EMAILS=test@privacyfence.eu`, `PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2`,
+  `PRIVACYFENCE_PEEK_BASE_URL=https://peek-qa.privacyfence.eu`,
+  `PRIVACYFENCE_GRIST_SERVER_URL=https://docs.getgrist.com` and `PRIVACYFENCE_PREVIEW_SERVICES=*`.
+- **`README.md`**: what each file is, and how ma6 installs them.
+- **Defence in depth (mb4).** A Cloudflare WAF custom rule blocks the same paths on
+  `runner.privacyfence.eu`, so `/mcp` stays closed even if the Caddyfile is changed by mistake.
+
+**Users and separation (amends D17).**
+- `pfrunner` is created with uid and gid 10001, the image's `privacyfence` user. The server's data
+  directory, `/home/pfrunner/qa-org-data` (mode 0700), is therefore owned by `pfrunner` on the host.
+- That one directory is shared on purpose: the server writes the tokens, and the runner reads them.
+  The server sees nothing else of `pfrunner`'s.
+- `pfrunner`'s one sudo rule runs the fixed compose project and nothing else.
+- ADR 0265 records this: the runner can change the QA server's data, and the QA server can change
+  the tokens the runner uses. Both hold only QA accounts.
+
+**Connecting the QA accounts (ma6), all in a browser.**
+- Sign in at `https://runner.privacyfence.eu` as `test@privacyfence.eu`. It is the QA server's
+  only admin and the account whose tokens the runner uses.
+- Offer every service on Admin → Services. Then, on `/connect`:
+  - Google (all six), Slack, Salesforce, Atlassian and Miro, through the relay with the built-in
+    apps;
+  - Telegram with the phone number and code;
+  - Grist with its API key;
+  - Peek with the device sign-in at `peek-qa.privacyfence.eu`.
+- Re-minting a token is reconnecting it on `/connect`.
+
+**How the runner uses them (p21, with `scripts/qa_runner_tokens.py` from p22).**
+- **`pull`** finds the QA principal's folder under `/home/pfrunner/qa-org-data/users/`:
+  - the folder named by the repository variable `PF_QA_PRINCIPAL_ID` when it is set;
+  - otherwise the single folder whose `credentials/` holds a `daemon_main.TOKEN_FILES` file.
+  - With none, or several, it fails and names the candidate ids. Principal ids are not secrets.
+  - It copies that `credentials/` to `<checkout>/users/qa-live/credentials/` (files mode 0600),
+    and records each file's SHA-256 in `<checkout>/.qa-pull.json`.
+- **`push`** (`if: always()`) writes back only the files the run changed, each atomically (a
+  temporary file in the same directory, then a rename). It skips, with a warning, any file whose
+  server copy changed since `pull`, for example one the maintainer reconnected during the run.
+- `tests/fixtures/qa_environment.yaml` stays a hand-placed configuration file in
+  `~/privacyfence/` (seed ids, no credential).
+- Tests (`tests/unit/test_qa_runner_tokens.py`): the variable and the single-folder rule; none and
+  several fail with the ids; the mode; push writes only changed files; push keeps a file changed on
+  the server; a symlinked file is refused.
+
+**A new connector is two pull requests.** Live recording needs a token, and the token now comes
+from `/connect` on the QA server, which runs `main`. So a new connector lands in two PRs:
+
+1. **Connect.** The sign-in and token storage, the `/connect` entry, a built-in app key when the
+   provider needs one (with its manual "register the app, add the secrets" step), and unit tests.
+   The service is listed in `oauth_apps.PREVIEW_SERVICES`.
+   - After the merge, the QA server redeploys. The maintainer connects the QA account on `/connect`
+     and seeds the data `docs/connector-qa.md` describes.
+2. **Tools.** The connector's tools, recorded live with `/qa-record <connector>` (the token is now
+   on the QA server), the live-check manifest entries, and removing the service from
+   `PREVIEW_SERVICES`.
+
+A release cut between the two never shows a half-built service.
+
+- **`oauth_apps.PREVIEW_SERVICES: frozenset[str] = frozenset()`** (p22). `effective_org_config`
+  drops a preview service's section, and `admin_config.service_rows` omits its row, unless
+  `PRIVACYFENCE_PREVIEW_SERVICES` (a comma-separated list, or `*`) names it. The QA server sets
+  `*`.
+- **Where it is written down.** The procedure is in `docs/coding-and-testing-guidelines.md` §3
+  "Adding a connector" and `docs/connector-qa.md`. `CLAUDE.md` gains a short "New connectors"
+  line pointing there, so a `/make-plan` for a new connector produces the two PRs, in that order,
+  with the browser connection between them as a manual step.
+
+### D23. 7.0 is tested as an alpha release, installed the regular way
+
+**No manual step tests a branch build.** The PR merges on CI and review. Then, in order:
+
+1. The relay deploys from `main` through its workflow (ma0), and the website pages deploy.
+2. The QA server deploys from `main`. The maintainer connects the QA accounts in a browser (ma6),
+   and the live check runs on the new runner (ma7).
+3. The maintainer cuts `7.0.0a1` with `/cut-release` (ma10).
+4. The remaining checks install the alpha exactly as an operator or a person would (ma2, ma3, ma4,
+   ma1, ma8):
+   - the image `ghcr.io/privacyfence/privacyfence-org:7.0.0a1`, through `compose.yaml` with
+     `PRIVACYFENCE_IMAGE_TAG=7.0.0a1`, or through `docker run`;
+   - the desktop pre-release installers from the download page (ADR 0024).
+5. Each defect is fixed in a normal PR to `main`, and the next alpha follows. 7.0.0 is cut once
+   every check passes (ma11). The Slack listing (ma9) and the website follow-up (ma5) come after.
+
+**Pre-release org images (p23).** ADR 0208 publishes only stable images, so today an alpha has none.
+
+- `scripts/org_image_tags.py`: a pre-release version (PEP 440 short form, `X.Y.ZaN`, `bN` or
+  `rcN`) gets exactly one tag, the version itself. It never moves `X.Y`, `X` or `latest`. Stable
+  versions are unchanged, and the floating-tag comparison still ignores pre-release tags.
+- `publish-org-image.yml` publishes every channel. A pre-release pushes the version tag (and the
+  per-architecture tags) with the same provenance attestation, and its summary says that no
+  floating tag moved.
+- `build.yml`'s `build-org-image` and `publish-pypi.yml` pass `--require` to
+  `scripts/builtin_apps.py check-dist` on every release tag, pre-releases included, because an
+  alpha image without the built-in apps could not be tested (p1). Telegram's rule is unchanged.
+- `docs/org-mode-docker.md`'s "Releases" row and `docs/releasing.md` say: a stable release gets the
+  version, `X.Y`, `X` and `latest`; a pre-release gets only its exact version, so the floating tags,
+  and with them unattended upgrades, never reach a pre-release.
+- ADR 0267 (new) amends 0208. It keeps 0208's reason (`latest` never points at a pre-release) and
+  drops its consequence that a pre-release image must be built by hand.
+- Tests: `tests/unit/test_org_image_tags.py` (a pre-release gets exactly `[version]`, even when it
+  is the highest tag) and `tests/unit/test_org_image_workflows.py` (no step is skipped for a
+  pre-release; the builtin check passes `--require` on every tag).
+
+**Consequences.**
+- The relay, its terms and the privacy text go live at the merge, before any 7.x release exists. No
+  server uses the relay until the alpha.
+- Between the merge and 7.0.0, `main` is 7.0, and `scripts/tag_release.py` tags only `main`'s
+  tip. A 6.x bugfix release would need its own maintenance branch, which the repository does not
+  have today. So the alpha phase should be short. This is an open question for the maintainer
+  (Risks).
+- Fixes found on the alpha are fixed forward on `main`; nothing is reverted to retest a branch.
+
 ## ADRs
 
 - **0254** — Built-in PrivacyFence OAuth apps for Google, Slack, Atlassian, Salesforce and Miro
@@ -2722,14 +2895,20 @@ holds.
   (Hetzner, behind the Cloudflare proxy, administered only over Tailscale), labelled
   `privacyfence-live` in its own runner group. They run in organization mode as the principal
   `qa-live` and test the built-in apps, so 8.x needs no runner change; the runner's bundle is
-  optional. The host also serves a QA organization server for relay testing. Amends 0019 (the
-  host) and 0181 (the group and label); relates to 0254, 0258.
+  optional. The host also serves a QA organization server, deployed from `main` with `/mcp`
+  blocked at its proxy, on which the QA accounts are connected in a browser; the runner copies
+  their tokens from its data directory (D22). A new connector lands as two PRs, connect first,
+  then tools with live recording. Amends 0019 (the host) and 0181 (the group and label); relates
+  to 0254, 0258.
 
 - **0266** — An organization server may opt in to PrivacyFence's built-in Google sign-in
   (`PRIVACYFENCE_IDP=builtin-google`): a separate `privacyfence-signin` client through the relay,
   default-deny (only admins by verified email and allowed Workspace domains with `hd`), each
   sign-in domain proven by a DNS TXT record and enforced by the relay on Google's `hd`, and never
   the default. Relates to 0262, 0263, 0258.
+- **0267** — Pre-releases publish the organization image too, under their exact version tag only;
+  `X.Y`, `X` and `latest` move only for stable releases (D23). Amends 0208.
+
 ## Manual steps
 
 Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
@@ -2742,27 +2921,28 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
   - (mb4) Build the new live-check runner, `runner.privacyfence.eu` (D17): Hetzner, Tailscale,
     the Cloudflare record and origin certificate, the `privacyfence-live` runner group and the
     runner itself.
-- **After:**
-  - (ma0) Deploy the relay Worker from the feature branch by hand, set its secrets, and run the
-    runbook's smoke tests; the merge then redeploys it through the workflow.
-  - (ma1) Check that a desktop build with an own-app bundle still connects as in 6.x, and offers no
-    built-in app.
-  - (ma2) Deploy the relay from the branch and connect through it from an org server.
-  - (ma3) Upgrade an org server with an old-style bundle, then use the Admin page and check that
-    Settings looks the same for an admin and a normal user.
-  - (ma4) Run the branch's Docker image in single-user mode: setup code, passkey, a connector
-    through the relay, and an MCP client signing in. Check that a desktop install shows the
-    deprecation notices.
-  - (ma6) Start the QA org server on the new runner host, sign in there as `test@privacyfence.eu`,
-    connect every service with the built-in apps, and move those tokens to the runner's `qa-live`
-    principal. ma2 uses that server.
-  - (ma8) After the merge, record the demo video on a build of `main` and submit the built-in Google
-    app for verification, with the scope justifications from the guide.
-    Also submit the `privacyfence-signin` project for brand verification (D20).
-  - (ma9) After the merge, submit the built-in Slack app to the Slack Marketplace (D19), once Slack's
-    requirements are met.
-  - (ma7) After the merge, run the live check on `main` on the new runner, then retire the old
-    runner and wipe its QA state.
+- **After the merge** (D23; nothing is tested on a branch build):
+  - (ma0) Approve the relay's first deploy from `main` and run the runbook's smoke tests.
+  - (ma6) Install the QA server's deploy files on the runner host, let it deploy from `main`, and
+    connect every QA account on its `/connect` page in a browser.
+  - (ma7) Run the live check on `main` on the new runner, then retire the old runner and wipe its QA
+    state.
+  - (ma10) Cut `7.0.0a1` with `/cut-release`, and check that GHCR has the `7.0.0a1` image and that
+    `latest` did not move.
+  - (ma2) Start a fresh organization server from the alpha image the way the Docker guide says,
+    and connect through the relay. Try the built-in Google sign-in.
+  - (ma3) Upgrade a 6.x org server with an old-style bundle to the alpha image, use the Admin page,
+    compare Settings for an admin and a normal user, and go back to 6.x.
+  - (ma4) Run the alpha image in single-user mode with `docker run`: setup code, passkey, a
+    connector through the relay, and an MCP client signing in.
+  - (ma1) Install the desktop alpha from the download page: an own-app bundle still connects as in
+    6.x, no built-in app is offered, and the deprecation notices show.
+  - (ma8) Record the demo video on the alpha and submit the built-in Google app for verification,
+    with the scope justifications from the guide. Also submit the `privacyfence-signin` project
+    for brand verification (D20).
+  - (ma11) Once every check above passes, cut 7.0.0.
+  - (ma9) Submit the built-in Slack app to the Slack Marketplace (D19), once Slack's requirements
+    are met.
   - (ma5) After tagging 7.0.0, run the follow-up website session from the guide; have the relay
     terms reviewed by a lawyer.
 
@@ -2801,9 +2981,20 @@ Step-by-step page: https://claude.ai/artifact/TumFGa3FRUqYkvuQyuTkGB
 - **The relay terms are not legal advice.** The plan writes them from the decisions above (D16), and
   ma5 asks for a lawyer's review. Until then they rest on the publisher's own judgement.
 - **The live-check cutover is a single switch.** `main`'s workflows move to the
-  `privacyfence-live` label when the PR merges. If the new runner is not registered and stocked
-  (mb4, ma6), the weekly check queues instead of running. The fix is to finish ma6, not to point
-  the workflows back at the old runner.
+  `privacyfence-live` label when the PR merges. Until ma6 has connected the QA accounts on the new
+  QA server, the live check fails at its token copy. The fix is to finish ma6, not to point the
+  workflows back at the old runner.
+- **Every manual check runs after the merge, on an alpha (D23).** The PR merges on CI and review
+  alone, so a defect the manual steps find is fixed forward on `main` before the next alpha.
+- **Open question: 6.x fixes during the alpha.** `main` is 7.0 from the merge on, and releases are
+  tagged only from `main`'s tip. If a 6.x bugfix release is needed before 7.0.0, the repository
+  needs a 6.x maintenance branch and a release path for it, which it does not have today. Keep the
+  alpha phase short.
+- **The QA Peek is public** at `peek-qa.privacyfence.eu` (D22), because its device sign-in runs in
+  the maintainer's browser. It holds only QA accounts and seed data, and Peek's own sign-in
+  protects it.
+- **The QA server and the runner share one directory** (D22). Each can change what the other
+  reads; both hold only QA accounts, and `/mcp` is closed so the server never uses the tokens.
 
 - **Security decisions the maintainer made from the audit (D15).**
   - Single-user mode is hardened (step-up on) and documented as no protection against an agent
@@ -2888,40 +3079,46 @@ manual_before:
   done_when: Settings → Secrets and variables → Actions lists the 12 repository secrets PF_APP_GOOGLE_WEB_CLIENT_ID/_SECRET, PF_APP_SLACK_CLIENT_ID/_SECRET, PF_APP_SALESFORCE_CLIENT_ID/_SECRET, PF_APP_ATLASSIAN_RELAY_CLIENT_ID/_SECRET, PF_APP_MIRO_CLIENT_ID/_SECRET, PF_APP_GOOGLE_SIGNIN_CLIENT_ID/_SECRET, and the Slack, Atlassian and Miro apps are set to public distribution
 - id: mb2-relay-worker-cloudflare
   title: Create the Cloudflare API token, the relay's Gmail sender (alias, delivery restriction, Internal OAuth client and send-only refresh token) and the oauth-relay-worker GitHub environment
-  why: the relay's deploy workflow (p11) uses them once the PR reaches main, and ma2 deploys from the branch by hand with the same token
+  why: the relay's deploy workflow (p11) deploys from main with them when the PR merges (ma0), before the alpha that ma2 and ma4 test
   done_when: the repository has an environment named oauth-relay-worker, restricted to main, holding secrets CF_OAUTH_RELAY_WORKER_API_TOKEN, CF_OAUTH_RELAY_WORKER_ACCOUNT_ID, CF_OAUTH_RELAY_REVOKE_TOKEN, CF_OAUTH_RELAY_GMAIL_CLIENT_ID, CF_OAUTH_RELAY_GMAIL_CLIENT_SECRET and CF_OAUTH_RELAY_GMAIL_REFRESH_TOKEN; the API token verifies with the curl in the page; and test@privacyfence.eu has the relay-notify@ alias in its own organizational unit with a Restrict delivery rule
 - id: mb4-live-runner-host
-  title: 'Build runner.privacyfence.eu: the Hetzner server, Tailscale, the Cloudflare DNS record, origin certificate and firewall, the pfrunner user, Peek, and the GitHub runner registered in the new privacyfence-live group; copy over the QA state that does not change'
-  why: p21 switches the live-check workflows to the privacyfence-live label at merge; without a registered runner in that group they would queue forever, and ma2 needs the host's public name for the QA org server
-  done_when: 'the organization''s Actions runner list shows runner-privacyfence-eu online in group privacyfence-live (Selected workflows: the two QA workflows on main), tailscale ssh reaches the host, ssh to its public address times out, and https://runner.privacyfence.eu answers through Cloudflare'
+  title: 'Build runner.privacyfence.eu: the Hetzner server, Tailscale, the Cloudflare DNS records (runner and peek-qa), origin certificate, WAF rule blocking /mcp and firewall, the pfrunner user (uid 10001), and the GitHub runner registered in the new privacyfence-live group; place qa_environment.yaml'
+  why: at merge p21 switches the live-check workflows and p22 adds the QA server deploy, all on the privacyfence-live label; without a registered runner in that group they would queue forever
+  done_when: 'the organization''s Actions runner list shows runner-privacyfence-eu online in group privacyfence-live (Selected workflows: connector-live-check.yml, qa-record-fixture.yml and deploy-qa-server.yml on main), tailscale ssh reaches the host, ssh to its public address times out, id pfrunner shows uid 10001, and https://runner.privacyfence.eu answers through Cloudflare'
 manual_after:
 - id: ma0-relay-first-deploy
-  title: Deploy the relay Worker for the first time from the feature branch, set its revoke token, and run the runbook's smoke tests
-  why: the deploy workflow deploys only main, and ma2 and ma4 need the real relay at oauth.privacyfence.eu before the PR merges
-- id: ma1-desktop-unchanged
-  title: Install a desktop build of the feature branch with an own-app bundle, connect Gmail and Slack as in 6.x, and check that without a bundle no built-in app is offered
-  why: D19 keeps desktop mode on own apps only; a real install with real consent screens is the only check that nothing regressed
-- id: ma2-org-relay-signin
-  title: On a test org server whose bundle has only mode/server/idp, offer the built-in services, register with the relay (deployed in ma0) and connect Gmail, Slack, Salesforce, Jira and Miro through it
-  why: the relay round trip needs a public domain, the real Worker and real providers; the deploy workflow only deploys main
-- id: ma3-upgrade-and-admin-page
-  title: Upgrade an org server that has an old-style bundle, check the one-time import, use the Admin page, and compare Settings for an admin and a normal user
-  why: checks the migration and the admin path end to end, with step-up, on a real deployment
-- id: ma4-docker-single-user-and-deprecation
-  title: Run the branch's Docker image in single-user mode (setup code, passkey, a connector through the relay, an MCP client), and check a desktop install's deprecation notices
-  why: single-user mode's browser ceremonies, the real relay and a real MCP client cannot run in CI
+  title: After the merge, approve the deploy-oauth-relay-worker run on main (it sets the Worker's revoke and Gmail secrets), check the dashboard, and run the runbook's smoke tests
+  why: 'D23: the relay deploys only from main, so its first deploy is the merge; the alpha (ma10) must find it live'
 - id: ma6-live-runner-state-and-qa-server
-  title: Deploy the branch's image as the QA org server on runner.privacyfence.eu, sign in as test@privacyfence.eu, connect every service with the built-in apps, and move those tokens to the runner's qa-live principal (ma2 uses the server)
-  why: the runner group admits only main's workflows, so the new runner first runs after the merge; its state and the QA server must be in place by then
-- id: ma9-slack-marketplace
-  title: After the merge, submit the built-in Slack app to the Slack Marketplace with the listing texts in the guide, once Slack's submission requirements are met; after approval, flip oauth_apps.SLACK_MARKETPLACE_LISTED in a one-line PR
-  why: a distributed Slack app outside the Marketplace is limited to 1 request per minute on channel history and thread reads (D19); the listing needs a released app and Slack's review
+  title: After the merge, install deploy/qa-runner/ on the runner host (deploy script, sudoers rule, compose override, Caddyfile, env file, IdP secret), let deploy-qa-server.yml deploy main, then sign in as test@privacyfence.eu and connect every service on /connect in a browser (Google, Slack, Salesforce, Atlassian, Miro, Telegram, Grist, Peek)
+  why: 'D22: the runner copies its tokens from the QA server, so they exist only once someone connects them there; the deploy files come from main'
 - id: ma7-live-runner-cutover
-  title: 'After the merge, dispatch connector-live-check on main, confirm it ran on runner-privacyfence-eu with every connector green and relay: up, then decommission the old privacyfence-test runner, its group and its QA state'
+  title: 'After ma6, dispatch connector-live-check on main, confirm it ran on runner-privacyfence-eu with every connector green and relay: up, then decommission the old privacyfence-test runner, its group and its QA state'
   why: the cutover happens only when main's workflows carry the new label; the old host holds live tokens until it is wiped
+- id: ma10-cut-alpha
+  title: Cut 7.0.0a1 with /cut-release, and check that GHCR has ghcr.io/privacyfence/privacyfence-org:7.0.0a1 with its attestation, that latest and the floating tags did not move, and that the download page offers the desktop pre-release
+  why: 'D23: every remaining check installs this alpha the regular way'
+- id: ma2-org-relay-signin
+  title: On a fresh test host, start an organization server from the 7.0.0a1 image exactly as docs/org-mode-docker.md's quick start says (env file, no bundle), offer the built-in services, register with the relay and connect Gmail, Slack, Salesforce, Jira and Miro; test revoke and restore; try the built-in Google sign-in
+  why: the relay round trip, the env-only start and the built-in sign-in need a public domain, the real Worker and real providers, installed the way an operator installs
+- id: ma3-upgrade-and-admin-page
+  title: Upgrade a 6.x org server with an old-style bundle to the 7.0.0a1 image (PRIVACYFENCE_IMAGE_TAG, docker compose pull, up -d), check the one-time import, use the Admin page, compare Settings for an admin and a normal user, and go back to the 6.x tag
+  why: checks the migration, the admin path with step-up, and the downgrade end to end on a regular Docker install
+- id: ma4-docker-single-user-and-deprecation
+  title: Run the 7.0.0a1 image in single-user mode with the docs' docker run command (setup code, passkey, a connector through the relay, an MCP client)
+  why: single-user mode's browser ceremonies, the real relay and a real MCP client cannot run in CI
+- id: ma1-desktop-unchanged
+  title: Install the 7.0.0a1 desktop pre-release from the download page, check that without a bundle no built-in app is offered, connect Gmail and Slack with an own-app bundle as in 6.x, and check the deprecation notices (log, page strip, companion, privacyfence_status)
+  why: D19 keeps desktop mode on own apps only; a real install with real consent screens is the only check that nothing regressed
 - id: ma8-google-verification
-  title: After the merge, record the demo video on a build of main (single-user and org server sign-ins through the relay, every scope in use), then submit the privacyfence-builtin Google app for verification with the scope justifications in the guide
-  why: Google requires a video of the real consent flow with the built-in client IDs and every scope in use, plus a live privacy policy with the Limited Use disclosure (p13c, deployed on merge); neither exists before the implementation is merged. Until verified, the built-in Google app shows an unverified-app screen and is capped at 100 users
+  title: Record the demo video on the alpha (single-user and org server sign-ins through the relay, every scope in use), then submit the privacyfence-builtin Google app for verification with the scope justifications in the guide, and the privacyfence-signin project for brand verification
+  why: Google requires a video of the real consent flow with the built-in client IDs and every scope in use, plus a live privacy policy with the Limited Use disclosure (p13c, deployed on merge). Until verified, the built-in Google app shows an unverified-app screen and is capped at 100 users
+- id: ma11-cut-stable
+  title: When ma0 to ma8 pass on the latest alpha (ma8 submitted, not necessarily approved), cut 7.0.0 with /cut-release and check that latest moved to it
+  why: 'D23: the stable release follows the alpha checks; fixes found on the alpha land as normal PRs and a new alpha first'
+- id: ma9-slack-marketplace
+  title: After 7.0.0, submit the built-in Slack app to the Slack Marketplace with the listing texts in the guide, once Slack's submission requirements are met; after approval, flip oauth_apps.SLACK_MARKETPLACE_LISTED in a one-line PR
+  why: a distributed Slack app outside the Marketplace is limited to 1 request per minute on channel history and thread reads (D19); the listing needs a released app and Slack's review
 - id: ma5-post-release-website-and-legal-review
   title: After tagging 7.0.0, run the follow-up website session from the guide (product and connector pages for 7.x, the Docker single-user download path, links to /docs/oauth-relay/), and have the relay terms reviewed by a lawyer
   why: 'ADR 0099: product pages land only after the stable release that documents them, and the relay terms are a legal text the plan cannot vouch for'
@@ -2931,7 +3128,7 @@ verify_after_merge:
 - test ! -d cloudflare/oauth-relay || (cd cloudflare/oauth-relay && npm ci && npm run typecheck && npm test)
 final_checks:
 - docs/builtin-oauth-apps-plan.md and docs/builtin-oauth-apps-plan-manual-steps.html are deleted, and grep -rn "builtin-oauth-apps-plan" --exclude-dir=.git . finds nothing
-- ADRs 0254-0266 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0011, 0016, 0019, 0181, 0196, 0200, 0217 and 0253 carry new Status lines; ADR 0040 is unchanged
+- ADRs 0254-0267 (or their renumbered successors) exist, are Accepted, and are listed in docs/adr/README.md's index; ADRs 0011, 0016, 0019, 0181, 0196, 0200, 0208, 0217 and 0253 carry new Status lines; ADR 0040 is unchanged
 - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
 - cd cloudflare/oauth-relay && npm ci && npm test && npm run typecheck && npm run dry-run passes
 phases:
@@ -3017,8 +3214,8 @@ phases:
     2. Add `src/privacyfence/_builtin_apps.py` to .gitignore directly below the `_telegram_credentials.py` line, and `include src/privacyfence/_builtin_apps.py` to MANIFEST.in directly below line 6, extending the comment above it to name both generated modules.
     3. In src/privacyfence/app_credentials.py add BUILTIN_APP_KEYS and builtin_app(key) per D1 (a literal `from . import _builtin_apps` with the same `# type: ignore[attr-defined]` comment the Telegram import carries; the PRIVACYFENCE_BUILTIN_APPS JSON-file fallback; one logger.warning naming only the env var on a bad file). Extend the module docstring by one paragraph naming ADR 0254.
     4. Do not call the generator from the desktop installers (scripts/build_dmg.sh, build_deb.sh, build_installer.ps1): desktop mode gets no built-in apps (D19).
-    5. .github/workflows/build.yml: in `build-org-image` only, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 12 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries in that step's env only, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (same REQUIRE logic, `python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`). The desktop build jobs get no PF_APP_ entry.
-    6. .github/workflows/publish-pypi.yml `build` job: the same two steps next to the Telegram ones, with check-dist over `dist/*.whl dist/*.tar.gz`. The secrets go only to the write step's env, never to the job.
+    5. .github/workflows/build.yml: in `build-org-image` only, add a step "Write built-in app credentials" right after "Write Telegram app credentials" (same shape, the 12 `PF_APP_*: ${{ secrets.PF_APP_* }}` entries in that step's env only, `python3 scripts/builtin_apps.py write`) and a step "Check built-in app credentials are packaged" right after the Telegram check step (`python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl`, where REQUIRE is --require on every release tag, stable or pre-release, because the alpha image is how 7.0 is tested (D23); only an untagged workflow_dispatch run warns). The desktop build jobs get no PF_APP_ entry.
+    6. .github/workflows/publish-pypi.yml `build` job: the same two steps next to the Telegram ones, with check-dist over `dist/*.whl dist/*.tar.gz` and the same every-tag REQUIRE rule. The secrets go only to the write step's env, never to the job.
     7. Tests. tests/unit/test_builtin_apps_script.py mirrors every test in tests/unit/test_telegram_credentials.py: it generates an importable module whose APPS equals the input; a value with quotes and backslashes stays inert (ast.literal_eval of the right-hand side equals the input); one-of-two set warns and skips; none set deletes a stale module; a newline in a value returns 2 and writes nothing; output is ASCII; check-dist pass, require-fail, warn, no files and unknown archive; main dispatch; git-ignored but packaged; build.yml's build-org-image job and publish-pypi.yml call `scripts/builtin_apps.py write`, while build_dmg.sh, build_deb.sh, build_installer.ps1 and build.yml's desktop jobs contain neither `builtin_apps.py` nor `PF_APP_`, build.yml and publish-pypi.yml call `scripts/builtin_apps.py check-dist`, and none contains `APPS = `. tests/unit/test_app_credentials.py: builtin_app returns the generated module's entry (monkeypatch sys.modules["privacyfence._builtin_apps"]), returns a copy, falls back to the JSON file, returns None and warns once for a missing or malformed file without logging its content; and BUILTIN_APP_KEYS order.
     8. Run ruff check . and python3 -m pytest tests/unit/test_builtin_apps_script.py tests/unit/test_app_credentials.py tests/unit/test_telegram_credentials.py tests/unit/test_org_image_workflows.py -q.
     9. After pushing the phase branch, dispatch build.yml on it (it is in ci.dispatchable; mb1's secrets are in place by now). In the run, the build-org-image "Write built-in app credentials" step's log must show `built-in app <key>: included` for all six keys. If they show `not set`, check the env wiring of step 5; if the secrets themselves are missing, stop with status=blocked naming mb1.
@@ -4048,11 +4245,12 @@ phases:
   - python3 -m pytest tests/unit -q passes
   - ruff check . passes
 - id: p12-adrs
-  title: ADRs 0254-0266 and the status lines on the ADRs they amend
+  title: ADRs 0254-0267 and the status lines on the ADRs they amend
   depends_on:
   - p20e-builtin-signin-relay
   - p10-bundle-tooling
   - p11-relay-worker
+  - p23-prerelease-org-image
   complexity: M
   touches:
   - docs/adr/0254-built-in-oauth-apps-ship-in-every-distribution.md
@@ -4068,6 +4266,8 @@ phases:
   - docs/adr/0264-admins-can-be-named-by-verified-email.md
   - docs/adr/0265-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md
   - docs/adr/0266-an-organization-server-may-opt-in-to-the-built-in-google-sign-in.md
+  - docs/adr/0267-pre-releases-publish-the-organization-image-under-their-exact-version.md
+  - docs/adr/0208-the-organization-image-is-published-to-ghcr-for-stable-releases-only.md
   - docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md
   - docs/adr/0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md
   - docs/adr/0011-org-mode-runs-its-own-oauth-authorization-server.md
@@ -4079,7 +4279,7 @@ phases:
   - docs/adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md
   brief: |-
     1. Check `ls docs/adr | tail -3` first. If 0254-0266 are taken by ADRs merged to main since this plan was written, take the next free numbers and use them everywhere; p13a-c read the file names from docs/adr/.
-    2. Write the thirteen ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
+    2. Write the fourteen ADRs in docs/adr/README.md's template: Status (Accepted, today's date, Implemented), Context, Decision, Alternatives considered, Consequences, Verification, Related.
        - Their decisions are this plan's "ADRs" section. Context, alternatives and consequences come from the Goal, the Design (D1-D21), "Accepted risks" and "Risks".
        - Alternatives to record:
          - 0254: fetch the credentials from a PrivacyFence endpoint at runtime; let the relay broker the token exchange and hold the secrets.
@@ -4093,10 +4293,11 @@ phases:
          - 0263: keeping a signed bundle mandatory for org mode; reading every bundle key from the environment (only the IdP and server need it); mixing bundle and environment fields within the idp section.
          - 0264: the group claim only; any email claim without email_verified; the first person to sign in becomes admin.
          - 0266: no built-in sign-in (every server registers its own IdP app); built-in sign-in on by default; the same Google project as the connector apps; allowing personal Gmail accounts.
-         - 0265: reworking the existing runner in place; keeping the live checks on own QA apps; a GitHub-hosted runner with credentials as secrets (ADR 0019 rejected it); opening SSH to the internet instead of Tailscale.
+         - 0265: reworking the existing runner in place; keeping the live checks on own QA apps; a GitHub-hosted runner with credentials as secrets (ADR 0019 rejected it); opening SSH to the internet instead of Tailscale; minting tokens with loopback CLI flows over an SSH tunnel and copying them by hand (the old runner's way); a QA server with /mcp open; publishing a main-branch image to GHCR for the QA server to pull.
+         - 0267: keeping images stable-only and testing each release candidate as a hand-built image; a moving "next" or "alpha" tag; publishing pre-release images to a separate package.
          - 0262: renaming org_config.json in place (breaks a downgrade); sharing the pin files (a 7.x serial would refuse 6.x's older bundle); reading whichever file is newer.
        - 0266 records D20, including its single-point-of-failure risk and the default-deny rule.
-       - Fold in D15 where it names an ADR: 0254 (SEC-02 threat, SEC-13 rotation, SEC-22), 0256 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0265 (D17: the firewall, Tailscale-only administration, pfrunner outside the docker group, secrets only in step env and the generated module deleted after each run), 0258 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0259 (SEC-01: single-user mode is no protection against an agent that can run docker), 0261 (SEC-21), 0263 (SEC-14).
+       - Fold in D15 where it names an ADR: 0254 (SEC-02 threat, SEC-13 rotation, SEC-22), 0256 (SEC-04 passkey for every sensitive Admin action, SEC-20), 0265 (D17 and D22: the firewall, Tailscale-only administration, pfrunner outside the docker group with one no-argument sudo rule, the shared data directory, /mcp blocked, secrets only in step env and the generated module deleted after each run, a new connector as two PRs), 0258 (D16 relay terms, SEC-05 one account and required reviewers, the Slack/Miro residual risk, SEC-09, SEC-15 wording, SEC-23 notification emails in place of a waiting period), 0259 (SEC-01: single-user mode is no protection against an agent that can run docker), 0261 (SEC-21), 0263 (SEC-14).
        - Link source files, never this plan. Do not mention any model or agent.
     3. Add one Status line to each amended ADR, and nothing else:
        - 0016: "Amended by [0255](...): the signature no longer covers operational settings. Amended by [0262](...): the bundle and pin file names."
@@ -4104,11 +4305,12 @@ phases:
        - 0011: "Amended by [0263](...): the IdP may come from environment variables."
        - 0016's line also names 0263: "org mode no longer always needs a signed bundle".
        - 0196: "Amended by [0255](...) and [0256](...)."
+       - 0208: "Amended by [0267](...): pre-releases publish the image under their exact version tag only."
        - 0253: "Amended by [0256](...): the AI token proposals switch is on the Admin page (scoped_tokens.allow_ai_proposals in org/admin_config.json)."
        - 0217: "Amended by [0257](...): the Stats section is on the Admin page."
        - 0019: "Amended by [0265](...): the runner host. The setup doc this ADR cites is now docs/connector-qa.md."
        - 0181: "Amended by [0265](...): the runner group and label are privacyfence-live."
-    4. docs/adr/README.md: add thirteen index rows in the existing format:
+    4. docs/adr/README.md: add fourteen index rows in the existing format:
        - 0254: "Accepted; relates to 0040"
        - 0255: "Accepted; amends 0016, 0196"
        - 0256: "Accepted; amends 0196, 0253; relates to 0016, 0034, 0068, 0070, 0200"
@@ -4122,9 +4324,10 @@ phases:
        - 0264: "Accepted; relates to 0011"
        - 0265: "Accepted; amends 0019, 0181; relates to 0254, 0258"
        - 0266: "Accepted; relates to 0258, 0262, 0263"
+       - 0267: "Accepted; amends 0208"
     5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
   acceptance:
-  - ls docs/adr/0254-*.md docs/adr/0255-*.md docs/adr/0256-*.md docs/adr/0257-*.md docs/adr/0258-*.md docs/adr/0259-*.md docs/adr/0260-*.md docs/adr/0261-*.md docs/adr/0262-*.md docs/adr/0263-*.md docs/adr/0264-*.md docs/adr/0265-*.md docs/adr/0266-*.md lists thirteen files (or the renumbered thirteen)
+  - ls docs/adr/0254-*.md docs/adr/0255-*.md docs/adr/0256-*.md docs/adr/0257-*.md docs/adr/0258-*.md docs/adr/0259-*.md docs/adr/0260-*.md docs/adr/0261-*.md docs/adr/0262-*.md docs/adr/0263-*.md docs/adr/0264-*.md docs/adr/0265-*.md docs/adr/0266-*.md docs/adr/0267-*.md lists fourteen files (or the renumbered fourteen)
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
   - git diff origin/main --stat -- docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md prints nothing
 - id: p13a-docs-operator
@@ -4291,10 +4494,9 @@ phases:
   - grep -rln "there are none" website --include=*.html --exclude-dir=_docs finds nothing
   - grep -n "PrivacyFence 8 removes it" website/download/index.html website/faq/index.html matches in both
 - id: p21-live-runner
-  title: Live checks in organization mode on the new runner (runner.privacyfence.eu), with the built-in apps and a relay health check
+  title: Live checks in organization mode on the new runner (runner.privacyfence.eu), with tokens copied from the QA server, the built-in apps and a relay health check
   depends_on:
-  - p13a-docs-operator
-  - p13b-docs-user
+  - p22-qa-server-deploy
   complexity: M
   touches:
   - .github/workflows/connector-live-check.yml
@@ -4314,7 +4516,7 @@ phases:
   - tests/fixtures/live/README.md
   - CHANGELOG.md
   brief: |-
-    Read "Design → D17" ("What the live checks test: organization mode and the built-in apps"), D18's environment addresses, and ADR 0265 (written in p12). The runner itself is set up by hand (manual mb4, ma6); this phase changes only the repository.
+    Read "Design → D17" ("What the live checks test: organization mode and the built-in apps"), D22 ("How the runner uses them"), D18's environment addresses, and ADR 0265 (written in p12). The runner itself is set up by hand (manual mb4, ma6); this phase changes only the repository.
     1. scripts/qa_fixture_recorder.py:
        - Add QA_PRINCIPAL_ID = "qa-live", QA_ADMIN (every admin_config.SERVICES entry offered), _qa_context() (enters principal.principal_scope for that principal once, before any connector is built) and _qa_org_config() per D17.
        - Replace every daemon_main.load_org_config() call (~:864, :945, :1283, :1323, :1527, :1790, :1880, :1937, :1984, :2042, :2093, :2171) with _qa_org_config(); where a helper passes org_mode=False to peek_client.bundle_base_url or grist_auth.bundle_settings, pass org_mode=True.
@@ -4322,14 +4524,14 @@ phases:
        - Update the module docstring (:1-60): organization mode, the qa-live principal, the token folder users/qa-live/credentials/, minting on the QA org server; and the runner name and label (:4-6, ~:2528-2538, ~:2601).
     2. Both workflows, per D17:
        - runs-on: [self-hosted, privacyfence-live]; the header comments name runner.privacyfence.eu and the privacyfence-live group.
-       - Workflow-level env PRIVACYFENCE_PEEK_BASE_URL=http://localhost:7700 and PRIVACYFENCE_GRIST_SERVER_URL=https://docs.getgrist.com.
+       - Workflow-level env PRIVACYFENCE_PEEK_BASE_URL=https://peek-qa.privacyfence.eu and PRIVACYFENCE_GRIST_SERVER_URL=https://docs.getgrist.com, and PF_QA_PRINCIPAL_ID: ${{ vars.PF_QA_PRINCIPAL_ID }} (empty when unset).
        - A "Write built-in app credentials" step before the recorder: `python3 scripts/builtin_apps.py write` with exactly the ten connector PF_APP_* secrets (GOOGLE_WEB, SLACK, SALESFORCE, ATLASSIAN_RELAY, MIRO; not GOOGLE_SIGNIN) in that step's env only; and a last step with if: always() running `rm -f src/privacyfence/_builtin_apps.py`.
-       - The copy-in copies ~/privacyfence/users/qa-live/ to the checkout's users/qa-live/, tests/fixtures/qa_environment.yaml, and org/org_bundle.json only if present; the copy-back (if: always()) returns users/qa-live/credentials/. Neither names a root-level credentials/ or org/org_config.json.
+       - The copy-in runs `python3 scripts/qa_runner_tokens.py pull --data-dir "$HOME/qa-org-data"` (p22) and copies ~/privacyfence/tests/fixtures/qa_environment.yaml and, only if present, ~/privacyfence/org/org_bundle.json; the copy-back (if: always()) runs `python3 scripts/qa_runner_tokens.py push --data-dir "$HOME/qa-org-data"`. Neither names a root-level credentials/ or org/org_config.json, and no step writes ~/privacyfence/users/.
        - connector-live-check.yml: the relay health step (continue-on-error) and its line in the job summary.
        - qa-record-fixture.yml's commit message (:247) names the privacyfence-live runner.
-    3. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; the builtin step's env keys are exactly the ten connector PF_APP_* secrets and no PF_APP_ secret appears in workflow-level or job-level env; the cleanup step has if: always() and comes last in the runner job; the copy steps name users/qa-live and no step names org/org_config.json or a root-level credentials/; the refusal step of qa-record-fixture.yml still checks refs/heads/main.
+    3. tests/unit/test_live_check_workflows.py (new; yaml.safe_load both files): runs-on is exactly ["self-hosted", "privacyfence-live"] for the runner job; the builtin step's env keys are exactly the ten connector PF_APP_* secrets and no PF_APP_ secret appears in workflow-level or job-level env; the cleanup step has if: always() and comes last in the runner job; the copy steps call qa_runner_tokens.py pull and push (push with if: always()) and no step names org/org_config.json or a root-level credentials/; the refusal step of qa-record-fixture.yml still checks refs/heads/main.
     4. tests/unit/test_qa_fixture_recorder.py: _qa_org_config gives the built-in section for a provider the bundle lacks (stub app_credentials.builtin_app) and keeps a bundle section that is present; inside _qa_context, daemon_main._resolve_path(TOKEN_FILES["slack"]) resolves under users/qa-live/credentials/; the Peek and Grist sections take the environment addresses.
-    5. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, organization mode with the qa-live principal, minting on the QA org server and moving the tokens, the hand-placed Telegram/Grist/Peek files, the cutover and decommissioning), fix :574, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
+    5. Docs per D17 "Docs": rewrite docs/connector-qa.md's runner section (keep its existing requirements; add the host, Cloudflare, Tailscale, pfrunner and Docker separation, organization mode with the qa-live principal, connecting every QA account on the QA org server in a browser and how the runner copies the tokens (D22), the cutover and decommissioning; remove the "Authenticating connectors" CLI section's runner use and the hand-written Grist/Peek/Telegram token instructions), fix :574, and replace the runner name and label in the other listed files at the lines that give them (find them with grep -rn "privacyfence-test" --exclude-dir=.git . and check each hit; tests/integration/test_linux_graphical_session_autostart.py and tests/unit/test_pre_release_check.py contain unrelated identifiers, leave them). Do not put the Tailscale auth key, a runner registration token or any secret value in a doc.
     6. CHANGELOG.md under ## [Unreleased]: one contributor-facing line that the live checks moved to a new runner, run in organization mode with the built-in apps, and check the relay's health.
     7. Run ruff check ., python3 -m pytest tests/unit/test_live_check_workflows.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
   acceptance:
@@ -4339,6 +4541,81 @@ phases:
   - grep -n "org/org_config.json" .github/workflows/connector-live-check.yml .github/workflows/qa-record-fixture.yml finds nothing
   - python3 -m pytest tests/unit -q passes
   - ruff check . passes
+- id: p22-qa-server-deploy
+  title: 'The QA server on the runner: deployed from main, /mcp blocked, token copy for the runner, preview services and the two-PR rule for new connectors'
+  depends_on:
+  - p13a-docs-operator
+  - p13b-docs-user
+  complexity: M
+  touches:
+  - .github/workflows/deploy-qa-server.yml
+  - deploy/qa-runner/**
+  - scripts/qa_runner_tokens.py
+  - tests/unit/test_qa_runner_tokens.py
+  - tests/unit/test_qa_runner_deploy.py
+  - src/privacyfence/oauth_apps.py
+  - tests/unit/test_oauth_apps.py
+  - src/privacyfence/admin_config.py
+  - tests/unit/test_admin_config.py
+  - docs/coding-and-testing-guidelines.md
+  - docs/connector-qa.md
+  - docs/configuration-reference.md
+  - .claude/commands/qa-record.md
+  - CLAUDE.md
+  - tests/conftest.py
+  brief: |-
+    Read "Design → D22" in full, and D17's host and runner parts. The host is set up by hand (mb4, ma6); this phase writes the repository side.
+    1. .github/workflows/deploy-qa-server.yml per D22: the triggers and concurrency, job build (copy build.yml's build-org-image steps for amd64: the Telegram and built-in credential steps with secrets in step env only, the wheel, the image; tag privacyfence-org:qa-main; docker save | gzip; upload-artifact qa-server-image with retention-days 3), job deploy on [self-hosted, privacyfence-live] (download-artifact to $HOME/qa-deploy/, then exactly `sudo -n /usr/local/sbin/pf-qa-deploy`; no checkout, no secrets), job verify on ubuntu-latest with D22's curl checks. Pin every action by commit SHA as the other workflows do. permissions: contents: read, actions: read.
+    2. deploy/qa-runner/: pf-qa-deploy (POSIX sh, set -eu, no arguments, D22's checks in that order), sudoers.pf-qa-deploy, compose.override.yaml, Caddyfile (with {$PF_CF_RANGES}), privacyfence.env.example and README.md, each exactly per D22. No secret value in any file.
+    3. scripts/qa_runner_tokens.py (stdlib only) with pull and push per D22, --data-dir and --checkout (default the repository root), reading the token file names from daemon_main.TOKEN_FILES by importing privacyfence.daemon_main inside main(). It never prints a token or file content.
+    4. oauth_apps.PREVIEW_SERVICES and PRIVACYFENCE_PREVIEW_SERVICES per D22, applied in effective_org_config and admin_config.service_rows. Add PRIVACYFENCE_PREVIEW_SERVICES to the conftest environment-clearing fixture. Tests: a preview service's section and row are dropped, kept when named, kept with "*", and an empty PREVIEW_SERVICES changes nothing (monkeypatch the frozenset).
+    5. tests/unit/test_qa_runner_deploy.py:
+       - The workflow: the build job's PF_APP_ and TELEGRAM_ secrets appear only in step env; the deploy job runs on exactly ["self-hosted", "privacyfence-live"], has no checkout step, no secrets and one run step equal to `sudo -n /usr/local/sbin/pf-qa-deploy`; the verify job checks /mcp for 404.
+       - The script: no use of "$1" or "$@"; it names the fixed tarball path and privacyfence-org:qa-main; `sh -n` passes.
+       - The sudoers line ends with the empty-argument "".
+       - The override sets user "10001:10001" and pull_policy never, and mounts /home/pfrunner/qa-org-data.
+       - The Caddyfile's @mcp matcher covers routes_mcp.MCP_PATH, oauth_provider.IDP_CALLBACK_PATH, the MCP SDK's AUTHORIZATION_PATH, TOKEN_PATH, REGISTRATION_PATH and REVOCATION_PATH, /oauth/consent/*, and both well-known prefixes. Also build the routes routes_mcp.mount_org_oauth returns (with the test provider test_routes_mcp.py uses) and assert every one of their paths is matched, so a new MCP route cannot slip past.
+    6. tests/unit/test_qa_runner_tokens.py per D22's test list, with tmp_path data and checkout directories.
+    7. Docs:
+       - docs/coding-and-testing-guidelines.md §3 "Adding a connector": D22's two-PR procedure (connect first behind PREVIEW_SERVICES, the browser connection on runner.privacyfence.eu, then tools with /qa-record and removing it from PREVIEW_SERVICES).
+       - docs/connector-qa.md: the QA server section (what it is, its deploy from main, /mcp blocked, connecting accounts on /connect, PF_QA_PRINCIPAL_ID), linked from the runner section p21 rewrites.
+       - docs/configuration-reference.md: PRIVACYFENCE_PREVIEW_SERVICES.
+       - .claude/commands/qa-record.md: a new connector's token must first be connected on the QA server (the connect PR merged).
+       - CLAUDE.md: one short "New connectors" bullet under "Commands and skills": a new connector is two PRs, connect then tools, and /make-plan plans them that way with the browser connection between them as a manual step; the procedure is in docs/coding-and-testing-guidelines.md §3.
+    8. Run ruff check ., python3 -m pytest tests/unit/test_qa_runner_deploy.py tests/unit/test_qa_runner_tokens.py tests/unit/test_oauth_apps.py tests/unit/test_admin_config.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q, then python3 -m pytest tests/unit -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_qa_runner_deploy.py tests/unit/test_qa_runner_tokens.py -q passes
+  - grep -n "privacyfence-live" .github/workflows/deploy-qa-server.yml matches
+  - grep -n "PREVIEW_SERVICES" src/privacyfence/oauth_apps.py src/privacyfence/admin_config.py matches in both
+  - grep -n "two PRs" docs/coding-and-testing-guidelines.md CLAUDE.md matches in both
+  - sh -n deploy/qa-runner/pf-qa-deploy passes
+  - python3 -m pytest tests/unit -q passes
+  - ruff check . passes
+- id: p23-prerelease-org-image
+  title: Pre-releases publish the organization image under their exact version tag
+  depends_on:
+  - p1-builtin-apps-generator
+  - p11-relay-worker
+  complexity: S
+  touches:
+  - scripts/org_image_tags.py
+  - tests/unit/test_org_image_tags.py
+  - .github/workflows/publish-org-image.yml
+  - tests/unit/test_org_image_workflows.py
+  - docs/org-mode-docker.md
+  - docs/releasing.md
+  brief: |-
+    Read "Design → D23" ("Pre-release org images").
+    1. scripts/org_image_tags.py: accept the PEP 440 short pre-release form (X.Y.ZaN, bN, rcN) and return exactly [version] for it; stable behaviour unchanged; update the module docstring.
+    2. .github/workflows/publish-org-image.yml: remove the stable-only skips; every channel downloads, pushes, tags (through org_image_tags.py) and attests. The summary line for a pre-release says no floating tag moved. Update the header comment (ADR 0267 instead of 0208's stable-only rule).
+    3. Tests: test_org_image_tags.py (a pre-release gets [version] even when it is the highest tag; a malformed version is still refused); test_org_image_workflows.py (no step in publish-org-image.yml is gated on the stable channel; the builtin check-dist passes --require on every tag, per p1).
+    4. docs/org-mode-docker.md's "Releases" row and image text, and docs/releasing.md's "organization Docker image" paragraph, per D23. Name ADR 0267.
+    5. Run ruff check . and python3 -m pytest tests/unit/test_org_image_tags.py tests/unit/test_org_image_workflows.py tests/unit/test_docs_links.py -q.
+  acceptance:
+  - python3 -m pytest tests/unit/test_org_image_tags.py tests/unit/test_org_image_workflows.py -q passes
+  - python3 scripts/org_image_tags.py 7.0.0a1 prints exactly 7.0.0a1 (with the git tags it reads)
+  - grep -n "channel == 'stable'" .github/workflows/publish-org-image.yml finds nothing
+  - ruff check . passes
 - id: p14-retire-plan
   title: Delete the plan document and its manual-steps page
   depends_on:
@@ -4346,6 +4623,7 @@ phases:
   - p13b-docs-user
   - p13c-website
   - p21-live-runner
+  - p23-prerelease-org-image
   complexity: S
   touches:
   - docs/builtin-oauth-apps-plan.md
