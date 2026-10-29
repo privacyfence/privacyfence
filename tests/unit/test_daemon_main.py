@@ -2306,20 +2306,29 @@ class TestMaybeStartWebServerOrgMode:
         )
         assert started.get("called") is True
         assert result.org.idp is None
+        assert result.org.provider.single_user is True
         assert result.base_url == "http://localhost:8765"
 
-    def test_single_user_mode_serves_no_identity_provider_routes(self, monkeypatch, tmp_path):
+    def test_single_user_mode_serves_its_own_sign_in_and_no_identity_provider_routes(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        import logging
+
         from starlette.testclient import TestClient
 
         self._no_bind(monkeypatch, tmp_path)
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
-            unattended_sessions_enabled=False, org_config=self._single_user_config(),
-        )
+        with caplog.at_level(logging.WARNING, logger="privacyfence.web.single_user_auth"):
+            result = daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert "Open http://localhost:8765/login to set up your passkey." in caplog.text
         client = TestClient(result._server.config.app, base_url="http://localhost:8765")
-        assert client.get("/login", follow_redirects=False).status_code == 404
+        login = client.get("/login", follow_redirects=False)
+        assert login.status_code == 200 and "Setup code" in login.text
         assert client.get("/oauth/idp/login-callback", follow_redirects=False).status_code == 404
+        assert client.get("/oauth/idp/callback", follow_redirects=False).status_code == 404
 
     def test_single_user_mode_logs_single_user_in_place_of_the_idp(self, monkeypatch, tmp_path, caplog):
         self._no_bind(monkeypatch, tmp_path)
@@ -5280,6 +5289,23 @@ class TestLoadAdminConfigSingleUser:
         idp = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
         admin, _ = daemon_main.load_admin_config({"mode": "org", "idp": idp})
         assert admin["step_up"] != {"enabled": True, "require_passkey": True, "scope": "writes_and_pii_reads"}
+
+
+class TestSingleUserEffectiveConfig:
+    def test_it_never_carries_auto_provisioning(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example")
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://grist.example")
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://provisioner.example")
+        bundle = {"mode": "org"}
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=True)
+        for name in ("peek", "grist"):
+            admin["services"][name]["offered"] = True
+            admin["services"][name]["auto_provision"]["enabled"] = True
+
+        effective = daemon_main.effective_org_config(bundle, admin)
+
+        assert "auto_provision" not in effective["peek"]
+        assert "auto_provision" not in effective["grist"]
 
 
 class TestEffectiveOrgConfigWiring:

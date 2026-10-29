@@ -152,6 +152,8 @@ MODULE_FLOORS: dict[str, float] = {
     # OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
     "src/privacyfence/web/routes_org_identity.py": 99.0,
+    # Single-user mode's whole sign-in: the setup code and the passkey that replace an IdP.
+    "src/privacyfence/web/single_user_auth.py": 100.0,
     # Safe-error taxonomy at the MCP boundary.
     "src/privacyfence/safe_errors.py": 100.0,
     "src/privacyfence/web/routes_mcp.py": 100.0,

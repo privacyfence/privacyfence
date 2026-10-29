@@ -127,11 +127,13 @@ def authenticated(request: Request, store: OrgSessionStore) -> Principal | None:
     return store.get(session_id)
 
 
-def set_session_cookie(response: Response, session_id: str) -> None:
-    # secure=True (unlike session_auth.py's local-mode cookie): org mode is
-    # HTTPS-mandatory, so a Secure cookie is never silently dropped
-    # here the way it would be forced to be over local mode's deliberate
-    # plain-HTTP loopback transport (ADR 0010).
+def set_session_cookie(response: Response, session_id: str, *, secure: bool = True) -> None:
+    # secure=True by default (unlike session_auth.py's local-mode cookie): an
+    # organization server is HTTPS-mandatory, so a Secure cookie is never
+    # silently dropped there the way it would be over local mode's deliberate
+    # plain-HTTP loopback transport (ADR 0010). Single-user mode is the one
+    # caller that passes False: it is served only over plain http on localhost,
+    # and Safari does not keep a Secure cookie on http://localhost.
     #
     # samesite="lax", NOT "strict" -- the one place org mode's cookie
     # policy has to differ from local mode's. This cookie is minted at the
@@ -156,7 +158,7 @@ def set_session_cookie(response: Response, session_id: str) -> None:
     # session is the principal that started the flow (ADR 0178). It does not help a callback
     # whose whole job is to *establish* the session; routes_org_identity.py's login callback
     # binds to its browser with a separate cookie instead.
-    response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax", secure=True, path="/")
+    response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax", secure=secure, path="/")
 
 
 def clear_session_cookie(response: Response) -> None:

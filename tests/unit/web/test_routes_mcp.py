@@ -1281,3 +1281,239 @@ class TestToolAnnotationsOverTheWire:
                 "/mcp", json=_INIT_BODY, headers={**_WIRE_HEADERS, _REMOVED_HEADER: "read-only"},
             )
         assert response.status_code == 200
+
+
+# --------------------------------------------------------------------- #
+# Single-user mode's authorize path: /login, then /oauth/single-user/continue
+# --------------------------------------------------------------------- #
+
+SINGLE_USER_ISSUER = "http://localhost:8765"
+
+
+class _WhoAmI(Connector):
+    @property
+    def name(self) -> str:
+        return "whoami"
+
+    def tool_specs(self) -> list[ToolSpec]:
+        return [ToolSpec(name="whoami", description="Returns the current principal.", params=[], read_only=True)]
+
+    async def call(self, tool: str, args: dict) -> object:
+        p = current_principal()
+        return {"id": p.id, "email": p.email, "is_admin": p.is_admin}
+
+
+def _single_user_app(tmp_path, monkeypatch, *, single_user: bool = True):
+    from starlette.applications import Starlette
+
+    from privacyfence.web import org_session
+    from privacyfence.web.oauth_provider import OrgOAuthProvider
+    from tests.unit.web.conftest import isolate_org_oauth_stores, org_idp
+
+    isolate_org_oauth_stores(tmp_path, monkeypatch)
+    if single_user:
+        provider = OrgOAuthProvider(None, idp_callback_url="", single_user=True)
+    else:
+        provider = OrgOAuthProvider(org_idp(), idp_callback_url=f"{SINGLE_USER_ISSUER}/oauth/idp/callback")
+    sessions = org_session.OrgSessionStore()
+    mcp_route, session_manager = rm.mount_mcp(McpDispatcher(lambda: {"whoami": _WhoAmI()}), verifier=provider)
+    routes = rm.mount_org_oauth(provider, issuer_url=SINGLE_USER_ISSUER, sessions=sessions)
+    return Starlette(routes=[mcp_route, *routes]), provider, sessions, session_manager
+
+
+def _single_user_client(app) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=SINGLE_USER_ISSUER)
+
+
+async def _authorize_to_login(client, client_id: str) -> tuple[str, str]:
+    """/authorize for ``client_id``; returns (the /login Location, the PKCE verifier)."""
+    from privacyfence import org_identity as oi
+    from tests.unit.web.conftest import CLAUDE_REDIRECT_URI, CLIENT_STATE
+
+    verifier, challenge = oi.generate_pkce_pair()
+    r = await client.get("/authorize", params={
+        "response_type": "code", "client_id": client_id, "redirect_uri": CLAUDE_REDIRECT_URI,
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": CLIENT_STATE,
+    })
+    assert r.status_code == 302, r.text
+    return r.headers["location"], verifier
+
+
+def _continue_path(login_location: str) -> str:
+    import urllib.parse as up
+    return dict(up.parse_qsl(up.urlparse(login_location).query))["next"]
+
+
+def _sign_in(client, sessions) -> None:
+    from privacyfence.web import org_session
+    from privacyfence.web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+    client.cookies.set(org_session.SESSION_COOKIE, sessions.create(SINGLE_USER_PRINCIPAL))
+
+
+class TestSingleUserAuthorize:
+    async def test_authorize_sends_the_browser_to_the_sign_in_page(self, tmp_path, monkeypatch):
+        from tests.unit.web.conftest import register_client
+
+        app, _provider, _sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            registration = await register_client(client)
+            location, _verifier = await _authorize_to_login(client, registration["client_id"])
+        assert location.startswith("/login?next=/oauth/single-user/continue%3Fstate%3D")
+
+    async def test_continue_without_a_session_goes_to_sign_in_and_keeps_the_state(self, tmp_path, monkeypatch):
+        from tests.unit.web.conftest import register_client
+
+        app, provider, _sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            registration = await register_client(client)
+            location, _verifier = await _authorize_to_login(client, registration["client_id"])
+            r = await client.get(_continue_path(location))
+        assert r.status_code == 302
+        assert r.headers["location"] == location
+        assert r.headers["cache-control"] == "no-store"
+        assert len(provider._pending) == 1  # still parked for after the sign-in
+
+    async def test_another_principals_session_is_not_enough(self, tmp_path, monkeypatch):
+        from privacyfence.principal import Principal
+        from privacyfence.web import org_session
+        from tests.unit.web.conftest import register_client
+
+        app, _provider, sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            registration = await register_client(client)
+            location, _verifier = await _authorize_to_login(client, registration["client_id"])
+            client.cookies.set(org_session.SESSION_COOKIE, sessions.create(Principal(id="alice")))
+            r = await client.get(_continue_path(location))
+        assert r.status_code == 302
+        assert r.headers["location"].startswith("/login?next=")
+
+    async def test_with_a_session_it_finishes_through_consent_and_the_token_is_the_administrators(
+        self, tmp_path, monkeypatch,
+    ):
+        import html
+        import re
+        import urllib.parse as up
+
+        from tests.unit.web.conftest import CLAUDE_REDIRECT_URI, CLIENT_STATE, exchange_for_tokens, register_client
+
+        app, _provider, sessions, manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            registration = await register_client(client, {
+                "client_name": "Claude", "redirect_uris": [CLAUDE_REDIRECT_URI], "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+            })
+            location, verifier = await _authorize_to_login(client, registration["client_id"])
+            _sign_in(client, sessions)
+            cont = await client.get(_continue_path(location))
+            assert cont.status_code == 302
+            consent = cont.headers["location"]
+            assert consent.startswith("/oauth/consent/")
+            page = await client.get(consent)
+            assert page.status_code == 200 and "Claude" in page.text and "admin@localhost" in page.text
+            csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+            decided = await client.post(
+                consent, data={"csrf": csrf, "decision": "allow"}, headers={"Origin": SINGLE_USER_ISSUER},
+            )
+            assert decided.status_code == 200
+            back = html.unescape(re.search(r'<a href="([^"]+)">Continue</a>', decided.text).group(1))
+            qs = dict(up.parse_qsl(up.urlparse(back).query))
+            assert qs["state"] == CLIENT_STATE
+            tokens = await exchange_for_tokens(
+                client, client_id=registration["client_id"], code=qs["code"], code_verifier=verifier,
+            )
+
+            # Allowed once: the next authorization of this client goes straight back to it.
+            location, _verifier = await _authorize_to_login(client, registration["client_id"])
+            again = await client.get(_continue_path(location))
+            assert again.headers["location"].startswith(CLAUDE_REDIRECT_URI)
+            assert "code=" in again.headers["location"]
+
+        async with mcp_lifespan(manager):
+            from tests.unit.web.conftest import mcp_session
+
+            async with mcp_session(app, access_token=tokens["access_token"]) as session:
+                result = await session.call_tool("whoami", {"reason": "test"})
+        assert result.structured_content == {"id": "single-user", "email": "admin@localhost", "is_admin": True}
+
+    async def test_a_foreign_origin_consent_post_is_refused(self, tmp_path, monkeypatch):
+        import re
+
+        from tests.unit.web.conftest import register_client
+
+        app, _provider, sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            registration = await register_client(client)
+            location, _verifier = await _authorize_to_login(client, registration["client_id"])
+            _sign_in(client, sessions)
+            consent = (await client.get(_continue_path(location))).headers["location"]
+            csrf = re.search(r'name="csrf" value="([^"]+)"', (await client.get(consent)).text).group(1)
+            refused = await client.post(
+                consent, data={"csrf": csrf, "decision": "allow"}, headers={"Origin": "http://localhost:3000"},
+            )
+        assert refused.status_code == 403
+
+    async def test_an_unknown_state_is_refused(self, tmp_path, monkeypatch):
+        app, _provider, sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            _sign_in(client, sessions)
+            r = await client.get("/oauth/single-user/continue", params={"state": "never-issued"})
+        assert r.status_code == 400
+        assert "expired" in r.text
+
+    async def test_a_missing_state_is_refused(self, tmp_path, monkeypatch):
+        app, _provider, sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            _sign_in(client, sessions)
+            r = await client.get("/oauth/single-user/continue")
+        assert r.status_code == 400
+
+    async def test_an_expired_state_is_refused(self, tmp_path, monkeypatch):
+        from privacyfence.web import oauth_provider as op
+        from tests.unit.web.conftest import register_client
+
+        app, _provider, sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            registration = await register_client(client)
+            location, _verifier = await _authorize_to_login(client, registration["client_id"])
+            _sign_in(client, sessions)
+            real_now = time.time()
+            monkeypatch.setattr(op.time, "time", lambda: real_now + op._PENDING_AUTHORIZATION_TTL_SECONDS + 1)
+            r = await client.get(_continue_path(location))
+        assert r.status_code == 400
+
+    async def test_a_state_is_used_once(self, tmp_path, monkeypatch):
+        from tests.unit.web.conftest import register_client
+
+        app, _provider, sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            registration = await register_client(client)
+            location, _verifier = await _authorize_to_login(client, registration["client_id"])
+            _sign_in(client, sessions)
+            first = await client.get(_continue_path(location))
+            second = await client.get(_continue_path(location))
+        assert first.status_code == 302
+        assert second.status_code == 400
+
+    async def test_a_single_user_server_has_no_idp_callback(self, tmp_path, monkeypatch):
+        app, _provider, _sessions, _manager = _single_user_app(tmp_path, monkeypatch)
+        async with _single_user_client(app) as client:
+            r = await client.get("/oauth/idp/callback", params={"state": "s", "code": "c"})
+        assert r.status_code == 404
+
+    async def test_a_multi_user_server_has_no_continue_route(self, tmp_path, monkeypatch):
+        app, _provider, _sessions, _manager = _single_user_app(tmp_path, monkeypatch, single_user=False)
+        async with _single_user_client(app) as client:
+            r = await client.get("/oauth/single-user/continue", params={"state": "s"})
+            idp = await client.get("/oauth/idp/callback", params={"state": "s", "code": "c"})
+        assert r.status_code == 404
+        assert idp.status_code == 400  # the IdP callback exists there
+
+    def test_a_single_user_provider_needs_the_session_store(self, tmp_path, monkeypatch):
+        from privacyfence.web.oauth_provider import OrgOAuthProvider
+        from tests.unit.web.conftest import isolate_org_oauth_stores
+
+        isolate_org_oauth_stores(tmp_path, monkeypatch)
+        provider = OrgOAuthProvider(None, idp_callback_url="", single_user=True)
+        with pytest.raises(ValueError, match="session store"):
+            rm.mount_org_oauth(provider, issuer_url=SINGLE_USER_ISSUER)
