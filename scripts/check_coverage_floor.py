@@ -75,7 +75,7 @@ OVERALL_FLOOR = 95.9
 # REPO_ROOT, as CI and pre_release_check.py both do).
 MODULE_FLOORS: dict[str, float] = {
     # The Admin JSON API: who may change what the organization offers and how it is gated.
-    "src/privacyfence/web/routes_admin.py": 95.0,
+    "src/privacyfence/web/routes_admin.py": 98.0,
     # Shared href-scheme allowlist and its two callers.
     "src/privacyfence/url_safety.py": 100.0,
     "src/privacyfence/email_markdown.py": 99.0,
@@ -162,7 +162,7 @@ MODULE_FLOORS: dict[str, float] = {
     # of new branches this module has taken on, and the one it would be worst
     # to let rot.
     "src/privacyfence/web/routes_security.py": 97.0,
-    "src/privacyfence/webauthn_stepup.py": 98.0,
+    "src/privacyfence/webauthn_stepup.py": 99.0,
     # This module decides whether a passkey is required at all --
     # an install's single most consequential security default, and now a
     # packaging-dependent one. Small enough that the overall floor would
@@ -213,6 +213,8 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/web/routes_approvals.py": 98.0,
     # Added with the ratchet audit; each is one point under what the suite measured.
     "src/privacyfence/scoped_tokens.py": 98.0,
+    # The pass that records the data-format marker 8.x relies on: every branch is a data-safety decision.
+    "src/privacyfence/data_format.py": 100.0,
     "src/privacyfence/web/mcp_dispatch.py": 95.0,
     "src/privacyfence/web/step_up_decide.py": 99.0,
     "src/privacyfence/web/approval_step_up.py": 99.0,

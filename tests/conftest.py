@@ -32,6 +32,7 @@ from privacyfence import (
     auto_accept,
     audit_log,
     daemon_main,
+    data_format,
     download_staging,
     gate,
     grist_auth,
@@ -160,6 +161,7 @@ def _reset() -> None:
     peek_provisioning._LOCKS.clear()
     # The relay registration state is process-wide.
     relay_client.reset_for_tests()
+    data_format.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)
@@ -194,7 +196,7 @@ def _isolate_whats_new_state(monkeypatch, request):
 
 # Modules that test the real functions below patch paths.data_dir to tmp_path themselves, so the
 # real path functions run and count toward their coverage.
-_ADMIN_CONFIG_FIXTURE_EXEMPT = ("test_app_credentials", "test_admin_config", "test_relay_client")
+_ADMIN_CONFIG_FIXTURE_EXEMPT = ("test_app_credentials", "test_admin_config", "test_relay_client", "test_data_format")
 
 
 @pytest.fixture(autouse=True)
@@ -209,6 +211,7 @@ def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
         admin_config, "admin_config_path", lambda: request.getfixturevalue("tmp_path") / "admin_config.json"
     )
     monkeypatch.setattr(app_credentials, "builtin_app", lambda key: None)
+    monkeypatch.setattr(data_format, "marker_path", lambda: request.getfixturevalue("tmp_path") / "data_format.json")
     monkeypatch.setattr(relay_client, "relay_token_path", lambda: request.getfixturevalue("tmp_path") / "relay_token.txt")
     monkeypatch.setattr(
         relay_client, "relay_status_path", lambda: request.getfixturevalue("tmp_path") / "relay_status.json"

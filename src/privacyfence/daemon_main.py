@@ -98,6 +98,7 @@ from . import (
     agent_label,
     agent_overrides,
     audit_forwarding,
+    data_format,
     grist_provisioning,
     oauth_apps,
     org_bundle_signing,
@@ -125,7 +126,7 @@ from .paths import (
     user_dir,
 )
 from .std_streams import ensure_std_streams
-from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
+from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal
 from .webauthn_stepup import StepUpRequirementChange, has_credentials as has_webauthn_credentials
 from .webauthn_stepup import observe_step_up_requirement, step_up_disabled_notice
 from .app_credentials import telegram_app_credentials
@@ -440,29 +441,6 @@ def load_config(config_path: str, *, principal: Principal | None = None) -> dict
         policy_upgrade.ensure_token_rules(config, principal, log=_deferred_warnings.append)
     policy_store.reject_v1_sections(config, resolved)
     return config
-
-
-def _upgrade_all_principals() -> None:
-    """Convert every principal's ``auto_accept:`` section to version 3 before the scoped token
-    store is built, so no scoped request is served with a token that still names a v2 rule id,
-    then give each principal's tokens written before tokens held their own rules their own copy
-    (ADR 0236). A principal without a settings file has no rules, so its old tokens get none; the
-    local principal is a no-op here after ``main``'s own ``load_config``."""
-    from .web.mcp_auth import scoped_token_principals
-
-    for principal in scoped_token_principals():
-        with principal_scope(principal):
-            resolved = _resolve_authority_path("config/settings.yaml")
-            if not os.path.exists(resolved):
-                # No rules to copy: the principal's legacy tokens get none, and stop warning.
-                policy_upgrade.ensure_token_rules({}, principal, log=_deferred_warnings.append)
-                continue
-            with open(resolved, encoding="utf-8") as fh:
-                config = yaml.safe_load(fh) or {}
-            if not isinstance(config, dict):
-                continue
-            policy_upgrade.ensure_scope_rows(config, resolved, principal, log=_deferred_warnings.append)
-            policy_upgrade.ensure_token_rules(config, principal, log=_deferred_warnings.append)
 
 
 # True once any load_org_config() call in this process copied org_config.json
@@ -1432,8 +1410,6 @@ def _start_org_web_server(
 
     push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)
 
-    # Before WebServer builds the scoped token store: tokens must name row ids when it loads them.
-    _upgrade_all_principals()
     _flush_deferred_warnings()
 
     server = WebServer(
@@ -2302,6 +2278,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # what the administrator configured.
     org_mode.reject_removed_tool_annotations(bundle)
     admin, admin_imported = load_admin_config(bundle)
+    # Before the web server is built (it loads the scoped token store, whose tokens must already
+    # hold their own rules) and for every person, signed in or not.
+    data_format.migrate_everything(log=logger.warning)
     # Same "org mode fails closed, local mode warns" posture as the
     # rest of this function's fail-safe defaults now that mode is known.
     check_storage_permissions(org_mode.resolve_mode(bundle) == "org")
@@ -2832,6 +2811,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         privilege_separation.check_runtime_identity()
     except privilege_separation.PrivilegeSeparationError as exc:
+        return _refuse_to_start(f"Configuration error: {exc}")
+
+    # Before anything reads or rewrites data: a newer release's data is not ours to touch.
+    try:
+        data_format.check_not_newer(data_format.read_marker())
+    except org_mode.ConfigurationError as exc:
         return _refuse_to_start(f"Configuration error: {exc}")
 
     # After the identity check, unlike --print-mcp-token above: this one reads

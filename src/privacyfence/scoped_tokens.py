@@ -412,6 +412,71 @@ def own_rules_in_file(
     return labels
 
 
+def renamed_verbs(raw: Any) -> list[str] | None:
+    """The canonical, sorted and de-duplicated verb names for a stored ``verbs`` list that names a
+    retired verb (``registry.LEGACY_VERB_ALIASES``); ``None`` when there is nothing to rename,
+    including a list holding anything but strings, which is left for the row's own reader."""
+    from .policy import registry  # function-local: policy reaches auto_accept (import cycle)
+
+    if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
+        return None
+    if not any(v in registry.LEGACY_VERB_ALIASES for v in raw):
+        return None
+    return sorted({registry.LEGACY_VERB_ALIASES[v].value if v in registry.LEGACY_VERB_ALIASES else v for v in raw})
+
+
+CANONICAL_VERBS_BACKUP_SUFFIX = ".pre-canonical-verbs.bak"
+
+
+def canonicalize_verbs_in_file(path: Path) -> tuple[bool, list[str]]:
+    """Rewrite the retired verb names in the ``rules`` rows of each token in ``path`` to their
+    current names, editing only each row's ``verbs`` value. Legacy entries (``rule_ids``), unknown
+    keys and rows that cannot be read are kept exactly as they are. The previous file is kept once
+    at ``<path>.pre-canonical-verbs.bak``, and the file is written only when something changed.
+
+    Returns ``(changed, problems)``: ``changed`` is ``True`` when the file was rewritten, and each
+    problem names a row that could not be read or a write that failed. A missing or unreadable file
+    is left alone and gives ``(False, [])``; the caller reports it."""
+    from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+
+    try:
+        original = path.read_bytes()
+        data = json.loads(original.decode("utf-8"))
+        entries = data["tokens"]
+        if not isinstance(entries, list):
+            return False, []
+    except (OSError, ValueError, KeyError, TypeError):
+        return False, []
+    problems: list[str] = []
+    changed = False
+    for entry in entries:
+        rows = entry.get("rules") if isinstance(entry, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict) or scope_rows.row_from_dict(row) is None:
+                name = row.get("id") if isinstance(row, dict) else None
+                problems.append(
+                    f"scoped token {entry.get('id', 'without an id')} rule {name or 'without an id'} "
+                    "could not be read"
+                )
+                continue
+            verbs = renamed_verbs(row.get("verbs"))
+            if verbs is not None:
+                row["verbs"] = verbs
+                changed = True
+    if not changed:
+        return False, problems
+    backup = path.with_name(path.name + CANONICAL_VERBS_BACKUP_SUFFIX)
+    try:
+        if not backup.exists():
+            secure_files.atomic_write_bytes(backup, original)
+        secure_files.atomic_write_json(path, data)
+    except OSError:
+        return False, [*problems, f"{path.name} could not be rewritten"]
+    return True, problems
+
+
 # (st_mtime_ns, st_ino) of a principal's file; the atomic replace gives a new inode, so a
 # same-second edit on a filesystem with coarse timestamps is still seen.
 _Stamp = tuple[int, int] | None
