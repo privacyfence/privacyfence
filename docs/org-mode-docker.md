@@ -72,6 +72,11 @@ services:
     env_file:
       - path: privacyfence.env
         required: false
+    # Keep the identity provider's client secret out of `docker inspect`: put it in a file, name
+    # that file with PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret in
+    # privacyfence.env, and uncomment this and the top-level `secrets:` block below.
+    # secrets:
+    #   - idp_client_secret
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
     networks:
@@ -102,6 +107,10 @@ networks:
     ipam:
       config:
         - subnet: 172.30.87.0/24
+
+# secrets:
+#   idp_client_secret:
+#     file: ./idp_client_secret
 
 volumes:
   pf-data:

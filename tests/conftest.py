@@ -38,6 +38,7 @@ from privacyfence import (
     grist_auth,
     grist_provisioning,
     local_files,
+    org_mode,
     peek_provisioning,
     pii_detector,
     privacy_filter,
@@ -105,6 +106,7 @@ def _reset() -> None:
     web_approval_ui._INSTANCE = None
     download_staging._INSTANCE = None
     grist_auth._DISCOVERY_CACHE.clear()
+    org_mode._env_ignored_warned = False
     # The Grist provisioner is a process-wide singleton started by the org server.
     grist_provisioning._INSTANCE = None
     grist_provisioning._LOCKS.clear()
@@ -174,10 +176,12 @@ def _reset_singletons():
 @pytest.fixture(autouse=True)
 def _clear_server_environment(monkeypatch):
     # These variables choose the mode and the listener; a developer's shell must never change what
-    # a test sees.
+    # a test sees. The identity-provider variables are cleared by prefix so a new one is covered
+    # without touching this list.
     for name in (
         "PRIVACYFENCE_MODE", "PRIVACYFENCE_BIND_HOST", "PRIVACYFENCE_PORT",
-        "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES",
+        "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES", "PRIVACYFENCE_ADMIN_EMAILS",
+        *(name for name in os.environ if name.startswith("PRIVACYFENCE_IDP_")),
     ):
         monkeypatch.delenv(name, raising=False)
 

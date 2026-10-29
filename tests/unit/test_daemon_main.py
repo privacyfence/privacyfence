@@ -464,6 +464,17 @@ class TestLoadOrgConfigSigning:
         with pytest.raises(org_mode.ConfigurationError, match="signing-key verification"):
             daemon_main.load_org_config()
 
+    def test_an_unsigned_bundle_is_still_refused_when_the_idp_comes_from_the_environment(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "cid")
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"server": {"issuer_url": "https://pf.example.com"}}))
+        with pytest.raises(org_mode.ConfigurationError, match="not signed"):
+            daemon_main.load_org_config()
+
     def test_org_mode_still_rejected_when_unsigned(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         (tmp_path / "org_bundle.json").write_text(json.dumps({"mode": "org"}))
@@ -2417,6 +2428,133 @@ class TestMaybeStartWebServerOrgMode:
             unattended_sessions_enabled=False, org_config=self._single_user_config(),
         )
         assert started.get("called") is True
+
+    SECRET = "s3cret-sentinel-value"
+
+    def _env_idp(self, monkeypatch, **extra):
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "cid")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_SECRET", self.SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", "https://pf.example.com")
+        for name, value in extra.items():
+            monkeypatch.setenv(name, value)
+
+    def _start_from_environment(self, monkeypatch, tmp_path, *, org_config=None, bundle=None):
+        return daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False,
+            org_config={"mode": "org"} if org_config is None else org_config, bundle=bundle,
+        )
+
+    def test_org_mode_with_no_bundle_and_an_idp_from_the_environment_starts_the_org_app(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        with caplog.at_level(logging.DEBUG):
+            result = self._start_from_environment(monkeypatch, tmp_path)
+        assert started.get("called") is True
+        assert result.org.idp.issuer == "https://idp.example.com"
+        assert result.org.idp.client_secret == self.SECRET
+        assert result.org.provider.single_user is False
+        assert result.base_url == "https://pf.example.com"
+        assert self.SECRET not in caplog.text
+        assert self.SECRET not in repr(result.org.idp)
+
+    def test_the_first_start_with_an_idp_records_org_server(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        self._start_from_environment(monkeypatch, tmp_path)
+        assert admin_config.load()["org_server"] is True
+
+    def test_org_server_is_recorded_even_when_discovery_fails(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+
+        def down(issuer):
+            raise org_mode.ConfigurationError("idp is down")
+
+        monkeypatch.setattr("privacyfence.org_identity.discover_idp", down)
+        with caplog.at_level(logging.DEBUG), pytest.raises(org_mode.ConfigurationError, match="idp is down"):
+            self._start_from_environment(monkeypatch, tmp_path)
+        assert admin_config.load()["org_server"] is True
+        assert self.SECRET not in caplog.text
+
+    def test_a_later_start_without_the_idp_variables_is_refused_as_single_user(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        self._start_from_environment(monkeypatch, tmp_path)
+        for name in ("PRIVACYFENCE_IDP_ISSUER", "PRIVACYFENCE_IDP_CLIENT_ID", "PRIVACYFENCE_IDP_CLIENT_SECRET"):
+            monkeypatch.delenv(name)
+        monkeypatch.delenv("PRIVACYFENCE_ISSUER_URL")
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert str(excinfo.value) == (
+            "This data directory belonged to an organization server; restore org_bundle.json, or "
+            "use a new data directory for single-user mode."
+        )
+
+    def test_a_single_user_start_does_not_record_org_server(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert not (tmp_path / "org" / "admin_config.json").exists()
+
+    def test_a_partial_idp_environment_refuses_the_start_instead_of_falling_back_to_single_user(
+        self, monkeypatch, tmp_path,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        with pytest.raises(org_mode.ConfigurationError, match="Set both"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+
+    def test_a_legacy_bundle_idp_wins_over_the_environment(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch, PRIVACYFENCE_IDP_ISSUER="https://env.example.com")
+        legacy = {
+            "mode": "org", "server": {"issuer_url": "https://pf.example.com"},
+            "idp": {"issuer": "https://bundle.example.com", "client_id": "bundle-client"},
+        }
+        with caplog.at_level(logging.WARNING):
+            result = self._start_from_environment(monkeypatch, tmp_path, org_config=legacy, bundle=legacy)
+        assert (result.org.idp.issuer, result.org.idp.client_id) == ("https://bundle.example.com", "bundle-client")
+        assert "are ignored: org_bundle.json has an \"idp\" section." in caplog.text
+        assert self.SECRET not in caplog.text
+
+    def test_a_legacy_organization_bundle_without_an_idp_refuses_the_start(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        legacy = {"mode": "org", "server": {"issuer_url": "http://localhost:8765"}}
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            self._start_from_environment(monkeypatch, tmp_path, org_config=legacy, bundle=legacy)
+        assert str(excinfo.value) == (
+            "org_bundle.json has no \"idp\" section; set PRIVACYFENCE_IDP_* and run "
+            "privacyfence-app --retire-bundle."
+        )
+
+    def test_a_legacy_bundle_without_an_idp_starts_when_the_environment_names_one(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        legacy = {"mode": "org", "server": {"issuer_url": "https://pf.example.com"}}
+        result = self._start_from_environment(monkeypatch, tmp_path, org_config=legacy, bundle=legacy)
+        assert started.get("called") is True
+        assert result.org.idp is not None
 
     def test_a_multi_user_server_ignores_a_pinned_signing_key(self, monkeypatch, tmp_path):
         started = self._no_bind(monkeypatch, tmp_path)

@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 import secrets
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode, urlsplit
@@ -35,6 +36,7 @@ import jwt
 import requests
 from jwt import PyJWKClient
 
+from . import org_mode
 from .org_mode import AuthzPolicyConfig, ConfigurationError
 from .paths import safe_principal_id
 from .principal import Principal
@@ -82,7 +84,7 @@ class IdpConfig:
 
     issuer: str
     client_id: str
-    client_secret: str
+    client_secret: str = dataclasses.field(repr=False)
     authorization_endpoint: str
     token_endpoint: str
     jwks_uri: str
@@ -98,6 +100,9 @@ class IdpConfig:
     # fallback for a user with no passkey enrolled), it just
     # never adds an acr_values hint the IdP might not support. See ADR 0066.
     step_up_acr_values: tuple[str, ...] = ()
+    # Entra ID and other providers never send ``email_verified``; this lets an allowed-domain rule
+    # trust the address anyway. Admins by email never use it.
+    trust_unverified_email: bool = False
 
     @staticmethod
     def from_org_config(org_config: dict[str, Any]) -> "IdpConfig | None":
@@ -115,7 +120,7 @@ class IdpConfig:
         ``None`` for those, since unlike a genuinely absent ``idp`` section
         this is a *broken* config, the same distinction startup draws between
         an absent and a malformed ``org_config.json``."""
-        idp = org_config.get("idp")
+        idp = org_mode.idp_section(org_config)
         if not isinstance(idp, dict):
             return None
         issuer = idp.get("issuer")
@@ -133,6 +138,7 @@ class IdpConfig:
             admin_group_claim=idp.get("admin_group_claim", "") or "",
             admin_group_values=tuple(idp.get("admin_group_values") or ()),
             step_up_acr_values=tuple(idp.get("step_up_acr_values") or ()),
+            trust_unverified_email=idp.get("trust_unverified_email") is True,
         )
 
 

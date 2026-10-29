@@ -1211,3 +1211,52 @@ class TestNothingSecretLeaks:
         everything = "\n".join(summaries) + caplog.text + admin_config.admin_config_path().read_text()
         assert SENTINEL not in everything and "CLIENT-SECRET-VALUE" not in everything
         assert summaries[3] == "Changed sign-in restrictions"
+
+
+class TestOrgServerFlag:
+    def test_default_is_false(self):
+        assert _import({})["org_server"] is False
+
+    @pytest.mark.parametrize("stored, expected", [(True, True), (False, False), ("yes", False), (1, False)])
+    def test_load_normalizes_the_flag(self, tmp_path, stored, expected):
+        config = _import({})
+        config["org_server"] = stored
+        _write(tmp_path, config)
+        assert admin_config.load()["org_server"] is expected
+
+    def test_a_file_written_before_the_flag_loads_as_false(self, tmp_path):
+        config = _import({})
+        del config["org_server"]
+        _write(tmp_path, config)
+        assert admin_config.load()["org_server"] is False
+
+    def test_mark_org_server_sets_and_keeps_the_flag(self):
+        admin_config.save(_import({}))
+        assert admin_config.mark_org_server()["org_server"] is True
+        assert _stored()["org_server"] is True
+        assert admin_config.mark_org_server()["org_server"] is True
+
+    def test_mark_org_server_without_a_file_creates_one(self):
+        admin_config.mark_org_server()
+        assert _stored()["org_server"] is True
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_apply_change_cannot_change_it(self, flag, clean_env):
+        config = _import({})
+        config["org_server"] = flag
+        admin_config.save(config)
+        _change("offer_service", {"service": "slack", "org_server": not flag})
+        _change("set_unattended_sessions", {"enabled": True, "org_server": not flag})
+        assert _stored()["org_server"] is flag
+        assert _stored()["services"]["slack"]["offered"] is True
+
+    def test_a_reimport_keeps_it(self):
+        config = _import({})
+        config["org_server"] = True
+        admin_config.save(config)
+        merged, imported = admin_config.ensure(
+            {"authz": {"allowed_domains": ["x.example.com"]}}, mode="org", single_user=False
+        )
+        assert imported is True
+        assert merged["org_server"] is True
+        assert _stored()["org_server"] is True
