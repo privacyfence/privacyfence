@@ -893,6 +893,62 @@ class TestScopedTokensSection:
         assert "anyRule ? 'Tools that need no rule, from other connectors (' : " in html
 
 
+class TestScopedTokenProposal:
+    """The review panel for an AI-proposed token: embedded escaped, with its review strings in the page."""
+
+    HOSTILE = "</script><img src=x onerror=alert(1)>"
+    PROPOSAL = {
+        "id": "p1", "label": HOSTILE, "days": 30, "tools": ["gmail_get_message"],
+        "allow_personal_data": True, "allow_personal_data_reads": False,
+        "rules": [{"request": {"kind": "new", "group": "gmail.anything", "value": "", "verbs": ["read"]},
+                   "sentence": HOSTILE}],
+        "agent_label": HOSTILE, "reason": HOSTILE, "source": "explicit", "uncovered_tools": [],
+        "expires_at": 1798675200,
+    }
+
+    def test_build_html_embeds_the_proposal_escaped(self):
+        html = build_html(_make_state(), initial_section="scoped_tokens",
+                          scoped_tokens=TestScopedTokensSection.DATA, scoped_proposal=self.PROPOSAL)
+        assert "window.__pfScopedProposal = " in html
+        assert self.HOSTILE not in html
+        assert html.count("</script>") == html.count("<script")
+
+    def test_review_strings_present(self):
+        html = build_html(_make_state(), scoped_tokens=TestScopedTokensSection.DATA, scoped_proposal=self.PROPOSAL)
+        for text in (
+            "Review proposed token",
+            "An AI client proposed this token. Untick anything the job does not need. "
+            "You can only narrow it here; to add more, use New token.",
+            "The AI client reports this name itself; PrivacyFence does not verify it.",
+            "The AI client asked for this.",
+            "This token proposal has expired, was declined or was already used.",
+            "No rule covers these tools, so the token\\'s calls to them will be denied: ",
+            "Delegate access to this token?",
+            "You are delegating access. Anything that holds this token can act as you within these rules, for ",
+            "Revoke it in Settings → Scoped tokens if it leaks or the job is retired.",
+            "This token may also return or upload personal data.",
+            "Type the token name to confirm",
+            "decline_scoped_token_proposal",
+            "create_proposed_scoped_token",
+        ):
+            assert text in html
+
+    def test_delegate_button_text(self):
+        html = build_html(_make_state(), scoped_tokens=TestScopedTokensSection.DATA, scoped_proposal=self.PROPOSAL)
+        assert "btn(' primary', 'Delegate access')" in html
+        assert "btn('', 'Cancel')" in html
+
+    def test_waiting_list_renders_when_proposals_exist(self):
+        data = {**TestScopedTokensSection.DATA,
+                "proposals": [{"id": "p1", "label": "nightly", "agent_label": "Claude", "expires_at": 1798675200}],
+                "proposals_enabled": True}
+        html = build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=data)
+        assert "Waiting for review" in html
+        assert "' — proposed by '" in html
+        assert "/settings/scoped_tokens/proposals/" in html
+        assert '"proposals": [{"id": "p1"' in html
+
+
 class TestOrgCapabilities:
     """window.__pfCapabilities is a separate embedded global from
     window.__pfInitialState -- state itself must stay exactly what the

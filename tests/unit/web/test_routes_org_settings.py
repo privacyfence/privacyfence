@@ -55,7 +55,10 @@ import yaml
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import auto_accept, paths, personal_settings, privacy_filter, scoped_tokens, secure_files, step_up_config
+from privacyfence import (
+    auto_accept, paths, personal_settings, privacy_filter, scoped_token_proposals, scoped_tokens, secure_files, step_up_config,
+)
+from privacyfence.agent_identity import AgentIdentity, AgentSource
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
@@ -1833,6 +1836,307 @@ class TestScopedTokenRoutes:
         body = client.get("/settings").text
         assert "Create this token? It is shown once and cannot be shown again." in body
         assert "window.__pfShowScopedSecret(res.state.secret" in body
+
+
+class TestScopedTokenProposalRoutes:
+    """Org mode's review page and the create_from_proposal and decline routes: the administrator's
+    two opt-ins, create's gates bound to the proposal, and one proposal per principal."""
+
+    CREATE = "/api/settings/scoped_tokens/create_from_proposal"
+    DECLINE = "/api/settings/scoped_tokens/decline_proposal"
+    ON = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30, allow_ai_proposals=True)
+    AGENT = AgentIdentity(id="claude-code", name="Claude Code", version="1", source=AgentSource.NONE)
+    REQUEST = {
+        "label": "sales-sync", "days": 7,
+        "rules": [{"kind": "new", "group": "gmail.sender", "value": "a@example.com", "verbs": ["read", "update"]}],
+        "tools": ["gmail_get_message", "gmail_list_messages"],
+        "allow_personal_data": False, "allow_personal_data_reads": False,
+    }
+
+    def _setup(self, tmp_path, monkeypatch, *, policy=None, step_up=None):
+        _seed(tmp_path, monkeypatch, "alice")
+        _seed(tmp_path, monkeypatch, "bob")
+        store = scoped_tokens.ScopedTokenStore(lambda: [ALICE, BOB])
+        app, sessions = _app(
+            scoped_token_policy=self.ON if policy is None else policy, scoped_token_store=store, step_up=step_up,
+            scoped_token_page_data=lambda principal: {"tokens": [], "proposals": [], "proposals_enabled": True},
+        )
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        return client, csrf, store
+
+    def _propose(self, principal=ALICE, **over):
+        request = scoped_tokens.normalise_create_request({**self.REQUEST, **over})
+        proposal = scoped_token_proposals.new_proposal(
+            principal=principal, request=request, source="bundle", agent=self.AGENT, reason="a weekly job",
+        )
+        scoped_token_proposals.get_registry().add(proposal)
+        return proposal
+
+    @staticmethod
+    def _body(proposal, csrf, **over):
+        body = {
+            **proposal.request, "proposal_id": proposal.id, "typed_label": proposal.request["label"],
+            "confirmed": True, "csrf": csrf,
+        }
+        return {**body, **over}
+
+    @staticmethod
+    def _live(proposal, principal=ALICE) -> bool:
+        return scoped_token_proposals.get_registry().get(principal.id, proposal.id) is not None
+
+    @staticmethod
+    def _summaries(principal=ALICE) -> list[str]:
+        from privacyfence.audit_log import get_audit_logger
+
+        with principal_scope(principal):
+            return [e.summary for e in get_audit_logger().recent_entries(50)]
+
+    @staticmethod
+    def _decisions(principal=ALICE) -> list[tuple[str, str]]:
+        from privacyfence.audit_log import get_audit_logger
+
+        with principal_scope(principal):
+            return [(e.decision, e.summary) for e in get_audit_logger().recent_entries(50)]
+
+    def test_refused_when_proposals_disabled_in_the_bundle(self, tmp_path, monkeypatch):
+        off = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30, allow_ai_proposals=False)
+        client, csrf, store = self._setup(tmp_path, monkeypatch, policy=off)
+        proposal = self._propose()
+
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+
+        assert r.status_code == 403
+        assert r.json() == {"error": scoped_tokens.PROPOSALS_DISABLED_MESSAGE}
+        assert store.tokens_for(ALICE) == [] and self._live(proposal)
+        # Scoped tokens off altogether: the older gate answers first.
+        none = scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=30, allow_ai_proposals=True)
+        client, csrf, store = self._setup(tmp_path, monkeypatch, policy=none)
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+        assert r.status_code == 403 and r.json() == {"error": ros._SCOPED_TOKENS_DISABLED}
+
+    def test_secret_shown_once_with_no_store(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-store"
+        body = r.json()
+        secret = body["secret"]
+        assert secret.startswith(scoped_tokens.TOKEN_PREFIX)
+        assert body["created"]["label"] == "sales-sync"
+        [token] = store.tokens_for(ALICE)
+        assert token.id == body["created"]["id"]
+        assert not self._live(proposal)
+        assert secret not in json.dumps(self._summaries())
+        assert secret not in client.get("/settings").text
+        # Spent: a second go is gone, and creates nothing.
+        again = client.post(self.CREATE, json=self._body(proposal, csrf))
+        assert again.status_code == 410
+        assert again.json() == {"error": scoped_token_proposals.GONE_MESSAGE}
+        assert len(store.tokens_for(ALICE)) == 1
+
+    def test_org_step_up_bound_to_the_proposal(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client, csrf, store = self._setup(tmp_path, monkeypatch, step_up=step_up)
+        first, second = self._propose(), self._propose(label="other")
+        narrowed = {"tools": ["gmail_get_message"]}
+        verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+
+        def _retry(asserted_for, submitted_for):
+            """An assertion obtained for one request, replayed for another."""
+            assert client.post(self.CREATE, json=self._body(asserted_for[0], csrf, **asserted_for[1])).status_code == 428
+            with patch.object(wa.webauthn, "verify_authentication_response", return_value=verified):
+                return client.post(self.CREATE, json={
+                    **self._body(submitted_for[0], csrf, **submitted_for[1]), "webauthn_assertion": {"id": "Y3JlZC0x"},
+                })
+
+        # Obtained for another proposal, or for the un-narrowed request: refused for this one.
+        assert _retry((first, narrowed), (second, narrowed)).status_code != 200
+        assert _retry((second, {}), (second, narrowed)).status_code != 200
+        assert store.tokens_for(ALICE) == []
+        # Obtained for exactly this request: accepted.
+        assert _retry((second, narrowed), (second, narrowed)).status_code == 200
+        assert [t.label for t in store.tokens_for(ALICE)] == ["other"]
+
+    def test_the_checks_run_before_step_up(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+        client, csrf, store = self._setup(tmp_path, monkeypatch, step_up=step_up)
+        proposal = self._propose()
+        assert client.post(self.CREATE, json=self._body(proposal, csrf, typed_label="nope")).status_code == 400
+        assert client.post(self.CREATE, json=self._body(proposal, csrf, days=8)).status_code == 400
+        gone = dataclasses.replace(proposal, id="stp-unknown")
+        assert client.post(self.CREATE, json=self._body(gone, csrf)).status_code == 410
+        # Only a request that would succeed meets the passkey (here: no credential enrolled).
+        assert client.post(self.CREATE, json=self._body(proposal, csrf)).status_code == 403
+        assert store.tokens_for(ALICE) == []
+
+    def test_typed_label_must_match(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+        for typed in ("sales-syn", "Sales-Sync", "", None):
+            r = client.post(self.CREATE, json=self._body(proposal, csrf, typed_label=typed))
+            assert r.status_code == 400
+            assert r.json() == {"error": "Type the token's name exactly to confirm."}
+        assert store.tokens_for(ALICE) == [] and self._live(proposal)
+        # A renamed token is confirmed by its own name.
+        r = client.post(self.CREATE, json=self._body(proposal, csrf, label="shorter", typed_label="shorter"))
+        assert r.status_code == 200
+        assert [t.label for t in store.tokens_for(ALICE)] == ["shorter"]
+
+    @pytest.mark.parametrize("change", [
+        {"days": 8},
+        {"tools": ["gmail_get_message", "gmail_list_messages", "tasks_list_tasks"]},
+        {"allow_personal_data": True},
+        {"allow_personal_data_reads": True},
+        {"rules": [{"kind": "copy", "rule_id": "r2"}]},
+        {"rules": [{"kind": "new", "group": "gmail.sender", "value": "b@example.com", "verbs": ["read"]}]},
+        {"rules": [{"kind": "new", "group": "gmail.sender", "value": "a@example.com", "verbs": ["read", "delete"]}]},
+    ])
+    def test_widening_is_refused(self, tmp_path, monkeypatch, change):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+
+        r = client.post(self.CREATE, json=self._body(proposal, csrf, **change))
+
+        assert r.status_code == 400
+        assert r.json() == {"error": scoped_token_proposals.WIDENED_MESSAGE}
+        assert store.tokens_for(ALICE) == [] and self._live(proposal)
+
+    def test_narrowing_is_accepted(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+        narrowed = {
+            "days": 3, "tools": ["gmail_get_message"],
+            "rules": [{"kind": "new", "group": "gmail.sender", "value": "a@example.com", "verbs": ["read"]}],
+        }
+
+        assert client.post(self.CREATE, json=self._body(proposal, csrf, **narrowed)).status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.tools == {"gmail_get_message"} and len(token.rules) == 1
+
+    def test_another_principals_proposal_is_gone(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        bobs = self._propose(principal=BOB)
+
+        r = client.post(self.CREATE, json=self._body(bobs, csrf))
+        assert r.status_code == 410
+        assert r.json() == {"error": scoped_token_proposals.GONE_MESSAGE}
+        d = client.post(self.DECLINE, json={"proposal_id": bobs.id, "csrf": csrf})
+        assert d.status_code == 410
+        page = client.get(f"/settings/scoped_tokens/proposals/{bobs.id}")
+        assert 'window.__pfScopedProposal = {"missing": true}' in page.text
+        assert store.tokens_for(ALICE) == [] and self._live(bobs, BOB)
+
+    def test_create_failure_restores_the_proposal(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+        assert client.post(self.CREATE, json=self._body(proposal, csrf)).status_code == 200
+        second = self._propose()  # same label: the store refuses it
+
+        r = client.post(self.CREATE, json=self._body(second, csrf))
+
+        assert r.status_code == 400
+        assert r.json() == {"error": "You already have a token with that name."}
+        assert self._live(second)
+        assert [d for d, _ in self._decisions() if d == "scoped_token_proposal_accepted"] == [
+            "scoped_token_proposal_accepted",
+        ]  # the first, successful one only
+
+    def test_gates_need_a_session_csrf_and_confirmation(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+        assert client.post(self.CREATE, json=self._body(proposal, "wrong")).status_code == 401
+        unconfirmed = {k: v for k, v in self._body(proposal, csrf).items() if k != "confirmed"}
+        assert client.post(self.CREATE, json=unconfirmed).json() == {"error": "confirmation required"}
+        no_id = {k: v for k, v in self._body(proposal, csrf).items() if k != "proposal_id"}
+        assert client.post(self.CREATE, json=no_id).json() == {"error": "invalid request"}
+        anonymous = _client(_app(scoped_token_policy=self.ON)[0])
+        assert anonymous.post(self.CREATE, json=self._body(proposal, csrf)).status_code == 401
+        assert anonymous.post(self.DECLINE, json={"proposal_id": proposal.id, "csrf": csrf}).status_code == 401
+        assert client.post(self.DECLINE, json={"proposal_id": proposal.id, "csrf": "wrong"}).status_code == 401
+        assert store.tokens_for(ALICE) == [] and self._live(proposal)
+
+    def test_review_page_redirects_when_disabled(self, tmp_path, monkeypatch):
+        proposals_off = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30, allow_ai_proposals=False)
+        tokens_off = scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=30, allow_ai_proposals=True)
+        for policy in (proposals_off, tokens_off):
+            client, _csrf, _store = self._setup(tmp_path, monkeypatch, policy=policy)
+            proposal = self._propose()
+            r = client.get(f"/settings/scoped_tokens/proposals/{proposal.id}")
+            assert r.status_code == 303 and r.headers["location"] == "/settings"
+        # The section itself only needs scoped tokens, not proposals.
+        client, _csrf, _store = self._setup(tmp_path, monkeypatch, policy=proposals_off)
+        assert client.get("/settings/scoped_tokens").status_code == 200
+        client, _csrf, _store = self._setup(tmp_path, monkeypatch, policy=tokens_off)
+        r = client.get("/settings/scoped_tokens")
+        assert r.status_code == 303 and r.headers["location"] == "/settings"
+
+    def test_signed_out_review_link_returns_to_the_review_page(self):
+        anonymous = _client(_app(scoped_token_policy=self.ON)[0])
+        r = anonymous.get("/settings/scoped_tokens/proposals/stp-abc")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/login?next=/settings/scoped_tokens/proposals/stp-abc"
+        assert anonymous.get("/settings/scoped_tokens").headers["location"] == "/login?next=/settings/scoped_tokens"
+
+    def test_review_page_embeds_the_proposal(self, tmp_path, monkeypatch):
+        client, _csrf, _store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+
+        section = client.get("/settings/scoped_tokens")
+        assert section.status_code == 200
+        assert 'window.__pfInitialSection = "scoped_tokens"' in section.text
+        assert "window.__pfScopedProposal = " not in section.text
+
+        r = client.get(f"/settings/scoped_tokens/proposals/{proposal.id}")
+        assert r.status_code == 200
+        assert 'window.__pfInitialSection = "scoped_tokens"' in r.text
+        assert "window.__pfScopedProposal = " in r.text
+        assert proposal.id in r.text and "sales-sync" in r.text and "a weekly job" in r.text
+        assert self._live(proposal)
+        gone = client.get("/settings/scoped_tokens/proposals/stp-nope")
+        assert gone.status_code == 200 and 'window.__pfScopedProposal = {"missing": true}' in gone.text
+
+    def test_decline_takes_and_audits(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+
+        r = client.post(self.DECLINE, json={"proposal_id": proposal.id, "csrf": csrf})
+
+        assert r.status_code == 200 and r.json() == {"declined": True}
+        assert not self._live(proposal)
+        assert ("scoped_token_proposal_declined", "Token proposal 'sales-sync' declined") in self._decisions()
+        again = client.post(self.DECLINE, json={"proposal_id": proposal.id, "csrf": csrf})
+        assert again.status_code == 410
+        assert again.json() == {"error": scoped_token_proposals.GONE_MESSAGE}
+        assert store.tokens_for(ALICE) == []
+
+    def test_accept_audit_names_principal_and_proposal(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+
+        r = client.post(self.CREATE, json=self._body(proposal, csrf, label="shorter", typed_label="shorter"))
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        decisions = self._decisions()
+        assert (
+            "scoped_token_proposal_accepted",
+            f"Token proposal 'sales-sync' accepted as 'shorter' ({token.id})",
+        ) in decisions
+        [created] = [text for text in self._summaries() if text.startswith("Created scoped token")]
+        assert created.startswith(f"Created scoped token 'shorter' ({token.id}), 7 days")
+        assert created.endswith(" from a proposal (principal=alice)")
+        assert r.json()["secret"] not in created
 
 
 class TestPersonalSettingsRoutes:

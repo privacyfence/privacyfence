@@ -373,7 +373,7 @@ class TestAllowPersonalDataReads:
 class TestPolicy:
     def test_policy_local_is_always_enabled_365(self):
         policy = scoped_tokens.policy_from_org_config({"scoped_tokens": {"enabled": False, "max_days": 5}}, org_mode=False)
-        assert policy == ScopedTokenPolicy(True, 365)
+        assert policy == ScopedTokenPolicy(True, 365, True)
 
     def test_policy_org_defaults_off_90_and_clamps_bad_max_days(self, caplog):
         from_cfg = scoped_tokens.policy_from_org_config
@@ -385,6 +385,96 @@ class TestPolicy:
         for bad in (0, 366, "30", 1.5, True, None):
             assert from_cfg({"scoped_tokens": {"enabled": True, "max_days": bad}}, org_mode=True).max_days == 90
         assert "scoped_tokens.max_days" in caplog.text
+
+    def test_local_policy_allows_ai_proposals(self):
+        policy = scoped_tokens.policy_from_org_config({}, org_mode=False)
+        assert policy.allow_ai_proposals is True
+
+    def test_org_policy_needs_allow_ai_proposals_true(self):
+        from_cfg = scoped_tokens.policy_from_org_config
+        assert from_cfg({"scoped_tokens": {"enabled": True}}, org_mode=True).allow_ai_proposals is False
+        on = from_cfg({"scoped_tokens": {"enabled": True, "allow_ai_proposals": True}}, org_mode=True)
+        assert on.allow_ai_proposals is True
+        off = from_cfg({"scoped_tokens": {"enabled": True, "allow_ai_proposals": False}}, org_mode=True)
+        assert off.allow_ai_proposals is False
+
+    def test_org_policy_ignores_allow_ai_proposals_without_enabled(self):
+        for section in ({"allow_ai_proposals": True}, {"enabled": False, "allow_ai_proposals": True}):
+            policy = scoped_tokens.policy_from_org_config({"scoped_tokens": section}, org_mode=True)
+            assert policy.allow_ai_proposals is False
+
+    def test_org_policy_warns_on_non_bool_allow_ai_proposals(self, caplog):
+        for bad in ("true", 1, None):
+            policy = scoped_tokens.policy_from_org_config(
+                {"scoped_tokens": {"enabled": True, "allow_ai_proposals": bad}}, org_mode=True,
+            )
+            assert policy.allow_ai_proposals is False
+        assert "scoped_tokens.allow_ai_proposals must be true or false; using false" in caplog.text
+
+
+class TestCheckRequest:
+    @staticmethod
+    def _check(store, **overrides):
+        args = dict(label="sales-sync", days=90, rules=_copy("rule-a"), tools=[TOOL], policy=ENABLED)
+        args.update(overrides)
+        return store.check_request(LOCAL_PRINCIPAL, **args)
+
+    def test_check_request_writes_nothing(self, tmp_path):
+        store = _store()
+        self._check(store)
+        assert store.tokens_for(LOCAL_PRINCIPAL) == []
+        assert not _file(tmp_path).exists()
+
+    @pytest.mark.parametrize("overrides", [
+        {"label": "-x"},
+        {"days": 366},
+        {"tools": ["nope"], "rules": []},
+        {"rules": [{"kind": "new", "group": "drive.folder", "value": "", "verbs": ["read"]}]},
+    ])
+    def test_check_request_raises_the_same_errors_as_create(self, overrides):
+        with pytest.raises(ScopedTokenError) as created:
+            _create(_store(), **overrides)
+        with pytest.raises(ScopedTokenError) as checked:
+            self._check(_store(), **overrides)
+        assert str(checked.value) == str(created.value)
+
+    def test_check_request_refuses_when_disabled(self):
+        with pytest.raises(ScopedTokenError, match="^Scoped tokens are not enabled on this install."):
+            self._check(_store(), policy=ScopedTokenPolicy(False, 90))
+
+    def test_check_existing_false_skips_the_duplicate_label_check(self):
+        store = _store()
+        _create(store)
+        with pytest.raises(ScopedTokenError, match="^You already have a token with that name.$"):
+            self._check(store)
+        self._check(store, check_existing=False)
+
+    def test_check_existing_false_skips_the_token_limit(self):
+        store = _store()
+        for i in range(MAX_TOKENS_PER_PRINCIPAL):
+            _create(store, label=f"t{i}")
+        with pytest.raises(ScopedTokenError, match="tokens already"):
+            self._check(store, label="one-more")
+        self._check(store, label="one-more", check_existing=False)
+
+    def test_create_still_refuses_a_duplicate_label(self):
+        store = _store()
+        _create(store)
+        with pytest.raises(ScopedTokenError, match="^You already have a token with that name.$"):
+            _create(store)
+        assert len(store.tokens_for(LOCAL_PRINCIPAL)) == 1
+
+
+def test_normalise_create_request_sorts_tools_and_rules():
+    body = scoped_tokens.normalise_create_request({
+        "label": "x", "days": 5, "tools": ["b_tool", "a_tool"],
+        "rules": [{"kind": "copy", "rule_id": "rule-a"}],
+    })
+    assert body is not None
+    assert body["tools"] == ["a_tool", "b_tool"]
+    assert body["rules"] == _copy("rule-a")
+    assert body["allow_personal_data"] is False
+    assert scoped_tokens.normalise_create_request({"label": "x", "days": True, "tools": [], "rules": []}) is None
 
 
 class TestToken:

@@ -28,6 +28,8 @@ from unittest.mock import MagicMock
 import httpx2
 import pytest
 from mcp import ClientSession, types
+
+from privacyfence import scoped_tokens
 from mcp.client.streamable_http import streamable_http_client
 
 from privacyfence.web import mcp_tools
@@ -85,7 +87,7 @@ async def _connected_session(dispatcher: McpDispatcher):
 
 
 async def test_the_live_tool_list_is_exactly_the_set_checked_here():
-    async with _connected_session(McpDispatcher(lambda: CONNECTORS)) as session:
+    async with _connected_session(McpDispatcher(lambda: CONNECTORS, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False))) as session:
         listed = await session.list_tools()
     assert sorted(tool.name for tool in listed.tools) == sorted(ADVERTISED)
     for tool in listed.tools:

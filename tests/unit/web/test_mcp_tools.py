@@ -200,6 +200,21 @@ class TestMetaToolManifest:
         assert "reason" in tool.input_schema["properties"]
         assert "reason" in tool.input_schema.get("required", [])
 
+    def test_propose_scoped_token_requires_reason_and_label(self):
+        schema = mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.input_schema
+        assert set(schema["required"]) == {"reason", "label"}
+        assert set(schema["properties"]) == {
+            "reason", "label", "days", "from_session", "rules", "tools", "allow_personal_data",
+            "allow_personal_data_reads",
+        }
+        assert mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL in mcp_tools.META_TOOLS
+
+    def test_propose_scoped_token_is_not_read_only(self):
+        annotations = mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.annotations
+        assert (annotations.read_only_hint, annotations.destructive_hint, annotations.idempotent_hint) == (
+            False, False, False,
+        )
+
     def test_check_policy_requires_connector_tool_and_reason(self):
         schema = mcp_tools.CHECK_POLICY_TOOL.input_schema
         assert set(schema["required"]) == {"connector", "tool", "reason"}

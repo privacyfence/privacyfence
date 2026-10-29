@@ -33,6 +33,10 @@ docs/how-it-works.md's "Unattended sessions" section.
 Settings (--scoped-token-max-days N caps how long one lasts, 1-365); without
 it the feature is off in organization mode (ADR 0165).
 
+--enable-scoped-token-proposals also lets an AI client propose a scoped token for
+a person to review and create (--disable-scoped-token-proposals turns it off);
+it has no effect unless --enable-scoped-tokens is set (ADR 0253).
+
 --sign-key also signs a "serial" into the bundle (--serial N, default: the
 current Unix time); an install refuses a bundle whose serial is lower than the
 highest it has accepted, so a later build always wins.
@@ -527,6 +531,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--disable-scoped-tokens", action="store_true",
         help="Explicitly turn scoped tokens back off (useful with --merge).",
     )
+    proposals_toggle = scoped.add_mutually_exclusive_group()
+    proposals_toggle.add_argument(
+        "--enable-scoped-token-proposals", action="store_true",
+        help="Let AI clients propose scoped tokens for a person to review (off by default; "
+             "needs --enable-scoped-tokens).",
+    )
+    proposals_toggle.add_argument(
+        "--disable-scoped-token-proposals", action="store_true",
+        help="Explicitly turn scoped token proposals back off (useful with --merge).",
+    )
     scoped.add_argument(
         "--scoped-token-max-days", type=_scoped_token_days, metavar="N", default=None,
         help="The longest a scoped token may last, in days (1-365). Default: 90.",
@@ -773,7 +787,10 @@ def main(argv: list[str] | None = None) -> int:
     elif args.disable_unattended_sessions:
         bundle["unattended_sessions"] = {"enabled": False}
 
-    if args.enable_scoped_tokens or args.disable_scoped_tokens or args.scoped_token_max_days is not None:
+    if (
+        args.enable_scoped_tokens or args.disable_scoped_tokens or args.scoped_token_max_days is not None
+        or args.enable_scoped_token_proposals or args.disable_scoped_token_proposals
+    ):
         scoped_section: dict[str, Any] = dict(bundle.get("scoped_tokens") or {})
         if args.enable_scoped_tokens:
             scoped_section["enabled"] = True
@@ -781,6 +798,10 @@ def main(argv: list[str] | None = None) -> int:
             scoped_section["enabled"] = False
         if args.scoped_token_max_days is not None:
             scoped_section["max_days"] = args.scoped_token_max_days
+        if args.enable_scoped_token_proposals:
+            scoped_section["allow_ai_proposals"] = True
+        elif args.disable_scoped_token_proposals:
+            scoped_section["allow_ai_proposals"] = False
         bundle["scoped_tokens"] = scoped_section
 
     if args.mode == "org":

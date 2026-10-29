@@ -2179,6 +2179,49 @@ class TestScopedTokenWiring:
         assert wiring.store_rename("st-missing", "x") is None
         assert [t["label"] for t in wiring.page_data()["tokens"]] == ["new"]
 
+    def test_page_data_lists_pending_proposals(self, tmp_path, monkeypatch):
+        from privacyfence import scoped_token_proposals as stp
+        from privacyfence import scoped_tokens
+        from privacyfence.agent_identity import AgentIdentity, AgentSource
+        from privacyfence.principal import LOCAL_PRINCIPAL, Principal
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        self._rules(monkeypatch)
+        agent = AgentIdentity(id="claude-code", name="Claude Code", version="1", source=AgentSource.NONE)
+        request = scoped_tokens.normalise_create_request(
+            {"label": "weekly", "days": 30, "rules": [], "tools": ["gmail_list_messages"]},
+        )
+        mine = stp.new_proposal(principal=LOCAL_PRINCIPAL, request=request, source="bundle", agent=agent, reason="r")
+        theirs = stp.new_proposal(
+            principal=Principal(id="bob", email="b@example.com", display_name="Bob"), request=request,
+            source="bundle", agent=agent, reason="r",
+        )
+        stp.get_registry().add(mine)
+        stp.get_registry().add(theirs)
+
+        data = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()})).page_data()
+
+        from privacyfence import agent_label
+
+        assert data["proposals"] == [{
+            "id": mine.id, "label": "weekly", "agent_label": agent_label.label_for(agent).text,
+            "expires_at": mine.expires_at,
+        }]
+
+    def test_page_data_proposals_enabled_follows_the_policy(self, tmp_path, monkeypatch):
+        from privacyfence import scoped_tokens
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web.server import build_scoped_token_wiring, scoped_token_page_data
+
+        self._store(tmp_path, monkeypatch)
+        self._rules(monkeypatch)
+        assert build_scoped_token_wiring(McpDispatcher(lambda: {})).page_data()["proposals_enabled"] is True
+        for allowed in (True, False):
+            policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365, allow_ai_proposals=allowed)
+            data = scoped_token_page_data(LOCAL_PRINCIPAL, policy=policy, delivery="once", connector_names=set())
+            assert data["proposals_enabled"] is allowed
+
     def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
         import time
 

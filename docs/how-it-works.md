@@ -103,7 +103,7 @@ Instead of its own credential, a client can hold a **scoped token** created in S
 bearer token with an expiry, its own rules and a list of tools. It sees only those tools,
 and a call it makes is auto-accepted only through one of its own rules; otherwise it is denied at
 once, with no approval card. A box on the token lets covered Gmail and Slack reads return personal data, which the scan still reports in the audit log. Revoking it affects no other client. In organization mode the
-administrator must turn the feature on. See [Scoped tokens](security-and-compliance.md#scoped-tokens).
+administrator must turn the feature on. Claude can also propose a token for you to review and create ([ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md)). See [Scoped tokens](security-and-compliance.md#scoped-tokens).
 
 ### What the AI system is told
 
@@ -113,8 +113,8 @@ that PrivacyFence is irrelevant), and to call `privacyfence_status` before the f
 PrivacyFence-governed action. It also advertises tool-list change notifications: when you connect,
 disable or re-enable a service in Settings, connected clients are told to refresh their tool list.
 
-The tool list holds one tool per enabled, signed-in connector tool, plus the eight `privacyfence_*`
-tools below. Each connector tool carries MCP annotations that say what it does: a read is
+The tool list holds one tool per enabled, signed-in connector tool, plus the `privacyfence_*`
+tools below: eight always, and `privacyfence_propose_scoped_token` only where token proposals are on (always on a local install, by the administrator's choice in organization mode). Each connector tool carries MCP annotations that say what it does: a read is
 read-only and idempotent; a write is neither. Only the three tools that delete something,
 `calendar_delete_event` (an event), `drive_sheets_delete_dimensions` (rows or columns of a
 spreadsheet) and `peek_delete_page` (a Peek page with its comments and visit history), are marked
@@ -173,7 +173,7 @@ rules are in [Approvals and policy](approvals-and-policy.md).
 
 ## PrivacyFence's own tools
 
-PrivacyFence adds eight tools of its own. They are not connector tools and have no gate. Unlike
+PrivacyFence adds eight tools of its own, plus `privacyfence_propose_scoped_token` where token proposals are on (always on a local install, by the administrator's choice in organization mode). They are not connector tools and have no gate. Unlike
 connector tools, each carries its real MCP annotations.
 
 | Tool | What it does | Required arguments | Annotations |
@@ -185,6 +185,7 @@ connector tools, each carries its real MCP annotations.
 | `privacyfence_await_approval` | Waits for one or more pending approvals and reports each one's status (`pending`, `approved`, `denied`, `expired`, `unknown`), never content; a denial's intent and note, when you gave them, come under `denial_feedback` (see [When you deny a call](tools-reference.md#when-you-deny-a-call)). Waits at most 120 seconds per call (default 30). | `approval_ids` | read-only, idempotent |
 | `privacyfence_begin_unattended_session` | Declares this connection a scheduled run with nobody watching. See [Unattended sessions](#unattended-sessions). | `reason` | not read-only, non-destructive, idempotent |
 | `privacyfence_end_unattended_session` | Clears that declaration for this connection. | `reason` | not read-only, non-destructive, idempotent |
+| `privacyfence_propose_scoped_token` | Proposes a scoped token for a routine, built from the calls approved in this session (`from_session`) or from rules and tools it names. Returns a review link at once and nothing else: you review and can only narrow it in **Settings → Scoped tokens**, confirm by typing its name, and copy the token yourself. Claude never receives the token or learns whether it was created. Not offered to a scoped token, refused in an unattended session. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md). | `reason`, `label` | not read-only, non-destructive, not idempotent |
 | `privacyfence_create_upload_slot` | Gives a client without the extension a one-time URL to upload a local file to. See [Files](#files). | `filename`, `reason` (plus `size_bytes`) | not read-only, non-destructive, not idempotent |
 
 `reason` is one sentence from the AI system on why it is making the call. It is logged, and it is

@@ -314,6 +314,37 @@ CREATE_UPLOAD_SLOT_TOOL = types.Tool(
     annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
 )
 
+PROPOSE_SCOPED_TOKEN_TOOL = types.Tool(
+    name="privacyfence_propose_scoped_token",
+    description=(
+        "Propose a scoped token (a named, expiring bearer credential limited to some rules and tools, "
+        "for a routine or scheduled job) for the person to review in PrivacyFence Settings. Returns at "
+        "once with review_url: give it to the person. Nothing is created until they review it, type its "
+        "name and confirm; they may narrow it. You never receive the token, nor whether it was created. "
+        "Set from_session=true to build its rules and tools from the calls approved in this session, or "
+        "pass rules (each {kind:'new', group, value, verbs} with group and verbs from "
+        "privacyfence_list_policy's scope_groups and value a comma-separated id list, or {kind:'copy', "
+        "rule_id}) and tools. days defaults to 90. Ask for allow_personal_data or "
+        "allow_personal_data_reads only if the job needs them. Refused in an unattended session. "
+        "reason: one sentence on what the token is for (logged and shown to the person)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "reason": {"type": "string"},
+            "label": {"type": "string"},
+            "days": {"type": "integer"},
+            "from_session": {"type": "boolean"},
+            "rules": {"type": "array", "items": {"type": "object"}},
+            "tools": {"type": "array", "items": {"type": "string"}},
+            "allow_personal_data": {"type": "boolean"},
+            "allow_personal_data_reads": {"type": "boolean"},
+        },
+        "required": ["reason", "label"],
+    },
+    annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+
 META_TOOLS: tuple[types.Tool, ...] = (
     CHECK_POLICY_TOOL,
     LIST_POLICY_TOOL,
@@ -323,5 +354,6 @@ META_TOOLS: tuple[types.Tool, ...] = (
     AWAIT_APPROVAL_TOOL,
     PRIVACYFENCE_STATUS_TOOL,
     CREATE_UPLOAD_SLOT_TOOL,
+    PROPOSE_SCOPED_TOKEN_TOOL,
 )
 META_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in META_TOOLS)
