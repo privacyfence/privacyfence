@@ -115,6 +115,7 @@ def _reset() -> None:
     local_files.configure_file_bridge()
     local_files.force_bridge_for_tests(False)
     settings_controller._main_dispatch = None
+    daemon_main._bundle_adopted_this_start = False
     state_stream._loop = None
     control_channel._mint_nonces.clear()
     # privilege_separation caches the parsed marker file for

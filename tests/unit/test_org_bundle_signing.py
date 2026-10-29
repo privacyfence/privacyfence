@@ -347,3 +347,125 @@ class TestBundleSerial:
 
         assert trust.ok
         assert trust.serial == 100
+
+
+def _legacy_install(org_dir, bundle: dict | None = None, *, serial: int | None = None, with_key: bool = True):
+    """A 6.x data directory: org_config.json plus its two pin files."""
+    import json
+
+    org_dir.mkdir(parents=True, exist_ok=True)
+    raw = json.dumps(bundle if bundle is not None else {"mode": "local"}).encode("utf-8")
+    (org_dir / "org_config.json").write_bytes(raw)
+    if with_key:
+        (org_dir / obs.LEGACY_PINNED_PUBKEY_FILENAME).write_text("a2V5\n")
+    if serial is not None:
+        (org_dir / obs.LEGACY_PINNED_SERIAL_FILENAME).write_text(f"{serial}\n")
+    return raw
+
+
+def _legacy_snapshot(org_dir):
+    return {
+        p.name: (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in org_dir.iterdir()
+        if p.name.startswith("org_config")
+    }
+
+
+class TestAdoptLegacyFiles:
+    def test_new_names_are_the_7x_names(self):
+        assert obs.PINNED_PUBKEY_FILENAME == "org_bundle_signing_pubkey.txt"
+        assert obs.PINNED_SERIAL_FILENAME == "org_bundle_serial.txt"
+        assert obs.LEGACY_PINNED_PUBKEY_FILENAME == "org_config_signing_pubkey.txt"
+        assert obs.LEGACY_PINNED_SERIAL_FILENAME == "org_config_serial.txt"
+
+    def test_adoption_copies_bundle_and_pins_and_writes_the_record(self, tmp_path, caplog):
+        import json
+
+        raw = _legacy_install(tmp_path, serial=3)
+        before = _legacy_snapshot(tmp_path)
+
+        with caplog.at_level("WARNING"):
+            assert obs.adopt_legacy_files(tmp_path) is True
+
+        assert (tmp_path / "org_bundle.json").read_bytes() == raw
+        assert (tmp_path / obs.PINNED_PUBKEY_FILENAME).read_text() == "a2V5\n"
+        assert (tmp_path / obs.PINNED_SERIAL_FILENAME).read_text() == "3\n"
+        record = json.loads((tmp_path / "org_bundle_adopted.json").read_text())
+        assert record["from"] == "org_config.json"
+        assert record["sha256"] == obs.sha256_hex(raw)
+        assert record["pins_adopted"] is True
+        assert record["at"]
+        assert "Copied org/org_config.json to org/org_bundle.json" in caplog.text
+        # 7.x never touches the 6.x files, so a downgrade finds them as they were.
+        assert _legacy_snapshot(tmp_path) == before
+
+    def test_no_adoption_when_the_bundle_already_exists(self, tmp_path):
+        _legacy_install(tmp_path)
+        (tmp_path / "org_bundle.json").write_text('{"mode": "org"}')
+
+        assert obs.adopt_legacy_files(tmp_path) is False
+        assert (tmp_path / "org_bundle.json").read_text() == '{"mode": "org"}'
+        # Only the pins were adopted: the record has no bundle part.
+        record = obs.load_adopted_record(tmp_path)
+        assert record["from"] == "" and record["sha256"] == ""
+
+    def test_nothing_to_adopt_returns_false_and_writes_nothing(self, tmp_path):
+        assert obs.adopt_legacy_files(tmp_path) is False
+        assert list(tmp_path.iterdir()) == []
+
+    def test_pins_are_copied_without_a_bundle_and_record_it(self, tmp_path):
+        import json
+
+        _legacy_install(tmp_path, serial=7)
+        (tmp_path / "org_config.json").unlink()
+
+        assert obs.adopt_legacy_files(tmp_path) is False
+
+        assert (tmp_path / obs.PINNED_SERIAL_FILENAME).read_text() == "7\n"
+        record = json.loads((tmp_path / "org_bundle_adopted.json").read_text())
+        assert record["pins_adopted"] is True
+        assert record["sha256"] == ""
+
+    def test_failed_copy_raises_configuration_error_naming_the_file(self, tmp_path, monkeypatch):
+        from privacyfence.org_mode import ConfigurationError
+
+        _legacy_install(tmp_path)
+
+        def boom(path, data, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(obs, "atomic_write_bytes", boom)
+        with pytest.raises(ConfigurationError, match="org_config"):
+            obs.adopt_legacy_files(tmp_path)
+        assert (tmp_path / "org_config.json").exists()
+
+    def test_pins_are_read_and_written_only_under_the_new_names_after_adoption(self, tmp_path):
+        _legacy_install(tmp_path, serial=2)
+        obs.adopt_legacy_files(tmp_path)
+        legacy_before = _legacy_snapshot(tmp_path)
+
+        assert obs.pinned_serial_path(tmp_path).name == "org_bundle_serial.txt"
+        assert obs.pinned_public_key_path(tmp_path).name == "org_bundle_signing_pubkey.txt"
+        obs.record_accepted_serial(obs.BundleTrust(ok=True, detail="", serial=9), tmp_path)
+
+        assert obs.load_pinned_serial(tmp_path) == 9
+        assert _legacy_snapshot(tmp_path) == legacy_before
+        assert (tmp_path / obs.LEGACY_PINNED_SERIAL_FILENAME).read_text() == "2\n"
+
+    def test_key_rotation_after_adoption_never_brings_the_old_key_back(self, tmp_path):
+        old_key, _ = obs.generate_keypair()
+        new_key, _ = obs.generate_keypair()
+        old_signed = obs.sign_bundle({"mode": "local"}, old_key)
+        (tmp_path / "org_config.json").write_text(__import__("json").dumps(old_signed))
+        (tmp_path / obs.LEGACY_PINNED_PUBKEY_FILENAME).write_text(obs.public_key_b64(old_key.public_key()) + "\n")
+        obs.adopt_legacy_files(tmp_path)
+
+        # Documented rotation: the administrator deletes the new-name pin.
+        (tmp_path / obs.PINNED_PUBKEY_FILENAME).unlink()
+        assert obs.adopt_legacy_files(tmp_path) is False
+        assert not (tmp_path / obs.PINNED_PUBKEY_FILENAME).exists()
+
+        rotated = obs.sign_bundle({"mode": "local", "org_name": "Acme"}, new_key)
+        trust = obs.verify_and_maybe_pin(rotated, tmp_path)
+        assert trust.ok and trust.newly_pinned
+        assert obs.load_pinned_public_key(tmp_path) == base64.b64decode(obs.public_key_b64(new_key.public_key()))

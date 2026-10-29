@@ -22,7 +22,9 @@ popup, so there's nothing to prioritize or exclude.
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime
 import json
+import os
 import pathlib
 import threading
 import time
@@ -664,20 +666,20 @@ class TestOrgConfigInstall:
         controller.install_org_config_bytes(b"not valid json")
 
         assert controller.error
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_json_without_version_field_is_rejected(self, controller):
         controller.install_org_config_bytes(json.dumps({"google": {"client_id": "x"}}).encode())
 
         assert controller.error
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_valid_bundle_is_installed(self, controller):
         bundle = {"version": 1, "org_name": "Acme", "google": {"client_id": "x", "client_secret": "y"}}
 
         controller.install_org_config_bytes(json.dumps(bundle).encode())
 
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == bundle
         assert controller.error == ""
 
@@ -694,7 +696,7 @@ class TestOrgConfigInstall:
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         def _load_installed():
-            path = sc.org_dir() / "org_config.json"
+            path = sc.org_dir() / "org_bundle.json"
             return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
         def _build(cfg, org):
@@ -746,7 +748,7 @@ class TestOrgConfigInstallSigning:
         controller.install_org_config_bytes(json.dumps(bundle).encode())
 
         assert controller.error == ""
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == bundle
 
     def test_org_mode_bundle_without_signature_is_rejected(self, controller):
@@ -755,7 +757,7 @@ class TestOrgConfigInstallSigning:
         controller.install_org_config_bytes(json.dumps(bundle).encode())
 
         assert "requires a signed" in controller.error
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_first_signed_bundle_is_installed_and_pins_its_key(self, controller):
         from privacyfence import org_bundle_signing
@@ -783,7 +785,7 @@ class TestOrgConfigInstallSigning:
         controller.install_org_config_bytes(json.dumps(second_bundle).encode())
 
         assert "verification" in controller.error
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == first_bundle  # unchanged -- the bad update was never written
 
     def test_install_org_config_refuses_an_older_serial_and_keeps_the_installed_file(self, controller):
@@ -800,7 +802,7 @@ class TestOrgConfigInstallSigning:
 
         assert "rollback refused" in controller.error
         assert str(org_bundle_signing.pinned_serial_path(sc.org_dir())) in controller.error
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == newer
         assert org_bundle_signing.load_pinned_serial(sc.org_dir()) == 200
 
@@ -846,7 +848,7 @@ class TestWouldPinNewOrgSigningKey:
         assert controller.would_pin_new_org_signing_key(json.dumps(bundle).encode()) is True
         # Read-only -- nothing pinned or installed by merely checking.
         assert not org_bundle_signing.pinned_public_key_path(sc.org_dir()).exists()
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_false_for_an_unsigned_bundle(self, controller):
         assert controller.would_pin_new_org_signing_key(json.dumps({"version": 1}).encode()) is False
@@ -3306,3 +3308,39 @@ class TestPrivacyPolicyFailClosed:
             controller.set_default_policy("privacy", "redact")
 
         assert "Privacy filter hot-reload failed" in caplog.text
+
+
+class TestOrgBundleInstalledDate:
+    """The General page's "installed" date for an adopted 6.x bundle is the legacy file's
+    mtime, not the time of the copy; once the bundle changes it is the bundle's own."""
+
+    @staticmethod
+    def _install(org, name, text, mtime):
+        path = org / name
+        path.write_text(text, encoding="utf-8")
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_adopted_copy_shows_the_legacy_files_date(self, controller):
+        from privacyfence import org_bundle_signing
+
+        org = sc.org_dir()
+        jan_5_2025 = datetime(2025, 1, 5, 12, 0).timestamp()
+        self._install(org, "org_config.json", '{"version": 1}', jan_5_2025)
+        org_bundle_signing.adopt_legacy_files(org)
+
+        general = controller.snapshot()["general"]
+        assert general["org_installed"] is True
+        assert general["org_installed_date"] == "Jan 5, 2025"
+
+    def test_a_newer_installed_bundle_shows_its_own_date(self, controller):
+        from privacyfence import org_bundle_signing
+
+        org = sc.org_dir()
+        jan_5_2025 = datetime(2025, 1, 5, 12, 0).timestamp()
+        mar_9_2026 = datetime(2026, 3, 9, 12, 0).timestamp()
+        self._install(org, "org_config.json", '{"version": 1}', jan_5_2025)
+        org_bundle_signing.adopt_legacy_files(org)
+        self._install(org, "org_bundle.json", '{"version": 2}', mar_9_2026)
+
+        assert controller.snapshot()["general"]["org_installed_date"] == "Mar 9, 2026"

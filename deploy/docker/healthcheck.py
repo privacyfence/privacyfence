@@ -13,13 +13,17 @@ import sys
 import urllib.request
 from pathlib import Path
 
-BUNDLE = Path.home() / ".privacyfence" / "org" / "org_config.json"
+ORG_DIR = Path.home() / ".privacyfence" / "org"
+BUNDLE = ORG_DIR / "org_bundle.json"
+# 6.x name; the daemon copies it to org_bundle.json on its first 7.x start.
+LEGACY_BUNDLE = ORG_DIR / "org_config.json"
 PROBE_PATH = "/.well-known/oauth-authorization-server"
 
 
 def main() -> int:
     try:
-        server = json.loads(BUNDLE.read_text(encoding="utf-8")).get("server") or {}
+        path = BUNDLE if BUNDLE.exists() else LEGACY_BUNDLE
+        server = json.loads(path.read_text(encoding="utf-8")).get("server") or {}
     except (OSError, ValueError):
         return 1
     port = int(server.get("port", 8765))

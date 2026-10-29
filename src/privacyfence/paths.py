@@ -203,9 +203,22 @@ def control_socket_dir() -> Path:
     return handoff_dir() if privilege_separation.is_enabled() else authority_dir()
 
 
+# The signed organization bundle. 7.x reads and writes ``org_bundle.json``;
+# ``org_config.json`` is the 6.x name, copied once by
+# ``org_bundle_signing.adopt_legacy_files`` and otherwise left untouched so a
+# downgrade to 6.x keeps working.
+ORG_BUNDLE_FILENAME = "org_bundle.json"
+LEGACY_ORG_CONFIG_FILENAME = "org_config.json"
+
+
 def org_dir() -> Path:
     """Directory holding the installed organization config bundle."""
     return secure_mkdir(data_dir() / "org")
+
+
+def org_bundle_path() -> Path:
+    """The installed organization bundle (``org/org_bundle.json``)."""
+    return org_dir() / ORG_BUNDLE_FILENAME
 
 
 def user_dir(principal: "Principal | None" = None) -> Path:

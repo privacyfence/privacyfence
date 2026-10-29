@@ -68,7 +68,7 @@ def test_telegram_is_never_in_the_default_step_list():
 
 
 def test_install_org_config_copies_bundle_into_place(tmp_path, monkeypatch):
-    target = tmp_path / "org" / "org_config.json"
+    target = tmp_path / "org" / "org_bundle.json"
     monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
     source = tmp_path / "org_config.qa.json"
     source.write_text('{"google": {}}', encoding="utf-8")
@@ -76,11 +76,11 @@ def test_install_org_config_copies_bundle_into_place(tmp_path, monkeypatch):
     qa_auth.install_org_config(source)
 
     assert target.read_text(encoding="utf-8") == '{"google": {}}'
-    assert not list(target.parent.glob("org_config.json.bak.*"))
+    assert not list(target.parent.glob("org_bundle.json.bak.*"))
 
 
 def test_install_org_config_backs_up_existing_file(tmp_path, monkeypatch):
-    target = tmp_path / "org" / "org_config.json"
+    target = tmp_path / "org" / "org_bundle.json"
     target.parent.mkdir(parents=True)
     target.write_text('{"google": {"old": true}}', encoding="utf-8")
     monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
@@ -90,13 +90,13 @@ def test_install_org_config_backs_up_existing_file(tmp_path, monkeypatch):
     qa_auth.install_org_config(source)
 
     assert target.read_text(encoding="utf-8") == '{"google": {"new": true}}'
-    backups = list(target.parent.glob("org_config.json.bak.*"))
+    backups = list(target.parent.glob("org_bundle.json.bak.*"))
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == '{"google": {"old": true}}'
 
 
 def test_install_org_config_source_is_already_the_target_is_a_noop(tmp_path, monkeypatch):
-    target = tmp_path / "org" / "org_config.json"
+    target = tmp_path / "org" / "org_bundle.json"
     target.parent.mkdir(parents=True)
     target.write_text('{"google": {}}', encoding="utf-8")
     monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
@@ -104,24 +104,24 @@ def test_install_org_config_source_is_already_the_target_is_a_noop(tmp_path, mon
     qa_auth.install_org_config(target)
 
     assert target.read_text(encoding="utf-8") == '{"google": {}}'
-    assert not list(target.parent.glob("org_config.json.bak.*"))
+    assert not list(target.parent.glob("org_bundle.json.bak.*"))
 
 
 def test_install_org_config_relative_source_resolving_to_target_is_a_noop(tmp_path, monkeypatch):
-    target = tmp_path / "org" / "org_config.json"
+    target = tmp_path / "org" / "org_bundle.json"
     target.parent.mkdir(parents=True)
     target.write_text('{"google": {}}', encoding="utf-8")
     monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
     monkeypatch.chdir(tmp_path)
 
-    qa_auth.install_org_config(Path("org/org_config.json"))
+    qa_auth.install_org_config(Path("org/org_bundle.json"))
 
     assert target.read_text(encoding="utf-8") == '{"google": {}}'
-    assert not list(target.parent.glob("org_config.json.bak.*"))
+    assert not list(target.parent.glob("org_bundle.json.bak.*"))
 
 
 def test_install_org_config_missing_source_raises(tmp_path, monkeypatch):
-    target = tmp_path / "org" / "org_config.json"
+    target = tmp_path / "org" / "org_bundle.json"
     monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
 
     with pytest.raises(FileNotFoundError):

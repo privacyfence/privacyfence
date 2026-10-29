@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Organization servers read `org/org_bundle.json`.** On the first start after the upgrade, PrivacyFence copies `org/org_config.json` and its two pin files (`org_config_signing_pubkey.txt`, `org_config_serial.txt`) to `org_bundle.json`, `org_bundle_signing_pubkey.txt` and `org_bundle_serial.txt`, and records the copy in `org/org_bundle_adopted.json`. The 6.x files are never changed, so going back to 6.x keeps working. If `org_config.json` is edited after the upgrade, the start logs a warning that it is ignored. The Docker image's health check and entrypoint accept either file name, and `scripts/build_org_bundle.py` now writes `org_bundle.json` by default.
+
 ## [6.12.0] — 2026-10-28
 
 ### Added

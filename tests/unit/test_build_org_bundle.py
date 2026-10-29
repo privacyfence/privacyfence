@@ -121,7 +121,7 @@ class TestSignBundle:
 
 class TestMainSigningIntegration:
     def test_mode_org_without_sign_key_is_rejected(self, tmp_path):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         with pytest.raises(SystemExit):
             build_org_bundle.main([
                 "-o", str(out_path), "--mode", "org",
@@ -134,7 +134,7 @@ class TestMainSigningIntegration:
     def test_mode_org_with_sign_key_writes_a_signed_bundle(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         rc = build_org_bundle.main([
             "-o", str(out_path), "--mode", "org",
@@ -158,7 +158,7 @@ class TestMainSigningIntegration:
         stripped and only re-added by an explicit (re-)sign this run."""
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--org-name", "Acme",
             "--slack-client-id", "id1", "--slack-client-secret", "secret1",
@@ -181,7 +181,7 @@ class TestMainSigningIntegration:
         monkeypatch.setattr(build_org_bundle.time, "time", lambda: 1_700_000_000.9)
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         build_org_bundle.main([
             "-o", str(out_path), "--org-name", "Acme",
@@ -194,7 +194,7 @@ class TestMainSigningIntegration:
     def test_serial_flag_sets_the_serial(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         build_org_bundle.main([
             "-o", str(out_path), "--org-name", "Acme",
@@ -205,7 +205,7 @@ class TestMainSigningIntegration:
         assert json.loads(out_path.read_text())["serial"] == 42
 
     def test_serial_without_sign_key_is_an_error(self, tmp_path, capsys):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         with pytest.raises(SystemExit):
             build_org_bundle.main([
@@ -228,7 +228,7 @@ class TestMainSigningIntegration:
     def test_merge_does_not_carry_the_old_serial(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--org-name", "Acme",
             "--slack-client-id", "id1", "--slack-client-secret", "secret1",
@@ -251,7 +251,7 @@ class TestMainSigningIntegration:
     def test_a_script_signed_bundle_with_a_serial_verifies_in_the_daemon_copy(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--org-name", "Acme",
             "--slack-client-id", "id1", "--slack-client-secret", "secret1",
@@ -267,7 +267,7 @@ class TestMainSigningIntegration:
     def test_authz_flags_write_the_authz_section(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         rc = build_org_bundle.main([
             "-o", str(out_path), "--mode", "org",
@@ -290,7 +290,7 @@ class TestMainSigningIntegration:
     def test_authz_required_group_without_groups_claim_is_rejected(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         with pytest.raises(SystemExit, match="authz-groups-claim"):
             build_org_bundle.main([
@@ -303,7 +303,7 @@ class TestMainSigningIntegration:
             ])
 
     def test_authz_flags_require_mode_org(self, tmp_path):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         with pytest.raises(SystemExit, match="--mode org"):
             build_org_bundle.main([
                 "-o", str(out_path), "--authz-allowed-domain", "acme.com",
@@ -312,7 +312,7 @@ class TestMainSigningIntegration:
     def test_mode_local_clears_a_previously_written_authz_section(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--mode", "org",
             "--server-issuer-url", "https://pf.example.com",
@@ -329,7 +329,7 @@ class TestMainSigningIntegration:
     def test_step_up_require_passkey_flag_writes_the_section(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         rc = build_org_bundle.main([
             "-o", str(out_path), "--mode", "org",
@@ -348,7 +348,7 @@ class TestMainSigningIntegration:
     def test_step_up_no_require_passkey_turns_it_back_off_on_merge(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--mode", "org",
             "--server-issuer-url", "https://pf.example.com",
@@ -369,7 +369,7 @@ class TestMainSigningIntegration:
     def test_step_up_scope_writes_the_widest_value_through(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
 
         rc = build_org_bundle.main([
             "-o", str(out_path), "--mode", "org",
@@ -397,7 +397,7 @@ class TestMainSigningIntegration:
         assert tuple(action.choices) == STEP_UP_SCOPES
 
     def test_step_up_require_passkey_requires_mode_org(self, tmp_path):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         with pytest.raises(SystemExit, match="--mode org"):
             build_org_bundle.main([
                 "-o", str(out_path), "--step-up-require-passkey",
@@ -422,7 +422,7 @@ class TestMainSigningIntegration:
 
 
 class TestAuditForwardingFlags:
-    """org_config.json's "audit_forwarding" section, built from
+    """org_bundle.json's "audit_forwarding" section, built from
     --audit-forwarding-* flags."""
 
     def _sign_key(self, tmp_path):
@@ -432,7 +432,7 @@ class TestAuditForwardingFlags:
 
     def _org_mode_args(self, tmp_path, *extra):
         return [
-            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
             "--server-issuer-url", "https://pf.example.com",
             "--idp-issuer", "https://idp.example.com",
             "--idp-client-id", "cid", "--idp-client-secret", "csecret",
@@ -443,7 +443,7 @@ class TestAuditForwardingFlags:
     def test_requires_org_mode(self, tmp_path):
         with pytest.raises(SystemExit, match="require --mode org"):
             build_org_bundle.main([
-                "-o", str(tmp_path / "org_config.json"),
+                "-o", str(tmp_path / "org_bundle.json"),
                 "--enable-audit-forwarding", "--audit-forwarding-syslog-host", "siem.example.com",
             ])
 
@@ -456,7 +456,7 @@ class TestAuditForwardingFlags:
             "--audit-forwarding-syslog-protocol", "udp",
         ))
         assert rc == 0
-        bundle = json.loads((tmp_path / "org_config.json").read_text())
+        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
         assert bundle["audit_forwarding"] == {
             "enabled": True, "kind": "syslog",
             "syslog": {"host": "siem.example.com", "port": 601, "protocol": "udp"},
@@ -474,7 +474,7 @@ class TestAuditForwardingFlags:
             "--audit-forwarding-http-bearer-token-env", "SIEM_TOKEN",
         ))
         assert rc == 0
-        bundle = json.loads((tmp_path / "org_config.json").read_text())
+        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
         assert bundle["audit_forwarding"] == {
             "enabled": True, "kind": "http",
             "http": {"url": "https://siem.example.com/ingest", "bearer_token_env": "SIEM_TOKEN"},
@@ -495,11 +495,11 @@ class TestAuditForwardingFlags:
         key_path = tmp_path / "key.pem"  # written by _org_mode_args' own _sign_key() above
 
         rc = build_org_bundle.main([
-            "-o", str(tmp_path / "org_config.json"), "--merge", "--disable-audit-forwarding",
+            "-o", str(tmp_path / "org_bundle.json"), "--merge", "--disable-audit-forwarding",
             "--sign-key", str(key_path),
         ])
         assert rc == 0
-        bundle = json.loads((tmp_path / "org_config.json").read_text())
+        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
         assert bundle["audit_forwarding"]["enabled"] is False
         # The rest of the section (host, etc.) survives -- only "enabled" flips.
         assert bundle["audit_forwarding"]["syslog"]["host"] == "siem.example.com"
@@ -512,10 +512,10 @@ class TestAuditForwardingFlags:
         build_org_bundle.main(args)
 
         rc = build_org_bundle.main([
-            "-o", str(tmp_path / "org_config.json"), "--merge", "--mode", "local",
+            "-o", str(tmp_path / "org_bundle.json"), "--merge", "--mode", "local",
         ])
         assert rc == 0
-        bundle = json.loads((tmp_path / "org_config.json").read_text())
+        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
         assert "audit_forwarding" not in bundle
 
     def test_summary_line_reports_enabled_state(self, tmp_path, capsys):
@@ -532,7 +532,7 @@ class TestServerBindHost:
     def _build(self, tmp_path, *extra):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         rc = build_org_bundle.main([
             "-o", str(out_path), "--mode", "org",
             "--server-issuer-url", "https://pf.example.com",
@@ -574,7 +574,7 @@ class TestAdminGroupFlags:
     def _setup(self, tmp_path):
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         assert build_org_bundle.main(self._org_args(out_path, key_path, "alice@example.com")) == 0
         return out_path, key_path
 
@@ -607,7 +607,7 @@ class TestAgentLinksFlag:
         key_path = tmp_path / "key.pem"
         if not key_path.exists():
             build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         argv = ["-o", str(out_path), "--sign-key", str(key_path)]
         if merge:
             argv.append("--merge")
@@ -650,7 +650,7 @@ class TestAgentLinksFlag:
     def test_requires_org_mode(self, tmp_path):
         with pytest.raises(SystemExit, match="--agent-links"):
             build_org_bundle.main([
-                "-o", str(tmp_path / "org_config.json"),
+                "-o", str(tmp_path / "org_bundle.json"),
                 "--slack-client-id", "id", "--slack-client-secret", "secret", "--no-agent-links",
             ])
 
@@ -668,7 +668,7 @@ class TestInstructionsPrintedAfterWriting:
         key_path = tmp_path / "key.pem"
         build_org_bundle._generate_signing_key(str(key_path))
         return [
-            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
             "--server-issuer-url", "https://pf.example.com/",
             "--idp-issuer", "https://idp.example.com",
             "--idp-client-id", "cid", "--idp-client-secret", "csecret",
@@ -679,18 +679,18 @@ class TestInstructionsPrintedAfterWriting:
         build_org_bundle.main(self._org_args(tmp_path))
 
         out = capsys.readouterr().out
-        assert "<data>/org/org_config.json" in out
+        assert "<data>/org/org_bundle.json" in out
         assert "restart" in out
         assert "Install/Update" not in out
 
     def test_local_bundle_says_to_install_it_from_settings(self, tmp_path, capsys):
         build_org_bundle.main([
-            "-o", str(tmp_path / "org_config.json"), "--slack-client-id", "id", "--slack-client-secret", "s",
+            "-o", str(tmp_path / "org_bundle.json"), "--slack-client-id", "id", "--slack-client-secret", "s",
         ])
 
         out = capsys.readouterr().out
         assert "Install/Update Organization Config" in out
-        assert "<data>/org/org_config.json" not in out
+        assert "<data>/org/org_bundle.json" not in out
 
     def test_org_bundle_lists_all_three_idp_redirect_uris(self, tmp_path, capsys):
         build_org_bundle.main(self._org_args(tmp_path))
@@ -717,7 +717,7 @@ class TestInstructionsPrintedAfterWriting:
         assert "/oauth/callback/slack" not in out
 
     def test_atlassian_assets_flag_sets_the_bundle_flag(self, tmp_path):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
             "--atlassian-assets",
@@ -725,7 +725,7 @@ class TestInstructionsPrintedAfterWriting:
         assert json.loads(out_path.read_text())["atlassian"]["assets"] is True
 
     def test_atlassian_without_the_assets_flag_leaves_it_out(self, tmp_path):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
         ])
@@ -733,11 +733,11 @@ class TestInstructionsPrintedAfterWriting:
 
     def test_atlassian_assets_flag_without_credentials_exits(self, tmp_path):
         with pytest.raises(SystemExit) as excinfo:
-            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--atlassian-assets"])
+            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), "--atlassian-assets"])
         assert str(excinfo.value) == "--atlassian-assets needs --atlassian-client-id and --atlassian-client-secret."
 
     def test_atlassian_assets_workspace_id_is_written(self, tmp_path):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         build_org_bundle.main([
             "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
             "--atlassian-assets", "--atlassian-assets-workspace-id", " 6d8c7ed1-92a5-4693-b107-226f466d78a3 ",
@@ -748,7 +748,7 @@ class TestInstructionsPrintedAfterWriting:
     def test_atlassian_assets_workspace_id_must_be_a_uuid(self, tmp_path):
         with pytest.raises(SystemExit) as excinfo:
             build_org_bundle.main([
-                "-o", str(tmp_path / "org_config.json"), "--atlassian-client-id", "a",
+                "-o", str(tmp_path / "org_bundle.json"), "--atlassian-client-id", "a",
                 "--atlassian-client-secret", "as", "--atlassian-assets-workspace-id", "../x",
             ])
         assert str(excinfo.value) == "--atlassian-assets-workspace-id is not a workspace id (expected a UUID)."
@@ -756,7 +756,7 @@ class TestInstructionsPrintedAfterWriting:
     def test_atlassian_assets_workspace_id_without_credentials_exits(self, tmp_path):
         with pytest.raises(SystemExit) as excinfo:
             build_org_bundle.main([
-                "-o", str(tmp_path / "org_config.json"),
+                "-o", str(tmp_path / "org_bundle.json"),
                 "--atlassian-assets-workspace-id", "6d8c7ed1-92a5-4693-b107-226f466d78a3",
             ])
         assert str(excinfo.value) == (
@@ -768,7 +768,7 @@ class TestInstructionsPrintedAfterWriting:
         capsys.readouterr()
 
         build_org_bundle.main([
-            "-o", str(tmp_path / "org_config.json"), "--merge",
+            "-o", str(tmp_path / "org_bundle.json"), "--merge",
             "--slack-client-id", "id", "--slack-client-secret", "s",
             "--sign-key", str(tmp_path / "key.pem"),
         ])
@@ -788,14 +788,14 @@ class TestInstructionsPrintedAfterWriting:
 
 
 class TestWebPushFlag:
-    """org_config.json's "web_push" section: the org-wide off switch (ADR 0081)."""
+    """org_bundle.json's "web_push" section: the org-wide off switch (ADR 0081)."""
 
     def _args(self, tmp_path, *extra):
         key_path = tmp_path / "key.pem"
         if not key_path.exists():
             build_org_bundle._generate_signing_key(str(key_path))
         return [
-            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
             "--server-issuer-url", "https://pf.example.com",
             "--idp-issuer", "https://idp.example.com",
             "--idp-client-id", "cid", "--idp-client-secret", "csecret",
@@ -803,7 +803,7 @@ class TestWebPushFlag:
         ]
 
     def _bundle(self, tmp_path) -> dict:
-        return json.loads((tmp_path / "org_config.json").read_text())
+        return json.loads((tmp_path / "org_bundle.json").read_text())
 
     def test_absent_by_default_which_means_on(self, tmp_path):
         from privacyfence.org_mode import WebPushConfig
@@ -824,7 +824,7 @@ class TestWebPushFlag:
 
     def test_requires_org_mode(self, tmp_path):
         with pytest.raises(SystemExit, match="require --mode org"):
-            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--no-web-push"])
+            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), "--no-web-push"])
 
 
 class TestRemovedToolAnnotations:
@@ -832,7 +832,7 @@ class TestRemovedToolAnnotations:
     5.0.0a1 bundle may still carry -- the daemon refuses to start with it."""
 
     def _out(self, tmp_path):
-        return tmp_path / "org_config.json"
+        return tmp_path / "org_bundle.json"
 
     def test_the_flag_is_no_longer_accepted(self, tmp_path):
         with pytest.raises(SystemExit):
@@ -874,14 +874,14 @@ class TestRemovedToolAnnotations:
 
 class TestGristFlags:
     def _build(self, tmp_path, *args):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         rc = build_org_bundle.main(["-o", str(out_path), *args])
         assert rc == 0
         return json.loads(out_path.read_text())
 
     def _exit_message(self, tmp_path, *args):
         with pytest.raises(SystemExit) as exc:
-            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
+            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), *args])
         return str(exc.value)
 
     def test_enable_flags_write_the_bare_sections(self, tmp_path):
@@ -956,13 +956,13 @@ class TestGristFlags:
 
 class TestMiroFlags:
     def _build(self, tmp_path, *args):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         assert build_org_bundle.main(["-o", str(out_path), *args]) == 0
         return json.loads(out_path.read_text())
 
     def _exit_message(self, tmp_path, *args):
         with pytest.raises(SystemExit) as exc:
-            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
+            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), *args])
         return str(exc.value)
 
     def test_the_pair_is_written(self, tmp_path):
@@ -990,13 +990,13 @@ class TestMiroFlags:
 
 class TestPeekFlags:
     def _build(self, tmp_path, *args):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         assert build_org_bundle.main(["-o", str(out_path), *args]) == 0
         return json.loads(out_path.read_text())
 
     def _exit_message(self, tmp_path, *args):
         with pytest.raises(SystemExit) as exc:
-            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
+            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), *args])
         return str(exc.value)
 
     def test_base_url_is_written_with_the_trailing_slash_stripped(self, tmp_path):
@@ -1029,7 +1029,7 @@ class TestPeekFlags:
         if not key_path.exists():
             build_org_bundle._generate_signing_key(str(key_path))
         return [
-            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
             "--server-issuer-url", "https://pf.example.com",
             "--idp-issuer", "https://idp.example.com",
             "--idp-client-id", "cid", "--idp-client-secret", "csecret",
@@ -1038,7 +1038,7 @@ class TestPeekFlags:
 
     def _org_bundle(self, tmp_path, *extra):
         assert build_org_bundle.main(self._org_args(tmp_path, *extra)) == 0
-        return json.loads((tmp_path / "org_config.json").read_text())
+        return json.loads((tmp_path / "org_bundle.json").read_text())
 
     def test_auto_provision_writes_the_section_with_the_default_env(self, tmp_path):
         bundle = self._org_bundle(
@@ -1097,13 +1097,13 @@ class TestPeekFlags:
 
     def test_mode_local_strips_auto_provision(self, tmp_path):
         self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         assert build_org_bundle.main(["-o", str(out_path), "--merge", "--mode", "local"]) == 0
         assert json.loads(out_path.read_text())["peek"] == {"base_url": "https://peek.example.com"}
 
     def test_merge_with_a_new_base_url_keeps_auto_provision(self, tmp_path):
         self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         assert build_org_bundle.main(
             ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"),
              "--peek-base-url", "https://peek2.example.com"]
@@ -1114,14 +1114,14 @@ class TestPeekFlags:
 
     def test_merge_can_add_auto_provision_to_an_existing_bundle(self, tmp_path):
         self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com")
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         assert build_org_bundle.main(
             ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"), "--peek-auto-provision"]
         ) == 0
         assert json.loads(out_path.read_text())["peek"]["auto_provision"]["enabled"] is True
 
     def test_enable_peek_keeps_the_section(self, tmp_path):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         assert build_org_bundle.main(["-o", str(out_path), "--enable-peek"]) == 0
         assert json.loads(out_path.read_text())["peek"] == {"enabled": True}
 
@@ -1132,7 +1132,7 @@ class TestScopedTokenFlags:
 
     @staticmethod
     def _build(tmp_path, *flags):
-        out_path = tmp_path / "org_config.json"
+        out_path = tmp_path / "org_bundle.json"
         rc = build_org_bundle.main(["-o", str(out_path), *flags])
         assert rc == 0
         return json.loads(out_path.read_text())
@@ -1176,15 +1176,15 @@ class TestScopedTokenFlags:
 
     @pytest.mark.parametrize("value,ok", [("1", True), ("365", True), ("0", False), ("366", False), ("many", False)])
     def test_scoped_token_max_days_range(self, tmp_path, value, ok):
-        args = ["-o", str(tmp_path / "org_config.json"), "--enable-scoped-tokens", "--scoped-token-max-days", value]
+        args = ["-o", str(tmp_path / "org_bundle.json"), "--enable-scoped-tokens", "--scoped-token-max-days", value]
         if ok:
             assert build_org_bundle.main(args) == 0
-            assert json.loads((tmp_path / "org_config.json").read_text())["scoped_tokens"]["max_days"] == int(value)
+            assert json.loads((tmp_path / "org_bundle.json").read_text())["scoped_tokens"]["max_days"] == int(value)
         else:
             with pytest.raises(SystemExit) as excinfo:
                 build_org_bundle.main(args)
             assert excinfo.value.code == 2
-            assert not (tmp_path / "org_config.json").exists()
+            assert not (tmp_path / "org_bundle.json").exists()
 
 
 class TestGristAutoProvisionFlags:
@@ -1194,7 +1194,7 @@ class TestGristAutoProvisionFlags:
         key_path = tmp_path / "key.pem"
         if not key_path.exists():
             build_org_bundle._generate_signing_key(str(key_path))
-        base = ["-o", str(tmp_path / "org_config.json")]
+        base = ["-o", str(tmp_path / "org_bundle.json")]
         if mode:
             base += [
                 "--mode", "org", "--server-issuer-url", "https://pf.example.com",
@@ -1204,7 +1204,7 @@ class TestGristAutoProvisionFlags:
         return [*base, *extra]
 
     def _bundle(self, tmp_path) -> dict:
-        return json.loads((tmp_path / "org_config.json").read_text())
+        return json.loads((tmp_path / "org_bundle.json").read_text())
 
     def _on(self, *extra):
         return [
@@ -1281,13 +1281,13 @@ class TestGristAutoProvisionFlags:
 
     def test_mode_local_strips_it(self, tmp_path):
         build_org_bundle.main(self._args(tmp_path, *self._on()))
-        assert build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--merge", "--mode", "local"]) == 0
+        assert build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), "--merge", "--mode", "local"]) == 0
         assert self._bundle(tmp_path)["grist"] == {"server_url": "https://grist.example.com"}
 
     def test_merge_new_server_url_keeps_auto_provision(self, tmp_path):
         build_org_bundle.main(self._args(tmp_path, *self._on()))
         assert build_org_bundle.main(
-            ["-o", str(tmp_path / "org_config.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
+            ["-o", str(tmp_path / "org_bundle.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
              "--grist-server-url", "https://grist2.example.com"]
         ) == 0
         grist = self._bundle(tmp_path)["grist"]
@@ -1297,7 +1297,7 @@ class TestGristAutoProvisionFlags:
     def test_merge_reuses_existing_provisioner_url(self, tmp_path):
         build_org_bundle.main(self._args(tmp_path, *self._on("--grist-provisioning-key-env", "MY_KEY")))
         assert build_org_bundle.main(
-            ["-o", str(tmp_path / "org_config.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
+            ["-o", str(tmp_path / "org_bundle.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
              "--grist-auto-provision"]
         ) == 0
         auto = self._bundle(tmp_path)["grist"]["auto_provision"]

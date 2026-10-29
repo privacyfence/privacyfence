@@ -1,8 +1,8 @@
 """Ed25519 signing/verification for organization config bundles
-(org_config.json), plus the plain-hash helper daemon_main.py's startup
+(org_bundle.json), plus the plain-hash helper daemon_main.py's startup
 logging uses. ADR 0016 records why integrity has these two layers.
 
-Threat model this closes: org_config.json carries the org's IdP client
+Threat model this closes: org_bundle.json carries the org's IdP client
 secret, the Google/Slack/Salesforce/Atlassian app registrations, and (in
 org mode) this daemon's own OAuth 2.1 authorization-server trust
 configuration (``idp.issuer``, ``server.issuer_url``). Before this,
@@ -84,7 +84,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from .secure_files import atomic_write_text
+from datetime import datetime, timezone
+
+from .org_mode import ConfigurationError
+from .paths import LEGACY_ORG_CONFIG_FILENAME, ORG_BUNDLE_FILENAME
+from .secure_files import atomic_write_bytes, atomic_write_json, atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +99,18 @@ SIGNATURE_FIELD = "signature"
 SIGNING_PUBLIC_KEY_FIELD = "signing_public_key"
 SERIAL_FIELD = "serial"
 
-# Lives alongside org_config.json itself (in the caller's own org_dir),
-# not inside org_config.json -- the whole point is that once a key is
+# Lives alongside org_bundle.json itself (in the caller's own org_dir),
+# not inside org_bundle.json -- the whole point is that once a key is
 # pinned, this file's trust doesn't come from anything the bundle itself
 # claims.
-PINNED_PUBKEY_FILENAME = "org_config_signing_pubkey.txt"
+PINNED_PUBKEY_FILENAME = "org_bundle_signing_pubkey.txt"
 # The highest bundle serial this install has accepted, beside the key pin.
-PINNED_SERIAL_FILENAME = "org_config_serial.txt"
+PINNED_SERIAL_FILENAME = "org_bundle_serial.txt"
+# The 6.x names. 7.x copies them once (adopt_legacy_files) and never writes,
+# renames or deletes them, so a downgrade finds its own pins unchanged.
+LEGACY_PINNED_PUBKEY_FILENAME = "org_config_signing_pubkey.txt"
+LEGACY_PINNED_SERIAL_FILENAME = "org_config_serial.txt"
+ADOPTED_RECORD_FILENAME = "org_bundle_adopted.json"
 
 
 def sha256_hex(raw: bytes) -> str:
@@ -140,6 +149,86 @@ def _verify_against(bundle: dict[str, Any], public_key_bytes: bytes) -> bool:
         return True
     except (InvalidSignature, ValueError, TypeError):
         return False
+
+
+def adopted_record_path(org_dir: Path) -> Path:
+    return org_dir / ADOPTED_RECORD_FILENAME
+
+
+def load_adopted_record(org_dir: Path) -> dict[str, Any]:
+    """The ``org_bundle_adopted.json`` record, or ``{}`` when it is absent
+    or unreadable."""
+    try:
+        data = json.loads(adopted_record_path(org_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _copy_unchanged(source: Path, dest: Path) -> bytes:
+    try:
+        raw = source.read_bytes()
+        atomic_write_bytes(dest, raw)
+    except OSError as exc:
+        raise ConfigurationError(f"Could not copy {source} to {dest} for PrivacyFence 7: {exc}") from exc
+    return raw
+
+
+def adopt_legacy_files(org_dir: Path) -> bool:
+    """Copies the 6.x bundle and pin files to their 7.x names (ADR 0016's
+    pins move too, so a newer serial accepted under 7.x never makes a
+    downgraded 6.x refuse its own older ``org_config.json``).
+
+    Returns True when the bundle was copied. The legacy files are never
+    modified or deleted. A failed copy raises ``ConfigurationError``, so the
+    daemon refuses to start rather than run with half a configuration.
+
+    The bundle is copied only while ``org_bundle.json`` does not exist. Each
+    pin is copied, independently of the bundle, when its new name is missing
+    -- but only until ``org_bundle_adopted.json`` records ``pins_adopted``,
+    so that deleting the new-name pin (the documented key rotation) never
+    brings the old key back.
+    """
+    bundle = org_dir / ORG_BUNDLE_FILENAME
+    legacy_bundle = org_dir / LEGACY_ORG_CONFIG_FILENAME
+    record = load_adopted_record(org_dir)
+
+    copied_pin = False
+    if not record.get("pins_adopted"):
+        for legacy_name, new_name in (
+            (LEGACY_PINNED_PUBKEY_FILENAME, PINNED_PUBKEY_FILENAME),
+            (LEGACY_PINNED_SERIAL_FILENAME, PINNED_SERIAL_FILENAME),
+        ):
+            legacy_pin, new_pin = org_dir / legacy_name, org_dir / new_name
+            if legacy_pin.exists() and not new_pin.exists():
+                _copy_unchanged(legacy_pin, new_pin)
+                copied_pin = True
+
+    adopted_bundle = False
+    if not bundle.exists() and legacy_bundle.exists():
+        raw = _copy_unchanged(legacy_bundle, bundle)
+        record.update({
+            "from": LEGACY_ORG_CONFIG_FILENAME,
+            "sha256": sha256_hex(raw),
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        adopted_bundle = True
+        logger.warning(
+            "Copied org/org_config.json to org/org_bundle.json for PrivacyFence 7. The original is "
+            "kept unchanged so that you can go back to 6.x."
+        )
+
+    if (adopted_bundle or copied_pin) and not record.get("pins_adopted"):
+        record.setdefault("from", "")
+        record.setdefault("sha256", "")
+        record.setdefault("at", datetime.now(timezone.utc).isoformat())
+        record["pins_adopted"] = True
+    if adopted_bundle or copied_pin:
+        try:
+            atomic_write_json(adopted_record_path(org_dir), record, indent=2)
+        except OSError as exc:
+            raise ConfigurationError(f"Could not write {adopted_record_path(org_dir)}: {exc}") from exc
+    return adopted_bundle
 
 
 def pinned_public_key_path(org_dir: Path) -> Path:
@@ -275,7 +364,7 @@ def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
 
 
 def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
-    """The one trust decision every org_config.json load or install goes
+    """The one trust decision every org_bundle.json load or install goes
     through. See module docstring for the TOFU model.
 
     Mutates disk state (pins a new key) only in the "first signed bundle
@@ -368,12 +457,18 @@ def sign_bundle(bundle: dict[str, Any], private_key: Ed25519PrivateKey) -> dict[
 
 
 __all__ = [
+    "ADOPTED_RECORD_FILENAME",
+    "LEGACY_PINNED_PUBKEY_FILENAME",
+    "LEGACY_PINNED_SERIAL_FILENAME",
     "PINNED_PUBKEY_FILENAME",
     "PINNED_SERIAL_FILENAME",
     "SIGNATURE_FIELD",
     "SIGNING_PUBLIC_KEY_FIELD",
     "BundleTrust",
+    "adopt_legacy_files",
+    "adopted_record_path",
     "generate_keypair",
+    "load_adopted_record",
     "load_pinned_public_key",
     "load_pinned_serial",
     "pinned_public_key_path",
