@@ -46,6 +46,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **An Admin API for organization servers.** Administrators can change which services the server offers, the Peek and Grist addresses, Jira Assets, unattended sessions, file delivery, web push, sign-in restrictions, step-up, scoped tokens and audit forwarding through `POST /api/admin/<action>`, and read the result from `GET /api/admin/state`. Every sensitive change asks for a passkey even when step-up is off, and a change is recorded in the audit log under the administrator. Changes to which services are offered take effect at once; the rest are saved and listed as waiting for a restart. The Admin page that uses it comes later.
+- **The Admin API on a desktop install, and room-directory and bundle uploads through it.** The owner can make the same changes (services, Peek and Grist addresses, Jira Assets, unattended sessions, clearing rooms) with `POST /api/admin/<action>`, upload a room directory file written by `sync_room_directory.py` to `POST /api/admin/rooms/upload`, and install an organization config bundle at `POST /api/admin/org_config/upload`. Each of these asks for a passkey even when step-up is off, and the desktop state reports a bundle that carries settings the admin configuration now owns.
 
 ### Changed
 

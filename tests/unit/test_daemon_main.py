@@ -1785,6 +1785,27 @@ class TestMaybeStartWebServer:
 
         assert result.mcp_dispatcher._registry is get_web_approval_ui().deferred_registry
 
+    def test_the_admin_api_gets_the_startup_admin_config_and_the_shared_org_config(self, monkeypatch, tmp_path):
+        from privacyfence.web import server as web_server
+        self._no_bind(monkeypatch, tmp_path)
+        seen = {}
+
+        def fake_build_app(web_ui, **kwargs):
+            seen.update(kwargs)
+            return lambda scope, receive, send: None
+
+        monkeypatch.setattr(web_server, "build_app", fake_build_app)
+        org_config = {"slack": {"client_id": "s"}}
+        startup_admin = {"services": {}}
+
+        daemon_main._maybe_start_web_server(
+            {}, self._connector_host(), unattended_sessions_enabled=False,
+            org_config=org_config, startup_admin=startup_admin,
+        )
+
+        assert seen["org_config"] is org_config
+        assert seen["startup_admin"] is startup_admin
+
     def test_approvals_config_overrides_the_registrys_defaults(self, monkeypatch, tmp_path):
         from privacyfence.web_approval_ui import get_web_approval_ui
         self._no_bind(monkeypatch, tmp_path)

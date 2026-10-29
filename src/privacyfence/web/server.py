@@ -1075,6 +1075,8 @@ def build_app(
     agent_overrides: AgentOverrides | None = None,
     mint_mcp_token: Callable[[bool], str] | None = None,
     mcp_url: str | None = None,
+    startup_admin: dict[str, Any] | None = None,
+    org_config: dict[str, Any] | None = None,
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -1215,6 +1217,14 @@ def build_app(
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
             require_human_session=require_human_session, ai_client=ai_client,
             scoped_tokens=build_scoped_token_wiring(mcp_dispatcher) if mcp_dispatcher is not None else None,
+        )))
+        from . import routes_admin
+
+        extra_routes.extend(_owner_only_routes(routes_admin.build_routes(
+            controller=controller, sessions=sessions, step_up=step_up, step_up_origin=step_up_issuer_url,
+            require_human_session=require_human_session,
+            startup_admin=startup_admin if startup_admin is not None else {},
+            org_config=org_config if org_config is not None else {},
         )))
 
     # The /security enrollment surface: mounted whenever step_up.rp_id is
@@ -1493,6 +1503,8 @@ class WebServer:
         trusted_proxies: tuple[str, ...] = (),
         step_up: StepUpConfig | None = None,
         agent_overrides: AgentOverrides | None = None,
+        startup_admin: dict[str, Any] | None = None,
+        org_config: dict[str, Any] | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own -- every local-mode caller leaves them unset.
@@ -1514,6 +1526,11 @@ class WebServer:
         ``agent_overrides`` (local mode only) is ``settings.yaml``'s ``agent_overrides:`` section,
         parsed once by daemon_main.py (``agent_overrides.from_config``) -- a relabel only, never
         an attested source (see that module).
+
+        ``startup_admin`` and ``org_config`` (local mode) are the admin config as loaded at start
+        and the effective organization config dict the connector factories read: the Admin API
+        compares the first to find what waits for a restart, and refreshes the second in place
+        after a live change so every principal sees it.
         """
         self.host = host
         self.port = port
@@ -1673,6 +1690,8 @@ class WebServer:
             agent_overrides=agent_overrides,
             mint_mcp_token=self._mint_mcp_token if self.mcp_verifier is not None else None,
             mcp_url=f"http://{host}:{port}{MCP_PATH}" if self.mcp_verifier is not None else None,
+            startup_admin=startup_admin,
+            org_config=org_config,
         )
         if trusted_proxies:
             # Honored only when this explicit list is non-empty --

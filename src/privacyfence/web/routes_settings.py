@@ -461,12 +461,13 @@ def _snapshot(controller: SettingsController) -> dict[str, Any]:
 # ``window.webkit.messageHandlers.pf.postMessage({action, ...payload})``
 # for a ``fetch()`` POST to /api/settings/<action>, the same technique
 # web/routes_approvals.py's own _bridge_shim already uses for the approval
-# card (see that module's docstring). Four actions are intercepted here
+# card (see that module's docstring). Five actions are intercepted here
 # instead of forwarded, because none of them is "POST an action, get a
 # snapshot back":
 #   - open_repo: a plain link, opened client-side -- no request at all.
 #   - install_org_config: triggers the hidden <input type=file> below,
 #     which itself POSTs a multipart body to /api/settings/org_config/upload.
+#   - upload_rooms: the same, for the room directory, to /api/admin/rooms/upload.
 #   - export_audit_log: a same-origin navigation to the download route.
 #   - quit_app: a client-side confirm() first, then still POSTed
 #     through as an action, but to its own /api/settings/quit_app route
@@ -485,64 +486,72 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
     than replacing the whole document's markup."""
     return (
         "<input type=\"file\" id=\"pf-org-config-input\" accept=\".json,application/json\" style=\"display:none\">"
+        "<input type=\"file\" id=\"pf-rooms-input\" accept=\".json,application/json\" style=\"display:none\">"
         f'<script nonce="{nonce}">(function(){{'
         f"var CSRF = {csrf!r};"
+        # An upload can answer 409 (would pin a new signing key -- ask first) and 428/403
+        # (step-up, same shape pfSettingsPost's own retry chain below already handles for JSON
+        # actions) as well as succeeding or 401/400/403-on-cross-origin. attemptUpload() re-POSTs
+        # the same file as a fresh FormData each round -- multipart has no way to resume a
+        # partially-approved request the way a JSON body's own retry does by copying `body`.
+        "function bindUpload(input, url) {"
+        "  input.addEventListener('change', function(){"
+        "    if (!input.files || !input.files[0]) return;"
+        "    var file = input.files[0];"
+        "    function attemptUpload(confirmPin, assertion) {"
+        "      var fd = new FormData();"
+        "      fd.append('file', file);"
+        "      fd.append('csrf', CSRF);"
+        "      if (confirmPin) { fd.append('confirm_pin', 'true'); }"
+        "      if (assertion) { fd.append('webauthn_assertion', JSON.stringify(assertion)); }"
+        "      return fetch(url, {method:'POST', credentials:'same-origin', body: fd})"
+        "        .then(function(r){"
+        "          if (r.status === 409) {"
+        "            return r.json().then(function(data){"
+        "              if (data.error === 'pin_confirmation_required' && window.confirm(data.detail + ' Continue?')) {"
+        "                return attemptUpload(true, assertion);"
+        "              }"
+        "              return null;"
+        "            });"
+        "          }"
+        "          if (r.status === 428) {"
+        "            return r.json().then(function(data){"
+        "              if (data.webauthn_options && window.PublicKeyCredential) {"
+        "                return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(newAssertion){"
+        "                  return attemptUpload(confirmPin, newAssertion);"
+        "                }).catch(function(err){"
+        "                  window.alert('This change needs your passkey, and the prompt failed: ' + err.message);"
+        "                  return null;"
+        "                });"
+        "              }"
+        "              window.alert('This change needs a passkey, and none is available in this browser.');"
+        "              return null;"
+        "            });"
+        "          }"
+        "          if (r.status === 403) {"
+        "            return r.json().then(function(data){"
+        "              if (data.enroll_url) {"
+        "                window.alert('This change requires a passkey. Set one up at ' + data.enroll_url + '.');"
+        "              }"
+        "              return null;"
+        "            });"
+        "          }"
+        "          return r.json().then(function(state){ return {ok: r.ok, state: state}; });"
+        "        });"
+        "    }"
+        "    attemptUpload(false, null).then(function(done){"
+        "      if (!done) return;"
+        "      if (done.ok && window.__pfRender) { window.__pfRender(done.state); }"
+        "      else if (!done.ok && done.state && typeof done.state.error === 'string' && window.__pfShowError) {"
+        "        window.__pfShowError(done.state.error);"
+        "      }"
+        "    }).finally(function(){ input.value = ''; });"
+        "  });"
+        "}"
         "var fileInput = document.getElementById('pf-org-config-input');"
-        "fileInput.addEventListener('change', function(){"
-        "  if (!fileInput.files || !fileInput.files[0]) return;"
-        "  var file = fileInput.files[0];"
-        # org_config_upload can answer 409 (would pin a new signing key --
-        # ask first) and 428/403 (step-up, same shape pfSettingsPost's own
-        # retry chain below already handles for JSON actions) as well as
-        # succeeding or 401/400/403-on-cross-origin. attemptOrgUpload() re-POSTs the same file as a
-        # fresh FormData each round -- multipart has no way to resume a
-        # partially-approved request the way a JSON body's own retry does
-        # by copying `body`.
-        "  function attemptOrgUpload(confirmPin, assertion) {"
-        "    var fd = new FormData();"
-        "    fd.append('file', file);"
-        "    fd.append('csrf', CSRF);"
-        "    if (confirmPin) { fd.append('confirm_pin', 'true'); }"
-        "    if (assertion) { fd.append('webauthn_assertion', JSON.stringify(assertion)); }"
-        "    return fetch('/api/settings/org_config/upload', {method:'POST', credentials:'same-origin', body: fd})"
-        "      .then(function(r){"
-        "        if (r.status === 409) {"
-        "          return r.json().then(function(data){"
-        "            if (data.error === 'pin_confirmation_required' && window.confirm(data.detail + ' Continue?')) {"
-        "              return attemptOrgUpload(true, assertion);"
-        "            }"
-        "            return null;"
-        "          });"
-        "        }"
-        "        if (r.status === 428) {"
-        "          return r.json().then(function(data){"
-        "            if (data.webauthn_options && window.PublicKeyCredential) {"
-        "              return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(newAssertion){"
-        "                return attemptOrgUpload(confirmPin, newAssertion);"
-        "              }).catch(function(err){"
-        "                window.alert('This change needs your passkey, and the prompt failed: ' + err.message);"
-        "                return null;"
-        "              });"
-        "            }"
-        "            window.alert('This change needs a passkey, and none is available in this browser.');"
-        "            return null;"
-        "          });"
-        "        }"
-        "        if (r.status === 403) {"
-        "          return r.json().then(function(data){"
-        "            if (data.enroll_url) {"
-        "              window.alert('This change requires a passkey. Set one up at ' + data.enroll_url + '.');"
-        "            }"
-        "            return null;"
-        "          });"
-        "        }"
-        "        return r.json();"
-        "      });"
-        "  }"
-        "  attemptOrgUpload(false, null).then(function(state){"
-        "    if (state && window.__pfRender) { window.__pfRender(state); }"
-        "  }).finally(function(){ fileInput.value = ''; });"
-        "});"
+        "var roomsInput = document.getElementById('pf-rooms-input');"
+        "bindUpload(fileInput, '/api/settings/org_config/upload');"
+        "bindUpload(roomsInput, '/api/admin/rooms/upload');"
         "function pfSettingsPost(url, body) {"
         "  return fetch(url, {method:'POST', credentials:'same-origin',"
         "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
@@ -553,6 +562,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  var action = payload.action; var rest = Object.assign({}, payload); delete rest.action;"
         f"  if (action === 'open_repo') {{ window.open({repo_url!r}, '_blank', 'noopener'); return; }}"
         "  if (action === 'install_org_config') { fileInput.click(); return; }"
+        "  if (action === 'upload_rooms') { roomsInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
         "  var url = '/api/settings/' + encodeURIComponent(action);"
         # The two AI client token actions (ADR 0104) have routes of their
@@ -778,6 +788,97 @@ def _apply_step_up_gate(
         fingerprint=_action_fingerprint(action, fingerprint_body), assertion=assertion, challenges=challenges,
         step_up_response=lambda: _settings_step_up_response(
             principal, action, fingerprint_body, step_up=confirmed_step_up, challenges=challenges, always=always,
+        ),
+    )
+
+
+async def handle_org_config_upload(
+    request: Request, *,
+    controller: SettingsController,
+    sessions: LocalSessionStore,
+    step_up: StepUpConfig | None,
+    step_up_origin: str,
+    challenges: StepUpChallengeStore,
+    require_human_session: bool,
+    state_builder: Callable[[], dict[str, Any]],
+    always: bool = False,
+) -> Response:
+    """The bundle upload behind both the Settings card and the Admin page: CSRF, human session,
+    size, the confirmation before a first signing key is pinned (409), then step-up. Only the
+    state it answers with differs, so each caller says what that is.
+
+    Unlike the JSON actions this route has no ``_SENSITIVE_ACTIONS`` entry: it is sensitive
+    whenever step-up is in force, and ``always`` (the Admin page) makes that unconditional, so a
+    passkey is asked for whatever the step-up configuration says."""
+    if not _session_authenticated(request, sessions):
+        return _unauthorized_response(request)
+    form = await request.form()
+    csrf = form.get("csrf")
+    if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not _origin_ok(request):
+        return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+    if require_human_session and not _is_human_session(request, sessions):
+        # Same rationale as settings_action's own check: an organization config bundle can
+        # rewrite the PII policy, every auto-accept rule, and every connector's OAuth client
+        # config in one shot -- at least as much "what gets gated" as any _SENSITIVE_ACTIONS entry.
+        body, status = _human_session_required_json("install an organization config bundle")
+        return JSONResponse(body, status_code=status)
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return JSONResponse({"error": "missing file"}, status_code=400)
+    raw = await upload.read()
+    if len(raw) > MAX_ORG_CONFIG_BYTES:
+        return JSONResponse({"error": "file too large"}, status_code=400)
+    # Pinning a signing key for the first time is a one-way trust decision (every future bundle
+    # is refused until an administrator deletes the pinned key file by hand) --
+    # controller.install_org_config_bytes still performs it unconditionally (daemon_main.
+    # load_org_config's own hand-edited-file path needs that), but this route, the only one
+    # reachable by an unsupervised local process, first asks for it explicitly rather than
+    # letting it happen as a side effect of an upload.
+    if controller.would_pin_new_org_signing_key(raw) and not _is_confirmed(form.get("confirm_pin")):
+        return JSONResponse(
+            {
+                "error": "pin_confirmation_required",
+                "detail": (
+                    "This is the first signed organization config bundle seen by this "
+                    "install. Installing it will trust and permanently pin its signing key "
+                    "for every future upload."
+                ),
+            },
+            status_code=409,
+        )
+    fingerprint_body = {"sha256": hashlib.sha256(raw).hexdigest()}
+    response = _gate_upload(
+        "org_config_upload", fingerprint_body, _parse_form_assertion(form.get("webauthn_assertion")),
+        principal=LOCAL_PRINCIPAL, step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
+        always=always,
+    )
+    if response is not None:
+        return response
+    controller.install_org_config_bytes(raw)
+    return JSONResponse(state_builder())
+
+
+def _gate_upload(
+    subject: str, fingerprint_body: dict[str, Any], assertion: dict[str, Any] | None, *,
+    principal: Principal, step_up: StepUpConfig | None, step_up_origin: str,
+    challenges: StepUpChallengeStore, always: bool,
+) -> JSONResponse | None:
+    """The step-up check of a multipart upload, bound to the file's hash so a ceremony completed
+    for one file cannot authorize another. ``None`` when nothing more is needed."""
+    in_force = step_up is not None and (always or (step_up.enabled and step_up.require_passkey))
+    if not in_force:
+        return None
+    assert step_up is not None  # nosec B101  # in_force already proved this
+    # A fresh, non-Optional-typed name for the lambda to close over -- see _apply_step_up_gate.
+    confirmed_step_up: StepUpConfig = step_up
+    return _verify_or_challenge(
+        principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"), subject_key=subject,
+        fingerprint=_action_fingerprint(subject, fingerprint_body), assertion=assertion, challenges=challenges,
+        step_up_response=lambda: _settings_step_up_response(
+            principal, subject, fingerprint_body, step_up=confirmed_step_up, challenges=challenges,
+            always=always,
         ),
     )
 
@@ -1009,84 +1110,19 @@ def build_routes(
         return JSONResponse({"status": "quitting"}, background=BackgroundTask(controller.quit_app))
 
     def _step_up_in_force() -> bool:
-        # Unlike _needs_step_up(action) above, the two bespoke sensitive
-        # routes (org_config_upload, and mcp_token_rotate -- ADR 0104) have
-        # no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check: both
-        # are listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and both are
-        # unconditionally sensitive whenever step-up is actually in force
-        # -- neither has a non-sensitive shape.
+        # Unlike _needs_step_up(action) above, the bespoke sensitive routes (org_config_upload,
+        # and mcp_token_rotate -- ADR 0104) have no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS
+        # membership to check: both are listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and both are
+        # unconditionally sensitive whenever step-up is actually in force -- neither has a
+        # non-sensitive shape.
         return step_up is not None and step_up.enabled and step_up.require_passkey
 
     async def org_config_upload(request: Request) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        form = await request.form()
-        csrf = form.get("csrf")
-        if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not _origin_ok(request):
-            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        if require_human_session and not _is_human_session(request, sessions):
-            # Same rationale as settings_action's own check above: an
-            # organization config bundle can rewrite the PII policy, every
-            # auto-accept rule, and every connector's OAuth client config
-            # in one shot -- at least as much "what gets gated" as any
-            # single _SENSITIVE_ACTIONS entry.
-            body, status = _human_session_required_json("install an organization config bundle")
-            return JSONResponse(body, status_code=status)
-        upload = form.get("file")
-        if upload is None or not hasattr(upload, "read"):
-            return JSONResponse({"error": "missing file"}, status_code=400)
-        raw = await upload.read()
-        if len(raw) > MAX_ORG_CONFIG_BYTES:
-            return JSONResponse({"error": "file too large"}, status_code=400)
-        # Pinning a signing key for the first time is a one-way trust
-        # decision (every future bundle is refused until an administrator
-        # deletes the pinned key file by hand) -- controller.
-        # install_org_config_bytes still performs it unconditionally
-        # (daemon_main.load_org_config's own hand-edited-file path needs
-        # that), but this route, the only one reachable by an
-        # unsupervised local process, first asks for it explicitly rather
-        # than letting it happen as a side effect of an upload.
-        if controller.would_pin_new_org_signing_key(raw) and not _is_confirmed(form.get("confirm_pin")):
-            return JSONResponse(
-                {
-                    "error": "pin_confirmation_required",
-                    "detail": (
-                        "This is the first signed organization config bundle seen by this "
-                        "install. Installing it will trust and permanently pin its signing key "
-                        "for every future upload."
-                    ),
-                },
-                status_code=409,
-            )
-        if _step_up_in_force():
-            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
-            # See _apply_step_up_gate's own comment on why the lambda below
-            # needs this fresh, non-Optional-typed name rather than closing
-            # over `step_up` directly.
-            confirmed_step_up: StepUpConfig = step_up
-            fingerprint_body = {"sha256": hashlib.sha256(raw).hexdigest()}
-            assertion = _parse_form_assertion(form.get("webauthn_assertion"))
-            # org_config_upload has no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS
-            # membership (module docstring) -- unconditionally sensitive
-            # whenever step-up is active, so this goes straight to
-            # _verify_or_challenge rather than through _apply_step_up_gate,
-            # which gates on that membership.
-            response = _verify_or_challenge(
-                LOCAL_PRINCIPAL, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
-                subject_key="org_config_upload",
-                fingerprint=_action_fingerprint("org_config_upload", fingerprint_body), assertion=assertion,
-                challenges=challenges,
-                step_up_response=lambda: _settings_step_up_response(
-                    LOCAL_PRINCIPAL, "org_config_upload", fingerprint_body,
-                    step_up=confirmed_step_up, challenges=challenges,
-                ),
-            )
-            if response is not None:
-                return response
-        controller.install_org_config_bytes(raw)
-        return JSONResponse(_snapshot(controller))
+        return await handle_org_config_upload(
+            request, controller=controller, sessions=sessions, step_up=step_up, step_up_origin=step_up_origin,
+            challenges=challenges, require_human_session=require_human_session,
+            state_builder=lambda: _snapshot(controller),
+        )
 
     async def mcp_token_copy(request: Request) -> Response:
         # Only mounted when ai_client is given -- see the routes list below.
