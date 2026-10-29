@@ -244,6 +244,17 @@ class TestStatsSection:
         assert {"service": "slack", "label": "Slack", "configured": True, "users": 1} in stats["connectors"]
         assert stats["rules"]["by_connector"] == [{"connector": "drive", "label": "Drive", "rules": 1, "users": 1}]
 
+    def test_stats_read_an_independent_copy_of_the_shared_config(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "carol")
+        shared = {"slack": {"client_id": "scid"}}
+        seen = []
+        monkeypatch.setattr(org_stats, "collect", lambda config: seen.append(config) or org_stats.empty())
+        app, sessions = _app(org_config=shared)
+        client = _client(app)
+        _signed_in(client, sessions, ADMIN)
+        client.get("/settings")
+        assert seen == [shared] and seen[0] is not shared
+
     def test_non_admin_gets_no_counts_and_no_section(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "bob")
         _seed(tmp_path, monkeypatch, "alice", rules=_catalogue_rules("drive.folder", "read", ["folder-a"]))

@@ -716,6 +716,29 @@ class TestSensitiveActionStepUp:
         assert controller.snapshot()["general"]["pii_enabled"] is True
 
 
+class TestStepUpGateSensitiveKeyword:
+    """Callers outside ``_SENSITIVE_ACTIONS`` (the Admin page) say for themselves whether an action
+    is sensitive, and may ask for an assertion whatever the step-up configuration says."""
+
+    ON = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+    OFF = StepUpConfig(enabled=False, rp_id="pf.example.com")
+
+    def test_sensitive_true_gates_an_action_that_is_not_in_the_set(self):
+        assert "set_web_push" not in rs._SENSITIVE_ACTIONS
+        assert rs._needs_step_up("set_web_push", self.ON) is False
+        assert rs._needs_step_up("set_web_push", self.ON, sensitive=True) is True
+
+    def test_sensitive_false_skips_an_action_that_is_in_the_set(self):
+        assert rs._needs_step_up("add_policy_rule", self.ON) is True
+        assert rs._needs_step_up("add_policy_rule", self.ON, sensitive=False) is False
+
+    def test_always_gates_when_step_up_is_off_but_only_for_a_sensitive_action(self):
+        assert rs._needs_step_up("x", self.OFF, sensitive=True) is False
+        assert rs._needs_step_up("x", self.OFF, sensitive=True, always=True) is True
+        assert rs._needs_step_up("x", self.OFF, sensitive=False, always=True) is False
+        assert rs._needs_step_up("add_policy_rule", None, always=True) is False
+
+
 class TestEnableStepUpAction:
     """The dispatcher-level half of SettingsController.enable_step_up --
     ``create_app``'s own ``step_up`` and ``controller._step_up`` (wired via

@@ -74,6 +74,8 @@ OVERALL_FLOOR = 95.9
 # relative, matching coverage.json's "files" keys exactly (pytest run from
 # REPO_ROOT, as CI and pre_release_check.py both do).
 MODULE_FLOORS: dict[str, float] = {
+    # The Admin JSON API: who may change what the organization offers and how it is gated.
+    "src/privacyfence/web/routes_admin.py": 95.0,
     # Shared href-scheme allowlist and its two callers.
     "src/privacyfence/url_safety.py": 100.0,
     "src/privacyfence/email_markdown.py": 99.0,

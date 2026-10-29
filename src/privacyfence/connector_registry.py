@@ -139,6 +139,14 @@ class ConnectorRegistry:
             self._hosts.pop(principal_id, None)
             self._last_used.pop(principal_id, None)
 
+    def evict_all(self) -> None:
+        """Drop every principal's connectors, so the next request rebuilds them from the current
+        organization config -- an administrator changed which services are offered or where
+        they point, which affects everyone at once."""
+        with self._lock:
+            self._hosts.clear()
+            self._last_used.clear()
+
     @property
     def principal_count(self) -> int:
         """The metric that goes alongside the bound: how many
