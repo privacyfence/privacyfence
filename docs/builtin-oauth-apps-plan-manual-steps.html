@@ -301,10 +301,12 @@ PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE=/run/secrets/grist_provisioning_key</pr
 sf project generate --name privacyfence-package
 cd privacyfence-package                             # set "namespace" in sfdx-project.json to the registered one
 
-# the app PrivacyFence_oauth is the only one in the Dev Hub, so the type names alone retrieve it
-sf project retrieve start --target-org pf-devhub \
-  --metadata ExternalClientApplication ExtlClntAppOauthSettings ExtlClntAppOauthConfigurablePolicies
-ls force-app/main/default                           # delete any global OAuth settings folder (e.g. extlClntAppGlobalOauthSets/): it holds the secret
+# retrieve exactly this app: its settings are named &lt;app&gt;_oauth and its policies &lt;app&gt;_oauthPlcy
+sf project retrieve start --target-org pf-devhub --metadata \
+  ExternalClientApplication:PrivacyFence_oauth \
+  ExtlClntAppOauthSettings:PrivacyFence_oauth_oauth \
+  ExtlClntAppOauthConfigurablePolicies:PrivacyFence_oauth_oauthPlcy
+ls -R force-app/main/default                        # exactly those three files; no global OAuth settings (they hold the secret)
 
 sf package create --name PrivacyFence --package-type Managed --path force-app --target-dev-hub pf-devhub
 sf package version create --package PrivacyFence --installation-key-bypass --code-coverage \
