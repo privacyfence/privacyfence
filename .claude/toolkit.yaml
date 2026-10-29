@@ -70,6 +70,8 @@ verify:
         plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md.
     - when: ["cloudflare/downloads/**"]
       do: "In cloudflare/downloads/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
+    - when: ["cloudflare/oauth-relay/**"]
+      do: "In cloudflare/oauth-relay/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
   dod_manual:
     - >-
       Is there a user-visible change? It needs a line under CHANGELOG.md's `## [Unreleased]`, never under a

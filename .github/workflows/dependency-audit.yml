@@ -40,7 +40,9 @@ name: Dependency audit
 #     materially larger blast radius than the shim's. So the whole tree,
 #     dev deps included, is audited with plain `npm audit --audit-level=high`
 #     (no `--omit=dev`) and BLOCKS on high or critical, same threshold as the
-#     shim but a deliberately wider scope.
+#     shim but a deliberately wider scope. The OAuth relay Worker
+#     (cloudflare/oauth-relay/package.json) has the same shape and the same
+#     policy, in its own job.
 on:
   push:
     # releases/** is protected the same as main (see CONTRIBUTING.md) and gets the same push-triggered
@@ -54,6 +56,8 @@ on:
       - "mcpb/shim/package-lock.json"
       - "cloudflare/downloads/package.json"
       - "cloudflare/downloads/package-lock.json"
+      - "cloudflare/oauth-relay/package.json"
+      - "cloudflare/oauth-relay/package-lock.json"
       - ".github/workflows/dependency-audit.yml"
   pull_request:
     paths:
@@ -64,6 +68,8 @@ on:
       - "mcpb/shim/package-lock.json"
       - "cloudflare/downloads/package.json"
       - "cloudflare/downloads/package-lock.json"
+      - "cloudflare/oauth-relay/package.json"
+      - "cloudflare/oauth-relay/package-lock.json"
       - ".github/workflows/dependency-audit.yml"
   schedule:
     # 07:00 UTC every Monday -- independent of any commit, so a newly
@@ -241,3 +247,30 @@ jobs:
         if: always()
         run: npm audit || true
         working-directory: cloudflare/downloads
+
+  npm-audit-oauth-relay:
+    # Same policy as npm-audit-worker, for the OAuth relay Worker: the whole tree, dev deps
+    # included, because its `wrangler` runs in deploy-oauth-relay-worker.yml's `deploy` job holding
+    # CLOUDFLARE_API_TOKEN against a production endpoint.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloudflare/oauth-relay/package-lock.json
+
+      - name: Install relay Worker dependencies
+        run: npm ci
+        working-directory: cloudflare/oauth-relay
+
+      - name: Audit relay Worker dependencies (blocking - high/critical, dev deps included)
+        run: npm audit --audit-level=high
+        working-directory: cloudflare/oauth-relay
+
+      - name: Audit relay Worker dependencies (informational - full report)
+        if: always()
+        run: npm audit || true
+        working-directory: cloudflare/oauth-relay

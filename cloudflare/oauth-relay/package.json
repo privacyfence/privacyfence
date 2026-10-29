@@ -1,0 +1,27 @@
+{
+  "name": "privacyfence-oauth-relay",
+  "version": "0.0.0-dev",
+  "description": "Cloudflare Worker at oauth.privacyfence.eu -- forwards an OAuth redirect for PrivacyFence's built-in apps to the registered PrivacyFence server that started the sign-in. See docs/oauth-relay.md.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "dry-run": "wrangler deploy --dry-run --outdir dist"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.23.0",
+    "@cloudflare/workers-types": "5.20261023.1",
+    "@vitest/coverage-istanbul": "4.1.12",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12",
+    "wrangler": "4.152.0"
+  },
+  "overrides": {
+    "vitest": "4.1.12",
+    "sharp": "0.35.5",
+    "undici": "7.30.1",
+    "zod": "4.6.6"
+  }
+}

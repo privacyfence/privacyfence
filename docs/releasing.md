@@ -68,6 +68,12 @@ nothing to R2, GitHub Releases, or PyPI — see that job's "Determine version an
 step, which resolves `channel="n/a (not a tag push)"` off a tag. A failure here is fixed on `main`
 like any other CI failure, then the pre-flight is re-run, before `release.yml` is dispatched at all.
 
+**Check the OAuth relay before tagging.** Organization servers that use the built-in OAuth apps
+sign in through the relay at `oauth.privacyfence.eu`, which ships on its own track and not with
+a release tag ([`oauth-relay.md`](oauth-relay.md)). Run `curl -fsSI https://oauth.privacyfence.eu/health`
+before dispatching `release.yml`; it must return 200. A relay that is down does not block a
+release, but a release published while it is down cannot be tested end to end.
+
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
 which reports *a* tag on the commit being built rather than specifically the one whose push started
 the run — so a commit carrying two release tags builds as whichever one `describe` prefers (the
