@@ -193,6 +193,51 @@ class TestIdpConfigFromOrgConfig:
         assert config.admin_group_values == ()
 
 
+class TestIdpConfigFromEnvironment:
+    SECRET = "s3cret-sentinel-value"
+
+    @staticmethod
+    def _discovery(monkeypatch):
+        monkeypatch.setattr(
+            oi, "discover_idp",
+            lambda issuer: {"authorization_endpoint": "a", "token_endpoint": "t", "jwks_uri": "j"},
+        )
+
+    def test_builds_config_from_the_environment_alone(self, monkeypatch, caplog):
+        self._discovery(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "cid")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_SECRET", self.SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL", "true")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES", "admins,ops")
+        with caplog.at_level("DEBUG"):
+            config = oi.IdpConfig.from_org_config({"mode": "org"})
+        assert config == oi.IdpConfig(
+            issuer="https://idp.example.com", client_id="cid", client_secret=self.SECRET,
+            authorization_endpoint="a", token_endpoint="t", jwks_uri="j",
+            admin_group_values=("admins", "ops"), trust_unverified_email=True,
+        )
+        assert self.SECRET not in caplog.text
+
+    def test_trust_unverified_email_defaults_to_false_and_reads_a_bundle_section(self, monkeypatch):
+        self._discovery(monkeypatch)
+        base = {"issuer": "https://idp.example.com", "client_id": "cid"}
+        assert oi.IdpConfig.from_org_config({"idp": base}).trust_unverified_email is False
+        assert oi.IdpConfig.from_org_config({"idp": {**base, "trust_unverified_email": True}}).trust_unverified_email
+
+    def test_a_bundle_idp_wins_over_the_environment(self, monkeypatch):
+        self._discovery(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://env.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "env-client")
+        config = oi.IdpConfig.from_org_config({"idp": {"issuer": "https://idp.example.com", "client_id": "cid"}})
+        assert (config.issuer, config.client_id) == ("https://idp.example.com", "cid")
+
+    def test_repr_does_not_contain_the_secret(self):
+        config = _idp(client_secret=self.SECRET)
+        assert self.SECRET not in repr(config)
+        assert self.SECRET not in str(config)
+
+
 class TestGeneratePkcePair:
     def test_challenge_is_derived_from_the_verifier(self):
         verifier, challenge = oi.generate_pkce_pair()

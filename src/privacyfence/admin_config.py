@@ -127,6 +127,10 @@ def _default_config() -> dict[str, Any]:
     return {
         "version": VERSION,
         "imported_from_bundle_sha256": "",
+        # Set by the daemon on the first start that has an identity provider and by nothing else:
+        # it marks the data directory as an organization server's, so removing the IdP settings
+        # never turns it into a single-user install.
+        "org_server": False,
         "services": {name: _default_service(name) for name in SERVICES},
         "rooms": [],
         "rooms_synced_at": "",
@@ -171,7 +175,22 @@ def load() -> dict[str, Any] | None:
     version = raw.get("version")
     if isinstance(version, bool) or version != VERSION:
         raise AdminConfigError(f"{path} has an unsupported version; this PrivacyFence reads version {VERSION}.")
-    return _fill(_default_config(), raw)
+    config = _fill(_default_config(), raw)
+    config["org_server"] = raw.get("org_server") is True
+    return config
+
+
+def mark_org_server() -> dict[str, Any]:
+    """Record that this data directory belongs to an organization server; returns the config.
+
+    Writes only when the flag is not already set. The daemon is the only caller: no Admin-page
+    action can set or clear it."""
+    with _write_lock:
+        config = load() or _default_config()
+        if not config["org_server"]:
+            config["org_server"] = True
+            _write(config)
+        return config
 
 
 def _write(data: dict[str, Any]) -> None:
@@ -763,6 +782,7 @@ def apply_change(
             result = _apply_scoped_tokens(config, params)
         else:
             result = _apply_audit_forwarding(config, params)
+        config["org_server"] = before["org_server"]
         if result[0] and config != before:
             _write(config)
         return result

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import time
@@ -25,6 +26,8 @@ from urllib.parse import urlsplit
 
 from .grist_auth import GristClientError, normalize_server_url
 from .peek_client import PeekClientError, normalize_base_url
+
+logger = logging.getLogger(__name__)
 
 Mode = Literal["local", "org"]
 
@@ -37,6 +40,17 @@ BIND_HOST_ENV = "PRIVACYFENCE_BIND_HOST"
 PORT_ENV = "PRIVACYFENCE_PORT"
 ISSUER_URL_ENV = "PRIVACYFENCE_ISSUER_URL"
 TRUSTED_PROXIES_ENV = "PRIVACYFENCE_TRUSTED_PROXIES"
+
+IDP_ISSUER_ENV = "PRIVACYFENCE_IDP_ISSUER"
+IDP_CLIENT_ID_ENV = "PRIVACYFENCE_IDP_CLIENT_ID"
+IDP_CLIENT_SECRET_ENV = "PRIVACYFENCE_IDP_CLIENT_SECRET"  # nosec B105  # a variable name, not a credential
+IDP_CLIENT_SECRET_FILE_ENV = "PRIVACYFENCE_IDP_CLIENT_SECRET_FILE"  # nosec B105  # a variable name, not a credential
+IDP_ADMIN_GROUP_CLAIM_ENV = "PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM"
+IDP_ADMIN_GROUP_VALUES_ENV = "PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES"
+IDP_STEP_UP_ACR_VALUES_ENV = "PRIVACYFENCE_IDP_STEP_UP_ACR_VALUES"
+IDP_TRUST_UNVERIFIED_EMAIL_ENV = "PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL"
+ADMIN_EMAILS_ENV = "PRIVACYFENCE_ADMIN_EMAILS"
+_IDP_ENV_PREFIX = "PRIVACYFENCE_IDP_"
 
 # Hostnames a single-user install may be served at: it has one administrator who signs in with a
 # setup code, which is only acceptable when nothing but this computer can reach it.
@@ -92,9 +106,94 @@ def resolve_mode(org_config: dict[str, Any]) -> Mode:
     return env_mode or DEFAULT_MODE  # type: ignore[return-value]  # validated against both literals above
 
 
+def _idp_env_names_set() -> bool:
+    """Whether any variable that configures the identity provider is set."""
+    return bool(_env(ADMIN_EMAILS_ENV)) or any(
+        name.startswith(_IDP_ENV_PREFIX) and value.strip() for name, value in os.environ.items()
+    )
+
+
+def _idp_present(org_config: dict[str, Any]) -> bool:
+    """Whether an identity provider is configured, by the bundle or by the environment.
+
+    Reads no secret, writes no log line and does no network discovery, so the mode checks that run
+    before the server is built can call it freely."""
+    return bool(org_config.get("idp")) or bool(_env(IDP_ISSUER_ENV) and _env(IDP_CLIENT_ID_ENV))
+
+
 def is_single_user(org_config: dict[str, Any]) -> bool:
     """Organization mode with no identity provider: one administrator, on this computer only."""
-    return resolve_mode(org_config) == "org" and not org_config.get("idp")
+    return resolve_mode(org_config) == "org" and not _idp_present(org_config)
+
+
+_env_ignored_warned = False
+
+
+def _comma_list(name: str) -> list[str]:
+    return [part.strip() for part in _env(name).split(",") if part.strip()]
+
+
+def _client_secret_from_env() -> str:
+    inline = os.environ.get(IDP_CLIENT_SECRET_ENV, "")
+    path = _env(IDP_CLIENT_SECRET_FILE_ENV)
+    if inline and path:
+        raise ConfigurationError(
+            f"Set {IDP_CLIENT_SECRET_ENV} or {IDP_CLIENT_SECRET_FILE_ENV}, not both."
+        )
+    if path:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return handle.read().rstrip("\r\n")
+        except (OSError, UnicodeDecodeError):
+            # The reason is dropped on purpose: a decode error quotes the bytes it choked on.
+            raise ConfigurationError(f"{IDP_CLIENT_SECRET_FILE_ENV} could not be read.") from None
+    return inline
+
+
+def idp_section(org_config: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``idp`` section the identity-provider settings are read from.
+
+    A non-empty bundle section wins, unchanged. Otherwise a section built from the
+    ``PRIVACYFENCE_IDP_*`` variables and ``PRIVACYFENCE_ADMIN_EMAILS``, when the issuer and the
+    client id are both set; a partial environment is an error rather than single-user mode, so a
+    typo never turns a real server into one. ``None`` when nothing configures an IdP."""
+    global _env_ignored_warned
+    bundle_idp = org_config.get("idp")
+    if bundle_idp:
+        if _idp_env_names_set() and not _env_ignored_warned:
+            _env_ignored_warned = True
+            logger.warning(
+                "PRIVACYFENCE_IDP_* and PRIVACYFENCE_ADMIN_EMAILS are ignored: org_bundle.json has an "
+                "\"idp\" section."
+            )
+        return bundle_idp
+    issuer, client_id = _env(IDP_ISSUER_ENV), _env(IDP_CLIENT_ID_ENV)
+    if not issuer and not client_id:
+        if _idp_env_names_set():
+            raise ConfigurationError(f"Set both {IDP_ISSUER_ENV} and {IDP_CLIENT_ID_ENV}, or neither.")
+        return None
+    if not issuer or not client_id:
+        raise ConfigurationError(f"Set both {IDP_ISSUER_ENV} and {IDP_CLIENT_ID_ENV}, or neither.")
+    section: dict[str, Any] = {"issuer": issuer, "client_id": client_id}
+    secret = _client_secret_from_env()
+    if secret:
+        section["client_secret"] = secret
+    if _env(IDP_ADMIN_GROUP_CLAIM_ENV):
+        section["admin_group_claim"] = _env(IDP_ADMIN_GROUP_CLAIM_ENV)
+    for key, name in (
+        ("admin_group_values", IDP_ADMIN_GROUP_VALUES_ENV),
+        ("step_up_acr_values", IDP_STEP_UP_ACR_VALUES_ENV),
+        ("admin_emails", ADMIN_EMAILS_ENV),
+    ):
+        values = _comma_list(name)
+        if values:
+            section[key] = values
+    trust = _env(IDP_TRUST_UNVERIFIED_EMAIL_ENV)
+    if trust:
+        if trust not in ("true", "false"):
+            raise ConfigurationError(f"{IDP_TRUST_UNVERIFIED_EMAIL_ENV} must be \"true\" or \"false\".")
+        section["trust_unverified_email"] = trust == "true"
+    return section
 
 
 def is_loopback_issuer(issuer_url: str) -> bool:

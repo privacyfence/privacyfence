@@ -1269,7 +1269,11 @@ def _require_single_user_start(server_config: org_mode.ServerConfig, startup_adm
         org_bundle_signing.pinned_public_key_path(org_dir()),
         org_dir() / org_bundle_signing.LEGACY_PINNED_PUBKEY_FILENAME,
     )
-    if any(path.exists() for path in pinned_keys) or admin.get("imported_from_bundle_sha256"):
+    if (
+        any(path.exists() for path in pinned_keys)
+        or admin.get("org_server")
+        or admin.get("imported_from_bundle_sha256")
+    ):
         raise org_mode.ConfigurationError(
             "This data directory belonged to an organization server; restore org_bundle.json, or "
             "use a new data directory for single-user mode."
@@ -1330,11 +1334,24 @@ def _start_org_web_server(
     # Validated here so a broken "peek"."auto_provision" refuses startup; peek_provisioning.start
     # parses it again below.
     org_mode.PeekProvisioningConfig.from_org_config(org_config)
+    if org_mode._idp_present(org_config):
+        # Recorded before discovery, so a server whose IdP is down at this start is still known
+        # as a server at the next one.
+        admin_config.mark_org_server()
+        if startup_admin is not None:
+            startup_admin["org_server"] = True
     idp = IdpConfig.from_org_config(org_config)
     # Validated here so a broken "grist"."auto_provision" refuses startup; the provisioner
     # itself re-reads it in grist_provisioning.start below.
     org_mode.GristProvisioningConfig.from_org_config(org_config)
     if idp is None:
+        if bundle:
+            # A signed organization bundle always meant a real server, and 6.x never wrote an
+            # "idp" section into one; running it as single-user mode would drop the sign-in.
+            raise org_mode.ConfigurationError(
+                "org_bundle.json has no \"idp\" section; set PRIVACYFENCE_IDP_* and run "
+                "privacyfence-app --retire-bundle."
+            )
         # No identity provider: single-user mode, which is only safe where nothing but this
         # computer can reach the listener.
         _require_single_user_start(server_config, startup_admin)

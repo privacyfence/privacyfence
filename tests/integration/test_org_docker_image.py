@@ -14,6 +14,8 @@ Covers:
     directory and its ``org/`` subdirectory.
   - **Strict startup**: an unsigned bundle (the daemon refuses) stops the container instead of
     degrading to local mode. No bundle at all starts single-user mode on localhost.
+  - **No bundle, an IdP from the environment**: the server starts as an organization server, says
+    so, and ``/login`` redirects to the identity provider.
   - **A running container**: the issuer host is served, an unexpected Host header is rejected,
     ``/login`` redirects to the identity provider, and Docker's own health check turns healthy.
   - **Lifecycle**: ``docker stop`` ends the daemon cleanly and promptly (SIGINT, exit 0), and state
@@ -245,6 +247,44 @@ class TestRunningContainer:
                 return
             time.sleep(1)
         pytest.fail(f"container never became healthy, last status {status!r}")
+
+
+class TestRunningContainerFromEnvironment:
+    """The same server with no bundle at all: the identity provider and the address come from the
+    environment."""
+
+    @pytest.fixture(scope="class", autouse=True)
+    @classmethod
+    def _service(cls, request, mock_idp):
+        name = f"pf-docker-test-{uuid.uuid4().hex[:8]}"
+        port = _free_port()
+        _docker("volume", "create", name)
+        request.addfinalizer(lambda: _docker("volume", "rm", "-f", name, check=False))
+        _start(
+            request, name, name,
+            f"PRIVACYFENCE_IDP_ISSUER={mock_idp.base_url}",
+            "PRIVACYFENCE_IDP_CLIENT_ID=privacyfence-docker",
+            f"PRIVACYFENCE_ISSUER_URL=https://{ISSUER_HOST}",
+            f"PRIVACYFENCE_PORT={port}",
+        )
+        _wait_ready(port, name)
+        cls.port = port
+        cls.container = name
+
+    def test_the_entrypoint_says_the_environment_is_used(self):
+        logs = _docker("logs", self.container)
+        output = logs.stdout + logs.stderr
+        assert "No organization bundle: using the IdP and server from the environment." in output
+
+    def test_no_single_user_line_is_logged(self):
+        logs = _docker("logs", self.container)
+        output = logs.stdout + logs.stderr
+        assert "single-user" not in output.lower()
+
+    def test_login_redirects_to_the_identity_provider(self, mock_idp):
+        response = _get(self.port, "/login", allow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"].startswith(mock_idp.base_url)
 
 
 def test_docker_stop_shuts_down_cleanly(request, volume, mock_idp):

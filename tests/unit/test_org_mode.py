@@ -766,3 +766,150 @@ class TestConnectorEnabledByOrg:
     def test_missing_or_empty_section_does_not(self):
         assert org_mode.connector_enabled_by_org({}, "grist") is False
         assert org_mode.connector_enabled_by_org({"grist": {}}, "grist") is False
+
+
+SECRET = "s3cret-sentinel-value"
+
+
+class TestIdpSection:
+    BUNDLE_IDP = {"issuer": "https://bundle.example.com", "client_id": "bundle-client", "client_secret": "b"}
+
+    @staticmethod
+    def _env(monkeypatch, **values):
+        for name, value in values.items():
+            monkeypatch.setenv(f"PRIVACYFENCE_{name}", value)
+
+    def test_idp_section_none_without_a_bundle_or_environment(self):
+        assert org_mode.idp_section({"mode": "org"}) is None
+
+    def test_idp_section_bundle_only(self):
+        assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+
+    def test_idp_section_env_only(self, monkeypatch):
+        self._env(monkeypatch, IDP_ISSUER="https://idp.example.com", IDP_CLIENT_ID="cid")
+        assert org_mode.idp_section({}) == {"issuer": "https://idp.example.com", "client_id": "cid"}
+
+    def test_idp_section_bundle_wins_and_warns_once(self, monkeypatch, caplog):
+        self._env(monkeypatch, IDP_ISSUER="https://env.example.com", IDP_CLIENT_ID="env-client")
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+            assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+        warnings = [r for r in caplog.records if "are ignored" in r.getMessage()]
+        assert len(warnings) == 1
+        assert "PRIVACYFENCE_ADMIN_EMAILS" in warnings[0].getMessage()
+
+    def test_idp_section_admin_emails_alone_triggers_the_ignored_warning(self, monkeypatch, caplog):
+        self._env(monkeypatch, ADMIN_EMAILS="a@example.com")
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+        assert any("are ignored" in r.getMessage() for r in caplog.records)
+
+    def test_idp_section_bundle_without_environment_does_not_warn(self, caplog):
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            org_mode.idp_section({"idp": self.BUNDLE_IDP})
+        assert not caplog.records
+
+    def test_idp_section_secret_from_a_value(self, monkeypatch, caplog):
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET=SECRET)
+        with caplog.at_level("DEBUG"):
+            assert org_mode.idp_section({})["client_secret"] == SECRET
+        assert SECRET not in caplog.text
+
+    def test_idp_section_secret_from_a_file_strips_the_trailing_newline(self, monkeypatch, tmp_path):
+        secret_file = tmp_path / "secret"
+        secret_file.write_text(SECRET + "\n")
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET_FILE=str(secret_file))
+        assert org_mode.idp_section({})["client_secret"] == SECRET
+
+    def test_idp_section_both_secret_forms_is_an_error(self, monkeypatch, tmp_path, caplog):
+        secret_file = tmp_path / "secret"
+        secret_file.write_text("x")
+        self._env(
+            monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET=SECRET,
+            IDP_CLIENT_SECRET_FILE=str(secret_file),
+        )
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.idp_section({})
+        assert str(excinfo.value) == (
+            "Set PRIVACYFENCE_IDP_CLIENT_SECRET or PRIVACYFENCE_IDP_CLIENT_SECRET_FILE, not both."
+        )
+        assert SECRET not in str(excinfo.value) and SECRET not in caplog.text
+
+    def test_idp_section_unreadable_secret_file_names_the_variable_not_the_content(self, monkeypatch, tmp_path):
+        secret_file = tmp_path / "secret"
+        secret_file.write_bytes(SECRET.encode() + b"\xff\xfe")
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET_FILE=str(secret_file))
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.idp_section({})
+        assert "PRIVACYFENCE_IDP_CLIENT_SECRET_FILE" in str(excinfo.value)
+        assert SECRET not in str(excinfo.value)
+        assert excinfo.value.__suppress_context__ is True
+
+    def test_idp_section_missing_secret_file_is_an_error(self, monkeypatch, tmp_path):
+        self._env(
+            monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c",
+            IDP_CLIENT_SECRET_FILE=str(tmp_path / "absent"),
+        )
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_IDP_CLIENT_SECRET_FILE"):
+            org_mode.idp_section({})
+
+    @pytest.mark.parametrize("missing", ["IDP_CLIENT_ID", "IDP_ISSUER"])
+    def test_idp_section_partial_environment_is_an_error(self, monkeypatch, missing):
+        values = {"IDP_ISSUER": "https://i", "IDP_CLIENT_ID": "c", "IDP_CLIENT_SECRET": SECRET}
+        del values[missing]
+        self._env(monkeypatch, **values)
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.idp_section({})
+        assert str(excinfo.value) == "Set both PRIVACYFENCE_IDP_ISSUER and PRIVACYFENCE_IDP_CLIENT_ID, or neither."
+
+    def test_idp_section_only_admin_emails_is_an_error(self, monkeypatch):
+        self._env(monkeypatch, ADMIN_EMAILS="a@example.com")
+        with pytest.raises(org_mode.ConfigurationError, match="Set both"):
+            org_mode.idp_section({})
+
+    def test_idp_section_comma_lists_and_scalars(self, monkeypatch):
+        self._env(
+            monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_ADMIN_GROUP_CLAIM="groups",
+            IDP_ADMIN_GROUP_VALUES=" admins , ops,,", IDP_STEP_UP_ACR_VALUES="mfa",
+            ADMIN_EMAILS="a@example.com, b@example.com",
+        )
+        section = org_mode.idp_section({})
+        assert section["admin_group_claim"] == "groups"
+        assert section["admin_group_values"] == ["admins", "ops"]
+        assert section["step_up_acr_values"] == ["mfa"]
+        assert section["admin_emails"] == ["a@example.com", "b@example.com"]
+
+    @pytest.mark.parametrize("value, expected", [("true", True), ("false", False)])
+    def test_idp_section_trust_unverified_email(self, monkeypatch, value, expected):
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_TRUST_UNVERIFIED_EMAIL=value)
+        assert org_mode.idp_section({})["trust_unverified_email"] is expected
+
+    @pytest.mark.parametrize("value", ["yes", "1", "TRUE"])
+    def test_idp_section_trust_unverified_email_rejects_anything_else(self, monkeypatch, value):
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_TRUST_UNVERIFIED_EMAIL=value)
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL"):
+            org_mode.idp_section({})
+
+
+class TestIsSingleUserWithEnvironmentIdp:
+    def test_is_single_user_with_an_env_idp_is_false(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "c")
+        assert org_mode.is_single_user({"mode": "org"}) is False
+
+    def test_is_single_user_never_opens_the_secret_file(self, monkeypatch, tmp_path):
+        secret_file = tmp_path / "secret"
+        secret_file.write_text(SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "c")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_SECRET_FILE", str(secret_file))
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("the secret file was opened")
+
+        monkeypatch.setattr("builtins.open", refuse)
+        assert org_mode.is_single_user({"mode": "org"}) is False
+
+    def test_is_single_user_with_only_one_idp_variable_is_still_single_user(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")
+        assert org_mode.is_single_user({"mode": "org"}) is True
