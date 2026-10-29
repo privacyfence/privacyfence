@@ -62,7 +62,8 @@ from .mcp_dispatch import McpDispatcher
 from . import org_session
 from .csp import nonce_for
 from .oauth_consent import render_consent_page, render_continue_page
-from .oauth_provider import CONSENT_PATH, IDP_CALLBACK_PATH, OrgOAuthProvider
+from .oauth_provider import CONSENT_PATH, IDP_CALLBACK_PATH, SINGLE_USER_CONTINUE_PATH, OrgOAuthProvider
+from .single_user_auth import SINGLE_USER_PRINCIPAL
 
 logger = logging.getLogger(__name__)
 
@@ -1048,7 +1049,9 @@ class _BasicAuthClientId:
         await self._app(scope, replay, send)
 
 
-def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Route]:
+def mount_org_oauth(
+    provider: OrgOAuthProvider, *, issuer_url: str, sessions: org_session.OrgSessionStore | None = None,
+) -> list[Route]:
     """Org mode's OAuth 2.1 authorization-server + resource-metadata
     surface (ADR 0011): the SDK's own
     ``create_auth_routes`` builds ``/.well-known/oauth-authorization-
@@ -1063,7 +1066,14 @@ def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Rout
     docstring for what it does. So are the consent page's two routes
     (``GET``/``POST`` ``/oauth/consent/<id>``, ADR 0177): the page an
     org member sees before a client they have not allowed yet gets a code.
+
+    A single-user provider has no IdP, so it gets ``/oauth/single-user/continue`` in place of the
+    IdP callback: ``authorize`` sends the browser to ``/login`` with that route as ``next``, and
+    the route finishes the authorization for the browser's session, which ``sessions`` resolves.
+    Each kind of server mounts only its own route.
     """
+    if provider.single_user and sessions is None:
+        raise ValueError("a single-user server needs its session store to finish an authorization")
     issuer = AnyHttpUrl(issuer_url)
     resource_url = AnyHttpUrl(f"{issuer_url.rstrip('/')}{MCP_PATH}")
     routes = [
@@ -1095,10 +1105,29 @@ def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Rout
             return PlainTextResponse("Authorization failed. Please try again.", status_code=400)
         return RedirectResponse(redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
 
-    routes.append(Route(IDP_CALLBACK_PATH, idp_callback))
-
     expired = "This sign-in has expired. Start again from your AI client."
     no_store = {"Cache-Control": "no-store"}
+
+    async def single_user_continue(request: Request) -> Response:
+        state = request.query_params.get("state", "")
+        if not state:
+            return PlainTextResponse("Invalid sign-in link.", status_code=400, headers=no_store)
+        principal = org_session.authenticated(request, sessions) if sessions is not None else None
+        if principal is None or principal.id != SINGLE_USER_PRINCIPAL.id:
+            # Not signed in yet: sign in, then come back here. The state stays parked until then.
+            here = f"{SINGLE_USER_CONTINUE_PATH}?state={quote(state, safe='')}"
+            return RedirectResponse(f"/login?next={quote(here, safe='/')}", status_code=302, headers=no_store)
+        try:
+            redirect_url = await provider.handle_single_user_continue(state=state, principal=principal)
+        except ValueError as exc:
+            logger.warning("MCP client authorization failed: %s", exc)
+            return PlainTextResponse(expired, status_code=400, headers=no_store)
+        return RedirectResponse(redirect_url, status_code=302, headers=no_store)
+
+    if provider.single_user:
+        routes.append(Route(SINGLE_USER_CONTINUE_PATH, single_user_continue, methods=["GET"]))
+    else:
+        routes.append(Route(IDP_CALLBACK_PATH, idp_callback))
 
     async def consent_page(request: Request) -> Response:
         consent_id = request.path_params["consent_id"]

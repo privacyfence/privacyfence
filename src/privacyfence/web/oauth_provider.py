@@ -68,7 +68,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -101,6 +101,7 @@ logger = logging.getLogger(__name__)
 CLIENTS_FILE_NAME = "oauth_clients.json"
 IDP_CALLBACK_PATH = "/oauth/idp/callback"
 CONSENT_PATH = "/oauth/consent"
+SINGLE_USER_CONTINUE_PATH = "/oauth/single-user/continue"
 
 _AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60
 _ACCESS_TOKEN_TTL_SECONDS = 60 * 60
@@ -248,8 +249,16 @@ class OrgOAuthProvider:
     bearer-auth middleware via ``verify_token``.
     """
 
-    def __init__(self, idp: IdpConfig | None, *, idp_callback_url: str, policy: AuthzPolicyConfig | None = None) -> None:
+    def __init__(
+        self, idp: IdpConfig | None, *, idp_callback_url: str, policy: AuthzPolicyConfig | None = None,
+        single_user: bool = False,
+    ) -> None:
+        if single_user and idp is not None:
+            raise ValueError("a single-user server has no identity provider")
         self._idp = idp
+        # Single-user mode signs its one administrator in with a setup code and then a passkey
+        # (web/single_user_auth.py), so authorize() sends the browser to /login instead of an IdP.
+        self.single_user = single_user
         self._idp_callback_url = idp_callback_url
         # The org's own sign-in policy (allowed domains, required groups):
         # layered on top of the IdP dance below, same as web/
@@ -398,16 +407,20 @@ class OrgOAuthProvider:
     # ------------------------------------------------------------------ #
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
-        if self._idp is None:
-            # Single-user mode has no identity provider to send the person to.
+        if self._idp is None and not self.single_user:
+            # A server without an identity provider that is not single-user has nobody to send
+            # the person to.
             raise AuthorizeError(
                 error="temporarily_unavailable",
                 error_description="sign-in is not available on this server yet",
             )
         self._prune_pending()
         own_state = secrets.token_urlsafe(32)
-        idp_nonce = secrets.token_urlsafe(16)
-        idp_code_verifier, idp_code_challenge = org_identity.generate_pkce_pair()
+        if self.single_user:
+            idp_nonce, idp_code_verifier, idp_code_challenge = "", "", ""
+        else:
+            idp_nonce = secrets.token_urlsafe(16)
+            idp_code_verifier, idp_code_challenge = org_identity.generate_pkce_pair()
         with self._lock:
             # The TTL-based prune above bounds how long a pending
             # authorization survives, not how many can accumulate *within*
@@ -423,6 +436,12 @@ class OrgOAuthProvider:
                 client_id=client.client_id, params=params, idp_nonce=idp_nonce,
                 idp_code_verifier=idp_code_verifier, created_at=time.time(),
             )
+        if self._idp is None:
+            # Single-user mode (the guard above refused anything else): the sign-in page, then
+            # the continue route, which finishes this authorization for whoever holds the
+            # session. The state is only a handle on the parked request: the continue route also
+            # needs the session, and the consent page still stands between it and a code.
+            return f"/login?next={quote(f'{SINGLE_USER_CONTINUE_PATH}?state={own_state}', safe='/')}"
         return org_identity.build_authorization_url(
             self._idp, redirect_uri=self._idp_callback_url, state=own_state,
             code_challenge=idp_code_challenge, nonce=idp_nonce,
@@ -463,10 +482,7 @@ class OrgOAuthProvider:
         """
         if self._idp is None:
             raise ValueError("this server has no identity provider")
-        with self._lock:
-            pending = self._pending.pop(state, None)
-        if pending is None or (time.time() - pending.created_at) > _PENDING_AUTHORIZATION_TTL_SECONDS:
-            raise ValueError("invalid or expired authorization attempt")
+        pending = self._pop_pending(state)
         tokens = await asyncio.to_thread(
             org_identity.exchange_code_for_tokens,
             self._idp, code=code, redirect_uri=self._idp_callback_url, code_verifier=pending.idp_code_verifier,
@@ -487,7 +503,30 @@ class OrgOAuthProvider:
             grist_provisioning.notify_sign_in, principal,
             email_verified=grist_provisioning.email_verified_claim(claims),
         )
+        return self._finish_for_principal(pending, principal)
 
+    async def handle_single_user_continue(self, *, state: str, principal: Principal) -> str:
+        """Single-user mode's counterpart to ``handle_idp_callback``, called by web/routes_mcp.py's
+        ``/oauth/single-user/continue`` once the browser holds a session for the one administrator
+        (the route checks that). There is no identity provider leg: the session is the proof of who
+        the person is. The rest is the IdP path's own -- the pending authorization is single-use
+        and expires, and a client the person has not allowed yet stops at the consent page."""
+        if not self.single_user:
+            raise ValueError("this server signs people in through its identity provider")
+        pending = self._pop_pending(state)
+        return self._finish_for_principal(pending, principal)
+
+    def _pop_pending(self, state: str) -> _PendingAuthorization:
+        """Single-use: the pending authorization is consumed whether or not it is still valid."""
+        with self._lock:
+            pending = self._pending.pop(state, None)
+        if pending is None or (time.time() - pending.created_at) > _PENDING_AUTHORIZATION_TTL_SECONDS:
+            raise ValueError("invalid or expired authorization attempt")
+        return pending
+
+    def _finish_for_principal(self, pending: _PendingAuthorization, principal: Principal) -> str:
+        """The client's redirect URL with a fresh code when ``principal`` already allowed this
+        client at this redirect URI, otherwise the consent page (ADR 0177)."""
         if self._consents.has(principal, pending.client_id, str(pending.params.redirect_uri)):
             return self._issue_code(pending.client_id, principal, pending.params)
         consent_id = secrets.token_urlsafe(32)

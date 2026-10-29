@@ -149,6 +149,149 @@ class TestWithoutAnIdentityProvider:
             await provider.handle_idp_callback(state="s", code="c")
 
 
+SINGLE_USER = Principal(id="single-user", email="admin@localhost", display_name="Administrator", is_admin=True)
+
+
+def _single_user_provider(tmp_path, monkeypatch) -> op.OrgOAuthProvider:
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+    monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
+    return op.OrgOAuthProvider(None, idp_callback_url=IDP_CALLBACK_URL, single_user=True)
+
+
+async def _single_user_continue(provider: op.OrgOAuthProvider, client, *, params=None) -> str:
+    """register -> authorize -> continue with the administrator's session; where the browser goes next."""
+    import urllib.parse as up
+    await provider.register_client(client)
+    login_url = await provider.authorize(client, params or _params())
+    next_path = dict(up.parse_qsl(up.urlparse(login_url).query))["next"]
+    state = dict(up.parse_qsl(up.urlparse(next_path).query))["state"]
+    return await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+
+class TestSingleUser:
+    """Single-user mode: authorize sends the browser to /login, and the continue route finishes it."""
+
+    def test_an_identity_provider_cannot_be_combined_with_single_user(self, tmp_path, monkeypatch):
+        with pytest.raises(ValueError, match="no identity provider"):
+            op.OrgOAuthProvider(_idp(), idp_callback_url=IDP_CALLBACK_URL, single_user=True)
+
+    async def test_authorize_returns_the_sign_in_page_with_the_continue_route_as_next(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+
+        url = await provider.authorize(client, _params())
+
+        assert url.startswith("/login?next=/oauth/single-user/continue%3Fstate%3D")
+        next_path = dict(up.parse_qsl(up.urlparse(url).query))["next"]
+        state = next_path.split("state=", 1)[1]
+        assert state in provider._pending
+
+    async def test_continue_with_a_remembered_consent_issues_the_code(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _remember_consent(provider, client, SINGLE_USER.id)
+
+        redirect = await _single_user_continue(provider, client, params=_params(state="clients-state"))
+
+        assert redirect.startswith("https://claude.example.com/callback?")
+        qs = dict(up.parse_qsl(up.urlparse(redirect).query))
+        assert qs["state"] == "clients-state"
+        auth_code = await provider.load_authorization_code(client, qs["code"])
+        tokens = await provider.exchange_authorization_code(client, auth_code)
+        access = await provider.load_access_token(tokens.access_token)
+        assert access.subject == SINGLE_USER.id
+
+    async def test_continue_without_consent_stops_at_the_consent_page(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        client.client_name = "Claude"
+
+        location = await _single_user_continue(provider, client)
+
+        assert location.startswith(op.CONSENT_PATH + "/")
+        assert provider._codes == {}
+        consent_id = location.rsplit("/", 1)[1]
+        view = provider.consent_view(consent_id)
+        assert view.client_name == "Claude"
+        assert view.principal_label == "admin@localhost"
+        redirect = provider.decide_consent(consent_id, csrf=view.csrf, allow=True)
+        assert "code=" in redirect
+        assert provider._consents.has(SINGLE_USER, "claude", "https://claude.example.com/callback")
+
+    async def test_deny_on_the_consent_page_returns_access_denied(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        location = await _single_user_continue(provider, _client_info())
+        consent_id = location.rsplit("/", 1)[1]
+
+        redirect = provider.decide_consent(consent_id, csrf=provider.consent_view(consent_id).csrf, allow=False)
+
+        assert "error=access_denied" in redirect
+        assert provider._codes == {}
+
+    async def test_an_unknown_state_is_refused(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="invalid or expired"):
+            await provider.handle_single_user_continue(state="never-issued", principal=SINGLE_USER)
+
+    async def test_a_state_is_single_use(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(dict(up.parse_qsl(up.urlparse(url).query))["next"]).query))["state"]
+
+        await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+        with pytest.raises(ValueError, match="invalid or expired"):
+            await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+    async def test_an_expired_state_is_refused(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(dict(up.parse_qsl(up.urlparse(url).query))["next"]).query))["state"]
+        real_now = time.time()
+        monkeypatch.setattr(op.time, "time", lambda: real_now + op._PENDING_AUTHORIZATION_TTL_SECONDS + 1)
+
+        with pytest.raises(ValueError, match="invalid or expired"):
+            await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+    async def test_a_multi_user_provider_refuses_the_continue_path(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        import urllib.parse as up
+        state = dict(up.parse_qsl(up.urlparse(await provider.authorize(client, _params())).query))["state"]
+
+        with pytest.raises(ValueError, match="identity provider"):
+            await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+        assert state in provider._pending  # not consumed by the refused call
+
+    async def test_the_idp_callback_is_refused(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="no identity provider"):
+            await provider.handle_idp_callback(state="s", code="c")
+
+    async def test_a_single_user_sign_in_never_notifies_the_provisioners(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(op.peek_provisioning, "notify_sign_in", lambda *a, **kw: calls.append("peek"))
+        monkeypatch.setattr(op.grist_provisioning, "notify_sign_in", lambda *a, **kw: calls.append("grist"))
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _remember_consent(provider, client, SINGLE_USER.id)
+
+        await _single_user_continue(provider, client)
+
+        assert calls == []
+
+
 class TestAuthorizeAndIdpCallback:
     async def test_authorize_redirects_to_the_idp(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)

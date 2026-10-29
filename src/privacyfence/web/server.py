@@ -1341,9 +1341,14 @@ def _build_org_app(
     from ..org_mode import AuthzPolicyConfig
     from . import (
         routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new,
+        single_user_auth,
     )
     from .routes_settings import build_org_routes
 
+    if org.provider.single_user != (org.idp is None):
+        # The sign-in routes follow org.idp and the authorize path follows the provider; the two
+        # must agree on whether there is an identity provider.
+        raise ValueError("OrgAuth.idp and OrgOAuthProvider.single_user disagree about single-user mode")
     extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
@@ -1365,7 +1370,7 @@ def _build_org_app(
         # is reachable to mint a capability link in the first place.
         extra_routes.extend(mount_capability_routes())
 
-    extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url))
+    extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url, sessions=org.sessions))
     # Mounted unconditionally here (every _build_org_app call is already
     # org mode) -- needs nothing from org.connector_registry, only
     # org.sessions, same reasoning /approvals'/security's own unconditional
@@ -1386,18 +1391,24 @@ def _build_org_app(
             org_config=org.org_config, issuer_url=org.issuer_url,
         ))
         default_next_path = "/connect"
+    issuer_host = urlparse(org.issuer_url).hostname or ""
+    step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)
     if org.idp is not None:
         extra_routes.extend(routes_org_identity.build_routes(
             idp=org.idp, sessions=org.sessions, base_url=org.issuer_url, default_next_path=default_next_path,
             # Derived from org.org_config directly here, the same
-            # "self-contained, cheap re-parse" pattern StepUpConfig below
+            # "self-contained, cheap re-parse" pattern StepUpConfig above
             # already uses -- see that call's own comment.
             policy=AuthzPolicyConfig.from_org_config(org.org_config),
             push_store=org.push_store,
         ))
-
-    issuer_host = urlparse(org.issuer_url).hostname or ""
-    step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)
+    else:
+        # Single-user mode: a setup code, then the passkey /security enrolls, with the same
+        # relying-party ID and origin.
+        extra_routes.extend(single_user_auth.build_routes(
+            sessions=org.sessions, issuer_url=org.issuer_url, step_up=step_up,
+            default_next_path=default_next_path, push_store=org.push_store,
+        ))
     # One approval route module builds both modes' routes (ADR 0033) --
     # only the IdP step-up routes (no local-mode analogue at all) stay a
     # separate mount, see routes_org_stepup.py's own module docstring.

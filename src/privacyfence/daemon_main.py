@@ -1418,6 +1418,8 @@ def _start_org_web_server(
     authz_policy = org_mode.AuthzPolicyConfig.from_org_config(org_config)
     provider = OrgOAuthProvider(
         idp, idp_callback_url=f"{server_config.issuer_url.rstrip('/')}/oauth/idp/callback", policy=authz_policy,
+        # No identity provider is single-user mode: /authorize sends the browser to its own sign-in.
+        single_user=idp is None,
     )
     sessions = OrgSessionStore()
     mcp_dispatcher = McpDispatcher(

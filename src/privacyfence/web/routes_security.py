@@ -134,6 +134,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal
 from ..step_up_config import StepUpConfig, effective_scope
 from ..webauthn_stepup import RegistrationChallengeStore, StepUpChallengeStore, WebAuthnError
+from . import routes_org_identity
 from .csp import nonce_for as _csp_nonce_for
 from .session_auth import human_session_required_json
 
@@ -145,6 +146,17 @@ logger = logging.getLogger(__name__)
 # constant. The string is the same one _enroll_fingerprint() binds to, so a
 # reader grepping either finds the other.
 _ENROLL_CEREMONY = "enroll-credential"
+
+
+def safe_next_path(raw: str | None, *, default: str) -> str:
+    """``routes_org_identity._safe_next_path``, which also refuses whitespace and control
+    characters. A browser strips tabs and newlines out of a URL before resolving it, so
+    ``"/\\t/evil.example"`` passes the leading-slash checks yet becomes ``//evil.example``, an
+    off-site address, once it is written into a link or handed to ``window.location``."""
+    if raw and any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        return default
+    return routes_org_identity._safe_next_path(raw, default=default)
+
 
 # ``recover_credential``'s attempt budget. A recovery code is 64 random bits,
 # so guessing is not the realistic threat; what these bound is a local
@@ -485,6 +497,10 @@ def build_routes(
             principal=principal, creds=creds, csrf=session_id, step_up=step_up,
             nonce=_csp_nonce_for(request), back_link=back_link, nav_items=nav_items,
             dev_unseparated_notice=dev_unseparated_notice,
+            # Where a first sign-in was headed before it stopped here to enroll a passkey (an
+            # AI client's authorization, say). The page reloads itself after an enrollment, so
+            # the link shows up once a passkey exists.
+            continue_path=safe_next_path(request.query_params.get("next"), default=""),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -1065,7 +1081,7 @@ def _recent_mints_html(rows: list[tuple[str, str]]) -> str:
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
     back_link: tuple[str, str], nav_items: tuple[tuple[str, str, str], ...] | None = None,
-    dev_unseparated_notice: str | None = None,
+    dev_unseparated_notice: str | None = None, continue_path: str = "",
 ) -> str:
     who = principal.email or principal.display_name or principal.id
     who_esc = _esc(who)
@@ -1090,6 +1106,10 @@ def _render_security_page(
         "" if nav_items is not None
         else f'<div class="cluster"><a class="button secondary" href="{_esc(back_link[0])}">{_esc(back_link[1])}</a></div>'
     )
+    continue_html = (
+        f'<div class="cluster"><a class="button primary" id="pf-continue" href="{_esc(continue_path)}">Continue</a></div>'
+        if creds and continue_path else ""
+    )
     content = (
         f'<div id="pf-security-page" class="stack" data-csrf="{_esc(csrf)}">'
         "<h1>Passkeys</h1>"
@@ -1097,6 +1117,7 @@ def _render_security_page(
         f'<p class="lead">Signed in as {who_esc}. A passkey (Face ID, Touch ID, fingerprint, or Windows Hello) proves it\'s '
         f"really you before a write approval is released, even if someone else has your unlocked phone. {_esc(scope_note)}</p>"
         f"{creds_html}"
+        f"{continue_html}"
         '<div class="cluster"><button type="button" class="button primary add" id="pf-add-passkey">Add a passkey</button>'
         '<span id="pf-passkey-status" class="meta" role="status"></span></div>'
         "<p>Lost every passkey enrolled here?</p>"
