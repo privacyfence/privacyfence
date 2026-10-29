@@ -303,9 +303,9 @@ cd privacyfence-package                             # set "namespace" in sfdx-pr
 
 # retrieve exactly this app: its settings are named &lt;app&gt;_oauth and its policies &lt;app&gt;_oauthPlcy
 sf project retrieve start --target-org pf-devhub --metadata \
-  ExternalClientApplication:PrivacyFence_oauth \
-  ExtlClntAppOauthSettings:PrivacyFence_oauth_oauth \
-  ExtlClntAppOauthConfigurablePolicies:PrivacyFence_oauth_oauthPlcy
+  ExternalClientApplication:PrivacyFence \
+  ExtlClntAppOauthSettings:PrivacyFence_oauth \
+  ExtlClntAppOauthConfigurablePolicies:PrivacyFence_oauthPlcy
 ls -R force-app/main/default                        # exactly those three files; no global OAuth settings (they hold the secret)
 
 sf package create --name PrivacyFence --package-type Managed --path force-app --target-dev-hub pf-devhub
@@ -317,8 +317,8 @@ sf package version promote --package "PrivacyFence@1.0.0-1" --target-dev-hub pf-
           <li><strong>Test install.</strong> Sign in to the QA Salesforce org as its admin and open the install URL. Install for admins only. Then <strong>Setup → External Client App Manager → PrivacyFence → Policies</strong>: <strong>Permitted users: All users may self-authorize</strong>. That org is the one the live checks connect in step 5. The real sign-in through the relay only works after the merge. If it then fails with a cross-org or invalid-client error, stop and decide: ship 7.0 without a built-in Salesforce app, or follow Salesforce's guidance on subscriber credentials (D26, "Known uncertainty").</li>
         </ol>
         <div class="note"><p><strong>Values for the External Client App</strong></p><div class="tbl"><table><tbody>
-          <tr><th>Name</th><td><code>PrivacyFence (oauth.privacyfence.eu)</code> (plain <code>PrivacyFence</code> is taken on Salesforce)</td></tr>
-          <tr><th>API name</th><td><code>PrivacyFence_oauth</code></td></tr>
+          <tr><th>Name</th><td><code>PrivacyFence</code>: what people see on Salesforce's consent screen</td></tr>
+          <tr><th>API name</th><td><code>PrivacyFence</code></td></tr>
           <tr><th>Contact email</th><td><code>info@privacyfence.eu</code></td></tr>
           <tr><th>Info URL</th><td><code>https://privacyfence.eu/connectors/salesforce/</code></td></tr>
           <tr><th>Logo image URL</th><td><code>https://privacyfence.eu/assets/salesforce-app-logo.png</code> (125 × 125 PNG, 9 KB; Salesforce allows at most 125 px high, 200 px wide, 100 KB)</td></tr>

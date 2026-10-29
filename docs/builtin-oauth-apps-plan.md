@@ -3124,9 +3124,10 @@ each customer org installs once.
   - the **namespace org**, which registers the package namespace (`privacyfence`, or `pfence` if
     taken) linked to the Dev Hub.
 - **The External Client App.**
-  - Name `PrivacyFence (oauth.privacyfence.eu)` (plain `PrivacyFence` is taken on Salesforce), API
-    name `PrivacyFence_oauth`, distribution state Packaged, contact `info@privacyfence.eu`. The
-    package itself is named `PrivacyFence`.
+  - Name and API name `PrivacyFence` (its metadata members are `PrivacyFence`,
+    `PrivacyFence_oauth` for the OAuth settings and `PrivacyFence_oauthPlcy` for the policies),
+    distribution state Packaged, contact `info@privacyfence.eu`. The package itself is also named
+    `PrivacyFence`.
   - Callback `https://oauth.privacyfence.eu/callback/salesforce`, scopes `api` and
     `refresh_token, offline_access`.
   - The authorization code flow, with PKCE and the client secret both required, and refresh token
