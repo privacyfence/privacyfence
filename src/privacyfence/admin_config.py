@@ -19,15 +19,28 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import ipaddress
 import json
 import logging
+import math
+import os
+import socket
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from . import paths, secure_files
-from .org_mode import Mode
-from .step_up_config import STEP_UP_SCOPES
+from . import app_credentials, grist_auth, paths, peek_client, scoped_tokens, secure_files
+from .org_mode import (
+    AuditForwardingConfig,
+    AuthzPolicyConfig,
+    ConfigurationError,
+    DownloadDeliveryConfig,
+    Mode,
+    WebPushConfig,
+)
+from .step_up_config import DEFAULT_STEP_UP_SCOPE, STEP_UP_SCOPES, StepUpConfig
 
 logger = logging.getLogger(__name__)
 
@@ -161,9 +174,13 @@ def load() -> dict[str, Any] | None:
     return _fill(_default_config(), raw)
 
 
+def _write(data: dict[str, Any]) -> None:
+    secure_files.atomic_write_json(admin_config_path(), data, indent=2, sort_keys=True)
+
+
 def save(data: dict[str, Any]) -> None:
     with _write_lock:
-        secure_files.atomic_write_json(admin_config_path(), data, indent=2, sort_keys=True)
+        _write(data)
 
 
 def _section(bundle: dict[str, Any], key: str) -> dict[str, Any]:
@@ -251,16 +268,20 @@ def legacy_keys_in(bundle: dict[str, Any]) -> list[str]:
     return names
 
 
-def _step_up_not_weaker(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
-    def rank(raw: dict[str, Any]) -> tuple[bool, bool, int]:
-        scope = raw.get("scope")
-        return (
-            bool(raw.get("enabled", False)),
-            bool(raw.get("require_passkey", False)),
-            STEP_UP_SCOPES.index(scope) if scope in STEP_UP_SCOPES else 0,
-        )
+def _step_up_rank(raw: dict[str, Any]) -> tuple[bool, bool, int]:
+    """How strict a stored ``step_up`` section is: enabled, passkey required, scope (narrowest
+    first). A missing scope is the default scope, as the parser reads it; an unknown one counts as
+    the narrowest."""
+    scope = raw.get("scope", DEFAULT_STEP_UP_SCOPE)
+    return (
+        bool(raw.get("enabled", False)),
+        bool(raw.get("require_passkey", False)),
+        STEP_UP_SCOPES.index(scope) if scope in STEP_UP_SCOPES else 0,
+    )
 
-    return all(new >= old for new, old in zip(rank(candidate), rank(current), strict=True))
+
+def _step_up_not_weaker(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    return all(new >= old for new, old in zip(_step_up_rank(candidate), _step_up_rank(current), strict=True))
 
 
 def _merge_reimport(current: dict[str, Any], incoming: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
@@ -333,3 +354,540 @@ def config_for(bundle: dict[str, Any], *, mode: Mode, single_user: bool) -> dict
     if loaded is not None:
         return loaded
     return import_from_bundle(bundle, mode=mode, single_user=single_user)
+
+
+# --------------------------------------------------------------------------- #
+# Changes made from the Admin page
+# --------------------------------------------------------------------------- #
+
+_LOCAL_AND_ORG: frozenset[str] = frozenset({"local", "org"})
+_ORG_ONLY: frozenset[str] = frozenset({"org"})
+_ACTION_MODES: dict[str, frozenset[str]] = {
+    "offer_service": _LOCAL_AND_ORG,
+    "withdraw_service": _LOCAL_AND_ORG,
+    "set_atlassian_assets": _LOCAL_AND_ORG,
+    "set_server_address": _LOCAL_AND_ORG,
+    "set_unattended_sessions": _LOCAL_AND_ORG,
+    "clear_rooms": _LOCAL_AND_ORG,
+    "set_auto_provisioning": _ORG_ONLY,
+    "set_download_delivery": _ORG_ONLY,
+    "set_web_push": _ORG_ONLY,
+    "set_authz": _ORG_ONLY,
+    "tighten_step_up": _ORG_ONLY,
+    "set_scoped_tokens": _ORG_ONLY,
+    "set_audit_forwarding": _ORG_ONLY,
+}
+
+MAX_ROOMS = 5000
+MAX_ROOM_TEXT = 500
+_ROOMS_REFUSAL = "The file is not a room directory written by sync_room_directory.py."
+_STEP_UP_REFUSAL = (
+    "Step-up can only be made stricter here. To relax it, edit org/admin_config.json and restart "
+    "PrivacyFence (ADR 0068)."
+)
+
+_ADDRESS_VARIABLE = {"peek": "PRIVACYFENCE_PEEK_BASE_URL", "grist": "PRIVACYFENCE_GRIST_SERVER_URL"}
+_PROVISIONER_VARIABLE = "PRIVACYFENCE_GRIST_PROVISIONER_URL"
+_AUTO_PROVISION_UNAVAILABLE = {
+    "peek": (
+        "Automatic accounts need the Peek address from PRIVACYFENCE_PEEK_BASE_URL on the server, "
+        "so the provisioning key only goes where the server's operator points it."
+    ),
+    "grist": (
+        "Automatic accounts need PRIVACYFENCE_GRIST_SERVER_URL and "
+        "PRIVACYFENCE_GRIST_PROVISIONER_URL on the server."
+    ),
+}
+_GRIST_OAUTH_REASON = "Automatic accounts work only with API keys; this server uses a Grist OAuth app."
+
+
+def _parse_error(exc: Exception) -> AdminConfigError:
+    return AdminConfigError(str(exc).replace("org_bundle.json's ", ""))
+
+
+def _param(params: dict[str, Any], name: str, kind: type) -> Any:
+    if name not in params:
+        raise AdminConfigError(f"Missing {name}.")
+    value = params[name]
+    if isinstance(value, bool) != (kind is bool) or not isinstance(value, kind):
+        raise AdminConfigError(f"{name} has the wrong type.")
+    return value
+
+
+def _service_name(params: dict[str, Any], allowed: tuple[str, ...] = SERVICES) -> str:
+    service = _param(params, "service", str)
+    if service not in allowed:
+        raise AdminConfigError("Unknown service.")
+    return service
+
+
+def _text(params: dict[str, Any], name: str) -> str:
+    value = _param(params, name, str).strip()
+    if any(unicodedata.category(char) in ("Cc", "Zl", "Zp") for char in value):
+        raise AdminConfigError(f"{name} must not contain control characters.")
+    return value
+
+
+def _word_list(raw: str) -> list[str]:
+    return [item for item in (part.strip() for part in raw.replace("\n", ",").split(",")) if item]
+
+
+def _env_addresses() -> dict[str, str]:
+    from . import oauth_apps
+
+    try:
+        return oauth_apps.environment_addresses()
+    except ConfigurationError:
+        return {}
+
+
+def _address_source(bundle: dict[str, Any], name: str, admin_service: dict[str, Any], env: dict[str, str]) -> str:
+    grist = bundle.get("grist")
+    if name == "grist" and isinstance(grist, dict) and grist.get("client_id"):
+        return "bundle"
+    if env.get(name):
+        return "environment"
+    if admin_service.get("address_locked"):
+        return "imported"
+    return "admin"
+
+
+def _auto_provision_state(
+    bundle: dict[str, Any],
+    name: str,
+    admin_service: dict[str, Any],
+    env: dict[str, str],
+    *,
+    mode: Mode,
+    single_user: bool,
+) -> tuple[bool, str]:
+    """Whether automatic accounts can be turned on for ``name``, and why not. The conditions are
+    the ones the effective config applies before it passes ``auto_provision`` on."""
+    source = _address_source(bundle, name, admin_service, env)
+    if source == "bundle":
+        return False, _GRIST_OAUTH_REASON
+    if mode != "org":
+        return False, "Automatic accounts are available only on an organization server."
+    if single_user:
+        return False, "Automatic accounts need people to sign in through an identity provider."
+    trusted = source in ("environment", "imported")
+    if name == "grist":
+        stored = admin_service.get("auto_provision", {})
+        provisioner = env.get("grist_provisioner") or (stored.get("provisioner_url", "") if source == "imported" else "")
+        trusted = trusted and bool(provisioner)
+    if not trusted:
+        return False, _AUTO_PROVISION_UNAVAILABLE[name]
+    return True, ""
+
+
+def _refuse_locked_address(name: str, source: str) -> None:
+    variable = _ADDRESS_VARIABLE[name]
+    if source == "environment":
+        raise AdminConfigError(f"This address is set by {variable} on the server.")
+    if source == "imported":
+        raise AdminConfigError(
+            f"This address came from the signed configuration file; set {variable} on the server to change it."
+        )
+    if source == "bundle":
+        raise AdminConfigError("This address comes from your organization's Grist app in the configuration file.")
+
+
+def _require_public_https_host(address: str) -> None:
+    refusal = AdminConfigError("Use an https:// address on a public host name.")
+    parts = urlsplit(address)
+    host = parts.hostname or ""
+    if parts.scheme != "https" or not host:
+        raise refusal
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise refusal
+    try:
+        found = socket.getaddrinfo(host, None)
+    except OSError:
+        raise refusal from None
+    for entry in found:
+        ip = ipaddress.ip_address(str(entry[4][0]).split("%")[0])
+        if not ip.is_global:
+            raise refusal
+
+
+def _normalized_address(name: str, value: str, *, mode: Mode) -> str:
+    if not value:
+        return ""
+    normalize = peek_client.normalize_base_url if name == "peek" else grist_auth.normalize_server_url
+    try:
+        address = normalize(value)
+    except (peek_client.PeekClientError, grist_auth.GristClientError) as exc:
+        raise AdminConfigError(str(exc)) from exc
+    if mode == "org":
+        _require_public_https_host(address)
+    return address
+
+
+def _endpoint(url: str) -> tuple[Any, ...]:
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme.lower(), (parts.hostname or "").lower(), parts.port)
+    except ValueError:
+        return (url,)
+
+
+def _port(params: dict[str, Any]) -> int:
+    port = _param(params, "syslog_port", int)
+    if not 1 <= port <= 65535:
+        raise AdminConfigError("Enter a port from 1 to 65535.")
+    return port
+
+
+def _apply_service_toggle(config: dict[str, Any], action: str, params: dict[str, Any]) -> tuple[str, list[str]]:
+    name = _service_name(params)
+    offered = action == "offer_service"
+    service = config["services"][name]
+    if service["offered"] == offered:
+        return "", []
+    service["offered"] = offered
+    label = SERVICE_LABELS[name]
+    return (f"Offered {label}" if offered else f"Stopped offering {label}"), ["services"]
+
+
+def _apply_atlassian_assets(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    enabled = _param(params, "enabled", bool)
+    workspace_id = _text(params, "workspace_id") if "workspace_id" in params else ""
+    if len(workspace_id) > 200:
+        raise AdminConfigError("The workspace id is too long.")
+    service = config["services"]["atlassian"]
+    if service["assets"] == enabled and service["assets_workspace_id"] == workspace_id:
+        return "", []
+    service["assets"] = enabled
+    service["assets_workspace_id"] = workspace_id
+    return f"Set Jira Assets to {'on' if enabled else 'off'}", ["services"]
+
+
+def _apply_server_address(
+    config: dict[str, Any], params: dict[str, Any], bundle: dict[str, Any], *, mode: Mode
+) -> tuple[str, list[str]]:
+    name = _service_name(params, tuple(_ADDRESS_FIELD))
+    value = _param(params, "value", str)
+    address = _normalized_address(name, value, mode=mode)
+    service = config["services"][name]
+    _refuse_locked_address(name, _address_source(bundle, name, service, _env_addresses()))
+    field = _ADDRESS_FIELD[name]
+    if service[field] == address:
+        return "", []
+    service[field] = address
+    label = SERVICE_LABELS[name]
+    return (f"Set the {label} server to {address}" if address else f"Cleared the {label} server"), ["services"]
+
+
+def _apply_auto_provisioning(
+    config: dict[str, Any], params: dict[str, Any], bundle: dict[str, Any], *, mode: Mode, single_user: bool
+) -> tuple[str, list[str]]:
+    name = _service_name(params, tuple(_ADDRESS_FIELD))
+    enabled = _param(params, "enabled", bool)
+    trust = _param(params, "trust_unverified_email", bool)
+    service = config["services"][name]
+    if enabled:
+        available, reason = _auto_provision_state(
+            bundle, name, service, _env_addresses(), mode=mode, single_user=single_user
+        )
+        if not available:
+            raise AdminConfigError(reason)
+    stored = service["auto_provision"]
+    if stored["enabled"] == enabled and stored["trust_unverified_email"] == trust:
+        return "", []
+    was_enabled = stored["enabled"]
+    stored["enabled"], stored["trust_unverified_email"] = enabled, trust
+    label = SERVICE_LABELS[name]
+    if was_enabled != enabled:
+        summary = f"Turned automatic {label} accounts {'on' if enabled else 'off'}"
+    else:
+        summary = f"Changed automatic {label} accounts"
+    return summary, ["auto_provision"]
+
+
+def _replace_section(config: dict[str, Any], key: str, candidate: dict[str, Any], summary: str) -> tuple[str, list[str]]:
+    if config[key] == candidate:
+        return "", []
+    config[key] = candidate
+    return summary, [key]
+
+
+def _apply_download_delivery(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    candidate = {
+        "inline_max_bytes": _param(params, "inline_max_bytes", int),
+        "link_ttl_seconds": _param(params, "link_ttl_seconds", int),
+        "allow_disk_staging": _param(params, "allow_disk_staging", bool),
+        "agent_links": _param(params, "agent_links", bool),
+        "allow_exports": _param(params, "allow_exports", bool),
+    }
+    _validated(DownloadDeliveryConfig.from_org_config, "download_delivery", candidate)
+    return _replace_section(config, "download_delivery", {**config["download_delivery"], **candidate}, "Changed file delivery")
+
+
+def _validated(parser: Any, section: str, candidate: dict[str, Any]) -> None:
+    try:
+        parser({section: candidate})
+    except ConfigurationError as exc:
+        raise _parse_error(exc) from exc
+
+
+def _apply_authz(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    candidate = {
+        "allowed_domains": _word_list(_param(params, "allowed_domains", str)),
+        "groups_claim": _param(params, "groups_claim", str).strip(),
+        "required_groups": _word_list(_param(params, "required_groups", str)),
+    }
+    _validated(AuthzPolicyConfig.from_org_config, "authz", candidate)
+    return _replace_section(config, "authz", {**config["authz"], **candidate}, "Changed sign-in restrictions")
+
+
+def _apply_web_push(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    enabled = _param(params, "enabled", bool)
+    candidate = {**config["web_push"], "enabled": enabled}
+    _validated(WebPushConfig.from_org_config, "web_push", candidate)
+    return _replace_section(config, "web_push", candidate, f"Turned web push {'on' if enabled else 'off'}")
+
+
+def _apply_unattended_sessions(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    enabled = _param(params, "enabled", bool)
+    candidate = {**config["unattended_sessions"], "enabled": enabled}
+    return _replace_section(
+        config, "unattended_sessions", candidate, f"Turned unattended sessions {'on' if enabled else 'off'}"
+    )
+
+
+def _apply_tighten_step_up(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    candidate = {
+        "enabled": _param(params, "enabled", bool),
+        "require_passkey": _param(params, "require_passkey", bool),
+        "scope": _param(params, "scope", str),
+    }
+    _validated(StepUpConfig.from_org_config, "step_up", candidate)
+    current = config["step_up"]
+    new_rank, old_rank = _step_up_rank(candidate), _step_up_rank(current)
+    if new_rank == old_rank:
+        return "", []
+    if not _step_up_not_weaker(candidate, current):
+        raise AdminConfigError(_STEP_UP_REFUSAL)
+    config["step_up"] = {**current, **candidate}
+    return "Made step-up stricter", ["step_up"]
+
+
+def _apply_scoped_tokens(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    max_days = _param(params, "max_days", int)
+    if not 1 <= max_days <= scoped_tokens.LOCAL_MAX_DAYS:
+        raise AdminConfigError(f"Scoped tokens can last from 1 to {scoped_tokens.LOCAL_MAX_DAYS} days.")
+    candidate = {
+        **config["scoped_tokens"],
+        "enabled": _param(params, "enabled", bool),
+        "max_days": max_days,
+        "allow_ai_proposals": _param(params, "allow_ai_proposals", bool),
+    }
+    return _replace_section(config, "scoped_tokens", candidate, "Changed scoped tokens")
+
+
+def _apply_audit_forwarding(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    current = config["audit_forwarding"]
+    current_http = current.get("http") if isinstance(current.get("http"), dict) else {}
+    current_syslog = current.get("syslog") if isinstance(current.get("syslog"), dict) else {}
+    kind = _param(params, "kind", str)
+    http_url = _param(params, "http_url", str).strip()
+    previous_kind = current.get("kind", "syslog")
+    previous_url = str(current_http.get("url", "") or "")
+    # The bearer variable's name is never taken from the request. It is also dropped when the
+    # forwarding target moves, so a token configured for one destination is not sent to another.
+    bearer = str(current_http.get("bearer_token_env", "") or "")
+    moved = kind != previous_kind or _endpoint(http_url) != _endpoint(previous_url)
+    dropped = bool(bearer) and moved
+    candidate = {
+        **current,
+        "enabled": _param(params, "enabled", bool),
+        "kind": kind,
+        "syslog": {
+            **current_syslog,
+            "host": _param(params, "syslog_host", str).strip(),
+            "port": _port(params),
+            "protocol": _param(params, "syslog_protocol", str),
+        },
+        "http": {**current_http, "url": http_url, "bearer_token_env": "" if moved else bearer},
+    }
+    _validated(AuditForwardingConfig.from_org_config, "audit_forwarding", candidate)
+    summary = "Changed audit forwarding"
+    if dropped:
+        summary += "; the bearer token was removed. Set it again in org/admin_config.json."
+    return _replace_section(config, "audit_forwarding", candidate, summary)
+
+
+def apply_change(
+    action: str, params: dict[str, Any], *, bundle: dict[str, Any], mode: Mode, single_user: bool
+) -> tuple[str, list[str]]:
+    """Validate and store one Admin-page change; returns ``(summary, changed_sections)``.
+
+    Everything that is not a parameter comes from the caller, never the request: the dispatcher
+    passes only the action's declared parameters. A change that alters nothing returns
+    ``("", [])`` and writes nothing. The privacy actions are not handled here.
+    """
+    modes = _ACTION_MODES.get(action)
+    if modes is None:
+        raise AdminConfigError("Unknown action.")
+    if mode not in modes:
+        raise AdminConfigError("This setting is available on organization servers only.")
+    with _write_lock:
+        config = config_for(bundle, mode=mode, single_user=single_user)
+        before = copy.deepcopy(config)
+        if action in ("offer_service", "withdraw_service"):
+            result = _apply_service_toggle(config, action, params)
+        elif action == "set_atlassian_assets":
+            result = _apply_atlassian_assets(config, params)
+        elif action == "set_server_address":
+            result = _apply_server_address(config, params, bundle, mode=mode)
+        elif action == "set_auto_provisioning":
+            result = _apply_auto_provisioning(config, params, bundle, mode=mode, single_user=single_user)
+        elif action == "set_unattended_sessions":
+            result = _apply_unattended_sessions(config, params)
+        elif action == "clear_rooms":
+            config["rooms"], config["rooms_synced_at"] = [], ""
+            result = ("Cleared the room directory", ["rooms"]) if before["rooms"] or before["rooms_synced_at"] else ("", [])
+        elif action == "set_download_delivery":
+            result = _apply_download_delivery(config, params)
+        elif action == "set_web_push":
+            result = _apply_web_push(config, params)
+        elif action == "set_authz":
+            result = _apply_authz(config, params)
+        elif action == "tighten_step_up":
+            result = _apply_tighten_step_up(config, params)
+        elif action == "set_scoped_tokens":
+            result = _apply_scoped_tokens(config, params)
+        else:
+            result = _apply_audit_forwarding(config, params)
+        if result[0] and config != before:
+            _write(config)
+        return result
+
+
+# --------------------------------------------------------------------------- #
+# The room directory
+# --------------------------------------------------------------------------- #
+
+
+def _clean_text(value: str) -> bool:
+    return len(value) <= MAX_ROOM_TEXT and not any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in value)
+
+
+def _room_ok(room: Any) -> bool:
+    if not isinstance(room, dict):
+        return False
+    email = room.get("resource_email")
+    if not isinstance(email, str) or not email.strip():
+        return False
+    for key, value in room.items():
+        if not isinstance(key, str) or not _clean_text(key):
+            return False
+        if isinstance(value, str):
+            if not _clean_text(value):
+                return False
+        elif isinstance(value, float):
+            if not math.isfinite(value):
+                return False
+        elif value is not None and not isinstance(value, (bool, int)):
+            return False
+    return True
+
+
+def replace_rooms(data: Any, *, bundle: dict[str, Any], mode: Mode, single_user: bool) -> str:
+    """Replace the room directory with the file ``sync_room_directory.py`` wrote.
+
+    Room text reaches agents as tool output, so it is held to a narrow shape: flat objects of
+    short strings without control characters, numbers, booleans and nulls.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("rooms"), list):
+        raise AdminConfigError(_ROOMS_REFUSAL)
+    rooms = data["rooms"]
+    if len(rooms) > MAX_ROOMS:
+        raise AdminConfigError(f"A room directory can hold at most {MAX_ROOMS} rooms.")
+    synced_at = data.get("rooms_synced_at", "")
+    if not isinstance(synced_at, str) or not _clean_text(synced_at) or not all(_room_ok(room) for room in rooms):
+        raise AdminConfigError(_ROOMS_REFUSAL)
+    with _write_lock:
+        config = config_for(bundle, mode=mode, single_user=single_user)
+        config["rooms"] = copy.deepcopy(rooms)
+        config["rooms_synced_at"] = synced_at
+        _write(config)
+    return f"Replaced the room directory ({len(rooms)} rooms)"
+
+
+# --------------------------------------------------------------------------- #
+# The Admin page's service rows
+# --------------------------------------------------------------------------- #
+
+
+def _service_row(
+    bundle: dict[str, Any], admin: dict[str, Any], name: str, env: dict[str, str], *, mode: Mode, single_user: bool
+) -> dict[str, Any]:
+    from . import oauth_apps
+
+    stored = admin.get("services", {}).get(name, {})
+    stored = stored if isinstance(stored, dict) else {}
+    section = _section(bundle, name)
+    app_source = "server"
+    client_id = ""
+    if name in oauth_apps.BUILTIN_KEY:
+        app_source = oauth_apps.credentials_source(bundle, name, mode=mode)
+        if app_source == "bundle":
+            client_id = str(section.get("consumer_key" if name == "salesforce" else "client_id") or "")
+        elif app_source == "builtin":
+            app = app_credentials.builtin_app(oauth_apps.BUILTIN_KEY[name])
+            client_id = str(app["client_id"]) if app else ""
+    elif name == "telegram":
+        app_source = "builtin" if app_credentials.telegram_app_credentials() is not None else "none"
+    elif name == "grist":
+        client_id = str(section.get("client_id") or "")
+
+    options: dict[str, Any] = {}
+    if name == "atlassian":
+        options = {
+            "assets": bool(stored.get("assets", False)),
+            "assets_workspace_id": str(stored.get("assets_workspace_id", "") or ""),
+        }
+    elif name in _ADDRESS_FIELD:
+        source = _address_source(bundle, name, stored, env)
+        if source == "bundle":
+            address = str(section.get("server_url") or "")
+        else:
+            address = env.get(name) or str(stored.get(_ADDRESS_FIELD[name], "") or "")
+        available, reason = _auto_provision_state(bundle, name, stored, env, mode=mode, single_user=single_user)
+        auto = stored.get("auto_provision", {})
+        key_env = str(auto.get("key_env", "") or _DEFAULT_KEY_ENV[name])
+        options = {
+            _ADDRESS_FIELD[name]: address,
+            "address_source": source,
+            "locked": source != "admin",
+            "auto_provision": {
+                "enabled": bool(auto.get("enabled", False)),
+                "trust_unverified_email": bool(auto.get("trust_unverified_email", False)),
+                "available": available,
+                "reason": reason,
+                "key_set": bool(os.environ.get(key_env, "").strip()),
+            },
+        }
+    return {
+        "key": name,
+        "label": SERVICE_LABELS[name],
+        "offered": bool(stored.get("offered", False)),
+        "app_source": app_source,
+        "client_id": client_id,
+        "relay": mode == "org" and app_source == "builtin" and name != "telegram",
+        "options": options,
+    }
+
+
+def service_rows(
+    bundle: dict[str, Any], admin: dict[str, Any], *, mode: Mode, single_user: bool = False
+) -> list[dict[str, Any]]:
+    """One row per service for the Admin page. A row never carries a secret: not a client
+    secret, not a provisioning key, only whether the key is set."""
+    env = _env_addresses()
+    return [_service_row(bundle, admin, name, env, mode=mode, single_user=single_user) for name in SERVICES]
