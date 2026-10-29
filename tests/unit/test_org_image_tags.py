@@ -37,9 +37,25 @@ def test_image_tags(known: list[str], version: str, expected: list[str]) -> None
     assert org_image_tags.image_tags(version, known) == expected
 
 
-@pytest.mark.parametrize("version", ["6.6.0a1", "6.6.0rc1", "6.6", "v6.6.0"])
-def test_non_stable_version_is_refused(version: str) -> None:
-    with pytest.raises(ValueError, match="stable versions only"):
+@pytest.mark.parametrize(
+    ("known", "version"),
+    [
+        ([], "7.0.0a1"),
+        (["v6.5.0"], "7.0.0b2"),
+        (["v6.5.0", "v7.0.0a1"], "7.0.0rc1"),
+        (["v7.0.0"], "7.0.0rc3"),
+        (["v7.0.0a1", "v7.0.0a2", "v8.0.0"], "7.0.0a2"),
+    ],
+)
+def test_pre_release_gets_exactly_its_version(known: list[str], version: str) -> None:
+    assert org_image_tags.image_tags(version, known) == [version]
+
+
+@pytest.mark.parametrize(
+    "version", ["6.6.0a", "6.6.0rc", "6.6.0.dev1", "6.6.0-rc1", "6.6.0a1.post2", "6.6", "v6.6.0", "7.0.0 a1", ""]
+)
+def test_malformed_version_is_refused(version: str) -> None:
+    with pytest.raises(ValueError, match="not a release version"):
         org_image_tags.image_tags(version, [])
 
 
@@ -63,6 +79,22 @@ def test_main_reads_tags_from_the_repo(
     assert capsys.readouterr().out == "1.0.1\n1.0\n"
 
 
-def test_main_refuses_a_pre_release(capsys: pytest.CaptureFixture[str]) -> None:
-    assert org_image_tags.main(["6.6.0a1"]) == 2
-    assert "error: org images are published for stable versions only" in capsys.readouterr().err
+def test_main_prints_only_the_version_for_a_pre_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _git(["init"], tmp_path)
+    _git(
+        ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", "init"],
+        tmp_path,
+    )
+    _git(["tag", "v6.5.0"], tmp_path)
+    _git(["tag", "v7.0.0a1"], tmp_path)
+    monkeypatch.setattr(org_image_tags, "REPO_ROOT", tmp_path)
+
+    assert org_image_tags.main(["7.0.0a1"]) == 0
+    assert capsys.readouterr().out == "7.0.0a1\n"
+
+
+def test_main_refuses_a_malformed_version(capsys: pytest.CaptureFixture[str]) -> None:
+    assert org_image_tags.main(["6.6.0.dev1"]) == 2
+    assert "error: not a release version" in capsys.readouterr().err
