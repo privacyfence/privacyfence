@@ -3134,8 +3134,9 @@ each customer org installs once.
     rotation on.
   - Its description, info URL, logo and icon are fixed in mb1. The logo and icon are served from
     privacyfence.eu.
-- **The package.** A 2GP managed package `PrivacyFence` contains the app without its global OAuth
-  settings. So every subscriber org shares the one consumer key and secret, and those never leave
+- **The package.** A 2GP managed package `PrivacyFence` contains the app and its OAuth settings,
+  without its global OAuth settings and without its OAuth policies: Salesforce does not package
+  `ExtlClntAppOauthConfigurablePolicies`, because each installing org sets its own. So every subscriber org shares the one consumer key and secret, and those never leave
   the Dev Hub.
   - Versions are created with `--installation-key-bypass` and promoted, so anyone can install the
     released version.

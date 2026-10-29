@@ -301,17 +301,17 @@ PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE=/run/secrets/grist_provisioning_key</pr
 sf project generate --name privacyfence-package
 cd privacyfence-package                             # set "namespace" in sfdx-project.json to the registered one
 
-# retrieve exactly this app: its settings are named &lt;app&gt;_oauth and its policies &lt;app&gt;_oauthPlcy
+# retrieve exactly this app and its OAuth settings (named &lt;app&gt;_oauth). Its policies
+# (&lt;app&gt;_oauthPlcy) cannot be packaged: each installing org sets its own.
 sf project retrieve start --target-org pf-devhub --metadata \
   ExternalClientApplication:PrivacyFence \
-  ExtlClntAppOauthSettings:PrivacyFence_oauth \
-  ExtlClntAppOauthConfigurablePolicies:PrivacyFence_oauthPlcy
-ls -R force-app/main/default                        # exactly those three files; no global OAuth settings (they hold the secret)
+  ExtlClntAppOauthSettings:PrivacyFence_oauth
+ls -R force-app/main/default                        # exactly those two files; no policies, no global OAuth settings (they hold the secret)
 
 sf package create --name PrivacyFence --package-type Managed --path force-app --target-dev-hub pf-devhub
 sf package version create --package PrivacyFence --installation-key-bypass --code-coverage \
-  --wait 30 --target-dev-hub pf-devhub
-sf package version promote --package "PrivacyFence@1.0.0-1" --target-dev-hub pf-devhub</pre>The package's name (<code>PrivacyFence</code>) is separate from the app's and only has to be unique in your Dev Hub.The promoted version prints an id starting with <code>04t</code>. Its install URL is <code>https://login.salesforce.com/packaging/installPackage.apexp?p0=04t…</code>.</li>
+  --wait 30 --target-dev-hub pf-devhub            # prints the Subscriber Package Version Id, 04t…
+sf package version promote --package 04t… --target-dev-hub pf-devhub</pre>Set <code>"versionNumber"</code> in <code>sfdx-project.json</code> (for example <code>1.0.0.NEXT</code>) before <code>version create</code> if you want a version other than the default.The package's name (<code>PrivacyFence</code>) is separate from the app's and only has to be unique in your Dev Hub.The promoted version prints an id starting with <code>04t</code>. Its install URL is <code>https://login.salesforce.com/packaging/installPackage.apexp?p0=04t…</code>.</li>
           <li><strong>Keep the package source.</strong> Commit the project, without the global OAuth settings file (it holds the secret), to <code>salesforce/package/</code> on the <code>plan/builtin-oauth-apps</code> branch, so later versions build from the repository.</li>
           <li><strong>Values for GitHub.</strong> The consumer key and secret from the app's OAuth settings in the Dev Hub go into the secrets <code>PF_APP_SALESFORCE_CLIENT_ID</code> and <code>PF_APP_SALESFORCE_CLIENT_SECRET</code> (last step of this section). The install URL goes into a repository <strong>variable</strong>, not a secret: <a href="https://github.com/privacyfence/privacyfence/settings/variables/actions/new">Settings → Secrets and variables → Actions → Variables → New repository variable</a>, named <code>PF_APP_SALESFORCE_INSTALL_URL</code>.</li>
           <li><strong>Test install.</strong> Sign in to the QA Salesforce org as its admin and open the install URL. Install for admins only. Then <strong>Setup → External Client App Manager → PrivacyFence → Policies</strong>: <strong>Permitted users: All users may self-authorize</strong>. That org is the one the live checks connect in step 5. The real sign-in through the relay only works after the merge. If it then fails with a cross-org or invalid-client error, stop and decide: ship 7.0 without a built-in Salesforce app, or follow Salesforce's guidance on subscriber credentials (D26, "Known uncertainty").</li>
