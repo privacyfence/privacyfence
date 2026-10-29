@@ -37,8 +37,8 @@ _FETCH_PATH = "/mcp-files/fetch/"
 _APPROVAL_POLLS = 8
 _APPROVAL_POLL_SECONDS = 120
 _UNATTENDED_DISABLED = (
-    "This PrivacyFence does not allow unattended sessions (unattended_sessions.enabled in "
-    "org_config.json). Ask your administrator, or run with --attended."
+    "This PrivacyFence does not allow unattended sessions (Admin page, Features). "
+    "Ask your administrator, or run with --attended."
 )
 
 

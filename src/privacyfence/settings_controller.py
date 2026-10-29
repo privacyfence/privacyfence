@@ -1326,7 +1326,10 @@ class SettingsController:
             org_config = self._org_config_or_empty()
         if connector in ORG_CONFIG_SERVICE and org_mode.connector_enabled_by_org(org_config, connector):
             return True
-        self.error = f"{connector_label(connector)} isn't enabled in your organization config."
+        self.error = (
+            f"{connector_label(connector)} isn't offered on this install. "
+            "Turn it on on the Admin page (Services)."
+        )
         return False
 
     def _authenticate_google(self, cname: str, org_config: dict[str, Any]) -> None:

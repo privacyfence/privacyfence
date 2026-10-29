@@ -1558,7 +1558,7 @@ _RULE_NAME_WAIT_SECONDS = 3.0
 # store raises the same text from ``create``.
 _SCOPED_TOKENS_DISABLED = (
     "Scoped tokens are not enabled on this install. "
-    "Your administrator turns them on in the organization config bundle."
+    "Your administrator turns them on on the Admin page."
 )
 
 _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({

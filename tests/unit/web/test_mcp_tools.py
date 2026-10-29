@@ -323,7 +323,7 @@ class TestBeginUnattendedSessionRefusedWhenDisabled:
             result = await session.call_tool("privacyfence_begin_unattended_session", {"reason": "scheduled run"})
         assert result.is_error is True
         assert "disabled" in result.content[0].text
-        assert "organization config" in result.content[0].text
+        assert "Admin page" in result.content[0].text
 
     async def test_never_actually_marks_the_session_unattended(self):
         dispatcher = _dispatcher({})

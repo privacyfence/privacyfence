@@ -772,9 +772,8 @@ class McpDispatcher:
     def begin_unattended_session(self, session_key: Hashable, claude_reason: str = "") -> dict:
         if not self._unattended_sessions_enabled:
             raise ValueError(
-                "Unattended sessions are disabled. An administrator must set "
-                "unattended_sessions.enabled: true in the organization config bundle "
-                "(org_config.json) before this connection can be marked unattended."
+                "Unattended sessions are disabled. An administrator turns them on on the "
+                "Admin page (Features) before this connection can be marked unattended."
             )
         self._unattended_sessions.add(session_key)
         logger.warning(

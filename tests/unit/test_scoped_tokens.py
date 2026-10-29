@@ -73,7 +73,7 @@ class TestCreateValidation:
             _create(_store(), policy=ScopedTokenPolicy(False, 90))
         assert str(err.value) == (
             "Scoped tokens are not enabled on this install. "
-            "Your administrator turns them on in the organization config bundle."
+            "Your administrator turns them on on the Admin page."
         )
 
     @pytest.mark.parametrize("label", ["", " x", "-x", "x" * 61, "a/b"])

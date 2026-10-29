@@ -744,9 +744,8 @@ _JS = r"""
     html += '<div><div class="pf-row-title">Welcome to PrivacyFence</div>';
     html += '<div class="pf-row-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
       'real accounts (Gmail, Drive, Slack, and similar) -- it governs access to them, it does not provide them ' +
-      'itself. Nothing is governed until at least one connector below is authenticated. If your IT team gave ' +
-      'you an organization config bundle, install it first from the General page; only the connectors it ' +
-      'enables are listed. Authenticate one below, then go back to Claude.</div></div>';
+      'itself. Nothing is governed until at least one connector below is authenticated. ' +
+      'The Admin page decides which services are offered. Authenticate one below, then go back to Claude.</div></div>';
     html += '<div class="pf-banner-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
       'data-dismiss-welcome="1">✕</div>';
     html += '</div></div>';
