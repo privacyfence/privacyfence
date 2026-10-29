@@ -94,9 +94,8 @@ class TestServerConfigFromOrgConfig:
 
 class TestDefaults:
     def test_default_bind_host_is_loopback(self):
-        # An org bundle with no "bind_host" must never listen on the
-        # network: the same 127.0.0.1 scripts/build_org_bundle.py writes
-        # by default (test_build_org_bundle.py pins the two together).
+        # A server config with no "bind_host" must never listen on the
+        # network: loopback, for a reverse proxy on the same host.
         assert org_mode.ServerConfig().bind_host == "127.0.0.1"
 
     def test_default_has_no_tls(self):

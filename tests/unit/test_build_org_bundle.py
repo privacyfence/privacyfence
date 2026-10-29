@@ -1,4 +1,6 @@
-"""Tests for scripts/build_org_bundle.py's bundle signing support.
+"""Tests for scripts/build_org_bundle.py: the desktop bundle it builds, its signing support, and
+the options it refuses now that operational settings live on the Admin page and organization
+servers take no bundle.
 
 This script deliberately doesn't import the ``privacyfence`` package (see
 its own module docstring -- it's meant to be runnable standalone, without
@@ -26,7 +28,6 @@ import pytest
 
 
 from privacyfence import org_bundle_signing
-from privacyfence.step_up_config import STEP_UP_SCOPES, StepUpConfig
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "build_org_bundle.py"
 _spec = importlib.util.spec_from_file_location("build_org_bundle", _SCRIPT_PATH)
@@ -119,38 +120,106 @@ class TestSignBundle:
             build_org_bundle._sign_bundle({"org_name": "Acme"}, str(key_path))
 
 
+# Every option that wrote an operational setting, with a sample value list that makes the command
+# line otherwise valid (the refusal must be what fails). The second column is the message kind.
+_MOVED = "moved"
+_MOVED_ENV = "moved-env"
+_MOVED_OPTIONS: list[tuple[str, list[str], str]] = [
+    ("--enable-telegram", [], _MOVED),
+    ("--enable-peek", [], _MOVED),
+    ("--enable-grist", [], _MOVED),
+    ("--peek-base-url", ["https://peek.example.com"], _MOVED),
+    ("--atlassian-assets", [], _MOVED),
+    ("--atlassian-assets-workspace-id", ["6d8c7ed1-92a5-4693-b107-226f466d78a3"], _MOVED),
+    ("--authz-allowed-domain", ["acme.com"], _MOVED),
+    ("--authz-groups-claim", ["groups"], _MOVED),
+    ("--authz-required-group", ["pf-users"], _MOVED),
+    ("--step-up-enabled", [], _MOVED),
+    ("--step-up-disabled", [], _MOVED),
+    ("--step-up-scope", ["writes"], _MOVED),
+    ("--step-up-rp-id", ["pf.example.com"], _MOVED),
+    ("--step-up-rp-name", ["PrivacyFence"], _MOVED),
+    ("--step-up-require-passkey", [], _MOVED),
+    ("--step-up-no-require-passkey", [], _MOVED),
+    ("--enable-unattended-sessions", [], _MOVED),
+    ("--disable-unattended-sessions", [], _MOVED),
+    ("--enable-scoped-tokens", [], _MOVED),
+    ("--disable-scoped-tokens", [], _MOVED),
+    ("--scoped-token-max-days", ["30"], _MOVED),
+    ("--enable-scoped-token-proposals", [], _MOVED),
+    ("--disable-scoped-token-proposals", [], _MOVED),
+    ("--downloads-inline-max-bytes", ["1000"], _MOVED),
+    ("--downloads-link-ttl-seconds", ["60"], _MOVED),
+    ("--downloads-disable-staging", [], _MOVED),
+    ("--agent-links", [], _MOVED),
+    ("--no-agent-links", [], _MOVED),
+    ("--exports", [], _MOVED),
+    ("--no-exports", [], _MOVED),
+    ("--web-push", [], _MOVED),
+    ("--no-web-push", [], _MOVED),
+    ("--enable-audit-forwarding", [], _MOVED),
+    ("--disable-audit-forwarding", [], _MOVED),
+    ("--audit-forwarding-kind", ["syslog"], _MOVED),
+    ("--audit-forwarding-syslog-host", ["siem.example.com"], _MOVED),
+    ("--audit-forwarding-syslog-port", ["601"], _MOVED),
+    ("--audit-forwarding-syslog-protocol", ["udp"], _MOVED),
+    ("--audit-forwarding-http-url", ["https://siem.example.com/ingest"], _MOVED),
+    ("--audit-forwarding-http-bearer-token-env", ["SIEM_TOKEN"], _MOVED),
+    ("--peek-auto-provision", [], _MOVED_ENV),
+    ("--no-peek-auto-provision", [], _MOVED_ENV),
+    ("--peek-provisioning-key-env", ["MY_KEY"], _MOVED_ENV),
+    ("--peek-trust-unverified-email", [], _MOVED_ENV),
+    ("--grist-auto-provision", [], _MOVED_ENV),
+    ("--no-grist-auto-provision", [], _MOVED_ENV),
+    ("--grist-provisioner-url", ["https://prov.example.com"], _MOVED_ENV),
+    ("--grist-provisioning-key-env", ["MY_KEY"], _MOVED_ENV),
+    ("--grist-trust-unverified-email", [], _MOVED_ENV),
+    # Pins an API-key server, which is an Admin-page setting; with a Grist OAuth app it stays valid.
+    ("--grist-server-url", ["https://grist.example.com"], _MOVED),
+]
+
+_ORG_MODE_OPTIONS: list[tuple[str, list[str]]] = [
+    ("--server-issuer-url", ["https://pf.example.com"]),
+    ("--server-bind-host", ["0.0.0.0"]),
+    ("--server-port", ["8765"]),
+    ("--server-tls-cert", ["/etc/pf/cert.pem"]),
+    ("--server-tls-key", ["/etc/pf/key.pem"]),
+    ("--server-trusted-proxy", ["10.0.0.5"]),
+    ("--idp-issuer", ["https://idp.example.com"]),
+    ("--idp-client-id", ["cid"]),
+    ("--idp-client-secret", ["csecret"]),
+    ("--idp-admin-group-claim", ["groups"]),
+    ("--idp-admin-group-value", ["pf-admins"]),
+    ("--idp-step-up-acr-value", ["mfa"]),
+]
+
+_MOVED_TEXT = "error: {option} has moved to the Admin page (ADR 0256); remove it."
+_MOVED_ENV_TEXT = (
+    "error: {option} has moved to the Admin page and PRIVACYFENCE_PEEK_BASE_URL / "
+    "PRIVACYFENCE_GRIST_SERVER_URL / PRIVACYFENCE_GRIST_PROVISIONER_URL on the server (ADR 0256, 0263); "
+    "remove it."
+)
+_ORG_TEXT = (
+    "error: {option}: organization servers take their settings from privacyfence.env and their own "
+    "apps from signed connector configs (docs/org-mode-setup-guide.md, ADR 0268)."
+)
+
+
+def _desktop_args(tmp_path: Path, *extra: str) -> list[str]:
+    """A valid minimal desktop command line: a Slack app, written to tmp_path/org_bundle.json."""
+    return [
+        "-o", str(tmp_path / "org_bundle.json"),
+        "--slack-client-id", "id1", "--slack-client-secret", "secret1", *extra,
+    ]
+
+
+def _run_expecting_exit(argv: list[str]) -> int | str | None:
+    with pytest.raises(SystemExit) as excinfo:
+        build_org_bundle.main(argv)
+    return excinfo.value.code
+
+
 class TestMainSigningIntegration:
-    def test_mode_org_without_sign_key_is_rejected(self, tmp_path):
-        out_path = tmp_path / "org_bundle.json"
-        with pytest.raises(SystemExit):
-            build_org_bundle.main([
-                "-o", str(out_path), "--mode", "org",
-                "--server-issuer-url", "https://pf.example.com",
-                "--idp-issuer", "https://idp.example.com",
-                "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            ])
-        assert not out_path.exists()
-
-    def test_mode_org_with_sign_key_writes_a_signed_bundle(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-
-        rc = build_org_bundle.main([
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path),
-        ])
-
-        assert rc == 0
-        bundle = json.loads(out_path.read_text())
-        assert bundle["mode"] == "org"
-        assert "signature" in bundle
-        trust = org_bundle_signing.verify_and_maybe_pin(bundle, tmp_path / "orgdir")
-        assert trust.ok and trust.signed
-
     def test_merge_without_sign_key_strips_a_stale_signature(self, tmp_path):
         """Re-running without --sign-key after a bundle was previously
         signed must not leave a now-invalid signature/key pair sitting in
@@ -176,6 +245,30 @@ class TestMainSigningIntegration:
         assert "signing_public_key" not in bundle
         assert bundle["slack"]["client_id"] == "id1"  # the earlier merge survives
         assert bundle["salesforce"]["consumer_key"] == "ckey"
+
+    def test_a_credentials_only_desktop_bundle_builds_and_verifies(self, tmp_path, capsys):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_bundle.json"
+
+        rc = build_org_bundle.main([
+            "-o", str(out_path), "--org-name", "Acme", "--slack-client-id", "id1",
+            "--slack-client-secret", "secret1", "--sign-key", str(key_path),
+        ])
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text())
+        assert bundle["slack"] == {"client_id": "id1", "client_secret": "secret1"}
+        assert not {"mode", "server", "idp"} & set(bundle)
+        trust = org_bundle_signing.verify_and_maybe_pin(bundle, tmp_path / "orgdir")
+        assert trust.ok and trust.signed
+        out = capsys.readouterr().out
+        assert "Install/Update Organization Config" in out
+        assert "<data>/org/org_bundle.json" not in out
+
+    def test_mode_local_is_still_accepted_and_written(self, tmp_path):
+        assert build_org_bundle.main(_desktop_args(tmp_path, "--mode", "local")) == 0
+        assert json.loads((tmp_path / "org_bundle.json").read_text())["mode"] == "local"
 
     def test_signing_adds_a_serial_that_defaults_to_the_current_time(self, tmp_path, monkeypatch):
         monkeypatch.setattr(build_org_bundle.time, "time", lambda: 1_700_000_000.9)
@@ -264,145 +357,6 @@ class TestMainSigningIntegration:
         assert trust.ok and trust.signed
         assert trust.serial == 42
 
-    def test_authz_flags_write_the_authz_section(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-
-        rc = build_org_bundle.main([
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--authz-allowed-domain", "acme.com", "--authz-allowed-domain", "acme.co.uk",
-            "--authz-groups-claim", "groups", "--authz-required-group", "privacyfence-users",
-            "--sign-key", str(key_path),
-        ])
-
-        assert rc == 0
-        bundle = json.loads(out_path.read_text())
-        assert bundle["authz"] == {
-            "allowed_domains": ["acme.com", "acme.co.uk"],
-            "groups_claim": "groups",
-            "required_groups": ["privacyfence-users"],
-        }
-
-    def test_authz_required_group_without_groups_claim_is_rejected(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-
-        with pytest.raises(SystemExit, match="authz-groups-claim"):
-            build_org_bundle.main([
-                "-o", str(out_path), "--mode", "org",
-                "--server-issuer-url", "https://pf.example.com",
-                "--idp-issuer", "https://idp.example.com",
-                "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-                "--authz-required-group", "privacyfence-users",
-                "--sign-key", str(key_path),
-            ])
-
-    def test_authz_flags_require_mode_org(self, tmp_path):
-        out_path = tmp_path / "org_bundle.json"
-        with pytest.raises(SystemExit, match="--mode org"):
-            build_org_bundle.main([
-                "-o", str(out_path), "--authz-allowed-domain", "acme.com",
-            ])
-
-    def test_mode_local_clears_a_previously_written_authz_section(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-        build_org_bundle.main([
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--authz-allowed-domain", "acme.com",
-            "--sign-key", str(key_path),
-        ])
-
-        build_org_bundle.main(["-o", str(out_path), "--merge", "--mode", "local"])
-
-        assert "authz" not in json.loads(out_path.read_text())
-
-    def test_step_up_require_passkey_flag_writes_the_section(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-
-        rc = build_org_bundle.main([
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--step-up-enabled", "--step-up-require-passkey",
-            "--sign-key", str(key_path),
-        ])
-
-        assert rc == 0
-        bundle = json.loads(out_path.read_text())
-        assert bundle["step_up"]["enabled"] is True
-        assert bundle["step_up"]["require_passkey"] is True
-
-    def test_step_up_no_require_passkey_turns_it_back_off_on_merge(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-        build_org_bundle.main([
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--step-up-enabled", "--step-up-require-passkey",
-            "--sign-key", str(key_path),
-        ])
-
-        build_org_bundle.main([
-            "-o", str(out_path), "--merge", "--step-up-no-require-passkey", "--sign-key", str(key_path),
-        ])
-
-        bundle = json.loads(out_path.read_text())
-        assert bundle["step_up"]["require_passkey"] is False
-        assert bundle["step_up"]["enabled"] is True  # untouched by this merge
-
-    def test_step_up_scope_writes_the_widest_value_through(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-
-        rc = build_org_bundle.main([
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--step-up-enabled", "--step-up-scope", "writes_and_reads",
-            "--sign-key", str(key_path),
-        ])
-
-        assert rc == 0
-        bundle = json.loads(out_path.read_text())
-        assert bundle["step_up"]["scope"] == "writes_and_reads"
-        # The bundle this script writes has to survive the daemon's own
-        # parser, which is the half that actually enforces the value.
-        assert StepUpConfig.from_org_config(bundle).scope == "writes_and_reads"
-
-    def test_step_up_scope_choices_match_the_daemons_own_accepted_scopes(self):
-        """build_org_bundle.py is stdlib-only by design, so it repeats
-        step_up_config.STEP_UP_SCOPES instead of importing it -- this is
-        what catches the two drifting apart."""
-        action = next(
-            a for a in build_org_bundle.build_parser()._actions if a.dest == "step_up_scope"
-        )
-        assert tuple(action.choices) == STEP_UP_SCOPES
-
-    def test_step_up_require_passkey_requires_mode_org(self, tmp_path):
-        out_path = tmp_path / "org_bundle.json"
-        with pytest.raises(SystemExit, match="--mode org"):
-            build_org_bundle.main([
-                "-o", str(out_path), "--step-up-require-passkey",
-            ])
-
     def test_sign_key_needs_cryptography_gives_a_clear_error(self, tmp_path, monkeypatch):
         # A plain sys.modules["cryptography"] = None wouldn't reliably
         # force ImportError here -- once a submodule has been imported
@@ -421,410 +375,216 @@ class TestMainSigningIntegration:
             build_org_bundle._generate_signing_key(str(tmp_path / "key.pem"))
 
 
-class TestAuditForwardingFlags:
-    """org_bundle.json's "audit_forwarding" section, built from
-    --audit-forwarding-* flags."""
+class TestRefusedOptions:
+    """Operational and organization-mode options stay parseable, hidden from --help, only to be
+    refused with a message that says where the setting went. Nothing is written."""
 
-    def _sign_key(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        return key_path
+    @pytest.mark.parametrize(
+        ("option", "values", "kind"), _MOVED_OPTIONS, ids=[row[0] for row in _MOVED_OPTIONS],
+    )
+    def test_moved_flag_is_refused(self, tmp_path, capsys, option, values, kind):
+        out_path = tmp_path / "org_bundle.json"
 
-    def _org_mode_args(self, tmp_path, *extra):
-        return [
-            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(self._sign_key(tmp_path)),
-            *extra,
-        ]
+        code = _run_expecting_exit(_desktop_args(tmp_path, option, *values))
 
-    def test_requires_org_mode(self, tmp_path):
-        with pytest.raises(SystemExit, match="require --mode org"):
-            build_org_bundle.main([
-                "-o", str(tmp_path / "org_bundle.json"),
-                "--enable-audit-forwarding", "--audit-forwarding-syslog-host", "siem.example.com",
-            ])
+        template = _MOVED_ENV_TEXT if kind == _MOVED_ENV else _MOVED_TEXT
+        assert code == 2
+        assert capsys.readouterr().err == template.format(option=option) + "\n"
+        assert not out_path.exists()
 
-    def test_syslog_kind_writes_full_section(self, tmp_path):
-        rc = build_org_bundle.main(self._org_mode_args(
-            tmp_path,
-            "--enable-audit-forwarding", "--audit-forwarding-kind", "syslog",
-            "--audit-forwarding-syslog-host", "siem.example.com",
-            "--audit-forwarding-syslog-port", "601",
-            "--audit-forwarding-syslog-protocol", "udp",
-        ))
-        assert rc == 0
-        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
-        assert bundle["audit_forwarding"] == {
-            "enabled": True, "kind": "syslog",
-            "syslog": {"host": "siem.example.com", "port": 601, "protocol": "udp"},
-        }
-
-    def test_syslog_kind_without_host_is_rejected(self, tmp_path):
-        with pytest.raises(SystemExit, match="audit-forwarding-syslog-host"):
-            build_org_bundle.main(self._org_mode_args(tmp_path, "--enable-audit-forwarding"))
-
-    def test_http_kind_writes_full_section(self, tmp_path):
-        rc = build_org_bundle.main(self._org_mode_args(
-            tmp_path,
-            "--enable-audit-forwarding", "--audit-forwarding-kind", "http",
-            "--audit-forwarding-http-url", "https://siem.example.com/ingest",
-            "--audit-forwarding-http-bearer-token-env", "SIEM_TOKEN",
-        ))
-        assert rc == 0
-        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
-        assert bundle["audit_forwarding"] == {
-            "enabled": True, "kind": "http",
-            "http": {"url": "https://siem.example.com/ingest", "bearer_token_env": "SIEM_TOKEN"},
-        }
-
-    def test_http_kind_without_url_is_rejected(self, tmp_path):
-        with pytest.raises(SystemExit, match="audit-forwarding-http-url"):
-            build_org_bundle.main(self._org_mode_args(
-                tmp_path, "--enable-audit-forwarding", "--audit-forwarding-kind", "http",
-            ))
-
-    def test_disable_flag_turns_it_back_off_on_merge(self, tmp_path):
-        args = self._org_mode_args(
-            tmp_path,
-            "--enable-audit-forwarding", "--audit-forwarding-syslog-host", "siem.example.com",
+    def test_org_mode_option_list_matches_the_parsers_server_and_idp_destinations(self):
+        parser = build_org_bundle.build_parser()
+        from_parser = sorted(
+            option
+            for action in parser._actions if action.dest.startswith(("server_", "idp_"))
+            for option in action.option_strings
         )
-        build_org_bundle.main(args)
-        key_path = tmp_path / "key.pem"  # written by _org_mode_args' own _sign_key() above
+        assert from_parser == sorted(option for option, _ in _ORG_MODE_OPTIONS)
 
-        rc = build_org_bundle.main([
-            "-o", str(tmp_path / "org_bundle.json"), "--merge", "--disable-audit-forwarding",
-            "--sign-key", str(key_path),
-        ])
-        assert rc == 0
-        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
-        assert bundle["audit_forwarding"]["enabled"] is False
-        # The rest of the section (host, etc.) survives -- only "enabled" flips.
-        assert bundle["audit_forwarding"]["syslog"]["host"] == "siem.example.com"
-
-    def test_local_mode_strips_any_existing_section(self, tmp_path):
-        args = self._org_mode_args(
-            tmp_path,
-            "--enable-audit-forwarding", "--audit-forwarding-syslog-host", "siem.example.com",
-        )
-        build_org_bundle.main(args)
-
-        rc = build_org_bundle.main([
-            "-o", str(tmp_path / "org_bundle.json"), "--merge", "--mode", "local",
-        ])
-        assert rc == 0
-        bundle = json.loads((tmp_path / "org_bundle.json").read_text())
-        assert "audit_forwarding" not in bundle
-
-    def test_summary_line_reports_enabled_state(self, tmp_path, capsys):
-        build_org_bundle.main(self._org_mode_args(
-            tmp_path, "--enable-audit-forwarding", "--audit-forwarding-syslog-host", "siem.example.com",
-        ))
-        assert "audit_forwarding.enabled=True" in capsys.readouterr().out
-
-
-class TestServerBindHost:
-    """The org guide says never to expose the listener directly, so a bundle
-    built with no --server-bind-host binds loopback for a same-host proxy."""
-
-    def _build(self, tmp_path, *extra):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
+    @pytest.mark.parametrize(("option", "values"), _ORG_MODE_OPTIONS, ids=[row[0] for row in _ORG_MODE_OPTIONS])
+    def test_org_mode_option_is_refused(self, tmp_path, capsys, option, values):
         out_path = tmp_path / "org_bundle.json"
-        rc = build_org_bundle.main([
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path), *extra,
-        ])
-        assert rc == 0
-        return json.loads(out_path.read_text())
 
-    def test_defaults_to_loopback(self, tmp_path):
-        assert self._build(tmp_path)["server"]["bind_host"] == "127.0.0.1"
+        code = _run_expecting_exit(_desktop_args(tmp_path, option, *values))
 
-    def test_explicit_flag_still_binds_elsewhere(self, tmp_path):
-        assert self._build(tmp_path, "--server-bind-host", "0.0.0.0")["server"]["bind_host"] == "0.0.0.0"
+        assert code == 2
+        assert capsys.readouterr().err == _ORG_TEXT.format(option=option) + "\n"
+        assert not out_path.exists()
 
-    def test_default_matches_the_daemons_default_for_a_bundle_without_bind_host(self):
-        from privacyfence import org_mode
+    @pytest.mark.parametrize("spelling", [["--mode", "org"], ["--mode=org"]])
+    def test_org_mode_option_is_refused_for_mode_org(self, tmp_path, capsys, spelling):
+        code = _run_expecting_exit(_desktop_args(tmp_path, *spelling))
 
-        assert build_org_bundle.build_parser().get_default("server_bind_host") == org_mode.DEFAULT_BIND_HOST
+        assert code == 2
+        assert capsys.readouterr().err == _ORG_TEXT.format(option="--mode org") + "\n"
+        assert not (tmp_path / "org_bundle.json").exists()
 
-
-class TestAdminGroupFlags:
-    """The admin list lives in idp, which only a --mode org run writes -- as a
-    whole. Admin flags on a run without --mode org used to be dropped silently."""
-
-    def _org_args(self, out_path, key_path, *admins):
-        argv = [
-            "-o", str(out_path), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path), "--idp-admin-group-claim", "email",
-        ]
-        for admin in admins:
-            argv += ["--idp-admin-group-value", admin]
-        return argv
-
-    def _setup(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-        assert build_org_bundle.main(self._org_args(out_path, key_path, "alice@example.com")) == 0
-        return out_path, key_path
-
-    @pytest.mark.parametrize("admin_flags", [
-        ["--idp-admin-group-value", "bob@example.com"],
-        ["--idp-admin-group-claim", "email"],
-        ["--idp-admin-group-claim", "email", "--idp-admin-group-value", "bob@example.com"],
-    ])
-    def test_merge_without_org_mode_is_refused_and_leaves_the_bundle_alone(self, tmp_path, admin_flags):
-        out_path, key_path = self._setup(tmp_path)
-        before = out_path.read_bytes()
-        with pytest.raises(SystemExit, match="require --mode org"):
-            build_org_bundle.main(["-o", str(out_path), "--merge", "--sign-key", str(key_path), *admin_flags])
-        assert out_path.read_bytes() == before
-
-    def test_merge_with_org_mode_replaces_the_admin_list(self, tmp_path):
-        out_path, key_path = self._setup(tmp_path)
-        # Adding bob means passing alice again; leaving someone out removes them.
-        argv = self._org_args(out_path, key_path, "alice@example.com", "bob@example.com")
-        assert build_org_bundle.main([*argv, "--merge"]) == 0
-        assert json.loads(out_path.read_text())["idp"]["admin_group_values"] == [
-            "alice@example.com", "bob@example.com",
-        ]
-        assert build_org_bundle.main([*self._org_args(out_path, key_path, "bob@example.com"), "--merge"]) == 0
-        assert json.loads(out_path.read_text())["idp"]["admin_group_values"] == ["bob@example.com"]
-
-
-class TestAgentLinksFlag:
-    def _build(self, tmp_path, *extra, merge=False):
-        key_path = tmp_path / "key.pem"
-        if not key_path.exists():
-            build_org_bundle._generate_signing_key(str(key_path))
-        out_path = tmp_path / "org_bundle.json"
-        argv = ["-o", str(out_path), "--sign-key", str(key_path)]
-        if merge:
-            argv.append("--merge")
-        else:
-            argv += [
-                "--mode", "org", "--server-issuer-url", "https://pf.example.com",
-                "--idp-issuer", "https://idp.example.com",
-                "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            ]
-        assert build_org_bundle.main([*argv, *extra]) == 0
-        return json.loads(out_path.read_text())
-
-    def test_absent_leaves_the_key_out_so_the_daemon_default_applies(self, tmp_path):
-        bundle = self._build(tmp_path)
-        assert "agent_links" not in bundle.get("download_delivery", {})
-
-    def test_no_agent_links_writes_false(self, tmp_path):
-        assert self._build(tmp_path, "--no-agent-links")["download_delivery"]["agent_links"] is False
-
-    def test_no_exports_writes_false(self, tmp_path):
-        assert self._build(tmp_path, "--no-exports")["download_delivery"]["allow_exports"] is False
-
-    def test_agent_links_writes_true(self, tmp_path):
-        assert self._build(tmp_path, "--agent-links")["download_delivery"]["agent_links"] is True
-
-    def test_agent_links_turns_it_back_on_on_merge_and_keeps_other_download_keys(self, tmp_path):
-        self._build(tmp_path, "--no-agent-links", "--downloads-disable-staging")
-
-        bundle = self._build(tmp_path, "--agent-links", merge=True)
-
-        assert bundle["download_delivery"] == {"agent_links": True, "allow_disk_staging": False}
-
-    def test_written_value_is_what_the_daemon_reads(self, tmp_path):
-        from privacyfence import org_mode
-
-        bundle = self._build(tmp_path, "--no-agent-links")
-
-        assert org_mode.DownloadDeliveryConfig.from_org_config(bundle).agent_links is False
-
-    def test_requires_org_mode(self, tmp_path):
-        with pytest.raises(SystemExit, match="--agent-links"):
-            build_org_bundle.main([
-                "-o", str(tmp_path / "org_bundle.json"),
-                "--slack-client-id", "id", "--slack-client-secret", "secret", "--no-agent-links",
-            ])
-
-    def test_summary_line_reports_agent_links(self, tmp_path, capsys):
-        self._build(tmp_path, "--no-agent-links")
-        assert "download_delivery.agent_links=False" in capsys.readouterr().out
-
-
-class TestInstructionsPrintedAfterWriting:
-    """The closing instructions depend on the bundle's mode: an org-mode
-    bundle is installed on the server by hand (Settings has no install
-    button in org mode), a local-mode bundle through Settings."""
-
-    def _org_args(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        return [
-            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com/",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path),
-        ]
-
-    def test_org_bundle_says_to_copy_it_to_the_server_and_restart(self, tmp_path, capsys):
-        build_org_bundle.main(self._org_args(tmp_path))
-
-        out = capsys.readouterr().out
-        assert "<data>/org/org_bundle.json" in out
-        assert "restart" in out
-        assert "Install/Update" not in out
-
-    def test_local_bundle_says_to_install_it_from_settings(self, tmp_path, capsys):
-        build_org_bundle.main([
-            "-o", str(tmp_path / "org_bundle.json"), "--slack-client-id", "id", "--slack-client-secret", "s",
-        ])
-
-        out = capsys.readouterr().out
-        assert "Install/Update Organization Config" in out
-        assert "<data>/org/org_bundle.json" not in out
-
-    def test_org_bundle_lists_all_three_idp_redirect_uris(self, tmp_path, capsys):
-        build_org_bundle.main(self._org_args(tmp_path))
-
-        out = capsys.readouterr().out
-        for path in ("/oauth/idp/callback", "/oauth/idp/login-callback", "/oauth/stepup/callback"):
-            assert f"https://pf.example.com{path}" in out
-        assert "'cid'" in out
-        assert "/oauth/callback/" not in out  # no connector configured, nothing to list
-
-    def test_org_bundle_lists_each_configured_connectors_callback(self, tmp_path, capsys):
-        secret = tmp_path / "client_secret.json"
-        secret.write_text(json.dumps({"web": {"client_id": "g", "client_secret": "gs"}}))
-
-        build_org_bundle.main([
-            *self._org_args(tmp_path),
-            "--google-client-secret", str(secret),
-            "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
-        ])
-
-        out = capsys.readouterr().out
-        for name in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script", "atlassian"):
-            assert f"https://pf.example.com/oauth/callback/{name}" in out
-        assert "/oauth/callback/slack" not in out
-
-    def test_atlassian_assets_flag_sets_the_bundle_flag(self, tmp_path):
-        out_path = tmp_path / "org_bundle.json"
-        build_org_bundle.main([
-            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
-            "--atlassian-assets",
-        ])
-        assert json.loads(out_path.read_text())["atlassian"]["assets"] is True
-
-    def test_atlassian_without_the_assets_flag_leaves_it_out(self, tmp_path):
-        out_path = tmp_path / "org_bundle.json"
-        build_org_bundle.main([
-            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
-        ])
-        assert "assets" not in json.loads(out_path.read_text())["atlassian"]
-
-    def test_atlassian_assets_flag_without_credentials_exits(self, tmp_path):
-        with pytest.raises(SystemExit) as excinfo:
-            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), "--atlassian-assets"])
-        assert str(excinfo.value) == "--atlassian-assets needs --atlassian-client-id and --atlassian-client-secret."
-
-    def test_atlassian_assets_workspace_id_is_written(self, tmp_path):
-        out_path = tmp_path / "org_bundle.json"
-        build_org_bundle.main([
-            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
-            "--atlassian-assets", "--atlassian-assets-workspace-id", " 6d8c7ed1-92a5-4693-b107-226f466d78a3 ",
-        ])
-        atlassian = json.loads(out_path.read_text())["atlassian"]
-        assert atlassian["assets_workspace_id"] == "6d8c7ed1-92a5-4693-b107-226f466d78a3"
-
-    def test_atlassian_assets_workspace_id_must_be_a_uuid(self, tmp_path):
-        with pytest.raises(SystemExit) as excinfo:
-            build_org_bundle.main([
-                "-o", str(tmp_path / "org_bundle.json"), "--atlassian-client-id", "a",
-                "--atlassian-client-secret", "as", "--atlassian-assets-workspace-id", "../x",
-            ])
-        assert str(excinfo.value) == "--atlassian-assets-workspace-id is not a workspace id (expected a UUID)."
-
-    def test_atlassian_assets_workspace_id_without_credentials_exits(self, tmp_path):
-        with pytest.raises(SystemExit) as excinfo:
-            build_org_bundle.main([
-                "-o", str(tmp_path / "org_bundle.json"),
-                "--atlassian-assets-workspace-id", "6d8c7ed1-92a5-4693-b107-226f466d78a3",
-            ])
-        assert str(excinfo.value) == (
-            "--atlassian-assets-workspace-id needs --atlassian-client-id and --atlassian-client-secret."
-        )
-
-    def test_merge_without_mode_flags_reads_the_issuer_from_the_existing_bundle(self, tmp_path, capsys):
-        build_org_bundle.main(self._org_args(tmp_path))
-        capsys.readouterr()
-
-        build_org_bundle.main([
-            "-o", str(tmp_path / "org_bundle.json"), "--merge",
-            "--slack-client-id", "id", "--slack-client-secret", "s",
-            "--sign-key", str(tmp_path / "key.pem"),
-        ])
-
-        out = capsys.readouterr().out
-        assert "https://pf.example.com/oauth/stepup/callback" in out
-        assert "https://pf.example.com/oauth/callback/slack" in out
-        assert "None/" not in out
-
-    def test_help_names_the_step_up_callback_and_apps_script(self, capsys):
+    def test_refused_options_are_hidden_from_help(self, capsys):
         with pytest.raises(SystemExit):
             build_org_bundle.main(["--help"])
+        out = capsys.readouterr().out
+        for option in [row[0] for row in _MOVED_OPTIONS if row[0] != "--grist-server-url"]:
+            assert option not in out
+        for option, _ in _ORG_MODE_OPTIONS:
+            assert option not in out
+        parser = build_org_bundle.build_parser()
+        hidden = {o for a in parser._actions if a.help is build_org_bundle.argparse.SUPPRESS for o in a.option_strings}
+        assert {row[0] for row in _MOVED_OPTIONS} - {"--grist-server-url"} <= hidden
 
+    def test_help_points_organization_servers_to_the_env_file_and_connector_configs(self, capsys):
+        with pytest.raises(SystemExit):
+            build_org_bundle.main(["--help"])
         out = " ".join(capsys.readouterr().out.split())
-        assert out.count("/oauth/stepup/callback") == 2
-        assert "Contacts, Tasks, Apps Script)" in out
+        assert "privacyfence.env" in out
+        assert "connector configs" in out
+        assert "Admin page" in out
 
+    def test_every_refused_option_is_reported_once_in_the_order_given(self, tmp_path, capsys):
+        code = _run_expecting_exit(_desktop_args(
+            tmp_path, "--enable-telegram", "--idp-issuer", "https://idp.example.com", "--mode", "org",
+            "--no-web-push", "--enable-telegram", "--peek-auto-provision",
+        ))
 
-class TestWebPushFlag:
-    """org_bundle.json's "web_push" section: the org-wide off switch (ADR 0081)."""
-
-    def _args(self, tmp_path, *extra):
-        key_path = tmp_path / "key.pem"
-        if not key_path.exists():
-            build_org_bundle._generate_signing_key(str(key_path))
-        return [
-            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path), *extra,
+        assert code == 2
+        assert capsys.readouterr().err.splitlines() == [
+            _MOVED_TEXT.format(option="--enable-telegram"),
+            _ORG_TEXT.format(option="--idp-issuer"),
+            _ORG_TEXT.format(option="--mode org"),
+            _MOVED_TEXT.format(option="--no-web-push"),
+            _MOVED_ENV_TEXT.format(option="--peek-auto-provision"),
         ]
 
-    def _bundle(self, tmp_path) -> dict:
-        return json.loads((tmp_path / "org_bundle.json").read_text())
+    def test_an_option_given_with_an_equals_sign_is_refused(self, tmp_path, capsys):
+        code = _run_expecting_exit(_desktop_args(tmp_path, "--step-up-scope=writes"))
 
-    def test_absent_by_default_which_means_on(self, tmp_path):
-        from privacyfence.org_mode import WebPushConfig
+        assert code == 2
+        assert capsys.readouterr().err == _MOVED_TEXT.format(option="--step-up-scope") + "\n"
 
-        assert build_org_bundle.main(self._args(tmp_path)) == 0
-        bundle = self._bundle(tmp_path)
-        assert "web_push" not in bundle
-        assert WebPushConfig.from_org_config(bundle).enabled is True
+    def test_a_grist_oauth_app_keeps_its_server_address(self, tmp_path):
+        out_path = tmp_path / "org_bundle.json"
+        assert build_org_bundle.main([
+            "-o", str(out_path), "--grist-server-url", "https://docs.example.com",
+            "--grist-client-id", "gid", "--grist-client-secret", "gsecret",
+        ]) == 0
+        assert json.loads(out_path.read_text())["grist"]["server_url"] == "https://docs.example.com"
 
-    def test_no_web_push_turns_it_off_and_web_push_back_on(self, tmp_path):
-        from privacyfence.org_mode import WebPushConfig
+    def test_refusal_does_not_touch_an_existing_output(self, tmp_path):
+        out_path = tmp_path / "org_bundle.json"
+        out_path.write_text("keep me")
 
-        assert build_org_bundle.main(self._args(tmp_path, "--no-web-push")) == 0
-        assert self._bundle(tmp_path)["web_push"] == {"enabled": False}
-        assert WebPushConfig.from_org_config(self._bundle(tmp_path)).enabled is False
-        assert build_org_bundle.main(self._args(tmp_path, "--merge", "--web-push")) == 0
-        assert self._bundle(tmp_path)["web_push"] == {"enabled": True}
+        assert _run_expecting_exit(_desktop_args(tmp_path, "--merge", "--enable-telegram")) == 2
 
-    def test_requires_org_mode(self, tmp_path):
-        with pytest.raises(SystemExit, match="require --mode org"):
-            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), "--no-web-push"])
+        assert out_path.read_text() == "keep me"
+
+
+class TestMerge:
+    def _write(self, tmp_path, bundle):
+        out_path = tmp_path / "org_bundle.json"
+        out_path.write_text(json.dumps(bundle))
+        return out_path
+
+    def test_merge_drops_legacy_operational_keys_and_says_so(self, tmp_path, capsys):
+        out_path = self._write(tmp_path, {
+            "version": 1,
+            "slack": {"client_id": "id", "client_secret": "secret"},
+            "authz": {"allowed_domains": ["acme.com"]},
+            "peek": {"base_url": "https://peek.example.com", "auto_provision": {"enabled": True}},
+            "telegram": {"enabled": True},
+            "download_delivery": {"agent_links": False},
+        })
+
+        assert build_org_bundle.main(["-o", str(out_path), "--merge"]) == 0
+
+        bundle = json.loads(out_path.read_text())
+        assert bundle["slack"] == {"client_id": "id", "client_secret": "secret"}
+        assert not {"authz", "peek", "telegram", "download_delivery"} & set(bundle)
+        out = capsys.readouterr().out
+        assert "note: dropped download_delivery, authz, telegram, peek; they are managed on the Admin page now." in out
+
+    def test_merge_drops_the_operational_sub_keys_and_keeps_the_oauth_apps(self, tmp_path, capsys):
+        out_path = self._write(tmp_path, {
+            "version": 1,
+            "atlassian": {
+                "client_id": "a", "client_secret": "as", "assets": True,
+                "assets_workspace_id": "6d8c7ed1-92a5-4693-b107-226f466d78a3",
+            },
+            "grist": {"server_url": "https://docs.example.com", "client_id": "g", "client_secret": "gs"},
+            "miro": {"client_id": "m", "client_secret": "ms"},
+        })
+
+        assert build_org_bundle.main(["-o", str(out_path), "--merge"]) == 0
+
+        bundle = json.loads(out_path.read_text())
+        assert bundle["atlassian"] == {"client_id": "a", "client_secret": "as"}
+        assert bundle["grist"]["server_url"] == "https://docs.example.com"
+        assert "note: dropped atlassian.assets, atlassian.assets_workspace_id;" in capsys.readouterr().out
+
+    def test_merge_drops_a_grist_api_key_server_and_its_auto_provisioning(self, tmp_path, capsys):
+        out_path = self._write(tmp_path, {
+            "version": 1,
+            "slack": {"client_id": "id", "client_secret": "secret"},
+            "grist": {"server_url": "https://grist.example.com", "auto_provision": {"enabled": True}},
+        })
+
+        assert build_org_bundle.main(["-o", str(out_path), "--merge"]) == 0
+
+        bundle = json.loads(out_path.read_text())
+        assert "grist" not in bundle
+        assert "note: dropped grist.server_url, grist.auto_provision;" in capsys.readouterr().out
+
+    def test_merge_of_a_credentials_only_bundle_prints_no_note(self, tmp_path, capsys):
+        out_path = self._write(tmp_path, {"version": 1, "slack": {"client_id": "id", "client_secret": "secret"}})
+
+        assert build_org_bundle.main(["-o", str(out_path), "--merge", "--org-name", "Acme"]) == 0
+
+        assert "note:" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize("org_keys", [
+        {"mode": "org"},
+        {"idp": {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}},
+        {"server": {"issuer_url": "https://pf.example.com"}},
+    ], ids=["mode-org", "idp", "server"])
+    def test_merge_refuses_an_organization_bundle(self, tmp_path, capsys, org_keys):
+        out_path = self._write(tmp_path, {
+            "version": 1, "slack": {"client_id": "id", "client_secret": "secret"}, **org_keys,
+        })
+        before = out_path.read_bytes()
+
+        code = _run_expecting_exit(["-o", str(out_path), "--merge", "--miro-client-id", "m", "--miro-client-secret", "ms"])
+
+        assert code == 2
+        assert capsys.readouterr().err == (
+            f"error: {out_path} is an organization bundle; organization servers no longer take bundles (ADR 0268).\n"
+        )
+        assert out_path.read_bytes() == before
+
+    def test_merge_keeps_a_local_mode_marker(self, tmp_path):
+        out_path = self._write(tmp_path, {
+            "version": 1, "mode": "local", "slack": {"client_id": "id", "client_secret": "secret"},
+        })
+
+        assert build_org_bundle.main(["-o", str(out_path), "--merge", "--org-name", "Acme"]) == 0
+
+        assert json.loads(out_path.read_text())["mode"] == "local"
+
+    def test_nothing_to_write_names_only_app_credentials(self, tmp_path):
+        out_path = tmp_path / "org_bundle.json"
+
+        with pytest.raises(SystemExit) as excinfo:
+            build_org_bundle.main(["-o", str(out_path), "--org-name", "Acme"])
+
+        message = str(excinfo.value)
+        assert "app credentials" in message and "nothing to write" in message
+        assert "unattended" not in message and "scoped" not in message
+        assert not out_path.exists()
+
+    def test_a_merge_left_with_no_app_credentials_writes_nothing(self, tmp_path):
+        out_path = self._write(tmp_path, {"version": 1, "telegram": {"enabled": True}})
+
+        with pytest.raises(SystemExit, match="nothing to write"):
+            build_org_bundle.main(["-o", str(out_path), "--merge"])
+
+        assert json.loads(out_path.read_text()) == {"version": 1, "telegram": {"enabled": True}}
 
 
 class TestRemovedToolAnnotations:
@@ -884,27 +644,9 @@ class TestGristFlags:
             build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), *args])
         return str(exc.value)
 
-    def test_enable_flags_write_the_bare_sections(self, tmp_path):
-        bundle = self._build(tmp_path, "--enable-telegram", "--enable-peek", "--enable-grist")
-        assert bundle["telegram"] == {"enabled": True}
-        assert bundle["peek"] == {"enabled": True}
-        assert bundle["grist"] == {"enabled": True}
-
-    def test_a_pinned_server_is_not_replaced_by_the_bare_section(self, tmp_path):
-        bundle = self._build(
-            tmp_path, "--enable-peek", "--peek-base-url", "https://peek.example.com",
-            "--enable-grist", "--grist-server-url", "https://grist.example.com",
-        )
-        assert bundle["peek"] == {"base_url": "https://peek.example.com"}
-        assert bundle["grist"] == {"server_url": "https://grist.example.com"}
-
-    def test_server_url_alone_writes_just_the_server_with_the_trailing_slash_stripped(self, tmp_path):
-        bundle = self._build(tmp_path, "--grist-server-url", "https://grist.example.com/")
-        assert bundle["grist"] == {"server_url": "https://grist.example.com"}
-
     def test_client_pair_and_auth_server_write_all_four_keys(self, tmp_path):
         bundle = self._build(
-            tmp_path, "--grist-server-url", "https://docs.example.com", "--grist-client-id", "gid",
+            tmp_path, "--grist-server-url", "https://docs.example.com/", "--grist-client-id", "gid",
             "--grist-client-secret", "gsecret", "--grist-auth-server-url", "https://login.example.com/",
         )
         assert bundle["grist"] == {
@@ -923,13 +665,19 @@ class TestGristFlags:
         assert message == "--grist-client-id, --grist-client-secret and --grist-auth-server-url need --grist-server-url."
 
     def test_http_url_exits(self, tmp_path):
-        message = self._exit_message(tmp_path, "--grist-server-url", "http://grist.example.com")
+        message = self._exit_message(
+            tmp_path, "--grist-server-url", "http://grist.example.com",
+            "--grist-client-id", "gid", "--grist-client-secret", "gsecret",
+        )
         assert message == (
             "--grist-server-url and --grist-auth-server-url must be https:// addresses (http:// only for localhost)."
         )
 
     def test_http_localhost_is_allowed(self, tmp_path):
-        bundle = self._build(tmp_path, "--grist-server-url", "http://localhost:8484")
+        bundle = self._build(
+            tmp_path, "--grist-server-url", "http://localhost:8484",
+            "--grist-client-id", "gid", "--grist-client-secret", "gsecret",
+        )
         assert bundle["grist"]["server_url"] == "http://localhost:8484"
 
     @pytest.mark.parametrize("url", [
@@ -937,21 +685,17 @@ class TestGristFlags:
         "https://grist.example.com/#top", "https://user:pw@grist.example.com",
     ])
     def test_api_path_query_fragment_and_userinfo_exit(self, tmp_path, url):
-        message = self._exit_message(tmp_path, "--grist-server-url", url)
+        message = self._exit_message(
+            tmp_path, "--grist-server-url", url, "--grist-client-id", "gid", "--grist-client-secret", "gsecret",
+        )
         assert message == (
             "--grist-server-url and --grist-auth-server-url must not contain a user name, password, query, "
             "fragment or /api."
         )
 
-    def test_org_mode_build_with_grist_prints_the_callback(self, tmp_path, capsys):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        self._build(
-            tmp_path, "--mode", "org", "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path), "--grist-server-url", "https://grist.example.com",
-        )
-        assert "https://pf.example.com/oauth/callback/grist" in capsys.readouterr().out
+    def test_auth_server_url_alone_exits(self, tmp_path):
+        message = self._exit_message(tmp_path, "--grist-auth-server-url", "https://login.example.com")
+        assert message == "--grist-client-id, --grist-client-secret and --grist-auth-server-url need --grist-server-url."
 
 
 class TestMiroFlags:
@@ -977,337 +721,31 @@ class TestMiroFlags:
     def test_one_without_the_other_exits(self, tmp_path, args):
         assert self._exit_message(tmp_path, *args) == "--miro-client-id and --miro-client-secret must be given together."
 
-    def test_org_mode_build_with_miro_prints_the_callback(self, tmp_path, capsys):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
-        self._build(
-            tmp_path, "--mode", "org", "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path), "--miro-client-id", "mid", "--miro-client-secret", "msecret",
-        )
-        assert "https://pf.example.com/oauth/callback/miro" in capsys.readouterr().out
 
-
-class TestPeekFlags:
-    def _build(self, tmp_path, *args):
+class TestAtlassianFlags:
+    def test_the_credentials_are_written_without_operational_keys(self, tmp_path):
         out_path = tmp_path / "org_bundle.json"
-        assert build_org_bundle.main(["-o", str(out_path), *args]) == 0
-        return json.loads(out_path.read_text())
+        build_org_bundle.main([
+            "-o", str(out_path), "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
+        ])
+        assert json.loads(out_path.read_text())["atlassian"] == {"client_id": "a", "client_secret": "as"}
 
-    def _exit_message(self, tmp_path, *args):
-        with pytest.raises(SystemExit) as exc:
-            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), *args])
-        return str(exc.value)
-
-    def test_base_url_is_written_with_the_trailing_slash_stripped(self, tmp_path):
-        bundle = self._build(tmp_path, "--peek-base-url", "https://peek.example.com/")
-        assert bundle["peek"] == {"base_url": "https://peek.example.com"}
-
-    def test_a_peek_only_bundle_is_written(self, tmp_path):
-        bundle = self._build(tmp_path, "--peek-base-url", "https://peek.example.com")
-        assert set(bundle) >= {"peek"} and "google" not in bundle
-
-    def test_http_on_a_remote_host_exits(self, tmp_path):
-        message = self._exit_message(tmp_path, "--peek-base-url", "http://peek.example.com")
-        assert message == "--peek-base-url must be an https:// address (http:// only for localhost)."
-
-    def test_http_localhost_is_allowed(self, tmp_path):
-        bundle = self._build(tmp_path, "--peek-base-url", "http://localhost:7700")
-        assert bundle["peek"]["base_url"] == "http://localhost:7700"
-
-    @pytest.mark.parametrize("url", [
-        "https://peek.example.com?x=1", "https://peek.example.com/#top", "https://user:pw@peek.example.com",
-    ])
-    def test_query_fragment_and_userinfo_exit(self, tmp_path, url):
-        message = self._exit_message(tmp_path, "--peek-base-url", url)
-        assert message == "--peek-base-url must not contain a user name, password, query or fragment."
-
-    # --peek-auto-provision (organization mode)
-
-    def _org_args(self, tmp_path, *extra):
-        key_path = tmp_path / "key.pem"
-        if not key_path.exists():
-            build_org_bundle._generate_signing_key(str(key_path))
-        return [
-            "-o", str(tmp_path / "org_bundle.json"), "--mode", "org",
-            "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com",
-            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--sign-key", str(key_path), *extra,
-        ]
-
-    def _org_bundle(self, tmp_path, *extra):
-        assert build_org_bundle.main(self._org_args(tmp_path, *extra)) == 0
-        return json.loads((tmp_path / "org_bundle.json").read_text())
-
-    def test_auto_provision_writes_the_section_with_the_default_env(self, tmp_path):
-        bundle = self._org_bundle(
-            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
-        )
-        assert bundle["peek"] == {
-            "base_url": "https://peek.example.com",
-            "auto_provision": {
-                "enabled": True, "key_env": "PRIVACYFENCE_PEEK_PROVISIONING_KEY", "trust_unverified_email": False,
-            },
-        }
-
-    def test_auto_provision_writes_a_custom_env(self, tmp_path):
-        bundle = self._org_bundle(
-            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
-            "--peek-provisioning-key-env", "MY_PEEK_KEY",
-        )
-        assert bundle["peek"]["auto_provision"]["key_env"] == "MY_PEEK_KEY"
-
-    def test_auto_provision_writes_trust_unverified_email(self, tmp_path):
-        bundle = self._org_bundle(
-            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
-            "--peek-trust-unverified-email",
-        )
-        assert bundle["peek"]["auto_provision"]["trust_unverified_email"] is True
-
-    def test_no_auto_provision_writes_enabled_false(self, tmp_path):
-        bundle = self._org_bundle(
-            tmp_path, "--peek-base-url", "https://peek.example.com", "--no-peek-auto-provision",
-        )
-        assert bundle["peek"]["auto_provision"]["enabled"] is False
-
-    def test_auto_provision_requires_org_mode(self, tmp_path):
-        message = self._exit_message(
-            tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision",
-        )
-        assert message == (
-            "--peek-auto-provision/--no-peek-auto-provision require --mode org (or --merge against an "
-            "existing org-mode bundle)."
-        )
-
-    def test_auto_provision_requires_a_base_url(self, tmp_path):
-        with pytest.raises(SystemExit) as exc:
-            build_org_bundle.main(self._org_args(tmp_path, "--peek-auto-provision"))
-        assert str(exc.value) == (
-            "--peek-auto-provision requires --peek-base-url (or --merge against a bundle that has one)."
-        )
-
-    @pytest.mark.parametrize("flag", [["--peek-provisioning-key-env", "K"], ["--peek-trust-unverified-email"]])
-    def test_auto_provision_options_alone_exit(self, tmp_path, flag):
-        with pytest.raises(SystemExit) as exc:
-            build_org_bundle.main(self._org_args(tmp_path, "--peek-base-url", "https://peek.example.com", *flag))
-        assert str(exc.value) == (
-            "--peek-provisioning-key-env and --peek-trust-unverified-email go with --peek-auto-provision."
-        )
-
-    def test_mode_local_strips_auto_provision(self, tmp_path):
-        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
-        out_path = tmp_path / "org_bundle.json"
-        assert build_org_bundle.main(["-o", str(out_path), "--merge", "--mode", "local"]) == 0
-        assert json.loads(out_path.read_text())["peek"] == {"base_url": "https://peek.example.com"}
-
-    def test_merge_with_a_new_base_url_keeps_auto_provision(self, tmp_path):
-        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com", "--peek-auto-provision")
-        out_path = tmp_path / "org_bundle.json"
-        assert build_org_bundle.main(
-            ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"),
-             "--peek-base-url", "https://peek2.example.com"]
-        ) == 0
-        peek = json.loads(out_path.read_text())["peek"]
-        assert peek["base_url"] == "https://peek2.example.com"
-        assert peek["auto_provision"]["enabled"] is True
-
-    def test_merge_can_add_auto_provision_to_an_existing_bundle(self, tmp_path):
-        self._org_bundle(tmp_path, "--peek-base-url", "https://peek.example.com")
-        out_path = tmp_path / "org_bundle.json"
-        assert build_org_bundle.main(
-            ["-o", str(out_path), "--merge", "--sign-key", str(tmp_path / "key.pem"), "--peek-auto-provision"]
-        ) == 0
-        assert json.loads(out_path.read_text())["peek"]["auto_provision"]["enabled"] is True
-
-    def test_enable_peek_keeps_the_section(self, tmp_path):
-        out_path = tmp_path / "org_bundle.json"
-        assert build_org_bundle.main(["-o", str(out_path), "--enable-peek"]) == 0
-        assert json.loads(out_path.read_text())["peek"] == {"enabled": True}
+    def test_one_without_the_other_exits(self, tmp_path):
+        with pytest.raises(SystemExit) as excinfo:
+            build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), "--atlassian-client-id", "a"])
+        assert str(excinfo.value) == "--atlassian-client-id and --atlassian-client-secret must be given together."
 
 
-class TestScopedTokenFlags:
-    """--enable/--disable-scoped-tokens and --scoped-token-max-days write the bundle's
-    ``scoped_tokens`` section (ADR 0165), the way --enable-unattended-sessions writes its own."""
+class TestInstructionsPrintedAfterWriting:
+    def test_the_bundle_is_installed_from_settings(self, tmp_path, capsys):
+        build_org_bundle.main(_desktop_args(tmp_path))
 
-    @staticmethod
-    def _build(tmp_path, *flags):
-        out_path = tmp_path / "org_bundle.json"
-        rc = build_org_bundle.main(["-o", str(out_path), *flags])
-        assert rc == 0
-        return json.loads(out_path.read_text())
+        out = capsys.readouterr().out
+        assert "Install/Update Organization Config" in out
+        assert "<data>/org/org_bundle.json" not in out
+        assert "/oauth/" not in out
 
-    def test_enable_and_disable_scoped_tokens_flags(self, tmp_path):
-        assert self._build(tmp_path, "--enable-scoped-tokens")["scoped_tokens"] == {"enabled": True}
-        assert self._build(tmp_path, "--disable-scoped-tokens")["scoped_tokens"] == {"enabled": False}
-        with_cap = self._build(tmp_path, "--enable-scoped-tokens", "--scoped-token-max-days", "30")
-        assert with_cap["scoped_tokens"] == {"enabled": True, "max_days": 30}
-        # Not written unless asked for.
-        assert "scoped_tokens" not in self._build(tmp_path, "--enable-unattended-sessions")
-        with pytest.raises(SystemExit):
-            build_org_bundle.main(["-o", str(tmp_path / "x.json"), "--enable-scoped-tokens", "--disable-scoped-tokens"])
+    def test_the_summary_names_the_services(self, tmp_path, capsys):
+        build_org_bundle.main(_desktop_args(tmp_path))
 
-    def test_merge_keeps_the_other_scoped_token_key(self, tmp_path):
-        self._build(tmp_path, "--enable-scoped-tokens", "--scoped-token-max-days", "30")
-        merged = self._build(tmp_path, "--merge", "--disable-scoped-tokens")
-        assert merged["scoped_tokens"] == {"enabled": False, "max_days": 30}
-        assert self._build(tmp_path, "--merge", "--scoped-token-max-days", "60")["scoped_tokens"] == {
-            "enabled": False, "max_days": 60,
-        }
-
-    def test_enable_and_disable_scoped_token_proposals_flags(self, tmp_path):
-        on = self._build(tmp_path, "--enable-scoped-tokens", "--enable-scoped-token-proposals")
-        assert on["scoped_tokens"] == {"enabled": True, "allow_ai_proposals": True}
-        off = self._build(tmp_path, "--disable-scoped-token-proposals")
-        assert off["scoped_tokens"] == {"allow_ai_proposals": False}
-        assert "scoped_tokens" not in self._build(tmp_path, "--enable-unattended-sessions")
-        with pytest.raises(SystemExit):
-            build_org_bundle.main([
-                "-o", str(tmp_path / "x.json"),
-                "--enable-scoped-token-proposals", "--disable-scoped-token-proposals",
-            ])
-
-    def test_merge_keeps_allow_ai_proposals(self, tmp_path):
-        self._build(tmp_path, "--enable-scoped-tokens", "--enable-scoped-token-proposals")
-        merged = self._build(tmp_path, "--merge", "--scoped-token-max-days", "30")
-        assert merged["scoped_tokens"] == {"enabled": True, "allow_ai_proposals": True, "max_days": 30}
-        merged = self._build(tmp_path, "--merge", "--disable-scoped-token-proposals")
-        assert merged["scoped_tokens"] == {"enabled": True, "allow_ai_proposals": False, "max_days": 30}
-
-    @pytest.mark.parametrize("value,ok", [("1", True), ("365", True), ("0", False), ("366", False), ("many", False)])
-    def test_scoped_token_max_days_range(self, tmp_path, value, ok):
-        args = ["-o", str(tmp_path / "org_bundle.json"), "--enable-scoped-tokens", "--scoped-token-max-days", value]
-        if ok:
-            assert build_org_bundle.main(args) == 0
-            assert json.loads((tmp_path / "org_bundle.json").read_text())["scoped_tokens"]["max_days"] == int(value)
-        else:
-            with pytest.raises(SystemExit) as excinfo:
-                build_org_bundle.main(args)
-            assert excinfo.value.code == 2
-            assert not (tmp_path / "org_bundle.json").exists()
-
-
-class TestGristAutoProvisionFlags:
-    """grist.auto_provision: the Grist provisioner switch (organization mode, API keys only)."""
-
-    def _args(self, tmp_path, *extra, mode=True):
-        key_path = tmp_path / "key.pem"
-        if not key_path.exists():
-            build_org_bundle._generate_signing_key(str(key_path))
-        base = ["-o", str(tmp_path / "org_bundle.json")]
-        if mode:
-            base += [
-                "--mode", "org", "--server-issuer-url", "https://pf.example.com",
-                "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid",
-                "--idp-client-secret", "csecret", "--sign-key", str(key_path),
-            ]
-        return [*base, *extra]
-
-    def _bundle(self, tmp_path) -> dict:
-        return json.loads((tmp_path / "org_bundle.json").read_text())
-
-    def _on(self, *extra):
-        return [
-            "--grist-server-url", "https://grist.example.com", "--grist-auto-provision",
-            "--grist-provisioner-url", "https://prov.example.com/", *extra,
-        ]
-
-    def _exit(self, tmp_path, *extra, mode=True):
-        with pytest.raises(SystemExit) as exc:
-            build_org_bundle.main(self._args(tmp_path, *extra, mode=mode))
-        return str(exc.value)
-
-    def test_writes_section_with_default_env(self, tmp_path):
-        assert build_org_bundle.main(self._args(tmp_path, *self._on())) == 0
-        assert self._bundle(tmp_path)["grist"] == {
-            "server_url": "https://grist.example.com",
-            "auto_provision": {
-                "enabled": True, "provisioner_url": "https://prov.example.com",
-                "key_env": "PRIVACYFENCE_GRIST_PROVISIONING_KEY", "trust_unverified_email": False,
-            },
-        }
-
-    def test_writes_custom_env(self, tmp_path):
-        build_org_bundle.main(self._args(tmp_path, *self._on("--grist-provisioning-key-env", "MY_KEY")))
-        assert self._bundle(tmp_path)["grist"]["auto_provision"]["key_env"] == "MY_KEY"
-
-    def test_writes_trust_unverified_email(self, tmp_path):
-        build_org_bundle.main(self._args(tmp_path, *self._on("--grist-trust-unverified-email")))
-        assert self._bundle(tmp_path)["grist"]["auto_provision"]["trust_unverified_email"] is True
-
-    def test_no_flag_writes_enabled_false(self, tmp_path):
-        build_org_bundle.main(
-            self._args(tmp_path, "--grist-server-url", "https://grist.example.com", "--no-grist-auto-provision")
-        )
-        grist = self._bundle(tmp_path)["grist"]
-        assert grist["auto_provision"] == {"enabled": False}
-        assert grist["server_url"].startswith("https://grist.example.com")
-
-    def test_no_flag_without_grist_section_writes_nothing(self, tmp_path):
-        build_org_bundle.main(self._args(tmp_path, "--no-grist-auto-provision"))
-        assert "grist" not in self._bundle(tmp_path)
-
-    def test_refuses_without_mode_org(self, tmp_path):
-        message = self._exit(tmp_path, *self._on(), mode=False)
-        assert "require --mode org" in message
-
-    def test_refuses_without_server_url(self, tmp_path):
-        message = self._exit(
-            tmp_path, "--grist-auto-provision", "--grist-provisioner-url", "https://prov.example.com",
-        )
-        assert message == (
-            "--grist-auto-provision requires --grist-server-url (or --merge against a bundle that has one)."
-        )
-
-    def test_refuses_with_oauth_app(self, tmp_path):
-        message = self._exit(
-            tmp_path, *self._on(), "--grist-client-id", "gid", "--grist-client-secret", "gsecret",
-        )
-        assert message == (
-            "--grist-auto-provision works only with API keys; it cannot be combined with --grist-client-id."
-        )
-
-    def test_refuses_without_provisioner_url(self, tmp_path):
-        message = self._exit(tmp_path, "--grist-server-url", "https://grist.example.com", "--grist-auto-provision")
-        assert message == "--grist-auto-provision requires --grist-provisioner-url."
-
-    @pytest.mark.parametrize(
-        "flag", [["--grist-provisioner-url", "https://prov.example.com"],
-                 ["--grist-provisioning-key-env", "X"], ["--grist-trust-unverified-email"]],
-    )
-    def test_refuses_companion_flags_alone(self, tmp_path, flag):
-        message = self._exit(tmp_path, *flag)
-        assert message.startswith("--grist-provisioner-url, --grist-provisioning-key-env and ")
-
-    def test_mode_local_strips_it(self, tmp_path):
-        build_org_bundle.main(self._args(tmp_path, *self._on()))
-        assert build_org_bundle.main(["-o", str(tmp_path / "org_bundle.json"), "--merge", "--mode", "local"]) == 0
-        assert self._bundle(tmp_path)["grist"] == {"server_url": "https://grist.example.com"}
-
-    def test_merge_new_server_url_keeps_auto_provision(self, tmp_path):
-        build_org_bundle.main(self._args(tmp_path, *self._on()))
-        assert build_org_bundle.main(
-            ["-o", str(tmp_path / "org_bundle.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
-             "--grist-server-url", "https://grist2.example.com"]
-        ) == 0
-        grist = self._bundle(tmp_path)["grist"]
-        assert grist["server_url"] == "https://grist2.example.com"
-        assert grist["auto_provision"]["enabled"] is True
-
-    def test_merge_reuses_existing_provisioner_url(self, tmp_path):
-        build_org_bundle.main(self._args(tmp_path, *self._on("--grist-provisioning-key-env", "MY_KEY")))
-        assert build_org_bundle.main(
-            ["-o", str(tmp_path / "org_bundle.json"), "--merge", "--sign-key", str(tmp_path / "key.pem"),
-             "--grist-auto-provision"]
-        ) == 0
-        auto = self._bundle(tmp_path)["grist"]["auto_provision"]
-        assert auto["provisioner_url"] == "https://prov.example.com"
-        assert auto["key_env"] == "MY_KEY"
-
-    def test_fresh_org_build_succeeds(self, tmp_path):
-        from privacyfence.org_mode import GristProvisioningConfig
-
-        assert build_org_bundle.main(self._args(tmp_path, *self._on())) == 0
-        config = GristProvisioningConfig.from_org_config(self._bundle(tmp_path))
-        assert config.enabled is True
-        assert config.provisioner_url == "https://prov.example.com"
+        assert f"Wrote {tmp_path / 'org_bundle.json'} with: slack, signed=False" in capsys.readouterr().out
