@@ -12,3 +12,7 @@ prune sync
 
 # plugins/ holds the privacyfence-sync Claude plugin (ADR 0163), attached to releases as a zip.
 prune plugins
+
+# salesforce/ holds the Salesforce managed package's source (salesforce/package/README.md), built with
+# the Salesforce CLI and installed in Salesforce orgs, never part of the Python distribution.
+prune salesforce
