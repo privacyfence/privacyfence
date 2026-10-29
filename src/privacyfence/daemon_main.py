@@ -1323,6 +1323,7 @@ def _start_org_web_server(
     from .approvals import PendingApprovalRegistry
     from .connector_registry import ConnectorRegistry
     from .gate import configure_popup_executor
+    from . import org_identity
     from .org_identity import IdpConfig
     from .web.mcp_dispatch import McpDispatcher
     from .web.oauth_provider import OrgOAuthProvider
@@ -1355,6 +1356,11 @@ def _start_org_web_server(
         # No identity provider: single-user mode, which is only safe where nothing but this
         # computer can reach the listener.
         _require_single_user_start(server_config, startup_admin)
+    elif (data_dir() / "users" / "single-user").is_dir():
+        logger.warning(
+            "This data directory holds single-user data (users/single-user/); people who sign in "
+            "through the identity provider cannot reach it."
+        )
 
     approvals_config = web_config.get("approvals", {}) or {}
     approval_registry = PendingApprovalRegistry(
@@ -1410,7 +1416,8 @@ def _start_org_web_server(
     # check_authz_policy's own docstring for what this does and doesn't
     # change. Absent "authz" section in org_config.json -> disabled,
     # every IdP-authenticated principal is admitted, unchanged from before.
-    authz_policy = org_mode.AuthzPolicyConfig.from_org_config(org_config)
+    # Bound to the IdP so the allowed-domain check knows the issuer and the unverified-email setting.
+    authz_policy = org_identity.IdpAuthzPolicy.bind(org_mode.AuthzPolicyConfig.from_org_config(org_config), idp)
     provider = OrgOAuthProvider(
         idp, idp_callback_url=f"{server_config.issuer_url.rstrip('/')}/oauth/idp/callback", policy=authz_policy,
         # No identity provider is single-user mode: /authorize sends the browser to its own sign-in.

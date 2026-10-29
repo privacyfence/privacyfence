@@ -396,7 +396,7 @@ class TestLoginCallback:
         app, sessions = _app(policy=policy)
         cb = self._drive_login(
             client=_client(app), monkeypatch=monkeypatch,
-            claims={"sub": "alice", "email": "alice@acme.com"},
+            claims={"sub": "alice", "email": "alice@acme.com", "email_verified": True},
         )
         assert cb.status_code == 302
         assert org_session.SESSION_COOKIE in cb.cookies
