@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [6.13.0] — 2026-10-29
+
 ### Changed
 
 - **A scoped token's "Let reads return personal data" box now covers Drive file content reads.** A routine whose token has the box ticked and a rule covering a Drive folder can read a file's text with `drive_get_file_content` even when the file holds personal data (a salary sheet, say); before, the call was denied with "needs a person's confirmation". The scan still runs and the audit log records what it found. Tokens without the box are unchanged ([ADR 0254](docs/adr/0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md)).
@@ -3523,7 +3525,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...HEAD
+[6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
 [6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0
 [6.11.0]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...v6.11.0
 [6.10.0]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...v6.10.0
