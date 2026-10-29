@@ -1,0 +1,20 @@
+{
+  "packageDirectories": [
+    {
+      "versionName": "ver 0.1",
+      "versionNumber": "0.1.0.NEXT",
+      "path": "force-app",
+      "default": true,
+      "package": "PrivacyFence",
+      "versionDescription": ""
+    }
+  ],
+  "name": "privacyfence-package",
+  "namespace": "privacyfence",
+  "sfdcLoginUrl": "https://login.salesforce.com",
+  "sourceApiVersion": "68.0",
+  "packageAliases": {
+    "PrivacyFence": "0Hoak00000073xFCAQ",
+    "PrivacyFence@0.1.0-1": "04tak000000qyRVAAY"
+  }
+}

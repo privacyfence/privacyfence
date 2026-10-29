@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExternalClientApplication xmlns="http://soap.sforce.com/2006/04/metadata">
+    <contactEmail>support@privacyfence.eu</contactEmail>
+    <description>PrivacyFence lets your AI assistant search, read and update Salesforce records as you, only with your approval. It runs on your own computer or your organization&apos;s PrivacyFence server; tokens and data stay there. Open source: privacyfence.eu</description>
+    <distributionState>Packaged</distributionState>
+    <iconUrl>https://privacyfence.eu/assets/salesforce-app-icon.png</iconUrl>
+    <infoUrl>https://privacyfence.eu/connectors/salesforce/</infoUrl>
+    <isProtected>false</isProtected>
+    <label>PrivacyFence</label>
+    <logoUrl>https://privacyfence.eu/assets/salesforce-app-logo.png</logoUrl>
+    <orgScopedExternalApp>00Dak00001O91zR:PrivacyFence</orgScopedExternalApp>
+</ExternalClientApplication>
