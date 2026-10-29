@@ -378,6 +378,9 @@ repository.
 | D1 database | `privacyfence-downloads` |
 | D1 database ID | `1cb5c99c-6d34-4031-a5f6-2f3a406e4979` |
 | D1 binding | `DB` |
+| Relay Worker | `privacyfence-oauth-relay` ([`oauth-relay.md`](oauth-relay.md)) |
+| Relay domain | `oauth.privacyfence.eu` (Custom Domain on the relay Worker) |
+| Relay Durable Object class | `Registry` (SQLite-backed, binding `REGISTRY`) |
 
 The D1 schema comes from this repo's migrations, never the dashboard. `workers_dev = false` and
 `[[routes]] custom_domain = true` are committed in `wrangler.toml` so a `wrangler deploy` cannot
@@ -387,12 +390,19 @@ re-enable a `*.workers.dev` URL.
 
 **There are two unrelated Cloudflare credential sets.** They differ in resource (Workers/D1 vs.
 R2), purpose (deploying the Worker vs. publishing the release archive) and the workflows that read
-them. Set them under repo **Settings → Secrets and variables → Actions**.
+them. Set them under repo **Settings → Secrets and variables → Actions**. The OAuth relay Worker has its
+own deploy credentials, kept as secrets of the `oauth-relay-worker` environment.
 
 | Name | Kind | Used by | For |
 | ---- | ---- | ------- | --- |
 | `CF_DOWNLOADS_WORKER_API_TOKEN` | secret | `deploy-download-worker.yml` (as `CLOUDFLARE_API_TOKEN`) | `wrangler deploy` + D1 migrations |
 | `CF_DOWNLOADS_WORKER_ACCOUNT_ID` | secret | `deploy-download-worker.yml` (as `CLOUDFLARE_ACCOUNT_ID`) | the account above |
+| `CF_OAUTH_RELAY_WORKER_API_TOKEN` | secret (environment `oauth-relay-worker`) | `deploy-oauth-relay-worker.yml` (as `CLOUDFLARE_API_TOKEN`) | `wrangler deploy` for the relay Worker |
+| `CF_OAUTH_RELAY_WORKER_ACCOUNT_ID` | secret (environment `oauth-relay-worker`) | `deploy-oauth-relay-worker.yml` (as `CLOUDFLARE_ACCOUNT_ID`) | the account above |
+| `CF_OAUTH_RELAY_REVOKE_TOKEN` | secret (environment `oauth-relay-worker`) | `deploy-oauth-relay-worker.yml` (as the Worker secret `REVOKE_TOKEN`) | the relay's maintainer token |
+| `CF_OAUTH_RELAY_GMAIL_CLIENT_ID` | secret (environment `oauth-relay-worker`) | `deploy-oauth-relay-worker.yml` (as the Worker secret `GMAIL_CLIENT_ID`) | the relay's registration-notification mail |
+| `CF_OAUTH_RELAY_GMAIL_CLIENT_SECRET` | secret (environment `oauth-relay-worker`) | `deploy-oauth-relay-worker.yml` (as the Worker secret `GMAIL_CLIENT_SECRET`) | as above |
+| `CF_OAUTH_RELAY_GMAIL_REFRESH_TOKEN` | secret (environment `oauth-relay-worker`) | `deploy-oauth-relay-worker.yml` (as the Worker secret `GMAIL_REFRESH_TOKEN`) | as above |
 | `CF_RELEASES_R2_ACCESS_KEY_ID` | secret | `build.yml`, `publish-pypi.yml` | S3 access to the release archive |
 | `CF_RELEASES_R2_SECRET_ACCESS_KEY` | secret | `build.yml`, `publish-pypi.yml` | as above |
 | `CF_RELEASES_R2_ENDPOINT` | **variable** (read as `vars.`) | `build.yml`, `publish-pypi.yml` | the bucket's S3-compatible endpoint URL |

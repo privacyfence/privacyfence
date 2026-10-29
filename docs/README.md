@@ -104,6 +104,8 @@ privacyfence.eu.
   organization deployment, the per-client script, the evidence to record, and the results table.
 - [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
+- [`oauth-relay.md`](oauth-relay.md) — the maintainer runbook for the OAuth redirect relay at
+  `oauth.privacyfence.eu`: provisioning, smoke tests, revoking a host and rolling back.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
