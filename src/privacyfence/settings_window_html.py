@@ -693,13 +693,9 @@ _JS = r"""
     }
     html += '</div>';
 
-    // Both cards below are meaningless on a headless org server --
-    // an update check against GitHub Releases and installing *this org's
-    // own* configuration bundle are both local-desktop-install concepts
-    // (org_settings_scope.NOT_APPLICABLE_ACTIONS covers toggle_update_check;
-    // install_org_config has no ACTION_SCOPES entry at all, since it isn't
-    // one of the generic dispatcher's actions -- both are the same "hidden
-    // for org" decision).
+    // The update check is meaningless on a headless org server -- it asks
+    // GitHub Releases about this desktop install
+    // (org_settings_scope.NOT_APPLICABLE_ACTIONS covers toggle_update_check).
     if (!notApplicable('toggle_update_check')) {
       html += '<div class="card pf-card">';
       html += rowHtml('Check for Updates', 'Once-a-day check against GitHub Releases. Never installs anything automatically.',
@@ -707,17 +703,6 @@ _JS = r"""
       html += rowHtml('Receive beta releases', '',
         toggleHtml(g.update_check_beta, 'toggle_update_check_beta', {}, !g.update_check_enabled, 'Receive beta releases'),
         'pf-row-sub', !g.update_check_enabled);
-      html += '</div>';
-    }
-
-    if (!notApplicable('install_org_config')) {
-      var installed = g.org_installed && g.org_installed_date
-        ? '<div class="pf-hint">Installed ' + esc(g.org_installed_date) + '</div>'
-        : (!g.org_installed ? '<span class="badge">Not installed</span>' : '');
-      html += '<div class="card pf-card">';
-      html += rowHtml('Organization Configuration', 'OAuth app credentials and unattended-session policy, provided by your IT administrator.',
-        '<div class="pf-row-controls"><div class="button primary" role="button" tabindex="0" aria-label="' + esc(g.org_button_label) + '" ' +
-        dataAttr('install_org_config', {}) + '>' + esc(g.org_button_label) + '</div>' + installed + '</div>');
       html += '</div>';
     }
 
@@ -2206,16 +2191,76 @@ _JS = r"""
   // Local mode's bundle upload. The shim posts the chosen file to the admin endpoint.
   function renderOrgConfig(state) {
     var html = '<div class="pf-page"><h1 class="pf-page-title">Organization configuration</h1><div class="card pf-card">';
-    html += rowHtml('Configuration file',
-      "Install or replace your organization's signed configuration file. Settings it carries are managed on this page.",
-      '<div class="button secondary" role="button" tabindex="0" aria-label="Install configuration file" ' +
+    html += rowHtml('Organization Configuration',
+      'Your own app credentials, and the server and identity-provider settings, from your IT administrator.',
+      '<div class="button primary" role="button" tabindex="0" aria-label="Install configuration file" ' +
       dataAttr('install_org_config', {}) + '>Install configuration file…</div>');
     return html + '</div></div>';
+  }
+
+  function serviceRow(state, key) {
+    return (state.services || []).filter(function (row) { return row.key === key; })[0] || null;
+  }
+
+  // Jira Assets: one form that posts its whole section, the switch and the workspace id together.
+  function assetsCardHtml(state) {
+    var row = serviceRow(state, 'atlassian');
+    if (!row) { return ''; }
+    var opts = row.options || {};
+    return '<div class="card pf-card pf-admin-assets">' + rowHtml('Jira Assets',
+      'Lets the Atlassian connector read Jira Assets objects. The workspace id is optional; leave it empty to use the only workspace.',
+      '<div class="pf-row-controls"><label class="pf-admin-check"><input type="checkbox" data-admin-assets-enabled="1"' +
+      (opts.assets ? ' checked' : '') + ' aria-label="Turn on Jira Assets"> On</label>' +
+      '<input class="field" type="text" autocomplete="off" spellcheck="false" placeholder="Workspace id" ' +
+      'aria-label="Jira Assets workspace id" value="' + esc(opts.assets_workspace_id || '') + '" data-admin-assets-workspace="1">' +
+      '<div class="button secondary" role="button" tabindex="0" aria-label="Save Jira Assets" data-admin-assets-save="1">Save</div></div>') +
+      '</div>';
+  }
+
+  function serverAddressesCardHtml(state) {
+    var html = '';
+    ['grist', 'peek'].forEach(function (key) {
+      var row = serviceRow(state, key);
+      if (!row) { return; }
+      var opts = row.options || {};
+      if (opts.locked) {
+        html += rowHtml(row.label + ' server', 'The address is set by the configuration file or the server and cannot be changed here.', '');
+      } else {
+        html += serverAddressRowHtml(row).replace('pf-row pf-row-sub', 'pf-row');
+      }
+    });
+    return html ? '<div class="card pf-card pf-admin-addresses">' + html + '</div>' : '';
+  }
+
+  function unattendedCardHtml(state) {
+    var on = !!(state.unattended_sessions || {}).enabled;
+    return '<div class="card pf-card">' + rowHtml('Unattended sessions',
+      'Lets an AI client keep working while nobody is at the computer to approve each step.',
+      toggleHtml(on, 'set_unattended_sessions', { enabled: !on }, false, 'Unattended sessions')) + '</div>';
+  }
+
+  function roomsCardHtml(state) {
+    var rooms = state.rooms || { count: 0, synced_at: '' };
+    var summary = rooms.count
+      ? rooms.count + (rooms.count === 1 ? ' room' : ' rooms') + (rooms.synced_at ? ', synced ' + rooms.synced_at : '') + '.'
+      : 'No room directory uploaded.';
+    return '<div class="card pf-card pf-admin-rooms">' + rowHtml('Room directory', esc(summary) +
+      ' Upload the JSON file the room directory sync script writes.',
+      '<div class="pf-row-controls"><div class="button secondary" role="button" tabindex="0" aria-label="Upload room directory" ' +
+      dataAttr('upload_rooms', {}) + '>Upload room directory…</div>' +
+      (rooms.count ? '<div class="button danger" role="button" tabindex="0" aria-label="Clear room directory" ' +
+        dataAttr('clear_rooms', {}) + ' data-confirm="Clear the room directory?">Clear</div>' : '') + '</div>') + '</div>';
+  }
+
+  function renderFeatures(state) {
+    return '<div class="pf-page"><h1 class="pf-page-title">Features</h1>' + assetsCardHtml(state) +
+      serverAddressesCardHtml(state) + unattendedCardHtml(state) + roomsCardHtml(state) + '</div>';
   }
 
   function adminSection(state, key) {
     switch (key) {
       case 'services': return renderServices(state);
+      case 'features': return renderFeatures(state);
       case 'org_config': return renderOrgConfig(state);
       default: return '';
     }
@@ -2591,6 +2636,8 @@ _JS = r"""
     var privacyNavEl = e.target.closest('[data-privacy-nav]');
     if (privacyNavEl) { ui.privacyGroup = privacyNavEl.getAttribute('data-privacy-nav'); render(pyState); return; }
 
+    if (e.target.closest('[data-admin-assets-save]')) { saveAssets(); return; }
+
     var addressSaveEl = e.target.closest('[data-admin-address-save]');
     if (addressSaveEl) { saveServerAddress(addressSaveEl.getAttribute('data-admin-address-save')); return; }
 
@@ -2711,6 +2758,12 @@ _JS = r"""
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }
       post(action, payload);
     }
+  }
+
+  function saveAssets() {
+    var on = document.querySelector('[data-admin-assets-enabled]');
+    var workspace = document.querySelector('[data-admin-assets-workspace]');
+    post('set_atlassian_assets', { enabled: !!(on && on.checked), workspace_id: workspace ? workspace.value : '' });
   }
 
   function saveServerAddress(service) {
@@ -2884,6 +2937,7 @@ _JS = r"""
     // A toggle's checkbox answers Space natively; Enter as well, as the
     // div-based switch it replaced did.
     if (el.getAttribute('role') === 'switch') { e.preventDefault(); el.click(); return; }
+    if (el.hasAttribute('data-admin-assets-workspace')) { saveAssets(); return; }
     if (el.hasAttribute('data-admin-address')) { saveServerAddress(el.getAttribute('data-admin-address')); return; }
     if (el.hasAttribute('data-aa-value')) {
       submitAddPolicyRule();
@@ -2942,21 +2996,21 @@ def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
     Local mode has no administrator distinction (the install owner is the only caller), so it
     gets every section. In org mode only an administrator gets any: the route refuses anyone
     else, and the same rule applies here to what is drawn. The sections that exist so far are
-    Services and, for local mode, the bundle upload.
+    Services, Features and, for local mode, the bundle upload.
     """
     from .web.routes_admin import ADMIN_ACTIONS  # deferred: the route layer imports this module
 
     if mode != ORG_MODE:
         return {
             "mode": LOCAL_MODE, "is_admin": False, "surface": "admin",
-            "sections": {"services": True, "org_config": True},
+            "sections": {"services": True, "features": True, "org_config": True},
             "not_applicable_actions": sorted(
                 name for name, spec in ADMIN_ACTIONS.items() if LOCAL_MODE not in spec.modes
             ),
         }
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
-        "sections": {"services": is_admin},
+        "sections": {"services": is_admin, "features": is_admin},
         "not_applicable_actions": [],
     }
 

@@ -89,7 +89,7 @@ in this module's test file for why a derived set would silently swallow a
 future action nobody classified either way.
 
 **Bespoke routes:** the sensitive-action net above only covers the
-generic dispatcher. ``org_config_upload`` has its own route, and an
+generic dispatcher. The bundle upload has its own route (on the Admin page, web/routes_admin.py), and an
 uploaded bundle can rewrite the PII policy, every auto-accept rule and
 every connector's OAuth client config in one shot -- so it is gated the
 same two ways (``_needs_step_up`` and ``require_human_session``), by
@@ -273,8 +273,8 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------- #
 # _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS above only cover the generic
 # POST /api/settings/{action} dispatcher. A bespoke route such as
-# org_config_upload (module docstring's own list of why: a multipart
-# upload, not a JSON action) would, for that reason alone, pass through
+# the scoped-token routes (module docstring's own list of why: a multipart
+# or bespoke body, not a JSON action) would, for that reason alone, pass through
 # neither _needs_step_up nor require_human_session, regardless of how much
 # policy an uploaded bundle can rewrite. Every path in _BESPOKE_SENSITIVE_ROUTE_PATHS is
 # wired through the same _needs_step_up-shaped/require_human_session-shaped
@@ -298,7 +298,6 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------- #
 
 _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
-    "/api/settings/org_config/upload",
     # Rotating cuts off every connected AI client at once -- the one token
     # action that earns the passkey step-up (ADR 0104).
     "/api/settings/mcp_token/rotate",
@@ -807,7 +806,7 @@ async def handle_org_config_upload(
     state_builder: Callable[[], dict[str, Any]],
     always: bool = False,
 ) -> Response:
-    """The bundle upload behind both the Settings card and the Admin page: CSRF, human session,
+    """The bundle upload behind the Admin page: CSRF, human session,
     size, the confirmation before a first signing key is pinned (409), then step-up. Only the
     state it answers with differs, so each caller says what that is.
 
@@ -1114,19 +1113,11 @@ def build_routes(
         return JSONResponse({"status": "quitting"}, background=BackgroundTask(controller.quit_app))
 
     def _step_up_in_force() -> bool:
-        # Unlike _needs_step_up(action) above, the bespoke sensitive routes (org_config_upload,
-        # and mcp_token_rotate -- ADR 0104) have no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS
-        # membership to check: both are listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and both are
-        # unconditionally sensitive whenever step-up is actually in force -- neither has a
-        # non-sensitive shape.
+        # Unlike _needs_step_up(action) above, the bespoke sensitive routes (mcp_token_rotate -- ADR 0104)
+        # have no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check: they are listed in
+        # _BESPOKE_SENSITIVE_ROUTE_PATHS, and are unconditionally sensitive whenever step-up is
+        # actually in force -- none has a non-sensitive shape.
         return step_up is not None and step_up.enabled and step_up.require_passkey
-
-    async def org_config_upload(request: Request) -> Response:
-        return await handle_org_config_upload(
-            request, controller=controller, sessions=sessions, step_up=step_up, step_up_origin=step_up_origin,
-            challenges=challenges, require_human_session=require_human_session,
-            state_builder=lambda: _snapshot(controller),
-        )
 
     async def mcp_token_copy(request: Request) -> Response:
         # Only mounted when ai_client is given -- see the routes list below.
@@ -1490,7 +1481,6 @@ def build_routes(
         Route("/settings", settings_page),
         Route("/settings/connectors", settings_connectors_page),
         Route("/api/settings/quit_app", quit_action, methods=["POST"]),
-        Route("/api/settings/org_config/upload", org_config_upload, methods=["POST"]),
         Route("/api/settings/audit_log/download", audit_log_download),
     ]
     if ai_client is not None:
@@ -1683,7 +1673,7 @@ def build_org_routes(
         ``dict``, the same as local mode's own ``payload.get(
         "webauthn_assertion")``, not the JSON-encoded *string* a multipart
         form field carried it as (``_parse_form_assertion``, still used by
-        ``org_config_upload`` above, which is still a real multipart
+        ``handle_org_config_upload`` above, which is still a real multipart
         route)."""
         assertion = form_body.get("webauthn_assertion")
         response = _apply_step_up_gate(

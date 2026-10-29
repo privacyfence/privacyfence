@@ -2569,8 +2569,8 @@ class TestHostileContentStaysText:
 
         def hostile_snapshot():
             state = real_snapshot()
-            state["general"]["org_installed"] = True
-            state["general"]["org_installed_date"] = "<b id=pfxss3>x</b>"
+            state["general"]["update_available"] = True
+            state["general"]["update_latest_version"] = "<b id=pfxss3>x</b>"
             return state
 
         controller.snapshot = hostile_snapshot
@@ -2578,7 +2578,7 @@ class TestHostileContentStaysText:
             call_soon_threadsafe(controller._push_snapshot)
             page.wait_for_function("() => window.__pfRenders > 0")
             assert page.locator("#pfxss3").count() == 0
-            assert "Installed <b id=pfxss3>x</b>" in page.locator("#app").inner_text()
+            assert "PrivacyFence <b id=pfxss3>x</b> is available" in page.locator("#app").inner_text()
         finally:
             controller.snapshot = real_snapshot
 

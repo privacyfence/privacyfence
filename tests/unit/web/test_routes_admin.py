@@ -798,6 +798,7 @@ class TestAdminPage:
         assert r.status_code == 200
         assert _active_nav(r.text) == ["/admin"]
         assert "window.__pfInitialSection = \"services\"" in r.text
+        assert '"features": true' in r.text
         assert '"surface": "admin"' in r.text or '"surface":"admin"' in r.text
         # Actions post under /api/admin, with the session's CSRF token.
         assert "var ENDPOINT = '/api/admin';" in r.text
