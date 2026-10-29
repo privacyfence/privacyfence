@@ -1157,6 +1157,14 @@ class TestAdminSurfaceCapabilities:
         admin = html.split("function renderAdmin(state) {", 1)[1].split("function renderSection(state)", 1)[0]
         assert "renderNav(" not in admin and "renderSection(" not in admin
 
+    def test_both_readiness_lines_are_in_the_script_and_escaped(self):
+        html = build_html(_admin_state(), surface="admin")
+        assert "Ready for PrivacyFence 8: yes." in html
+        assert "Ready for PrivacyFence 8: not yet. '" in html
+        assert "Fix them and restart; see the upgrade notes." in html
+        assert "problems.slice(0, 3)" in html
+        assert "esc(text)" in html
+
     def test_the_admin_nav_keys_and_labels_are_in_order(self):
         html = build_html(_admin_state(), surface="admin")
         nav = html.split("var ADMIN_NAV_ITEMS = [", 1)[1].split("];", 1)[0]
@@ -1206,6 +1214,16 @@ needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not o
 
 @needs_node
 class TestServicesSection:
+    def test_the_page_says_whether_the_install_is_ready_for_the_next_release(self):
+        ready = _render_admin(_admin_state(upgrade_ready={"ready": True, "problems": []}))
+        assert "Ready for PrivacyFence 8: yes." in ready
+        problems = ["a <b>x</b>", "two", "three", "four"]
+        page = _render_admin(_admin_state(upgrade_ready={"ready": False, "problems": problems}))
+        assert "Ready for PrivacyFence 8: not yet. 4 problem(s): a &lt;b&gt;x&lt;/b&gt;; two; three." in page
+        assert "four" not in page and "<b>x" not in page
+        assert "Fix them and restart; see the upgrade notes." in page
+        assert "Ready for PrivacyFence 8" not in _render_admin(_admin_state())
+
     def test_the_nav_shows_only_the_sections_the_capabilities_include(self):
         local = _render_admin(_admin_state(_row("google", "Google")))
         assert re.findall(r'aria-label="([^"]+)" data-nav', local) == ["Services", "Features", "Organization configuration"]

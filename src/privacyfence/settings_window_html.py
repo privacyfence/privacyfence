@@ -2436,6 +2436,20 @@ _JS = r"""
     }
   }
 
+  // Whether this install's data is in the shape the next major release expects. The problems
+  // come from files on disk, so they are escaped like any other text.
+  function upgradeReadyHtml(state) {
+    var ready = state.upgrade_ready;
+    if (!ready) { return ''; }
+    var text = 'Ready for PrivacyFence 8: yes.';
+    if (!ready.ready) {
+      var problems = ready.problems || [];
+      text = 'Ready for PrivacyFence 8: not yet. ' + problems.length + ' problem(s): ' +
+        problems.slice(0, 3).join('; ') + '. Fix them and restart; see the upgrade notes.';
+    }
+    return '<div class="muted pf-upgrade-ready" role="status">' + esc(text) + '</div>';
+  }
+
   function renderAdmin(state) {
     var visible = ADMIN_NAV_ITEMS.filter(function (item) { return CAPS.sections[item[0]]; });
     var section = CAPS.sections[ui.section] ? ui.section : (visible.length ? visible[0][0] : '');
@@ -2454,7 +2468,7 @@ _JS = r"""
       html += '<div class="card card-info pf-banner" role="status"><div>' +
         esc('Saved. Restart PrivacyFence for these changes to take effect: ' + state.restart_needed.join(', ') + '.') + '</div></div>';
     }
-    html += adminSection(state, section) + '</div></div>';
+    html += adminSection(state, section) + upgradeReadyHtml(state) + '</div></div>';
     document.getElementById('app').innerHTML = html;
     revealSelectedTabs();
   }

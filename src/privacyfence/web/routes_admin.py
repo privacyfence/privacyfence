@@ -58,7 +58,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import admin_config, oauth_apps, org_mode, relay_client, settings_window_html, web_shell
+from .. import admin_config, data_format, oauth_apps, org_mode, relay_client, settings_window_html, web_shell
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
@@ -259,6 +259,7 @@ def _admin_state(
         "rooms": {"count": len(admin.get("rooms") or []), "synced_at": str(admin.get("rooms_synced_at") or "")},
         "unattended_sessions": admin.get("unattended_sessions", {}),
         "restart_needed": _restart_needed(admin, startup_admin),
+        "upgrade_ready": data_format.status(),
     }
     if mode == "org":
         for key in _ORG_STATE_KEYS:

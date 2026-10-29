@@ -12,7 +12,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from privacyfence import admin_config, daemon_main, oauth_apps, paths, privacy_filter, relay_client
+from privacyfence import admin_config, daemon_main, data_format, oauth_apps, paths, privacy_filter, relay_client
 from privacyfence import webauthn_stepup as wa
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal, principal_scope
@@ -348,6 +348,14 @@ class TestState:
                 "step_up", "scoped_tokens", "audit_forwarding", "restart_needed", "relay_status"} <= set(state)
         assert {"privacy", "stats"} <= set(state)
         assert state["restart_needed"] == []
+
+    def test_state_carries_the_upgrade_readiness(self, monkeypatch):
+        monkeypatch.setitem(data_format._status, "ready", False)
+        monkeypatch.setitem(data_format._status, "problems", ["alice: settings.yaml cannot be read"])
+        world = World()
+        world.sign_in(ADMIN)
+        state = world.client.get("/api/admin/state").json()
+        assert state["upgrade_ready"] == {"ready": False, "problems": ["alice: settings.yaml cannot be read"]}
 
     def test_a_section_the_startup_copy_lacks_is_not_compared(self):
         assert routes_admin._restart_needed({"web_push": {"enabled": True}}, {}) == []
@@ -779,6 +787,7 @@ class TestLocalAccess:
         assert r.json()["error"] == "something to read"
         assert SECRET not in r.text
         assert "download_delivery" not in r.json() and "relay_status" not in r.json()
+        assert r.json()["upgrade_ready"] == data_format.status()
 
 
 class TestLocalHumanSession:
