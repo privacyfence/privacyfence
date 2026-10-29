@@ -41,7 +41,7 @@ position across that re-render.
 from __future__ import annotations
 
 import secrets
-from typing import Any
+from typing import Any, Literal
 
 from .design_css import DOCUMENT_CSS
 from .html_embed import json_for_script
@@ -126,6 +126,9 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-row-sub .pf-row-title { font-size: var(--step-small); font-weight: 500; }
 .pf-row-sub[aria-disabled="true"] .pf-row-title { color: var(--muted); }
 .pf-row-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+.pf-row-controls > input.field { flex: 1 1 16rem; min-width: 0; }
+.pf-admin-check { flex-direction: row; align-items: flex-start; justify-content: flex-start; cursor: pointer; }
+.pf-admin-check > input { margin-top: 3px; flex: none; }
 @container pf-settings (min-width: 900px) {
   .pf-row { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-m); }
   .pf-row-text { flex: 1 1 0; }
@@ -2062,6 +2065,186 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
+  // Admin page (CAPS.surface === 'admin', GET /admin in web/routes_admin.py)
+  //
+  // The admin state is its own shape (services, restart_needed, ...) and never carries
+  // the settings keys the sections above read, so render() hands it to renderAdmin
+  // before any of them runs.
+  // -------------------------------------------------------------------- //
+
+  var ADMIN_NAV_ITEMS = [
+    ['services', 'Services'], ['features', 'Features'], ['org_config', 'Organization configuration'],
+    ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
+    ['tokens', 'Scoped tokens'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
+  ];
+
+  // The provider setup doc for each service on the website: the doc's file name without .md.
+  var SERVICE_DOC_SLUGS = {
+    google: 'google-cloud-setup', slack: 'slack-setup', salesforce: 'salesforce-setup', atlassian: 'atlassian-setup',
+    miro: 'miro-setup', grist: 'grist-setup', peek: 'peek-setup', telegram: 'telegram-setup',
+  };
+  var SERVER_ADDRESS_VARIABLES = { peek: 'PRIVACYFENCE_PEEK_BASE_URL', grist: 'PRIVACYFENCE_GRIST_SERVER_URL' };
+  var PROVISIONING_KEY_VARIABLES = { peek: 'PRIVACYFENCE_PEEK_PROVISIONING_KEY', grist: 'PRIVACYFENCE_GRIST_PROVISIONING_KEY' };
+  var PROVISIONED_WHAT = { peek: 'a Peek account', grist: 'a Grist key' };
+  var RELAY_TERMS_URL = 'https://privacyfence.eu/relay-terms/';
+
+  function relayStatusHtml(status) {
+    var text;
+    if (!status.needed) {
+      text = 'Relay registration: not needed.';
+    } else if (status.last_error) {
+      text = 'Relay registration failed: ' + esc(status.last_error) + '. Built-in apps cannot sign in until it succeeds.';
+    } else if (status.last_ok_at) {
+      text = 'Relay registration: registered ' + esc(new Date(status.last_ok_at * 1000).toLocaleString()) + '.';
+    } else {
+      text = 'Relay registration: not registered yet.';
+    }
+    return '<div class="pf-row-desc pf-relay-status">' + text +
+      ' <a href="' + RELAY_TERMS_URL + '" target="_blank" rel="noopener">Relay terms</a></div>';
+  }
+
+  // The lines under a service's name: which app it uses and what an administrator can do about it.
+  function serviceLines(row) {
+    var lines = [];
+    var opts = row.options || {};
+    if (!row.offered) {
+      return ['Not offered.'];
+    }
+    if (row.app_source === 'bundle' || (row.app_source === 'server' && row.client_id)) {
+      lines.push("Uses your organization's own app (client " + esc(row.client_id) + '), from the configuration file.');
+    } else if (row.app_source === 'builtin') {
+      lines.push(row.relay ? 'Uses the built-in PrivacyFence app through oauth.privacyfence.eu.'
+        : 'Uses the built-in PrivacyFence app.');
+    } else if (row.app_source === 'none') {
+      lines.push("No app is available for this service. Add your organization's own app to the configuration file.");
+    }
+    if (row.relay && (row.key === 'slack' || row.key === 'miro')) {
+      lines.push('Sign-in codes for this service pass through oauth.privacyfence.eu without PKCE. Use your own app to avoid this.');
+    }
+    if (row.key === 'peek' || row.key === 'grist') {
+      var address = opts.server_url || opts.base_url || '';
+      var variable = SERVER_ADDRESS_VARIABLES[row.key];
+      if (!address) {
+        if (CAPS.mode === 'org') { lines.push('Set the server address below.'); }
+      } else if (opts.address_source === 'environment') {
+        lines.push('Server: ' + esc(address) + ' (set by ' + variable + ' on the server).');
+      } else if (opts.address_source === 'imported') {
+        lines.push('Server: ' + esc(address) + ' (from the signed configuration file).');
+      } else if (opts.address_source === 'bundle') {
+        lines.push('Server: ' + esc(address) + " (from your organization's Grist app in the configuration file).");
+      }
+    }
+    return lines;
+  }
+
+  function serverAddressRowHtml(row) {
+    var opts = row.options || {};
+    if (opts.locked) { return ''; }
+    var address = opts.server_url || opts.base_url || '';
+    return '<div class="pf-row pf-row-sub"><div class="pf-row-text"><div class="pf-row-title">Server address</div></div>' +
+      '<div class="pf-row-controls"><input class="field" type="url" autocomplete="off" spellcheck="false" ' +
+      'placeholder="https://" aria-label="' + esc(row.label) + ' server address" value="' + esc(address) +
+      '" data-admin-address="' + esc(row.key) + '">' +
+      '<div class="button secondary" role="button" tabindex="0" aria-label="Save the ' + esc(row.label) +
+      ' server address" data-admin-address-save="' + esc(row.key) + '">Save</div></div></div>';
+  }
+
+  // Automatic accounts (Peek and Grist, organization mode): the switch and the trust checkbox
+  // when the server's operator has made them available, the reason otherwise.
+  function autoProvisionRowHtml(row) {
+    var auto = (row.options || {}).auto_provision;
+    if (!auto || notApplicable('set_auto_provisioning')) { return ''; }
+    if (!auto.available) {
+      return rowHtml('Automatic accounts', esc(auto.reason), '', 'pf-row-sub');
+    }
+    var lines = [];
+    if (auto.enabled) {
+      lines.push('Automatic accounts: on. Each person who signs in gets ' + PROVISIONED_WHAT[row.key] + ' connected for them.');
+      if (!auto.key_set) {
+        lines.push('Automatic accounts: on, but ' + PROVISIONING_KEY_VARIABLES[row.key] + ' is not set on the server.');
+      }
+    }
+    var payload = { service: row.key, enabled: !auto.enabled, trust_unverified_email: !!auto.trust_unverified_email };
+    var html = rowHtml('Automatic accounts', lines.map(function (l) { return '<div>' + esc(l) + '</div>'; }).join(''),
+      toggleHtml(auto.enabled, 'set_auto_provisioning', payload, false, 'Automatic accounts for ' + row.label), 'pf-row-sub');
+    var trustPayload = { service: row.key, enabled: !!auto.enabled, trust_unverified_email: !auto.trust_unverified_email };
+    html += '<label class="pf-row pf-row-sub pf-admin-check"><input type="checkbox"' +
+      (auto.trust_unverified_email ? ' checked' : '') + ' ' + dataAttr('set_auto_provisioning', trustPayload) +
+      ' aria-label="Trust unverified email addresses for ' + esc(row.label) + '"> ' +
+      '<span class="pf-row-desc">Trust email addresses the identity provider does not mark verified (only for providers such as ' +
+      'Microsoft Entra ID that issue only verified, organization-owned addresses).</span></label>';
+    return html;
+  }
+
+  function renderServices(state) {
+    var html = '<div class="pf-page"><h1 class="pf-page-title">Services</h1>';
+    if (state.relay_status) {
+      html += '<div class="card pf-card">' + relayStatusHtml(state.relay_status) + '</div>';
+    }
+    (state.services || []).forEach(function (row) {
+      var lines = serviceLines(row).map(function (l) { return '<div>' + l + '</div>'; });
+      var usesApp = row.app_source === 'bundle' || row.app_source === 'builtin';
+      if (row.offered && usesApp) {
+        lines.push('<div>' + esc('Changing the app makes everyone who connected ' + row.label + ' connect again.') + '</div>');
+      }
+      var slug = SERVICE_DOC_SLUGS[row.key];
+      if (slug) {
+        lines.push('<div><a href="https://privacyfence.eu/docs/' + slug + '/" target="_blank" rel="noopener">' +
+          'How to use your own app</a></div>');
+      }
+      var action = row.offered ? 'withdraw_service' : 'offer_service';
+      html += '<div class="card pf-card pf-service" data-service="' + esc(row.key) + '">';
+      html += rowHtml(row.label, lines.join(''), toggleHtml(row.offered, action, { service: row.key }, false, 'Offer ' + row.label));
+      if (row.offered && (row.key === 'peek' || row.key === 'grist')) {
+        html += serverAddressRowHtml(row) + autoProvisionRowHtml(row);
+      }
+      html += '</div>';
+    });
+    return html + '</div>';
+  }
+
+  // Local mode's bundle upload. The shim posts the chosen file to the admin endpoint.
+  function renderOrgConfig(state) {
+    var html = '<div class="pf-page"><h1 class="pf-page-title">Organization configuration</h1><div class="card pf-card">';
+    html += rowHtml('Configuration file',
+      "Install or replace your organization's signed configuration file. Settings it carries are managed on this page.",
+      '<div class="button secondary" role="button" tabindex="0" aria-label="Install configuration file" ' +
+      dataAttr('install_org_config', {}) + '>Install configuration file…</div>');
+    return html + '</div></div>';
+  }
+
+  function adminSection(state, key) {
+    switch (key) {
+      case 'services': return renderServices(state);
+      case 'org_config': return renderOrgConfig(state);
+      default: return '';
+    }
+  }
+
+  function renderAdmin(state) {
+    var visible = ADMIN_NAV_ITEMS.filter(function (item) { return CAPS.sections[item[0]]; });
+    var section = CAPS.sections[ui.section] ? ui.section : (visible.length ? visible[0][0] : '');
+    var html = '<div class="split pf-settings-layout"><div class="tabstrip pf-nav" role="tablist" aria-label="Admin sections">';
+    visible.forEach(function (item) {
+      var active = section === item[0];
+      html += '<div class="tab pf-navitem' + (active ? ' active' : '') + '" role="tab" aria-selected="' +
+        (active ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(item[1]) + '" data-nav="' + item[0] + '">' + esc(item[1]) + '</div>';
+    });
+    html += '</div><div class="pf-content">';
+    if (state.error) {
+      html += '<div class="card card-danger pf-banner pf-error-banner" role="alert"><div>' + esc(state.error) + '</div>' +
+        '<div class="pf-banner-dismiss pf-error-dismiss" role="button" tabindex="0" aria-label="Dismiss error" data-dismiss-error="1">✕</div></div>';
+    }
+    if ((state.restart_needed || []).length) {
+      html += '<div class="card card-info pf-banner" role="status"><div>' +
+        esc('Saved. Restart PrivacyFence for these changes to take effect: ' + state.restart_needed.join(', ') + '.') + '</div></div>';
+    }
+    html += adminSection(state, section) + '</div></div>';
+    document.getElementById('app').innerHTML = html;
+    revealSelectedTabs();
+  }
+
+  // -------------------------------------------------------------------- //
   // Top-level render
   // -------------------------------------------------------------------- //
 
@@ -2238,6 +2421,7 @@ _JS = r"""
 
   function render(state) {
     pyState = state;
+    if (CAPS.surface === 'admin') { renderAdmin(state); return; }
     // Auto-close the modal once Python reports the sign-in is no longer in
     // progress (success or explicit cancel) -- see telegram_cancel_auth/
     // the success branches of telegram_submit_code/telegram_submit_2fa.
@@ -2407,6 +2591,9 @@ _JS = r"""
     var privacyNavEl = e.target.closest('[data-privacy-nav]');
     if (privacyNavEl) { ui.privacyGroup = privacyNavEl.getAttribute('data-privacy-nav'); render(pyState); return; }
 
+    var addressSaveEl = e.target.closest('[data-admin-address-save]');
+    if (addressSaveEl) { saveServerAddress(addressSaveEl.getAttribute('data-admin-address-save')); return; }
+
     var dismissEl = e.target.closest('[data-dismiss-error]');
     if (dismissEl) { pyState.error = ''; render(pyState); return; }
 
@@ -2524,6 +2711,11 @@ _JS = r"""
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }
       post(action, payload);
     }
+  }
+
+  function saveServerAddress(service) {
+    var input = document.querySelector('[data-admin-address="' + service + '"]');
+    post('set_server_address', { service: service, value: input ? input.value : '' });
   }
 
   function submitPeekModal(action) {
@@ -2692,6 +2884,7 @@ _JS = r"""
     // A toggle's checkbox answers Space natively; Enter as well, as the
     // div-based switch it replaced did.
     if (el.getAttribute('role') === 'switch') { e.preventDefault(); el.click(); return; }
+    if (el.hasAttribute('data-admin-address')) { saveServerAddress(el.getAttribute('data-admin-address')); return; }
     if (el.hasAttribute('data-aa-value')) {
       submitAddPolicyRule();
       return;
@@ -2742,8 +2935,34 @@ _LOCAL_ONLY_BESPOKE_ACTIONS: frozenset[str] = frozenset({
 })
 
 
-def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
-    """Which of the inner-nav sections this ``(mode, is_admin)``
+def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
+    """The Admin page's sections and suppressed actions. It is a separate surface because its
+    state is not the settings state: ``renderAdmin`` draws its own nav from these keys.
+
+    Local mode has no administrator distinction (the install owner is the only caller), so it
+    gets every section. In org mode only an administrator gets any: the route refuses anyone
+    else, and the same rule applies here to what is drawn. The sections that exist so far are
+    Services and, for local mode, the bundle upload.
+    """
+    from .web.routes_admin import ADMIN_ACTIONS  # deferred: the route layer imports this module
+
+    if mode != ORG_MODE:
+        return {
+            "mode": LOCAL_MODE, "is_admin": False, "surface": "admin",
+            "sections": {"services": True, "org_config": True},
+            "not_applicable_actions": sorted(
+                name for name, spec in ADMIN_ACTIONS.items() if LOCAL_MODE not in spec.modes
+            ),
+        }
+    return {
+        "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
+        "sections": {"services": is_admin},
+        "not_applicable_actions": [],
+    }
+
+
+def _capabilities_for(mode: str, *, is_admin: bool, surface: str = "settings") -> dict[str, Any]:
+    """Which of the inner-nav sections this ``(mode, is_admin, surface)``
     combination gets, and which individual controls (see ``dataAttr``/
     ``toggleHtml`` call sites throughout ``_JS``) must never draw at all --
     kept out of ``state`` itself (a separate ``window.__pfCapabilities``
@@ -2773,16 +2992,20 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     can post is itself ``admin_only`` in ``ACTION_SCOPES``, so a non-admin
     who somehow reached one would have every mutation 403 anyway; hiding
     the page is the same authorization decision, applied to rendering).
+
+    ``surface="admin"`` is the Admin page instead (``_admin_capabilities``).
     """
+    if surface == "admin":
+        return _admin_capabilities(mode, is_admin=is_admin)
     if mode != ORG_MODE:
         return {
-            "mode": LOCAL_MODE, "is_admin": False,
+            "mode": LOCAL_MODE, "is_admin": False, "surface": "settings",
             # Stats counts an org server's principals; local mode has one user.
             "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "stats": False},
             "not_applicable_actions": [],
         }
     return {
-        "mode": ORG_MODE, "is_admin": is_admin,
+        "mode": ORG_MODE, "is_admin": is_admin, "surface": "settings",
         "sections": {
             # Org mode's clients connect with OAuth 2.1, not a local token
             # (ADR 0011), so the local "Connect an AI client" page is never shown.
@@ -2797,7 +3020,7 @@ def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
     mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
     scoped_tokens: dict[str, Any] | None = None, personal_transfer: bool = False,
-    scoped_proposal: dict[str, Any] | None = None,
+    scoped_proposal: dict[str, Any] | None = None, surface: Literal["settings", "admin"] = "settings",
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
@@ -2852,22 +3075,30 @@ def build_html(
     administrator has enabled the feature, ADR 0165) turns on the "Scoped
     tokens" section the same way.
 
+    ``surface="admin"`` renders the Admin page from its own state (web/routes_admin.py) with the
+    same machinery: ``mode``/``is_admin`` pick its sections (``_admin_capabilities``), and the
+    settings-only inputs below (``ai_client``, ``scoped_tokens``, ``personal_transfer``) do not
+    apply to it. ``GET /admin`` passes ``initial_section="services"``.
+
     ``personal_transfer`` draws Auto-accept's "Move your settings" card (export and import of
     the person's own rules, web/personal_settings_shim.py); like ``mode`` it only reaches
     ``window.__pfCapabilities``.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json_for_script(state)
-    capabilities = _capabilities_for(mode, is_admin=is_admin)
-    capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
-    capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
-    capabilities["personalTransfer"] = personal_transfer
+    capabilities = _capabilities_for(mode, is_admin=is_admin, surface=surface)
+    if surface == "admin":
+        ai_client = scoped_tokens = scoped_proposal = None
+    else:
+        capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
+        capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
+        capabilities["personalTransfer"] = personal_transfer
     caps_json = json_for_script(capabilities)
     ai_client_script = ""
-    if capabilities["sections"]["ai_client"]:
+    if capabilities["sections"].get("ai_client"):
         ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json_for_script(ai_client)};</script>'
     scoped_tokens_script = ""
-    if capabilities["sections"]["scoped_tokens"]:
+    if capabilities["sections"].get("scoped_tokens"):
         # Rule sentences carry user-chosen values: no "</script>" may end the tag early.
         scoped_json = json_for_script(scoped_tokens)
         scoped_tokens_script = f'<script nonce="{nonce}">window.__pfScopedTokens = {scoped_json};</script>'
@@ -2880,7 +3111,7 @@ def build_html(
     if initial_section is not None:
         section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json_for_script(initial_section)};</script>'
     return (
-        "<title>PrivacyFence Settings</title>"
+        f"<title>PrivacyFence {'Admin' if surface == 'admin' else 'Settings'}</title>"
         f'<style nonce="{nonce}">{DOCUMENT_CSS}{_CSS}</style>'
         '<div id="app" class="shell pf-settings"></div>'
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'

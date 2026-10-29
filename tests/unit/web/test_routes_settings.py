@@ -1885,13 +1885,14 @@ class TestScopedTokenRoutes:
 
 
 class TestRoomsUploadShim:
-    def test_the_shim_intercepts_upload_rooms_and_posts_the_file_to_the_admin_route(self, client, sessions):
+    def test_the_shim_intercepts_upload_rooms_and_posts_the_file_under_its_endpoint(self, client, sessions):
         _authed(client, sessions)
         page = client.get("/settings").text
         assert "if (action === 'upload_rooms') { roomsInput.click(); return; }" in page
-        assert "bindUpload(roomsInput, '/api/admin/rooms/upload');" in page
-        # The bundle upload keeps its own path.
-        assert "bindUpload(fileInput, '/api/settings/org_config/upload');" in page
+        assert "bindUpload(roomsInput, ENDPOINT + '/rooms/upload');" in page
+        assert "bindUpload(fileInput, ENDPOINT + '/org_config/upload');" in page
+        # Settings posts to its own endpoint; the Admin page passes /api/admin.
+        assert "var ENDPOINT = '/api/settings';" in page
 
 
 class TestHandleOrgConfigUploadAlways:

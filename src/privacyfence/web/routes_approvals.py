@@ -502,7 +502,7 @@ def _render_org_list_page(
         title="PrivacyFence — Approvals",
         active="approvals",
         nonce=nonce,
-        nav_items=web_shell.ORG_NAV_ITEMS,
+        nav_items=web_shell.org_nav_items(principal.is_admin),
         principal_label=principal.email or principal.display_name or principal.id,
         stream_url="/api/approvals/stream",
         notifications_enabled=False,
