@@ -26,6 +26,7 @@ long option, including both halves of a --x/--no-x pair, must appear in the doc.
 """
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -129,6 +130,8 @@ def _bundle_options() -> list[str]:
     parser = build_org_bundle.build_parser()
     options: list[str] = []
     for action in parser._actions:
+        if action.help is argparse.SUPPRESS:
+            continue  # a refused option; it is documented where its setting went, not here
         for option in action.option_strings:
             if option.startswith("--") and option != "--help":
                 options.append(option)
@@ -137,9 +140,12 @@ def _bundle_options() -> list[str]:
 
 def test_build_org_bundle_options_are_read_from_its_parser():
     options = _bundle_options()
-    assert "--server-bind-host" in options
-    assert "--no-agent-links" in options
-    assert len(options) > 40
+    assert "--slack-client-id" in options
+    assert "--sign-key" in options
+    # Refused options are hidden from --help, so they are not part of what the reference must list.
+    assert "--server-bind-host" not in options
+    assert "--no-agent-links" not in options
+    assert len(options) > 15
 
 
 def test_every_build_org_bundle_option_is_documented():
