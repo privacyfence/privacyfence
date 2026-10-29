@@ -1355,3 +1355,145 @@ class TestGristApiKey:
         monkeypatch.setattr(rc.GristClient, "check_connection", lambda self: "grist.example.com")
         self._post(client, session_id, api_key=self._KEY)
         assert "Enter your Grist API key." not in self._page(client, session_id)
+
+
+# ---------------------------------------------------------------------------- #
+# Built-in apps through the sign-in relay
+# ---------------------------------------------------------------------------- #
+
+RELAY_CALLBACK = "https://oauth.privacyfence.eu/callback"
+
+
+def _relayed(section: dict) -> dict:
+    return {**section, "relay": True}
+
+
+@pytest.fixture
+def registered(monkeypatch):
+    monkeypatch.setattr(
+        rc.relay_client, "status", lambda: {"last_ok_at": 1.0, "last_error": "", "needed": True},
+    )
+
+
+def _relay_app(org_config, issuer=ISSUER):
+    sessions = org_session.OrgSessionStore()
+    registry = _registry()
+    app = Starlette(routes=rc.build_routes(
+        sessions=sessions, connector_registry=registry, org_config=org_config, issuer_url=issuer,
+    ))
+    return _client(app), sessions, registry
+
+
+def _start(client, sessions, service):
+    session_id, _principal = _signed_in(sessions)
+    cookies = {org_session.SESSION_COOKIE: session_id}
+    response = client.get(f"/oauth/start/{service}", cookies=cookies)
+    return response, session_id
+
+
+class TestRelay:
+    def test_relayed_slack_start_uses_the_relay_redirect_and_a_host_state(self, registered):
+        client, sessions, _registry = _relay_app({"slack": _relayed(_ORG_CONFIG["slack"])})
+        r, _ = _start(client, sessions, "slack")
+        location = r.headers["location"]
+        assert location.startswith("https://slack.com/oauth/v2/authorize?")
+        qs = dict(up.parse_qsl(up.urlparse(location).query))
+        assert qs["redirect_uri"] == f"{RELAY_CALLBACK}/slack"
+        assert qs["state"].startswith("pf.example.com~")
+        assert len(qs["state"].split("~", 1)[1]) == 43
+
+    def test_the_callback_exchanges_with_the_relay_redirect(self, registered, monkeypatch):
+        client, sessions, registry = _relay_app({"slack": _relayed(_ORG_CONFIG["slack"])})
+        r, session_id = _start(client, sessions, "slack")
+        state = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))["state"]
+        seen = []
+
+        def fake_exchange_code(client_id, client_secret, code, redirect_uri):
+            seen.append(redirect_uri)
+            return {"access_token": "xoxp-fake", "team_name": "Acme"}
+
+        monkeypatch.setattr(rc.slack_client, "exchange_code", fake_exchange_code)
+        callback = client.get(
+            f"/oauth/callback/slack?code=c&state={up.quote(state)}", cookies={org_session.SESSION_COOKIE: session_id},
+        )
+        assert callback.headers["location"] == "/connect?connected=slack"
+        assert seen == [f"{RELAY_CALLBACK}/slack"]
+
+    def test_jira_uses_the_atlassian_grant(self, registered):
+        client, sessions, _registry = _relay_app({"atlassian": _relayed(_ORG_CONFIG["atlassian"])})
+        r, _ = _start(client, sessions, "jira")
+        qs = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))
+        assert qs["redirect_uri"] == f"{RELAY_CALLBACK}/atlassian"
+
+    def test_a_relayed_google_start_hands_google_auth_no_relay_key(self, registered, monkeypatch):
+        client, sessions, _registry = _relay_app({"google": _relayed(_GOOGLE_ORG)})
+        seen = []
+        real = rc.google_oauth.authorize_url
+
+        def spy(client_config, scopes, redirect_uri, state):
+            seen.append((client_config, redirect_uri))
+            return real(client_config, scopes, redirect_uri, state)
+
+        monkeypatch.setattr(rc.google_oauth, "authorize_url", spy)
+        r, _ = _start(client, sessions, "gmail")
+        assert r.status_code == 302
+        assert "relay" not in seen[0][0]["web"]
+        assert seen[0][1] == f"{RELAY_CALLBACK}/gmail"
+
+    def test_a_relayed_google_exchange_hands_google_auth_no_relay_key(self, registered, monkeypatch):
+        client, sessions, _registry = _relay_app({"google": _relayed(_GOOGLE_ORG)})
+        r, session_id = _start(client, sessions, "gmail")
+        state = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))["state"]
+        seen = []
+        monkeypatch.setattr(
+            rc.google_oauth, "exchange_code",
+            lambda client_config, scopes, redirect_uri, code, verifier: seen.append((client_config, redirect_uri)),
+        )
+        monkeypatch.setattr(rc.google_oauth, "save_credentials", lambda path, creds: None)
+        callback = client.get(
+            f"/oauth/callback/gmail?code=c&state={up.quote(state)}", cookies={org_session.SESSION_COOKIE: session_id},
+        )
+        assert callback.headers["location"] == "/connect?connected=gmail"
+        assert "relay" not in seen[0][0]["web"]
+        assert seen[0][1] == f"{RELAY_CALLBACK}/gmail"
+
+    def test_without_a_successful_registration_the_start_is_refused(self, monkeypatch, caplog):
+        monkeypatch.setattr(rc.relay_client, "status", lambda: {"last_ok_at": None, "last_error": "", "needed": True})
+        client, sessions, _registry = _relay_app({"slack": _relayed(_ORG_CONFIG["slack"])})
+        with caplog.at_level("WARNING"):
+            r, _ = _start(client, sessions, "slack")
+        assert r.headers["location"] == "/connect?error=slack"
+        assert "relay registration has not succeeded yet" in caplog.text
+
+    def test_a_section_without_the_marker_keeps_the_servers_own_redirect(self, registered):
+        client, sessions, _registry = _relay_app({"slack": _ORG_CONFIG["slack"]})
+        r, _ = _start(client, sessions, "slack")
+        qs = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))
+        assert qs["redirect_uri"] == f"{ISSUER}/oauth/callback/slack"
+        assert "~" not in qs["state"]
+
+    def test_a_loopback_server_needs_no_registration(self, monkeypatch):
+        monkeypatch.setattr(rc.relay_client, "status", lambda: {"last_ok_at": None, "last_error": "", "needed": False})
+        client, sessions, _registry = _relay_app(
+            {"slack": _relayed(_ORG_CONFIG["slack"])}, issuer="http://localhost:8765",
+        )
+        r, _ = _start(client, sessions, "slack")
+        qs = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))
+        assert qs["redirect_uri"] == f"{RELAY_CALLBACK}/slack"
+        assert qs["state"].startswith("localhost:8765~")
+
+    def test_a_client_changed_during_the_sign_in_drops_the_attempt(self, registered, monkeypatch):
+        org_config = {"slack": _relayed(_ORG_CONFIG["slack"])}
+        client, sessions, _registry = _relay_app(org_config)
+        r, session_id = _start(client, sessions, "slack")
+        state = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))["state"]
+        org_config["slack"] = _relayed({"client_id": "other", "client_secret": "x"})
+        monkeypatch.setattr(rc.slack_client, "exchange_code", lambda *a: pytest.fail("must not exchange"))
+        callback = client.get(
+            f"/oauth/callback/slack?code=c&state={up.quote(state)}", cookies={org_session.SESSION_COOKIE: session_id},
+        )
+        assert callback.headers["location"] == "/connect?error=slack"
+
+    def test_the_pending_client_id_covers_salesforce_and_grist(self):
+        assert rc._section_client_id({"salesforce": {"consumer_key": "k"}}, "salesforce") == "k"
+        assert rc._section_client_id({}, "grist") == ""

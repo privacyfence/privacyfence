@@ -63,7 +63,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, peek_provisioning, google_oauth, grist_auth, grist_provisioning, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
+from .. import atlassian_oauth, peek_client, peek_provisioning, google_oauth, grist_auth, grist_provisioning, miro_auth, oauth_apps, org_identity, org_mode, paths, relay_client, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
 from ..app_credentials import telegram_app_credentials
 from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
@@ -207,6 +207,8 @@ class _PendingAuth:
     principal_id: str
     service: str
     code_verifier: str = ""
+    redirect_uri: str = ""
+    client_id: str = ""
     created_at: float = field(default_factory=time.time)
 
 
@@ -220,10 +222,16 @@ class _PendingAuthStore:
         self._lock = threading.Lock()
         self._pending: dict[str, _PendingAuth] = {}
 
-    def put(self, *, state: str, principal_id: str, service: str, code_verifier: str = "") -> None:
+    def put(
+        self, *, state: str, principal_id: str, service: str, code_verifier: str = "", redirect_uri: str = "",
+        client_id: str = "",
+    ) -> None:
         self._prune()
         with self._lock:
-            self._pending[state] = _PendingAuth(principal_id=principal_id, service=service, code_verifier=code_verifier)
+            self._pending[state] = _PendingAuth(
+                principal_id=principal_id, service=service, code_verifier=code_verifier,
+                redirect_uri=redirect_uri, client_id=client_id,
+            )
 
     def pop(self, state: str) -> _PendingAuth | None:
         with self._lock:
@@ -326,6 +334,21 @@ class _PeekAuthStore:
 # HTTP/PKCE mechanics.
 # ---------------------------------------------------------------------------- #
 
+def _google_client_section(org_config: dict[str, Any]) -> dict[str, Any]:
+    """The Google section without the relay marker, which google-auth's client config must not see."""
+    return {k: v for k, v in (org_config.get("google") or {}).items() if k != oauth_apps.RELAY_MARKER}
+
+
+def _section_client_id(org_config: dict[str, Any], service: str) -> str:
+    """The OAuth client a service signs in with right now, so a callback can tell that an admin
+    changed it while the person was at the provider."""
+    if service == "grist":
+        bundle = _grist_bundle(org_config)
+        return bundle.oauth.client_id if bundle is not None and bundle.oauth is not None else ""
+    section = org_config.get(_ORG_CONFIG_SECTION[service]) or {}
+    return str(section.get("client_id") or section.get("consumer_key") or "")
+
+
 class _NotConfigured(Exception):
     """Raised when org_config.json has no (usable) section for a service."""
 
@@ -336,7 +359,7 @@ def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri:
     docstring). Raises ``_NotConfigured`` if org_config.json has no usable
     section for ``service``."""
     if service in GOOGLE_SERVICES:
-        client_config = google_oauth.web_client_config(org_config.get("google") or {})
+        client_config = google_oauth.web_client_config(_google_client_section(org_config))
         if not client_config:
             raise _NotConfigured(service)
         return google_oauth.authorize_url(client_config, GOOGLE_SCOPES[service], redirect_uri, state)
@@ -402,7 +425,7 @@ def _exchange_and_save(
     token_file = _token_file_path(principal, service)
 
     if service in GOOGLE_SERVICES:
-        client_config = google_oauth.web_client_config(org_config.get("google") or {})
+        client_config = google_oauth.web_client_config(_google_client_section(org_config))
         creds = google_oauth.exchange_code(client_config, GOOGLE_SCOPES[service], redirect_uri, code, code_verifier)
         google_oauth.save_credentials(token_file, creds)
         return
@@ -465,6 +488,8 @@ def build_routes(
     peek_states = _PeekAuthStore()
     grist_errors: dict[str, str] = {}  # principal id -> the last API-key form error, cleared on success
     base_url = issuer_url.rstrip("/")
+    netloc = relay_client.issuer_host(issuer_url)
+    relay_loopback = relay_client.loopback_host(netloc)
 
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
@@ -486,6 +511,16 @@ def build_routes(
         # this is a no-op change for them.
         redirect_uri = f"{base_url}/oauth/callback/{_GRANT_KEY[service]}"
         state = secrets.token_urlsafe(32)
+        if oauth_apps.uses_relay(org_config.get(_ORG_CONFIG_SECTION[service]) or {}):
+            # The provider redirects to the relay, which forwards the browser to this server; the
+            # relay learns where from the host in front of the nonce. It does that only for a
+            # server it has verified, so do not send the person to the provider before that.
+            if not relay_loopback and relay_client.status()["last_ok_at"] is None:
+                logger.warning("relay registration has not succeeded yet")
+                return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
+            redirect_uri = oauth_apps.relay_redirect_uri(_GRANT_KEY[service])
+            state = f"{netloc}~{state}"
+        client_id = _section_client_id(org_config, service)
         try:
             if service == "grist":  # discovery makes network calls
                 authorize_url, code_verifier = await asyncio.to_thread(
@@ -495,7 +530,10 @@ def build_routes(
                 authorize_url, code_verifier = _build_authorize_url(service, org_config, redirect_uri, state)
         except (_NotConfigured, grist_auth.GristClientError):
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
-        attempts.put(state=state, principal_id=principal.id, service=service, code_verifier=code_verifier)
+        attempts.put(
+            state=state, principal_id=principal.id, service=service, code_verifier=code_verifier,
+            redirect_uri=redirect_uri, client_id=client_id,
+        )
         return RedirectResponse(authorize_url, status_code=302, headers={"Cache-Control": "no-store"})
 
     async def callback(request: Request) -> Response:
@@ -523,11 +561,14 @@ def build_routes(
         if provider_error or not code:
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
 
+        if _section_client_id(org_config, service) != pending.client_id:
+            logger.warning("OAuth app for %s changed during the sign-in; the attempt was dropped", service)
+            return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
+
         principal = Principal(id=pending.principal_id)
-        redirect_uri = f"{base_url}/oauth/callback/{grant_key}"
         try:
             with principal_scope(principal):
-                _exchange_and_save(service, org_config, redirect_uri, code, pending.code_verifier, principal)
+                _exchange_and_save(service, org_config, pending.redirect_uri, code, pending.code_verifier, principal)
         except Exception as exc:  # noqa: BLE001 -- any provider/exchange failure ends the same way
             logger.warning("Service authorization failed for %s (%s): %s", principal.id, service, exc)
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})

@@ -2385,6 +2385,27 @@ class TestOrgModeConnectorRegistry:
                 unattended_sessions_enabled=False, org_config=org_config,
             )
 
+    def test_org_server_starts_the_relay_registration_loop_on_the_shared_config(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        events: list = []
+        monkeypatch.setattr(
+            daemon_main.relay_client, "start_registration_loop",
+            lambda issuer_url, org_config, stop: events.append(("loop", issuer_url, org_config, stop)),
+        )
+        monkeypatch.setattr(daemon_main.relay_client, "request_check", lambda: events.append(("check",)))
+        org_config = self._org_config()
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=org_config,
+        )
+
+        assert [e[0] for e in events] == ["loop", "check"]
+        _, issuer_url, shared, stop = events[0]
+        assert shared is org_config and shared is result.org.org_config
+        assert stop is daemon_main._shutdown_event
+        assert issuer_url == result.org.issuer_url
+
     def test_org_auth_carries_the_org_config_bundle(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         org_config = self._org_config()

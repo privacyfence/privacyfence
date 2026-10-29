@@ -9,6 +9,7 @@ from __future__ import annotations
 from starlette.testclient import TestClient
 
 from privacyfence import org_identity as oi
+from privacyfence import relay_client
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web.mcp_dispatch import McpDispatcher
@@ -186,6 +187,28 @@ class TestConnectSurfaceOrgMode:
         # as that default once a connector registry is present (see
         # test_routes_org_identity.py::TestLogin for the equivalent
         # no-registry case, which keeps the "/approvals" default).
+
+
+class TestRelayWellKnown:
+    def _client(self, tmp_path, monkeypatch) -> TestClient:
+        org = _org_auth(tmp_path, monkeypatch)
+        app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
+        return TestClient(app, base_url=ISSUER, follow_redirects=False)
+
+    def test_serves_the_token_without_a_session_once_a_service_uses_the_relay(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(relay_client, "status", lambda: {"last_ok_at": None, "last_error": "", "needed": True})
+        r = self._client(tmp_path, monkeypatch).get("/.well-known/privacyfence-relay")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/plain")
+        assert r.headers["cache-control"] == "no-store"
+        assert r.text == relay_client.well_known_token()
+        assert len(r.text) == 43
+
+    def test_is_not_found_while_no_service_uses_the_relay(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/.well-known/privacyfence-relay")
+        assert r.status_code == 404
+        assert r.headers["cache-control"] == "no-store"
+        assert not (tmp_path / "relay_token.txt").exists()
 
 
 class TestApprovalsAndSecuritySurfaceOrgMode:
