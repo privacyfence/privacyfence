@@ -2462,6 +2462,41 @@ class TestMaybeStartWebServerOrgMode:
         assert self.SECRET not in caplog.text
         assert self.SECRET not in repr(result.org.idp)
 
+    def test_an_idp_added_to_a_data_directory_with_single_user_data_logs_that_it_is_unreachable(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "single-user").mkdir(parents=True)
+        self._env_idp(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            self._start_from_environment(monkeypatch, tmp_path)
+        assert "users/single-user/" in caplog.text
+        assert "cannot reach it" in caplog.text
+
+    def test_no_single_user_data_means_no_unreachable_data_log(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            self._start_from_environment(monkeypatch, tmp_path)
+        assert "users/single-user/" not in caplog.text
+
+    def test_the_sign_in_policy_is_bound_to_the_idp(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL", "true")
+        result = self._start_from_environment(monkeypatch, tmp_path, org_config={
+            "mode": "org", "authz": {"allowed_domains": ["acme.com"]},
+        })
+        policy = result.org.provider._policy
+        assert policy.allowed_domains == ("acme.com",)
+        assert policy.trust_unverified_email is True
+        assert policy.issuer == "https://idp.example.com"
+
     def test_the_first_start_with_an_idp_records_org_server(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)

@@ -399,7 +399,7 @@ class TestAuthorizeAndIdpCallback:
         client = _client_info()
         await provider.register_client(client)
         _remember_consent(provider, client, "alice")
-        _patch_idp_exchange(monkeypatch, claims={"sub": "alice", "email": "alice@acme.com"})
+        _patch_idp_exchange(monkeypatch, claims={"sub": "alice", "email": "alice@acme.com", "email_verified": True})
         auth_url = await provider.authorize(client, _params())
         state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
         redirect_url = await provider.handle_idp_callback(state=state, code="idp-code")
