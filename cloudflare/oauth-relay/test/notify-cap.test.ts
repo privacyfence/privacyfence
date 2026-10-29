@@ -1,5 +1,5 @@
 /**
- * SEC-23's hard cap of 50 notification mails a UTC day. Its own file: storage is isolated per
+ * The hard cap of 50 notification mails a UTC day. Its own file: storage is isolated per
  * file, so the day's count starts at zero here.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";

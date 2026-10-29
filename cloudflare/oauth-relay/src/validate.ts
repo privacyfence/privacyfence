@@ -1,5 +1,5 @@
 /**
- * The host rules of the relay contract (docs/builtin-oauth-apps-plan.md D5, D9, D15 SEC-02/SEC-10)
+ * The host rules of the relay contract (see README.md)
  * and the token, state and sign-in-domain parsing. The Python side (relay_client.valid_relay_host,
  * public_host) implements the same rules and tests the same cases.
  */
@@ -33,7 +33,7 @@ function validName(name: string): boolean {
   return TLD.test(labels[labels.length - 1]!);
 }
 
-/** A host is valid when it satisfies every rule of D5's host list. Case matters: hosts are lower-case. */
+/** A host is valid when it satisfies every rule of the host list. Case matters: hosts are lower-case. */
 export function validRelayHost(host: unknown): host is string {
   if (typeof host !== "string" || host.length === 0 || host.length > 253) return false;
   const { name, port } = splitHost(host);
@@ -48,7 +48,7 @@ export function validRelayHost(host: unknown): host is string {
   }
 }
 
-/** `localhost` or `127.0.0.1`, with an optional port of at most 65535 (SEC-10). */
+/** `localhost` or `127.0.0.1`, with an optional port of at most 65535). */
 export function loopbackHost(host: string): boolean {
   const match = LOOPBACK.exec(host);
   if (!match) return false;
@@ -69,7 +69,7 @@ function labelSuffixes(name: string): string[] {
 
 /**
  * True when the name is, or sits below, a public suffix of the Public Suffix List's private
- * section (`x.github.io`, `a.pages.dev`, ngrok domains...): D15 SEC-02.
+ * section (`x.github.io`, `a.pages.dev`, ngrok domains...). Anyone with a free account there could otherwise register.
  */
 export function inPrivateSuffix(hostOrDomain: string): boolean {
   const { name } = splitHost(hostOrDomain);
@@ -80,7 +80,7 @@ export function inPrivateSuffix(hostOrDomain: string): boolean {
   return false;
 }
 
-/** A sign-in domain must be a plain registrable-looking name (D20): no port, no public suffix. */
+/** A sign-in domain must be a plain registrable-looking name (sign-in domain proof): no port, no public suffix. */
 export function validSigninDomain(domain: unknown): domain is string {
   if (typeof domain !== "string" || domain.length === 0 || domain.length > 253) return false;
   if (domain.includes(":") || !validName(domain)) return false;
@@ -102,7 +102,7 @@ export function parseState(state: string): { host: string; nonce: string } | nul
   return { host: state.slice(0, tilde), nonce };
 }
 
-/** The `grant` -> forward path map: connector grants (D5) and the sign-in grants (D20). */
+/** The `grant` -> forward path map: connector grants and the sign-in grants. */
 export const CONNECTOR_GRANTS = [
   "gmail",
   "drive",

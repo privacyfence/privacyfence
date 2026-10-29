@@ -1,5 +1,5 @@
 /**
- * New-registration notification (D15 SEC-23): one plain-text mail to the maintainers through the
+ * New-registration notification (maintainer alert): one plain-text mail to the maintainers through the
  * Gmail API, with `fetch` only -- no SDK, no dependency, no [[send_email]] binding.
  *
  * The OAuth client is an Internal Web client of the privacyfence.eu Workspace; its refresh token is

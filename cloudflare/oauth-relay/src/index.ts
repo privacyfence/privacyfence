@@ -1,7 +1,8 @@
 /**
  * The OAuth redirect relay behind https://oauth.privacyfence.eu. The contract with the PrivacyFence
- * server (routes, codes, texts, headers) is docs/builtin-oauth-apps-plan.md D5, with D9 (loopback),
- * D15 (hardening), D16 (terms), D17 (restore) and D20 (sign-in grants, DNS domain proof).
+ * server (routes, codes, texts, headers) is described in README.md and docs/oauth-relay.md: registration
+ * by well-known proof, loopback forwarding, rate limits, the terms redirect, restore, and the sign-in
+ * grants with their DNS domain proof.
  *
  * The Worker writes no logs and never stores or logs an authorization `code`.
  */
@@ -139,7 +140,7 @@ async function proofMatches(host: string, token: string): Promise<boolean> {
 
 type DnsAnswer = "yes" | "no" | "error";
 
-/** One DNS-over-HTTPS TXT lookup for `_privacyfence-relay.<domain>` (D20). */
+/** One DNS-over-HTTPS TXT lookup for `_privacyfence-relay.<domain>` (sign-in domain proof). */
 async function dnsProof(domain: string, expected: string): Promise<DnsAnswer> {
   try {
     const url = `https://cloudflare-dns.com/dns-query?name=${DNS_NAME_PREFIX}${domain}&type=TXT`;
@@ -208,7 +209,7 @@ interface NotifyInput {
   domains: string[];
 }
 
-/** SEC-23: sends the maintainers' mail for a first registration or a changed sign-in domain set. */
+/** Sends the maintainers' mail for a first registration or a changed sign-in domain set. */
 async function notifyMaintainers(env: Env, input: NotifyInput): Promise<void> {
   const registry = registryOf(env);
   const nowIso = input.now.toISOString();
@@ -309,7 +310,7 @@ async function handleCallback(request: Request, env: Env, grant: string): Promis
   const url = new URL(request.url);
   const params = url.searchParams;
   const count = (name: string) => params.getAll(name).length;
-  // Exactly one state and exactly one code or one error (SEC-10, SEC-24): a fragment-borne token
+  // Exactly one state and exactly one code or one error (strict parsing): a fragment-borne token
   // from a crafted response type is never carried on to a host.
   if (count("state") !== 1 || count("hd") > 1 || count("code") > 1 || count("error") > 1) {
     return badRedirect(BAD_REDIRECT);
@@ -350,7 +351,7 @@ async function handleRegistrations(request: Request, env: Env): Promise<Response
     notified: row.notified,
     signin_domains: row.signin_domains,
   }));
-  // The notification counters ride in headers so the body stays the plain JSON list D5 promises.
+  // The notification counters ride in headers so the body stays the plain JSON list the contract promises.
   return json(200, list, {
     "X-Notify-Failures": String(stats.notify_failures),
     "X-Notify-Last-Error": stats.notify_last_error,

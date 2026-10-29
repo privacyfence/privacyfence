@@ -1,5 +1,5 @@
 /**
- * The relay contract (docs/builtin-oauth-apps-plan.md D5, D9, D15-D17, D20) against the Worker's own
+ * The relay contract (README.md) against the Worker's own
  * fetch handler in the workers runtime. Storage is isolated per test FILE, not per test, so every
  * test uses fresh hosts and client addresses and never assumes an empty registry.
  */
@@ -55,7 +55,7 @@ describe("GET and HEAD /health", () => {
   });
 });
 
-describe("terms links (D16)", () => {
+describe("terms links", () => {
   it.each(["/", "/terms"])("%s redirects to the relay terms on GET and HEAD", async (path) => {
     for (const method of ["GET", "HEAD"]) {
       const response = await call(path, { method });
@@ -270,7 +270,7 @@ describe("POST /register", () => {
     });
   });
 
-  describe("rate limits (SEC-03, SEC-25)", () => {
+  describe("rate limits", () => {
     it("throttles a repeated failure from the same address, never a valid proof from another", async () => {
       const host = freshHost();
       const attacker = freshIp();
@@ -469,7 +469,7 @@ describe("GET /callback/:grant", () => {
     expect(await response.text()).toBe(NOT_REGISTERED);
   });
 
-  describe("strict parameters (SEC-10, SEC-24)", () => {
+  describe("strict parameters", () => {
     const state = encodeURIComponent(stateFor("pf.example.org"));
     it.each([
       ["no query", ""],
@@ -491,7 +491,7 @@ describe("GET /callback/:grant", () => {
     });
   });
 
-  describe("on localhost (D9)", () => {
+  describe("on localhost", () => {
     it.each(["localhost", "localhost:8765", "127.0.0.1", "127.0.0.1:8765"])(
       "forwards %s to http without consulting the registry",
       async (host) => {
@@ -528,7 +528,7 @@ describe("GET /callback/:grant", () => {
   });
 });
 
-describe("sign-in grants (D20)", () => {
+describe("sign-in grants", () => {
   const DOMAIN = "acme-corp.example";
   const hash = async (token: string) => {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
@@ -818,7 +818,7 @@ describe("POST /admin/revoke and /admin/restore", () => {
     expect((await call("/admin/revoke", postJson({ host }, bearer()))).status).toBe(200);
   });
 
-  it("restores a host, which must prove control again before forwarding resumes (D17)", async () => {
+  it("restores a host, which must prove control again before forwarding resumes", async () => {
     const host = freshHost();
     await registerOk(host);
     await call("/admin/revoke", postJson({ host }, bearer()));

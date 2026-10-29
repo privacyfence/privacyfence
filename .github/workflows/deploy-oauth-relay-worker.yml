@@ -81,7 +81,7 @@ jobs:
         run: npm ci
 
       # The env var names on the left are fixed by wrangler's own CLI; only the GitHub secrets on
-      # the right (CF_OAUTH_RELAY_WORKER_*) are this repo's to name. There is no D1 step: the
+      # the right (CF_OAUTH_RELAY_WORKER_*) are this repo's to name. There is no database migration step: the
       # registry is a SQLite Durable Object created by wrangler.toml's migration.
       - name: Deploy Worker
         run: npx wrangler deploy
@@ -98,7 +98,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_OAUTH_RELAY_WORKER_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_OAUTH_RELAY_WORKER_ACCOUNT_ID }}
 
-      # The Gmail credential for the new-registration notification (src/notify.ts, D15 SEC-23):
+      # The Gmail credential for the new-registration notification (src/notify.ts):
       # an OAuth client of the privacyfence.eu Workspace and a refresh token for the single scope
       # gmail.send. Same handling as REVOKE_TOKEN.
       - name: Set Gmail client id

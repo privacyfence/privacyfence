@@ -3,12 +3,12 @@
  * `env.REGISTRY.get(env.REGISTRY.idFromName("global"))`.
  *
  * Tables:
- *  - registrations: a row exists only after a successful proof (D15 SEC-03). An empty
+ *  - registrations: a row exists only after a successful proof (unverified hosts never get one). An empty
  *    `verified_at` means "restored, must prove again".
  *  - attempts: register requests and failures, for rate limits. Pruned of rows older than an hour
  *    on every write; never a registrations row.
- *  - new_hosts: first-proof counts per address per UTC day (SEC-25).
- *  - counters: notification bookkeeping (SEC-23), shown to the maintainer on /registrations.
+ *  - new_hosts: first-proof counts per address per UTC day (a cap on throwaway hosts).
+ *  - counters: notification bookkeeping, shown to the maintainer on /registrations.
  *
  * Every method is synchronous SQL inside a single-threaded object, so each is atomic.
  */
@@ -202,7 +202,7 @@ export class Registry extends DurableObject<Env> {
     );
   }
 
-  /** Lifts a revocation and clears `verified_at`: the host must prove control again (D17). */
+  /** Lifts a revocation and clears `verified_at`: the host must prove control again. */
   restore(host: string): void {
     this.ctx.storage.sql.exec("UPDATE registrations SET revoked = 0, verified_at = '' WHERE host = ?", host);
   }
@@ -223,7 +223,7 @@ export class Registry extends DurableObject<Env> {
     return registration;
   }
 
-  /** Decides whether a notification email may go out today (SEC-23's hard cap of 50 a UTC day). */
+  /** Decides whether a notification email may go out today (a hard cap of 50 a UTC day). */
   reserveNotification(day: string): NotifyDecision {
     const stored = this.counter("notify_day");
     if (stored !== day) {

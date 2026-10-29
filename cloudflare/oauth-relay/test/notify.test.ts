@@ -1,4 +1,4 @@
-/** SEC-23: the registration email through the Gmail API, with fetch stubbed for both endpoints. */
+/** The registration email through the Gmail API, with fetch stubbed for both endpoints. */
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMessage, notifyConfigured, resetNotifyCache, sendNotification } from "../src/notify";
