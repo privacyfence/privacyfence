@@ -503,7 +503,11 @@ _STREAM_JS = """
 })();
 """
 
-_NAV_ITEMS = (("approvals", "Approvals", "/approvals"), ("settings", "Settings", "/settings"))
+_NAV_ITEMS = (
+    ("approvals", "Approvals", "/approvals"),
+    ("settings", "Settings", "/settings"),
+    ("admin", "Admin", "/admin"),
+)
 
 # Org mode's own route set. It has no local-mode ``/settings`` dispatcher
 # (see web/server.py's module docstring for what org mode deliberately
@@ -516,6 +520,15 @@ ORG_NAV_ITEMS = (
     ("passkeys", "Passkeys", "/security"),
     ("settings", "Settings", "/settings"),
 )
+
+# The same set plus the Admin page, for a signed-in administrator. A page that knows its
+# principal picks between the two through ``org_nav_items``.
+ORG_ADMIN_NAV_ITEMS = ORG_NAV_ITEMS + (("admin", "Admin", "/admin"),)
+
+
+def org_nav_items(is_admin: bool) -> tuple[tuple[str, str, str], ...]:
+    return ORG_ADMIN_NAV_ITEMS if is_admin else ORG_NAV_ITEMS
+
 
 # The installable org app (ADR 0081): the manifest, and the icon iOS uses for the Home Screen,
 # which it reads from this link rather than from the manifest. Both routes are org mode's
@@ -775,7 +788,7 @@ def wrap(
         whats_new_script = (
             f'<script nonce="{nonce}">{_WHATS_NEW_JS % {"csrf": json_for_script(csrf)}}</script>'
         )
-    is_org = nav_items == ORG_NAV_ITEMS
+    is_org = nav_items in (ORG_NAV_ITEMS, ORG_ADMIN_NAV_ITEMS)
     app_links = _ORG_APP_LINKS if is_org else ""
     sign_out_script = f'<script nonce="{nonce}">{_ORG_SIGN_OUT_JS}</script>' if is_org else ""
     return f"""<!DOCTYPE html>

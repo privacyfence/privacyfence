@@ -466,16 +466,19 @@ def _snapshot(controller: SettingsController) -> dict[str, Any]:
 # snapshot back":
 #   - open_repo: a plain link, opened client-side -- no request at all.
 #   - install_org_config: triggers the hidden <input type=file> below,
-#     which itself POSTs a multipart body to /api/settings/org_config/upload.
-#   - upload_rooms: the same, for the room directory, to /api/admin/rooms/upload.
+#     which itself POSTs a multipart body to <endpoint>/org_config/upload.
+#   - upload_rooms: the same, for the room directory, to <endpoint>/rooms/upload.
 #   - export_audit_log: a same-origin navigation to the download route.
 #   - quit_app: a client-side confirm() first, then still POSTed
 #     through as an action, but to its own /api/settings/quit_app route
 #     (see build_routes below) rather than the generic dispatcher.
 # ---------------------------------------------------------------------------- #
 
-def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
-    """``pfSettingsPost``'s own ``428``/``403`` branches are
+def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str = "/api/settings") -> str:
+    """``endpoint`` is where the page's actions and uploads are posted: ``/api/settings`` for
+    Settings, ``/api/admin`` for the Admin page, which shares this renderer.
+
+    ``pfSettingsPost``'s own ``428``/``403`` branches are
     the settings-page counterpart of web/routes_approvals.py's own
     ``_bridge_shim`` step-up handling -- see that function's docstring for
     the shared shape (``428`` carries fresh ``webauthn_options`` to complete
@@ -489,6 +492,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "<input type=\"file\" id=\"pf-rooms-input\" accept=\".json,application/json\" style=\"display:none\">"
         f'<script nonce="{nonce}">(function(){{'
         f"var CSRF = {csrf!r};"
+        f"var ENDPOINT = {endpoint!r};"
         # An upload can answer 409 (would pin a new signing key -- ask first) and 428/403
         # (step-up, same shape pfSettingsPost's own retry chain below already handles for JSON
         # actions) as well as succeeding or 401/400/403-on-cross-origin. attemptUpload() re-POSTs
@@ -550,8 +554,8 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "}"
         "var fileInput = document.getElementById('pf-org-config-input');"
         "var roomsInput = document.getElementById('pf-rooms-input');"
-        "bindUpload(fileInput, '/api/settings/org_config/upload');"
-        "bindUpload(roomsInput, '/api/admin/rooms/upload');"
+        "bindUpload(fileInput, ENDPOINT + '/org_config/upload');"
+        "bindUpload(roomsInput, ENDPOINT + '/rooms/upload');"
         "function pfSettingsPost(url, body) {"
         "  return fetch(url, {method:'POST', credentials:'same-origin',"
         "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
@@ -564,7 +568,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  if (action === 'install_org_config') { fileInput.click(); return; }"
         "  if (action === 'upload_rooms') { roomsInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
-        "  var url = '/api/settings/' + encodeURIComponent(action);"
+        "  var url = ENDPOINT + '/' + encodeURIComponent(action);"
         # The two AI client token actions (ADR 0104) have routes of their
         # own; rotating asks first, the same way quit_app does.
         "  var tokenAction = (action === 'copy_mcp_token' || action === 'rotate_mcp_token');"
@@ -2139,7 +2143,7 @@ def build_org_routes(
                 )
                 page = web_shell.wrap(
                     body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
-                    nav_items=web_shell.ORG_NAV_ITEMS,
+                    nav_items=web_shell.org_nav_items(principal.is_admin),
                     principal_label=principal.email or principal.display_name or principal.id,
                     live_updates=False, notifications_enabled=False,
                 )
@@ -2164,7 +2168,7 @@ def build_org_routes(
         body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         html = web_shell.wrap(
             body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
-            nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal.email or principal.display_name or principal.id,
+            nav_items=web_shell.org_nav_items(principal.is_admin), principal_label=principal.email or principal.display_name or principal.id,
             # Org mode has no per-request settings push to subscribe a
             # live stream to (state_stream.py's own StateStream.push_
             # settings is wired to one local SettingsController's own

@@ -3,6 +3,7 @@ audited, and what the page state carries."""
 from __future__ import annotations
 
 import json
+import re
 from unittest.mock import patch
 
 import pytest
@@ -770,3 +771,59 @@ class TestLocalBundleUpload:
 
     def test_it_is_classified_as_bespoke_sensitive(self):
         assert routes_admin.ROUTE_CLASSIFICATION[self.URL] == "bespoke-sensitive"
+
+
+def _active_nav(page: str) -> list[str]:
+    return sorted(set(re.findall(r'<a class="pf-shell-nav-item active" href="([^"]+)" aria-current="page">', page)))
+
+
+class TestAdminPage:
+    def test_an_org_visitor_with_no_session_is_sent_to_sign_in(self):
+        world = World()
+        r = world.client.get("/admin")
+        assert (r.status_code, r.headers["location"]) == (302, "/login?next=/admin")
+
+    def test_an_org_non_admin_gets_a_403_page_without_the_admin_nav_item(self):
+        world = World()
+        world.sign_in(ALICE)
+        r = world.client.get("/admin")
+        assert r.status_code == 403
+        assert "Only administrators can open this page." in r.text
+        assert 'href="/admin"' not in r.text
+
+    def test_an_org_admin_gets_the_page_with_the_admin_nav_item_active(self):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.client.get("/admin")
+        assert r.status_code == 200
+        assert _active_nav(r.text) == ["/admin"]
+        assert "window.__pfInitialSection = \"services\"" in r.text
+        assert '"surface": "admin"' in r.text or '"surface":"admin"' in r.text
+        # Actions post under /api/admin, with the session's CSRF token.
+        assert "var ENDPOINT = '/api/admin';" in r.text
+        assert f"var CSRF = '{csrf}';" in r.text
+        assert "pfWebauthnGet" in r.text
+        assert SECRET not in r.text
+
+    def test_the_page_state_is_the_admin_state(self):
+        world = World()
+        world.sign_in(ADMIN)
+        r = world.client.get("/admin")
+        assert '"restart_needed"' in r.text and '"relay_status"' in r.text
+        assert '"connectors"' not in r.text.split("window.__pfInitialState")[1].split("</script>")[0]
+
+    def test_a_local_visitor_with_no_session_is_refused(self, local_controller, monkeypatch):
+        world = LocalWorld(local_controller, monkeypatch)
+        assert world.client.get("/admin").status_code == 401
+
+    def test_the_local_owner_gets_the_page_with_the_admin_nav_item_active(self, local_controller, monkeypatch):
+        world = LocalWorld(local_controller, monkeypatch)
+        csrf = world.sign_in()
+        r = world.client.get("/admin")
+        assert r.status_code == 200
+        assert _active_nav(r.text) == ["/admin"]
+        assert "var ENDPOINT = '/api/admin';" in r.text
+        assert f"var CSRF = '{csrf}';" in r.text
+        assert '"org_config": true' in r.text
+        assert '"relay_status"' not in r.text
+        assert SECRET not in r.text

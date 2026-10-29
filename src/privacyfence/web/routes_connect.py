@@ -1123,7 +1123,7 @@ def _render_connect_page(
     )
     return web_shell.wrap(
         body, title="PrivacyFence — Connect your accounts", active="connections", nonce=nonce,
-        nav_items=web_shell.ORG_NAV_ITEMS, principal_label=who, live_updates=False, notifications_enabled=False,
+        nav_items=web_shell.org_nav_items(principal.is_admin), principal_label=who, live_updates=False, notifications_enabled=False,
         csrf=csrf, whats_new_version=whats_new_version,
     )
 

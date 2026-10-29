@@ -326,6 +326,27 @@ class TestNavItems:
             assert f'class="pf-shell-nav-item" href="{href}"' in html
 
 
+class TestAdminNavItem:
+    def test_the_local_nav_has_an_admin_item(self):
+        assert web_shell._NAV_ITEMS[-1] == ("admin", "Admin", "/admin")
+        html = web_shell.wrap("", title="t", active="admin")
+        assert 'class="pf-shell-nav-item active" href="/admin" aria-current="page"' in html
+
+    def test_an_admins_org_nav_ends_with_admin_and_other_nav_has_none(self):
+        assert web_shell.org_nav_items(True) == web_shell.ORG_NAV_ITEMS + (("admin", "Admin", "/admin"),)
+        assert web_shell.org_nav_items(True)[-1] == ("admin", "Admin", "/admin")
+        assert web_shell.org_nav_items(False) == web_shell.ORG_NAV_ITEMS
+        assert all(key != "admin" for key, _label, _href in web_shell.org_nav_items(False))
+
+    @pytest.mark.parametrize("is_admin", [True, False])
+    def test_wrap_treats_both_org_tuples_as_org(self, is_admin):
+        org = web_shell.wrap("", title="t", active="approvals", nav_items=web_shell.org_nav_items(is_admin))
+        local = web_shell.wrap("", title="t", active="approvals")
+        assert 'rel="manifest"' in org
+        assert 'rel="manifest"' not in local
+        assert ('href="/admin"' in org) is is_admin
+
+
 class TestPrincipalLabel:
     def test_absent_by_default(self):
         # Local mode has exactly one principal; naming it would be noise.

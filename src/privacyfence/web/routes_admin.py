@@ -7,6 +7,10 @@ a mode-independent core (``_dispatch`` and ``_admin_state``), the way ``routes_s
 route layer with an authentication adapter per mode (ADR 0033). Local mode also mounts
 ``POST /api/admin/org_config/upload``, the bundle upload that used to live on Settings.
 
+``GET /admin`` is the page itself: ``settings_window_html`` rendering the page state, with the
+bridge shim posting to ``/api/admin``. In organization mode a signed-out visitor is sent to the
+login page and a signed-in non-administrator gets a 403 page.
+
 Who may use it. In organization mode, a signed-in principal with ``is_admin``; anyone else gets a
 JSON 401 or 403. In local mode, the install owner (the caller mounts these routes behind the same
 owner-only wrapper as Settings), and sensitive actions and both uploads also need a session a
@@ -48,17 +52,19 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import admin_config, oauth_apps, org_mode, relay_client
+from .. import admin_config, oauth_apps, org_mode, relay_client, settings_window_html, web_shell
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
-from ..settings_controller import SettingsController
+from ..settings_controller import REPO_URL, SettingsController
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_session
+from .csp import nonce_for as _csp_nonce_for
+from .routes_security import PF_WEBAUTHN_JS
 from .routes_settings import (
     _apply_step_up_gate,
     _BadAction,
@@ -66,8 +72,10 @@ from .routes_settings import (
     _gate_upload,
     _parse_form_assertion,
     _record_settings_audit,
+    _settings_bridge_shim,
     handle_org_config_upload,
 )
+from .session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE
 from .session_auth import LocalSessionStore
 from .session_auth import authenticated as _session_authenticated
 from .session_auth import check_csrf as _local_csrf_matches
@@ -164,6 +172,21 @@ MAX_ROOMS_UPLOAD_BYTES = 2 * 1024 * 1024
 
 # The sections only an organization server has.
 _ORG_STATE_KEYS = ("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding")
+
+
+_ADMIN_PAGE_TITLE = "PrivacyFence — Admin"
+
+
+def _admin_page_body(
+    state: dict[str, Any], *, mode: Mode, is_admin: bool, csrf: str, nonce: str,
+) -> str:
+    """The page's markup: the shared renderer on the admin surface, the WebAuthn helpers a
+    sensitive action's passkey prompt needs, and the bridge shim that posts to ``/api/admin``."""
+    body = settings_window_html.build_html(
+        state, nonce=nonce, initial_section="services", mode=mode, is_admin=is_admin, surface="admin",
+    )
+    body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
+    return body + _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce, endpoint="/api/admin")
 
 
 def _error(message: str, status: int = 400) -> JSONResponse:
@@ -365,6 +388,33 @@ def build_org_routes(
             mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
         ))
 
+    async def admin_page(request: Request) -> Response:
+        principal = org_session.authenticated(request, sessions)
+        if principal is None:
+            return RedirectResponse("/login?next=/admin", status_code=302, headers={"Cache-Control": "no-store"})
+        if not principal.is_admin:
+            body = '<section class="pf-settings-error" role="alert"><p>Only administrators can open this page.</p></section>'
+            page = web_shell.wrap(
+                body, title=_ADMIN_PAGE_TITLE, active="admin", nonce=_csp_nonce_for(request),
+                nav_items=web_shell.org_nav_items(False),
+                principal_label=principal.email or principal.display_name or principal.id,
+                live_updates=False, notifications_enabled=False,
+            )
+            return HTMLResponse(page, status_code=403, headers={"Cache-Control": "no-store"})
+        nonce = _csp_nonce_for(request)
+        csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
+        state = _admin_state(
+            mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+        )
+        html = web_shell.wrap(
+            _admin_page_body(state, mode="org", is_admin=True, csrf=csrf, nonce=nonce),
+            title=_ADMIN_PAGE_TITLE, active="admin", nonce=nonce,
+            nav_items=web_shell.org_nav_items(True),
+            principal_label=principal.email or principal.display_name or principal.id,
+            live_updates=False, notifications_enabled=False, csrf=csrf,
+        )
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
     async def admin_action(request: Request) -> Response:
         principal = _admin_principal(request)
         if isinstance(principal, Response):
@@ -406,6 +456,7 @@ def build_org_routes(
         )
 
     routes: list[BaseRoute] = [
+        Route("/admin", admin_page),
         Route("/api/admin/state", admin_state),
         Route("/api/admin/rooms/upload", rooms_upload, methods=["POST"]),
         Route("/api/admin/{action}", admin_action, methods=["POST"]),
@@ -475,6 +526,21 @@ def build_routes(
             return _unauthorized_response(request)
         return JSONResponse(state())
 
+    async def admin_page(request: Request) -> Response:
+        if not _session_authenticated(request, sessions):
+            return _unauthorized_response(request)
+        nonce = _csp_nonce_for(request)
+        csrf = request.cookies.get(_LOCAL_SESSION_COOKIE, "")
+        # Approval notifications follow the same setting as on Settings.
+        general = controller.snapshot().get("general", {})
+        html = web_shell.wrap(
+            _admin_page_body(state(), mode="local", is_admin=False, csrf=csrf, nonce=nonce),
+            title=_ADMIN_PAGE_TITLE, active="admin", nonce=nonce,
+            notifications_enabled=general.get("notifications_enabled", True),
+            notifications_detail=general.get("notifications_detail", "minimal"),
+        )
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
     async def admin_action(request: Request) -> Response:
         if not _session_authenticated(request, sessions):
             return _unauthorized_response(request)
@@ -528,6 +594,7 @@ def build_routes(
         )
 
     routes: list[BaseRoute] = [
+        Route("/admin", admin_page),
         Route("/api/admin/state", admin_state),
         Route("/api/admin/rooms/upload", rooms_upload, methods=["POST"]),
         Route("/api/admin/org_config/upload", org_config_upload, methods=["POST"]),
