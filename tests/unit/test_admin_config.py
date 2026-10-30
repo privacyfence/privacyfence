@@ -1184,6 +1184,26 @@ class TestServiceRows:
         assert rows["grist"]["options"]["auto_provision"]["key_set"] is False
         assert SENTINEL not in json.dumps(rows)
 
+    def test_key_set_follows_a_key_file_and_an_unreadable_file_is_not_set(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "peek_key"
+        key_file.write_text(SENTINEL + "\n")
+        monkeypatch.delenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", raising=False)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE", str(key_file))
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE", str(tmp_path / "absent"))
+        rows = self._rows()
+        assert rows["peek"]["options"]["auto_provision"]["key_set"] is True
+        assert rows["grist"]["options"]["auto_provision"]["key_set"] is False
+        assert SENTINEL not in json.dumps(rows)
+
+    def test_rows_name_the_key_variable_never_its_value(self, monkeypatch):
+        monkeypatch.setenv("CUSTOM_GRIST_KEY", SENTINEL)
+        admin = _import({})
+        admin["services"]["grist"]["auto_provision"]["key_env"] = "CUSTOM_GRIST_KEY"
+        rows = self._rows(admin=admin)
+        assert rows["peek"]["options"]["key_env"] == "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
+        assert rows["grist"]["options"]["key_env"] == "CUSTOM_GRIST_KEY"
+        assert SENTINEL not in json.dumps(rows)
+
     def test_no_row_carries_a_secret(self):
         bundle = {
             "slack": {"client_id": "own", "client_secret": "BUNDLE-SECRET-VALUE"},

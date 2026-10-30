@@ -18,9 +18,13 @@ services:
         required: false
     # Keep the identity provider's client secret out of `docker inspect`: put it in a file, name
     # that file with PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret in
-    # privacyfence.env, and uncomment this and the top-level `secrets:` block below.
+    # privacyfence.env, and uncomment this and the top-level `secrets:` block below. The Peek and
+    # Grist provisioning keys work the same way, with PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE and
+    # PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE.
     # secrets:
     #   - idp_client_secret
+    #   - peek_provisioning_key
+    #   - grist_provisioning_key
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
     networks:
@@ -55,6 +59,10 @@ networks:
 # secrets:
 #   idp_client_secret:
 #     file: ./idp_client_secret
+#   peek_provisioning_key:
+#     file: ./peek_provisioning_key
+#   grist_provisioning_key:
+#     file: ./grist_provisioning_key
 
 volumes:
   pf-data:

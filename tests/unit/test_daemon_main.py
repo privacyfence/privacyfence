@@ -2940,6 +2940,21 @@ class TestPeekRelease:
         assert captured.out == ""
         assert env.released == ["alice"]
 
+    def test_release_reads_the_key_from_a_file(self, env, monkeypatch, tmp_path):
+        key_file = tmp_path / "peek_key"
+        key_file.write_text("peekprov_file\n")
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(key_file))
+        assert daemon_main.run_peek_release("alice") == 0
+        assert env.fake.instances[0].key == "peekprov_file"
+
+    def test_release_with_an_unreadable_key_file_names_the_variable(self, env, monkeypatch, tmp_path, capsys):
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(tmp_path / "absent"))
+        assert daemon_main.run_peek_release("alice") == 1
+        assert self.KEY_ENV + "_FILE" in capsys.readouterr().err
+        assert env.fake.instances == []
+
     def test_release_called(self, env):
         assert daemon_main.run_peek_release("alice") == 0
         assert env.fake.instances[0].released == ["alice"]
@@ -5157,6 +5172,23 @@ class TestGristRelease:
         assert captured.out == ""
         assert captured.err.startswith("The Grist provisioner is unreachable.")
         assert captured.err.rstrip().endswith("run --grist-release again to delete it in Grist.")
+
+    def test_release_reads_the_key_from_a_file(self, env, monkeypatch, tmp_path):
+        client, _ = env
+        key_file = tmp_path / "grist_key"
+        key_file.write_text("gristprov_file\n")
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(key_file))
+        assert daemon_main.run_grist_release("alice") == 0
+        assert client.built_with[1] == "gristprov_file"
+
+    def test_release_with_an_unreadable_key_file_names_the_variable(self, env, monkeypatch, tmp_path, capsys):
+        client, _ = env
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(tmp_path / "absent"))
+        assert daemon_main.run_grist_release("alice") == 1
+        assert self.KEY_ENV + "_FILE" in capsys.readouterr().err
+        assert client.released == []
 
     def test_release_runs_before_the_provisioner_call(self, env, monkeypatch):
         from privacyfence import grist_provisioning
