@@ -40,7 +40,11 @@ Done once, in this order. The Cloudflare resources are listed in
    the providers' redirects are challenged.
 3. **The deploy token.** An account-owned API token that can edit Workers scripts and routes, made
    the way [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md#use-account-owned-api-tokens)
-   describes and verified before it is stored.
+   describes and verified before it is stored. It needs two permission policies: **Workers Scripts ·
+   Edit** on the account, and **Workers Routes · Edit** plus **Zone · Read** on `privacyfence.eu`.
+   The token form offers Workers Scripts under a zone policy too, but `wrangler deploy` calls
+   `/accounts/<id>/workers/scripts/…`, which a zone policy does not cover: the deploy then fails with
+   `No access to the specified resource`.
 4. **The GitHub environment `oauth-relay-worker`**, under repo Settings → Environments:
    - **Deployment branches:** `main` only.
    - **Required reviewers:** at least one person other than the author of the change, with "Prevent
@@ -58,7 +62,8 @@ Done once, in this order. The Cloudflare resources are listed in
 
 6. **The first deploy.** Run `Deploy OAuth relay Worker` on `main` from the Actions tab. It deploys
    the Worker, creates the Durable Object class `Registry` from the migration, sets the Worker
-   secrets from the environment secrets, and checks `/health`.
+   secrets from the environment secrets, and checks `/health`. If it fails, see
+   [When a deploy fails](#when-a-deploy-fails).
 7. **The checks below**, then the smoke tests.
 
 ### The registration mail
@@ -144,6 +149,27 @@ curl -sSI "$RELAY/callback/slack?state=localhost%3A8765~$NONCE"
 ```
 
 The deploy workflow itself only checks `/health`.
+
+### When a deploy fails
+
+The `Deploy Worker` step stops before the secrets are set, so a failed deploy leaves no new
+secrets behind. Fix the cause and use **Re-run failed jobs** on the same run.
+
+- **`/accounts/***/workers/scripts/privacyfence-oauth-relay/secrets` failed: `No access to the
+  specified resource`.** The token cannot reach the account's Workers scripts. Check that
+  `CF_OAUTH_RELAY_WORKER_ACCOUNT_ID` in the `oauth-relay-worker` *environment* holds this account's
+  ID (an environment secret wins over a repository secret of the same name), and that the token has
+  Workers Scripts · Edit in an *account* policy, not only in the `privacyfence.eu` zone policy.
+  Editing a token's policies keeps its value, so no secret changes.
+- **`Trigger configuration … was only partially updated`, custom domains, `[code: 10013]`.** The
+  Worker was uploaded but `oauth.privacyfence.eu` could not be attached, usually because a DNS
+  record for that name already exists. A failed attach can leave one behind itself: a locked record
+  of type Worker with no Worker named next to it. Attach the domain by hand at
+  `https://dash.cloudflare.com/<account id>/workers/services/view/privacyfence-oauth-relay/production/settings`
+  → Domains & Routes → Add → Custom domain, then re-run; `wrangler deploy` keeps a domain that is
+  already attached. Use that address because the Workers & Pages list can leave out a Worker that
+  has never been deployed with a route. `GET /accounts/<id>/workers/scripts` with the deploy token
+  shows whether the upload reached the account.
 
 ## Review new registrations
 
