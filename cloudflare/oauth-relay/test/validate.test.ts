@@ -8,7 +8,8 @@ import {
   publicHost,
   validRelayHost,
   validSigninDomain,
-  validToken,
+  rateLimitKey,
+  validSecret,
 } from "../src/validate";
 
 describe("validRelayHost", () => {
@@ -153,14 +154,14 @@ describe("validSigninDomain", () => {
   });
 });
 
-describe("validToken", () => {
+describe("validSecret", () => {
   it("wants exactly 43 url-safe characters", () => {
-    expect(validToken("A".repeat(43))).toBe(true);
-    expect(validToken("a-_".repeat(14) + "a")).toBe(true);
-    expect(validToken("A".repeat(42))).toBe(false);
-    expect(validToken("A".repeat(44))).toBe(false);
-    expect(validToken("A".repeat(42) + "+")).toBe(false);
-    expect(validToken(null)).toBe(false);
+    expect(validSecret("A".repeat(43))).toBe(true);
+    expect(validSecret("a-_".repeat(14) + "a")).toBe(true);
+    expect(validSecret("A".repeat(42))).toBe(false);
+    expect(validSecret("A".repeat(44))).toBe(false);
+    expect(validSecret("A".repeat(42) + "+")).toBe(false);
+    expect(validSecret(null)).toBe(false);
   });
 });
 
@@ -195,4 +196,27 @@ describe("grants", () => {
     expect(isSigninGrant("slack")).toBe(false);
     expect(isSigninGrant("toString")).toBe(false);
   });
+});
+
+describe("rateLimitKey", () => {
+  it.each([
+    ["203.0.113.9", "203.0.113.9"],
+    ["2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"],
+    ["2001:DB8:1:2::1", "2001:db8:1:2::/64"],
+    ["2001:db8::1", "2001:db8:0:0::/64"],
+    ["::1", "0:0:0:0::/64"],
+    ["fe80::1%eth0", "fe80:0:0:0::/64"],
+    ["::ffff:198.51.100.7", "198.51.100.7"],
+    ["64:ff9b::198.51.100.7", "64:ff9b:0:0::/64"],
+    ["1:2:3:4:5:6:198.51.100.7", "1:2:3:4::/64"],
+  ])("keys %s as %s", (ip, key) => {
+    expect(rateLimitKey(ip)).toBe(key);
+  });
+
+  it.each([["unknown"], ["1:2:3"], ["1::2::3"], ["1:2:3:4:5:6:7:8:9"], ["1::2:3:4:5:6:7:8"], ["g::1"], ["::1.2.3.999"]])(
+    "uses %s as is when it is no address",
+    (ip) => {
+      expect(rateLimitKey(ip)).toBe(ip);
+    },
+  );
 });

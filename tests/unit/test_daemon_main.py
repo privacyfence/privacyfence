@@ -2776,11 +2776,9 @@ class TestOrgModeConnectorRegistry:
         assert result.org.provider._idp_callback_url == "https://pf.example.com/oauth/idp/callback"
 
     def test_the_missing_dns_records_are_logged_at_start_before_registration(self, monkeypatch, tmp_path, caplog):
-        import hashlib
-
         with caplog.at_level(logging.INFO):
             _result, events = self._start_builtin(monkeypatch, tmp_path, authz={"allowed_domains": ["acme.org"]})
-        value = "pf-relay=" + hashlib.sha256(daemon_main.relay_client.well_known_token().encode()).hexdigest()
+        value = daemon_main.relay_client.dns_record_value("pf.example.com")
         lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Built-in Google sign-in: add")]
         assert lines == [
             f"Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.{domain} with the value "
@@ -2788,7 +2786,7 @@ class TestOrgModeConnectorRegistry:
             for domain in ("acme.com", "acme.org")
         ]
         assert events == ["loop"]
-        assert daemon_main.relay_client.well_known_token() not in caplog.text.replace(value, "")
+        assert daemon_main.relay_client.relay_secret() not in caplog.text
 
     def test_the_startup_line_names_the_builtin_sign_in_rather_than_a_disabled_policy(
         self, monkeypatch, tmp_path, caplog,
@@ -3030,7 +3028,7 @@ class TestPeekRelease:
 
 
 class TestRelayDnsRecords:
-    _BUILTIN = {"idp": {
+    _BUILTIN = {"server": {"issuer_url": "https://pf.acme.example.com"}, "idp": {
         "issuer": "https://accounts.google.com", "client_id": "builtin-signin", "builtin": True, "relay": True,
         "admin_emails": ["alice@acme.com"],
     }, "authz": {"allowed_domains": ["acme.org"]}}
@@ -3042,14 +3040,12 @@ class TestRelayDnsRecords:
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
     def test_prints_one_line_per_missing_domain_and_exits(self, monkeypatch, capsys):
-        import hashlib
-
         monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
-        daemon_main.relay_client.well_known_token()
+        daemon_main.relay_client.relay_secret()
         daemon_main.relay_client._persist_last_ok(1.0, ["acme.com"])
         daemon_main.relay_client.reset_for_tests()
         assert daemon_main.run_relay_dns_records() == 0
-        value = "pf-relay=" + hashlib.sha256(daemon_main.relay_client.well_known_token().encode()).hexdigest()
+        value = daemon_main.relay_client.dns_record_value("pf.acme.example.com")
         assert capsys.readouterr().out == (
             f"Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.acme.org with the value "
             f"{value}. Until then nobody from acme.org can sign in.\n"
@@ -3057,7 +3053,7 @@ class TestRelayDnsRecords:
 
     def test_says_so_when_everything_is_proven(self, monkeypatch, capsys):
         monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
-        daemon_main.relay_client.well_known_token()
+        daemon_main.relay_client.relay_secret()
         daemon_main.relay_client._persist_last_ok(1.0, ["acme.com", "acme.org"])
         daemon_main.relay_client.reset_for_tests()
         assert daemon_main.run_relay_dns_records() == 0
@@ -3076,20 +3072,18 @@ class TestRelayDnsRecords:
         assert daemon_main.run_relay_dns_records() == 1
         assert "bad config" in capsys.readouterr().err
 
-    def test_after_a_replaced_token_the_lines_give_the_new_values(self, monkeypatch, tmp_path, capsys):
-        import hashlib
-
+    def test_after_a_replaced_secret_the_lines_give_the_new_values(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
-        old = daemon_main.relay_client.well_known_token()
+        old = daemon_main.relay_client.dns_record_value("pf.acme.example.com")
         daemon_main.relay_client._persist_last_ok(1.0, ["acme.com", "acme.org"])
         daemon_main.relay_client.relay_token_path().unlink()
         daemon_main.relay_client.reset_for_tests()
         assert daemon_main.run_relay_dns_records() == 0
-        new = daemon_main.relay_client.well_known_token()
+        new = daemon_main.relay_client.dns_record_value("pf.acme.example.com")
         out = capsys.readouterr().out
         assert new != old
-        assert out.count(hashlib.sha256(new.encode()).hexdigest()) == 2
-        assert hashlib.sha256(old.encode()).hexdigest() not in out
+        assert out.count(new) == 2
+        assert old not in out
 
     def test_runs_after_the_runtime_identity_check_without_starting_the_daemon(self, monkeypatch):
         from privacyfence import privilege_separation

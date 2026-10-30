@@ -492,8 +492,8 @@ files are mode `0600`.
 | `org_bundle_adopted.json` | the daemon | Records the copy from `org_config.json` (its hash and time), that the pins were adopted, and a retirement. |
 | `admin_config.json` | the daemon | [Above](#admin-config-orgadmin_configjson). Back it up. |
 | `connector_configs/`, `connector_config_signing_pubkey.txt`, `connector_config_serials.json` | the daemon | [Connector configs](#connector-configs). |
-| `relay_token.txt` | the daemon, on first need | The 43-character token the server proves its host name with at `/.well-known/privacyfence-relay`, and, with the built-in Google sign-in, the value behind every `_privacyfence-relay` DNS TXT record (`pf-relay=<SHA-256 of the token>`). Back it up: replacing it means publishing every record again. |
-| `relay_status.json` | the daemon | When the relay last accepted this server, and which sign-in domains it has verified. |
+| `relay_token.txt` | the daemon, on first need | The 43-character secret the server proves its host name with: it sends the secret to the relay and serves its SHA-256 at `/.well-known/privacyfence-relay`. Keep it private. With the built-in Google sign-in it is also behind every `_privacyfence-relay` DNS TXT record (`pf-relay=v1:<SHA-256 of "v1\|<host>\|<that hash>">`). Back it up: replacing it means publishing every record again. |
+| `relay_status.json` | the daemon | When the relay last accepted this server, which sign-in domains it has verified, and which it refused as public suffixes. |
 | `oauth_clients.json`, `oauth_refresh.json`, `web_push_vapid_key.pem` | the daemon | Registered AI clients, their refresh tokens and the push key ([backup](org-mode-setup-guide.md#backup)). |
 | `../data_format.json` | the daemon | The marker of the data format, written once every person's data is up to date ([upgrade](org-mode-setup-guide.md#upgrading-to-8x)). |
 

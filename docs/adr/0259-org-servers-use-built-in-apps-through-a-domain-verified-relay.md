@@ -21,11 +21,27 @@ send a sign-in code to a server that merely asks.
   `.github/workflows/deploy-oauth-relay-worker.yml` on its own track, never by a release tag, and its
   contract only grows: every relay version keeps serving every released 7.x server, and a breaking
   change is a new path with the old one kept.
-- **It forwards only to a host that proved control of its name.** A server serves a random token at
-  `/.well-known/privacyfence-relay` (the route answers 404 unless a relayed service is in use) and
-  registers with `POST /register`; the relay fetches the token with redirects off and a 5-second
-  timeout. Only a successful proof creates a registration. The server renews daily; a registration
+- **It forwards only to a host that proved control of its name, and only the holder of the host's
+  secret can change its registration.** A server keeps a random secret (`org/relay_token.txt`),
+  serves its SHA-256 at `/.well-known/privacyfence-relay` (the route answers 404 unless a relayed
+  service is in use) and registers with `POST /register`, sending the secret. The relay fetches the
+  well-known value with redirects off and a 5-second timeout and compares it with the hash of the
+  secret it received; it never stores the secret. Only a successful proof creates a registration or
+  changes one (its `verified_at`, its sign-in domains). The server renews daily; a registration
   older than 35 days is treated as unregistered.
+- **Why a secret behind a public hash, rather than a public token.** If the well-known value itself
+  were the credential, anyone who read it could post it to `/register`: a third party could replace
+  a host's verified sign-in domains with an empty set (every built-in sign-in refused while the
+  server still believed itself registered), and keep doing so. Serving the hash keeps the
+  well-known flow exactly as it was for the operator (nothing to configure, one file to back up)
+  while making the public value useless on its own. The alternatives were authenticating
+  `/register` by the fetched host alone (it is still a public value) or a relay-issued key per host
+  (a second credential to store, lose and recover, and a bootstrap problem for a host's first
+  registration); the hashed secret needs neither.
+- **`/register` is JSON only and rate-limited by network.** It requires `Content-Type:
+  application/json` (415 `unsupported_media_type` otherwise), so a web page cannot use its
+  visitors' browsers to post `text/plain` or form bodies to it. The rate limits key an IPv6 client
+  on its /64, since one subscriber usually holds a whole /64.
 - **What is relayed.** `GET /callback/<grant>` for the connector grants and the three sign-in grants
   of [ADR 0267](0267-an-organization-server-may-opt-in-to-the-built-in-google-sign-in.md). The `state`
   the server sends is `<host>~<random>`; the relay answers 302 to
@@ -50,11 +66,14 @@ send a sign-in code to a server that merely asks.
   control again).
 - **Registrations are limited and notified.** Failed attempts are counted apart from registrations and
   never block a later valid proof; there are per-host-and-address and per-address limits, and at most
-  five new hosts per address per day (`too_many_new_hosts`). Each first registration emails the
-  maintainers through the Gmail API with a send-only token from an account restricted to internal
-  delivery; there is no waiting period, because review and revocation cover a bad host. At most 50
-  such emails go out per day, and a registration that sent none is flagged `"notified": false` on
-  `/registrations`.
+  five new hosts per address per day (`too_many_new_hosts`). Each first registration, and each gain
+  of a sign-in domain that no earlier mail for that host named, emails the maintainers through the
+  Gmail API with a send-only token from an account restricted to internal delivery; there is no
+  waiting period, because review and revocation cover a bad host. A removed domain, a domain put
+  back, or a repeated request mails nothing, so the daily cap cannot be burnt by flipping a record or
+  replaying a registration. At most 3 mails a day concern one host and 50 go out in all; a
+  registration whose news was not mailed is flagged `"notified": false` on `/registrations`, which
+  lists only the hosts verified within the 35 days.
 - **Deploy control.** The relay lives in the existing Cloudflare account; a Workers deploy token
   covers every Worker in it, so the `oauth-relay-worker` GitHub environment has required reviewers
   with self-review prevented.
@@ -62,8 +81,8 @@ send a sign-in code to a server that merely asks.
   in `org/relay_status.json` so a restart inside the 35 days keeps relayed sign-in open, and treats
   `too_soon` and `too_many_new_hosts` as "retry later" without clearing an earlier success. Until a
   registration has succeeded, a sign-in that would go through the relay is refused on the Connect
-  page. `org/relay_token.txt` is created if missing and is kept: replacing a token after a recorded
-  success logs an error.
+  page. `org/relay_token.txt` is created if missing and is kept: replacing the secret after a recorded
+  success logs an error. The secret is never served or logged.
 - **Terms.** The relay is offered as is, under the relay terms published at https://privacyfence.eu/relay-terms/, with
   no warranty and liability limited as far as the law allows.
 
@@ -92,8 +111,8 @@ send a sign-in code to a server that merely asks.
 
 ## Verification
 
-`cloudflare/oauth-relay/test/` (`relay.test.ts`, `validate.test.ts`, `notify.test.ts`,
-`notify-cap.test.ts`), `tests/unit/test_relay_client.py`, `tests/unit/web/test_routes_connect.py`.
+`cloudflare/oauth-relay/test/` (`relay.test.ts`, `register-authority.test.ts`, `validate.test.ts`,
+`notify.test.ts`, `notify-cap.test.ts`), `tests/unit/test_relay_client.py`, `tests/unit/web/test_routes_connect.py`.
 Code: `cloudflare/oauth-relay/src/`, `src/privacyfence/relay_client.py`,
 `.github/workflows/deploy-oauth-relay-worker.yml`. Runbook: `docs/oauth-relay.md`.
 

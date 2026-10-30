@@ -9,7 +9,8 @@ import {
   NOT_REGISTERED,
   REVOKE_TOKEN,
   TERMS,
-  TOKEN,
+  PROOF,
+  SECRET,
   bearer,
   call,
   expectSecurityHeaders,
@@ -23,6 +24,7 @@ import {
   registry,
   stateFor,
   stubFetch,
+  txtValue,
 } from "./helpers";
 
 afterEach(() => {
@@ -133,7 +135,7 @@ describe("POST /register", () => {
     [null],
   ])("rejects the host %j as invalid_request", async (host) => {
     const spy = stubFetch(() => new Response("never", { status: 500 }));
-    const response = await call("/register", postJson({ host, token: TOKEN }, { "CF-Connecting-IP": freshIp() }));
+    const response = await call("/register", postJson({ host, secret: SECRET }, { "CF-Connecting-IP": freshIp() }));
     expect(response.status).toBe(400);
     expect(await jsonOf(response)).toEqual({ error: "invalid_request" });
     expect(spy).not.toHaveBeenCalled();
@@ -155,7 +157,7 @@ describe("POST /register", () => {
     ["a.netlify.app"],
   ])("refuses %s as host_not_public without calling anyone", async (host) => {
     const spy = stubFetch(() => new Response("never", { status: 500 }));
-    const response = await call("/register", postJson({ host, token: TOKEN }, { "CF-Connecting-IP": freshIp() }));
+    const response = await call("/register", postJson({ host, secret: SECRET }, { "CF-Connecting-IP": freshIp() }));
     expect(response.status).toBe(400);
     expect(await jsonOf(response)).toEqual({ error: "host_not_public" });
     expect(spy).not.toHaveBeenCalled();
@@ -167,22 +169,23 @@ describe("POST /register", () => {
     ["an array", "[]"],
     ["a string", '"x"'],
     ["null", "null"],
-    ["no token", JSON.stringify({ host: "pf.example.org" })],
-    ["a short token", JSON.stringify({ host: "pf.example.org", token: "short" })],
-    ["a token with a bad character", JSON.stringify({ host: "pf.example.org", token: "+".repeat(43) })],
-    ["an oversized body", JSON.stringify({ host: "pf.example.org", token: TOKEN, pad: "x".repeat(5000) })],
-    ["signin_domains that is no array", JSON.stringify({ host: "pf.example.org", token: TOKEN, signin_domains: "acme.com" })],
+    ["no secret", JSON.stringify({ host: "pf.example.org" })],
+    ["the public proof instead of the secret", JSON.stringify({ host: "pf.example.org", secret: PROOF })],
+    ["a token field instead of the secret", JSON.stringify({ host: "pf.example.org", token: SECRET })],
+    ["a short secret", JSON.stringify({ host: "pf.example.org", secret: "short" })],
+    ["a secret with a bad character", JSON.stringify({ host: "pf.example.org", secret: "+".repeat(43) })],
+    ["an oversized body", JSON.stringify({ host: "pf.example.org", secret: SECRET, pad: "x".repeat(5000) })],
+    ["signin_domains that is no array", JSON.stringify({ host: "pf.example.org", secret: SECRET, signin_domains: "acme.com" })],
     [
       "more than 20 sign-in domains",
       JSON.stringify({
         host: "pf.example.org",
-        token: TOKEN,
+        secret: SECRET,
         signin_domains: Array.from({ length: 21 }, (_, i) => `d${i}.example.org`),
       }),
     ],
-    ["a public-suffix sign-in domain", JSON.stringify({ host: "pf.example.org", token: TOKEN, signin_domains: ["co.uk"] })],
-    ["a free-mail sign-in domain", JSON.stringify({ host: "pf.example.org", token: TOKEN, signin_domains: ["gmail.com"] })],
-    ["a malformed sign-in domain", JSON.stringify({ host: "pf.example.org", token: TOKEN, signin_domains: ["a..b"] })],
+    ["a sign-in domain that is no string", JSON.stringify({ host: "pf.example.org", secret: SECRET, signin_domains: [5] })],
+    ["a malformed sign-in domain", JSON.stringify({ host: "pf.example.org", secret: SECRET, signin_domains: ["a..b"] })],
   ])("rejects %s as invalid_request", async (_name, body) => {
     const response = await call("/register", postJson(body, { "CF-Connecting-IP": freshIp() }));
     expect(response.status).toBe(400);
@@ -199,9 +202,9 @@ describe("POST /register", () => {
   });
 
   describe("the proof", () => {
-    it("refuses a token mismatch", async () => {
+    it("refuses a proof that is not the SHA-256 of the secret", async () => {
       const host = freshHost();
-      stubFetch(proofServes(host, "x".repeat(43)));
+      stubFetch(proofServes(host, "x".repeat(64)));
       const response = await register(host);
       expect(response.status).toBe(403);
       expect(await jsonOf(response)).toEqual({ error: "proof_failed" });
@@ -212,7 +215,7 @@ describe("POST /register", () => {
       ["a 404", () => new Response("no", { status: 404 })],
       ["a 302", () => new Response(null, { status: 302, headers: { Location: "https://elsewhere.example/" } })],
       ["a 500", () => new Response("no", { status: 500 })],
-      ["a body over 256 bytes", () => new Response(TOKEN + " ".repeat(300))],
+      ["a body over 256 bytes", () => new Response(PROOF + " ".repeat(300))],
       [
         "a body that errors",
         () =>
@@ -254,7 +257,7 @@ describe("POST /register", () => {
       stubFetch(() => new Response("no", { status: 404 }));
       await register(host);
       expect(await registry().getRegistration(host)).toBeNull();
-      expect(await registry().listActive()).not.toContainEqual(expect.objectContaining({ host }));
+      expect(await registry().listActive(Date.now(), 35 * 24 * 3600 * 1000)).not.toContainEqual(expect.objectContaining({ host }));
     });
   });
 
@@ -530,16 +533,12 @@ describe("GET /callback/:grant", () => {
 
 describe("sign-in grants", () => {
   const DOMAIN = "acme-corp.example";
-  const hash = async (token: string) => {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  };
   const dnsAnswer = (value: string) =>
     new Response(JSON.stringify({ Status: 0, Answer: [{ name: "x", type: 16, data: `"${value}"` }] }));
 
   async function registerWithDomain(host: string): Promise<void> {
-    const expected = `pf-relay=${await hash(TOKEN)}`;
-    stubFetch((url) => (url === proofUrl(host) ? new Response(TOKEN) : dnsAnswer(expected)));
+    const expected = await txtValue(host);
+    stubFetch((url) => (url === proofUrl(host) ? new Response(PROOF) : dnsAnswer(expected)));
     const response = await register(host, { domains: [DOMAIN] });
     expect(response.status).toBe(200);
     expect((await jsonOf(response)).signin_domains_verified).toEqual([DOMAIN]);
@@ -629,21 +628,21 @@ describe("sign-in grants", () => {
     it("reports a missing record with the TXT name and value to publish", async () => {
       const host = freshHost();
       stubFetch((url) =>
-        url === proofUrl(host) ? new Response(TOKEN) : new Response(JSON.stringify({ Status: 3 })),
+        url === proofUrl(host) ? new Response(PROOF) : new Response(JSON.stringify({ Status: 3 })),
       );
       const response = await register(host, { domains: [DOMAIN] });
       expect(response.status).toBe(200);
       const body = await jsonOf(response);
       expect(body.signin_domains_verified).toEqual([]);
       expect(body.signin_domains_missing).toEqual([
-        { domain: DOMAIN, txt_name: `_privacyfence-relay.${DOMAIN}`, txt_value: `pf-relay=${await hash(TOKEN)}` },
+        { domain: DOMAIN, txt_name: `_privacyfence-relay.${DOMAIN}`, txt_value: await txtValue(host) },
       ]);
       expect((await registry().getRegistration(host))?.signin_domains).toEqual([]);
     });
 
     it("treats a wrong TXT value as missing", async () => {
       const host = freshHost();
-      stubFetch((url) => (url === proofUrl(host) ? new Response(TOKEN) : dnsAnswer("pf-relay=deadbeef")));
+      stubFetch((url) => (url === proofUrl(host) ? new Response(PROOF) : dnsAnswer("pf-relay=deadbeef")));
       const body = await jsonOf(await register(host, { domains: [DOMAIN] }));
       expect(body.signin_domains_verified).toEqual([]);
       expect(body.signin_domains_missing).toHaveLength(1);
@@ -651,11 +650,11 @@ describe("sign-in grants", () => {
 
     it("reads a TXT value split into several strings and ignores other record types", async () => {
       const host = freshHost();
-      const expected = `pf-relay=${await hash(TOKEN)}`;
+      const expected = await txtValue(host);
       const half = Math.floor(expected.length / 2);
       stubFetch((url) =>
         url === proofUrl(host)
-          ? new Response(TOKEN)
+          ? new Response(PROOF)
           : new Response(
               JSON.stringify({
                 Status: 0,
@@ -672,22 +671,22 @@ describe("sign-in grants", () => {
 
     it("reads an unquoted TXT value and an empty answer", async () => {
       const host = freshHost();
-      const expected = `pf-relay=${await hash(TOKEN)}`;
+      const expected = await txtValue(host);
       stubFetch((url) =>
         url === proofUrl(host)
-          ? new Response(TOKEN)
+          ? new Response(PROOF)
           : new Response(JSON.stringify({ Status: 0, Answer: [{ type: 16, data: expected }] })),
       );
       expect((await jsonOf(await register(host, { domains: [DOMAIN] }))).signin_domains_verified).toEqual([DOMAIN]);
       const other = freshHost();
-      stubFetch((url) => (url === proofUrl(other) ? new Response(TOKEN) : new Response(JSON.stringify({ Status: 0 }))));
+      stubFetch((url) => (url === proofUrl(other) ? new Response(PROOF) : new Response(JSON.stringify({ Status: 0 }))));
       expect((await jsonOf(await register(other, { domains: [DOMAIN] }))).signin_domains_missing).toHaveLength(1);
     });
 
     it("queries DNS over HTTPS for the _privacyfence-relay name", async () => {
       const host = freshHost();
       const spy = stubFetch((url) =>
-        url === proofUrl(host) ? new Response(TOKEN) : new Response(JSON.stringify({ Status: 3 })),
+        url === proofUrl(host) ? new Response(PROOF) : new Response(JSON.stringify({ Status: 3 })),
       );
       await register(host, { domains: [DOMAIN, DOMAIN] });
       const dns = spy.mock.calls.filter(([url]) => String(url).startsWith("https://cloudflare-dns.com/"));
@@ -702,15 +701,15 @@ describe("sign-in grants", () => {
       const host = freshHost();
       await registerWithDomain(host);
       stubFetch((url) => {
-        if (url === proofUrl(host)) return new Response(TOKEN);
+        if (url === proofUrl(host)) return new Response(PROOF);
         throw new TypeError("dns down");
       });
       expect((await jsonOf(await register(host, { domains: [DOMAIN] }))).signin_domains_verified).toEqual([DOMAIN]);
-      stubFetch((url) => (url === proofUrl(host) ? new Response(TOKEN) : new Response("bad", { status: 502 })));
+      stubFetch((url) => (url === proofUrl(host) ? new Response(PROOF) : new Response("bad", { status: 502 })));
       expect((await jsonOf(await register(host, { domains: [DOMAIN] }))).signin_domains_verified).toEqual([DOMAIN]);
-      stubFetch((url) => (url === proofUrl(host) ? new Response(TOKEN) : new Response("{}", { status: 200 })));
+      stubFetch((url) => (url === proofUrl(host) ? new Response(PROOF) : new Response("{}", { status: 200 })));
       expect((await jsonOf(await register(host, { domains: [DOMAIN] }))).signin_domains_verified).toEqual([DOMAIN]);
-      stubFetch((url) => (url === proofUrl(host) ? new Response(TOKEN) : new Response(JSON.stringify({ Status: 3 }))));
+      stubFetch((url) => (url === proofUrl(host) ? new Response(PROOF) : new Response(JSON.stringify({ Status: 3 }))));
       const dropped = await jsonOf(await register(host, { domains: [DOMAIN] }));
       expect(dropped.signin_domains_verified).toEqual([]);
       expect((await registry().getRegistration(host))?.signin_domains).toEqual([]);
@@ -719,7 +718,7 @@ describe("sign-in grants", () => {
     it("does not keep a never-verified domain when DNS fails", async () => {
       const host = freshHost();
       stubFetch((url) => {
-        if (url === proofUrl(host)) return new Response(TOKEN);
+        if (url === proofUrl(host)) return new Response(PROOF);
         throw new TypeError("dns down");
       });
       const body = await jsonOf(await register(host, { domains: [DOMAIN] }));

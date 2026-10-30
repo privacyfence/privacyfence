@@ -1,4 +1,4 @@
-"""relay_client: the host rules, the well-known token, registration and the check loop."""
+"""relay_client: the host rules, the relay secret and its well-known proof, registration and the check loop."""
 from __future__ import annotations
 
 import json
@@ -59,9 +59,9 @@ def posts(monkeypatch):
 
 class TestToken:
     def test_created_once_with_43_characters_and_mode_0600(self, tmp_path):
-        token = relay_client.well_known_token()
+        token = relay_client.relay_secret()
         assert len(token) == 43
-        assert relay_client.well_known_token() == token
+        assert relay_client.relay_secret() == token
         assert stat.S_IMODE((tmp_path / "org" / "relay_token.txt").stat().st_mode) == 0o600
 
     @pytest.mark.parametrize("content", ["short", "!" * 43, ""])
@@ -69,16 +69,16 @@ class TestToken:
         path = tmp_path / "org" / "relay_token.txt"
         path.parent.mkdir(parents=True)
         path.write_text(content)
-        token = relay_client.well_known_token()
+        token = relay_client.relay_secret()
         assert token != content and len(token) == 43
         assert path.read_text() == token
 
     def test_replacement_after_a_recorded_success_logs_an_error_once_without_the_token(self, tmp_path, caplog):
         relay_client._persist_last_ok(1.0)
         with caplog.at_level(logging.ERROR):
-            first = relay_client.well_known_token()
+            first = relay_client.relay_secret()
             (tmp_path / "org" / "relay_token.txt").write_text("bad")
-            second = relay_client.well_known_token()
+            second = relay_client.relay_secret()
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert len(errors) == 1
         assert "relay_token.txt" in errors[0].getMessage()
@@ -86,7 +86,7 @@ class TestToken:
 
     def test_first_creation_logs_no_error(self, caplog):
         with caplog.at_level(logging.ERROR):
-            relay_client.well_known_token()
+            relay_client.relay_secret()
         assert caplog.records == []
 
 
@@ -151,7 +151,7 @@ class TestRegister:
         assert relay_client.register("https://PF.acme.example.com:8443/") == (True, "")
         assert posts == [{
             "url": "https://oauth.privacyfence.eu/register",
-            "json": {"host": "pf.acme.example.com:8443", "token": relay_client.well_known_token()},
+            "json": {"host": "pf.acme.example.com:8443", "secret": relay_client.relay_secret()},
             "timeout": 10,
             "allow_redirects": False,
         }]
@@ -160,6 +160,7 @@ class TestRegister:
         (_Response(403, {"error": "proof_failed"}), "proof_failed"),
         (_Response(429, {"error": "too_soon"}), "too_soon"),
         (_Response(429, {"error": "too_many_new_hosts"}), "too_many_new_hosts"),
+        (_Response(415, {"error": "unsupported_media_type"}), "unsupported_media_type"),
         (_Response(500), "HTTP 500"),
         (_Response(403, {"error": "something_new"}), "HTTP 403"),
         (_Response(502, ["x"]), "HTTP 502"),
@@ -185,6 +186,7 @@ class TestStatus:
     def test_starts_empty(self):
         assert relay_client.status() == {
             "last_ok_at": None, "last_error": "", "needed": False, "signin_domains_verified": [],
+            "signin_domains_refused": [],
         }
 
     def test_a_recorded_success_survives_a_restart(self, posts):
@@ -258,6 +260,7 @@ class TestTick:
             assert relay_client._tick(ISSUER, SLACK_RELAYED, 200.0) == HOUR
         assert relay_client.status() == {
             "last_ok_at": 200.0, "last_error": "", "needed": True, "signin_domains_verified": [],
+            "signin_domains_refused": [],
         }
         posts.reply["value"] = _Response(500)
         assert relay_client._tick(ISSUER, SLACK_RELAYED, 200.0 + 25 * HOUR) == 60.0
@@ -271,12 +274,12 @@ class TestTick:
         assert status["last_ok_at"] == 100.0
         assert status["last_error"] == code
 
-    def test_the_token_never_reaches_the_log(self, posts, caplog):
+    def test_the_secret_never_reaches_the_log(self, posts, caplog):
         with caplog.at_level(logging.DEBUG):
             relay_client._tick(ISSUER, SLACK_RELAYED, 100.0)
             posts.reply["value"] = _Response(500)
             relay_client._tick(ISSUER, SLACK_RELAYED, 100.0 + 25 * HOUR)
-        assert relay_client.well_known_token() not in caplog.text
+        assert relay_client.relay_secret() not in caplog.text
 
     def test_sees_a_section_added_later_to_the_shared_config(self, posts):
         org_config: dict[str, Any] = {}
@@ -336,7 +339,7 @@ class TestLoop:
 
 
 def _builtin(admins: list[str], allowed: list[str] | None = None) -> dict[str, Any]:
-    config: dict[str, Any] = {"idp": {
+    config: dict[str, Any] = {"server": {"issuer_url": ISSUER}, "idp": {
         "issuer": "https://accounts.google.com", "client_id": "builtin", "builtin": True, "relay": True,
         "admin_emails": admins,
     }}
@@ -353,10 +356,12 @@ def _verified_reply(*domains: str) -> _Response:
                            "signin_domains_missing": []})
 
 
-def _txt_value() -> str:
+def _txt_value(host: str = "pf.acme.example.com") -> str:
+    """The record value, computed here from the documented format rather than by relay_client."""
     import hashlib
 
-    return "pf-relay=" + hashlib.sha256(relay_client.well_known_token().encode()).hexdigest()
+    proof = hashlib.sha256(relay_client.relay_secret().encode()).hexdigest()
+    return "pf-relay=v1:" + hashlib.sha256(f"v1|{host}|{proof}".encode()).hexdigest()
 
 
 class TestSigninDomains:
@@ -394,7 +399,7 @@ class TestSigninRegistration:
     def test_register_sends_the_signin_domains(self, posts):
         relay_client.register(ISSUER, ["acme.com", "acme.org"])
         assert posts[0]["json"] == {
-            "host": "pf.acme.example.com", "token": relay_client.well_known_token(),
+            "host": "pf.acme.example.com", "secret": relay_client.relay_secret(),
             "signin_domains": ["acme.com", "acme.org"],
         }
 
@@ -406,7 +411,7 @@ class TestSigninRegistration:
         # Only names the server sent can come back as verified.
         assert relay_client.status()["signin_domains_verified"] == ["acme.com"]
         saved = json.loads((tmp_path / "org" / "relay_status.json").read_text())
-        assert saved == {"last_ok_at": 100.0, "signin_domains_verified": ["acme.com"]}
+        assert saved == {"last_ok_at": 100.0, "signin_domains_verified": ["acme.com"], "signin_domains_refused": []}
         relay_client.reset_for_tests()
         assert relay_client.verified_signin_domains() == frozenset({"acme.com"})
 
@@ -451,8 +456,80 @@ class TestSigninRegistration:
         assert relay_client.verified_signin_domains() == frozenset()
 
 
+# The same vectors are in cloudflare/oauth-relay/test/register-authority.test.ts: the server and the
+# relay must compute the identical record.
+SECRET_VECTOR = "t" * 43
+RECORD_VECTORS = [
+    ("pf.acme.example.com", "pf-relay=v1:084fdbae3551700b442490b19ce08f8e00fa3c9844c1ade07d8155790a0112d0"),
+    ("pf.acme.example.com:8443", "pf-relay=v1:e36de5e96920cee82fc23148240b3970ac70511442062d99d3c98b8d03864119"),
+]
+
+
+class TestDnsRecordValue:
+    @pytest.fixture
+    def fixed_secret(self, tmp_path):
+        path = tmp_path / "org" / "relay_token.txt"
+        path.parent.mkdir(parents=True)
+        path.write_text(SECRET_VECTOR)
+
+    @pytest.mark.parametrize("host,value", RECORD_VECTORS)
+    def test_matches_the_relay_vectors(self, fixed_secret, host, value):
+        assert relay_client.dns_record_value(host) == value
+
+    def test_the_well_known_proof_is_the_hash_of_the_secret_and_not_the_secret(self, fixed_secret):
+        import hashlib
+
+        proof = relay_client.well_known_proof()
+        assert proof == hashlib.sha256(SECRET_VECTOR.encode()).hexdigest()
+        assert SECRET_VECTOR not in proof
+
+    def test_is_bound_to_the_host(self):
+        values = {relay_client.dns_record_value(host) for host in ("pf.acme.com", "pf.evil.example", "pf.acme.com:8443")}
+        assert len(values) == 3
+
+    def test_changes_with_the_secret(self, tmp_path):
+        before = relay_client.dns_record_value("pf.acme.com")
+        (tmp_path / "org" / "relay_token.txt").write_text("u" * 43)
+        assert relay_client.dns_record_value("pf.acme.com") != before
+
+
+class TestRefusedSigninDomains:
+    def _refused_reply(self) -> _Response:
+        return _Response(200, {"signin_domains_verified": ["acme.com"], "signin_domains_missing": [],
+                               "signin_domains_refused": ["co.uk", "not-sent.example"]})
+
+    def test_a_refused_domain_is_reported_and_registration_still_succeeds(self, posts, tmp_path):
+        config = _builtin(["a@acme.com"], ["co.uk"])
+        posts.reply["value"] = self._refused_reply()
+        relay_client._tick(ISSUER, config, 100.0)
+        status = relay_client.status()
+        assert status["last_ok_at"] == 100.0 and status["last_error"] == ""
+        # Only names the server sent are kept.
+        assert status["signin_domains_refused"] == ["co.uk"]
+        assert relay_client.missing_dns_records(config) == [
+            "Built-in Google sign-in: co.uk is a public suffix or a shared mail domain, which the relay "
+            "never accepts as a sign-in domain. Nobody from co.uk can sign in."
+        ]
+        relay_client.reset_for_tests()
+        assert relay_client.status()["signin_domains_refused"] == ["co.uk"]
+
+    def test_a_refused_domain_does_not_make_the_server_register_every_hour(self, posts):
+        config = _builtin(["a@acme.com"], ["co.uk"])
+        posts.reply["value"] = self._refused_reply()
+        relay_client._tick(ISSUER, config, 100.0)
+        relay_client._tick(ISSUER, config, 100.0 + HOUR)
+        assert len(posts) == 1
+
+    def test_no_lines_without_a_public_issuer(self):
+        config = _builtin(["a@acme.com"])
+        config["server"] = {"issuer_url": "http://localhost:8765"}
+        assert relay_client.missing_dns_records(config) == []
+        config["server"] = {"issuer_url": "ftp://x"}
+        assert relay_client.missing_dns_records(config) == []
+
+
 class TestDnsRecordLines:
-    def test_one_line_per_missing_domain_with_the_hash_of_the_token(self, posts, caplog):
+    def test_one_line_per_missing_domain_with_the_host_bound_value(self, posts, caplog):
         posts.reply["value"] = _verified_reply("acme.com")
         with caplog.at_level(logging.WARNING):
             relay_client._tick(ISSUER, BUILTIN, 100.0)
@@ -463,7 +540,7 @@ class TestDnsRecordLines:
         )
         assert relay_client.missing_dns_records(BUILTIN) == [expected]
         assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [expected]
-        assert relay_client.well_known_token() not in caplog.text
+        assert relay_client.relay_secret() not in caplog.text
 
     def test_every_domain_is_missing_before_any_registration(self):
         lines = relay_client.missing_dns_records(BUILTIN)
@@ -477,7 +554,7 @@ class TestDnsRecordLines:
         relay_client._tick(ISSUER, BUILTIN, 100.0)
         assert relay_client.missing_dns_records(BUILTIN) == []
 
-    def test_a_replaced_token_gives_the_new_values_and_forgets_the_old_proofs(self, posts, tmp_path, caplog):
+    def test_a_replaced_secret_gives_the_new_values_and_forgets_the_old_proofs(self, posts, tmp_path, caplog):
         posts.reply["value"] = _verified_reply("acme.com", "acme.org")
         relay_client._tick(ISSUER, BUILTIN, 100.0)
         old_value = _txt_value()
@@ -493,7 +570,7 @@ class TestDnsRecordLines:
         assert all(new_value in line and old_value not in line for line in messages[1:])
         assert relay_client.verified_signin_domains() == frozenset()
         assert relay_client.status()["last_ok_at"] == 100.0
-        assert relay_client.well_known_token() not in caplog.text
+        assert relay_client.relay_secret() not in caplog.text
         # The next pass registers again at once rather than waiting out the day.
         relay_client._tick(ISSUER, BUILTIN, 200.0)
         assert len(posts) == 2

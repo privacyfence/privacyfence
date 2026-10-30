@@ -10,15 +10,19 @@ import { sendNotification } from "./notify";
 import type { Registration } from "./registry";
 import {
   MAX_SIGNIN_DOMAINS,
+  dnsRecordValue,
   forwardPath,
   inPrivateSuffix,
   isSigninGrant,
   loopbackHost,
   parseState,
   publicHost,
+  rateLimitKey,
+  sha256Hex,
+  signinDomainAllowed,
+  signinDomainSyntax,
   validRelayHost,
-  validSigninDomain,
-  validToken,
+  validSecret,
 } from "./validate";
 
 export { Registry } from "./registry";
@@ -74,11 +78,6 @@ function registryOf(env: Env): DurableObjectStub<import("./registry").Registry> 
   return env.REGISTRY.get(env.REGISTRY.idFromName("global"));
 }
 
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 /** Constant-time comparison of two strings through their SHA-256 digests. */
 async function safeEqual(a: string, b: string): Promise<boolean> {
   const encoder = new TextEncoder();
@@ -123,7 +122,8 @@ async function readLimited(response: Response, limit: number): Promise<string | 
   return new TextDecoder().decode(bytes);
 }
 
-async function proofMatches(host: string, token: string): Promise<boolean> {
+/** Whether `host` serves `proof` (the SHA-256 of the secret in the request) at its well-known path. */
+async function proofMatches(host: string, proof: string): Promise<boolean> {
   try {
     const response = await fetch(`https://${host}${PROOF_PATH}`, {
       redirect: "manual",
@@ -132,7 +132,7 @@ async function proofMatches(host: string, token: string): Promise<boolean> {
     });
     if (response.status !== 200) return false;
     const body = await readLimited(response, 256);
-    return body !== null && body.trim() === token;
+    return body !== null && body.trim() === proof;
   } catch {
     return false;
   }
@@ -165,7 +165,7 @@ async function dnsProof(domain: string, expected: string): Promise<DnsAnswer> {
 
 interface RegisterBody {
   host: string;
-  token: string;
+  secret: string;
   signinDomains: string[];
 }
 
@@ -179,15 +179,21 @@ function parseRegisterBody(raw: string): RegisterBody | null {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
   const body = parsed as Record<string, unknown>;
   if (!validRelayHost(body.host) && !(typeof body.host === "string" && loopbackHost(body.host))) return null;
-  if (!validToken(body.token)) return null;
+  if (!validSecret(body.secret)) return null;
   let signinDomains: string[] = [];
   if (body.signin_domains !== undefined) {
     const domains = body.signin_domains;
     if (!Array.isArray(domains) || domains.length > MAX_SIGNIN_DOMAINS) return null;
-    if (!domains.every(validSigninDomain)) return null;
+    if (!domains.every(signinDomainSyntax)) return null;
     signinDomains = [...new Set(domains as string[])];
   }
-  return { host: body.host as string, token: body.token, signinDomains };
+  return { host: body.host as string, secret: body.secret, signinDomains };
+}
+
+/** `application/json`, with or without parameters: a cross-site form or `text/plain` post is refused. */
+function jsonContentType(request: Request): boolean {
+  const value = request.headers.get("Content-Type") ?? "";
+  return value.split(";")[0]!.trim().toLowerCase() === "application/json";
 }
 
 async function readBody(request: Request): Promise<string | null> {
@@ -207,9 +213,10 @@ interface NotifyInput {
   country: string;
   now: Date;
   domains: string[];
+  isNew: boolean;
 }
 
-/** Sends the maintainers' mail for a first registration or a changed sign-in domain set. */
+/** Sends the maintainers' mail for a first registration, or for sign-in domains a host gained. */
 async function notifyMaintainers(env: Env, input: NotifyInput): Promise<void> {
   const registry = registryOf(env);
   const nowIso = input.now.toISOString();
@@ -225,8 +232,10 @@ async function notifyMaintainers(env: Env, input: NotifyInput): Promise<void> {
     subject = "PrivacyFence relay: notification limit reached";
     body = "More new registrations today than the notification limit; see /registrations.";
   } else {
-    subject = `New PrivacyFence relay registration: ${input.host}`;
-    const active = await registry.countActive();
+    subject = input.isNew
+      ? `New PrivacyFence relay registration: ${input.host}`
+      : `PrivacyFence relay sign-in domains added: ${input.host}`;
+    const active = await registry.countActive(input.now.getTime(), MAX_VERIFIED_AGE_MS);
     const signin = input.domains.length > 0 ? `yes (${input.domains.join(", ")})` : "no";
     body = [
       `Host: ${input.host}`,
@@ -243,7 +252,7 @@ async function notifyMaintainers(env: Env, input: NotifyInput): Promise<void> {
   }
   const result = await sendNotification(env, subject, body, input.now);
   if (result.status === "sent") {
-    if (decision === "send") await registry.markNotified(input.host);
+    if (decision === "send") await registry.markNotified(input.host, input.domains);
   } else if (result.status === "failed") {
     await registry.recordNotifyFailure(result.code, nowIso);
   } else {
@@ -253,10 +262,11 @@ async function notifyMaintainers(env: Env, input: NotifyInput): Promise<void> {
 
 async function handleRegister(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (request.method !== "POST") return methodNotAllowed(["POST"]);
+  if (!jsonContentType(request)) return error(415, "unsupported_media_type");
   const raw = await readBody(request);
   const body = raw === null ? null : parseRegisterBody(raw);
   if (body === null) return error(400, "invalid_request");
-  const { host, token, signinDomains } = body;
+  const { host, secret, signinDomains } = body;
   if (loopbackHost(host) || !publicHost(host) || inPrivateSuffix(host)) return error(400, "host_not_public");
 
   const registry = registryOf(env);
@@ -264,30 +274,42 @@ async function handleRegister(request: Request, env: Env, ctx: ExecutionContext)
   if (existing?.revoked) return error(403, "revoked");
 
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const limitKey = rateLimitKey(ip);
   const country = request.headers.get("CF-IPCountry") ?? "unknown";
   const now = new Date();
-  const verdict = await registry.noteAttempt(host, ip, now.getTime(), now.toISOString());
+  const verdict = await registry.noteAttempt(host, limitKey, now.getTime(), now.toISOString());
   if (verdict !== "ok") return error(429, verdict);
 
-  if (!(await proofMatches(host, token))) {
-    await registry.noteFailure(host, ip, now.getTime());
+  // Only the holder of the secret can register or change a host: the host publishes its hash, so
+  // the public value alone proves nothing.
+  const proof = await sha256Hex(secret);
+  if (!(await proofMatches(host, proof))) {
+    await registry.noteFailure(host, limitKey, now.getTime());
     return error(403, "proof_failed");
   }
 
-  const expected = `pf-relay=${await sha256Hex(token)}`;
-  const answers = await Promise.all(signinDomains.map((domain) => dnsProof(domain, expected)));
-  const kept = new Set(existing?.signin_domains ?? []);
+  const expected = await dnsRecordValue(host, proof);
+  const requested = signinDomains.filter(signinDomainAllowed);
+  const refused = signinDomains.filter((domain) => !signinDomainAllowed(domain)).sort();
+  // A domain verified earlier is checked again even when this request leaves it out: only DNS
+  // takes it away. The requested domains come first within the cap of MAX_SIGNIN_DOMAINS.
+  const stored = new Set(existing?.signin_domains ?? []);
+  const extra = [...stored].filter((domain) => !requested.includes(domain) && signinDomainAllowed(domain)).sort();
+  const checked = [...requested, ...extra].slice(0, MAX_SIGNIN_DOMAINS);
+  const answers = await Promise.all(checked.map((domain) => dnsProof(domain, expected)));
   const verified: string[] = [];
   const missing: { domain: string; txt_name: string; txt_value: string }[] = [];
-  signinDomains.forEach((domain, index) => {
+  checked.forEach((domain, index) => {
     // A lookup that failed (as opposed to finding no record) keeps a domain verified earlier.
-    if (answers[index] === "yes" || (answers[index] === "error" && kept.has(domain))) verified.push(domain);
-    else missing.push({ domain, txt_name: `${DNS_NAME_PREFIX}${domain}`, txt_value: expected });
+    if (answers[index] === "yes" || (answers[index] === "error" && stored.has(domain))) verified.push(domain);
+    else if (requested.includes(domain)) {
+      missing.push({ domain, txt_name: `${DNS_NAME_PREFIX}${domain}`, txt_value: expected });
+    }
   });
 
-  const result = await registry.upsertVerified(host, now.toISOString(), ip, verified);
-  if (result.isNew || result.domainsChanged) {
-    ctx.waitUntil(notifyMaintainers(env, { host, ip, country, now, domains: verified }));
+  const result = await registry.upsertVerified(host, now.toISOString(), limitKey, verified);
+  if (result.notify) {
+    ctx.waitUntil(notifyMaintainers(env, { host, ip, country, now, domains: verified, isNew: result.isNew }));
   }
   return json(200, {
     host,
@@ -295,6 +317,7 @@ async function handleRegister(request: Request, env: Env, ctx: ExecutionContext)
     terms: TERMS_URL,
     signin_domains_verified: [...verified].sort(),
     signin_domains_missing: missing,
+    signin_domains_refused: refused,
   });
 }
 
@@ -344,7 +367,10 @@ async function handleRegistrations(request: Request, env: Env): Promise<Response
   if (request.method !== "GET") return methodNotAllowed(["GET"]);
   if (!(await authorized(request, env))) return error(401, "unauthorized");
   const registry = registryOf(env);
-  const [rows, stats] = await Promise.all([registry.listActive(), registry.notifyStats()]);
+  const [rows, stats] = await Promise.all([
+    registry.listActive(Date.now(), MAX_VERIFIED_AGE_MS),
+    registry.notifyStats(),
+  ]);
   const list = rows.map((row: Registration) => ({
     host: row.host,
     registered_at: row.registered_at,

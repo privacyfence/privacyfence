@@ -1313,13 +1313,14 @@ def build_app(
 
 
 async def _relay_well_known(request: Request) -> Response:
-    """The token the sign-in relay fetches to check that this server controls its host name.
-    Public by design: it grants nothing. It is withheld until a service actually uses the relay,
-    so nobody else can register a server whose administrator never offered a built-in service."""
+    """The SHA-256 of the relay secret, which the sign-in relay fetches to check that this server
+    controls its host name. Public by design: only the secret, which the server sends to the relay
+    alone, can register the host. It is withheld until a service actually uses the relay, so
+    nobody else can register a server whose administrator never offered a built-in service."""
     if not relay_client.status()["needed"]:
         return PlainTextResponse("Not Found", status_code=404, headers={"Cache-Control": "no-store"})
-    token = await asyncio.to_thread(relay_client.well_known_token)
-    return PlainTextResponse(token, headers={"Cache-Control": "no-store"})
+    proof = await asyncio.to_thread(relay_client.well_known_proof)
+    return PlainTextResponse(proof, headers={"Cache-Control": "no-store"})
 
 
 def _build_org_app(
