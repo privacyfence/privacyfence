@@ -348,8 +348,9 @@ the shape into the new frame and the sticky note out of its frame. The client ha
       something to return; without it the recording holds an empty list. The field is created in
       the site-wide Fields admin and attaches only to a company-managed space; a team-managed
       space's own field dialog has no Assets type.
-- [ ] Build the QA bundle with `--atlassian-assets --atlassian-assets-workspace-id <workspaceId>`,
-      the id shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`.
+- [ ] Turn on **Jira Assets** under **Admin → Features** on the QA server, with the workspace id
+      shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`, and set the
+      same id as `assets.workspace_id`: the live checks do not read the QA server's Admin settings.
 - [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
       `PrivacyFence QA seed contract [QATEST]`) and optionally `assets.seed_object_key` (blank to
       resolve by label inside the schema).

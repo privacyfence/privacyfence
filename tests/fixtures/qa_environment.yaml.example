@@ -36,6 +36,10 @@ jira:
 assets:
   # docs/connector-qa.md, "Seed: Jira Assets"
   schema_key: PFQA
+  # The site's Assets workspace id (a UUID): open
+  # https://<your-site>.atlassian.net/rest/servicedeskapi/assets/workspace signed in and copy
+  # workspaceId. The QA server's Admin → Features value is not read by the live checks.
+  workspace_id: ""
   # Leave blank to resolve by label inside the QA schema instead (one extra
   # API call per run).
   seed_object_key: ""
