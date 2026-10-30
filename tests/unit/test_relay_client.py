@@ -376,6 +376,14 @@ class TestSigninDomains:
         warnings = [r for r in caplog.records if "nobody from" in r.getMessage()]
         assert len(warnings) == 1 and "gmail.com" in warnings[0].getMessage()
 
+    def test_a_broken_idp_setting_proves_no_domain(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "something-else")
+        assert relay_client.signin_domains({}) is None
+
+    def test_malformed_admin_addresses_are_skipped(self):
+        config = _builtin(["a@acme.com", "no-at-sign", "@acme.net", "b@", 7])
+        assert relay_client.signin_domains(config) == ["acme.com"]
+
     def test_at_most_twenty(self):
         config = _builtin(["a@acme.com"], [f"d{i:02}.example.com" for i in range(25)])
         domains = relay_client.signin_domains(config)
