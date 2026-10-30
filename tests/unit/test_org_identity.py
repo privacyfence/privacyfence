@@ -13,7 +13,7 @@ import pytest
 import requests
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from privacyfence import org_identity as oi
+from privacyfence import org_identity as oi, relay_client
 from privacyfence.org_mode import AuthzPolicyConfig
 from privacyfence.principal import Principal
 
@@ -689,12 +689,22 @@ class TestAdminEmailsFromConfig:
         assert config.admin_emails == ("alice@acme.com", "bob@acme.com")
 
 
+def _prove_domains(*domains: str) -> None:
+    """As if the relay's last registration answered these sign-in domains as proven in DNS."""
+    relay_client._persist_last_ok(1.0, list(domains))
+    relay_client.reset_for_tests()
+
+
 class TestBuiltinGoogleSignin:
     """PrivacyFence's own Google client: any Google account can finish Google's side, so the
     server admits only listed admins and allowed domains, each with a matching ``hd``."""
 
     CLIENT_ID = "builtin-signin.apps.googleusercontent.com"
     GOOGLE = "https://accounts.google.com"
+
+    @pytest.fixture(autouse=True)
+    def _domains_proven(self):
+        _prove_domains("acme.com", "acme.org")
 
     def _idp(self, **overrides):
         values = dict(
@@ -797,6 +807,34 @@ class TestBuiltinGoogleSignin:
         claims = {"sub": "s", "email": "eve@gmail.com", "aud": "own-client"}
         oi.check_authz_policy(oi.principal_from_claims(claims, idp), claims, oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(), idp))
 
+    def test_an_admin_of_a_domain_not_proven_in_dns_is_refused(self):
+        _prove_domains("acme.org")
+        with pytest.raises(oi.AuthorizationDenied, match="not proven in DNS"):
+            self._check("alice@acme.com", {"email_verified": True, "hd": "acme.com"})
+
+    def test_an_allowed_domain_not_proven_in_dns_is_refused(self):
+        _prove_domains("acme.com")
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("carol@acme.org", {"email_verified": True, "hd": "acme.org"}, domains=("acme.org",))
+
+    def test_nothing_proven_refuses_even_the_admin(self):
+        relay_client.reset_for_tests()
+        relay_client.relay_status_path().unlink()
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("alice@acme.com", {"email_verified": True, "hd": "acme.com"})
+
+    def test_a_proven_domain_does_not_admit_an_unlisted_account(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("eve@acme.org", {"email_verified": True, "hd": "acme.org"})
+
+    def test_an_own_idp_ignores_the_proven_domains(self):
+        relay_client.reset_for_tests()
+        relay_client.relay_status_path().unlink()
+        idp = _idp(issuer=self.GOOGLE, client_id="own-client")
+        claims = {"sub": "s", "email": "carol@acme.org", "email_verified": True, "hd": "acme.org", "aud": "own-client"}
+        policy = oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(allowed_domains=("acme.org",)), idp)
+        oi.check_authz_policy(oi.principal_from_claims(claims, idp), claims, policy)
+
     def test_bind_carries_builtin_and_the_admins(self):
         bound = oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(), self._idp())
         assert bound.builtin is True and bound.admin_emails == ("alice@acme.com",)
@@ -848,3 +886,26 @@ class TestBuiltinIdpConfig:
         self._discovery(monkeypatch)
         with pytest.raises(oi.ConfigurationError):
             oi.IdpConfig.from_org_config({"idp": {**self.SECTION, "issuer": "https://idp.example.com"}})
+
+
+class TestSigninRedirect:
+    def test_an_own_idp_keeps_this_servers_callback_and_a_plain_state(self):
+        idp = _idp()
+        assert oi.signin_redirect_uri(
+            idp, issuer_url="https://pf.acme.com/", grant="idp-login", callback_path="/oauth/idp/login-callback",
+        ) == "https://pf.acme.com/oauth/idp/login-callback"
+        state = oi.new_signin_state(idp, issuer_url="https://pf.acme.com")
+        assert "~" not in state and len(state) == 43
+
+    @pytest.mark.parametrize("grant", ["idp", "idp-login", "stepup"])
+    def test_through_the_relay_the_relays_uri_and_a_host_state(self, grant):
+        idp = _idp(relay=True)
+        assert oi.signin_redirect_uri(
+            idp, issuer_url="https://PF.acme.com:8443", grant=grant, callback_path="/x",
+        ) == f"https://oauth.privacyfence.eu/callback/{grant}"
+        host, _, nonce = oi.new_signin_state(idp, issuer_url="https://PF.acme.com:8443").partition("~")
+        assert host == "pf.acme.com:8443" and len(nonce) == 43
+
+    def test_every_state_is_fresh(self):
+        idp = _idp(relay=True)
+        assert len({oi.new_signin_state(idp, issuer_url="https://pf.acme.com") for _ in range(50)}) == 50

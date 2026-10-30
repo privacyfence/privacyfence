@@ -83,7 +83,7 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
-from .. import grist_provisioning, org_identity, peek_provisioning, scoped_tokens
+from .. import grist_provisioning, org_identity, peek_provisioning, relay_client, scoped_tokens
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..principal import Principal
@@ -211,6 +211,8 @@ class _PendingAuthorization:
     idp_nonce: str
     idp_code_verifier: str
     created_at: float
+    # The redirect_uri sent to the IdP for this attempt; the code exchange must send the same.
+    idp_redirect_uri: str
 
 
 @dataclass
@@ -241,6 +243,13 @@ class _IssuedCode:
     expires_at: float
 
 
+def _relay_ready(idp: IdpConfig) -> bool:
+    """Whether the relay would forward this server's sign-ins: it has registered, and with the
+    built-in Google sign-in at least one sign-in domain is proven in DNS."""
+    status = relay_client.status()
+    return status["last_ok_at"] is not None and (not idp.builtin or bool(status["signin_domains_verified"]))
+
+
 class OrgOAuthProvider:
     """Implements ``OAuthAuthorizationServerProvider`` (satisfied
     structurally -- this class is never registered against the Protocol at
@@ -251,11 +260,15 @@ class OrgOAuthProvider:
 
     def __init__(
         self, idp: IdpConfig | None, *, idp_callback_url: str, policy: AuthzPolicyConfig | None = None,
-        single_user: bool = False,
+        single_user: bool = False, issuer_url: str = "",
     ) -> None:
         if single_user and idp is not None:
             raise ValueError("a single-user server has no identity provider")
+        if idp is not None and idp.relay and not issuer_url:
+            # The relay finds this server from the host at the front of the state.
+            raise ValueError("an identity provider behind the relay needs the server's issuer_url")
         self._idp = idp
+        self._issuer_url = issuer_url
         # Single-user mode signs its one administrator in with a setup code and then a passkey
         # (web/single_user_auth.py), so authorize() sends the browser to /login instead of an IdP.
         self.single_user = single_user
@@ -414,8 +427,19 @@ class OrgOAuthProvider:
                 error="temporarily_unavailable",
                 error_description="sign-in is not available on this server yet",
             )
+        if self._idp is not None and self._idp.relay and not _relay_ready(self._idp):
+            # The relay would refuse this sign-in (not registered yet, or no sign-in domain proven
+            # in DNS); /login shows the person why.
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="sign-in is starting up on this server; try again in a minute",
+            )
         self._prune_pending()
-        own_state = secrets.token_urlsafe(32)
+        own_state = (
+            org_identity.new_signin_state(self._idp, issuer_url=self._issuer_url)
+            if self._idp is not None else secrets.token_urlsafe(32)
+        )
+        redirect_uri = self._idp_callback_url
         if self.single_user:
             idp_nonce, idp_code_verifier, idp_code_challenge = "", "", ""
         else:
@@ -435,6 +459,7 @@ class OrgOAuthProvider:
             self._pending[own_state] = _PendingAuthorization(
                 client_id=client.client_id, params=params, idp_nonce=idp_nonce,
                 idp_code_verifier=idp_code_verifier, created_at=time.time(),
+                idp_redirect_uri=redirect_uri,
             )
         if self._idp is None:
             # Single-user mode (the guard above refused anything else): the sign-in page, then
@@ -443,7 +468,7 @@ class OrgOAuthProvider:
             # needs the session, and the consent page still stands between it and a code.
             return f"/login?next={quote(f'{SINGLE_USER_CONTINUE_PATH}?state={own_state}', safe='/')}"
         return org_identity.build_authorization_url(
-            self._idp, redirect_uri=self._idp_callback_url, state=own_state,
+            self._idp, redirect_uri=redirect_uri, state=own_state,
             code_challenge=idp_code_challenge, nonce=idp_nonce,
         )
 
@@ -485,7 +510,7 @@ class OrgOAuthProvider:
         pending = self._pop_pending(state)
         tokens = await asyncio.to_thread(
             org_identity.exchange_code_for_tokens,
-            self._idp, code=code, redirect_uri=self._idp_callback_url, code_verifier=pending.idp_code_verifier,
+            self._idp, code=code, redirect_uri=pending.idp_redirect_uri, code_verifier=pending.idp_code_verifier,
         )
         id_token = tokens.get("id_token")
         if not id_token:

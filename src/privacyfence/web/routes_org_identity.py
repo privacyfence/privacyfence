@@ -12,6 +12,11 @@ with two distinct redirect URIs an org admin registers once with the IdP:
 - ``/oauth/idp/callback`` -- web/oauth_provider.py, on behalf of a pending
   Claude/MCP-client authorization.
 
+With PrivacyFence's built-in Google sign-in both go through the PrivacyFence relay instead: the IdP
+redirects to the relay's fixed URI, and the relay forwards the browser to the same path here,
+reading the host from the ``state``. Every server using that client shares it, so an attempt only
+finishes with its own single-use state, its own PKCE verifier and its own ID-token nonce.
+
 Not wired into routes_approvals.py's or routes_settings.py's own auth
 checks in this phase -- see org_session.py's module docstring for what
 that means and doesn't mean.
@@ -31,7 +36,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import grist_provisioning, org_identity, peek_provisioning, web_shell
+from .. import grist_provisioning, org_identity, peek_provisioning, relay_client, web_shell
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..web_push import PushSubscriptionStore, session_tag
@@ -53,6 +58,16 @@ LOGIN_BINDING_COOKIE = "pf_org_login"
 SIGNED_OUT_PATH = "/signed-out"
 DEFAULT_NEXT_PATH = "/approvals"
 
+# Shown by /login instead of a redirect to the IdP while a relayed sign-in could not finish: the
+# relay forwards a sign-in only for a registered server, and with the built-in Google sign-in only
+# for accounts of a domain proven in DNS.
+STARTING_UP_TEXT = (
+    "Sign-in is starting up: this server is registering with the PrivacyFence relay. Try again in a minute."
+)
+WAITING_FOR_DNS_TEXT = (
+    "Sign-in is waiting for DNS: the administrator must publish the record shown in the server log."
+)
+
 # A login attempt outlives one browser round trip to the IdP and back --
 # generous but bounded, so an abandoned /login tab doesn't leak the
 # in-memory store forever.
@@ -65,6 +80,8 @@ class _LoginAttempt:
     code_verifier: str
     next_path: str
     created_at: float
+    # The redirect_uri sent with the authorization request; the code exchange must send the same.
+    redirect_uri: str
 
 
 class _LoginAttemptStore:
@@ -77,18 +94,20 @@ class _LoginAttemptStore:
         self._lock = threading.Lock()
         self._attempts: dict[str, _LoginAttempt] = {}
 
-    def create(self, *, next_path: str) -> tuple[str, _LoginAttempt, str]:
+    def create(self, *, next_path: str, redirect_uri: str, state: str = "") -> tuple[str, _LoginAttempt, str]:
         """Returns ``(state, attempt, code_challenge)`` -- ``state`` is the
-        dict key (and the OAuth ``state`` param sent to the IdP);
+        dict key (and the OAuth ``state`` param sent to the IdP), a fresh random one unless the
+        caller passes its own (the relay's ``host~nonce`` form);
         ``code_challenge`` is derived from the attempt's own
         ``code_verifier`` and handed back so the caller can build the
         authorization URL without generating PKCE material twice."""
         self._prune()
-        state = secrets.token_urlsafe(32)
+        state = state or secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(16)
         code_verifier, code_challenge = org_identity.generate_pkce_pair()
         attempt = _LoginAttempt(
             nonce=nonce, code_verifier=code_verifier, next_path=next_path, created_at=time.time(),
+            redirect_uri=redirect_uri,
         )
         with self._lock:
             self._attempts[state] = attempt
@@ -182,13 +201,40 @@ def build_routes(
             logger.warning("Could not update this browser's push subscriptions: %s", type(exc).__name__)
 
     attempts = _LoginAttemptStore()
-    redirect_uri = f"{base_url.rstrip('/')}{LOGIN_CALLBACK_PATH}"
+    redirect_uri = org_identity.signin_redirect_uri(
+        idp, issuer_url=base_url, grant="idp-login", callback_path=LOGIN_CALLBACK_PATH,
+    )
+
+    def relay_not_ready(request: Request) -> Response | None:
+        """The page /login shows instead of sending the person to the IdP, while the relay would
+        refuse the sign-in; ``None`` once it can go through."""
+        if not idp.relay:
+            return None
+        status = relay_client.status()
+        if status["last_ok_at"] is None:
+            text = STARTING_UP_TEXT
+        elif idp.builtin and not status["signin_domains_verified"]:
+            text = WAITING_FOR_DNS_TEXT
+        else:
+            return None
+        body = f"<h1>Sign-in is not available yet</h1><p>{text}</p>"
+        return HTMLResponse(
+            web_shell.plain_page(body, title="PrivacyFence — Sign-in", nonce=nonce_for(request)),
+            status_code=503, headers={"Cache-Control": "no-store", "Retry-After": "60"},
+        )
 
     async def login(request: Request) -> Response:
+        not_ready = relay_not_ready(request)
+        if not_ready is not None:
+            return not_ready
         next_path = _safe_next_path(request.query_params.get("next"), default=default_next_path)
-        state, attempt, code_challenge = attempts.create(next_path=next_path)
+        state, attempt, code_challenge = attempts.create(
+            next_path=next_path, state=org_identity.new_signin_state(idp, issuer_url=base_url),
+            redirect_uri=redirect_uri,
+        )
         url = org_identity.build_authorization_url(
-            idp, redirect_uri=redirect_uri, state=state, code_challenge=code_challenge, nonce=attempt.nonce,
+            idp, redirect_uri=attempt.redirect_uri, state=state, code_challenge=code_challenge,
+            nonce=attempt.nonce,
         )
         response = RedirectResponse(url, status_code=302, headers={"Cache-Control": "no-store"})
         response.set_cookie(
@@ -213,7 +259,7 @@ def build_routes(
         try:
             tokens = await asyncio.to_thread(
                 org_identity.exchange_code_for_tokens,
-                idp, code=code, redirect_uri=redirect_uri, code_verifier=attempt.code_verifier,
+                idp, code=code, redirect_uri=attempt.redirect_uri, code_verifier=attempt.code_verifier,
             )
             id_token = tokens.get("id_token")
             if not id_token:

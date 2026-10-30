@@ -2742,6 +2742,63 @@ class TestOrgModeConnectorRegistry:
         assert stop is daemon_main._shutdown_event
         assert issuer_url == result.org.issuer_url
 
+    _BUILTIN_IDP = {
+        "issuer": "https://accounts.google.com", "client_id": "builtin-signin", "client_secret": "builtin-secret",
+        "builtin": True, "relay": True, "admin_emails": ["alice@acme.com"], "trust_unverified_email": False,
+    }
+
+    def _start_builtin(self, monkeypatch, tmp_path, **overrides):
+        self._no_bind(monkeypatch, tmp_path)
+        events: list = []
+        monkeypatch.setattr(
+            daemon_main.relay_client, "start_registration_loop", lambda *a: events.append("loop"),
+        )
+        monkeypatch.setattr(daemon_main.relay_client, "request_check", lambda: None)
+        org_config = self._org_config(idp=dict(self._BUILTIN_IDP), **overrides)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=org_config,
+        )
+        return result, events
+
+    def test_the_builtin_sign_in_sends_the_idp_leg_through_the_relay(self, monkeypatch, tmp_path):
+        result, _events = self._start_builtin(monkeypatch, tmp_path)
+        assert result.org.provider._idp_callback_url == "https://oauth.privacyfence.eu/callback/idp"
+        assert result.org.provider._issuer_url == "https://pf.example.com"
+
+    def test_an_own_idp_keeps_todays_idp_callback_byte_for_byte(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main.relay_client, "start_registration_loop", lambda *a: None)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        assert result.org.provider._idp_callback_url == "https://pf.example.com/oauth/idp/callback"
+
+    def test_the_missing_dns_records_are_logged_at_start_before_registration(self, monkeypatch, tmp_path, caplog):
+        import hashlib
+
+        with caplog.at_level(logging.INFO):
+            _result, events = self._start_builtin(monkeypatch, tmp_path, authz={"allowed_domains": ["acme.org"]})
+        value = "pf-relay=" + hashlib.sha256(daemon_main.relay_client.well_known_token().encode()).hexdigest()
+        lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Built-in Google sign-in: add")]
+        assert lines == [
+            f"Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.{domain} with the value "
+            f"{value}. Until then nobody from {domain} can sign in."
+            for domain in ("acme.com", "acme.org")
+        ]
+        assert events == ["loop"]
+        assert daemon_main.relay_client.well_known_token() not in caplog.text.replace(value, "")
+
+    def test_the_startup_line_names_the_builtin_sign_in_rather_than_a_disabled_policy(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        with caplog.at_level(logging.INFO):
+            self._start_builtin(monkeypatch, tmp_path)
+        active = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Org mode active")]
+        assert len(active) == 1
+        assert "app-level authz policy built-in Google sign-in (1 admin(s), 0 allowed domain(s)" in active[0]
+
     def test_org_auth_carries_the_org_config_bundle(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         org_config = self._org_config()
@@ -2970,6 +3027,79 @@ class TestPeekRelease:
 
         assert daemon_main.main(["--peek-release", "alice"]) == 0
         assert calls == ["identity", "alice"]
+
+
+class TestRelayDnsRecords:
+    _BUILTIN = {"idp": {
+        "issuer": "https://accounts.google.com", "client_id": "builtin-signin", "builtin": True, "relay": True,
+        "admin_emails": ["alice@acme.com"],
+    }, "authz": {"allowed_domains": ["acme.org"]}}
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    def test_prints_one_line_per_missing_domain_and_exits(self, monkeypatch, capsys):
+        import hashlib
+
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
+        daemon_main.relay_client.well_known_token()
+        daemon_main.relay_client._persist_last_ok(1.0, ["acme.com"])
+        daemon_main.relay_client.reset_for_tests()
+        assert daemon_main.run_relay_dns_records() == 0
+        value = "pf-relay=" + hashlib.sha256(daemon_main.relay_client.well_known_token().encode()).hexdigest()
+        assert capsys.readouterr().out == (
+            f"Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.acme.org with the value "
+            f"{value}. Until then nobody from acme.org can sign in.\n"
+        )
+
+    def test_says_so_when_everything_is_proven(self, monkeypatch, capsys):
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
+        daemon_main.relay_client.well_known_token()
+        daemon_main.relay_client._persist_last_ok(1.0, ["acme.com", "acme.org"])
+        daemon_main.relay_client.reset_for_tests()
+        assert daemon_main.run_relay_dns_records() == 0
+        assert "every sign-in domain is proven in DNS" in capsys.readouterr().out
+
+    def test_without_the_builtin_sign_in_there_is_nothing_to_publish(self, monkeypatch, capsys):
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: {"mode": "org"})
+        assert daemon_main.run_relay_dns_records() == 0
+        assert "does not use the built-in Google sign-in" in capsys.readouterr().out
+
+    def test_a_broken_config_is_reported(self, monkeypatch, capsys):
+        def broken():
+            raise daemon_main.org_mode.ConfigurationError("bad config")
+
+        monkeypatch.setattr(daemon_main, "_release_org_config", broken)
+        assert daemon_main.run_relay_dns_records() == 1
+        assert "bad config" in capsys.readouterr().err
+
+    def test_after_a_replaced_token_the_lines_give_the_new_values(self, monkeypatch, tmp_path, capsys):
+        import hashlib
+
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
+        old = daemon_main.relay_client.well_known_token()
+        daemon_main.relay_client._persist_last_ok(1.0, ["acme.com", "acme.org"])
+        daemon_main.relay_client.relay_token_path().unlink()
+        daemon_main.relay_client.reset_for_tests()
+        assert daemon_main.run_relay_dns_records() == 0
+        new = daemon_main.relay_client.well_known_token()
+        out = capsys.readouterr().out
+        assert new != old
+        assert out.count(hashlib.sha256(new.encode()).hexdigest()) == 2
+        assert hashlib.sha256(old.encode()).hexdigest() not in out
+
+    def test_runs_after_the_runtime_identity_check_without_starting_the_daemon(self, monkeypatch):
+        from privacyfence import privilege_separation
+
+        calls: list[str] = []
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_relay_dns_records", lambda: calls.append("dns") or 0)
+        assert daemon_main.main(["--relay-dns-records"]) == 0
+        assert calls == ["identity", "dns"]
 
 
 class TestScopeRowsUpgrade:

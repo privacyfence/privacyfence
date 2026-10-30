@@ -183,7 +183,9 @@ def _set_state(**fields: Any) -> None:
 
 class TestStatus:
     def test_starts_empty(self):
-        assert relay_client.status() == {"last_ok_at": None, "last_error": "", "needed": False}
+        assert relay_client.status() == {
+            "last_ok_at": None, "last_error": "", "needed": False, "signin_domains_verified": [],
+        }
 
     def test_a_recorded_success_survives_a_restart(self, posts):
         relay_client._tick(ISSUER, SLACK_RELAYED, 1000.0)
@@ -231,13 +233,13 @@ class TestTick:
 
     def test_never_registered_calls_with_the_need_already_published(self, posts, monkeypatch):
         seen = []
-        original = relay_client.register
+        original = relay_client._register
 
-        def register_spy(issuer_url):
+        def register_spy(issuer_url, signin_domains):
             seen.append(relay_client.status()["needed"])  # the well-known route is open while the relay fetches it
-            return original(issuer_url)
+            return original(issuer_url, signin_domains)
 
-        monkeypatch.setattr(relay_client, "register", register_spy)
+        monkeypatch.setattr(relay_client, "_register", register_spy)
         assert relay_client._tick(ISSUER, SLACK_RELAYED, 100.0) == HOUR
         assert seen == [True]
 
@@ -254,7 +256,9 @@ class TestTick:
         posts.reply["value"] = _Response()
         with caplog.at_level(logging.INFO):
             assert relay_client._tick(ISSUER, SLACK_RELAYED, 200.0) == HOUR
-        assert relay_client.status() == {"last_ok_at": 200.0, "last_error": "", "needed": True}
+        assert relay_client.status() == {
+            "last_ok_at": 200.0, "last_error": "", "needed": True, "signin_domains_verified": [],
+        }
         posts.reply["value"] = _Response(500)
         assert relay_client._tick(ISSUER, SLACK_RELAYED, 200.0 + 25 * HOUR) == 60.0
 
@@ -329,3 +333,159 @@ class TestLoop:
         relay_client.request_check()
         thread.join(5)
         assert "Relay registration check failed" in caplog.text
+
+
+def _builtin(admins: list[str], allowed: list[str] | None = None) -> dict[str, Any]:
+    config: dict[str, Any] = {"idp": {
+        "issuer": "https://accounts.google.com", "client_id": "builtin", "builtin": True, "relay": True,
+        "admin_emails": admins,
+    }}
+    if allowed is not None:
+        config["authz"] = {"allowed_domains": allowed}
+    return config
+
+
+BUILTIN = _builtin(["Alice@Acme.com", "bob@acme.com"], ["acme.org", "ACME.com"])
+
+
+def _verified_reply(*domains: str) -> _Response:
+    return _Response(200, {"host": "pf.acme.example.com", "signin_domains_verified": list(domains),
+                           "signin_domains_missing": []})
+
+
+def _txt_value() -> str:
+    import hashlib
+
+    return "pf-relay=" + hashlib.sha256(relay_client.well_known_token().encode()).hexdigest()
+
+
+class TestSigninDomains:
+    def test_the_admins_domains_and_the_allowed_domains_lowercased_and_deduplicated(self):
+        assert relay_client.signin_domains(BUILTIN) == ["acme.com", "acme.org"]
+
+    def test_none_without_the_builtin_sign_in(self):
+        assert relay_client.signin_domains({}) is None
+        own = {"idp": {"issuer": "https://accounts.google.com", "client_id": "own", "admin_emails": ["a@acme.com"]}}
+        assert relay_client.signin_domains(own) is None
+
+    def test_names_the_relay_would_refuse_are_never_sent(self, caplog):
+        config = _builtin(["a@gmail.com", "b@googlemail.com", "c@acme.com", "d@x.local", "e@ac\u212ame.com"])
+        with caplog.at_level(logging.WARNING):
+            assert relay_client.signin_domains(config) == ["acme.com"]
+            relay_client.signin_domains(config)
+        warnings = [r for r in caplog.records if "nobody from" in r.getMessage()]
+        assert len(warnings) == 1 and "gmail.com" in warnings[0].getMessage()
+
+    def test_at_most_twenty(self):
+        config = _builtin(["a@acme.com"], [f"d{i:02}.example.com" for i in range(25)])
+        domains = relay_client.signin_domains(config)
+        assert domains is not None and len(domains) == relay_client.MAX_SIGNIN_DOMAINS == 20
+
+
+class TestSigninRegistration:
+    def test_register_sends_the_signin_domains(self, posts):
+        relay_client.register(ISSUER, ["acme.com", "acme.org"])
+        assert posts[0]["json"] == {
+            "host": "pf.acme.example.com", "token": relay_client.well_known_token(),
+            "signin_domains": ["acme.com", "acme.org"],
+        }
+
+    def test_tick_registers_at_once_and_persists_the_verified_set(self, posts, tmp_path):
+        posts.reply["value"] = _verified_reply("acme.com", "evil.com")
+        assert relay_client._tick(ISSUER, BUILTIN, 100.0) == HOUR
+        assert posts[0]["json"]["signin_domains"] == ["acme.com", "acme.org"]
+        assert relay_client.status()["needed"] is True
+        # Only names the server sent can come back as verified.
+        assert relay_client.status()["signin_domains_verified"] == ["acme.com"]
+        saved = json.loads((tmp_path / "org" / "relay_status.json").read_text())
+        assert saved == {"last_ok_at": 100.0, "signin_domains_verified": ["acme.com"]}
+        relay_client.reset_for_tests()
+        assert relay_client.verified_signin_domains() == frozenset({"acme.com"})
+
+    def test_needed_from_the_first_start_without_any_relayed_service(self, posts):
+        relay_client._tick(ISSUER, BUILTIN, 100.0)
+        assert relay_client.status()["needed"] is True and len(posts) == 1
+
+    def test_a_missing_domain_is_checked_again_at_the_next_pass(self, posts):
+        posts.reply["value"] = _verified_reply("acme.com")
+        relay_client._tick(ISSUER, BUILTIN, 100.0)
+        posts.reply["value"] = _verified_reply("acme.com", "acme.org")
+        relay_client._tick(ISSUER, BUILTIN, 100.0 + HOUR)
+        assert len(posts) == 2
+        assert relay_client.status()["signin_domains_verified"] == ["acme.com", "acme.org"]
+        relay_client._tick(ISSUER, BUILTIN, 100.0 + 2 * HOUR)
+        assert len(posts) == 2  # everything proven and fresh: no call
+
+    def test_a_failed_registration_keeps_the_verified_set(self, posts):
+        posts.reply["value"] = _verified_reply("acme.com")
+        relay_client._tick(ISSUER, BUILTIN, 100.0)
+        posts.reply["value"] = _Response(500)
+        relay_client._tick(ISSUER, BUILTIN, 100.0 + HOUR)
+        assert relay_client.status()["signin_domains_verified"] == ["acme.com"]
+
+    def test_a_connector_only_server_sends_no_signin_domains(self, posts):
+        relay_client._tick(ISSUER, SLACK_RELAYED, 100.0)
+        assert "signin_domains" not in posts[0]["json"]
+
+    @pytest.mark.parametrize("body", [None, {"signin_domains_verified": "acme.com"}, {"signin_domains_verified": [3]}])
+    def test_an_odd_answer_verifies_nothing(self, posts, body):
+        posts.reply["value"] = _Response(200, body)
+        relay_client._tick(ISSUER, BUILTIN, 100.0)
+        assert relay_client.status()["signin_domains_verified"] == []
+
+    @pytest.mark.parametrize("content", [
+        json.dumps({"last_ok_at": 1.0, "signin_domains_verified": "acme.com"}),
+        json.dumps({"last_ok_at": 1.0, "signin_domains_verified": [1, "gmail.com", "-x.com"]}),
+    ])
+    def test_an_odd_status_file_verifies_nothing(self, tmp_path, content):
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "relay_status.json").write_text(content)
+        assert relay_client.verified_signin_domains() == frozenset()
+
+
+class TestDnsRecordLines:
+    def test_one_line_per_missing_domain_with_the_hash_of_the_token(self, posts, caplog):
+        posts.reply["value"] = _verified_reply("acme.com")
+        with caplog.at_level(logging.WARNING):
+            relay_client._tick(ISSUER, BUILTIN, 100.0)
+        value = _txt_value()
+        expected = (
+            f"Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.acme.org with the value "
+            f"{value}. Until then nobody from acme.org can sign in."
+        )
+        assert relay_client.missing_dns_records(BUILTIN) == [expected]
+        assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [expected]
+        assert relay_client.well_known_token() not in caplog.text
+
+    def test_every_domain_is_missing_before_any_registration(self):
+        lines = relay_client.missing_dns_records(BUILTIN)
+        assert [line.split()[8] for line in lines] == [
+            "_privacyfence-relay.acme.com", "_privacyfence-relay.acme.org",
+        ]
+
+    def test_no_lines_without_the_builtin_sign_in_or_once_everything_is_proven(self, posts):
+        assert relay_client.missing_dns_records(SLACK_RELAYED) == []
+        posts.reply["value"] = _verified_reply("acme.com", "acme.org")
+        relay_client._tick(ISSUER, BUILTIN, 100.0)
+        assert relay_client.missing_dns_records(BUILTIN) == []
+
+    def test_a_replaced_token_gives_the_new_values_and_forgets_the_old_proofs(self, posts, tmp_path, caplog):
+        posts.reply["value"] = _verified_reply("acme.com", "acme.org")
+        relay_client._tick(ISSUER, BUILTIN, 100.0)
+        old_value = _txt_value()
+        (tmp_path / "org" / "relay_token.txt").unlink()
+        relay_client.reset_for_tests()  # a restart
+        with caplog.at_level(logging.WARNING):
+            relay_client.log_missing_dns_records(BUILTIN)
+        new_value = _txt_value()
+        assert new_value != old_value
+        messages = [r.getMessage() for r in caplog.records]
+        assert messages[0].startswith("org/relay_token.txt was missing or unreadable and has been replaced.")
+        assert len(messages) == 3
+        assert all(new_value in line and old_value not in line for line in messages[1:])
+        assert relay_client.verified_signin_domains() == frozenset()
+        assert relay_client.status()["last_ok_at"] == 100.0
+        assert relay_client.well_known_token() not in caplog.text
+        # The next pass registers again at once rather than waiting out the day.
+        relay_client._tick(ISSUER, BUILTIN, 200.0)
+        assert len(posts) == 2

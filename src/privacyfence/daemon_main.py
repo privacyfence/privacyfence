@@ -1326,7 +1326,7 @@ def _start_org_web_server(
     from . import org_identity
     from .org_identity import IdpConfig
     from .web.mcp_dispatch import McpDispatcher
-    from .web.oauth_provider import OrgOAuthProvider
+    from .web.oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
     from .web.org_session import OrgSessionStore
     from .web.server import OrgAuth, WebServer
     from .web_approval_ui import init_web_approval_ui
@@ -1418,8 +1418,16 @@ def _start_org_web_server(
     # every IdP-authenticated principal is admitted, unchanged from before.
     # Bound to the IdP so the allowed-domain check knows the issuer and the unverified-email setting.
     authz_policy = org_identity.IdpAuthzPolicy.bind(org_mode.AuthzPolicyConfig.from_org_config(org_config), idp)
+    # With the built-in Google sign-in the IdP redirects to the relay, which forwards the browser
+    # to /oauth/idp/callback here.
+    idp_callback_url = (
+        org_identity.signin_redirect_uri(
+            idp, issuer_url=server_config.issuer_url, grant="idp", callback_path=IDP_CALLBACK_PATH,
+        )
+        if idp is not None else f"{server_config.issuer_url.rstrip('/')}{IDP_CALLBACK_PATH}"
+    )
     provider = OrgOAuthProvider(
-        idp, idp_callback_url=f"{server_config.issuer_url.rstrip('/')}/oauth/idp/callback", policy=authz_policy,
+        idp, idp_callback_url=idp_callback_url, policy=authz_policy, issuer_url=server_config.issuer_url,
         # No identity provider is single-user mode: /authorize sends the browser to its own sign-in.
         single_user=idp is None,
     )
@@ -1453,17 +1461,33 @@ def _start_org_web_server(
         trusted_proxies=server_config.trusted_proxies,
     )
     server.start()
+    # Before the first registration: what the administrator still has to publish in DNS for the
+    # built-in Google sign-in, from the last registration's answer.
+    relay_client.log_missing_dns_records(org_config)
     relay_client.start_registration_loop(server_config.issuer_url, org_config, _shutdown_event)
     relay_client.request_check()
     approval_registry.set_base_url(server.base_url)
     step_up = step_up_config.StepUpConfig.from_org_config(org_config)
+    if authz_policy.builtin:
+        # The built-in sign-in refuses everyone it was not told to admit, restrictions or not.
+        authz_summary = (
+            f"built-in Google sign-in ({len(authz_policy.admin_emails)} admin(s), "
+            f"{len(authz_policy.allowed_domains)} allowed domain(s), "
+            f"{len(authz_policy.required_groups)} required group(s))"
+        )
+    elif authz_policy.enabled:
+        authz_summary = (
+            f"enabled ({len(authz_policy.allowed_domains)} allowed domain(s), "
+            f"{len(authz_policy.required_groups)} required group(s))"
+        )
+    else:
+        authz_summary = "disabled"
     logger.info(
         "Org mode active -- MCP-over-HTTP at %s (OAuth 2.1, DCR at %s/register), IdP %s, "
         "WebAuthn step-up %s, app-level authz policy %s, accepting Host %s",
         server.mcp_url, server.base_url, idp.issuer if idp is not None else "single-user",
         f"enabled (scope={step_up.scope})" if step_up.enabled else "disabled",
-        f"enabled ({len(authz_policy.allowed_domains)} allowed domain(s), "
-        f"{len(authz_policy.required_groups)} required group(s))" if authz_policy.enabled else "disabled",
+        authz_summary,
         # The Host-allowlist set, named at startup: a reverse proxy
         # forwarding a hostname this doesn't contain gets a flat 400 on
         # every request, and without this line the only way to find out
@@ -2570,6 +2594,31 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --relay-dns-records
+# ---------------------------------------------------------------------------- #
+
+def run_relay_dns_records() -> int:
+    """Print the lines the server logs for each sign-in domain the relay has not found proven in
+    DNS, so an administrator can publish the records before anyone can sign in. Reads the last
+    registration's answer from the data directory; a running server checks again within the hour,
+    and at its next start."""
+    try:
+        org_config = _release_org_config()
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if relay_client.signin_domains(org_config) is None:
+        print("This server does not use the built-in Google sign-in; it needs no DNS records.")
+        return 0
+    lines = relay_client.missing_dns_records(org_config)
+    for line in lines:
+        print(line)
+    if not lines:
+        print("Built-in Google sign-in: every sign-in domain is proven in DNS.")
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # --peek-release
 # ---------------------------------------------------------------------------- #
 
@@ -2749,6 +2798,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--relay-dns-records", action="store_true",
+        help=(
+            "Print the DNS TXT records the built-in Google sign-in still needs, one line per sign-in "
+            "domain the relay has not found yet, and exit."
+        ),
+    )
+    parser.add_argument(
         "--peek-release", metavar="PRINCIPAL_ID", default=None,
         help=(
             "Revoke the Peek token PrivacyFence minted for the account PRINCIPAL_ID, stop renewing it, "
@@ -2856,6 +2912,8 @@ def main(argv: list[str] | None = None) -> int:
     # must run as the account that owns it.
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
+    if args.relay_dns_records:
+        return run_relay_dns_records()
     if args.peek_release is not None:
         return run_peek_release(args.peek_release)
     if args.grist_release is not None:

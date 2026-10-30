@@ -1158,3 +1158,120 @@ class TestRefreshTokenSurvivesARestart:
         with caplog.at_level("INFO"):
             _provider(tmp_path, monkeypatch)
         assert "restored 1 persisted refresh-token record(s)" in caplog.text
+
+
+class TestIdpLegThroughTheRelay:
+    """With the built-in Google sign-in, the IdP leg of an MCP client's authorization goes through
+    the relay's ``idp`` grant, with the same cross-server checks as the browser's own sign-in."""
+
+    RELAY_URI = "https://oauth.privacyfence.eu/callback/idp"
+    ISSUER = "https://pf.example.com"
+
+    def _setup(self, tmp_path, monkeypatch, *, prove: tuple[str, ...] | None = ("acme.com",), **idp_overrides):
+        from tests.unit.web.test_routes_org_identity import FakeGoogle, prove_relay
+
+        google = FakeGoogle(monkeypatch)
+        idp = google.idp(**idp_overrides)
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+        monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
+        callback = oi.signin_redirect_uri(
+            idp, issuer_url=self.ISSUER, grant="idp", callback_path=op.IDP_CALLBACK_PATH,
+        )
+        provider = op.OrgOAuthProvider(
+            idp, idp_callback_url=callback, issuer_url=self.ISSUER,
+            policy=oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(), idp),
+        )
+        if prove is not None:
+            prove_relay(*prove)
+        return google, provider
+
+    @staticmethod
+    def _query(url: str) -> dict[str, str]:
+        import urllib.parse as up
+
+        return dict(up.parse_qsl(up.urlparse(url).query))
+
+    async def _authorize(self, provider) -> str:
+        client = _client_info()
+        await provider.register_client(client)
+        return await provider.authorize(client, _params())
+
+    def test_a_relayed_idp_needs_the_issuer_url(self, monkeypatch):
+        from tests.unit.web.test_routes_org_identity import FakeGoogle
+
+        with pytest.raises(ValueError):
+            op.OrgOAuthProvider(FakeGoogle(monkeypatch).idp(), idp_callback_url=self.RELAY_URI)
+
+    async def test_the_relay_redirect_uri_for_authorize_and_exchange_and_a_host_state(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch)
+        url = await self._authorize(provider)
+        query = self._query(url)
+        assert query["redirect_uri"] == self.RELAY_URI
+        host, _, nonce = query["state"].partition("~")
+        assert host == "pf.example.com" and len(nonce) == 43
+        answer = google.sign_in(url)
+        redirect = await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        assert redirect.startswith("/oauth/consent/")
+        assert google.exchanges[0]["redirect_uri"] == self.RELAY_URI
+
+    async def test_before_registration_no_redirect_to_google(self, tmp_path, monkeypatch):
+        _google, provider = self._setup(tmp_path, monkeypatch, prove=None)
+        with pytest.raises(AuthorizeError) as raised:
+            await self._authorize(provider)
+        assert raised.value.error == "temporarily_unavailable"
+        assert provider._pending == {}
+
+    async def test_while_no_domain_is_proven_no_redirect_to_google(self, tmp_path, monkeypatch):
+        _google, provider = self._setup(tmp_path, monkeypatch, prove=())
+        with pytest.raises(AuthorizeError):
+            await self._authorize(provider)
+
+    async def test_a_code_from_another_attempt_fails_the_exchange(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch)
+        first = await self._authorize(provider)
+        second = await self._authorize(provider)
+        code = google.sign_in(first)["code"]
+        import requests
+
+        with pytest.raises(requests.HTTPError):
+            await provider.handle_idp_callback(state=self._query(second)["state"], code=code)
+
+    async def test_an_id_token_with_another_attempts_nonce_is_refused(self, tmp_path, monkeypatch):
+        import jwt
+
+        google, provider = self._setup(tmp_path, monkeypatch)
+        first = await self._authorize(provider)
+        second = await self._authorize(provider)
+        answer = google.sign_in(second, nonce=self._query(first)["nonce"])
+        with pytest.raises(jwt.InvalidTokenError):
+            await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+
+    async def test_a_replayed_unknown_or_foreign_state_is_refused(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch)
+        answer = google.sign_in(await self._authorize(provider))
+        await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        with pytest.raises(ValueError):
+            await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        answer = google.sign_in(await self._authorize(provider))
+        nonce = answer["state"].partition("~")[2]
+        for state in (f"other.example.com~{nonce}", f"pf.example.com~{'x' * 43}", nonce):
+            with pytest.raises(ValueError):
+                await provider.handle_idp_callback(state=state, code=answer["code"])
+        assert len(google.exchanges) == 1
+
+    async def test_an_admin_of_a_domain_not_proven_in_dns_is_refused(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch, prove=("acme.org",))
+        answer = google.sign_in(await self._authorize(provider))
+        with pytest.raises(oi.AuthorizationDenied):
+            await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+
+    async def test_an_own_idp_keeps_todays_redirect_uri_byte_for_byte(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch, prove=None, builtin=False, relay=False, admin_emails=())
+        url = await self._authorize(provider)
+        query = self._query(url)
+        assert query["redirect_uri"] == "https://pf.example.com/oauth/idp/callback"
+        assert "~" not in query["state"]
+        answer = google.sign_in(url)
+        await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        assert google.exchanges[0]["redirect_uri"] == "https://pf.example.com/oauth/idp/callback"

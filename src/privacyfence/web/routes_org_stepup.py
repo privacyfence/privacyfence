@@ -52,6 +52,7 @@ from .routes_approvals import _STEP_UP_RESULTS
 logger = logging.getLogger(__name__)
 
 _STEP_UP_ATTEMPT_TTL_SECONDS = 10 * 60
+STEPUP_CALLBACK_PATH = "/oauth/stepup/callback"
 
 
 @dataclass
@@ -62,6 +63,8 @@ class _StepUpAuthAttempt:
     choice: int | None
     nonce: str
     code_verifier: str
+    # The redirect_uri sent with the authorization request; the code exchange must send the same.
+    redirect_uri: str
     created_at: float = field(default_factory=time.time)
 
 
@@ -95,7 +98,11 @@ def build_routes(
     *, web_ui: WebApprovalUI, sessions: OrgSessionStore, step_up: StepUpConfig, idp: IdpConfig, issuer_url: str,
 ) -> list[Route]:
     stepup_attempts = _StepUpAuthAttemptStore()
-    origin = issuer_url.rstrip("/")
+    # With the built-in Google sign-in the IdP redirects to the relay's "stepup" URI, and the relay
+    # forwards the browser to this server's callback below.
+    redirect_uri = org_identity.signin_redirect_uri(
+        idp, issuer_url=issuer_url, grant="stepup", callback_path=STEPUP_CALLBACK_PATH,
+    )
 
     async def stepup_idp_start(request: Request) -> Response:
         """The card's "Verify by signing in again" button posts here (JSON
@@ -134,14 +141,13 @@ def build_routes(
         raw = body.get("choice")
         choice = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
 
-        state = secrets.token_urlsafe(32)
+        state = org_identity.new_signin_state(idp, issuer_url=issuer_url)
         nonce = secrets.token_urlsafe(16)
         code_verifier, code_challenge = org_identity.generate_pkce_pair()
         stepup_attempts.put(state, _StepUpAuthAttempt(
             principal_id=principal.id, approval_id=approval_id, result=result, choice=choice,
-            nonce=nonce, code_verifier=code_verifier,
+            nonce=nonce, code_verifier=code_verifier, redirect_uri=redirect_uri,
         ))
-        redirect_uri = f"{origin}/oauth/stepup/callback"
         extra_params = {"prompt": "login", "max_age": "0"}
         if idp.step_up_acr_values:
             extra_params["acr_values"] = " ".join(idp.step_up_acr_values)
@@ -166,11 +172,10 @@ def build_routes(
                 f"/approvals/{quote(attempt.approval_id)}?stepup=error", status_code=302,
                 headers={"Cache-Control": "no-store"},
             )
-        redirect_uri = f"{origin}/oauth/stepup/callback"
         try:
             tokens = await asyncio.to_thread(
                 org_identity.exchange_code_for_tokens,
-                idp, code=code, redirect_uri=redirect_uri, code_verifier=attempt.code_verifier,
+                idp, code=code, redirect_uri=attempt.redirect_uri, code_verifier=attempt.code_verifier,
             )
             id_token = tokens.get("id_token")
             if not id_token:
@@ -212,8 +217,8 @@ def build_routes(
 
     return [
         Route("/api/approvals/{id}/stepup/idp", stepup_idp_start, methods=["POST"]),
-        Route("/oauth/stepup/callback", stepup_callback),
+        Route(STEPUP_CALLBACK_PATH, stepup_callback),
     ]
 
 
-__all__ = ["build_routes"]
+__all__ = ["STEPUP_CALLBACK_PATH", "build_routes"]
