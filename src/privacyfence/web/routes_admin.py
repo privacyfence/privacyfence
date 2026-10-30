@@ -265,6 +265,7 @@ def _admin_state(
         for key in _ORG_STATE_KEYS:
             state[key] = admin.get(key, {})
         state["relay_status"] = relay_client.status()
+        state["signin"] = admin_config.signin_state(bundle)
         if install_wide_settings is not None:
             state["privacy"] = _privacy_rows(install_wide_settings)
         state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))

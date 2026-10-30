@@ -972,3 +972,111 @@ class TestIsSingleUserWithEnvironmentIdp:
     def test_is_single_user_with_only_one_idp_variable_is_still_single_user(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")
         assert org_mode.is_single_user({"mode": "org"}) is True
+
+
+class TestBuiltinGoogleIdpSection:
+    """``PRIVACYFENCE_IDP=builtin-google``: PrivacyFence's own Google sign-in client."""
+
+    SECRET = "builtin-signin-secret-sentinel"
+    APP = {"client_id": "builtin-signin.apps.googleusercontent.com", "client_secret": SECRET}
+
+    @pytest.fixture(autouse=True)
+    def _builtin(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_IDP", raising=False)
+        monkeypatch.setattr(
+            org_mode.app_credentials, "builtin_app", lambda key: dict(self.APP) if key == "google_signin" else None,
+        )
+
+    @staticmethod
+    def _env(monkeypatch, **values):
+        values = {"IDP": "builtin-google", "ADMIN_EMAILS": "alice@acme.com, bob@acme.com",
+                  "ISSUER_URL": "https://pf.acme.com", **values}
+        for name, value in values.items():
+            monkeypatch.setenv(f"PRIVACYFENCE_{name}", value)
+
+    def test_builds_the_builtin_section(self, monkeypatch):
+        self._env(monkeypatch)
+        assert org_mode.idp_section({"mode": "org"}) == {
+            "issuer": "https://accounts.google.com",
+            "client_id": "builtin-signin.apps.googleusercontent.com",
+            "client_secret": self.SECRET,
+            "relay": True,
+            "builtin": True,
+            "admin_emails": ["alice@acme.com", "bob@acme.com"],
+            "trust_unverified_email": False,
+        }
+
+    def test_the_server_address_may_come_from_the_bundle(self, monkeypatch):
+        self._env(monkeypatch)
+        monkeypatch.delenv("PRIVACYFENCE_ISSUER_URL")
+        section = org_mode.idp_section({"server": {"issuer_url": "https://pf.acme.com"}})
+        assert section["builtin"] is True
+
+    @pytest.mark.parametrize("variable", [
+        "IDP_ISSUER", "IDP_CLIENT_ID", "IDP_CLIENT_SECRET", "IDP_CLIENT_SECRET_FILE",
+        "IDP_ADMIN_GROUP_CLAIM", "IDP_ADMIN_GROUP_VALUES", "IDP_STEP_UP_ACR_VALUES", "IDP_TRUST_UNVERIFIED_EMAIL",
+    ])
+    def test_own_idp_settings_cannot_be_combined(self, monkeypatch, variable):
+        self._env(monkeypatch, **{variable: "true"})
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "PRIVACYFENCE_IDP=builtin-google cannot be combined with your own IdP settings."
+
+    @pytest.mark.parametrize("emails", ["", " , ,"])
+    def test_admin_emails_are_required(self, monkeypatch, emails):
+        self._env(monkeypatch, ADMIN_EMAILS=emails)
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "The built-in Google sign-in needs PRIVACYFENCE_ADMIN_EMAILS."
+
+    @pytest.mark.parametrize("app", [None, {}, {"client_id": "x"}, {"client_id": "", "client_secret": "s"}])
+    def test_a_build_without_the_builtin_app_is_refused(self, monkeypatch, app):
+        self._env(monkeypatch)
+        monkeypatch.setattr(org_mode.app_credentials, "builtin_app", lambda key: app)
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "This build has no built-in Google sign-in; use your own IdP app."
+
+    @pytest.mark.parametrize("address", [
+        "", "http://pf.acme.com", "https://localhost", "https://localhost:8765", "https://pf.localhost",
+        "https://127.0.0.1", "https://[::1]", "https://10.0.0.5", "https://192.168.1.2", "https://0.0.0.0",
+        "ftp://pf.acme.com",
+    ])
+    def test_a_non_public_https_server_address_is_refused(self, monkeypatch, address):
+        self._env(monkeypatch, ISSUER_URL=address)
+        if not address:
+            monkeypatch.delenv("PRIVACYFENCE_ISSUER_URL")
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "The built-in Google sign-in needs a public https:// server address."
+
+    @pytest.mark.parametrize("value", ["builtin", "google", "Builtin-Google", "builtin-google2", "own"])
+    def test_any_other_value_names_the_accepted_one(self, monkeypatch, value):
+        self._env(monkeypatch, IDP=value)
+        with pytest.raises(org_mode.ConfigurationError, match='PRIVACYFENCE_IDP must be "builtin-google"'):
+            org_mode.idp_section({})
+
+    def test_a_legacy_bundle_idp_wins_and_warns_once(self, monkeypatch, caplog):
+        self._env(monkeypatch)
+        bundle_idp = {"issuer": "https://idp.example.com", "client_id": "own"}
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            assert org_mode.idp_section({"idp": bundle_idp}) == bundle_idp
+            assert org_mode.idp_section({"idp": bundle_idp}) == bundle_idp
+        assert len([r for r in caplog.records if "are ignored" in r.getMessage()]) == 1
+        assert org_mode.builtin_signin_selected({"idp": bundle_idp}) is False
+
+    def test_errors_and_logs_never_carry_the_secret(self, monkeypatch, caplog):
+        self._env(monkeypatch, IDP_CLIENT_ID="own")
+        with caplog.at_level("DEBUG"), pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert self.SECRET not in str(exc.value) and self.SECRET not in caplog.text
+
+    def test_builtin_counts_as_an_idp_so_the_server_is_never_single_user(self, monkeypatch):
+        self._env(monkeypatch)
+        assert org_mode.is_single_user({"mode": "org"}) is False
+        assert org_mode.builtin_signin_selected({}) is True
+
+    def test_a_mistyped_value_is_not_single_user_either(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "bultin-google")
+        assert org_mode.is_single_user({"mode": "org"}) is False
+        assert org_mode.builtin_signin_selected({}) is False
