@@ -13,10 +13,12 @@ The shared dict is held by several long-lived objects, so it is refreshed in pla
 from __future__ import annotations
 
 import copy
+import json
 import os
 import threading
 from collections.abc import Mapping
 from typing import Any, Literal
+from urllib.parse import quote
 
 from . import admin_config, app_credentials, connector_configs
 from .grist_auth import GristClientError, normalize_server_url
@@ -311,3 +313,35 @@ def relay_redirect_uri(grant: str) -> str:
 
 def uses_relay(section: dict[str, Any]) -> bool:
     return section.get(RELAY_MARKER) is True
+
+
+def slack_limited(section: dict[str, Any] | None) -> bool:
+    """Whether Slack throttles this connection's history and thread reads: the Slack section is the
+    built-in app and the app is not yet listed in the Slack Marketplace. A workspace's own
+    internal app keeps Slack's full rate limits."""
+    return bool(section) and uses_relay(section or {}) and not SLACK_MARKETPLACE_LISTED
+
+
+def slack_manifest(issuer_url: str) -> dict[str, Any]:
+    """The Slack app manifest for a workspace's own internal app on this server: the server's
+    callback as the redirect URL and the same user scopes the built-in app asks for, no bot."""
+    from .slack_client import DEFAULT_USER_SCOPES
+
+    return {
+        "display_information": {"name": "PrivacyFence"},
+        "oauth_config": {
+            "redirect_urls": [f"{issuer_url.rstrip('/')}/oauth/callback/slack"],
+            "scopes": {"user": list(DEFAULT_USER_SCOPES)},
+        },
+        "settings": {
+            "org_deploy_enabled": False,
+            "socket_mode_enabled": False,
+            "token_rotation_enabled": False,
+        },
+    }
+
+
+def slack_create_app_url(issuer_url: str) -> str:
+    """Slack's "create an app" page, opened with ``slack_manifest`` filled in."""
+    manifest = json.dumps(slack_manifest(issuer_url), separators=(",", ":"))
+    return f"https://api.slack.com/apps?new_app=1&manifest_json={quote(manifest, safe='')}"

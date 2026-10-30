@@ -784,8 +784,65 @@ class SlackClient:
         )
         return messages, has_more, next_cursor
 
+    def search_channel_history(
+        self, channel_id: str, limit: int = 50, oldest: str | None = None, cursor: str = "",
+    ) -> tuple[list[SlackMessage], bool, str] | None:
+        """A channel's recent messages through ``search.messages`` instead of
+        ``conversations.history``, for an app Slack throttles on the latter.
+
+        Same return shape as ``get_channel_history``; ``cursor`` is a page number. Returns None
+        when the search cannot be scoped to this conversation (a direct message, or neither the
+        id nor the name finds it), and the caller reads the history instead. Search misses some
+        message subtypes and lags behind a just-posted message.
+        """
+        if not channel_id or channel_id[0] not in "CG":
+            return None
+        limit = self._clamp(limit, default=50, hi=1000)
+        page = int(cursor) if cursor.isdigit() and int(cursor) > 0 else 1
+        cutoff = None
+        if oldest:
+            try:
+                cutoff = datetime.fromtimestamp(float(oldest), tz=timezone.utc)
+            except ValueError:
+                cutoff = None
+        scopes = [f"in:<#{channel_id}>"]
+        name = self.resolve_channel_name(channel_id)
+        if name:
+            scopes.append(f"in:#{name}")
+        for scope in scopes:
+            query = self._recent_search_query(scope, cutoff) if cutoff else scope
+            try:
+                response = self._client.search_messages(
+                    query=query, count=min(limit, 100), page=page, **_RECENT_SORT_KWARGS
+                )
+            except SlackApiError as exc:
+                raise SlackClientError(
+                    f"search_channel_history({channel_id}) failed: {self._describe_error(exc)}"
+                ) from exc
+            container = response.get("messages") or {}
+            raw_matches = [
+                raw for raw in container.get("matches", []) or []
+                if (raw.get("channel") or {}).get("id", "") == channel_id
+            ]
+            if not raw_matches:
+                if page > 1:
+                    return [], False, ""
+                continue
+            messages = [self._parse_search_match(raw) for raw in raw_matches]
+            if cutoff is not None:
+                messages = [m for m in messages if m.timestamp is not None and m.timestamp >= cutoff]
+            messages.sort(key=lambda m: m.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            reached_cutoff = cutoff is not None and len(messages) < len(raw_matches)
+            has_more = not reached_cutoff and page < (container.get("paging") or {}).get("pages", 1)
+            logger.info(
+                "search_channel_history %s returned %d message(s), has_more=%s",
+                channel_id, len(messages), has_more,
+            )
+            return messages[:limit], has_more, str(page + 1) if has_more else ""
+        return None
+
     def get_thread_replies(
-        self, channel_id: str, thread_ts: str, cursor: str = ""
+        self, channel_id: str, thread_ts: str, cursor: str = "", limit: int = 0,
     ) -> tuple[list[SlackMessage], bool, str]:
         """Fetch all replies in a thread via ``conversations.replies``.
 
@@ -799,6 +856,8 @@ class SlackClient:
             )
         channel_name = self.resolve_channel_name(channel_id)
         kwargs: dict[str, Any] = {"channel": channel_id, "ts": thread_ts}
+        if limit > 0:
+            kwargs["limit"] = limit
         if cursor:
             kwargs["cursor"] = cursor
         try:

@@ -1256,6 +1256,33 @@ class TestServicesSection:
         assert "Changing the app makes everyone who connected Slack connect again." in page
         assert "without PKCE" not in page
 
+    def test_the_builtin_slack_row_offers_the_workspaces_own_app(self):
+        import html as html_lib
+        from urllib.parse import parse_qs, urlparse
+
+        from privacyfence import oauth_apps
+
+        url = oauth_apps.slack_create_app_url("https://pf.example.org")
+        row = _row(
+            "slack", "Slack", client_id="b", relay=True,
+            options={
+                "slack_limited": True, "create_app_url": url,
+                "manifest": oauth_apps.slack_manifest("https://pf.example.org"),
+            },
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Slack limits channel history and thread reads for apps outside the Slack Marketplace." in html_lib.unescape(page)
+        assert "Create your workspace" in page and "own Slack app" in page
+        href = re.search(r'href="(https://api\.slack\.com/apps[^"]+)"', page).group(1)
+        manifest = json.loads(parse_qs(urlparse(html_lib.unescape(href)).query)["manifest_json"][0])
+        assert manifest == oauth_apps.slack_manifest("https://pf.example.org")
+        assert "Upload a connector config" in page
+
+    def test_a_listed_or_own_slack_app_shows_no_create_button(self):
+        row = _row("slack", "Slack", client_id="b", relay=True)
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "own Slack app" not in page and "Slack limits channel history" not in page
+
     def test_an_imported_connector_config_says_where_it_came_from(self):
         row = _row(
             "slack", "Slack", app_source="connector", client_id="old-id",
