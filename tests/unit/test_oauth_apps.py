@@ -594,3 +594,61 @@ class TestConnectorConfigs:
         path.write_bytes(path.read_bytes().replace(b"slack-id", b"evil-id"))
         with pytest.raises(ConfigurationError, match="slack"):
             oauth_apps.effective_org_config({}, make_admin("slack"), mode="org")
+
+
+class TestSlackLimited:
+    def test_the_built_in_app_is_limited_until_it_is_listed(self, monkeypatch):
+        assert oauth_apps.slack_limited({"client_id": "x", "relay": True})
+        monkeypatch.setattr(oauth_apps, "SLACK_MARKETPLACE_LISTED", True)
+        assert not oauth_apps.slack_limited({"client_id": "x", "relay": True})
+
+    def test_an_own_app_and_no_section_are_not_limited(self):
+        assert not oauth_apps.slack_limited({"client_id": "x", "client_secret": "y"})
+        assert not oauth_apps.slack_limited({})
+        assert not oauth_apps.slack_limited(None)
+
+    def test_the_effective_section_decides(self, builtins):
+        builtins("slack")
+        admin = make_admin("slack")
+        assert oauth_apps.slack_limited(compose({}, admin)["slack"])
+        own = connector("slack", client_id="own", client_secret="s")
+        assert not oauth_apps.slack_limited(compose({}, admin, connectors=own)["slack"])
+
+
+class TestSlackManifest:
+    def test_redirect_url_scopes_and_settings(self):
+        from privacyfence.slack_client import DEFAULT_USER_SCOPES
+
+        manifest = oauth_apps.slack_manifest("https://pf.example.org/")
+        assert manifest["display_information"]["name"] == "PrivacyFence"
+        assert manifest["oauth_config"]["redirect_urls"] == ["https://pf.example.org/oauth/callback/slack"]
+        assert manifest["oauth_config"]["scopes"] == {"user": DEFAULT_USER_SCOPES}
+        assert "bot" not in manifest["oauth_config"]["scopes"]
+        assert manifest["settings"] == {
+            "org_deploy_enabled": False, "socket_mode_enabled": False, "token_rotation_enabled": False,
+        }
+
+    def test_the_create_url_decodes_to_the_manifest(self):
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        url = oauth_apps.slack_create_app_url("https://pf.example.org")
+        parsed = urlparse(url)
+        assert (parsed.scheme, parsed.netloc, parsed.path) == ("https", "api.slack.com", "/apps")
+        query = parse_qs(parsed.query)
+        assert query["new_app"] == ["1"]
+        assert json.loads(query["manifest_json"][0]) == oauth_apps.slack_manifest("https://pf.example.org")
+
+    def test_the_builtin_slack_row_carries_the_link_only_while_limited(self, builtins, monkeypatch):
+        builtins("slack")
+        admin = make_admin("slack")
+
+        def slack_row():
+            rows = admin_config.service_rows({}, admin, mode="org", issuer_url="https://pf.example.org")
+            return next(row for row in rows if row["key"] == "slack")
+
+        options = slack_row()["options"]
+        assert options["slack_limited"] is True
+        assert options["create_app_url"] == oauth_apps.slack_create_app_url("https://pf.example.org")
+        monkeypatch.setattr(oauth_apps, "SLACK_MARKETPLACE_LISTED", True)
+        assert "slack_limited" not in slack_row()["options"]

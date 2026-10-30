@@ -260,7 +260,7 @@ def _single_user(bundle: dict[str, Any]) -> bool:
 
 def _admin_state(
     *, mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
-    principal: Principal, install_wide_settings: dict[str, Any] | None = None,
+    principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
 ) -> dict[str, Any]:
     """What the Admin page renders from. It carries no secret: service rows hold a client id at
     most, and audit forwarding carries the name of its bearer-token variable, never the value.
@@ -269,7 +269,9 @@ def _admin_state(
     when the caller has it) and the usage stats counted from every principal's files."""
     admin = admin_config.config_for(bundle, mode=mode, single_user=_single_user(bundle))
     state: dict[str, Any] = {
-        "services": admin_config.service_rows(bundle, admin, mode=mode, single_user=_single_user(bundle)),
+        "services": admin_config.service_rows(
+            bundle, admin, mode=mode, single_user=_single_user(bundle), issuer_url=issuer_url,
+        ),
         "rooms": {"count": len(admin.get("rooms") or []), "synced_at": str(admin.get("rooms_synced_at") or "")},
         "unattended_sessions": admin.get("unattended_sessions", {}),
         "restart_needed": _restart_needed(admin, startup_admin),
@@ -360,7 +362,7 @@ def _dispatch(
     return JSONResponse({
         **_admin_state(
             mode=mode, bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
-            install_wide_settings=install_wide_settings,
+            install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
         ),
         **(state_extra() if state_extra is not None else {}),
     })
@@ -579,7 +581,7 @@ def build_org_routes(
             return principal
         return JSONResponse(_admin_state(
             mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
-            install_wide_settings=install_wide_settings,
+            install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
         ))
 
     async def admin_page(request: Request) -> Response:
@@ -599,7 +601,7 @@ def build_org_routes(
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         state = _admin_state(
             mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
-            install_wide_settings=install_wide_settings,
+            install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
         )
         html = web_shell.wrap(
             _admin_page_body(state, mode="org", is_admin=True, csrf=csrf, nonce=nonce),
@@ -648,7 +650,7 @@ def build_org_routes(
             challenges=challenges, refresh_live=refresh_live,
             state=lambda: _admin_state(
                 mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
-            install_wide_settings=install_wide_settings,
+            install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
             ),
         )
 
@@ -669,7 +671,7 @@ def build_org_routes(
             refresh_live=refresh_live,
             state=lambda: _admin_state(
                 mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
-                install_wide_settings=install_wide_settings,
+                install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
             ),
         )
 

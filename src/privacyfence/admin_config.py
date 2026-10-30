@@ -939,7 +939,7 @@ def _connector_options(loaded: connector_configs.LoadedConfig) -> dict[str, Any]
 
 def _service_row(
     bundle: dict[str, Any], admin: dict[str, Any], name: str, env: dict[str, str], *, mode: Mode, single_user: bool,
-    connectors: dict[str, connector_configs.LoadedConfig] | None = None,
+    connectors: dict[str, connector_configs.LoadedConfig] | None = None, issuer_url: str = "",
 ) -> dict[str, Any]:
     from . import oauth_apps
 
@@ -961,6 +961,11 @@ def _service_row(
         elif app_source == "builtin":
             app = app_credentials.builtin_app(oauth_apps.BUILTIN_KEY[name])
             client_id = str(app["client_id"]) if app else ""
+            if name == "slack" and app and oauth_apps.slack_limited(oauth_apps._builtin_section(name, app)):
+                connector_options["slack_limited"] = True
+                if issuer_url:
+                    connector_options["create_app_url"] = oauth_apps.slack_create_app_url(issuer_url)
+                    connector_options["manifest"] = oauth_apps.slack_manifest(issuer_url)
     elif name == "telegram":
         app_source = "builtin" if app_credentials.telegram_app_credentials() is not None else "none"
     elif name == "grist":
@@ -1023,13 +1028,13 @@ def signin_state(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def service_rows(
-    bundle: dict[str, Any], admin: dict[str, Any], *, mode: Mode, single_user: bool = False
+    bundle: dict[str, Any], admin: dict[str, Any], *, mode: Mode, single_user: bool = False, issuer_url: str = "",
 ) -> list[dict[str, Any]]:
     """One row per service for the Admin page. A row never carries a secret: not a client
     secret, not a provisioning key, only whether the key is set."""
     env = _env_addresses()
     connectors = connector_configs.load_all(connector_configs.default_org_dir()) if mode == "org" else {}
     return [
-        _service_row(bundle, admin, name, env, mode=mode, single_user=single_user, connectors=connectors)
+        _service_row(bundle, admin, name, env, mode=mode, single_user=single_user, connectors=connectors, issuer_url=issuer_url)
         for name in SERVICES
     ]

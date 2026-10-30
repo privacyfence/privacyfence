@@ -1799,7 +1799,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             # until a full users.list/conversations.list re-sync finished,
             # which read as "the app isn't running yet."
             logger.info("Slack connector ready for workspace %r", workspace)
-            slack_connector = SlackConnector(slack_client)
+            slack_connector = SlackConnector(slack_client, limited=oauth_apps.slack_limited(slack_org))
             slack_connector.my_email = token.get("email", "")
             connectors.append(slack_connector)
         except (SlackClientError, FileNotFoundError) as exc:

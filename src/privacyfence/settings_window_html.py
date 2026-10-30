@@ -2123,6 +2123,10 @@ _JS = r"""
     if (row.relay && (row.key === 'slack' || row.key === 'miro')) {
       lines.push('Sign-in codes for this service pass through oauth.privacyfence.eu without PKCE. Use your own app to avoid this.');
     }
+    if (opts.slack_limited) {
+      lines.push("Slack limits channel history and thread reads for apps outside the Slack Marketplace. " +
+        "Your workspace\u2019s own app reads at full speed.");
+    }
     if (row.key === 'peek' || row.key === 'grist') {
       var address = opts.server_url || opts.base_url || '';
       var variable = SERVER_ADDRESS_VARIABLES[row.key];
@@ -2158,6 +2162,23 @@ _JS = r"""
       '<a href="' + CONNECTOR_TOOL_URL + '" target="_blank" rel="noopener">in your browser</a>' + esc(' or with the ') +
       '<a href="' + CONNECTOR_DOCS_URL + '" target="_blank" rel="noopener">Python tool</a>' + esc('.');
     return rowHtml('Own app', desc, controls, 'pf-row-sub');
+  }
+
+  // The built-in Slack app is throttled until it is listed: one click opens Slack's create page with
+  // a manifest for this server, and the lines say how the finished app becomes a connector config.
+  function slackOwnAppRowHtml(row) {
+    var opts = row.options || {};
+    if (!opts.slack_limited || !opts.create_app_url) { return ''; }
+    var controls = '<div class="pf-row-controls"><a class="button secondary" role="button" target="_blank" rel="noopener" href="' +
+      esc(opts.create_app_url) + '">Create your workspace\u2019s own Slack app</a></div>';
+    var desc = '<div>' + esc('Left undistributed, the app is internal to your workspace and reads at full speed. ' +
+      'Copy its Client ID and Client Secret from Basic Information, sign them as a connector config, and upload ' +
+      'the file with \u201cUpload a connector config\u201d below.') + '</div>' +
+      '<div>' + esc('An internal Slack app serves one workspace. Never turn on public distribution for it.') + '</div>' +
+      '<details><summary>' + esc('If Slack does not fill in the app') + '</summary><div>' +
+      esc('Choose Create New App \u2192 From an app manifest in Slack and paste this:') + '</div><pre>' +
+      esc(JSON.stringify(opts.manifest || {}, null, 2)) + '</pre></details>';
+    return rowHtml('Own Slack app', desc, controls, 'pf-row-sub');
   }
 
   function serverAddressRowHtml(row) {
@@ -2222,6 +2243,9 @@ _JS = r"""
       var action = row.offered ? 'withdraw_service' : 'offer_service';
       html += '<div class="card pf-card pf-service" data-service="' + esc(row.key) + '">';
       html += rowHtml(row.label, lines.join(''), toggleHtml(row.offered, action, { service: row.key }, false, 'Offer ' + row.label));
+      if (CAPS.mode === 'org' && row.key === 'slack') {
+        html += slackOwnAppRowHtml(row);
+      }
       if (CAPS.mode === 'org' && CONNECTOR_PROVIDERS.indexOf(row.key) !== -1) {
         html += connectorConfigRowHtml(row);
       }

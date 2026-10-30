@@ -1471,3 +1471,72 @@ class TestReadState:
         assert [set(c["preview"]) for c in gated_call_spy] == [
             {"Channel"}, {"Channel"}, {"Query", "Since"},
         ]
+
+
+def make_limited_connector():
+    connector, client = make_connector()
+    limited = SlackConnector(client, limited=True)
+    limited.my_email = connector.my_email
+    return limited, client
+
+
+class TestLimitedMode:
+    async def test_channel_history_reads_through_search_and_never_conversations_history(self, gated_call_spy):
+        connector, client = make_limited_connector()
+        client.search_channel_history.return_value = ([make_message()], False, "")
+
+        result = await connector.call("slack_get_channel_history", {"channel_id": "C123", "minutes": 30})
+
+        client.search_channel_history.assert_called_once()
+        assert client.search_channel_history.call_args.args[:2] == ("C123", 50)
+        assert client.search_channel_history.call_args.args[2] is not None
+        client.get_channel_history.assert_not_called()
+        assert "Read through Slack search, because Slack limits history reads for this app" in result["note"]
+        assert "switch to your workspace's own app on the Admin page" in result["note"]
+
+    async def test_history_falls_back_and_says_why_when_search_cannot_be_scoped(self, gated_call_spy):
+        connector, client = make_limited_connector()
+        client.search_channel_history.return_value = None
+        client.get_channel_history.return_value = ([make_message()], False, "")
+
+        result = await connector.call("slack_get_channel_history", {"channel_id": "D123"})
+
+        client.get_channel_history.assert_called_once()
+        assert "could not be scoped" in result["note"]
+
+    async def test_thread_replies_are_capped_at_15_and_say_so(self, gated_call_spy):
+        connector, client = make_limited_connector()
+        replies = [make_message(id=f"1720000000.{i:06d}") for i in range(20)]
+        client.get_thread_replies.return_value = (replies, False, "")
+
+        result = await connector.call(
+            "slack_get_thread_replies", {"channel_id": "C123", "thread_ts": "1720000000.000000"}
+        )
+
+        assert client.get_thread_replies.call_args.kwargs["limit"] == 15
+        assert len(result["messages"]) == 15
+        assert result["has_more"] is True
+        assert "15 replies" in result["note"] and "own app on the Admin page" in result["note"]
+
+    async def test_the_approval_card_has_no_thread_preview_and_no_lookup(self, gated_call_spy):
+        connector, client = make_limited_connector()
+        client.send_message.return_value = {"ts": "123.456", "channel_id": "C123"}
+
+        await connector.call(
+            "slack_send_message", {"channel_id": "C123", "text": "reply", "thread_ts": "100.001"}
+        )
+
+        assert "In thread" not in gated_call_spy[0]["preview"]
+        client.get_message.assert_not_called()
+
+    def test_tool_descriptions_name_the_limits_only_in_limited_mode(self):
+        limited, _ = make_limited_connector()
+        plain, _ = make_connector()
+
+        def description(connector, name):
+            return next(s.description for s in connector.tool_specs() if s.name == name)
+
+        assert "reads through Slack search" in description(limited, "slack_get_channel_history")
+        assert "at most 15 replies" in description(limited, "slack_get_thread_replies")
+        assert "reads through Slack search" not in description(plain, "slack_get_channel_history")
+        assert "at most 15 replies" not in description(plain, "slack_get_thread_replies")
