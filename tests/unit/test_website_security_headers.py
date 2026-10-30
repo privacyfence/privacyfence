@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from tests.website_site import built_site  # first: puts scripts/ on sys.path
+from tests.website_site import build_site, built_site  # first: puts scripts/ on sys.path
 from site_security_headers import CSP_DOCS, CSP_SITE, HSTS, NOSNIFF, REFERRER_POLICY, headers_for_path  # noqa: E402
 
 SCRIPT_ORIGINS = ("https://www.googletagmanager.com",)
@@ -116,8 +116,12 @@ class _InlineFinder(HTMLParser):
 
 def _hand_written_pages():
     site = built_site()
+    unlisted = set(build_site.UNLISTED_PAGES.values())
     return sorted(
-        p.relative_to(site).as_posix() for p in site.rglob("*.html") if p.relative_to(site).parts[0] != "docs"
+        p.relative_to(site).as_posix()
+        for p in site.rglob("*.html")
+        # The unlisted pages carry their own hash-based policy instead.
+        if p.relative_to(site).parts[0] != "docs" and p.relative_to(site).as_posix() not in unlisted
     )
 
 

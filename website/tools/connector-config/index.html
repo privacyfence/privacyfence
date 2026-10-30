@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-S4yyqCIGCsucx1B/mORQTVulRxVlsUlkLgGJV/tV84w='; style-src 'sha256-plHi4UVn+OUCn0UdNCCBZks8fIaXKKmi4ocyhh8rE1s='; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Sign a PrivacyFence connector config</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1b1f24;
+  --muted: #59636e;
+  --line: #d0d7de;
+  --panel: #f6f8fa;
+  --accent: #0b5cad;
+  --accent-fg: #ffffff;
+  --warn-bg: #fff8c5;
+  --warn-fg: #4d3800;
+  --bad: #b3261e;
+  --ok: #1a7f37;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --line: #3d444d;
+    --panel: #151b23;
+    --accent: #4493f8;
+    --accent-fg: #0d1117;
+    --warn-bg: #3a2f00;
+    --warn-fg: #f2d675;
+    --bad: #ff7b72;
+    --ok: #56d364;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 42rem; margin: 0 auto; padding: 1.5rem 16px 3rem; }
+h1 { font-size: 1.5rem; margin: 0 0 .5rem; }
+h2 { font-size: 1.1rem; margin: 2rem 0 .5rem; }
+p { margin: .5rem 0; }
+a { color: var(--accent); }
+label { display: block; font-weight: 600; margin-top: 1rem; }
+.hint { color: var(--muted); font-size: .875rem; font-weight: 400; }
+input, select, textarea {
+  width: 100%;
+  margin-top: .25rem;
+  padding: .5rem .625rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .8125rem; min-height: 8rem; }
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: .5rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.row { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.25rem; align-items: center; }
+.note { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: .75rem 1rem; margin: 1rem 0; }
+.warn { background: var(--warn-bg); color: var(--warn-fg); border-color: transparent; }
+.status { margin-top: 1rem; font-weight: 600; }
+.status.bad { color: var(--bad); }
+.status.ok { color: var(--ok); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .875em; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sign a connector config</h1>
+  <p>A connector config is your organization's own app for one service, signed with your key. Upload the file on the
+  Admin page of your PrivacyFence server, under Services.</p>
+
+  <div class="note">
+    <strong>This page runs only in your browser.</strong> It sends nothing anywhere: it has no network access, loads
+    nothing from outside, and cannot submit a form. The key and the client secret you enter stay in this tab and are
+    never stored.
+    Even so, a web page is something you have to trust. If you would rather not paste your key into one, use the
+    offline copy: the same file is in the
+    <a href="https://github.com/privacyfence/privacyfence/blob/main/website/tools/connector-config/index.html" rel="noopener noreferrer">repository</a>
+    and is attached to each release as <code>privacyfence-connector-config-tool.html</code>. Download it and open it
+    from your disk, or use <code>scripts/sign_connector_config.py</code>, which does the same on the command line.
+  </div>
+
+  <div id="unsupported" class="note warn" hidden>This browser cannot sign Ed25519; use scripts/sign_connector_config.py.</div>
+
+  <h2>1. The signing key</h2>
+  <p>The first connector config you upload to a server decides which key that server trusts from then on, so keep
+  the key file safe and use the same one for every app.</p>
+  <div class="row">
+    <button type="button" id="generate">Generate a new key</button>
+  </div>
+  <div id="keyinfo" class="note" hidden>
+    The key was downloaded as <code>privacyfence-connector-key.pem</code> and filled in below. Store the file somewhere
+    private and back it up: it cannot be recovered.<br>
+    Fingerprint: <code id="keyinfo-fingerprint"></code>
+  </div>
+  <label for="key">Signing key <span class="hint">(a PKCS#8 PEM private key, starting with -----BEGIN PRIVATE KEY-----)</span></label>
+  <textarea id="key" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+  <p class="hint">Fingerprint of this key: <code id="fingerprint">none yet</code></p>
+
+  <h2>2. The app</h2>
+  <label for="provider">Service</label>
+  <select id="provider">
+    <option value="google">Google Workspace</option>
+    <option value="slack">Slack</option>
+    <option value="salesforce">Salesforce</option>
+    <option value="atlassian">Jira and Confluence (Atlassian)</option>
+    <option value="miro">Miro</option>
+    <option value="grist">Grist</option>
+  </select>
+
+  <label for="serial">Serial <span class="hint">(a whole number higher than any serial you used before for this service)</span></label>
+  <input id="serial" inputmode="numeric" autocomplete="off">
+
+  <label for="client-id"><span id="client-id-label">Client ID</span></label>
+  <input id="client-id" autocomplete="off" autocapitalize="off" spellcheck="false">
+
+  <label for="client-secret"><span id="client-secret-label">Client secret</span></label>
+  <input id="client-secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+
+  <div id="group-salesforce" hidden>
+    <label for="login-url">Login URL <span class="hint">(optional: your org's https://&lt;name&gt;.my.salesforce.com address)</span></label>
+    <input id="login-url" autocomplete="off" autocapitalize="off" spellcheck="false">
+  </div>
+
+  <div id="group-grist" hidden>
+    <label for="auth-server-url">Auth server URL</label>
+    <input id="auth-server-url" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label for="server-url">Grist server URL</label>
+    <input id="server-url" autocomplete="off" autocapitalize="off" spellcheck="false">
+  </div>
+
+  <div class="row">
+    <button type="button" id="sign" class="primary">Sign</button>
+  </div>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+</main>
+<script>
+"use strict";
+(function () {
+  var HEADER = "privacyfence-connector-config v1";
+  var PROVIDERS = ["google", "slack", "salesforce", "atlassian", "miro", "grist"];
+  var MAX_FILE_BYTES = 8 * 1024;
+  var MAX_VALUE_CHARS = 512;
+  var MAX_SERIAL_DIGITS = 15;
+  var DEFAULT_FIELDS = ["client_id", "client_secret"];
+  var FIELDS = {
+    salesforce: ["consumer_key", "consumer_secret", "login_url"],
+    grist: ["client_id", "client_secret", "auth_server_url", "server_url"]
+  };
+  var OPTIONAL = { login_url: true };
+  var PEM_HEAD = "-----BEGIN PRIVATE KEY-----";
+  var PEM_TAIL = "-----END PRIVATE KEY-----";
+  var UNSUPPORTED = "This browser cannot sign Ed25519; use scripts/sign_connector_config.py.";
+
+  function subtle() {
+    var c = globalThis.crypto;
+    return c && c.subtle ? c.subtle : null;
+  }
+
+  function fieldNames(provider) {
+    return FIELDS[provider] || DEFAULT_FIELDS;
+  }
+
+  function toBase64(bytes) {
+    var text = "";
+    for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+    return btoa(text);
+  }
+
+  function fromBase64(text) {
+    var raw = atob(text);
+    var bytes = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    return bytes;
+  }
+
+  function fromBase64Url(text) {
+    var padded = text.replace(/-/g, "+").replace(/_/g, "/");
+    while (padded.length % 4) padded += "=";
+    return fromBase64(padded);
+  }
+
+  function ascii(text) {
+    var bytes = new Uint8Array(text.length);
+    for (var i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+    return bytes;
+  }
+
+  function checkValue(name, value) {
+    if (!value || value.length > MAX_VALUE_CHARS) {
+      throw new Error(name + " must be 1 to " + MAX_VALUE_CHARS + " characters.");
+    }
+    if (value !== value.replace(/^ +| +$/g, "")) {
+      throw new Error(name + " must not start or end with a space.");
+    }
+    if (!/^[\x20-\x7e]+$/.test(value)) {
+      throw new Error(name + " must be printable ASCII.");
+    }
+    return value;
+  }
+
+  // "SHA256:" and the unpadded base64 of the SHA-256 of the 32-byte public key.
+  async function fingerprint(publicKey) {
+    var digest = new Uint8Array(await subtle().digest("SHA-256", publicKey));
+    return "SHA256:" + toBase64(digest).replace(/=+$/, "");
+  }
+
+  function pemToDer(pem) {
+    var body = String(pem).trim();
+    if (body.indexOf(PEM_HEAD) !== 0 || body.slice(-PEM_TAIL.length) !== PEM_TAIL) {
+      throw new Error("The key must be a PKCS#8 PEM private key (-----BEGIN PRIVATE KEY-----).");
+    }
+    body = body.slice(PEM_HEAD.length, body.length - PEM_TAIL.length).replace(/\s+/g, "");
+    try {
+      return fromBase64(body);
+    } catch (e) {
+      throw new Error("The key is not valid base64.");
+    }
+  }
+
+  function derToPem(der) {
+    var lines = toBase64(der).match(/.{1,64}/g);
+    return PEM_HEAD + "\n" + lines.join("\n") + "\n" + PEM_TAIL + "\n";
+  }
+
+  // The private key and its raw 32-byte public key. WebCrypto derives the public key only through
+  // the private key's JWK export, so the key is imported extractable and never leaves this tab.
+  async function loadKey(pem) {
+    var key;
+    try {
+      key = await subtle().importKey("pkcs8", pemToDer(pem), { name: "Ed25519" }, true, ["sign"]);
+    } catch (e) {
+      if (e && /PEM|base64/.test(e.message)) throw e;
+      throw new Error("That is not an Ed25519 PKCS#8 private key.");
+    }
+    var jwk = await subtle().exportKey("jwk", key);
+    return { privateKey: key, publicKey: fromBase64Url(jwk.x) };
+  }
+
+  // values maps field names to strings; the file's field order comes from this table, not the caller.
+  async function signConfig(input, pem) {
+    var provider = input.provider;
+    if (PROVIDERS.indexOf(provider) < 0) throw new Error("provider must be one of " + PROVIDERS.join(", ") + ".");
+    var serial = String(input.serial);
+    if (!/^[1-9][0-9]*$/.test(serial) || serial.length > MAX_SERIAL_DIGITS) {
+      throw new Error("serial must be a positive whole number without leading zeros, at most 15 digits.");
+    }
+    var signedAt = input.signedAt;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(signedAt) || isNaN(Date.parse(signedAt))) {
+      throw new Error("signed_at must look like 2026-11-02T10:00:00Z.");
+    }
+    var lines = [HEADER, "provider: " + provider, "serial: " + serial];
+    fieldNames(provider).forEach(function (name) {
+      var value = input.values[name] || "";
+      if (OPTIONAL[name] && !value) return;
+      lines.push(name + ": " + checkValue(name, value));
+    });
+    var loaded = await loadKey(pem);
+    lines.push("signed_at: " + signedAt);
+    lines.push("key: " + toBase64(loaded.publicKey));
+    var message = ascii(lines.join("\n") + "\n");
+    var signature = new Uint8Array(await subtle().sign({ name: "Ed25519" }, loaded.privateKey, message));
+    var text = lines.join("\n") + "\nsignature: " + toBase64(signature) + "\n";
+    if (text.length > MAX_FILE_BYTES) throw new Error("A connector config is at most 8 KB.");
+    var verifyKey = await subtle().importKey("raw", loaded.publicKey, { name: "Ed25519" }, false, ["verify"]);
+    if (!(await subtle().verify({ name: "Ed25519" }, verifyKey, signature, message))) {
+      throw new Error("The signature did not verify; nothing was produced.");
+    }
+    return { text: text, fingerprint: await fingerprint(loaded.publicKey) };
+  }
+
+  async function generateKey() {
+    var pair = await subtle().generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    var der = new Uint8Array(await subtle().exportKey("pkcs8", pair.privateKey));
+    var publicKey = new Uint8Array(await subtle().exportKey("raw", pair.publicKey));
+    return { pem: derToPem(der), fingerprint: await fingerprint(publicKey) };
+  }
+
+  async function keyFingerprint(pem) {
+    return fingerprint((await loadKey(pem)).publicKey);
+  }
+
+  async function supported() {
+    try {
+      await subtle().generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function todaySerial() {
+    var now = new Date();
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    return "" + now.getUTCFullYear() + pad(now.getUTCMonth() + 1) + pad(now.getUTCDate()) + "01";
+  }
+
+  function nowIso() {
+    return new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  }
+
+  globalThis.pfConnectorTool = {
+    signConfig: signConfig,
+    generateKey: generateKey,
+    keyFingerprint: keyFingerprint,
+    fingerprint: fingerprint,
+    fieldNames: fieldNames,
+    todaySerial: todaySerial,
+    nowIso: nowIso
+  };
+
+  if (typeof document === "undefined") return;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function download(name, text) {
+    var url = URL.createObjectURL(new Blob([text], { type: "application/octet-stream" }));
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function status(message, kind) {
+    var el = $("status");
+    el.textContent = message;
+    el.className = "status" + (kind ? " " + kind : "");
+  }
+
+  function showFingerprint() {
+    var pem = $("key").value;
+    var el = $("fingerprint");
+    if (!pem.trim()) {
+      el.textContent = "none yet";
+      return Promise.resolve();
+    }
+    return keyFingerprint(pem).then(
+      function (value) { el.textContent = value; },
+      function (e) { el.textContent = e.message; }
+    );
+  }
+
+  function showProvider() {
+    var provider = $("provider").value;
+    var salesforce = provider === "salesforce";
+    $("client-id-label").textContent = salesforce ? "Consumer key" : "Client ID";
+    $("client-secret-label").textContent = salesforce ? "Consumer secret" : "Client secret";
+    $("group-salesforce").hidden = !salesforce;
+    $("group-grist").hidden = provider !== "grist";
+    status("");
+  }
+
+  function collect() {
+    var provider = $("provider").value;
+    var names = fieldNames(provider);
+    var values = {};
+    values[names[0]] = $("client-id").value;
+    values[names[1]] = $("client-secret").value;
+    if (provider === "salesforce") values.login_url = $("login-url").value;
+    if (provider === "grist") {
+      values.auth_server_url = $("auth-server-url").value;
+      values.server_url = $("server-url").value;
+    }
+    return { provider: provider, serial: $("serial").value, signedAt: nowIso(), values: values };
+  }
+
+  $("serial").value = todaySerial();
+  $("provider").addEventListener("change", showProvider);
+  $("key").addEventListener("input", showFingerprint);
+  showProvider();
+
+  $("generate").addEventListener("click", function () {
+    generateKey().then(function (made) {
+      $("key").value = made.pem;
+      $("keyinfo-fingerprint").textContent = made.fingerprint;
+      $("keyinfo").hidden = false;
+      download("privacyfence-connector-key.pem", made.pem);
+      return showFingerprint();
+    }).catch(function (e) { status(e.message, "bad"); });
+  });
+
+  $("sign").addEventListener("click", function () {
+    var input = collect();
+    signConfig(input, $("key").value).then(function (made) {
+      download(input.provider + ".pfconnector", made.text);
+      $("client-secret").value = "";
+      $("serial").value = String(Number(input.serial) + 1);
+      status("Signed " + input.provider + ".pfconnector with key " + made.fingerprint + ". Compare that fingerprint with the one the Admin page shows before you confirm the first upload. The secret field was cleared.", "ok");
+    }).catch(function (e) { status(e.message, "bad"); });
+  });
+
+  supported().then(function (ok) {
+    if (ok) return;
+    $("unsupported").hidden = false;
+    $("generate").disabled = true;
+    $("sign").disabled = true;
+  });
+}());
+</script>
+</body>
+</html>

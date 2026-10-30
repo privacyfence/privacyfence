@@ -75,6 +75,7 @@ def test_every_website_file_is_actually_deployed():
     """
     accounted = (
         set(build_site.PAGES.values())
+        | set(build_site.UNLISTED_PAGES.values())
         | {source.removeprefix("website/") for source in build_site.STATIC.values() if source.startswith("website/")}
         | set(build_site.BUILD_INPUTS)
         | set(build_site.REPOSITORY_ONLY)
