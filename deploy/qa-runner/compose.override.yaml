@@ -14,6 +14,10 @@ services:
       - idp_client_secret
 
   caddy:
+    # Pinned by digest: the host's image store is writable by the deploy script, and a floating tag
+    # would run whatever is tagged caddy:2 locally with the origin key and ports 80 and 443. Bump it
+    # by hand (README, "Updating the pinned images").
+    image: caddy:2@sha256:5e5286cb37d44086d651a5363f05f43a692ce4d649d88fb1bd844579f45fa9e8
     environment:
       PF_CF_RANGES: ${PF_CF_RANGES:?set PF_CF_RANGES in .env to Cloudflare's published ranges}
     volumes:
@@ -21,7 +25,8 @@ services:
       - /etc/pf-qa:/etc/pf-qa:ro
 
   peek:
-    image: ghcr.io/privacyfence/peek:main
+    # Pinned by digest, like Caddy (README, "Updating the pinned images").
+    image: ghcr.io/privacyfence/peek:main@sha256:c194fac1373438219a640aa41902f492a0b56ebb2d6df01e76db813d2cc51d03
     restart: unless-stopped
     environment:
       PEEK_BASE_URL: https://peek-qa.privacyfence.eu
@@ -30,6 +35,8 @@ services:
     networks:
       - pf
 
+# The file is bind-mounted with its host owner and mode, so the host file must be owned by uid 10001
+# (the container user) with mode 0400: README, "Installing", step 4.
 secrets:
   idp_client_secret:
     file: ./idp_client_secret

@@ -2,8 +2,14 @@
 and the proxy that keeps /mcp closed (docs/connector-qa.md, "The QA server")."""
 from __future__ import annotations
 
+import gzip
+import io
+import json
+import os
 import re
+import stat
 import subprocess
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +82,10 @@ class TestWorkflow:
         assert [s["uses"].split("@")[0] for s in steps if "uses" in s] == ["actions/download-artifact"]
         assert steps[0]["with"]["name"] == "qa-server-image" and "qa-deploy" in steps[0]["with"]["path"]
 
+    def test_no_job_runs_from_a_branch_other_than_main(self, workflow):
+        for name, job in workflow["jobs"].items():
+            assert job["if"] == "github.ref == 'refs/heads/main'", name
+
     def test_the_verify_job_checks_the_public_address(self, workflow):
         job = workflow["jobs"]["verify"]
         assert job["runs-on"] == "ubuntu-latest" and job["needs"] == "deploy"
@@ -110,9 +120,20 @@ class TestDeployScript:
         assert "--project-directory" in script and "/opt/pf-qa/run" in script and "--no-build" in script
 
     def test_the_checks_run_in_order(self, script):
-        order = ["[ -L", "gunzip -t", "docker load", "up -d --no-build", "healthy", "docker image prune -f", 'rm -f "$TARBALL"']
-        positions = [script.index(item) for item in order]
+        order = ["[ -L", 'cat "$TARBALL"', "gunzip -t", "manifest.json", "docker load", "up -d --no-build", "healthy",
+                 "docker image prune -f", 'rm -f "$TARBALL"']
+        code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+        positions = [code.index(item) for item in order]
         assert positions == sorted(positions)
+
+    def test_the_tarball_is_read_once_into_a_root_owned_copy(self, script):
+        code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+        reads = [line for line in code.splitlines() if "$TARBALL" in line and "echo" not in line]
+        reads = [line.strip() for line in reads]
+        assert reads == ['if [ -L "$TARBALL" ] || [ ! -f "$TARBALL" ]; then', 'cat "$TARBALL" > "$work/image.tar.gz"',
+                         'rm -f "$TARBALL"']
+        assert 'cat "$TARBALL" > "$work/image.tar.gz"' in code
+        assert 'docker load -i "$work/image.tar"' in code and "gunzip -c |" not in code
 
     def test_it_is_strict_posix_shell(self, script):
         assert script.startswith("#!/bin/sh\n") and "set -eu" in script
@@ -120,6 +141,120 @@ class TestDeployScript:
 
     def test_it_is_executable(self):
         assert (HOST / "pf-qa-deploy").stat().st_mode & 0o111
+
+
+def _tar(entries: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, data in entries.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def _image_tar(tags: list[str] | None, *, index: dict[str, Any] | None = None, entries: int = 1) -> bytes:
+    manifest = [{"Config": "c.json", "RepoTags": tags, "Layers": []} for _ in range(entries)]
+    files = {"manifest.json": json.dumps(manifest).encode()}
+    if index is not None:
+        files["index.json"] = json.dumps(index).encode()
+    return _tar(files)
+
+
+FAKE_DOCKER = """#!/bin/sh
+echo "$*" >> "$FAKE_LOG"
+case "$1" in
+    load) echo "$FAKE_LOAD_OUTPUT" ;;
+    image) [ "$2" = inspect ] ;;
+    compose)
+        case "$4" in
+            ps) echo cid ;;
+        esac ;;
+    inspect) echo healthy ;;
+esac
+exit 0
+"""
+
+
+class TestDeployScriptBehaviour:
+    """Runs the real script with the fixed paths pointed at a temporary directory and a fake docker."""
+
+    def _run(self, tmp_path, payload: bytes | None, *, output="Loaded image: privacyfence-org:qa-main", link=False):
+        script = (HOST / "pf-qa-deploy").read_text(encoding="utf-8")
+        tarball = tmp_path / "in.tar.gz"
+        if link:
+            (tmp_path / "real").write_bytes(gzip.compress(payload or b""))
+            tarball.symlink_to(tmp_path / "real")
+        elif payload is not None:
+            tarball.write_bytes(gzip.compress(payload))
+        patched = script.replace("TARBALL=/home/pfrunner/qa-deploy/privacyfence-org-qa.tar.gz", f"TARBALL={tarball}")
+        patched = patched.replace("PROJECT_DIR=/opt/pf-qa/run", f"PROJECT_DIR={tmp_path}").replace("sleep 5", "sleep 0")
+        copy = tmp_path / "deploy.sh"
+        copy.write_text(patched, encoding="utf-8")
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        docker = bin_dir / "docker"
+        docker.write_text(FAKE_DOCKER, encoding="utf-8")
+        docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+        log = tmp_path / "docker.log"
+        log.write_text("")
+        env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_LOG": str(log),
+               "FAKE_LOAD_OUTPUT": output}
+        result = subprocess.run(["sh", str(copy)], capture_output=True, text=True, env=env, check=False)
+        return result, log.read_text().splitlines(), tarball
+
+    def test_the_expected_image_loads_and_the_tarball_is_removed(self, tmp_path):
+        result, calls, tarball = self._run(tmp_path, _image_tar(["privacyfence-org:qa-main"]))
+        assert result.returncode == 0, result.stderr
+        assert any(call.startswith("load -i ") for call in calls)
+        assert any(call.startswith("compose ") and "up -d --no-build" in call for call in calls)
+        assert not tarball.exists()
+
+    @pytest.mark.parametrize("output", [
+        "Loaded image: privacyfence-org:qa-main",
+        "Loaded image ID: sha256:" + "a" * 64,
+    ])
+    def test_both_image_store_output_formats_are_accepted(self, tmp_path, output):
+        result, _, _ = self._run(tmp_path, _image_tar(["privacyfence-org:qa-main"]), output=output)
+        assert result.returncode == 0, result.stderr
+
+    def test_other_load_output_is_refused(self, tmp_path):
+        result, _, _ = self._run(tmp_path, _image_tar(["privacyfence-org:qa-main"]), output="Loaded image: caddy:2")
+        assert result.returncode == 1 and "unexpected docker load output" in result.stderr
+
+    @pytest.mark.parametrize("tags", [["caddy:2"], ["privacyfence-org:qa-main", "caddy:2"], [], None])
+    def test_a_manifest_with_any_other_tag_is_refused_before_loading(self, tmp_path, tags):
+        result, calls, _ = self._run(tmp_path, _image_tar(tags))
+        assert result.returncode != 0
+        assert not any(call.startswith(("load", "compose")) for call in calls)
+
+    def test_two_images_in_one_archive_are_refused(self, tmp_path):
+        result, calls, _ = self._run(tmp_path, _image_tar(["privacyfence-org:qa-main"], entries=2))
+        assert result.returncode != 0 and calls == []
+
+    def test_a_name_hidden_in_the_oci_index_is_refused(self, tmp_path):
+        index = {"manifests": [{"annotations": {"io.containerd.image.name": "docker.io/library/caddy:2"}}]}
+        result, calls, _ = self._run(tmp_path, _image_tar(["privacyfence-org:qa-main"], index=index))
+        assert result.returncode != 0 and "also names" in result.stderr and calls == []
+
+    def test_the_expected_names_in_the_oci_index_are_accepted(self, tmp_path):
+        index = {"manifests": [{"annotations": {
+            "io.containerd.image.name": "docker.io/library/privacyfence-org:qa-main",
+            "org.opencontainers.image.ref.name": "qa-main"}}]}
+        result, _, _ = self._run(tmp_path, _image_tar(["privacyfence-org:qa-main"], index=index))
+        assert result.returncode == 0, result.stderr
+
+    def test_an_archive_without_a_manifest_is_refused(self, tmp_path):
+        result, calls, _ = self._run(tmp_path, _tar({"other": b"x"}))
+        assert result.returncode != 0 and calls == []
+
+    def test_a_symlink_is_refused(self, tmp_path):
+        result, calls, _ = self._run(tmp_path, _image_tar(["privacyfence-org:qa-main"]), link=True)
+        assert result.returncode == 1 and calls == []
+
+    def test_a_missing_file_is_refused(self, tmp_path):
+        result, calls, _ = self._run(tmp_path, None)
+        assert result.returncode == 1 and calls == []
 
 
 def test_the_sudoers_line_allows_no_argument():
@@ -143,9 +278,20 @@ class TestComposeOverride:
         volumes = override["services"]["privacyfence"]["volumes"]
         assert volumes == ["/home/pfrunner/qa-org-data:/var/lib/privacyfence-org/.privacyfence"]
 
+    def test_every_image_other_than_the_local_one_is_pinned_by_digest(self, override):
+        for name, service in override["services"].items():
+            if name == "privacyfence":
+                continue
+            assert re.fullmatch(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}", service["image"]), (name, service["image"])
+
+    def test_the_secret_file_is_readable_by_the_container_user_only(self):
+        readme = (HOST / "README.md").read_text(encoding="utf-8")
+        assert "`chown 10001:10001`" in readme and "`chmod 0400`" in readme
+        assert "(mode 0600)" not in readme
+
     def test_peek_sits_on_the_same_network(self, override):
         peek = override["services"]["peek"]
-        assert peek["image"] == "ghcr.io/privacyfence/peek:main"
+        assert peek["image"].startswith("ghcr.io/privacyfence/peek:main@sha256:")
         assert peek["environment"]["PEEK_BASE_URL"] == "https://peek-qa.privacyfence.eu"
         assert peek["networks"] == ["pf"]
 
@@ -154,6 +300,11 @@ class TestComposeOverride:
         assert not {"privileged", "cap_add", "read_only", "security_opt", "cap_drop"} & set(server)
         base = yaml.safe_load((ROOT / "deploy" / "docker" / "compose.yaml").read_text(encoding="utf-8"))
         assert base["services"]["privacyfence"]["read_only"] is True
+
+
+def test_the_qa_environment_limits_the_sign_in_domains():
+    text = (HOST / "privacyfence.env.example").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^PRIVACYFENCE_ALLOWED_DOMAINS=[a-z0-9.-]+\.[a-z]+$", text)
 
 
 def _matcher() -> list[str]:

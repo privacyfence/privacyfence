@@ -32,6 +32,8 @@ permissions:
 
 jobs:
   build:
+    # A manual run from another branch must not deploy it.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,6 +101,7 @@ jobs:
           retention-days: 3
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: [self-hosted, privacyfence-live]
     steps:
@@ -111,6 +114,7 @@ jobs:
         run: sudo -n /usr/local/sbin/pf-qa-deploy
 
   verify:
+    if: github.ref == 'refs/heads/main'
     needs: deploy
     runs-on: ubuntu-latest
     steps:

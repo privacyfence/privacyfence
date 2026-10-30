@@ -18,14 +18,57 @@ if [ -L "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
     echo "$TARBALL is missing, a symlink or not a regular file" >&2
     exit 1
 fi
-gunzip -t "$TARBALL"
 
-loaded="$(gunzip -c "$TARBALL" | docker load)"
-echo "$loaded"
-if [ "$loaded" != "Loaded image: $IMAGE" ]; then
-    echo "the tarball did not load exactly $IMAGE" >&2
-    exit 1
+# Everything below reads a root-owned copy, never $TARBALL again, so pfrunner cannot swap the file
+# between the check and the load.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+cat "$TARBALL" > "$work/image.tar.gz"
+gunzip -t "$work/image.tar.gz"
+gunzip -c "$work/image.tar.gz" > "$work/image.tar"
+
+# docker load tags whatever the archive says, as root: it could move a name such as caddy:2 to code
+# of pfrunner's choosing, which the next deploy then runs with the origin key and ports 80 and 443.
+# Read the names out of the archive first and load only an archive that carries exactly $IMAGE.
+tar -xOf "$work/image.tar" manifest.json > "$work/manifest.json"
+if tar -tf "$work/image.tar" | grep -qx 'index.json'; then
+    tar -xOf "$work/image.tar" index.json > "$work/index.json"
+else
+    echo '{}' > "$work/index.json"
 fi
+python3 -I - "$IMAGE" "$work/manifest.json" "$work/index.json" <<'PY'
+import json
+import sys
+
+image, manifest_path, index_path = sys.argv[1:4]
+with open(manifest_path, encoding="utf-8") as handle:
+    manifest = json.load(handle)
+with open(index_path, encoding="utf-8") as handle:
+    index = json.load(handle)
+
+if not isinstance(manifest, list) or len(manifest) != 1 or manifest[0].get("RepoTags") != [image]:
+    sys.exit("the tarball does not carry exactly one image tagged %s" % image)
+
+# The containerd image store also names images in the OCI index.
+allowed = {image, "docker.io/library/" + image, image.split(":", 1)[1]}
+for entry in index.get("manifests", []) if isinstance(index, dict) else []:
+    annotations = entry.get("annotations") or {}
+    for key in ("io.containerd.image.name", "org.opencontainers.image.ref.name"):
+        if key in annotations and annotations[key] not in allowed:
+            sys.exit("the tarball also names %s" % annotations[key])
+PY
+
+loaded="$(docker load -i "$work/image.tar")"
+echo "$loaded"
+# Docker's classic image store prints "Loaded image: <tag>", the containerd store may print
+# "Loaded image ID: sha256:..." for an image it loaded by its content ID; the names were checked above.
+echo "$loaded" | while IFS= read -r line; do
+    case "$line" in
+        "Loaded image: $IMAGE" | "Loaded image ID: sha256:"* | "") ;;
+        *) echo "unexpected docker load output: $line" >&2; exit 1 ;;
+    esac
+done
+docker image inspect "$IMAGE" > /dev/null
 
 docker compose --project-directory "$PROJECT_DIR" up -d --no-build
 
