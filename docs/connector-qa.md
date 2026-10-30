@@ -471,7 +471,8 @@ live checks copy the QA principal's tokens from its data directory.
   internet. It shares the runner with the live checks, so a deploy never overlaps one. The host files
   are in [`deploy/qa-runner/`](../deploy/qa-runner/README.md).
 - **`/mcp` is blocked.** The proxy answers 404 for `/mcp` and every MCP OAuth endpoint, and a
-  Cloudflare WAF rule blocks the same paths. No AI client can reach a public server that holds live QA
+  Cloudflare WAF rule blocks the same paths first, so from the internet they answer 403; the
+  `verify` job accepts either. No AI client can reach a public server that holds live QA
   tokens, and nothing on the server builds the QA principal's connectors, so nothing there uses or
   refreshes the tokens. The runner is their only user, which matters for Atlassian's rotating refresh
   tokens and for Telegram, whose session must not be used from two places at once.
