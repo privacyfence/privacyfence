@@ -1203,7 +1203,7 @@ def _render(html):
     scripts = re.findall(r"<script nonce=\"[^\"]+\">(.*?)</script>", html, re.DOTALL)
     done = subprocess.run(
         ["node", "-e", _RENDER_HARNESS], input=json.dumps(scripts),
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
     )
     assert done.returncode == 0, done.stderr
     return done.stdout
