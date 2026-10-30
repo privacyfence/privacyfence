@@ -1241,6 +1241,90 @@ class TestServicesSection:
         assert "Changing the app makes everyone who connected Slack connect again." in page
         assert "Sign-in codes for this service pass through" not in page
 
+    def test_a_connector_config_app_names_its_client_serial_date_and_key(self):
+        row = _row(
+            "slack", "Slack", app_source="connector", client_id="own-id",
+            options={"serial": 7, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": "SHA256:abc", "imported": False},
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert (
+            "Your organization&#39;s own app (client own-id), connector config serial 7, signed 2026-11-02 "
+            "with key SHA256:abc."
+        ) in page or (
+            "Your organization's own app (client own-id), connector config serial 7, signed 2026-11-02 with key SHA256:abc."
+        ) in page
+        assert "Changing the app makes everyone who connected Slack connect again." in page
+        assert "without PKCE" not in page
+
+    def test_an_imported_connector_config_says_where_it_came_from(self):
+        row = _row(
+            "slack", "Slack", app_source="connector", client_id="old-id",
+            options={"serial": None, "signed_at": "", "fingerprint": "", "imported": True},
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "(client old-id), imported from the organization configuration file." in page
+        assert "connector config serial" not in page
+
+    def test_an_organization_row_has_the_upload_control_and_the_tool_links(self):
+        keys = ["google", "slack", "salesforce", "atlassian", "miro", "grist"]
+        page = _render_admin(_admin_state(*[_row(k, k.title()) for k in keys]), mode="org", is_admin=True)
+        for key in keys:
+            assert f'aria-label="Upload a connector config for {key.title()}"' in page, key
+        assert page.count('data-action="upload_connector_config"') == len(keys)
+        assert page.count('href="https://privacyfence.eu/tools/connector-config/"') == len(keys)
+        assert page.count('href="https://privacyfence.eu/docs/org-mode-setup-guide/"') == len(keys)
+        assert "Remove our own app" not in page
+
+    def test_telegram_and_peek_have_no_connector_config_control(self):
+        page = _render_admin(
+            _admin_state(_row("telegram", "Telegram"), _row("peek", "Peek")), mode="org", is_admin=True,
+        )
+        assert "connector config" not in page.lower()
+
+    def test_a_desktop_install_has_no_connector_config_control(self):
+        page = _render_admin(_admin_state(_row("slack", "Slack", app_source="none")))
+        assert "upload_connector_config" not in page and "tools/connector-config" not in page
+        assert "Add your organization" in page and "to the configuration file." in page
+
+    def test_remove_our_own_app_posts_the_service_and_asks_first(self):
+        row = _row(
+            "miro", "Miro", app_source="connector", client_id="own",
+            options={"serial": 1, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": "SHA256:k", "imported": False},
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert 'aria-label="Remove our own app for Miro"' in page and ">Remove our own app</div>" in page
+        assert 'data-action="remove_connector_config"' in page
+        assert "{&quot;service&quot;:&quot;miro&quot;}" in page or '{"service":"miro"}' in page
+        assert "Remove our own app for Miro? Everyone who connected Miro has to connect again." in page
+
+    def test_an_organization_row_with_no_app_points_to_the_upload(self):
+        page = _render_admin(_admin_state(_row("miro", "Miro", app_source="none")), mode="org", is_admin=True)
+        assert "Upload a connector config for your organization&#39;s own app." in page \
+            or "Upload a connector config for your organization's own app." in page
+        assert "to the configuration file." not in page
+
+    def test_a_grist_connector_config_names_where_the_server_address_comes_from(self):
+        row = _row(
+            "grist", "Grist", app_source="connector", client_id="g",
+            options={
+                "serial": 1, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": "SHA256:k", "imported": False,
+                "server_url": "https://grist.example", "address_source": "connector", "locked": True,
+            },
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Server: https://grist.example (from your organization" in page
+        assert "Grist connector config)." in page
+
+    def test_the_legacy_bundle_line_shows_only_when_the_state_carries_it(self):
+        line = "org/org_bundle.json is read only for its server and identity-provider settings until PrivacyFence 8."
+        with_line = _render_admin(
+            _admin_state(_row("slack", "Slack"), legacy_bundle_warning=line + " <b>x</b>"), mode="org", is_admin=True,
+        )
+        assert line in with_line and "&lt;b&gt;x&lt;/b&gt;" in with_line and "<b>x</b>" not in with_line
+        assert "identity-provider settings" not in _render_admin(
+            _admin_state(_row("slack", "Slack")), mode="org", is_admin=True,
+        )
+
     def test_a_relayed_builtin_app_says_so(self):
         page = _render_admin(
             _admin_state(_row("atlassian", "Atlassian", relay=True)), mode="org", is_admin=True,

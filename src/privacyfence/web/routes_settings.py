@@ -468,6 +468,9 @@ def _snapshot(controller: SettingsController) -> dict[str, Any]:
 #   - install_org_config: triggers the hidden <input type=file> below,
 #     which itself POSTs a multipart body to <endpoint>/org_config/upload.
 #   - upload_rooms: the same, for the room directory, to <endpoint>/rooms/upload.
+#   - upload_connector_config: the same, for a signed connector config, to
+#     <endpoint>/connector_config/upload; its 409 carries the signing key's fingerprint, which
+#     the next attempt sends back as the confirmation.
 #   - export_audit_log: a same-origin navigation to the download route.
 #   - quit_app: a client-side confirm() first, then still POSTed
 #     through as an action, but to its own /api/settings/quit_app route
@@ -490,6 +493,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
     return (
         "<input type=\"file\" id=\"pf-org-config-input\" accept=\".json,application/json\" style=\"display:none\">"
         "<input type=\"file\" id=\"pf-rooms-input\" accept=\".json,application/json\" style=\"display:none\">"
+        "<input type=\"file\" id=\"pf-connector-config-input\" accept=\".pfconnector,.txt,text/plain\" style=\"display:none\">"
         f'<script nonce="{nonce}">(function(){{'
         f"var CSRF = {csrf!r};"
         f"var ENDPOINT = {endpoint!r};"
@@ -507,13 +511,14 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "      fd.append('file', file);"
         "      fd.append('csrf', CSRF);"
         "      if (confirmPin) { fd.append('confirm_pin', 'true'); }"
+        "      if (typeof confirmPin === 'string') { fd.append('confirm_fingerprint', confirmPin); }"
         "      if (assertion) { fd.append('webauthn_assertion', JSON.stringify(assertion)); }"
         "      return fetch(url, {method:'POST', credentials:'same-origin', body: fd})"
         "        .then(function(r){"
         "          if (r.status === 409) {"
         "            return r.json().then(function(data){"
         "              if (data.error === 'pin_confirmation_required' && window.confirm(data.detail + ' Continue?')) {"
-        "                return attemptUpload(true, assertion);"
+        "                return attemptUpload(data.fingerprint || true, assertion);"
         "              }"
         "              return null;"
         "            });"
@@ -554,8 +559,10 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "}"
         "var fileInput = document.getElementById('pf-org-config-input');"
         "var roomsInput = document.getElementById('pf-rooms-input');"
+        "var connectorInput = document.getElementById('pf-connector-config-input');"
         "bindUpload(fileInput, ENDPOINT + '/org_config/upload');"
         "bindUpload(roomsInput, ENDPOINT + '/rooms/upload');"
+        "bindUpload(connectorInput, ENDPOINT + '/connector_config/upload');"
         "function pfSettingsPost(url, body) {"
         "  return fetch(url, {method:'POST', credentials:'same-origin',"
         "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
@@ -567,6 +574,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         f"  if (action === 'open_repo') {{ window.open({repo_url!r}, '_blank', 'noopener'); return; }}"
         "  if (action === 'install_org_config') { fileInput.click(); return; }"
         "  if (action === 'upload_rooms') { roomsInput.click(); return; }"
+        "  if (action === 'upload_connector_config') { connectorInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
         "  var url = ENDPOINT + '/' + encodeURIComponent(action);"
         # The two AI client token actions (ADR 0104) have routes of their

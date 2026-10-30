@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +20,7 @@ from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, org_stats, routes_admin
+from tests.connector_config_support import SENTINEL, public_bytes, sign
 
 BASE_URL = "https://pf.example.com"
 ALICE = Principal(id="alice", email="alice@example.com", display_name="Alice")
@@ -699,6 +702,394 @@ class TestOrgRoomsUpload:
         world = World()
         csrf = world.sign_in(ADMIN)
         assert _upload(world.client, "/api/admin/org_config/upload", csrf, b"{}").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Connector configs: upload and removal, organization mode
+# --------------------------------------------------------------------------- #
+
+CONNECTOR_URL = "/api/admin/connector_config/upload"
+KEY_FINGERPRINT = connector_configs.fingerprint(public_bytes(sign.__globals__["fixture_key"]()))
+
+
+def _connector_upload(client, csrf, raw, *, assertion=None, name="file", **fields):
+    data = {"csrf": csrf, **fields}
+    if assertion is not None:
+        data["webauthn_assertion"] = json.dumps(assertion)
+    return client.post(CONNECTOR_URL, data=data, files={name: ("slack.pfconnector", raw, "text/plain")})
+
+
+def _connector_passkey_upload(world, csrf, raw, **fields):
+    """The upload's two requests when the first key is already trusted or confirmed: the challenge,
+    then the resubmitted file with the assertion."""
+    first = _connector_upload(world.client, csrf, raw, **fields)
+    assert first.status_code == 428, first.text
+    with patch.object(wa.webauthn, "verify_authentication_response", return_value=VERIFIED):
+        return _connector_upload(world.client, csrf, raw, assertion={"id": "Y3JlZC0x"}, **fields)
+
+
+def _signed_in_admin(**world_kwargs):
+    world = World(**world_kwargs)
+    _enrol(ADMIN)
+    return world, world.sign_in(ADMIN)
+
+
+def _installed(world, csrf, raw=None, **fields):
+    """Trust the fixture key and store one config; returns the response."""
+    return _connector_passkey_upload(
+        world, csrf, raw if raw is not None else sign("slack", 1), confirm_fingerprint=KEY_FINGERPRINT, **fields,
+    )
+
+
+class TestOrgConnectorConfigUpload:
+    def test_connector_config_upload_is_classified_as_bespoke_sensitive(self):
+        assert routes_admin.ROUTE_CLASSIFICATION[CONNECTOR_URL] == "bespoke-sensitive"
+        assert routes_admin.ROUTE_CLASSIFICATION["/api/admin/rooms/upload"] == "bespoke-sensitive"
+
+    def test_connector_config_upload_needs_an_admin_session(self):
+        world = World()
+        assert _connector_upload(world.client, "x", sign("slack")).status_code == 401
+        csrf = world.sign_in(ALICE)
+        assert _connector_upload(world.client, csrf, sign("slack")).status_code == 403
+
+    def test_connector_config_upload_checks_csrf_and_origin(self):
+        world, csrf = _signed_in_admin()
+        assert _connector_upload(world.client, "wrong", sign("slack")).status_code == 401
+        r = world.client.post(
+            CONNECTOR_URL, data={"csrf": csrf}, files={"file": ("s", sign("slack"), "text/plain")},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert r.status_code == 403
+        assert connector_configs.load_all(connector_configs.default_org_dir()).get("slack").source == "legacy-bundle"
+
+    def test_connector_config_upload_always_needs_a_passkey(self, audit):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        # The key is confirmed, so only the passkey stands in the way.
+        r = _connector_upload(world.client, csrf, sign("slack"), confirm_fingerprint=KEY_FINGERPRINT)
+        assert (r.status_code, r.json()) == (
+            403, {"error": "Add a passkey on /security first.", "enroll_url": "/security"},
+        )
+        assert connector_configs.load_all(connector_configs.default_org_dir())["slack"].source == "legacy-bundle"
+        assert not connector_configs.pinned_key_path(connector_configs.default_org_dir()).exists()
+        assert audit == [("carol", "Step-up required for 'upload_connector_config', refused (principal=carol)")]
+
+    def test_connector_config_first_upload_asks_to_confirm_the_key_before_anything_else(self):
+        world, csrf = _signed_in_admin()
+        r = _connector_upload(world.client, csrf, sign("slack"))
+        assert r.status_code == 409
+        body = r.json()
+        assert body["error"] == "pin_confirmation_required" and body["fingerprint"] == KEY_FINGERPRINT
+        assert KEY_FINGERPRINT in body["detail"]
+        assert not connector_configs.pinned_key_path(connector_configs.default_org_dir()).exists()
+        assert not connector_configs.serials_path(connector_configs.default_org_dir()).exists()
+        wrong = _connector_upload(world.client, csrf, sign("slack"), confirm_fingerprint="SHA256:not-the-key")
+        assert wrong.status_code == 409 and wrong.json()["fingerprint"] == KEY_FINGERPRINT
+
+    def test_connector_config_upload_pins_stores_and_applies_live(self, audit, relay_checks):
+        world, csrf = _signed_in_admin()
+        shared = world.org_config
+        assert shared["slack"]["client_id"] == "slack-id" and shared["slack"]["client_secret"] == SECRET
+        r = _installed(world, csrf, sign("slack", 4, client_id="own-id"))
+        assert r.status_code == 200, r.text
+        assert world.org_config is shared
+        assert shared["slack"]["client_id"] == "own-id" and shared["slack"]["client_secret"] == SENTINEL
+        assert world.registry.evicted == 1 and relay_checks == [1]
+        assert audit[-1] == ("carol", "Set the Slack connector config (serial 4) (admin=carol)")
+        row = next(row for row in r.json()["services"] if row["key"] == "slack")
+        assert row["app_source"] == "connector" and row["client_id"] == "own-id"
+        assert row["options"] == {
+            "serial": 4, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": KEY_FINGERPRINT, "imported": False,
+        }
+        org = connector_configs.default_org_dir()
+        assert connector_configs.stored_path(org, "slack").read_bytes() == sign("slack", 4, client_id="own-id")
+        assert not connector_configs.legacy_path(org, "slack").exists()
+
+    def test_connector_config_a_trusted_key_needs_no_confirmation(self):
+        world, csrf = _signed_in_admin()
+        assert _installed(world, csrf).status_code == 200
+        assert _connector_passkey_upload(world, csrf, sign("slack", 2)).status_code == 200
+
+    def test_connector_config_secret_never_reaches_the_state_a_log_or_the_audit(self, audit, caplog):
+        caplog.set_level("DEBUG")
+        world, csrf = _signed_in_admin()
+        responses = [
+            _connector_upload(world.client, csrf, sign("slack")),
+            _installed(world, csrf),
+            _connector_passkey_upload(world, csrf, sign("slack", 1)),
+            _connector_upload(world.client, csrf, sign("slack", 2, client_id="bad\tid")),
+            _connector_passkey_upload(world, csrf, sign("slack", 2)),
+            world.client.get("/api/admin/state"),
+            world.client.get("/admin"),
+        ]
+        responses.append(_passkey_post(world, "remove_connector_config", {"service": "slack"}, csrf))
+        everything = "\n".join([r.text for r in responses] + [repr(audit), caplog.text])
+        assert SENTINEL not in everything and SECRET not in everything
+        assert [r.status_code for r in responses[:5]] == [409, 200, 400, 400, 200]
+
+    @pytest.mark.parametrize("serial", [1, 2])
+    def test_connector_config_a_lower_or_equal_serial_is_refused(self, serial):
+        world, csrf = _signed_in_admin()
+        assert _installed(world, csrf, sign("slack", 2)).status_code == 200
+        r = _connector_passkey_upload(world, csrf, sign("slack", serial, client_id="replay"))
+        assert r.status_code == 400
+        assert r.json() == {"error": f"serial {serial} is not higher than 2, the highest accepted for slack."}
+        assert world.org_config["slack"]["client_id"] == "slack-id"
+
+    def test_connector_config_a_replayed_upload_is_refused(self):
+        world, csrf = _signed_in_admin()
+        raw = sign("slack", 5)
+        assert _installed(world, csrf, raw).status_code == 200
+        replay = _connector_passkey_upload(world, csrf, raw)
+        assert replay.status_code == 400 and "not higher than 5" in replay.json()["error"]
+
+    def test_connector_config_a_removed_configs_serial_cannot_come_back(self):
+        world, csrf = _signed_in_admin()
+        raw = sign("slack", 5)
+        assert _installed(world, csrf, raw).status_code == 200
+        assert _passkey_post(world, "remove_connector_config", {"service": "slack"}, csrf).status_code == 200
+        assert _connector_passkey_upload(world, csrf, raw).status_code == 400
+
+    def test_connector_config_another_key_is_refused_once_one_is_trusted(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        world, csrf = _signed_in_admin()
+        assert _installed(world, csrf).status_code == 200
+        other = Ed25519PrivateKey.generate()
+        r = _connector_passkey_upload(world, csrf, sign("slack", 9, key=other, client_id="attacker"))
+        assert r.status_code == 400 and "signed with another key" in r.json()["error"]
+        assert world.org_config["slack"]["client_id"] == "slack-id"
+
+    def test_connector_config_a_tampered_file_is_refused(self):
+        world, csrf = _signed_in_admin()
+        assert _installed(world, csrf).status_code == 200
+        tampered = sign("slack", 3).replace(b"slack-id", b"evil-id")
+        r = _connector_passkey_upload(world, csrf, tampered)
+        assert (r.status_code, r.json()) == (400, {"error": "The signature does not verify against the key this server trusts."})
+
+    @pytest.mark.parametrize("raw", [b"", b"not a connector config", b"privacyfence-connector-config v2\n", b"\x00\xff" * 40])
+    def test_connector_config_a_malformed_file_gives_the_parsers_message(self, raw):
+        world, csrf = _signed_in_admin()
+        with pytest.raises(connector_configs.ConnectorConfigError) as expected:
+            connector_configs.parse(raw)
+        r = _connector_upload(world.client, csrf, raw)
+        assert (r.status_code, r.json()) == (400, {"error": str(expected.value)})
+        assert not connector_configs.pinned_key_path(connector_configs.default_org_dir()).exists()
+
+    def test_connector_config_the_passkey_is_bound_to_the_file(self):
+        world, csrf = _signed_in_admin()
+        fields = {"confirm_fingerprint": KEY_FINGERPRINT}
+        assert _connector_upload(world.client, csrf, sign("slack", 1), **fields).status_code == 428
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=VERIFIED):
+            r = _connector_upload(world.client, csrf, sign("slack", 2), assertion={"id": "Y3JlZC0x"}, **fields)
+        assert r.status_code != 200
+        assert world.org_config["slack"]["client_id"] == "slack-id"
+
+    def test_connector_config_a_file_over_8_kb_is_refused(self):
+        world, csrf = _signed_in_admin()
+        r = _connector_upload(world.client, csrf, b"x" * (connector_configs.MAX_FILE_BYTES + 1))
+        assert (r.status_code, r.json()) == (400, {"error": "The file is larger than 8 KB."})
+
+    def test_connector_config_a_huge_body_is_refused_before_it_is_read(self):
+        world, csrf = _signed_in_admin()
+        r = _connector_upload(world.client, csrf, b"x" * (1024 * 1024))
+        assert (r.status_code, r.json()) == (413, {"error": "The file is larger than 8 KB."})
+
+    def test_connector_config_a_body_with_no_declared_size_is_refused(self):
+        world, csrf = _signed_in_admin()
+        body = (
+            f'--b\r\nContent-Disposition: form-data; name="csrf"\r\n\r\n{csrf}\r\n--b--\r\n'.encode()
+        )
+        r = world.client.post(
+            CONNECTOR_URL, content=iter([body]), headers={"Content-Type": "multipart/form-data; boundary=b"},
+        )
+        assert r.status_code == 411
+
+    def test_connector_config_no_file_several_files_or_a_misnamed_one_are_refused(self):
+        world, csrf = _signed_in_admin()
+        none = world.client.post(CONNECTOR_URL, data={"csrf": csrf})
+        assert (none.status_code, none.json()) == (400, {"error": "Missing file."})
+        misnamed = _connector_upload(world.client, csrf, sign("slack"), name="other")
+        assert (misnamed.status_code, misnamed.json()) == (400, {"error": "Missing file."})
+        several = world.client.post(
+            CONNECTOR_URL, data={"csrf": csrf},
+            files=[("file", ("a", sign("slack"), "text/plain")), ("file", ("b", sign("slack", 2), "text/plain"))],
+        )
+        assert (several.status_code, several.json()) == (400, {"error": "Upload exactly one file."})
+        assert not connector_configs.pinned_key_path(connector_configs.default_org_dir()).exists()
+
+    def test_connector_config_a_failed_write_is_500_without_detail(self, monkeypatch):
+        world, csrf = _signed_in_admin()
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full at /secret/path")
+
+        monkeypatch.setattr(routes_admin.connector_configs, "accept", boom)
+        r = _connector_passkey_upload(world, csrf, sign("slack"), confirm_fingerprint=KEY_FINGERPRINT)
+        assert (r.status_code, r.json()) == (500, {"error": "Could not store the connector config."})
+
+    def test_connector_config_confirmation_required_at_accept_time_is_409(self, monkeypatch):
+        world, csrf = _signed_in_admin()
+
+        def lost_race(*args, **kwargs):
+            raise connector_configs.ConfirmationRequired(KEY_FINGERPRINT)
+
+        monkeypatch.setattr(routes_admin.connector_configs, "accept", lost_race)
+        r = _connector_passkey_upload(world, csrf, sign("slack"), confirm_fingerprint=KEY_FINGERPRINT)
+        assert r.status_code == 409 and r.json()["fingerprint"] == KEY_FINGERPRINT
+
+    def test_connector_config_an_unreadable_pin_is_refused_not_treated_as_absent(self):
+        world, csrf = _signed_in_admin()
+        connector_configs.pinned_key_path(connector_configs.default_org_dir()).write_text("garbage", encoding="utf-8")
+        r = _connector_upload(world.client, csrf, sign("slack"), confirm_fingerprint=KEY_FINGERPRINT)
+        assert r.status_code == 400 and "cannot be read" in r.json()["error"]
+
+    def test_connector_config_the_state_row_of_an_imported_config_has_no_serial(self):
+        world, csrf = _signed_in_admin()
+        row = next(row for row in world.client.get("/api/admin/state").json()["services"] if row["key"] == "slack")
+        assert row["app_source"] == "connector" and row["client_id"] == "slack-id"
+        assert row["options"] == {"serial": None, "signed_at": "", "fingerprint": "", "imported": True}
+        assert SECRET not in json.dumps(row)
+
+    def test_connector_config_a_grist_config_supplies_the_address_and_locks_it(self):
+        world, csrf = _signed_in_admin()
+        assert _installed(world, csrf, sign("grist", 1)).status_code == 200
+        row = next(row for row in world.client.get("/api/admin/state").json()["services"] if row["key"] == "grist")
+        assert row["app_source"] == "connector" and row["client_id"] == "grist-id"
+        assert row["options"]["server_url"] == "https://grist.example" and row["options"]["locked"] is True
+        assert row["options"]["address_source"] == "connector"
+
+    def test_connector_config_a_state_names_the_legacy_bundle_line_only_while_one_exists(self):
+        world, csrf = _signed_in_admin()
+        assert "legacy_bundle_warning" not in world.client.get("/api/admin/state").json()
+        (paths.org_bundle_path()).write_text("{}", encoding="utf-8")
+        state = world.client.get("/api/admin/state").json()
+        assert state["legacy_bundle_warning"] == connector_configs.LEGACY_BUNDLE_WARNING
+
+
+class TestOrgRemoveConnectorConfig:
+    def test_remove_connector_config_is_a_sensitive_live_org_action(self):
+        spec = routes_admin.ADMIN_ACTIONS["remove_connector_config"]
+        assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "live")
+
+    def test_remove_connector_config_always_needs_a_passkey(self, audit):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("remove_connector_config", {"service": "slack"}, csrf)
+        assert (r.status_code, r.json()["enroll_url"]) == (403, "/security")
+        assert connector_configs.load_all(connector_configs.default_org_dir())["slack"].client_id == "slack-id"
+        assert audit == [("carol", "Step-up required for 'remove_connector_config', refused (principal=carol)")]
+
+    def test_remove_connector_config_applies_live_and_falls_back(self, audit, relay_checks):
+        world, csrf = _signed_in_admin()
+        assert _installed(world, csrf).status_code == 200
+        shared, evicted, checks = world.org_config, world.registry.evicted, len(relay_checks)
+        r = _passkey_post(world, "remove_connector_config", {"service": "slack"}, csrf)
+        assert r.status_code == 200, r.text
+        assert world.org_config is shared and "slack" not in shared
+        assert world.registry.evicted == evicted + 1 and len(relay_checks) == checks + 1
+        assert audit[-1] == ("carol", "Removed the Slack connector config (admin=carol)")
+        row = next(row for row in r.json()["services"] if row["key"] == "slack")
+        assert row["app_source"] in ("builtin", "none") and row["client_id"] != "slack-id"
+        assert not connector_configs.stored_path(connector_configs.default_org_dir(), "slack").exists()
+        assert SENTINEL not in r.text
+
+    def test_remove_connector_config_with_nothing_stored_changes_and_audits_nothing(self, audit):
+        world, csrf = _signed_in_admin()
+        r = _passkey_post(world, "remove_connector_config", {"service": "miro"}, csrf)
+        assert r.status_code == 200 and world.registry.evicted == 0
+        assert not [entry for _, entry in audit if entry.startswith("Removed")]
+
+    @pytest.mark.parametrize("service", ["peek", "telegram", "nope", ""])
+    def test_remove_connector_config_refuses_a_service_with_no_connector_config(self, service):
+        world, csrf = _signed_in_admin()
+        r = _passkey_post(world, "remove_connector_config", {"service": service}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "Unknown service."})
+
+    def test_remove_connector_config_declares_only_service(self):
+        world, csrf = _signed_in_admin()
+        r = world.post("remove_connector_config", {"service": "slack", "path": "../x"}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "Unexpected field: path."})
+        assert world.post("remove_connector_config", {}, csrf).json() == {"error": "Missing service."}
+
+    def test_remove_connector_config_is_not_an_action_in_local_mode(self):
+        assert routes_admin.ADMIN_ACTIONS["remove_connector_config"].modes == frozenset({"org"})
+        assert "remove_connector_config" in admin_config._ACTION_MODES
+
+    def test_remove_connector_config_state_carries_no_secret_after_a_save_failure(self, monkeypatch):
+        world, csrf = _signed_in_admin()
+
+        def boom(*args, **kwargs):
+            raise connector_configs.ConnectorConfigError("cannot remove")
+
+        monkeypatch.setattr(admin_config.connector_configs, "remove", boom)
+        r = _passkey_post(world, "remove_connector_config", {"service": "slack"}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "cannot remove"})
+
+
+_SHIM_HARNESS = r"""
+const script = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const inputs = {};
+const document = { getElementById: (id) => (inputs[id] = inputs[id] || {
+  listeners: {}, files: [{name: 'slack.pfconnector'}], click() { this.clicked = true; },
+  addEventListener(name, fn) { this.listeners[name] = fn; },
+}) };
+class FormData { constructor() { this.fields = []; } append(k, v) { this.fields.push([k, String(v)]); } }
+const calls = [];
+const replies = [
+  [409, {error: 'pin_confirmation_required', detail: 'Check SHA256:abc.', fingerprint: 'SHA256:abc'}],
+  [428, {webauthn_options: {challenge: 'c'}}],
+  [200, {services: []}],
+];
+const window = { confirm: (text) => { calls.push(['confirm', text]); return true; }, alert: (t) => calls.push(['alert', t]),
+  PublicKeyCredential: true, __pfRender: (state) => calls.push(['render', state]), location: {} };
+window.window = window;
+const fetch = (url, init) => {
+  calls.push(['fetch', url, init.body.fields]);
+  const [status, body] = replies.shift();
+  return Promise.resolve({status, ok: status === 200, json: () => Promise.resolve(body)});
+};
+const pfWebauthnGet = () => Promise.resolve({id: 'cred'});
+new Function('window', 'document', 'FormData', 'fetch', 'pfWebauthnGet', script)(
+  window, document, FormData, fetch, pfWebauthnGet);
+inputs['pf-connector-config-input'].listeners.change();
+setTimeout(() => {
+  window.webkit.messageHandlers.pf.postMessage({action: 'upload_connector_config', service: 'slack'});
+  console.log(JSON.stringify({calls, clicked: inputs['pf-connector-config-input'].clicked === true}));
+}, 50);
+"""
+
+
+class TestConnectorConfigPageShim:
+    def test_connector_config_the_admin_page_wires_the_upload_to_its_endpoint(self):
+        world, csrf = _signed_in_admin()
+        page = world.client.get("/admin").text
+        assert 'id="pf-connector-config-input"' in page
+        assert "bindUpload(connectorInput, ENDPOINT + '/connector_config/upload');" in page
+        assert "if (action === 'upload_connector_config') { connectorInput.click(); return; }" in page
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+    def test_connector_config_the_shim_confirms_the_fingerprint_then_answers_the_passkey(self):
+        from privacyfence.web import routes_settings
+
+        shim = routes_settings._settings_bridge_shim(csrf="tok", repo_url="https://example.com", nonce="n", endpoint="/api/admin")
+        script = re.search(r"<script nonce=\"n\">(.*)</script>", shim, re.DOTALL).group(1)
+        done = subprocess.run(
+            ["node", "-e", _SHIM_HARNESS], input=json.dumps(script), capture_output=True, text=True,
+            timeout=30, check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        out = json.loads(done.stdout)
+        fetches = [call for call in out["calls"] if call[0] == "fetch"]
+        assert [call[1] for call in fetches] == ["/api/admin/connector_config/upload"] * 3
+        first, second, third = (dict(fields) for _, _, fields in fetches)
+        assert "confirm_fingerprint" not in first and "webauthn_assertion" not in first
+        assert second["confirm_fingerprint"] == "SHA256:abc" and "webauthn_assertion" not in second
+        assert third["confirm_fingerprint"] == "SHA256:abc" and json.loads(third["webauthn_assertion"]) == {"id": "cred"}
+        assert third["csrf"] == "tok"
+        assert ["confirm", "Check SHA256:abc. Continue?"] in out["calls"]
+        assert ["render", {"services": []}] in out["calls"]
+        assert out["clicked"] is True
 
 
 # --------------------------------------------------------------------------- #

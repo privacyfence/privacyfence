@@ -2076,6 +2076,10 @@ _JS = r"""
   var PROVISIONING_KEY_VARIABLES = { peek: 'PRIVACYFENCE_PEEK_PROVISIONING_KEY', grist: 'PRIVACYFENCE_GRIST_PROVISIONING_KEY' };
   var PROVISIONED_WHAT = { peek: 'a Peek account', grist: 'a Grist key' };
   var RELAY_TERMS_URL = 'https://privacyfence.eu/relay-terms/';
+  // The providers an organization can bring its own app for, as signed connector configs.
+  var CONNECTOR_PROVIDERS = ['google', 'slack', 'salesforce', 'atlassian', 'miro', 'grist'];
+  var CONNECTOR_TOOL_URL = 'https://privacyfence.eu/tools/connector-config/';
+  var CONNECTOR_DOCS_URL = 'https://privacyfence.eu/docs/org-mode-setup-guide/';
 
   function relayStatusHtml(status) {
     var text;
@@ -2099,13 +2103,22 @@ _JS = r"""
     if (!row.offered) {
       return ['Not offered.'];
     }
-    if (row.app_source === 'bundle' || (row.app_source === 'server' && row.client_id)) {
+    if (row.app_source === 'connector') {
+      if (opts.imported) {
+        lines.push("Your organization's own app (client " + esc(row.client_id) + '), imported from the organization configuration file.');
+      } else {
+        lines.push("Your organization's own app (client " + esc(row.client_id) + '), connector config serial ' + esc(opts.serial) +
+          ', signed ' + esc(String(opts.signed_at || '').slice(0, 10)) + ' with key ' + esc(opts.fingerprint) + '.');
+      }
+    } else if (row.app_source === 'bundle' || (row.app_source === 'server' && row.client_id)) {
       lines.push("Uses your organization's own app (client " + esc(row.client_id) + '), from the configuration file.');
     } else if (row.app_source === 'builtin') {
       lines.push(row.relay ? 'Uses the built-in PrivacyFence app through oauth.privacyfence.eu.'
         : 'Uses the built-in PrivacyFence app.');
     } else if (row.app_source === 'none') {
-      lines.push("No app is available for this service. Add your organization's own app to the configuration file.");
+      lines.push(CAPS.mode === 'org' && CONNECTOR_PROVIDERS.indexOf(row.key) !== -1
+        ? "No app is available for this service. Upload a connector config for your organization's own app."
+        : "No app is available for this service. Add your organization's own app to the configuration file.");
     }
     if (row.relay && (row.key === 'slack' || row.key === 'miro')) {
       lines.push('Sign-in codes for this service pass through oauth.privacyfence.eu without PKCE. Use your own app to avoid this.');
@@ -2119,11 +2132,32 @@ _JS = r"""
         lines.push('Server: ' + esc(address) + ' (set by ' + variable + ' on the server).');
       } else if (opts.address_source === 'imported') {
         lines.push('Server: ' + esc(address) + ' (from the signed configuration file).');
+      } else if (opts.address_source === 'connector') {
+        lines.push('Server: ' + esc(address) + " (from your organization's Grist connector config).");
       } else if (opts.address_source === 'bundle') {
         lines.push('Server: ' + esc(address) + " (from your organization's Grist app in the configuration file).");
       }
     }
     return lines;
+  }
+
+  // Organization servers: upload the signed file for this provider's own app, or take it away.
+  // Removing falls back to the built-in app, or to none, and everyone connects again.
+  function connectorConfigRowHtml(row) {
+    var controls = '<div class="pf-row-controls"><div class="button secondary" role="button" tabindex="0" ' +
+      'aria-label="Upload a connector config for ' + esc(row.label) + '" ' + dataAttr('upload_connector_config', {}) +
+      '>Upload a connector config\u2026</div>';
+    if (row.app_source === 'connector' && !notApplicable('remove_connector_config')) {
+      controls += '<div class="button danger" role="button" tabindex="0" aria-label="Remove our own app for ' +
+        esc(row.label) + '" ' + dataAttr('remove_connector_config', { service: row.key }) +
+        ' data-confirm="' + esc('Remove our own app for ' + row.label + '? Everyone who connected ' + row.label +
+          ' has to connect again.') + '">Remove our own app</div>';
+    }
+    controls += '</div>';
+    var desc = esc('A file signed with your organization\u2019s connector config key. Sign one ') +
+      '<a href="' + CONNECTOR_TOOL_URL + '" target="_blank" rel="noopener">in your browser</a>' + esc(' or with the ') +
+      '<a href="' + CONNECTOR_DOCS_URL + '" target="_blank" rel="noopener">Python tool</a>' + esc('.');
+    return rowHtml('Own app', desc, controls, 'pf-row-sub');
   }
 
   function serverAddressRowHtml(row) {
@@ -2171,9 +2205,12 @@ _JS = r"""
     if (state.relay_status) {
       html += '<div class="card pf-card">' + relayStatusHtml(state.relay_status) + '</div>';
     }
+    if (state.legacy_bundle_warning) {
+      html += '<div class="card pf-card"><div class="pf-row-desc pf-legacy-bundle">' + esc(state.legacy_bundle_warning) + '</div></div>';
+    }
     (state.services || []).forEach(function (row) {
       var lines = serviceLines(row).map(function (l) { return '<div>' + l + '</div>'; });
-      var usesApp = row.app_source === 'bundle' || row.app_source === 'builtin';
+      var usesApp = row.app_source === 'bundle' || row.app_source === 'builtin' || row.app_source === 'connector';
       if (row.offered && usesApp) {
         lines.push('<div>' + esc('Changing the app makes everyone who connected ' + row.label + ' connect again.') + '</div>');
       }
@@ -2185,6 +2222,9 @@ _JS = r"""
       var action = row.offered ? 'withdraw_service' : 'offer_service';
       html += '<div class="card pf-card pf-service" data-service="' + esc(row.key) + '">';
       html += rowHtml(row.label, lines.join(''), toggleHtml(row.offered, action, { service: row.key }, false, 'Offer ' + row.label));
+      if (CAPS.mode === 'org' && CONNECTOR_PROVIDERS.indexOf(row.key) !== -1) {
+        html += connectorConfigRowHtml(row);
+      }
       if (row.offered && (row.key === 'peek' || row.key === 'grist')) {
         html += serverAddressRowHtml(row) + autoProvisionRowHtml(row);
       }

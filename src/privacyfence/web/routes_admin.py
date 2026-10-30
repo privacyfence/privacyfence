@@ -2,8 +2,9 @@
 
 ``POST /api/admin/{action}`` changes one thing and answers with the page state; ``GET
 /api/admin/state`` answers with the state alone; ``POST /api/admin/rooms/upload`` replaces the
-room directory. ``build_org_routes`` and ``build_routes`` (local mode) are the two adapters around
-a mode-independent core (``_dispatch`` and ``_admin_state``), the way ``routes_settings`` keeps one
+room directory; and, in organization mode, ``POST /api/admin/connector_config/upload`` stores a
+signed connector config (an organization's own OAuth app for one provider). ``build_org_routes``
+and ``build_routes`` (local mode) are the two adapters around a mode-independent core (``_dispatch`` and ``_admin_state``), the way ``routes_settings`` keeps one
 route layer with an authentication adapter per mode (ADR 0033). Local mode also mounts
 ``POST /api/admin/org_config/upload``, the bundle upload that used to live on Settings.
 
@@ -54,11 +55,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from starlette.exceptions import HTTPException
+from starlette.formparsers import MultiPartException
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import admin_config, data_format, oauth_apps, org_mode, relay_client, settings_window_html, web_shell
+from .. import admin_config, connector_configs, data_format, oauth_apps, org_mode, paths, relay_client, settings_window_html, web_shell
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
@@ -117,6 +120,7 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "tighten_step_up": AdminAction(_ORG_ONLY, True, "restart"),
     "set_scoped_tokens": AdminAction(_ORG_ONLY, True, "restart"),
     "set_audit_forwarding": AdminAction(_ORG_ONLY, True, "restart"),
+    "remove_connector_config": AdminAction(_ORG_ONLY, True, "live"),
     "toggle_pii_detection": AdminAction(_ORG_ONLY, True, "self"),
     "toggle_pii_category": AdminAction(_ORG_ONLY, True, "self"),
     "set_default_policy": AdminAction(_ORG_ONLY, True, "self"),
@@ -152,6 +156,7 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
         ("enabled", bool, True), ("kind", str, True), ("syslog_host", str, True), ("syslog_port", int, True),
         ("syslog_protocol", str, True), ("http_url", str, True),
     ),
+    "remove_connector_config": (("service", str, True),),
     "toggle_pii_detection": (),
     "toggle_pii_category": (("category_key", str, True),),
     "set_default_policy": (("group", str, True), ("policy", str, True)),
@@ -177,12 +182,21 @@ ROUTE_CLASSIFICATION: dict[str, Literal["action-dispatcher", "bespoke-sensitive"
     # Room names become tool output an agent reads, so replacing them is gated like a sensitive
     # action: a fresh assertion bound to the file's hash, and a human session in local mode.
     "/api/admin/rooms/upload": "bespoke-sensitive",
+    # The file becomes an OAuth client secret on disk, and the first one pins the key every later
+    # file must be signed with: a fresh assertion bound to the file's hash, and the key's
+    # fingerprint confirmed before it is trusted.
+    "/api/admin/connector_config/upload": "bespoke-sensitive",
     # A bundle can rewrite the policy and every connector's OAuth client; local mode only.
     "/api/admin/org_config/upload": "bespoke-sensitive",
 }
 
 # What the room directory upload accepts, in bytes.
 MAX_ROOMS_UPLOAD_BYTES = 2 * 1024 * 1024
+
+# What the connector config upload accepts, in bytes. The request itself may be a little larger for
+# the multipart framing and the form's other fields; anything beyond this is not read at all.
+MAX_CONNECTOR_CONFIG_BYTES = connector_configs.MAX_FILE_BYTES
+_CONNECTOR_CONFIG_REQUEST_SLACK = 32 * 1024
 
 # The sections only an organization server has.
 _ORG_STATE_KEYS = ("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding")
@@ -265,6 +279,8 @@ def _admin_state(
         for key in _ORG_STATE_KEYS:
             state[key] = admin.get(key, {})
         state["relay_status"] = relay_client.status()
+        if paths.org_bundle_path().exists():
+            state["legacy_bundle_warning"] = connector_configs.LEGACY_BUNDLE_WARNING
         state["signin"] = admin_config.signin_state(bundle)
         if install_wide_settings is not None:
             state["privacy"] = _privacy_rows(install_wide_settings)
@@ -420,6 +436,94 @@ async def _replace_rooms_from_upload(
     return JSONResponse(state())
 
 
+def _connector_config_confirmation(fingerprint: str) -> JSONResponse:
+    """The first connector config for a server trusts its signing key from then on; the page
+    shows the fingerprint and sends it back to say the administrator checked it."""
+    return JSONResponse(
+        {
+            "error": "pin_confirmation_required",
+            "fingerprint": fingerprint,
+            "detail": (
+                "This is the first connector config for this server. Installing it trusts its signing key, "
+                f"{fingerprint}, for every future connector config. Check that this is your key."
+            ),
+        },
+        status_code=409,
+    )
+
+
+async def _read_connector_config_form(request: Request) -> Any:  # noqa: ANN401 -- starlette's FormData
+    """The upload's multipart form, read only when its declared size is plausible and with a cap on
+    the parts, or a ``Response`` that refuses it. A body that does not declare its size is refused
+    because there is no way to bound it before it is spooled to disk."""
+    declared = request.headers.get("content-length", "")
+    if not declared.isdigit():
+        return _error("The upload must declare its size.", 411)
+    if int(declared) > MAX_CONNECTOR_CONFIG_BYTES + _CONNECTOR_CONFIG_REQUEST_SLACK:
+        return _error("The file is larger than 8 KB.", 413)
+    try:
+        return await request.form(max_files=1, max_fields=8, max_part_size=MAX_CONNECTOR_CONFIG_BYTES)
+    except (MultiPartException, HTTPException):
+        return _error("Upload exactly one file.")
+
+
+async def _accept_connector_config_upload(
+    form: Any, principal: Principal, *,  # noqa: ANN401 -- starlette's FormData
+    step_up: StepUpConfig, step_up_origin: str, challenges: StepUpChallengeStore,
+    refresh_live: Callable[[list[str]], None], state: Callable[[], dict[str, Any]],
+) -> Response:
+    """Everything after the caller has authenticated the administrator and checked CSRF and
+    origin: one file of at most 8 KB, the confirmation before a first key is trusted, a passkey
+    bound to the file's hash, then ``connector_configs.accept``, which verifies and stores it.
+
+    The client secret in the file reaches the disk and nothing else: a refusal carries the
+    parser's message, which names the problem and never a value, and the audit entry names the
+    provider and serial."""
+    uploads = [value for key, value in form.multi_items() if key == "file"]
+    if len(uploads) != 1 or not hasattr(uploads[0], "read"):
+        return _error("Upload exactly one file." if uploads else "Missing file.")
+    raw = await uploads[0].read(MAX_CONNECTOR_CONFIG_BYTES + 1)
+    if len(raw) > MAX_CONNECTOR_CONFIG_BYTES:
+        return _error("The file is larger than 8 KB.")
+    org = connector_configs.default_org_dir()
+    confirmed = form.get("confirm_fingerprint")
+    confirmed = confirmed if isinstance(confirmed, str) and confirmed else None
+    try:
+        parsed = connector_configs.parse(raw)
+        if connector_configs.load_pin(org) is None and confirmed != connector_configs.fingerprint(parsed.key):
+            # Asked before the passkey so that a first upload costs one prompt, not two.
+            return _connector_config_confirmation(connector_configs.fingerprint(parsed.key))
+    except connector_configs.ConnectorConfigError as exc:
+        return _error(str(exc))
+    refusal = _gate_upload(
+        "upload_connector_config", {"sha256": hashlib.sha256(raw).hexdigest()},
+        _parse_form_assertion(form.get("webauthn_assertion")),
+        principal=principal, step_up=step_up, step_up_origin=step_up_origin, challenges=challenges, always=True,
+    )
+    if refusal is not None:
+        with principal_scope(principal):
+            _record_settings_audit(
+                principal, f"Step-up required for 'upload_connector_config', refused (principal={principal.id})",
+            )
+        return refusal
+    try:
+        accepted = connector_configs.accept(org, raw, confirmed_fingerprint=confirmed)
+    except connector_configs.ConfirmationRequired as exc:
+        return _connector_config_confirmation(exc.fingerprint)
+    except connector_configs.ConnectorConfigError as exc:
+        return _error(str(exc))
+    except OSError as exc:
+        logger.error("Could not store the connector config: %s", exc)
+        return _error("Could not store the connector config.", 500)
+    label = admin_config.SERVICE_LABELS[accepted.provider]
+    with principal_scope(principal):
+        _record_settings_audit(
+            principal, f"Set the {label} connector config (serial {accepted.serial}) (admin={principal.id})",
+        )
+    refresh_live(["services"])
+    return JSONResponse(state())
+
+
 def _check_classified(routes: list[BaseRoute]) -> None:
     for route in routes:
         if isinstance(route, Route) and "POST" in (route.methods or set()) and route.path not in ROUTE_CLASSIFICATION:
@@ -548,10 +652,32 @@ def build_org_routes(
             ),
         )
 
+    async def connector_config_upload(request: Request) -> Response:
+        principal = _admin_principal(request)
+        if isinstance(principal, Response):
+            return principal
+        form = await _read_connector_config_form(request)
+        if isinstance(form, Response):
+            return form
+        csrf = form.get("csrf")
+        if not isinstance(csrf, str) or not org_session.check_csrf(request, csrf):
+            return _error("unauthorized", 401)
+        if not org_session.check_origin(request):
+            return _error("Cross-origin request rejected.", 403)
+        return await _accept_connector_config_upload(
+            form, principal, step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
+            refresh_live=refresh_live,
+            state=lambda: _admin_state(
+                mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+                install_wide_settings=install_wide_settings,
+            ),
+        )
+
     routes: list[BaseRoute] = [
         Route("/admin", admin_page),
         Route("/api/admin/state", admin_state),
         Route("/api/admin/rooms/upload", rooms_upload, methods=["POST"]),
+        Route("/api/admin/connector_config/upload", connector_config_upload, methods=["POST"]),
         Route("/api/admin/{action}", admin_action, methods=["POST"]),
     ]
     _check_classified(routes)
