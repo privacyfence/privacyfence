@@ -66,8 +66,10 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
 export interface MessageTransport {
   send(message: JSONRPCMessage): Promise<void>;
-  onmessage?: (message: JSONRPCMessage) => void;
-  onerror?: (error: Error) => void;
+  // `| undefined` because the SDK's Transport declares these that way (1.32.2,
+  // typescript-sdk#2814) and this shim compiles with exactOptionalPropertyTypes.
+  onmessage?: ((message: JSONRPCMessage) => void) | undefined;
+  onerror?: ((error: Error) => void) | undefined;
 }
 
 /** JSON-RPC's own "Internal error" code. The failure being reported is this
