@@ -12,6 +12,8 @@ import sys
 import pytest
 
 from privacyfence import admin_config, connector_configs, paths
+from tests.connector_config_support import SENTINEL as CONNECTOR_SECRET
+from tests.connector_config_support import public_bytes, sign, fixture_key
 
 ALL_SERVICES = list(admin_config.SERVICES)
 
@@ -1218,6 +1220,110 @@ class TestServiceRows:
         text = json.dumps(self._rows(bundle))
         for secret in ("BUNDLE-SECRET-VALUE", "GRIST-SECRET-VALUE", "g-secret-VALUE", "s-secret-VALUE", "sf-secret-VALUE", "hash-VALUE"):
             assert secret not in text
+
+
+class TestConnectorConfigRows:
+    """An organization server's own app is a stored connector config; its row names the file."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, monkeypatch, tmp_path, clean_env):
+        monkeypatch.setattr(connector_configs, "default_org_dir", lambda: tmp_path)
+        monkeypatch.setattr(admin_config.app_credentials, "builtin_app", lambda key: None)
+        monkeypatch.setattr(admin_config.app_credentials, "telegram_app_credentials", lambda: None)
+
+    def _store(self, tmp_path, provider, serial=1, **overrides):
+        fingerprint = connector_configs.fingerprint(public_bytes(fixture_key()))
+        connector_configs.accept(tmp_path, sign(provider, serial, **overrides), confirmed_fingerprint=fingerprint)
+        return fingerprint
+
+    def _rows(self, mode="org"):
+        rows = admin_config.service_rows({}, _import({}, mode=mode), mode=mode)
+        return {row["key"]: row for row in rows}
+
+    def test_a_signed_config_names_its_client_serial_date_and_key_but_not_the_secret(self, tmp_path):
+        fingerprint = self._store(tmp_path, "slack", 7, client_id="own-slack")
+        row = self._rows()["slack"]
+        assert (row["app_source"], row["client_id"], row["relay"]) == ("connector", "own-slack", False)
+        assert row["options"] == {
+            "serial": 7, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": fingerprint, "imported": False,
+        }
+        assert CONNECTOR_SECRET not in json.dumps(self._rows())
+
+    def test_salesforce_reports_its_consumer_key_as_the_client(self, tmp_path):
+        self._store(tmp_path, "salesforce", consumer_key="own-consumer")
+        assert self._rows()["salesforce"]["client_id"] == "own-consumer"
+
+    def test_an_imported_config_has_no_serial_or_key(self, tmp_path):
+        stored = connector_configs.legacy_path(tmp_path, "miro")
+        stored.parent.mkdir(parents=True)
+        stored.write_text(
+            json.dumps({"source": "legacy-bundle", "fields": {"client_id": "old-miro", "client_secret": "x"}}),
+            encoding="utf-8",
+        )
+        row = self._rows()["miro"]
+        assert (row["app_source"], row["client_id"]) == ("connector", "old-miro")
+        assert row["options"] == {"serial": None, "signed_at": "", "fingerprint": "", "imported": True}
+
+    def test_a_grist_config_supplies_the_server_address_and_locks_it(self, tmp_path):
+        self._store(tmp_path, "grist")
+        row = self._rows()["grist"]
+        assert (row["app_source"], row["client_id"]) == ("connector", "grist-id")
+        assert row["options"]["server_url"] == "https://grist.example"
+        assert (row["options"]["address_source"], row["options"]["locked"]) == ("connector", True)
+        assert row["options"]["serial"] == 1
+
+    def test_a_provider_without_a_config_has_no_connector_options(self, tmp_path):
+        self._store(tmp_path, "slack")
+        rows = self._rows()
+        assert rows["google"]["app_source"] == "none" and "serial" not in rows["google"]["options"]
+        assert rows["telegram"]["options"] == {} and "serial" not in rows["peek"]["options"]
+
+    def test_local_mode_ignores_stored_connector_configs(self, tmp_path):
+        self._store(tmp_path, "slack")
+        assert self._rows(mode="local")["slack"]["app_source"] == "none"
+
+
+class TestRemoveConnectorConfig:
+    @pytest.fixture(autouse=True)
+    def _isolated(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(connector_configs, "default_org_dir", lambda: tmp_path)
+
+    def _store(self, tmp_path, provider="slack", serial=1):
+        fingerprint = connector_configs.fingerprint(public_bytes(fixture_key()))
+        connector_configs.accept(tmp_path, sign(provider, serial), confirmed_fingerprint=fingerprint)
+
+    def test_it_deletes_the_file_keeps_the_serial_and_names_the_provider(self, tmp_path):
+        self._store(tmp_path, "salesforce", 4)
+        summary, changed = _change("remove_connector_config", {"service": "salesforce"})
+        assert (summary, changed) == ("Removed the Salesforce connector config", ["services"])
+        assert not connector_configs.stored_path(tmp_path, "salesforce").exists()
+        assert connector_configs.load_serials(tmp_path) == {"salesforce": 4}
+        assert CONNECTOR_SECRET not in summary
+
+    def test_nothing_stored_changes_nothing(self):
+        assert _change("remove_connector_config", {"service": "slack"}) == ("", [])
+
+    @pytest.mark.parametrize("service", ["peek", "telegram", "nope"])
+    def test_only_a_provider_with_a_connector_config_is_accepted(self, service):
+        with pytest.raises(admin_config.AdminConfigError, match="Unknown service"):
+            _change("remove_connector_config", {"service": service})
+
+    def test_a_service_is_required_and_must_be_text(self):
+        for params in ({}, {"service": 3}):
+            with pytest.raises(admin_config.AdminConfigError):
+                _change("remove_connector_config", params)
+
+    def test_a_desktop_install_has_no_connector_configs(self):
+        with pytest.raises(admin_config.AdminConfigError, match="organization servers only"):
+            _change("remove_connector_config", {"service": "slack"}, mode="local")
+
+    def test_a_refusal_from_the_store_is_reported_as_an_admin_error(self, monkeypatch):
+        def boom(org, provider):
+            raise connector_configs.ConnectorConfigError("cannot remove")
+
+        monkeypatch.setattr(connector_configs, "remove", boom)
+        with pytest.raises(admin_config.AdminConfigError, match="cannot remove"):
+            _change("remove_connector_config", {"service": "slack"})
 
 
 class TestNothingSecretLeaks:

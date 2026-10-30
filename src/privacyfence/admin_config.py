@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import app_credentials, grist_auth, paths, peek_client, scoped_tokens, secure_files
+from . import app_credentials, connector_configs, grist_auth, paths, peek_client, scoped_tokens, secure_files
 from .org_mode import (
     ADMIN_EMAILS_ENV,
     AuditForwardingConfig,
@@ -454,6 +454,7 @@ _ACTION_MODES: dict[str, frozenset[str]] = {
     "tighten_step_up": _ORG_ONLY,
     "set_scoped_tokens": _ORG_ONLY,
     "set_audit_forwarding": _ORG_ONLY,
+    "remove_connector_config": _ORG_ONLY,
 }
 
 MAX_ROOMS = 5000
@@ -808,6 +809,17 @@ def _apply_audit_forwarding(config: dict[str, Any], params: dict[str, Any]) -> t
     return _replace_section(config, "audit_forwarding", candidate, summary)
 
 
+def _apply_remove_connector_config(params: dict[str, Any]) -> tuple[str, list[str]]:
+    """Delete the stored connector config of one provider. Its serial stays recorded, so the same
+    file cannot be uploaded again. Nothing stored means nothing to say."""
+    name = _service_name(params, connector_configs.PROVIDERS)
+    try:
+        removed = connector_configs.remove(connector_configs.default_org_dir(), name)
+    except connector_configs.ConnectorConfigError as exc:
+        raise AdminConfigError(str(exc)) from None
+    return (f"Removed the {SERVICE_LABELS[name]} connector config", ["services"]) if removed else ("", [])
+
+
 def apply_change(
     action: str, params: dict[str, Any], *, bundle: dict[str, Any], mode: Mode, single_user: bool
 ) -> tuple[str, list[str]]:
@@ -848,6 +860,8 @@ def apply_change(
             result = _apply_tighten_step_up(config, params)
         elif action == "set_scoped_tokens":
             result = _apply_scoped_tokens(config, params)
+        elif action == "remove_connector_config":
+            result = _apply_remove_connector_config(params)
         else:
             result = _apply_audit_forwarding(config, params)
         config["org_server"] = before["org_server"]
@@ -912,8 +926,20 @@ def replace_rooms(data: Any, *, bundle: dict[str, Any], mode: Mode, single_user:
 # --------------------------------------------------------------------------- #
 
 
+def _connector_options(loaded: connector_configs.LoadedConfig) -> dict[str, Any]:
+    """What the Services row says about a stored connector config: which file it is and who signed
+    it, never the fields, which hold the client secret."""
+    return {
+        "serial": loaded.serial,
+        "signed_at": loaded.signed_at,
+        "fingerprint": loaded.fingerprint,
+        "imported": loaded.source == connector_configs.LEGACY_SOURCE,
+    }
+
+
 def _service_row(
-    bundle: dict[str, Any], admin: dict[str, Any], name: str, env: dict[str, str], *, mode: Mode, single_user: bool
+    bundle: dict[str, Any], admin: dict[str, Any], name: str, env: dict[str, str], *, mode: Mode, single_user: bool,
+    connectors: dict[str, connector_configs.LoadedConfig] | None = None,
 ) -> dict[str, Any]:
     from . import oauth_apps
 
@@ -922,9 +948,15 @@ def _service_row(
     section = _section(bundle, name)
     app_source = "server"
     client_id = ""
+    connector_options: dict[str, Any] = {}
     if name in oauth_apps.BUILTIN_KEY:
-        app_source = oauth_apps.credentials_source(bundle, name, mode=mode)
-        if app_source == "bundle":
+        app_source = oauth_apps.credentials_source(bundle, name, mode=mode, connectors=connectors)
+        if app_source == "connector":
+            # The client id and where the file came from, never the secret in its fields.
+            loaded = (connectors or {})[name]
+            client_id = loaded.client_id
+            connector_options = _connector_options(loaded)
+        elif app_source == "bundle":
             client_id = str(section.get("consumer_key" if name == "salesforce" else "client_id") or "")
         elif app_source == "builtin":
             app = app_credentials.builtin_app(oauth_apps.BUILTIN_KEY[name])
@@ -933,6 +965,11 @@ def _service_row(
         app_source = "builtin" if app_credentials.telegram_app_credentials() is not None else "none"
     elif name == "grist":
         client_id = str(section.get("client_id") or "")
+        if mode == "org" and "grist" in (connectors or {}):
+            app_source = "connector"
+            loaded = (connectors or {})[name]
+            client_id = loaded.client_id
+            connector_options = _connector_options(loaded)
 
     options: dict[str, Any] = {}
     if name == "atlassian":
@@ -941,8 +978,10 @@ def _service_row(
             "assets_workspace_id": str(stored.get("assets_workspace_id", "") or ""),
         }
     elif name in _ADDRESS_FIELD:
-        source = _address_source(bundle, name, stored, env)
-        if source == "bundle":
+        source = "connector" if app_source == "connector" else _address_source(bundle, name, stored, env)
+        if source == "connector":
+            address = str((connectors or {})[name].fields.get("server_url") or "")
+        elif source == "bundle":
             address = str(section.get("server_url") or "")
         else:
             address = env.get(name) or str(stored.get(_ADDRESS_FIELD[name], "") or "")
@@ -969,7 +1008,7 @@ def _service_row(
         "app_source": app_source,
         "client_id": client_id,
         "relay": mode == "org" and app_source == "builtin" and name != "telegram",
-        "options": options,
+        "options": {**options, **connector_options},
     }
 
 
@@ -989,4 +1028,8 @@ def service_rows(
     """One row per service for the Admin page. A row never carries a secret: not a client
     secret, not a provisioning key, only whether the key is set."""
     env = _env_addresses()
-    return [_service_row(bundle, admin, name, env, mode=mode, single_user=single_user) for name in SERVICES]
+    connectors = connector_configs.load_all(connector_configs.default_org_dir()) if mode == "org" else {}
+    return [
+        _service_row(bundle, admin, name, env, mode=mode, single_user=single_user, connectors=connectors)
+        for name in SERVICES
+    ]
