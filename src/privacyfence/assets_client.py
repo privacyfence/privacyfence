@@ -41,9 +41,9 @@ NEEDS_ASSETS_PERMISSION = (
 )
 NOT_AUTHENTICATED = "Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings."
 NEEDS_WORKSPACE_ID = (
-    "Jira Assets could not look up this site's Assets workspace id. Set it as "
-    "connectors.assets.workspace_id in PrivacyFence settings, or in the organization bundle "
-    "(build_org_bundle.py --atlassian-assets-workspace-id); see docs/atlassian-setup.md."
+    "Jira Assets could not look up this site's Assets workspace id. Set it under Admin → "
+    "Features → Jira Assets, or as connectors.assets.workspace_id in PrivacyFence settings; see "
+    "docs/atlassian-setup.md."
 )
 
 MAX_PAGES = 10
