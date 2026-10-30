@@ -96,7 +96,7 @@ class TestWorkflow:
                       "GET /.well-known/oauth-protected-resource/mcp", "GET /authorize", "GET /register",
                       "POST /token"):
             assert check in text
-        assert "!= 404" in text
+        assert "403|404) ;;" in text
 
     def test_every_action_is_pinned_by_sha(self, workflow):
         for job in workflow["jobs"].values():
