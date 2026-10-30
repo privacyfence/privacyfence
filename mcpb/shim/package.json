@@ -11,7 +11,7 @@
     "test": "node --import tsx --test --experimental-test-coverage --test-coverage-branches=88 --test-coverage-lines=95 test/*.test.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1"
+    "@modelcontextprotocol/sdk": "1.32.2"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "2.1.2",

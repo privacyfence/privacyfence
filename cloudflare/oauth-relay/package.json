@@ -11,15 +11,15 @@
     "dry-run": "wrangler deploy --dry-run --outdir dist"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.23.0",
-    "@cloudflare/workers-types": "5.20261023.1",
-    "@vitest/coverage-istanbul": "4.1.12",
+    "@cloudflare/vitest-plugin": "^1.4.11",
+    "@cloudflare/workers-types": "5.20261027.1",
+    "@vitest/coverage-istanbul": "5.0.5",
     "typescript": "7.0.2",
-    "vitest": "4.1.12",
-    "wrangler": "4.152.0"
+    "vitest": "5.0.5",
+    "wrangler": "4.153.0"
   },
   "overrides": {
-    "vitest": "4.1.12",
+    "vitest": "5.0.5",
     "sharp": "0.35.5",
     "undici": "7.30.1",
     "zod": "4.6.6"
