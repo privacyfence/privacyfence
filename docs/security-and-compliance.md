@@ -6,19 +6,27 @@ statement. The reasons behind each decision are in the linked ADRs.
 
 ## Deployment modes
 
-| | Local mode (default) | Organization mode |
-| --- | --- | --- |
-| Where it runs | One person's own computer | A server the organization runs |
-| Who signs in | Nobody: one implicit user per OS account | Each person, through the organization's OIDC identity provider |
-| How AI clients connect | `/mcp` on `127.0.0.1`, plain HTTP ([ADR 0010](adr/0010-local-mode-serves-plain-http-on-localhost.md)) | `/mcp` behind the organization's HTTPS reverse proxy, with OAuth 2.1 ([ADR 0011](adr/0011-org-mode-runs-its-own-oauth-authorization-server.md)) |
-| Privilege separation | Always, on a packaged install (see [Privilege separation](#privilege-separation)) | Not used: the AI client has no access to the server |
+| | Local mode (desktop; deprecated) | Organization mode | Single-user mode (organization mode on localhost) |
+| --- | --- | --- | --- |
+| Where it runs | One person's own computer | A server the organization runs | One person's own computer, usually in Docker |
+| Who signs in | Nobody: one implicit user per OS account | Each person, through the organization's OIDC identity provider | One administrator: a setup code, then a passkey |
+| How AI clients connect | `/mcp` on `127.0.0.1`, plain HTTP ([ADR 0010](adr/0010-local-mode-serves-plain-http-on-localhost.md)) | `/mcp` behind the organization's HTTPS reverse proxy, with OAuth 2.1 ([ADR 0011](adr/0011-org-mode-runs-its-own-oauth-authorization-server.md)) | `/mcp` at `http://localhost`, with OAuth 2.1 and the person's consent |
+| Privilege separation | Always, on a packaged install (see [Privilege separation](#privilege-separation)) | Not used: the AI client has no access to the server | Not used; see [Single-user mode](#single-user-mode) |
+| Built-in OAuth apps | None | Yes, through the relay | Yes, through the relay |
 
-Claude Desktop and Claude Code work with either mode. claude.ai can reach PrivacyFence only through
-an organization deployment, because local mode listens only on localhost.
+Local mode is deprecated in PrivacyFence 7 and removed in 8 ([moving to organization
+mode](moving-to-organization-mode.md)). Claude Desktop and Claude Code work with every mode. claude.ai
+can reach PrivacyFence only through an organization deployment, because the others listen only on
+localhost.
 
-There is no PrivacyFence-operated infrastructure in either mode. No hosted service sits in the
-data path: every tool call goes from the machine or server running PrivacyFence straight to the
-provider (Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server).
+**Which PrivacyFence-operated services exist.** In local mode there are none: every tool call goes
+from the machine running PrivacyFence straight to the provider (Google, Slack, Salesforce,
+Atlassian, Telegram, Grist or your Peek server). Organization mode and the Docker image have one,
+and only when a service uses a built-in app: the **OAuth redirect relay** at
+`oauth.privacyfence.eu`, which forwards a provider's redirect to your server. It is not in the path
+of any tool call, and an organization that uses its own apps for every provider needs it only for
+the opt-in built-in Google sign-in. What it sees and what it can do are in
+[Built-in apps, the admin config and the relay](#built-in-apps-the-admin-config-and-the-relay).
 
 A **packaged install** is the macOS `.pkg` (on the DMG), the Windows installer, or the `.deb`. A
 source checkout or a `pip`/`pipx install privacyfence` is not packaged. It is never
@@ -64,6 +72,110 @@ the organization's identity provider. A browser session and an MCP client's OAut
 same sign-in resolve to the same person. Each person's connectors, approvals, staged downloads,
 passkeys and audit log are kept apart by principal, and one person never receives another's.
 
+Installation-wide settings (which services are offered, sign-in restrictions, step-up, audit
+forwarding and the others) are changed on the **Admin** page, by an administrator the identity
+provider names. They are stored in the admin config described [below](#built-in-apps-the-admin-config-and-the-relay).
+
+## Single-user mode
+
+An organization-mode install without an identity provider is **single-user mode**: one
+administrator, served only at `http://localhost` or `http://127.0.0.1`. It is how the Docker image
+starts without any configuration. A server that ever had an identity provider, a pinned bundle key
+or `org_server` recorded in its admin config is refused in single-user mode, so removing the
+identity-provider settings cannot turn a production server into a setup-code server
+([ADR 0260](adr/0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md)).
+
+**Signing in.** The server logs a setup code (`Setup code: XXXX-XXXX`) at start, while no passkey is
+enrolled. Entering it at `/login` signs you in as the administrator and leads to Passkeys. The code
+works once, five wrong attempts discard it until the next start, and it **stops working for good once
+a passkey is enrolled**; every later sign-in uses the passkey. Step-up is on and a passkey is
+required by default, so approvals and every sensitive Admin action ask for the passkey even with a
+valid session cookie.
+
+**What it does not protect against.** Single-user mode is no protection against an agent that can run
+`docker` on that computer. Whoever can run `docker` can read `docker logs` (and so the setup code),
+read or replace the data volume, or open a page on another localhost port, and takes over the
+install. The AI clients you connect run as you. Run the container under a separate operating-system
+account (rootless Docker) or in a virtual machine, publish the port only on `127.0.0.1`, or use an
+organization server. A lost passkey is recovered by stopping the container and deleting the passkey
+credentials file in the volume; the next start prints a new code.
+
+## Built-in apps, the admin config and the relay
+
+**Built-in apps.** The organization image and the PyPI package carry PrivacyFence's own OAuth apps
+for Google, Slack, Salesforce, Atlassian and Miro; the desktop installers carry none. A server uses
+one when a service is offered and no connector config replaces it. Their client secrets are public in
+effect: anyone can read them from the image. A refresh token is bound to the app that issued it, so a built-in app's
+public secret adds no protection to a stolen token; protect tokens as you would with your own app.
+Secrets are rotated by adding the new one beside the old where the provider
+allows two (Google and Salesforce do), releasing, and retiring the old one once the release is
+adopted ([ADR 0255](adr/0255-built-in-oauth-apps-ship-in-every-distribution.md)). Do not mark the
+built-in app as trusted or pre-approved in a provider's admin console: that trust would extend to
+every PrivacyFence server and to anyone using the public app. To trust an app, register your own and
+give it to PrivacyFence as a connector config.
+
+**The relay.** A provider accepts only fixed redirect URLs for an app, so a built-in app redirects to
+`https://oauth.privacyfence.eu/callback/<provider>`, and the relay forwards that browser redirect to
+your server ([ADR 0259](adr/0259-org-servers-use-built-in-apps-through-a-domain-verified-relay.md)).
+
+- *What it sees.* The query of each redirect (the one-time authorization code and your `state`) and
+  the host name your server registered, its registration dates and, for the built-in Google sign-in,
+  the verified sign-in domains. It writes no logs, stores no authorization code, and holds no client
+  secret, access token or refresh token: it never exchanges a code. A localhost server needs no
+  registration; its redirect goes straight back to your own browser. The
+  [privacy statement](https://privacyfence.eu/privacy/#relay) and the
+  [relay terms](https://privacyfence.eu/relay-terms/) are the legal text.
+- *Domain verification.* The relay forwards only to a host that proved it controls its name by
+  serving a random token at `/.well-known/privacyfence-relay` (the route answers 404 unless a relayed
+  service is in use), and renews daily. It refuses hosts under private suffixes such as `github.io`
+  and `pages.dev`, where anyone can create a name. The built-in Google sign-in also needs each sign-in
+  domain proven in DNS (a TXT record at `_privacyfence-relay.<domain>` carrying a hash of the
+  server's relay token), and forwards a code only for a verified domain.
+- *Maintainer controls.* Each new registration emails the maintainers, and a reported host is
+  revoked within one working day.
+- *What a compromised relay could do, per provider.* It sees the code in transit and could send it
+  elsewhere, or substitute its own. For **Google, Atlassian and Salesforce**, which PrivacyFence signs
+  in with PKCE, a code without the server's verifier is useless, and a substituted code fails at the
+  exchange. For **Slack and Miro**, which send no PKCE, a compromised relay could exchange a code
+  before your server does, or sign a person in to an attacker's account; the Admin page says "Sign-in
+  codes for this service pass through oauth.privacyfence.eu without PKCE. Use your own app to avoid
+  this." on those rows. A compromised relay never gets a token that is already stored on your server,
+  and none of this applies to a service that uses your organization's own app. A compromised deploy
+  path could change the relay; the deploy environment requires reviewers other than the author.
+- *Consent phishing.* Anyone who owns a public domain can run a server and show "PrivacyFence" on a
+  provider's consent screen. Domain proof, the notification and revocation bound this, which is why
+  the provider guides tell you not to trust the built-in app.
+
+**The admin config.** Installation-wide settings live in `org/admin_config.json`, written only by the
+daemon with owner-only permissions, and changed on the Admin page by the install owner (desktop) or an
+IdP administrator (organization). It has the trust of `settings.yaml`: whoever can write the install
+directory can change it ([ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md)).
+The addresses a Peek or Grist provisioning key is sent to come only from the server's environment (or
+an upgraded server's locked address), so a hijacked Admin session cannot point the key at another
+host; changing audit forwarding to another URL clears its bearer-token variable.
+
+**Signed connector configs.** An organization's own app for Google, Slack, Salesforce, Atlassian, Miro
+or Grist is a small text file signed with an Ed25519 key. The first upload pins the key only after an
+administrator confirms its fingerprint, a different key is refused (rotation is deleting
+`org/connector_config_signing_pubkey.txt` on the server), each provider's serial must exceed any
+accepted before, also after the config is removed, and the file is verified again at every start
+([ADR 0269](adr/0269-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md)).
+Signing now covers only startup settings (on a desktop bundle) and app credentials; operational
+settings are not signed, they are the admin config
+([ADR 0256](adr/0256-org-config-holds-only-startup-settings-and-app-credentials.md)).
+Uploading or removing one always asks for a passkey, is audited without the secret, and makes everyone
+who connected that service sign in again.
+
+**Sign-in by verified email.** An administrator can be named by email
+(`PRIVACYFENCE_ADMIN_EMAILS`), and sign-in can be limited to allowed email domains. Both now trust
+an address only when the identity provider reports it verified (`email_verified` exactly `true`),
+and with Google the account's Workspace domain (`hd`) must match the address, so a personal account
+registered with a work address cannot get in. A
+provider that never sends `email_verified`, such as Microsoft Entra ID, needs
+`PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL=true` for allowed domains to keep working; it never applies to
+administrators named by email. See
+[ADR 0265](adr/0265-admins-can-be-named-by-verified-email.md).
+
 ## Human and unattested sessions
 
 Every local-mode web session records how it was started:
@@ -100,18 +212,20 @@ sign-in), and neither can be done at a time of the AI client's choosing without 
 
 Step-up asks for a fresh WebAuthn passkey assertion (Touch ID, Windows Hello, a security key, or
 a phone over the browser's QR-code flow) before a decision is released. The `step_up` settings (in `config/settings.yaml` for local mode,
-`org_config.json` for organization mode; see [Configuration reference](configuration-reference.md))
+`org/admin_config.json` for organization mode; see [Configuration reference](configuration-reference.md))
 default to:
 
 | Key | Packaged local install | Non-packaged local install | Organization mode |
 | --- | --- | --- | --- |
-| `enabled` | `true` | `false` | `false` |
-| `require_passkey` | `true` | `false` (setting `true` is refused at startup) | `false` |
+| `enabled` | `true` | `false` | `false` (`true` on a single-user install) |
+| `require_passkey` | `true` | `false` (setting `true` is refused at startup) | `false` (`true` on a single-user install) |
 | `scope` | `writes_and_pii_reads` | `writes_and_pii_reads` | `writes_and_pii_reads` |
 | `batch` | `single_assertion` | `single_assertion` | `single_assertion` |
 
-An explicit value always wins. Organization mode sets these with `scripts/build_org_bundle.py`
-(`--step-up-enabled`, `--step-up-require-passkey`, `--step-up-scope`).
+An explicit value always wins. On an organization server an administrator makes step-up stricter on
+**Admin → Step-up** (the page only offers stricter choices); relaxing it is an edit of
+`org/admin_config.json` followed by a restart ([ADR 0068](adr/0068-step-up-is-turned-on-from-the-ui-and-off-only-by-a-config-edit.md)),
+and `rp_id`, `rp_name` and `batch` have no control and are set the same way.
 
 `scope` decides which approving decisions need a passkey:
 
@@ -131,6 +245,11 @@ says:
   detection or a PII category on or off; the calendar free/busy setting; re-enabling a connector
   that was switched off; turning step-up on;
 - uploading an organization config bundle;
+- every sensitive **Admin** action (offering a service, uploading or removing a connector config,
+  changing a server address, the Salesforce login URL, sign-in restrictions, step-up, scoped tokens,
+  audit forwarding, the privacy policy, uploading rooms or a bundle): these ask for a passkey
+  **whatever the step-up configuration says**, in every mode, and a person with no passkey is told
+  to add one on `/security` first ([ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md));
 - confirming a rule an AI client proposed with `privacyfence_propose_policy_change` (see below).
 
 Adding a passkey, and removing your last one, are gated whatever `require_passkey` says (see
@@ -377,7 +496,8 @@ The chain detects edits, insertions and deletions made without the key. Anyone w
 key can rebuild a consistent chain. On a separated install that means root or the service account.
 On a non-packaged install it includes any process running as you. For evidence that survives that,
 send a copy off the machine. Organization mode can forward every entry to syslog or an HTTP
-endpoint (`audit_forwarding` in `org_config.json`); local mode has no forwarding.
+endpoint (**Admin → Audit forwarding**, stored as `audit_forwarding` in `org/admin_config.json`); local
+mode has no forwarding.
 
 Security events have their own `decision` values: `sign_in_code_minted`,
 `webauthn_credential_enrolled`, `webauthn_credential_removed`, `webauthn_enrollment_refused`,
@@ -438,7 +558,7 @@ to build the card, detect personal data or check a rule. That data stays inside 
   gated content; `detailed` adds the approval's summary line and can put it on a lock screen. An
   organization deployment's push notifications always carry the count only, encrypted and padded
   to a fixed size; the browser's push service (Apple, Google, Mozilla or Microsoft) sees when one
-  was sent, and the bundle can turn them off
+  was sent, and an administrator can turn them off on the Admin page
   ([ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md)).
 
 **A deny note** is the one thing a person can add to what the AI sees. Whoever denies a request can
@@ -466,9 +586,11 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
 - **Organization OAuth server:** at most 2,000 registered clients, 8 KiB of metadata per
   registration, and unused registrations pruned after 180 days. Access tokens last 1 hour and
   refresh tokens at most 30 days.
-- **Organization config:** validated at startup, which fails instead of weakening; the bundle's
-  hash is audited and it can be signed ([ADR 0016](adr/0016-org-config-bundle-hash-log-and-signing.md)).
-  Protect who can replace it.
+- **Organization config:** validated at startup, which fails instead of weakening. A desktop bundle
+  or a server's legacy bundle has its hash audited and can be signed
+  ([ADR 0016](adr/0016-org-config-bundle-hash-log-and-signing.md)). An organization server's own apps
+  are signed connector configs, each verified again at every start. Protect who can replace them and
+  the data directory, which holds the admin config.
 - **Downloads in organization mode:** staged encrypted, served once through a short-lived link
   (default 300 seconds) ([ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)).
 - **Client secrets** belong to the deployment, not a person. Rotate a leaked one with the provider.
@@ -480,13 +602,16 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
 
 ## What PrivacyFence does not claim
 
-- **No certification, business-continuity plan or SLA.** There is no PrivacyFence-operated
-  infrastructure to certify and no service whose outage affects you; installed copies keep running
-  without the maintainer. Reports are handled best-effort. Treat this as a risk acceptance: approve
+- **No certification, business-continuity plan or SLA.** The only PrivacyFence-operated service is
+  the optional redirect relay, offered as is under its [terms](https://privacyfence.eu/relay-terms/).
+  If it is down, built-in apps cannot start a new sign-in until it is back; tool calls, connections
+  that already exist and servers using their own apps are unaffected, and installed copies keep
+  running without the maintainer. Reports are handled best-effort. Treat this as a risk acceptance: approve
   PrivacyFence through an exception process, pin a reviewed release, and assign an internal owner to
   track releases ([ADR 0025](adr/0025-no-certified-security-framework.md)).
 - **No protection against root or a local Administrator**, or against local code on a
-  non-packaged install.
+  non-packaged install, or against an agent that can run `docker` on a single-user install
+  ([Single-user mode](#single-user-mode)).
 - **No confidentiality of the local review screen** against a process running as you.
 - **No verified AI-system identity in local mode.**
 - **No hard stop from the unattended-session flag.** It is advisory

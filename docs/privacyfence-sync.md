@@ -47,10 +47,10 @@ the process that runs `privacyfence-sync`. A token is never accepted as a comman
 Runs use the stored sign-in as long as `PRIVACYFENCE_TOKEN` is not set. A sign-in lasts 30 days;
 after that a run exits with code 4 and you sign in again.
 
-**Unattended sessions must be allowed.** Both modes need `unattended_sessions.enabled` in the
-organization bundle (`build_org_bundle.py --enable-unattended-sessions`, see the
-[configuration reference](configuration-reference.md)). Without it a run stops before its first
-step.
+**Unattended sessions must be allowed.** Both modes need the **Unattended sessions** switch under
+**Admin → Features** turned on (an administrator on an organization server, the install owner on a
+desktop install; see [Connecting a service](connecting-a-service.md#the-admin-page)). Without it a
+run stops before its first step.
 
 ## The rules a recipe needs
 

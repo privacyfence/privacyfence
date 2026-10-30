@@ -1,8 +1,26 @@
 # Google setup (Gmail, Drive, Calendar, Contacts, Tasks, Apps Script)
 
-One administrator registers PrivacyFence with Google Cloud once per organization and puts the
-resulting OAuth client into the organization config bundle. Users then sign in to each Google
-connector from PrivacyFence — they never open the Google Cloud console.
+You need this page only to use your organization's own app instead of the built-in one.
+
+An organization server and the Docker image offer Google with PrivacyFence's built-in app: nothing to
+register, and people sign in from PrivacyFence. The built-in app shows Google's "unverified app"
+screen and is capped at 100 users until Google verifies it, and Google's verification for the Gmail
+and Drive scopes includes an annual security assessment. A Google Workspace organization that wants
+neither limit registers its own app, as described here, and can mark that app (its own client ID)
+as trusted in the Workspace Admin console. Do not mark the built-in PrivacyFence app as trusted or
+pre-approved: that trust would extend to every PrivacyFence server and to anyone using the public
+app. To trust an app, register your own.
+
+How the app reaches PrivacyFence depends on the deployment:
+
+- **Organization server (and the Docker image):** the app is a signed connector config uploaded on
+  **Admin → Services**. Its OAuth client must be a **Web application** client.
+- **Desktop install:** the app is a `google` section in the organization config bundle. Its client
+  must be a **Desktop app** client. Desktop installs have no built-in app; desktop mode is deprecated
+  and goes away in PrivacyFence 8 ([moving to organization mode](moving-to-organization-mode.md)).
+
+Users then sign in to each Google connector from PrivacyFence — they never open the Google Cloud
+console.
 
 ## What you need
 
@@ -10,7 +28,8 @@ connector from PrivacyFence — they never open the Google Cloud console.
   [console.cloud.google.com](https://console.cloud.google.com/)).
 - For Workspace accounts, ideally the right to create an **Internal** app, so no Google
   verification is needed (see [Consent screen and verification](#3-consent-screen-and-verification)).
-- Python 3 to run `scripts/build_org_bundle.py`.
+- Python 3, to run `scripts/sign_connector_config.py` (organization server) or
+  `scripts/build_org_bundle.py` (desktop install), or a browser for the offline signing page.
 - Which deployment you are building for: **desktop installs**, an **organization server**, or
   both. They need different OAuth client types (step 4).
 
@@ -72,7 +91,8 @@ Credentials → OAuth client ID**):
 - **Organization server:** application type **Web application**, with every org redirect URI from
   the [values table](#values) under **Authorized redirect URIs**. Use a client dedicated to the
   connectors, separate from the one your server uses for sign-in (see
-  [org-mode-setup-guide.md](org-mode-setup-guide.md)).
+  [org-mode-setup-guide.md](org-mode-setup-guide.md)). A Desktop app client is refused at sign-in
+  with `redirect_uri_mismatch`.
 
 The two types are not interchangeable: a Desktop app client cannot hold an HTTPS redirect URI, and
 a Web application client cannot accept a loopback redirect on a port picked at sign-in time. If you
@@ -85,14 +105,15 @@ Download each client's JSON (`client_secret_….json`). Treat it as a secret.
 | Item | Value |
 |---|---|
 | Local redirect (desktop installs) | `http://localhost:<port>/`, port picked by the operating system at each sign-in. Nothing to register — requires a **Desktop app** client. |
-| Org redirects (organization server) | Register all six on the **Web application** client, with `<server>` your server's `--server-issuer-url`:<br>`https://<server>/oauth/callback/gmail`<br>`https://<server>/oauth/callback/drive`<br>`https://<server>/oauth/callback/calendar`<br>`https://<server>/oauth/callback/contacts`<br>`https://<server>/oauth/callback/tasks`<br>`https://<server>/oauth/callback/apps_script` |
+| Org redirects (organization server) | Register all six on the **Web application** client, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`):<br>`https://<server>/oauth/callback/gmail`<br>`https://<server>/oauth/callback/drive`<br>`https://<server>/oauth/callback/calendar`<br>`https://<server>/oauth/callback/contacts`<br>`https://<server>/oauth/callback/tasks`<br>`https://<server>/oauth/callback/apps_script` |
 | Gmail scopes | `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/gmail.settings.basic` |
 | Drive scope | `https://www.googleapis.com/auth/drive` |
 | Calendar scope | `https://www.googleapis.com/auth/calendar` |
 | Contacts scope | `https://www.googleapis.com/auth/contacts` |
 | Tasks scope | `https://www.googleapis.com/auth/tasks` |
 | Apps Script scopes | `https://www.googleapis.com/auth/script.projects`, `https://www.googleapis.com/auth/script.processes`, `https://www.googleapis.com/auth/drive.metadata.readonly` |
-| Bundle flag | `--google-client-secret <path to the downloaded JSON>` |
+| Connector config (organization server) | `sign_connector_config.py sign --provider google --client-id <client ID> --client-secret-file <file holding the client secret> …`, or the same in the browser signing page |
+| Bundle flag (desktop install) | `--google-client-secret <path to the downloaded JSON>` |
 
 Each Google connector is a separate sign-in with only its own scopes. PrivacyFence never requests
 Admin SDK or Workspace-directory scopes from users; room booking uses a separately synced directory
@@ -100,7 +121,30 @@ Admin SDK or Workspace-directory scopes from users; room booking uses a separate
 `drive.metadata.readonly` scope reads only file names, IDs and timestamps, to list your script
 projects; the connector has no tool that runs a script.
 
-## Build and distribute the bundle
+## Give PrivacyFence the app
+
+### Organization server: a signed connector config
+
+On an organization server the app is a small signed text file. Take the client ID and client secret
+from the downloaded JSON, sign them with your organization's connector config key, and upload the
+file on **Admin → Services** (the Google row, **Upload a connector config…**).
+
+```bash
+python3 scripts/sign_connector_config.py keygen --out connector_signing_key.pem
+python3 scripts/sign_connector_config.py sign --provider google --serial 1 \
+  --client-id 1234567890-abc.apps.googleusercontent.com \
+  --client-secret-file google_client_secret.txt \
+  --key connector_signing_key.pem --output google.connector.txt
+```
+
+`keygen` is run once per organization and shows the key's fingerprint; the first upload asks you to
+check that fingerprint, and every later file must be signed with the same key and a higher serial.
+The key tool, the serial rule and the signing page that works offline in a browser are described in
+[org-mode-setup-guide.md](org-mode-setup-guide.md). Uploading asks for a passkey, and **Remove our
+own app** on the same row goes back to the built-in app; either change makes everyone who connected
+Google sign in again.
+
+### Desktop install: the bundle
 
 `scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
 stable GitHub Release. It needs only Python 3 (signing with `--sign-key` also needs
@@ -110,34 +154,32 @@ stable GitHub Release. It needs only Python 3 (signing with `--sign-key` also ne
 python3 scripts/build_org_bundle.py \
   --org-name "Your Company" \
   --google-client-secret /path/to/client_secret.json \
-  -o org_config.json
+  -o org_bundle.json
 ```
 
-Add `--merge` to add Google to an existing `org_config.json` without losing its other sections;
-the `google` section itself is replaced by the client you pass. A bundle holds one Google client,
-so desktop installs (Desktop app client) and an organization server (Web application client) get
-separate bundles.
-
-Distribute the bundle to desktop users by whatever channel you use for internal tools; for an
-organization server, build it with the server flags and install it there. Signing, the org-mode
-flags and installing on the server are covered in
-[org-mode-setup-guide.md](org-mode-setup-guide.md).
+The bundle carries credentials only. The settings that used to go into it (which services are
+offered, step-up, unattended sessions and the others) are on the Admin page, and the script refuses
+their old flags. Add `--merge` to add Google to an existing bundle without losing its other
+sections; the `google` section itself is replaced by the client you pass. Install the bundle on
+**Admin → Organization configuration** ([connecting-a-service.md](connecting-a-service.md)). Signing
+and the other flags are covered in [org-mode-setup-guide.md](org-mode-setup-guide.md).
 
 ### Optional: room directory for `calendar_list_rooms`
 
 Skip this if your organization does not book Workspace rooms; every other Calendar tool works
 without it.
 
-`calendar_list_rooms` reads a room list (name, email, building, floor, capacity) stored in the
-bundle's `rooms` section, not Google live. `scripts/sync_room_directory.py` (from the same
-repository and release) fills it. It needs the Workspace-admin scope
+`calendar_list_rooms` reads a room list (name, email, building, floor, capacity) that you upload on
+the Admin page, not Google live. `scripts/sync_room_directory.py` (from the same repository and
+release) writes it. It needs the Workspace-admin scope
 `admin.directory.resource.calendar.readonly`, so it uses a **second** Google Cloud project,
 keeping that scope off the client every user signs in with:
 
 1. Create a second project (for example `privacyfence-room-sync`) and enable only the **Admin SDK
    API**.
 2. Configure its consent screen as in step 3; only the administrators who run the sync need access.
-3. Create a **Desktop app** OAuth client and download its JSON. Never put it in `org_config.json`.
+3. Create a **Desktop app** OAuth client and download its JSON. Never put it in a connector config or
+   bundle.
 4. Run the sync signed in as an account with the Workspace **Directory Reader** role (or super
    admin):
 
@@ -145,21 +187,19 @@ keeping that scope off the client every user signs in with:
    pip install google-auth google-auth-oauthlib google-api-python-client
    python3 scripts/sync_room_directory.py \
      --admin-client-secret /path/to/room_sync_client_secret.json \
-     --org-config org_config.json
+     --output rooms.json
    ```
 
-   It merges the `rooms` section into the bundle and leaves the rest untouched. `--query` filters
-   which rooms are fetched; `--token-file` (default `.room_sync_token.json`) caches the sync's own
-   sign-in between runs — keep it private.
-5. If the bundle is signed, pass `--sign-key <same signing key>` too (needs `pip install
-   cryptography`). Without it the script refuses to modify a signed bundle, since the merge would
-   invalidate the signature.
-6. Redistribute the bundle. Re-run the sync whenever your rooms change.
+   It writes `rooms.json` (the default name) readable only by you. `--query` filters which rooms are
+   fetched; `--token-file` (default `.room_sync_token.json`) caches the sync's own sign-in between
+   runs — keep it private.
+5. Upload `rooms.json` on **Admin → Features** (the room directory). It asks for a passkey and shows
+   how many rooms were stored and when. Re-run the sync and upload again whenever your rooms change.
 
 ## Users connect
 
-Users install the bundle and click **Authenticate…** (desktop) or **Connect** (organization
-server) for each Google connector they want — the shared flow is described in
+Users click **Authenticate…** (desktop install, after the bundle is installed) or **Connect**
+(organization server) for each Google connector they want — the shared flow is described in
 [connecting-a-service.md](connecting-a-service.md). Google-specific points:
 
 - Each Google connector is its own sign-in; connecting Gmail does not connect Drive.
@@ -175,7 +215,7 @@ server) for each Google connector they want — the shared flow is described in
 and in Testing, and the account is not a test user. Add it under **Audience → Test users**, or use
 an Internal app.
 
-**"This app isn't verified"** — expected for an unverified External app. Test users can continue
+**"This app isn't verified"** — expected for the built-in app, and for any unverified External app. Test users can continue
 through **Advanced → Go to PrivacyFence**. See [verification](#3-consent-screen-and-verification).
 
 **"Error 403: org_internal"** — the app is Internal and the account is outside your Workspace
@@ -188,8 +228,8 @@ verify the External one.
 **"Error 400: redirect_uri_mismatch"** — the client type does not match the deployment. Desktop
 installs need a **Desktop app** client; an organization server needs a **Web application** client
 with all six `https://<server>/oauth/callback/<service>` URIs registered, spelled exactly as
-PrivacyFence builds them from `--server-issuer-url` (the Apps Script one is `apps_script`, with
-an underscore). Check which client the installed bundle actually contains.
+PrivacyFence builds them from the server's public address (the Apps Script one is `apps_script`, with
+an underscore). Check which client the connector config or installed bundle actually contains.
 
 **"authentication failed: Google OAuth exchange failed: the granted scopes are missing [...]"** —
 a permission was unticked on Google's consent page. **Reconnect…** and leave every box ticked.
@@ -205,9 +245,9 @@ turned on the per-user switch at
 **Scopes changed on the client, or a 403 on a tool that worked before** — **Reconnect…** the
 connector so Google issues a token with the current scopes.
 
-**`calendar_list_rooms` returns nothing** — the bundle has no `rooms` section yet. Run the
-[room directory sync](#optional-room-directory-for-calendar_list_rooms) and redistribute the
-bundle.
+**`calendar_list_rooms` returns nothing** — no room directory has been uploaded yet. Run the
+[room directory sync](#optional-room-directory-for-calendar_list_rooms) and upload `rooms.json` on
+the Admin page.
 
 **`sync_room_directory.py` fails with "Room directory listing requires Google Workspace admin
 access"** — the account you signed in with lacks the **Directory Reader** role. Run it again as an

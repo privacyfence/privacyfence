@@ -260,10 +260,12 @@ the text, but it never asks for a second confirmation. The one exception is `dri
 an uploaded file can be something the AI system never read, so it gets the same scan and second
 confirmation as a read.
 
-Turn the check off, or turn off just IP addresses or currency amounts, in
+Turn the check off, or turn off just IP addresses or currency amounts, on a desktop install in
 **Settings → General → PII Detection Gate** (`pii_detection.enabled`,
 `pii_detection.detect_ip_addresses`, `pii_detection.detect_financial_figures`; all on by default).
-In an organization deployment these settings are install-wide and set by an administrator.
+In an organization deployment these settings are install-wide and edited by an administrator on
+**Admin → Privacy Filter** (the PII Detection Gate is there too), not on Settings; saving asks for a
+passkey. Settings is personal.
 
 ---
 
@@ -521,7 +523,8 @@ Each category is set to one of:
 | `redact` | `[REDACTED BY PRIVACY FILTER — N characters withheld]` (only the length is revealed) | empty |
 | `block` | `[BLOCKED BY PRIVACY FILTER]` | empty |
 
-Set them in **Settings → Privacy Filter**, which has one page per group, or in `settings.yaml`.
+On a desktop install, set them in **Settings → Privacy Filter**, which has one page per group, or in
+`settings.yaml`. On an organization server an administrator sets them on **Admin → Privacy Filter**.
 Changes apply immediately. Each group also has a `default_policy` for any category not listed.
 
 | Group (`settings.yaml` key) | Settings page | Categories — value in a fresh `settings.yaml` |
@@ -546,8 +549,10 @@ instead: whether `calendar_get_free_busy` may show event titles and status
 If `file_metadata` and `file_list` are set differently, PrivacyFence logs a warning at startup:
 a file's name and owners reach the AI system through whichever of the two tools is still allowed.
 
-In an organization deployment the privacy filter and the PII check are install-wide and edited by an
-administrator; see [Organization deployment](org-mode-setup-guide.md).
+In an organization deployment the privacy filter and the PII check are install-wide: an
+administrator edits the install-wide privacy policy on the **Admin → Privacy Filter** page, and
+**Settings** does not show it. Settings is personal. A desktop install keeps its own Privacy Filter on
+Settings. See [Organization deployment](org-mode-setup-guide.md).
 
 ---
 

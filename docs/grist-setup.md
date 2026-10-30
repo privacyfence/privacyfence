@@ -8,11 +8,12 @@ change.
 
 ## Two ways to connect
 
-- **OAuth**, when your organization registered a PrivacyFence app in Grist and put it in the
-  organization config bundle. OAuth apps are available in Grist's paid editions. You click
+- **OAuth**, when your organization registered a PrivacyFence app in Grist and gave it to
+  PrivacyFence (a signed connector config on an organization server, a bundle section on a desktop
+  install). OAuth apps are available in Grist's paid editions. You click
   **Authenticate…** (desktop) or **Connect** (organization server) and sign in on Grist's own
   page.
-- **A personal API key** otherwise, on any Grist edition. When the bundle holds an OAuth app,
+- **A personal API key** otherwise, on any Grist edition. When an OAuth app is set up,
   API keys are not accepted: the organization chose OAuth.
 
 ## Connect with an API key
@@ -20,10 +21,10 @@ change.
 1. In Grist, open **Account settings → Developer → API Key** and create the key, then copy it.
 2. On a desktop install, open PrivacyFence's Settings page, **Connectors → Grist →
    Authenticate…**, enter the server address (`https://docs.getgrist.com` for the hosted
-   service, or your own server's address, without `/api`) and the key. When the organization
-   bundle names the server, only the key is asked for.
+   service, or your own server's address, without `/api`) and the key. When the server's
+   address is set on the Admin page, only the key is asked for.
 3. On an organization server, the connections page asks only for the key; the server comes from
-   the bundle.
+   the Admin page (**Features**) or from `PRIVACYFENCE_GRIST_SERVER_URL`.
 
 The key acts as you: it has your access to every document you can open, and Grist offers no
 scopes for it. PrivacyFence sends it only to the server it was entered for, stores it in a file
@@ -41,29 +42,30 @@ README). The provisioner sets or reads the person's key directly in Grist's data
 calls the provisioner with a scoped provisioning key; the provisioner never connects to
 PrivacyFence.
 
-**Store the provisioning key in the daemon's environment**, never in the bundle. The default name is
-`PRIVACYFENCE_GRIST_PROVISIONING_KEY`; `--grist-provisioning-key-env NAME` picks another. On a
-systemd install put `NAME=gristprov_…` in the unit's `EnvironmentFile` (mode `0600`, owned by
-root). With Docker, put it in `privacyfence.env` next to `compose.yaml`.
+**Set the addresses and the key on the server**, never in the bundle or the Admin page:
 
-**Turn it on** in the bundle:
+- `PRIVACYFENCE_GRIST_SERVER_URL`: the Grist server's address.
+- `PRIVACYFENCE_GRIST_PROVISIONER_URL`: the provisioner's address.
+- `PRIVACYFENCE_GRIST_PROVISIONING_KEY`, or, better, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE`
+  naming a file that holds the key (a Docker secret). Setting both, or a file that cannot be read,
+  refuses the start.
 
-```bash
-python3 scripts/build_org_bundle.py --mode org \
-  --grist-server-url https://grist.example.com \
-  --grist-auto-provision \
-  --grist-provisioner-url https://grist-provisioner.example.com \
-  -o org_config.json --merge
-```
+On a systemd install put them in the unit's `EnvironmentFile` (mode `0600`, owned by root). With
+Docker, put them in `privacyfence.env` next to `compose.yaml`, and the key in a Docker secret.
+Restart the server.
 
-`--no-grist-auto-provision` turns it off again. It works only without a Grist OAuth app
-(`--grist-client-id`), and rebuilding with `--merge` keeps the setting.
+**Turn it on** under **Admin → Services**: the Grist row has an **Automatic accounts** switch. It
+works only without a Grist OAuth app, and the row says when it is unavailable, or when the key is
+not set (naming the variable the server reads). A server upgraded from 6.11 keeps its automatic
+accounts: its old addresses stay and the Admin page shows them as fixed, and a key variable name
+it chose keeps working. The 6.11 bundle flags `--grist-auto-provision`, `--grist-provisioner-url`
+and the others are refused by `build_org_bundle.py`.
 
 **Verified email.** Only a person whose ID token says `email_verified` is `true` is provisioned.
-Google always sends it. `--grist-trust-unverified-email` is for identity providers that never send
-the claim but issue only verified, organization-owned addresses; it is safe only then, because
-otherwise anyone who can set their own email at the provider could get another person's Grist key.
-Give the flag again on every `--grist-auto-provision` rebuild; leaving it out turns it off.
+Google always sends it. The **Trust email addresses the identity provider does not mark verified**
+checkbox on the Grist row is for identity providers that never send the claim but issue only
+verified, organization-owned addresses; it is safe only then, because otherwise anyone who can set
+their own email at the provider could get another person's Grist key.
 
 **What a person gets.**
 
@@ -82,7 +84,7 @@ Give the flag again on every `--grist-auto-provision` rebuild; leaving it out tu
 **Release a person.** `privacyfence-app --grist-release PRINCIPAL_ID` (in Docker: `docker compose
 exec privacyfence privacyfence-app --grist-release PRINCIPAL_ID`) makes the provisioner delete the key in
 Grist if it created it, and PrivacyFence forgets it. It needs the provisioning key in the
-environment. A person who signs in again is provisioned again, so remove them from the identity
+environment (or its `_FILE` form). A person who signs in again is provisioned again, so remove them from the identity
 provider first. A running daemon keeps a person's Grist connector in memory until it is rebuilt, so
 restart the daemon after `--grist-release` when the key was adopted (a deleted managed key stops
 working in Grist at once). Running `--grist-release` again for the same person is safe, for example
@@ -100,7 +102,7 @@ For administrators, in Grist's paid editions.
 2. Enter a name such as `PrivacyFence`.
 3. Add the redirect URIs, each on its own line: `http://localhost:53685/callback` for desktop
    installs and, for an organization server, `https://<server>/oauth/callback/grist`, with
-   `<server>` your server's `--server-issuer-url`. One app can carry both.
+   `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`). One app can carry both.
 4. Allow the permissions `doc:read`, `doc:write`, `doc.schema:write` and `offline_access`.
 5. Save, then copy the **client id** and **client secret**.
 
@@ -110,38 +112,51 @@ permissions above.
 
 ## Values
 
-| Item | Value | `build_org_bundle.py` option |
+| Item | Value | `build_org_bundle.py` option (desktop) |
 |---|---|---|
-| Server address | `https://docs.getgrist.com`, a team site or your self-hosted server; no path ending in `/api` | `--grist-server-url` |
+| Server address | `https://docs.getgrist.com`, a team site or your self-hosted server; no path ending in `/api` | `--grist-server-url` (with the OAuth app) |
 | Client id | From the registered app | `--grist-client-id` |
 | Client secret | From the registered app | `--grist-client-secret` |
 | Sign-in server | Left unset for getgrist.com and for any server that serves `/.well-known/oauth-authorization-server` itself | `--grist-auth-server-url` |
 
 The client id and secret go together, and the sign-in server needs them.
 
-## Build and distribute the bundle
+## Give PrivacyFence the OAuth app
 
-`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
-stable GitHub Release. It needs only Python 3.
+Grist's OAuth app still goes in a signed file or the bundle; only the server address moved to the
+Admin page.
+
+On an organization server, sign the app as a connector config and upload it on **Admin → Services**
+(the Grist row, **Upload a connector config…**). The file carries the server address and, if needed,
+the sign-in server:
+
+```bash
+python3 scripts/sign_connector_config.py keygen --out connector_signing_key.pem   # once
+python3 scripts/sign_connector_config.py sign --provider grist --serial 1 \
+  --client-id abc123 --client-secret-file grist_secret.txt \
+  --server-url https://docs.getgrist.com \
+  --key connector_signing_key.pem --output grist.connector.txt
+```
+
+A connector config's address is shown on the row as coming from your organization's Grist app; the
+Admin page owns the address only when no connector config locks it. Uploading and **Remove our own
+app** ask for a passkey and make everyone who connected Grist sign in again. See
+[org-mode-setup-guide.md](org-mode-setup-guide.md).
+
+On a desktop install, put the app in the bundle:
 
 ```bash
 python3 scripts/build_org_bundle.py \
   --grist-server-url https://docs.getgrist.com \
   --grist-client-id abc123 \
   --grist-client-secret abcdef0123456789 \
-  -o org_config.json --merge
+  -o org_bundle.json --merge
 ```
 
-Organization mode also takes `--grist-auto-provision` / `--no-grist-auto-provision`,
-`--grist-provisioner-url URL`, `--grist-provisioning-key-env NAME` and `--grist-trust-unverified-email`
-(see [Automatic API keys](#automatic-api-keys-organization-mode)).
-
-`--merge` adds Grist to an existing `org_config.json`. A bundle with only `--grist-server-url`
-pins the server for API keys; organization mode needs at least that. Without a `grist` section, in
-either mode, Grist is not listed at all; `--enable-grist` writes the bare switch for local mode when
-you do not want to pin a server
+`--grist-server-url` is accepted with the client id and secret (the server the OAuth app belongs
+to). A server address without an OAuth app is set on **Admin → Features** or with
+`PRIVACYFENCE_GRIST_SERVER_URL`; without an address Grist is not listed at all
 ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). See
-[org-mode-setup-guide.md](org-mode-setup-guide.md) for signing and the server flags, and
 [connecting-a-service.md](connecting-a-service.md) for the shared connect flow.
 
 ## What the assistant can do
@@ -257,11 +272,11 @@ is saved yet. Use **Authenticate…** on the Grist row.
 **`Grist's saved sign-in could not be read.`** — the saved credential file is damaged. Connect
 again.
 
-**`Your organization connects to Grist with OAuth.`** — the bundle holds an OAuth app, so an API
+**`Your organization connects to Grist with OAuth.`** — an OAuth app is set up, so an API
 key is not accepted. Use **Authenticate…** (desktop) or **Connect** (organization server).
 
 **`Grist was connected to a different server than your organization uses.`** — the saved
-credential belongs to another server than the bundle names. Connect again.
+credential belongs to another server than the one set for the install. Connect again.
 
 **`Enter the Grist server address, such as https://docs.getgrist.com.`**, **`The Grist server
 address must start with https://`**, **`…must not contain a user name, password, query or
@@ -342,7 +357,7 @@ one of the messages above. The sweep retries.
 
 **`No such account.`**, **`Grist auto-provisioning is not enabled in the organization config.`**,
 **`Set <NAME> to the Grist provisioning key first.`** — `--grist-release` messages: check the id,
-the bundle and the environment.
+the Admin page's **Automatic accounts** switch and the environment.
 
 **`… PrivacyFence has already forgotten the key; run --grist-release again to delete it in
 Grist.`** — the provisioner could not be reached for the release. Run the command again.

@@ -86,17 +86,18 @@ off `download_delivery.agent_links`, steps that receive a file fail with a messa
 
 ### Unattended sessions must be allowed
 
-A plain sign-in (the stored `login`, or your own AI client token) needs `unattended_sessions.enabled`
-in PrivacyFence's organization config bundle (built with `build_org_bundle.py
---enable-unattended-sessions`). Without it, a run stops before the first step with:
+A plain sign-in (the stored `login`, or your own AI client token) needs unattended sessions turned
+on: the **Unattended sessions** switch under **Admin → Features** (an administrator on an
+organization server, the install owner on a desktop install). Without it, a run stops before the
+first step with:
 
 ```
-privacyfence-sync: This PrivacyFence does not allow unattended sessions (unattended_sessions.enabled in org_config.json). Ask your administrator, or run with --attended.
+privacyfence-sync: This PrivacyFence does not allow unattended sessions (Admin page, Features). Ask your administrator, or run with --attended.
 ```
 
 A scoped token does not need it: the token is already limited to the rules and tools it was created
-with, and it can only be denied, never prompted. It needs `scoped_tokens.enabled` instead (built
-with `--enable-scoped-tokens`); see [On a server, against organization mode](#on-a-server-against-organization-mode).
+with, and it can only be denied, never prompted. It needs scoped tokens turned on instead (**Admin → Scoped
+tokens** on an organization server); see [On a server, against organization mode](#on-a-server-against-organization-mode).
 
 ## The rules a recipe needs
 
@@ -1016,9 +1017,8 @@ stored sign-in: `login` needs a browser on the same machine, and the sign-in las
 a scoped token instead. It is a named, expiring credential limited to the rules and tools you
 choose, and it can only be denied, never prompted.
 
-1. **The administrator enables scoped tokens** in the organization config bundle
-   (`build_org_bundle.py --enable-scoped-tokens`). A scoped token needs no
-   `unattended_sessions.enabled` ([ADR 0164](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md));
+1. **The administrator enables scoped tokens** under **Admin → Scoped tokens**. A scoped token needs no
+   unattended-sessions switch ([ADR 0164](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md));
    a plain sign-in does.
 2. **Create a scoped token** in **Settings** with the recipe's rules and tools.
    `privacyfence-sync permissions RECIPE` lists both. Add each rule on the token's form.
