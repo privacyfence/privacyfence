@@ -2388,8 +2388,8 @@ class TestMaybeStartWebServerOrgMode:
             )
         assert str(excinfo.value) == (
             "Organization mode without an identity provider is single-user mode and runs only at "
-            "http://localhost or http://127.0.0.1. Add an \"idp\" section to org_bundle.json to "
-            "serve any other address."
+            "http://localhost or http://127.0.0.1. Set PRIVACYFENCE_IDP_ISSUER and "
+            "PRIVACYFENCE_IDP_CLIENT_ID (docs/org-mode-docker.md) to serve any other address."
         )
 
     @pytest.mark.parametrize("pin", ["org_bundle_signing_pubkey.txt", "org_config_signing_pubkey.txt"])

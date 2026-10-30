@@ -117,8 +117,8 @@ def reload_for_all_principals(config: dict[str, Any], *, org_managed: bool = Tru
     The privacy/PII policy is install-wide -- one ``settings.yaml`` on the
     server, no per-user override (docs/org-mode-setup-guide.md's
     "Install-wide and per-user policy"). ``init_privacy_filter`` alone only
-    ever writes the *current* principal's entry, so an admin editing it from
-    ``/settings/privacy`` would otherwise change it for their own session
+    ever writes the *current* principal's entry, so an admin editing it on the
+    Admin page's Privacy Filter would otherwise change it for their own session
     and nobody else's -- every other signed-in principal would keep
     enforcing the policy loaded when their entry was first built, with
     nothing anywhere saying so. An install-wide write needs a story for
