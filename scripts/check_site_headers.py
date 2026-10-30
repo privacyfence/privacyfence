@@ -16,9 +16,9 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from site_security_headers import headers_for_path  # noqa: E402 -- a sibling script, not a package
+from site_security_headers import HASHED_INLINE_PAGES, headers_for_path  # noqa: E402 -- a sibling script, not a package
 
-PATHS = ("/", "/docs/", "/download/")
+PATHS = ("/", "/docs/", "/download/", *HASHED_INLINE_PAGES)
 TIMEOUT_SECONDS = 20
 
 

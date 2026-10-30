@@ -13,6 +13,11 @@ Stdlib only.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
+from pathlib import Path
+
 HSTS = "max-age=31536000; includeSubDomains"
 NOSNIFF = "nosniff"
 REFERRER_POLICY = "strict-origin-when-cross-origin"
@@ -44,20 +49,49 @@ CSP_SITE = _csp(_SCRIPT_SRC_SITE, _STYLE_SRC_SITE)
 CSP_DOCS = _csp(f"script-src 'self' 'unsafe-inline' {_GTM}", "style-src 'self' 'unsafe-inline'")
 
 
+# Pages that carry their own inline script and style instead of loading them from 'self'. Each
+# gets the site policy plus the sha256 of exactly its inline blocks, read from the page, so no
+# other inline code is allowed and the hashes cannot drift from the file.
+_WEBSITE = Path(__file__).resolve().parent.parent / "website"
+HASHED_INLINE_PAGES: dict[str, str] = {
+    "/tools/connector-config/": "tools/connector-config/index.html",
+}
+
+
+def inline_block_hashes(html: str, tag: str) -> list[str]:
+    """CSP `'sha256-...'` sources for the attribute-less inline `<tag>` blocks of `html`."""
+    return [
+        "'sha256-" + base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii") + "'"
+        for body in re.findall(rf"<{tag}>(.*?)</{tag}>", html, flags=re.DOTALL)
+    ]
+
+
+def csp_for_hashed_page(path: str) -> str:
+    """The site CSP with the hashes of `path`'s inline script and style added."""
+    html = (_WEBSITE / HASHED_INLINE_PAGES[path]).read_text(encoding="utf-8")
+    scripts, styles = inline_block_hashes(html, "script"), inline_block_hashes(html, "style")
+    return _csp(" ".join([_SCRIPT_SRC_SITE, *scripts]), " ".join([_STYLE_SRC_SITE, *styles]))
+
+
 def headers_for_path(path: str) -> dict[str, str]:
     """The four headers the site sends for URL path `path` (no query string)."""
     docs = path == "/docs" or path.startswith("/docs/")
+    if path in HASHED_INLINE_PAGES:
+        csp = csp_for_hashed_page(path)
+    else:
+        csp = CSP_DOCS if docs else CSP_SITE
     return {
         "Strict-Transport-Security": HSTS,
         "X-Content-Type-Options": NOSNIFF,
         "Referrer-Policy": REFERRER_POLICY,
-        "Content-Security-Policy": CSP_DOCS if docs else CSP_SITE,
+        "Content-Security-Policy": csp,
     }
 
 
 def main() -> int:
-    """Prints the three Cloudflare rules for the dashboard."""
+    """Prints the Cloudflare rules for the dashboard."""
     site = headers_for_path("/")
+    hashed = " AND ".join(f"URI Path does not equal {p}" for p in HASHED_INLINE_PAGES)
     rules = [
         (
             "pf-security-headers-all",
@@ -69,13 +103,21 @@ def main() -> int:
         ),
         (
             "pf-csp-site",
-            "Hostname equals privacyfence.eu AND URI Path does not equal /docs AND URI Path does not start with /docs/",
+            f"Hostname equals privacyfence.eu AND URI Path does not equal /docs AND URI Path does not start with /docs/ AND {hashed}",
             [f"Content-Security-Policy: {CSP_SITE}"],
         ),
         (
             "pf-csp-docs",
             "Hostname equals privacyfence.eu AND (URI Path equals /docs OR URI Path starts with /docs/)",
             [f"Content-Security-Policy: {CSP_DOCS}"],
+        ),
+        *(
+            (
+                f"pf-csp-{path.strip('/').replace('/', '-')}",
+                f"Hostname equals privacyfence.eu AND URI Path equals {path}",
+                [f"Content-Security-Policy: {csp_for_hashed_page(path)}"],
+            )
+            for path in HASHED_INLINE_PAGES
         ),
     ]
     for name, match, lines in rules:
