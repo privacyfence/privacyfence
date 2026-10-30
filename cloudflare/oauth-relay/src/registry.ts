@@ -4,7 +4,8 @@
  *
  * Tables:
  *  - registrations: a row exists only after a successful proof (unverified hosts never get one). An empty
- *    `verified_at` means "restored, must prove again".
+ *    `verified_at` means "restored, must prove again". `notified_domains` are the sign-in domains the
+ *    last sent mail named; `notice_day` and `notice_count` cap the mails one host can cause a day.
  *  - attempts: register requests and failures, for rate limits. Pruned of rows older than an hour
  *    on every write; never a registrations row.
  *  - new_hosts: first-proof counts per address per UTC day (a cap on throwaway hosts).
@@ -22,6 +23,9 @@ export interface Registration {
   revoked: boolean;
   signin_domains: string[];
   notified: boolean;
+  notified_domains: string[];
+  notice_day: string;
+  notice_count: number;
 }
 
 export type AttemptVerdict = "ok" | "too_soon" | "too_many_new_hosts";
@@ -29,7 +33,8 @@ export type NotifyDecision = "send" | "limit" | "none";
 
 export interface UpsertResult {
   isNew: boolean;
-  domainsChanged: boolean;
+  /** A mail is due: a new host, or sign-in domains no earlier mail named, within the host's daily allowance. */
+  notify: boolean;
   registered_at: string;
   verified_at: string;
 }
@@ -47,6 +52,8 @@ const PER_IP_LIMIT = 30;
 const NEW_HOSTS_PER_IP_PER_DAY = 5;
 const ATTEMPT_RETENTION_MS = 60 * 60_000;
 export const NOTIFY_DAILY_CAP = 50;
+// Mails one host can cause in a UTC day. Further changes leave the row `notified: false` until a mail names them.
+export const NOTICES_PER_HOST_PER_DAY = 3;
 
 type Row = Record<string, string | number | null>;
 
@@ -59,8 +66,18 @@ function toRegistration(row: Row): Registration {
     revoked: row.revoked === 1,
     signin_domains: JSON.parse(String(row.signin_domains)) as string[],
     notified: row.notified === 1,
+    notified_domains: JSON.parse(String(row.notified_domains)) as string[],
+    notice_day: String(row.notice_day),
+    notice_count: Number(row.notice_count),
   };
 }
+
+/** Columns added after the table was first created, for a registry that already exists. */
+const LATER_COLUMNS: Record<string, string> = {
+  notified_domains: "TEXT NOT NULL DEFAULT '[]'",
+  notice_day: "TEXT NOT NULL DEFAULT ''",
+  notice_count: "INTEGER NOT NULL DEFAULT 0",
+};
 
 export class Registry extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -75,6 +92,10 @@ export class Registry extends DurableObject<Env> {
       signin_domains TEXT NOT NULL DEFAULT '[]',
       notified INTEGER NOT NULL DEFAULT 0
     )`);
+    const columns = new Set(sql.exec("PRAGMA table_info(registrations)").toArray().map((row) => String(row.name)));
+    for (const [name, definition] of Object.entries(LATER_COLUMNS)) {
+      if (!columns.has(name)) sql.exec(`ALTER TABLE registrations ADD COLUMN ${name} ${definition}`);
+    }
     sql.exec(`CREATE TABLE IF NOT EXISTS attempts (
       host TEXT NOT NULL,
       ip TEXT NOT NULL,
@@ -153,23 +174,29 @@ export class Registry extends DurableObject<Env> {
     this.ctx.storage.sql.exec("INSERT INTO attempts (host, ip, at_ms, failed) VALUES (?, ?, ?, 1)", host, ip, nowMs);
   }
 
-  /** The successful proof: the only way a row is created. `domains` are the DNS-verified sign-in domains. */
+  /**
+   * The successful proof: the only way a row is created. `domains` are the DNS-verified sign-in
+   * domains. A mail is due for a new host, and for verified domains no earlier sent mail named, at
+   * most NOTICES_PER_HOST_PER_DAY a day per host: dropping and re-adding a domain, or repeating a
+   * request, never causes another one.
+   */
   upsertVerified(host: string, nowIso: string, ip = "", domains: string[] = []): UpsertResult {
     const existing = this.getRegistration(host);
     const sorted = [...domains].sort();
     const json = JSON.stringify(sorted);
+    const day = nowIso.slice(0, 10);
     if (existing === null) {
       this.ctx.storage.sql.exec(
-        `INSERT INTO registrations (host, registered_at, verified_at, last_attempt_at, signin_domains)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO registrations (host, registered_at, verified_at, last_attempt_at, signin_domains, notice_day, notice_count)
+         VALUES (?, ?, ?, ?, ?, ?, 1)`,
         host,
         nowIso,
         nowIso,
         nowIso,
         json,
+        day,
       );
       if (ip !== "") {
-        const day = nowIso.slice(0, 10);
         this.ctx.storage.sql.exec(
           `INSERT INTO new_hosts (day, ip, count) VALUES (?, ?, 1)
            ON CONFLICT(day, ip) DO UPDATE SET count = count + 1`,
@@ -178,20 +205,26 @@ export class Registry extends DurableObject<Env> {
         );
         this.ctx.storage.sql.exec("DELETE FROM new_hosts WHERE day < ?", day);
       }
-      return { isNew: true, domainsChanged: sorted.length > 0, registered_at: nowIso, verified_at: nowIso };
+      return { isNew: true, notify: true, registered_at: nowIso, verified_at: nowIso };
     }
     const registeredAt = existing.registered_at === "" ? nowIso : existing.registered_at;
+    const gained = sorted.some((domain) => !existing.notified_domains.includes(domain));
+    const usedToday = existing.notice_day === day ? existing.notice_count : 0;
+    const notify = gained && usedToday < NOTICES_PER_HOST_PER_DAY;
     this.ctx.storage.sql.exec(
-      `UPDATE registrations SET registered_at = ?, verified_at = ?, last_attempt_at = ?, signin_domains = ?
+      `UPDATE registrations SET registered_at = ?, verified_at = ?, last_attempt_at = ?, signin_domains = ?,
+         notified = ?, notice_day = ?, notice_count = ?
        WHERE host = ?`,
       registeredAt,
       nowIso,
       nowIso,
       json,
+      gained || !existing.notified ? 0 : 1,
+      notify ? day : existing.notice_day,
+      notify ? usedToday + 1 : existing.notice_count,
       host,
     );
-    const changed = JSON.stringify([...existing.signin_domains].sort()) !== json;
-    return { isNew: false, domainsChanged: changed, registered_at: registeredAt, verified_at: nowIso };
+    return { isNew: false, notify, registered_at: registeredAt, verified_at: nowIso };
   }
 
   /** Revokes a host, inserting a revoked row when the host is absent. */
@@ -207,11 +240,12 @@ export class Registry extends DurableObject<Env> {
     this.ctx.storage.sql.exec("UPDATE registrations SET revoked = 0, verified_at = '' WHERE host = ?", host);
   }
 
-  /** Non-revoked, verified hosts, sorted by host. */
-  listActive(): Registration[] {
-    return this.rows("SELECT * FROM registrations WHERE revoked = 0 AND verified_at != '' ORDER BY host").map(
-      toRegistration,
-    );
+  /** Non-revoked hosts verified within `maxAgeMs` of `nowMs` (those the relay forwards for), sorted by host. */
+  listActive(nowMs: number, maxAgeMs: number): Registration[] {
+    return this.rows(
+      "SELECT * FROM registrations WHERE revoked = 0 AND verified_at != '' AND verified_at >= ? ORDER BY host",
+      new Date(nowMs - maxAgeMs).toISOString(),
+    ).map(toRegistration);
   }
 
   /** Whether this registration may forward: not revoked, verified within `maxAgeMs` of `nowMs`. */
@@ -239,8 +273,13 @@ export class Registry extends DurableObject<Env> {
     return count === NOTIFY_DAILY_CAP ? "limit" : "none";
   }
 
-  markNotified(host: string): void {
-    this.ctx.storage.sql.exec("UPDATE registrations SET notified = 1 WHERE host = ?", host);
+  /** A mail naming `domains` went out for `host`. */
+  markNotified(host: string, domains: string[] = []): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE registrations SET notified = 1, notified_domains = ? WHERE host = ?",
+      JSON.stringify([...domains].sort()),
+      host,
+    );
   }
 
   recordNotifySkipped(): void {
@@ -263,8 +302,13 @@ export class Registry extends DurableObject<Env> {
     };
   }
 
-  countActive(): number {
-    return Number(this.rows("SELECT COUNT(*) AS n FROM registrations WHERE revoked = 0 AND verified_at != ''")[0]!.n);
+  countActive(nowMs: number, maxAgeMs: number): number {
+    const cutoff = new Date(nowMs - maxAgeMs).toISOString();
+    const rows = this.rows(
+      "SELECT COUNT(*) AS n FROM registrations WHERE revoked = 0 AND verified_at != '' AND verified_at >= ?",
+      cutoff,
+    );
+    return Number(rows[0]!.n);
   }
 
   attemptRowCount(): number {

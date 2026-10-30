@@ -4,7 +4,9 @@ import worker from "../src/index";
 import type { Registry } from "../src/registry";
 
 export const ORIGIN = "https://oauth.privacyfence.eu";
-export const TOKEN = "t".repeat(43);
+/** The server's registration secret, and the SHA-256 it serves at its well-known path. */
+export const SECRET = "t".repeat(43);
+export const PROOF = "80383f974f22964fd6b7ae851b6ccc9180ed4e6fcb2e415bafcab6d822139238";
 export const REVOKE_TOKEN = "test-revoke-token";
 export const TERMS = " Terms: https://privacyfence.eu/relay-terms/";
 export const NOT_REGISTERED =
@@ -60,17 +62,27 @@ export function stubFetch(handler: FetchHandler) {
 
 export const proofUrl = (host: string): string => `https://${host}/.well-known/privacyfence-relay`;
 
-/** A fetch handler where `host` serves `token` at its well-known path. */
-export function proofServes(host: string, token = TOKEN): FetchHandler {
-  return (url) => (url === proofUrl(host) ? new Response(`${token}\n`) : new Response("unexpected", { status: 500 }));
+/** A fetch handler where `host` serves `proof` at its well-known path. */
+export function proofServes(host: string, proof = PROOF): FetchHandler {
+  return (url) => (url === proofUrl(host) ? new Response(`${proof}\n`) : new Response("unexpected", { status: 500 }));
+}
+
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The TXT value that lets `host` (serving `proof`) sign in people from a domain, computed independently. */
+export async function txtValue(host: string, proof = PROOF): Promise<string> {
+  return `pf-relay=v1:${await sha256Hex(`v1|${host}|${proof}`)}`;
 }
 
 export async function register(
   host: string,
-  options: { token?: string; ip?: string; domains?: unknown } = {},
+  options: { secret?: string; ip?: string; domains?: unknown } = {},
   testEnv: Env = env,
 ): Promise<Response> {
-  const body: Record<string, unknown> = { host, token: options.token ?? TOKEN };
+  const body: Record<string, unknown> = { host, secret: options.secret ?? SECRET };
   if (options.domains !== undefined) body.signin_domains = options.domains;
   return call("/register", postJson(body, { "CF-Connecting-IP": options.ip ?? freshIp(), "CF-IPCountry": "DE" }), testEnv);
 }

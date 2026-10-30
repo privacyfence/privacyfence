@@ -7,6 +7,7 @@ which don't), TLS/trusted-proxies plumbing, and base_url/allowed_hosts.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 
 import pytest
 from starlette.testclient import TestClient
@@ -208,14 +209,14 @@ class TestRelayWellKnown:
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
         return TestClient(app, base_url=ISSUER, follow_redirects=False)
 
-    def test_serves_the_token_without_a_session_once_a_service_uses_the_relay(self, tmp_path, monkeypatch):
+    def test_serves_the_hash_of_the_secret_without_a_session_once_a_service_uses_the_relay(self, tmp_path, monkeypatch):
         monkeypatch.setattr(relay_client, "status", lambda: {"last_ok_at": None, "last_error": "", "needed": True})
         r = self._client(tmp_path, monkeypatch).get("/.well-known/privacyfence-relay")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/plain")
         assert r.headers["cache-control"] == "no-store"
-        assert r.text == relay_client.well_known_token()
-        assert len(r.text) == 43
+        assert r.text == hashlib.sha256(relay_client.relay_secret().encode()).hexdigest()
+        assert relay_client.relay_secret() not in r.text
 
     def test_is_not_found_while_no_service_uses_the_relay(self, tmp_path, monkeypatch):
         r = self._client(tmp_path, monkeypatch).get("/.well-known/privacyfence-relay")

@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNotifyCache } from "../src/notify";
-import { TOKEN, decodeRaw, freshHost, freshIp, mailEnv, register, registry, stubFetch } from "./helpers";
+import { PROOF, decodeRaw, freshHost, freshIp, mailEnv, register, registry, stubFetch } from "./helpers";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -15,7 +15,7 @@ describe("the daily notification cap", () => {
   it("sends one over-the-limit message for the 51st registration and none for the 52nd", async () => {
     const sent: string[] = [];
     stubFetch((url, init) => {
-      if (url.endsWith("/.well-known/privacyfence-relay")) return new Response(TOKEN);
+      if (url.endsWith("/.well-known/privacyfence-relay")) return new Response(PROOF);
       if (url.startsWith("https://oauth2.googleapis.com/")) {
         return new Response(JSON.stringify({ access_token: "at", expires_in: 3600 }));
       }

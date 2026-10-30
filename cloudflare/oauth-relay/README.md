@@ -29,9 +29,9 @@ not public, and neither is a host under a suffix of the Public Suffix List's pri
 | ----- | --------- |
 | `GET`, `HEAD /health` | 200, body `ok`. |
 | `GET`, `HEAD /` and `/terms` | 302 to the relay terms. |
-| `POST /register` | Body `{"host", "token", "signin_domains"?}`. `token` is 43 characters of `[A-Za-z0-9_-]`. The relay fetches `https://<host>/.well-known/privacyfence-relay` (no redirects, 5 s, 256 bytes) and compares it with `token`. 200 `{"host", "verified_at", "terms", "signin_domains_verified", "signin_domains_missing"}`. Errors: 400 `invalid_request`, 400 `host_not_public`, 403 `revoked`, 403 `proof_failed`, 429 `too_soon`, 429 `too_many_new_hosts`. |
+| `POST /register` | `Content-Type: application/json` (parameters allowed). Body `{"host", "secret", "signin_domains"?}`. `secret` is the server's 43 characters of `[A-Za-z0-9_-]`. The relay fetches `https://<host>/.well-known/privacyfence-relay` (no redirects, 5 s, 256 bytes) and compares it with the lower-case hex SHA-256 of `secret`. 200 `{"host", "verified_at", "terms", "signin_domains_verified", "signin_domains_missing", "signin_domains_refused"}`. Errors: 415 `unsupported_media_type`, 400 `invalid_request`, 400 `host_not_public`, 403 `revoked`, 403 `proof_failed`, 429 `too_soon`, 429 `too_many_new_hosts`. |
 | `GET /callback/:grant` | `grant` is `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `atlassian` or `miro`, or one of the sign-in grants `idp`, `idp-login`, `stepup`. 302 to `https://<host>/oauth/callback/<grant>?<the original query>`; the sign-in grants forward to `/oauth/idp/callback`, `/oauth/idp/login-callback` and `/oauth/stepup/callback`. |
-| `GET /registrations` | The maintainer token is required. A JSON list of the non-revoked, verified hosts, sorted. The notification counters are in the `X-Notify-*` response headers. |
+| `GET /registrations` | The maintainer token is required. A JSON list of the non-revoked hosts verified within the last 35 days (the ones the relay forwards for), sorted. The notification counters are in the `X-Notify-*` response headers. |
 | `POST /admin/revoke`, `POST /admin/restore` | The maintainer token is required. Body `{"host"}`. |
 
 Every response carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and
@@ -41,17 +41,44 @@ Every response carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer`
 within the last 35 days. A server registers again every day. Only a successful proof creates a
 registration.
 
+The well-known path serves only the hash of the secret; the secret itself goes to the relay alone.
+So knowing what a host serves is not enough to register it or to change its registration (its
+sign-in domains, its `verified_at`): that takes the secret. The relay never stores the secret; it
+compares its hash with what the host serves on every request.
+
+**Sign-in domains.** `signin_domains` (at most 20, each a host name with no port; a malformed one is
+400 `invalid_request`) are the Google Workspace domains the server signs people in from. A
+domain that can never be one (a public suffix such as `co.uk` or `github.io`, or `gmail.com`) is
+listed in `signin_domains_refused` and the rest of the request goes ahead. Each other domain is
+proven by a DNS TXT record at `_privacyfence-relay.<domain>` with the value
+
+    pf-relay=v1:<lower-case hex SHA-256 of the UTF-8 string "v1|<host>|<proof>">
+
+where `<host>` is the registered host exactly as in the request (lower-case, with `:port` when it
+has one) and `<proof>` is the 64-character hex string the host serves at its well-known path. The
+host is part of the value, so a record vouches for that one server: another server cannot reuse it,
+even with a copy of the proof. The `v1` tag names this format; a different format would get a new
+tag, and `v1` records keep their meaning. The relay checks the records with DNS over HTTPS on every
+successful registration. A domain verified earlier is checked again even when the request leaves it
+out; it is dropped only when DNS answers that the record is gone or has another value (a failed
+lookup keeps it). The requested domains are checked first, and at most 20 in all.
+
+**Notification mails.** The maintainers get a mail for a new host and for a host whose verified
+sign-in domains gain one that no earlier mail named. Removing a domain, putting a named one back or
+repeating a request sends none. One host causes at most 3 mails a UTC day, and all hosts together
+at most 50; a registration whose news was not mailed is listed with `"notified": false`.
+
 **Callbacks.** The query must carry exactly one `state` and exactly one `code` or exactly one
 `error`, with no repeated parameter; anything else is a 400 with no redirect. A `state` whose host
 is `localhost` or `127.0.0.1` (with an optional port) is forwarded to `http://<host>/...` without
 consulting the registry, so a single-user install on the person's own computer can use the built-in
 apps; the sign-in grants refuse such a host. A sign-in grant carrying a `code` is forwarded only
-when Google's `hd` parameter names a domain the server proved with a DNS TXT record at
-`_privacyfence-relay.<domain>` whose value is `pf-relay=<sha256 of the server's token>`.
+when Google's `hd` parameter names one of the host's verified sign-in domains.
 
 **Limits.** A failed proof for the same host from the same address blocks a repeat for 60 seconds
 (`too_soon`), an address may send 30 register requests in 10 minutes, and at most 5 new hosts a
-UTC day. A failure never blocks a later valid proof from another address.
+UTC day. An IPv6 address counts as its /64. A failure never blocks a later valid proof from another
+address.
 
 ## Revoking a host
 

@@ -3,7 +3,8 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMessage, notifyConfigured, resetNotifyCache, sendNotification } from "../src/notify";
 import {
-  TOKEN,
+  PROOF,
+  SECRET,
   bearer,
   call,
   decodeRaw,
@@ -15,6 +16,7 @@ import {
   register,
   registry,
   stubFetch,
+  txtValue,
 } from "./helpers";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -37,7 +39,7 @@ interface Gmail {
 function gmailStub(host: string, overrides: { token?: () => Response; send?: () => Response } = {}) {
   const gmail: Gmail = { sent: [], tokenCalls: 0 };
   const spy = stubFetch((url, init) => {
-    if (url === proofUrl(host)) return new Response(TOKEN);
+    if (url === proofUrl(host)) return new Response(PROOF);
     if (url === TOKEN_URL) {
       gmail.tokenCalls += 1;
       return overrides.token?.() ?? new Response(JSON.stringify({ access_token: "at-1", expires_in: 3600 }));
@@ -50,6 +52,10 @@ function gmailStub(host: string, overrides: { token?: () => Response; send?: () 
     return new Response("unexpected " + url, { status: 500 });
   });
   return { gmail, spy };
+}
+
+async function jsonOf(response: Response): Promise<Record<string, unknown>> {
+  return (await response.json()) as Record<string, unknown>;
 }
 
 async function stats(): Promise<Record<string, unknown>> {
@@ -94,18 +100,19 @@ describe("the first registration email", () => {
     expect(gmail.sent).toHaveLength(1);
   });
 
-  it("mentions the verified sign-in domains, and mails again when they change", async () => {
+  it("mentions the verified sign-in domains, and mails once more only for a domain no mail named", async () => {
     const host = freshHost();
     const domain = "mail-corp.example";
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(TOKEN));
-    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const second = "mail-corp2.example";
+    const value = await txtValue(host);
     const gmail: Gmail = { sent: [], tokenCalls: 0 };
-    let dnsHas = true;
+    let published = new Set([domain]);
     stubFetch((url, init) => {
-      if (url === proofUrl(host)) return new Response(TOKEN);
+      if (url === proofUrl(host)) return new Response(PROOF);
       if (url.startsWith("https://cloudflare-dns.com/")) {
+        const name = new URL(url).searchParams.get("name")!.replace("_privacyfence-relay.", "");
         return new Response(
-          JSON.stringify(dnsHas ? { Status: 0, Answer: [{ type: 16, data: `"pf-relay=${hex}"` }] } : { Status: 3 }),
+          JSON.stringify(published.has(name) ? { Status: 0, Answer: [{ type: 16, data: `"${value}"` }] } : { Status: 3 }),
         );
       }
       if (url === TOKEN_URL) return new Response(JSON.stringify({ access_token: "at", expires_in: 3600 }));
@@ -117,10 +124,44 @@ describe("the first registration email", () => {
     expect(gmail.sent[0]).toContain(`Built-in Google sign-in: yes (${domain})`);
     await register(host, { domains: [domain] }, mailEnv());
     expect(gmail.sent).toHaveLength(1);
-    dnsHas = false;
+    // A removed record takes the domain away without a mail, and putting it back sends none either.
+    published = new Set();
+    expect((await jsonOf(await register(host, { domains: [domain] }, mailEnv()))).signin_domains_verified).toEqual([]);
+    published = new Set([domain]);
     await register(host, { domains: [domain] }, mailEnv());
+    expect(gmail.sent).toHaveLength(1);
+    // A domain no mail named yet is mailed.
+    published = new Set([domain, second]);
+    await register(host, { domains: [domain, second] }, mailEnv());
     expect(gmail.sent).toHaveLength(2);
-    expect(gmail.sent[1]).toContain("Built-in Google sign-in: no");
+    expect(gmail.sent[1]).toContain(`Subject: PrivacyFence relay sign-in domains added: ${host}\r\n`);
+    expect(gmail.sent[1]).toContain(`Built-in Google sign-in: yes (${domain}, ${second})`);
+    expect((await registry().getRegistration(host))?.notified).toBe(true);
+  });
+
+  it("mails about one host at most three times a day, and leaves the rest unnotified", async () => {
+    const host = freshHost();
+    const value = await txtValue(host);
+    const gmail: Gmail = { sent: [], tokenCalls: 0 };
+    // Wildcard DNS: every name proves this host, so each request can bring new domains.
+    stubFetch((url, init) => {
+      if (url === proofUrl(host)) return new Response(PROOF);
+      if (url.startsWith("https://cloudflare-dns.com/")) {
+        return new Response(JSON.stringify({ Status: 0, Answer: [{ type: 16, data: `"${value}"` }] }));
+      }
+      if (url === TOKEN_URL) return new Response(JSON.stringify({ access_token: "at", expires_in: 3600 }));
+      gmail.sent.push(decodeRaw((JSON.parse(String(init?.body)) as { raw: string }).raw));
+      return new Response("{}");
+    });
+    const ip = freshIp();
+    for (let i = 0; i < 8; i += 1) {
+      const domains = Array.from({ length: 20 }, (_, j) => `w${i}-${j}.wild.example`);
+      expect((await register(host, { ip, domains }, mailEnv())).status).toBe(200);
+    }
+    // The first registration and two changes; the five later changes wait for the weekly review.
+    expect(gmail.sent).toHaveLength(3);
+    expect((await registry().getRegistration(host))?.notified).toBe(false);
+    expect((await registry().getRegistration(host))?.signin_domains).toHaveLength(20);
   });
 
   it("reuses the access token within its lifetime and fetches a new one after it", async () => {
@@ -129,7 +170,7 @@ describe("the first registration email", () => {
     const { gmail } = gmailStub(first);
     await register(first, {}, mailEnv());
     stubFetch((url, init) => {
-      if (url === proofUrl(second)) return new Response(TOKEN);
+      if (url === proofUrl(second)) return new Response(PROOF);
       if (url === TOKEN_URL) {
         gmail.tokenCalls += 1;
         return new Response(JSON.stringify({ access_token: "at-2", expires_in: 3600 }));
@@ -158,7 +199,7 @@ describe("failures never fail the registration", () => {
     const before = Number((await stats()).notify_failures);
     if (options.reject) {
       stubFetch((url) => {
-        if (url === proofUrl(host)) return new Response(TOKEN);
+        if (url === proofUrl(host)) return new Response(PROOF);
         throw new DOMException("timed out", "TimeoutError");
       });
     } else {

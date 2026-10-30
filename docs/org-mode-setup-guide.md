@@ -310,14 +310,22 @@ PRIVACYFENCE_ALLOWED_DOMAINS=acme.example.com
   `gmail.com` and `googlemail.com` are never accepted as a sign-in domain), and groups: Google sends
   none, so administrators are named by email only.
 - **Each sign-in domain is proven in DNS.** The domain of every administrator and every allowed
-  domain, at most 20, must have a TXT record `_privacyfence-relay.<domain>` with the value
-  `pf-relay=<SHA-256 of the server's relay token>`. The server logs the exact record to add for each
+  domain, at most 20, must have a TXT record `_privacyfence-relay.<domain>` with the value the
+  server gives you, of the form `pf-relay=v1:<64 hex digits>`. Copy it from the log rather than
+  computing it: it is the SHA-256 of `v1|<server host>|<proof>` (the server host as in
+  `PRIVACYFENCE_ISSUER_URL`, with `:port` if it has one; the proof is what the server serves at
+  `/.well-known/privacyfence-relay`), so it names this one server and no other server can use it.
+  The server logs the exact record to add for each
   missing domain at every start and after each registration, and
   `privacyfence-app --relay-dns-records` prints the same lines and exits. Nobody from a domain can
   sign in until its record exists; a domain is checked again within the hour. Until the server has
   registered with the relay `/login` says `Sign-in is starting up`, and while no domain is proven it
-  says `Sign-in is waiting for DNS`. The token lives in `org/relay_token.txt`: back it up, because
-  replacing it means publishing every record again with the new value the log gives.
+  says `Sign-in is waiting for DNS`. A public suffix (`co.uk`, `github.io`) can never be a sign-in
+  domain; the log says so and the other domains and the connectors are unaffected. Moving the
+  server to another address, or replacing `org/relay_token.txt`, changes every value: back the file
+  up, and after either, publish the new values the log gives. Removing a domain from the allowed
+  domains stops its sign-ins on the server at once; delete its DNS record as well, which is what
+  takes it off the relay.
 - **It depends on PrivacyFence's services.** Every sign-in, and every approval that asks for a fresh
   sign-in, goes through `oauth.privacyfence.eu` and the Google Cloud project that owns the sign-in
   client (`privacyfence-signin`). If either is down or withdrawn, nobody can sign in to any server
@@ -401,8 +409,9 @@ The relay serves a server only if all of these hold:
   works; `http://…` or `https://example.com/privacyfence` cannot use the relay, and must use their
   own apps.
 - **The server is reachable from the internet at `/.well-known/privacyfence-relay`.** To register,
-  the relay fetches that URL from outside and compares the answer with the server's token
-  (`org/relay_token.txt`). The server serves the path only while a service uses a built-in app
+  the server sends the relay its secret (`org/relay_token.txt`, never served or logged), and the
+  relay fetches that URL from outside and compares the answer, the secret's SHA-256, with it. Only
+  the holder of the secret can register the address or change its registration. The server serves the path only while a service uses a built-in app
   and answers 404 otherwise, so a server that never offered one cannot be registered by someone
   else. If you restrict access by IP address ([section 7](#optional-restrict-access-by-ip-address)),
   keep this one path open to everyone, and do not limit port 443 itself to given addresses: the relay
@@ -1300,7 +1309,7 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 |---|---|
 | `org/admin_config.json` | Everything set on the [Admin page](#the-admin-page). |
 | `org/connector_configs/`, `org/connector_config_signing_pubkey.txt`, `org/connector_config_serials.json` | Your own apps' signed connector configs (with their client secrets), the pinned signing key and the highest serial accepted per provider. |
-| `org/relay_token.txt`, `org/relay_status.json` | The token the server proves its host name with, and when the relay last accepted it. With the built-in Google sign-in the token is also the value behind every `_privacyfence-relay` DNS TXT record: if it is lost and replaced, every record must be published again. |
+| `org/relay_token.txt`, `org/relay_status.json` | The secret the server proves its host name with (keep it private, like a key), and when the relay last accepted it. With the built-in Google sign-in the secret is also behind every `_privacyfence-relay` DNS TXT record: if it is lost and replaced, every record must be published again. |
 | `org/org_config.json`, `org/org_config_signing_pubkey.txt`, `org/org_config_serial.txt` | An upgraded server's 6.x bundle and pins, which 7.x never changes. Keep them for [going back to 6.x](#going-back-to-6x). |
 | `org/org_bundle.json`, `org/org_bundle_signing_pubkey.txt`, `org/org_bundle_serial.txt`, `org/org_bundle_adopted.json` | An upgraded server's adopted copy of the bundle, its pins and the record of the copy. Absent on a server that never had a 6.x bundle, or after `--retire-bundle`. |
 | `data_format.json` | The marker that this data is ready for PrivacyFence 8 ([Upgrading to 8.x](#upgrading-to-8x)). |
@@ -1592,8 +1601,8 @@ Notes:
   `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE` (or change `PRIVACYFENCE_IDP_CLIENT_SECRET`) and restart.
 - **Connector client secrets:** sign a new connector config for that provider with a higher serial
   and upload it. People's existing connector tokens keep working unless the provider revokes them.
-- **The relay token:** `org/relay_token.txt` is kept, not rotated. If you replace it on purpose, the
-  server registers again with the new token, and with the built-in Google sign-in every
+- **The relay secret:** `org/relay_token.txt` is kept, not rotated. If you replace it on purpose, the
+  server registers again with the new secret, and with the built-in Google sign-in every
   `_privacyfence-relay` DNS record must be published again with the new value (the log lists them).
 - **Push-notification key:** stop the daemon, delete `org/web_push_vapid_key.pem` and start; the
   daemon generates a new one. Every browser's subscription is bound to the old key, so each person's
