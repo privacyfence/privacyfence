@@ -1,9 +1,18 @@
 # Atlassian setup (Jira and Confluence)
 
 PrivacyFence connects to **Jira Cloud** and **Confluence Cloud** through one Atlassian OAuth 2.0
-(3LO) app: a single sign-in covers both connectors. One administrator creates the app once per
-organization and puts its client ID and secret into the organization config bundle; users then
-approve it in their browser from PrivacyFence.
+(3LO) app: a single sign-in covers both connectors.
+
+You need this page only to use your organization's own app instead of the built-in one. An
+organization server and the Docker image offer Jira and Confluence with PrivacyFence's built-in app,
+and each person approves it in their browser from PrivacyFence; there is nothing extra to set up.
+
+Do not mark the built-in PrivacyFence app as trusted or pre-approved: that trust would extend to
+every PrivacyFence server and to anyone using the public app. To trust an app, register your own.
+
+Your own app is a signed connector config uploaded on **Admin → Services** on an organization
+server, and an `atlassian` section in the bundle on a desktop install (desktop installs have no
+built-in app; see [moving to organization mode](moving-to-organization-mode.md)).
 
 PrivacyFence supports Atlassian Cloud (`*.atlassian.net` sites) only, not Jira or Confluence Data
 Center or Server.
@@ -12,9 +21,10 @@ Center or Server.
 
 - An Atlassian account that can create apps in the
   [developer console](https://developer.atlassian.com/console/myapps/).
-- Python 3 to run `scripts/build_org_bundle.py`.
+- Python 3 to run `scripts/sign_connector_config.py` (organization server) or
+  `scripts/build_org_bundle.py` (desktop install), or a browser for the offline signing page.
 - Which deployment you are building for. An Atlassian app has a single callback URL, so desktop
-  installs and an organization server each need **their own app** (and their own bundle). If you
+  installs and an organization server each need **their own app** (and their own connector config or bundle). If you
   run only one kind, you need only one app.
 
 ## Register the app
@@ -60,7 +70,7 @@ or Confluence to get a token with the new scopes.
 | Item | Value |
 |---|---|
 | Local redirect (desktop installs' app) | `http://127.0.0.1:53684/callback` — exactly this; Atlassian matches the string literally, so `localhost` does not match |
-| Org redirect (organization server's app) | `https://<server>/oauth/callback/atlassian`, with `<server>` your server's `--server-issuer-url`. The same URL serves both Jira and Confluence. |
+| Org redirect (organization server's app) | `https://<server>/oauth/callback/atlassian`, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`). The same URL serves both Jira and Confluence. |
 | Jira scopes (classic) | `read:jira-work`, `write:jira-work`, `read:jira-user` |
 | Confluence scopes (granular) | `read:space:confluence`, `read:page:confluence`, `write:page:confluence`, `read:content:confluence`, `read:content-details:confluence`, `write:content:confluence`, `read:attachment:confluence` |
 | Added automatically | `offline_access` |
@@ -117,23 +127,35 @@ other fields, custom fields included, the agent uses `jira_search_issues_with_fi
 `fields` parameter of `jira_get_issue`, and you review the values on the approval card first. No
 extra scope is needed. `jira_export_issues` writes a whole search, up to 10,000 issues, to a CSV or JSON file in one approval, and the same "this project" rule covers it.
 
-## Build and distribute the bundle
+## Give PrivacyFence the app
 
-`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
-stable GitHub Release. It needs only Python 3; no PrivacyFence install is required.
+On an organization server, sign the client ID and secret as a connector config and upload it on
+**Admin → Services** (the Atlassian row, **Upload a connector config…**):
+
+```bash
+python3 scripts/sign_connector_config.py keygen --out connector_signing_key.pem   # once
+python3 scripts/sign_connector_config.py sign --provider atlassian --serial 1 \
+  --client-id abcdef01234567890 --client-secret-file atlassian_secret.txt \
+  --key connector_signing_key.pem --output atlassian.connector.txt
+```
+
+Uploading asks for a passkey (the first upload also asks you to check the signing key's
+fingerprint). **Remove our own app** on the row goes back to the built-in app. Either change makes
+everyone who connected Jira or Confluence sign in again. The signing tools and the serial rule are
+described in [org-mode-setup-guide.md](org-mode-setup-guide.md).
+
+On a desktop install, put them in the bundle:
 
 ```bash
 python3 scripts/build_org_bundle.py \
   --atlassian-client-id abcdef01234567890 \
   --atlassian-client-secret abcdef0123456789abcdef0123456789 \
-  -o org_config.json --merge
+  -o org_bundle.json --merge
 ```
 
-`--merge` adds Atlassian to an existing `org_config.json`; drop it if this is the first service in
-the bundle. A bundle's `atlassian` section holds one app, so the desktop installs' bundle gets the
-desktop app's credentials and the organization server's bundle gets the server app's. Build the
-server's bundle with the server flags and install it on the server — see
-[org-mode-setup-guide.md](org-mode-setup-guide.md) for signing and the server flags.
+`--merge` adds Atlassian to an existing bundle; drop it if this is the first service in the bundle.
+Install it on **Admin → Organization configuration**
+([connecting-a-service.md](connecting-a-service.md)).
 
 ## Jira Assets
 
@@ -146,21 +168,21 @@ for anything new.
 | Item | Value |
 |---|---|
 | Assets scopes (granular, under the Jira API) | `read:cmdb-schema:jira`, `read:cmdb-type:jira`, `read:cmdb-attribute:jira`, `read:cmdb-object:jira` |
-| Bundle flags | `--atlassian-assets` (needs the client id and secret flags). Writes `atlassian.assets: true`, which switches Assets on by default for every user of the bundle. `--atlassian-assets-workspace-id <id>` writes `atlassian.assets_workspace_id`. |
-| Workspace id setting | `connectors.assets.workspace_id`, which wins over the bundle's |
+| Where it is switched on | **Admin → Features → Jira Assets**: a switch and an optional workspace id. The bundle flags `--atlassian-assets` and `--atlassian-assets-workspace-id` are refused; they moved to the Admin page. |
+| Workspace id setting | `connectors.assets.workspace_id` in a person's own settings, which wins over the Admin page's |
 
 1. In the [developer console](https://developer.atlassian.com/console/myapps/), open the app, go to
    **Permissions**, click **Configure** next to **Jira API**, and add the four scopes above on the
    **Granular scopes** tab.
 2. Find the site's Assets workspace id: signed in to the site in a browser, open
    `https://<your-site>.atlassian.net/rest/servicedeskapi/assets/workspace` and copy `workspaceId`.
-   Put it in the bundle with `--atlassian-assets-workspace-id`, or in each user's settings as
+   Enter it under **Admin → Features → Jira Assets**, or put it in each user's settings as
    `connectors.assets.workspace_id`. PrivacyFence cannot look it up itself: Atlassian answers that
    lookup only for the Jira Service Management scope `read:servicedesk-request`, which the developer
    console does not offer every app, and asking for a scope the app lacks fails the whole sign-in.
-3. Switch Assets on: in **Settings > Connectors** enable **Jira Assets** (desktop), or build the
-   bundle with `--atlassian-assets`. An explicit `connectors.assets.enabled` setting wins over the
-   bundle flag.
+3. Switch Assets on: turn on **Jira Assets** under **Admin → Features** for everyone, or, on a
+   desktop install, enable it in **Settings → Connectors**. An explicit `connectors.assets.enabled`
+   setting wins over the Admin page's switch.
 4. Authenticate again (**Authenticate…** on Jira Assets, or **Reconnect…**) so Atlassian shows the
    extra consent. Tokens made before Assets was on do not have the permissions.
    In org mode, Assets has no sign-in of its own: it uses the Jira and Confluence sign-in on
@@ -169,7 +191,7 @@ for anything new.
 
 ## Users connect
 
-Users install the bundle and click **Authenticate…** next to Jira or Confluence (desktop) or
+Users click **Authenticate…** next to Jira or Confluence (desktop install, after the bundle is installed) or
 **Connect** (organization server), then sign in and click **Accept** on Atlassian's page. Either
 button connects both products. The shared flow is described in
 [connecting-a-service.md](connecting-a-service.md). Atlassian-specific points:
@@ -185,7 +207,7 @@ button connects both products. The shared flow is described in
 **"The app's callback URL is invalid" during sign-in** — the app's Callback URL does not match the
 deployment it is used for: exactly `http://127.0.0.1:53684/callback` for desktop installs, or
 `https://<server>/oauth/callback/atlassian` for an organization server. An app holds only one, so
-check that the bundle contains the right app's credentials.
+check that the connector config or bundle contains the right app's credentials.
 
 **"You don't have access to this app. This application is in development"** on Atlassian's page —
 the app is not shared, so only its creator can sign in. Set its **Distribution status** to

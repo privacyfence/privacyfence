@@ -18,18 +18,18 @@ people connect with Peek's own device sign-in, the flow `peek login` uses.
 ## Users connect
 
 **Local mode.** In **Settings > Connectors > Peek**, choose **Authenticate…**. Enter the address of
-your Peek server (or, when your organization's bundle pins one, just confirm it), then choose
+your Peek server (or, when the install owner has set one on the Admin page, just confirm it), then choose
 **Continue**. A browser window opens on the machine running PrivacyFence; sign in to Peek there and
 approve the code PrivacyFence shows, then choose **Done** in PrivacyFence. The code is valid for 15
 minutes.
 
 Without the desktop window, `privacyfence-app --peek-login` does the same on the command line: it
-asks for the server address (unless the bundle pins it), prints the page to open and the code to
+asks for the server address (unless one is set on the Admin page), prints the page to open and the code to
 approve, and saves the token when you approve.
 
 **Organization mode.** Open the connections page (`/connect`) and choose **Connect Peek**. Choose
 **Open Peek**, sign in and approve the code, then choose **Done**. **Reconnect Peek** does the same
-again. Peek appears there only when the organization's bundle names the Peek server.
+again. Peek appears there only when the Peek server's address is set: on the Admin page (Features) or by `PRIVACYFENCE_PEEK_BASE_URL` on the server.
 
 The token Peek issues is saved in `credentials/peek_token.json` with the server it belongs to, and
 is used only with that server (ADR [0152](adr/0152-which-peek-server-is-used-and-a-token-stays-with-it.md)).
@@ -46,12 +46,18 @@ can stay in separate network zones.
 1. A Peek admin creates a scoped provisioning key on the Peek server:
    `peek provisioner create --name PrivacyFence`. The key starts with `peekprov_`. It can create and
    release accounts and mint tokens for them; it never reaches an admin account.
-2. Put the key in the PrivacyFence daemon's environment as `PRIVACYFENCE_PEEK_PROVISIONING_KEY`, or under
-   the name you give with `--peek-provisioning-key-env`. The bundle never holds the key. With systemd,
-   add it to the unit's `EnvironmentFile`; with Docker, add it to `privacyfence.env`
+2. Set the variables on the server, then restart it: `PRIVACYFENCE_PEEK_BASE_URL` (the Peek server's
+   address) and the key, as `PRIVACYFENCE_PEEK_PROVISIONING_KEY` or, better, as
+   `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE` naming a file that holds it (a Docker secret). Setting
+   both the plain variable and the file, or a file that cannot be read, refuses the start. The key
+   is never stored in the Admin configuration or a bundle. With systemd, add the variables to the
+   unit's `EnvironmentFile`; with Docker, to `privacyfence.env`
    ([organization setup guide](org-mode-setup-guide.md), [Docker guide](org-mode-docker.md)).
-3. Rebuild the bundle with `--peek-base-url URL --peek-auto-provision` (see
-   [Build and distribute the bundle](#build-and-distribute-the-bundle)) and restart the daemon.
+3. Open **Admin → Services**, find the Peek row and turn **Automatic accounts** on. The row says
+   when the key is missing and names the variable the server reads.
+
+A server upgraded from 6.11 keeps its automatic accounts: the addresses it had are kept and the
+Admin page shows them as fixed (see below), and a key variable name it chose keeps working.
 
 **What happens.** When a person signs in, in the browser or through an AI client, PrivacyFence queues
 them and a single background worker creates or looks up their Peek account, by their PrivacyFence id
@@ -63,7 +69,8 @@ that your organization connected the account automatically.
 
 - *A verified email.* Only a person whose ID token says `email_verified` is true is provisioned.
   Without that check, anyone who can set their own email at the identity provider could take over
-  another person's Peek account. `--peek-trust-unverified-email` skips the check. Use it only when your
+  another person's Peek account. The **Trust email addresses the identity provider does not mark
+  verified** checkbox on the Peek row of **Admin → Services** skips the check. Use it only when your
   identity provider never sends the claim but issues only verified, organization-owned addresses,
   such as Microsoft Entra ID work accounts.
 - *A person's own sign-in wins.* Someone who connected Peek by hand on **/connect** keeps that
@@ -80,7 +87,7 @@ in loses the Peek token when it expires, up to about 150 days after their last s
 renewed just inside the 90 days lives another 90).
 
 **When someone leaves.** Remove them from the identity provider first, then run
-`privacyfence-app --peek-release PRINCIPAL_ID` (with the provisioning key in the environment). It
+`privacyfence-app --peek-release PRINCIPAL_ID` (with the provisioning key in the environment, or its `_FILE` form). It
 revokes PrivacyFence's token for the person and stops renewing it. Their Peek account and pages stay;
 disabling the account is the Peek admin's decision. Someone who can still sign in is provisioned
 again, so release is for people who can no longer sign in.
@@ -94,31 +101,29 @@ sign-in, including people who do not use PrivacyFence.
 
 | Value | Where it comes from |
 |---|---|
-| Peek server address | Your Peek server's own base URL, such as `https://peek.example.com`. In `build_org_bundle.py`: `--peek-base-url`. |
+| Peek server address | Your Peek server's own base URL, such as `https://peek.example.com`. Set it on **Admin → Features** or with `PRIVACYFENCE_PEEK_BASE_URL` on the server. |
 
 Only `https://` addresses work (`http://` is allowed for `localhost`, `127.0.0.1` and `::1`), without
 a user name, password, query or fragment. A path prefix is kept.
 
-## Build and distribute the bundle
+## Where the server address is set
 
-`--peek-base-url URL` writes the `peek.base_url` entry of the organization config bundle (see
-[Configuration reference](configuration-reference.md#build-options)). In local mode it pins the
-server, so people do not type it; a token saved for another server stops working and asks to
-connect again. Organization mode offers Peek only when the bundle has it. Without a `peek` section,
-in either mode, Peek is not listed at all; `--enable-peek` writes the bare switch for local mode when
-you do not want to pin a server ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
-Peek needs no other entry: there is no callback URL and no client secret.
+The address is a setting of the install, not of the organization config bundle:
 
-For [automatic accounts](#automatic-accounts-organization-mode), add these (organization mode only;
-they need `--peek-base-url`, and `--mode local` drops them):
+- **Admin → Features** has a form for it, on a desktop install (for the owner) and on an organization
+  server (for administrators). Saving asks for a passkey.
+- `PRIVACYFENCE_PEEK_BASE_URL` on the server sets it in the environment. The Admin page then shows
+  the address and says it is set by that variable, and no form is offered.
+- An upgraded 6.11 server keeps the address its signed bundle had, locked in the same way.
 
-- `--peek-auto-provision` (or `--no-peek-auto-provision`) writes `peek.auto_provision.enabled`.
-- `--peek-provisioning-key-env NAME` names the environment variable the daemon reads the key from
-  (default `PRIVACYFENCE_PEEK_PROVISIONING_KEY`). It goes with `--peek-auto-provision`.
-- `--peek-trust-unverified-email` provisions people whose ID token lacks `email_verified`. It goes with
-  `--peek-auto-provision`; see the rule above for when this is safe.
-
-`--merge --peek-base-url NEW` keeps an existing `auto_provision` entry.
+Where an address is set, people do not type it; a token saved for another server stops working and
+asks to connect again. Organization mode offers Peek only when an address is set. On a desktop
+install without one, Peek is not listed at all
+([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). The
+bundle's old `--peek-base-url`, `--enable-peek`, `--peek-auto-provision` and related flags are
+refused by `build_org_bundle.py`, which names where each went
+([ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md)). Peek needs no
+other entry: there is no callback URL and no client secret.
 
 ## What the assistant can do
 
@@ -190,11 +195,11 @@ again.`** — the token was revoked or expired. Connect again.
 
 **`Peek was connected to a different server than your organization uses. Use Authenticate… in
 PrivacyFence Settings to connect again.`** — the saved token belongs to a server other than the
-bundle's. Connect again.
+one set for the install. Connect again.
 
-**`Peek organization config not installed`** — organization mode without a `peek` entry in the
-bundle. Ask your administrator to rebuild the bundle with `--peek-base-url`.
-**`Peek organization config is not usable: …`** — the bundle's address is not valid; rebuild it.
+**`Peek organization config not installed`** — organization mode with no Peek server address. Ask your
+administrator to set it on the Admin page (Features) or with `PRIVACYFENCE_PEEK_BASE_URL`.
+**`Peek organization config is not usable: …`** — the address is not valid; set it again.
 **`Peek is not set up by your organization.`** — the same, shown on the connections page.
 
 **`Enter the Peek server address, such as https://peek.example.com.`**, **`The Peek server address
@@ -274,16 +279,8 @@ than the Peek server accepts (2 MiB by default); PrivacyFence itself stops at 10
 
 ### Automatic accounts
 
-**`org_config.json's "peek"."auto_provision"."enabled" must be true or false, got …`** (also for
-`trust_unverified_email`), **`… "key_env" must be an environment variable name, got …`**,
-**`… "peek"."auto_provision" needs "mode": "org"`**, **`… needs "peek"."base_url"`**,
-**`org_config.json's "peek"."base_url" is not usable: …`** — the daemon refuses to start with a bad
-entry. Rebuild the bundle with `--peek-base-url` and `--peek-auto-provision` in organization mode.
-
-**`--peek-auto-provision/--no-peek-auto-provision require --mode org (or --merge against an
-existing org-mode bundle).`**, **`--peek-auto-provision requires --peek-base-url (or --merge against a
-bundle that has one).`**, **`--peek-provisioning-key-env and --peek-trust-unverified-email go with
---peek-auto-provision.`** — the builder refused; add the missing flag.
+**`PRIVACYFENCE_PEEK_BASE_URL is not usable: …`** — the daemon refuses to start with a bad address in
+the environment. Fix the variable and restart.
 
 **`Peek auto-provisioning is on, but … is not set; people connect Peek by hand on /connect.`** —
 the daemon's environment lacks the key. Set the variable named in the message (see the setup above)
@@ -326,5 +323,5 @@ repeats, check that Peek is reachable from the daemon.
 
 **`No such account.`**, **`Peek auto-provisioning is not enabled in the organization config.`**,
 **`Set <name> to the Peek provisioning key first.`** — messages of `--peek-release`. Check the
-account id (a directory under `users/`), that the bundle has `--peek-auto-provision`, and that the
+account id (a directory under `users/`), that **Automatic accounts** is on for Peek on the Admin page, and that the
 key variable is set in the shell that runs the command. A Peek error is printed as it is; see above.

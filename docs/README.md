@@ -16,8 +16,10 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   per platform.
 - [`platform-support.md`](platform-support.md) — supported OS versions and architectures, where
   PrivacyFence keeps its data, logs, and start/stop commands.
-- [`connecting-a-service.md`](connecting-a-service.md) — connecting Gmail, Slack and the other
-  services from Settings, and what each connector status means.
+- [`connecting-a-service.md`](connecting-a-service.md) — the Admin page, connecting Gmail, Slack and
+  the other services, and what each connector status means.
+- [`moving-to-organization-mode.md`](moving-to-organization-mode.md) — why desktop mode is deprecated,
+  the two ways forward, and what to do before any upgrade to 8.x.
 
 ### Using PrivacyFence
 
@@ -42,8 +44,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 
 ### Connector setup
 
-Registering the OAuth app (or bot) each service needs, for a local install or an organization
-bundle:
+Registering your organization's own OAuth app (or bot) for a service, in place of the built-in one,
+as a signed connector config on an organization server or a bundle section on a desktop install:
 
 - [`google-cloud-setup.md`](google-cloud-setup.md) — Gmail, Drive, Docs, Sheets, Calendar,
   Contacts, Tasks and Apps Script
