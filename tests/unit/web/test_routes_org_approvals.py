@@ -1524,3 +1524,84 @@ class TestDenyWithFeedback:
             assert "ORG-NOTE-MARKER" not in chunk
         rows = json.loads(second.split("data: ", 1)[1])
         assert denied.id not in {row["id"] for row in rows}
+
+
+class TestIdpStepUpThroughTheRelay:
+    """The built-in Google sign-in's step-up goes through the relay's ``stepup`` grant. The client is
+    shared by every server using it, so only this attempt's own state, PKCE verifier and nonce may
+    complete it."""
+
+    RELAY_URI = "https://oauth.privacyfence.eu/callback/stepup"
+
+    def _setup(self, monkeypatch, **idp_overrides):
+        from tests.unit.web.test_routes_org_identity import FakeGoogle
+
+        google = FakeGoogle(monkeypatch)
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"), idp=google.idp(**idp_overrides),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        return google, app, web_ui, client, session_id
+
+    def _redirect(self, client, web_ui, session_id, *, dedupe_key: str = "k1") -> tuple[str, str]:
+        approval = _register(web_ui, ALICE, gate_kind="popup", dedupe_key=dedupe_key)
+        start = _start(client, approval.id, csrf=session_id)
+        assert start.status_code == 200
+        return approval.id, start.json()["redirect"]
+
+    @staticmethod
+    def _callback(app, query: dict[str, str]):
+        # The relay forwards Google's query unchanged; the landing carries no session cookie.
+        return TestClient(app, base_url=ISSUER, follow_redirects=False).get(
+            f"{routes_org_stepup.STEPUP_CALLBACK_PATH}?{up.urlencode(query)}",
+        )
+
+    def test_the_relay_redirect_uri_for_authorize_and_exchange_and_a_host_state(self, monkeypatch):
+        google, app, web_ui, client, session_id = self._setup(monkeypatch)
+        _approval_id, url = self._redirect(client, web_ui, session_id)
+        query = dict(up.parse_qsl(up.urlparse(url).query))
+        assert query["redirect_uri"] == self.RELAY_URI
+        assert query["prompt"] == "login" and query["state"].startswith("pf.example.com~")
+        r = self._callback(app, google.sign_in(url, sub="alice", email="alice@acme.com"))
+        assert r.headers["location"] == "/approvals?stepup=ok"
+        assert google.exchanges[0]["redirect_uri"] == self.RELAY_URI
+
+    def test_a_code_from_another_attempt_fails_the_exchange(self, monkeypatch):
+        google, app, web_ui, client, session_id = self._setup(monkeypatch)
+        _first_id, first = self._redirect(client, web_ui, session_id, dedupe_key="k1")
+        second_id, second = self._redirect(client, web_ui, session_id, dedupe_key="k2")
+        code = google.sign_in(first, sub="alice")["code"]
+        state = dict(up.parse_qsl(up.urlparse(second).query))["state"]
+        r = self._callback(app, {"code": code, "state": state, "hd": "acme.com"})
+        assert r.headers["location"] == f"/approvals/{second_id}?stepup=error"
+
+    def test_an_id_token_with_another_attempts_nonce_is_refused(self, monkeypatch):
+        google, app, web_ui, client, session_id = self._setup(monkeypatch)
+        _first_id, first = self._redirect(client, web_ui, session_id, dedupe_key="k1")
+        second_id, second = self._redirect(client, web_ui, session_id, dedupe_key="k2")
+        other_nonce = dict(up.parse_qsl(up.urlparse(first).query))["nonce"]
+        r = self._callback(app, google.sign_in(second, sub="alice", nonce=other_nonce))
+        assert r.headers["location"] == f"/approvals/{second_id}?stepup=error"
+
+    def test_a_replayed_unknown_or_foreign_state_is_refused(self, monkeypatch):
+        google, app, web_ui, client, session_id = self._setup(monkeypatch)
+        _approval_id, url = self._redirect(client, web_ui, session_id)
+        query = google.sign_in(url, sub="alice")
+        assert self._callback(app, query).headers["location"] == "/approvals?stepup=ok"
+        assert self._callback(app, query).status_code == 400
+        _approval_id, url = self._redirect(client, web_ui, session_id, dedupe_key="k2")
+        query = google.sign_in(url, sub="alice")
+        nonce = query["state"].partition("~")[2]
+        for state in (f"other.example.com~{nonce}", f"pf.example.com~{'x' * 43}", nonce):
+            assert self._callback(app, {**query, "state": state}).status_code == 400
+        assert len(google.exchanges) == 1
+
+    def test_an_own_idp_keeps_todays_redirect_uri_byte_for_byte(self, monkeypatch):
+        google, app, web_ui, client, session_id = self._setup(monkeypatch, builtin=False, relay=False, admin_emails=())
+        _approval_id, url = self._redirect(client, web_ui, session_id)
+        query = dict(up.parse_qsl(up.urlparse(url).query))
+        assert query["redirect_uri"] == "https://pf.example.com/oauth/stepup/callback"
+        assert "~" not in query["state"]
+        assert self._callback(app, google.sign_in(url, sub="alice")).headers["location"] == "/approvals?stepup=ok"
+        assert google.exchanges[0]["redirect_uri"] == "https://pf.example.com/oauth/stepup/callback"

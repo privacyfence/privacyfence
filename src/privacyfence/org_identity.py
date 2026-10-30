@@ -36,7 +36,7 @@ import jwt
 import requests
 from jwt import PyJWKClient
 
-from . import app_credentials, org_mode
+from . import app_credentials, oauth_apps, org_mode, relay_client
 from .org_mode import AuthzPolicyConfig, ConfigurationError
 from .paths import safe_principal_id
 from .principal import Principal
@@ -229,6 +229,26 @@ def generate_pkce_pair() -> tuple[str, str]:
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
     return verifier, challenge
+
+
+def signin_redirect_uri(idp: IdpConfig, *, issuer_url: str, grant: str, callback_path: str) -> str:
+    """The ``redirect_uri`` a sign-in sends to the IdP: this server's own callback, or, when the
+    IdP's redirects go through the PrivacyFence relay, the relay's fixed URI for ``grant``
+    (``idp``, ``idp-login`` or ``stepup``), which forwards the browser to ``callback_path`` here.
+    The caller keeps it with the attempt and sends the same value with the code exchange."""
+    if idp.relay:
+        return oauth_apps.relay_redirect_uri(grant)
+    return f"{issuer_url.rstrip('/')}{callback_path}"
+
+
+def new_signin_state(idp: IdpConfig, *, issuer_url: str) -> str:
+    """A fresh, single-use ``state`` for one sign-in attempt. Through the relay it starts with this
+    server's host and a ``~``: that is how the relay knows where to send the browser. The random
+    part alone binds it to the attempt, so a state naming another server is never one of ours."""
+    nonce = secrets.token_urlsafe(32)
+    if idp.relay:
+        return f"{relay_client.issuer_host(issuer_url)}~{nonce}"
+    return nonce
 
 
 def build_authorization_url(
@@ -482,7 +502,9 @@ def _issued_to_builtin_signin(claims: dict[str, Any]) -> bool:
 def _admit_builtin_signin(principal: Principal, claims: dict[str, Any], policy: AuthzPolicyConfig) -> None:
     """The built-in Google client's rule: the address must be verified and belong to the
     person's Google Workspace domain (``hd``), and it must either be a listed admin's or be in an
-    allowed domain. Everyone else is refused. A personal Google account has no ``hd``, so it never
+    allowed domain. That domain must also be one the relay last found proven in DNS for this
+    server, so a server signs in only accounts of domains its operator controls. Everyone else is
+    refused. A personal Google account has no ``hd``, so it never
     signs in this way, and an unverified address is never trusted."""
     email = _normalized_email(principal.email)
     domain = _email_domain(email)
@@ -494,7 +516,12 @@ def _admit_builtin_signin(principal: Principal, claims: dict[str, Any], policy: 
         and workspace_domain == domain
         and (email in admins or domain in policy.allowed_domains)
     ):
-        return
+        if workspace_domain in relay_client.verified_signin_domains():
+            return
+        raise AuthorizationDenied(
+            f"principal {principal.id!r} (email {principal.email!r}): the domain {workspace_domain} is not"
+            " proven in DNS for the built-in Google sign-in yet"
+        )
     raise AuthorizationDenied(
         f"principal {principal.id!r} (email {principal.email!r}) is neither an admin nor in an allowed"
         " Google Workspace domain"
@@ -511,6 +538,8 @@ __all__ = [
     "discover_idp",
     "exchange_code_for_tokens",
     "generate_pkce_pair",
+    "new_signin_state",
     "principal_from_claims",
+    "signin_redirect_uri",
     "verify_id_token",
 ]
