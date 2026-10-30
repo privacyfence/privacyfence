@@ -386,7 +386,10 @@ def _stored_error(provider: str, problem: str) -> ConnectorConfigError:
     )
 
 
-def _load_signed(org: Path, provider: str, pin: bytes | None, serials: dict[str, int]) -> LoadedConfig:
+def _load_signed(org: Path, provider: str, pin: bytes | None, serials: dict[str, int]) -> LoadedConfig | None:
+    """The verified config, or ``None`` when the file was signed under a key this server no longer
+    trusts (no key is pinned, or another one is): that is what rotating the key leaves behind, so
+    the service stays on its built-in app until a new signed file is uploaded."""
     path = stored_path(org, provider)
     try:
         parsed = parse(path.read_bytes())
@@ -396,9 +399,14 @@ def _load_signed(org: Path, provider: str, pin: bytes | None, serials: dict[str,
         raise _stored_error(provider, f"is malformed ({exc})") from None
     if parsed.provider != provider:
         raise _stored_error(provider, f"is a {parsed.provider} config")
-    if pin is None:
-        raise _stored_error(provider, "has no trusted signing key to verify against")
-    if parsed.key != pin or not verify(parsed, pin):
+    if pin is None or parsed.key != pin:
+        logger.warning(
+            "The stored %s connector config was signed under a key this server does not trust "
+            "(none is pinned, or another one is), so it is not used; upload a new one on Admin → Services.",
+            provider,
+        )
+        return None
+    if not verify(parsed, pin):
         raise _stored_error(provider, "no longer verifies against the trusted signing key")
     if parsed.serial < serials.get(provider, 0):
         raise _stored_error(provider, "is older than the newest one accepted (rollback)")
@@ -429,20 +437,33 @@ def _load_imported(org: Path, provider: str) -> LoadedConfig:
     )
 
 
-def load_all(org: Path) -> dict[str, LoadedConfig]:
-    """Every stored connector config, verified again against the pin. A signed file that no
-    longer verifies, or an unreadable imported one, raises ``ConnectorConfigError`` naming the
-    provider. A signed file wins over an imported one for the same provider."""
+def load_with_stale(org: Path) -> tuple[dict[str, LoadedConfig], set[str]]:
+    """``load_all`` and the providers whose stored signed file is not used because its key is not
+    the pinned one (the state key rotation leaves until each file is uploaded again)."""
     found: dict[str, LoadedConfig] = {}
+    stale: set[str] = set()
     signed = [provider for provider in PROVIDERS if stored_path(org, provider).exists()]
     pin = _current_pin(org) if signed else None
     serials = load_serials(org) if signed else {}
     for provider in PROVIDERS:
         if provider in signed:
-            found[provider] = _load_signed(org, provider, pin, serials)
+            loaded = _load_signed(org, provider, pin, serials)
+            if loaded is None:
+                stale.add(provider)
+            else:
+                found[provider] = loaded
         elif legacy_path(org, provider).exists():
             found[provider] = _load_imported(org, provider)
-    return found
+    return found, stale
+
+
+def load_all(org: Path) -> dict[str, LoadedConfig]:
+    """Every stored connector config, verified again against the pin. A signed file that is
+    malformed, tampered with under the pinned key or rolled back, or an unreadable imported one,
+    raises ``ConnectorConfigError`` naming the provider. A signed file under a key that is not the
+    pinned one is skipped (see ``load_with_stale``). A signed file wins over an imported one for the
+    same provider."""
+    return load_with_stale(org)[0]
 
 
 def remove(org: Path, provider: str) -> bool:
@@ -509,6 +530,7 @@ __all__ = [
     "import_from_legacy_bundle",
     "load_all",
     "load_pin",
+    "load_with_stale",
     "load_serials",
     "parse",
     "remove",

@@ -218,15 +218,18 @@ def _notice_state_path() -> Path:
 
 def _show_deprecation_notice_once(show: Callable[[str], None]) -> None:
     """Show the desktop-mode deprecation notice through ``show`` unless this OS user has seen it.
-    A marker that cannot be read or written only means the notice shows again next start."""
+    A marker that cannot be read or written, or a notifier that fails, only means the notice shows again next start."""
     from .org_mode import LOCAL_MODE_DEPRECATION
 
     path = _notice_state_path()
     with contextlib.suppress(OSError, ValueError):
         if json.loads(path.read_text(encoding="utf-8")).get(_NOTICE_MARKER_KEY) is True:
             return
-    with contextlib.suppress(Exception):
+    try:
         show(LOCAL_MODE_DEPRECATION)
+    except Exception:  # a notifier that failed has not shown the notice, so it is not marked as seen
+        logger.debug("Could not show the desktop-mode deprecation notice", exc_info=True)
+        return
     tmp = path.with_name(path.name + ".tmp")
     with contextlib.suppress(OSError):
         path.parent.mkdir(parents=True, exist_ok=True)

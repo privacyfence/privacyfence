@@ -187,7 +187,9 @@ name them, in one of two ways, in the environment file. A person who matches eit
   (comma-separated). A person is an admin when the identity provider says their address is
   **verified** (`email_verified` is exactly `true` in the ID token). With Google the account's
   Workspace domain (`hd` claim) must also match the address. Matching ignores case and surrounding
-  spaces; an address with a non-ASCII character never matches.
+  spaces; an address with a non-ASCII character never matches. `email_verified` must be the
+  boolean `true`: an identity provider that sends the string `"true"` (Amazon Cognito does) is
+  treated as not verified, like Microsoft Entra ID below.
 - **By group or role claim**, with `PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM=groups` and
   `PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES=privacyfence-admins` (values comma-separated). A person is an
   admin when the claim contains any of the values. A claim that is a single string is matched like a
@@ -266,7 +268,8 @@ administrators too: an admin outside the allowed domains cannot sign in.
 **Breaking in 7.0: allowed domains now need a verified email.** A sign-in is admitted by an allowed
 domain only when the identity provider reports the address as verified (`email_verified` is exactly
 `true`); a missing or false value is refused. With Google the account must also carry a matching
-`hd`. Microsoft Entra ID never sends `email_verified`, so an organization on Entra that restricts
+`hd`. Microsoft Entra ID never sends `email_verified`, and Amazon Cognito sends it as the string
+`"true"`, which does not count, so an organization on either that restricts
 sign-in to domains sets `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL=true` in the environment file to keep
 that working (on an upgraded server that still has its bundle, retire the bundle first: its identity
 provider settings win over the variable). Google's `hd` rule still applies, and this never makes anyone an admin. Do it only
@@ -298,7 +301,11 @@ PRIVACYFENCE_ALLOWED_DOMAINS=acme.example.com
   address is in an allowed domain may sign in, each with a verified address and a Google Workspace
   domain (`hd` claim) that matches it. `PRIVACYFENCE_ALLOWED_DOMAINS` (comma-separated) fills the
   allowed domains on the first start only; afterwards edit them on **Admin → Sign-in**, which also
-  names the built-in sign-in and shows the administrators read-only.
+  names the built-in sign-in and shows the administrators read-only. (The variable seeds the
+  allowed domains on any organization server's first start, not only with the built-in sign-in.)
+- **Secondary domains.** A Google Workspace user whose address is on a secondary domain is always
+  refused by the built-in sign-in: the account's `hd` is its primary domain and must equal the
+  address's domain.
 - **Not supported with it:** personal Google accounts (Gmail, which has no Workspace domain, and
   `gmail.com` and `googlemail.com` are never accepted as a sign-in domain), and groups: Google sends
   none, so administrators are named by email only.
@@ -560,8 +567,12 @@ such as `2026110201` (`YYYYMMDDnn`) works; the browser tool prefills one from to
 
 **Rotating the signing key.** Stop the daemon, delete `org/connector_config_signing_pubkey.txt`, start
 it, and upload a config signed with the new key; the first upload pins it after you confirm the
-fingerprint. Serials carry over. A stored file that no longer verifies against the pinned key refuses
-the start and names the provider.
+fingerprint. Serials carry over. With no key pinned, the server still starts: every stored file is
+set aside (the log says so, and the service's row on **Admin → Services** asks for a new upload) and
+that service stays on its built-in app. A file signed under a key other than the pinned one is set
+aside the same way, so after the first upload under the new key, upload each other provider's config
+signed with it too. A stored file that was changed under the pinned key, or rolled back to an older
+serial, refuses the start and names the provider.
 
 The files are `org/connector_configs/<provider>.txt`, the pin `org/connector_config_signing_pubkey.txt`
 and `org/connector_config_serials.json`; include all three in the [backup](#backup).
@@ -1390,8 +1401,12 @@ the daemon and delete these files, then start 7.x, which adopts and imports agai
 
 ```bash
 cd /var/lib/privacyfence-org/.privacyfence/org
-sudo rm -f org_bundle.json org_bundle_adopted.json org_bundle_signing_pubkey.txt org_bundle_serial.txt admin_config.json
+sudo rm -rf connector_configs
+sudo rm -f org_bundle.json org_bundle_adopted.json org_bundle_signing_pubkey.txt org_bundle_serial.txt admin_config.json connector_config_signing_pubkey.txt connector_config_serials.json
 ```
+
+The first line matters: an app credential changed in `org_config.json` while on 6.x is otherwise
+ignored, because 7.x keeps using the copy it imported.
 
 Deleting only `org_bundle.json` re-adopts `org_config.json`; if 7.x has since recorded a newer serial
 in `org_bundle_serial.txt`, it refuses that older bundle with the existing "delete the serial pin"
@@ -1565,8 +1580,9 @@ Notes:
 ### Key and secret rotation
 
 - **Connector-config signing key:** stop the daemon, delete `org/connector_config_signing_pubkey.txt`,
-  start it and upload a config signed with the new key on **Admin → Services**; confirm its
-  fingerprint ([section 6](#signed-connector-configs)). Serials are kept.
+  start it and upload a config signed with the new key on **Admin → Services** for each provider
+  that has one; confirm its fingerprint ([section 6](#signed-connector-configs)). Until a provider's
+  config is uploaded again, it stays on its built-in app. Serials are kept.
 - **A bundle's signing key** (the legacy bundle of an upgraded server, or a desktop install's
   bundle): stop the daemon, delete `org/org_bundle_signing_pubkey.txt` and start; the next bundle
   accepted pins the new key. After an upgrade, deleting the new-name pin is the rotation: the 6.x pin

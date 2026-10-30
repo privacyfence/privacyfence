@@ -615,6 +615,17 @@ class TestOrgRoomsUpload:
         csrf = world.sign_in(ALICE)
         assert _upload(world.client, self.URL, csrf, ROOMS_BYTES).status_code == 403
 
+    def test_a_huge_body_or_one_with_no_declared_size_is_refused_before_it_is_read(self):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        big = _upload(world.client, self.URL, csrf, b"x" * (3 * 1024 * 1024))
+        assert (big.status_code, big.json()) == (413, {"error": "The file is larger than 2 MB."})
+        body = f'--b\r\nContent-Disposition: form-data; name="csrf"\r\n\r\n{csrf}\r\n--b--\r\n'.encode()
+        r = world.client.post(
+            self.URL, content=iter([body]), headers={"Content-Type": "multipart/form-data; boundary=b"},
+        )
+        assert r.status_code == 411
+
     def test_csrf_and_origin_are_checked(self):
         world = World()
         csrf = world.sign_in(ADMIN)
@@ -938,6 +949,22 @@ class TestOrgConnectorConfigUpload:
         monkeypatch.setattr(routes_admin.connector_configs, "accept", lost_race)
         r = _connector_passkey_upload(world, csrf, sign("slack"), confirm_fingerprint=KEY_FINGERPRINT)
         assert r.status_code == 409 and r.json()["fingerprint"] == KEY_FINGERPRINT
+
+    def test_connector_config_uploading_under_a_new_key_after_the_pin_was_deleted_does_not_fail(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        world, csrf = _signed_in_admin()
+        assert _installed(world, csrf, sign("slack", 1)).status_code == 200
+        connector_configs.pinned_key_path(connector_configs.default_org_dir()).unlink()
+        other = Ed25519PrivateKey.generate()
+        r = _connector_passkey_upload(
+            world, csrf, sign("google", 2, key=other),
+            confirm_fingerprint=connector_configs.fingerprint(public_bytes(other)),
+        )
+        assert r.status_code == 200, r.text
+        rows = {row["key"]: row for row in r.json()["services"]}
+        assert rows["google"]["app_source"] == "connector"
+        assert rows["slack"]["app_source"] != "connector" and rows["slack"]["options"].get("reupload_needed") is True
 
     def test_connector_config_an_unreadable_pin_is_refused_not_treated_as_absent(self):
         world, csrf = _signed_in_admin()

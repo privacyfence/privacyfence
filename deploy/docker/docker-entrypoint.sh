@@ -13,7 +13,7 @@ if [ ! -f "$bundle" ] && [ ! -f "$legacy_bundle" ]; then
     elif [ "${PRIVACYFENCE_IDP:-}" = "builtin-google" ]; then
         echo "No organization bundle: using the built-in Google sign-in and the server from the environment." >&2
     else
-        echo "No organization bundle: starting in single-user mode at http://localhost:8765 (docs/org-mode-docker.md, \"Run it on this computer\")." >&2
+        echo "No organization bundle: starting in single-user mode at http://localhost:${PRIVACYFENCE_PORT:-8765} (docs/org-mode-docker.md, \"Run it on this computer\")." >&2
     fi
 fi
 exec privacyfence-app "$@"

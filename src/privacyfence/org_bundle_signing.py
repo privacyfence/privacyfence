@@ -206,30 +206,43 @@ def adopt_legacy_files(org_dir: Path) -> bool:
                 copied_pin = True
 
     adopted_bundle = False
+    raw = b""
     # A retired bundle stays retired: 6.x's untouched org_config.json is not copied back.
     if not bundle.exists() and legacy_bundle.exists() and not record.get("retired"):
-        raw = _copy_unchanged(legacy_bundle, bundle)
+        try:
+            raw = legacy_bundle.read_bytes()
+        except OSError as exc:
+            raise ConfigurationError(
+                f"Could not copy {legacy_bundle} to {bundle} for PrivacyFence 7: {exc}"
+            ) from exc
         record.update({
             "from": LEGACY_ORG_CONFIG_FILENAME,
             "sha256": sha256_hex(raw),
             "at": datetime.now(timezone.utc).isoformat(),
         })
         adopted_bundle = True
-        logger.warning(
-            "Copied org/org_config.json to org/org_bundle.json for PrivacyFence 7. The original is "
-            "kept unchanged so that you can go back to 6.x."
-        )
 
     if (adopted_bundle or copied_pin) and not record.get("pins_adopted"):
         record.setdefault("from", "")
         record.setdefault("sha256", "")
         record.setdefault("at", datetime.now(timezone.utc).isoformat())
         record["pins_adopted"] = True
+    # The record goes first: a crash between the two writes leaves a record and no bundle, which
+    # the next start copies again, instead of a bundle no record vouches for.
     if adopted_bundle or copied_pin:
         try:
             atomic_write_json(adopted_record_path(org_dir), record, indent=2)
         except OSError as exc:
             raise ConfigurationError(f"Could not write {adopted_record_path(org_dir)}: {exc}") from exc
+    if adopted_bundle:
+        try:
+            atomic_write_bytes(bundle, raw)
+        except OSError as exc:
+            raise ConfigurationError(f"Could not copy {legacy_bundle} to {bundle} for PrivacyFence 7: {exc}") from exc
+        logger.warning(
+            "Copied org/org_config.json to org/org_bundle.json for PrivacyFence 7. The original is "
+            "kept unchanged so that you can go back to 6.x."
+        )
     return adopted_bundle
 
 

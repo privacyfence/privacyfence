@@ -1085,7 +1085,7 @@ def _admin_upload(client, data=None, files=None):
 
 
 class TestOrgConfigUpload:
-    def test_a_csrf_sent_as_a_file_is_unauthorized(self, admin_client, sessions):
+    def test_a_csrf_sent_as_a_file_is_refused(self, admin_client, sessions):
         _authed(admin_client, sessions)
         r = _admin_upload(admin_client,
             files={
@@ -1093,7 +1093,17 @@ class TestOrgConfigUpload:
                 "file": ("org_config.json", b'{"version": 1}', "application/json"),
             },
         )
-        assert r.status_code == 401
+        assert (r.status_code, r.json()) == (400, {"error": "Upload exactly one file."})
+
+    def test_a_huge_body_or_one_with_no_declared_size_is_refused_before_it_is_read(self, admin_client, sessions):
+        _authed(admin_client, sessions)
+        big = _admin_upload(admin_client, files={"file": ("b.json", b"x" * 2_000_000, "application/json")})
+        assert big.status_code == 413
+        body = b'--b\r\nContent-Disposition: form-data; name="csrf"\r\n\r\nx\r\n--b--\r\n'
+        r = admin_client.post(
+            ADMIN_UPLOAD_URL, content=iter([body]), headers={"Content-Type": "multipart/form-data; boundary=b"},
+        )
+        assert r.status_code == 411
 
     def test_valid_bundle_is_installed(self, admin_client, controller, sessions, tmp_path):
         csrf = _authed(admin_client, sessions)

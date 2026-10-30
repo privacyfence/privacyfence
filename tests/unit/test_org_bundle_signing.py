@@ -399,6 +399,32 @@ class TestAdoptLegacyFiles:
         # 7.x never touches the 6.x files, so a downgrade finds them as they were.
         assert _legacy_snapshot(tmp_path) == before
 
+    def test_a_crash_between_the_record_and_the_bundle_is_adopted_again(self, tmp_path, monkeypatch):
+        raw = _legacy_install(tmp_path)
+        real = obs.atomic_write_bytes
+
+        def crash(path, data, *args, **kwargs):
+            if path.name == "org_bundle.json":
+                raise OSError("disk full")
+            return real(path, data, *args, **kwargs)
+
+        monkeypatch.setattr(obs, "atomic_write_bytes", crash)
+        with pytest.raises(obs.ConfigurationError, match="Could not copy"):
+            obs.adopt_legacy_files(tmp_path)
+        assert not (tmp_path / "org_bundle.json").exists()
+        assert (tmp_path / "org_bundle_adopted.json").exists()
+
+        monkeypatch.setattr(obs, "atomic_write_bytes", real)
+        assert obs.adopt_legacy_files(tmp_path) is True
+        assert (tmp_path / "org_bundle.json").read_bytes() == raw
+        assert obs.load_adopted_record(tmp_path)["sha256"] == obs.sha256_hex(raw)
+
+    def test_an_unreadable_legacy_bundle_refuses_the_start(self, tmp_path):
+        (tmp_path / "org_config.json").mkdir()
+        with pytest.raises(obs.ConfigurationError, match="Could not copy"):
+            obs.adopt_legacy_files(tmp_path)
+        assert not (tmp_path / "org_bundle.json").exists()
+
     def test_no_adoption_when_the_bundle_already_exists(self, tmp_path):
         _legacy_install(tmp_path)
         (tmp_path / "org_bundle.json").write_text('{"mode": "org"}')

@@ -230,6 +230,7 @@ def test_bad_inputs_are_refused_without_writing(secret_file, tmp_path, capsys):
     assert "client_id" in _run(with_("--client-id", "x" * 513), capsys)
     assert "client_id" in _run(with_("--client-id", "tab\there"), capsys)
     assert "signed_at" in _run(with_("--signed-at", "2026-11-02 10:00"), capsys)
+    assert "signed_at" in _run(with_("--signed-at", "2026-11-2T1:00:00Z"), capsys)
     assert "Cannot read the key file" in _run(with_("--key", str(tmp_path / "missing.pem")), capsys)
     assert not out.exists()
 

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from typing import Any, Callable
 
 import yaml
@@ -64,7 +63,8 @@ def ensure_scope_rows(
     backup = f"{config_path}{BACKUP_SUFFIX}"
     try:
         if not os.path.exists(backup) and os.path.exists(config_path):
-            shutil.copy2(config_path, backup)
+            with open(config_path, "rb") as fh:
+                atomic_write_bytes(backup, fh.read())
     except OSError as exc:
         log(
             f"{config_path}: could not keep a backup of the previous file, so the auto-accept "

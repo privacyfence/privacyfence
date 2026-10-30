@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 
 import pytest
 import yaml
@@ -86,6 +85,7 @@ def _read(config_path):
 
 def test_v2_is_converted_and_backed_up(config_path, tmp_path):
     original = _write_v2(config_path)
+    os.chmod(config_path, 0o644)
     original_text = _read_text(config_path)
     _make_token()
     logged: list[str] = []
@@ -101,6 +101,8 @@ def test_v2_is_converted_and_backed_up(config_path, tmp_path):
     assert row["scope"] == "drive.folder"
     assert sorted(row["former_ids"]) == sorted([NARROW_ID, FLAGGED_ID])
     assert _read_text(f"{config_path}.pre-scope-rules.bak") == original_text
+    if os.name == "posix":
+        assert os.stat(f"{config_path}.pre-scope-rules.bak").st_mode & 0o777 == 0o600
     (tok,) = json.loads(_token_file(tmp_path).read_text(encoding="utf-8"))["tokens"]
     assert "rule_ids" not in tok
     (copy,) = tok["rules"]
@@ -194,7 +196,7 @@ def test_backup_failure_leaves_v2_and_returns_false(config_path, monkeypatch):
     def boom(*args, **kwargs):
         raise OSError("read-only")
 
-    monkeypatch.setattr(shutil, "copy2", boom)
+    monkeypatch.setattr(policy_upgrade, "atomic_write_bytes", boom)
     monkeypatch.setattr(scoped_tokens, "own_legacy_rules", lambda *a, **k: migrated.append(a))
 
     assert policy_upgrade.ensure_scope_rows(cfg, config_path, LOCAL_PRINCIPAL, log=logged.append) is False

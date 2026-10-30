@@ -1383,6 +1383,16 @@ class TestDeprecationNotice:
 
         companion._show_deprecation_notice_once(boom)
 
+    def test_a_failing_notifier_leaves_no_marker_so_the_notice_shows_next_start(self, marker):
+        def boom(text):
+            raise RuntimeError("no notifier")
+
+        companion._show_deprecation_notice_once(boom)
+        assert not marker.exists()
+        shown = []
+        companion._show_deprecation_notice_once(shown.append)
+        assert shown == [LOCAL_MODE_DEPRECATION]
+
     @pytest.mark.parametrize(
         ("platform", "expected"),
         [

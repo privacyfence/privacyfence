@@ -73,8 +73,7 @@ class TestLoadAndSave:
             tmp_path,
             {
                 "version": 1,
-                "services": {"slack": {"offered": True}, "atlassian": {"offered": True}, "miro": "oops"},
-                "unattended_sessions": "oops",
+                "services": {"slack": {"offered": True}, "atlassian": {"offered": True}},
                 "org_server": True,
             },
         )
@@ -102,10 +101,25 @@ class TestLoadAndSave:
             "provisioner_url": "",
         }
 
-    def test_a_non_object_services_value_is_replaced(self, tmp_path):
-        _write(tmp_path, {"version": 1, "services": [1]})
-        loaded = admin_config.load()
-        assert all(not service["offered"] for service in loaded["services"].values())
+    @pytest.mark.parametrize(
+        ("section", "value"),
+        [
+            ("authz", ["acme.example.com"]),
+            ("step_up", "off"),
+            ("services", [1]),
+            ("unattended_sessions", "oops"),
+        ],
+    )
+    def test_a_wrongly_typed_section_refuses_instead_of_defaulting(self, tmp_path, section, value):
+        path = _write(tmp_path, {"version": 1, section: value})
+        with pytest.raises(admin_config.AdminConfigError, match=f"'{section}'") as excinfo:
+            admin_config.load()
+        assert str(path) in str(excinfo.value)
+
+    def test_a_wrongly_typed_service_refuses(self, tmp_path):
+        _write(tmp_path, {"version": 1, "services": {"miro": "oops"}})
+        with pytest.raises(admin_config.AdminConfigError, match="'services.miro'"):
+            admin_config.load()
 
     def test_save_round_trips(self, tmp_path):
         config = _import({"slack": {"client_id": "x"}})
@@ -1233,6 +1247,23 @@ class TestServiceRows:
         assert rows["telegram"]["app_source"] == "builtin" and rows["telegram"]["relay"] is False
         assert rows["miro"]["app_source"] == "none" and rows["miro"]["relay"] is False
         assert rows["salesforce"]["client_id"] == "sf-id"
+
+    def test_the_builtin_salesforce_app_offers_its_install_link(self, monkeypatch):
+        url = "https://login.salesforce.com/packaging/installPackage.apexp?p0=04t"
+        apps = {"salesforce": {"client_id": "sf-id", "client_secret": "x", "install_url": url}}
+        monkeypatch.setattr(admin_config.app_credentials, "builtin_app", lambda key: apps.get(key))
+        assert self._rows()["salesforce"]["options"] == {"login_url": "", "install_url": url}
+
+    def test_a_stored_config_under_an_untrusted_key_is_flagged_and_the_builtin_app_stays(self, tmp_path):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from tests.connector_config_support import sign
+
+        store = connector_configs.stored_path(tmp_path, "slack")
+        store.parent.mkdir(parents=True)
+        store.write_bytes(sign("slack", 1, key=Ed25519PrivateKey.generate()))
+        row = self._rows()["slack"]
+        assert row["app_source"] == "builtin" and row["options"]["reupload_needed"] is True
+        assert "reupload_needed" not in self._rows()["google"]["options"]
 
     def test_local_mode_has_no_builtin_apps_and_no_relay(self):
         rows = self._rows(mode="local")
