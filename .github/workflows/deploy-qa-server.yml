@@ -130,7 +130,9 @@ jobs:
           check() {
             code="$(curl -sS -o /dev/null -w '%{http_code}' -X "$1" "https://runner.privacyfence.eu$2")"
             echo "$1 $2 -> $code"
-            if [ "$code" != 404 ]; then echo "::error::$1 $2 answered $code, not 404"; fail=1; fi
+            # 403 is the Cloudflare WAF rule (deploy/qa-runner/README.md, step 6), which answers
+            # before the request reaches the proxy; 404 is the Caddyfile. Anything else is open.
+            case "$code" in 403|404) ;; *) echo "::error::$1 $2 answered $code, not 403 or 404"; fail=1 ;; esac
           }
           check GET /mcp
           check GET /.well-known/oauth-authorization-server
