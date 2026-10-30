@@ -4361,3 +4361,63 @@ class TestLifecyclePeek:
         assert not result.ok
         assert result.cleanup_ok is None
         assert fake.deleted == []
+
+
+class TestOrganizationModeContext:
+    """The checks run in organization mode as the principal ``qa-live``."""
+
+    @staticmethod
+    def _builtin(monkeypatch, apps=None):
+        from privacyfence import app_credentials
+
+        stub = {"client_id": "builtin-id", "client_secret": "builtin-secret"}
+        monkeypatch.setattr(app_credentials, "builtin_app", lambda key: dict(apps.get(key, stub)) if apps else dict(stub))
+
+    def test_builtin_section_for_a_provider_the_bundle_lacks(self, monkeypatch):
+        self._builtin(monkeypatch)
+        monkeypatch.setattr(recorder.daemon_main, "load_org_config", lambda: {})
+        config = recorder._qa_org_config()
+        assert config["slack"]["client_id"] == "builtin-id"
+        assert config["miro"]["client_secret"] == "builtin-secret"
+        assert config["mode"] == "org"
+
+    def test_keeps_a_bundle_section_that_is_present(self, monkeypatch):
+        self._builtin(monkeypatch)
+        monkeypatch.setattr(
+            recorder.daemon_main, "load_org_config", lambda: {"idp": {"issuer": "https://idp.example"}},
+        )
+        assert recorder._qa_org_config()["idp"] == {"issuer": "https://idp.example"}
+
+    def test_every_service_is_offered(self, monkeypatch):
+        self._builtin(monkeypatch)
+        monkeypatch.setattr(recorder.daemon_main, "load_org_config", lambda: {})
+        config = recorder._qa_org_config()
+        for provider in ("google", "slack", "salesforce", "atlassian", "miro"):
+            assert provider in config
+        assert set(recorder.QA_ADMIN["services"]) == set(recorder.admin_config.SERVICES)
+        assert all(service["offered"] for service in recorder.QA_ADMIN["services"].values())
+
+    def test_peek_and_grist_take_the_environment_addresses(self, monkeypatch):
+        self._builtin(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek-qa.privacyfence.eu")
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://docs.getgrist.com")
+        monkeypatch.setattr(recorder.daemon_main, "load_org_config", lambda: {})
+        config = recorder._qa_org_config()
+        assert config["peek"]["base_url"] == "https://peek-qa.privacyfence.eu"
+        assert config["grist"]["server_url"] == "https://docs.getgrist.com"
+
+    def test_token_paths_resolve_under_the_qa_principal(self):
+        with recorder._qa_context():
+            resolved = Path(recorder.daemon_main._resolve_path(recorder.daemon_main.TOKEN_FILES["slack"]))
+        assert resolved.parts[-4:-1] == ("users", "qa-live", "credentials")
+        assert resolved.name == Path(recorder.daemon_main.TOKEN_FILES["slack"]).name
+
+    def test_main_runs_every_mode_inside_the_context(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            recorder, "run",
+            lambda *a, **kw: seen.append(recorder.principal.current_principal().id) or 0,
+        )
+        monkeypatch.setattr(sys, "argv", ["qa_fixture_recorder.py", "--check"])
+        assert recorder.main() == 0
+        assert seen == ["qa-live"]
