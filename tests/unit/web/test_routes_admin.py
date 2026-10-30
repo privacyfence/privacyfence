@@ -695,13 +695,17 @@ class TestOrgRoomsUpload:
         world = World()
         _enrol(ADMIN)
         csrf = world.sign_in(ADMIN)
+        # Refused before the passkey is asked for, so no assertion is sent.
         first = _upload(world.client, self.URL, csrf, raw)
-        if first.status_code == 428:
-            with patch.object(wa.webauthn, "verify_authentication_response", return_value=VERIFIED):
-                first = _upload(world.client, self.URL, csrf, raw, assertion={"id": "Y3JlZC0x"})
         assert first.status_code == 400
         assert first.json() == {"error": "The file is not a room directory written by sync_room_directory.py."}
         assert admin_config.load()["rooms"] == []
+
+    def test_an_invalid_file_is_refused_even_without_an_enrolled_passkey(self, audit):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        assert _upload(world.client, self.URL, csrf, b'{"rooms": "x"}').status_code == 400
+        assert audit == []
 
     def test_a_file_over_2_mb_is_refused(self):
         world = World()
@@ -1357,7 +1361,7 @@ class TestLocalRoomsUpload:
         world = LocalWorld(local_controller, monkeypatch)
         _enrol_local()
         csrf = world.sign_in()
-        refused = _passkey_upload(world.client, self.URL, csrf, b"[1, 2]")
+        refused = _upload(world.client, self.URL, csrf, b"[1, 2]")  # no passkey asked for first
         assert (refused.status_code, refused.json()["error"]) == (
             400, "The file is not a room directory written by sync_room_directory.py.",
         )

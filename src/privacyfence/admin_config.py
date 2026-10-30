@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 VERSION = 1
 FILENAME = "admin_config.json"
 
+# Every service the admin config knows. One named in oauth_apps.PREVIEW_SERVICES is left out of the
+# Admin rows and the effective config until PRIVACYFENCE_PREVIEW_SERVICES names it.
 SERVICES = ("google", "slack", "salesforce", "atlassian", "miro", "telegram", "grist", "peek")
 SERVICE_LABELS = {
     "google": "Google",
@@ -951,12 +953,11 @@ def _room_ok(room: Any) -> bool:
     return True
 
 
-def replace_rooms(data: Any, *, bundle: dict[str, Any], mode: Mode, single_user: bool) -> str:
-    """Replace the room directory with the file ``sync_room_directory.py`` wrote.
+def check_rooms(data: Any) -> tuple[list[Any], str]:
+    """The rooms and sync date of a room file, or ``AdminConfigError`` when it is not one.
 
     Room text reaches agents as tool output, so it is held to a narrow shape: flat objects of
-    short strings without control characters, numbers, booleans and nulls.
-    """
+    short strings without control characters, numbers, booleans and nulls."""
     if not isinstance(data, dict) or not isinstance(data.get("rooms"), list):
         raise AdminConfigError(_ROOMS_REFUSAL)
     rooms = data["rooms"]
@@ -965,6 +966,12 @@ def replace_rooms(data: Any, *, bundle: dict[str, Any], mode: Mode, single_user:
     synced_at = data.get("rooms_synced_at", "")
     if not isinstance(synced_at, str) or not _clean_text(synced_at) or not all(_room_ok(room) for room in rooms):
         raise AdminConfigError(_ROOMS_REFUSAL)
+    return rooms, synced_at
+
+
+def replace_rooms(data: Any, *, bundle: dict[str, Any], mode: Mode, single_user: bool) -> str:
+    """Replace the room directory with the file ``sync_room_directory.py`` wrote."""
+    rooms, synced_at = check_rooms(data)
     with _write_lock:
         config = config_for(bundle, mode=mode, single_user=single_user)
         config["rooms"] = copy.deepcopy(rooms)

@@ -424,12 +424,13 @@ async def _replace_rooms_from_upload(
     try:
         data = json.loads(raw)
     except ValueError:
-        # Not JSON at all: replace_rooms words the refusal for anything that is not a room file.
-        data = None
-        try:
-            admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=_single_user(bundle))
-        except admin_config.AdminConfigError as exc:
-            return _error(str(exc))
+        data = None  # check_rooms words the refusal for anything that is not a room file
+    # Refuse a file that is not a room file before asking for the passkey: the assertion below is
+    # bound to this body's hash, so the file that is checked is the file that is stored.
+    try:
+        admin_config.check_rooms(data)
+    except admin_config.AdminConfigError as exc:
+        return _error(str(exc))
     refusal = _gate_upload(
         "upload_rooms", {"sha256": hashlib.sha256(raw).hexdigest()},
         _parse_form_assertion(form.get("webauthn_assertion")),
