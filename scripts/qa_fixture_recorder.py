@@ -2974,7 +2974,9 @@ def lifecycle_miro(manifest: dict[str, Any]) -> LifecycleResult:
             {"type": "sticky_note", "data": {"content": sticky_text}, "position": {"x": 0, "y": 0},
              "parent": {"id": frame.id}},
             {"type": "shape", "data": {"content": f"{LIFECYCLE_TAG} miro shape {suffix}", "shape": "rectangle"},
-             "style": {"fillColor": "#fff9b1"}, "position": {"x": 100, "y": 0}},
+             # Inside the frame created below: Miro refuses to parent an item that lies outside
+             # the frame's bounds.
+             "style": {"fillColor": "#fff9b1"}, "position": {"x": 0, "y": 400}},
         ])
         if len(created) != 2:
             raise MiroClientError(f"create_items returned {len(created)} item(s), expected 2")
