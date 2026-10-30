@@ -11,7 +11,7 @@ due is in [`release-testing.md`](release-testing.md).
 ## Credential boundary
 
 Live connector credentials — the per-account OAuth token files, the Telegram session and the QA
-`org_config.json` — exist only as local files on a developer's own machine or on the
+`org_bundle.json` — exist only as local files on a developer's own machine or on the
 project-controlled self-hosted runner labelled `privacyfence-test`. They are never stored as GitHub
 Actions secrets and never reach a GitHub-hosted runner or a `pull_request`-triggered workflow. Both
 workflows that use them (`connector-live-check.yml`, `qa-record-fixture.yml`) trigger only on
@@ -44,7 +44,7 @@ For each of Google, Slack, Atlassian and Salesforce, follow the "For IT admins" 
 [`atlassian-setup.md`](atlassian-setup.md) and [`salesforce-setup.md`](salesforce-setup.md), and
 merge every client id/secret into one QA bundle with `scripts/build_org_bundle.py --merge` (for
 example `-o org_config.qa.json`). Keep it separate from any production bundle. It is installed as
-`org/org_config.json`, by `scripts/qa_authenticate_connectors.py --org-config` (see
+`org/org_bundle.json`, by `scripts/qa_authenticate_connectors.py --org-config` (see
 [Authenticating connectors](#authenticating-connectors)) or by **Install/Update Organization
 Config…** in PrivacyFence Settings.
 
@@ -148,11 +148,12 @@ carries `[QATEST]` and has text and a user id.
 calendar, whatever `calendar_id` is passed; exploratory runs that exercise them leave entries on
 primary, and neither has a delete tool.
 
-`calendar_list_rooms` returns the `rooms` list in `org_config.json` and makes no live call. To
+`calendar_list_rooms` returns the room list in `org/admin_config.json` and makes no live call. To
 cover it, you need Workspace admin rights: create a calendar resource (Admin console → Directory →
-Buildings and resources), then run `scripts/sync_room_directory.py` from a second Cloud project as
-described in [`google-cloud-setup.md`](google-cloud-setup.md)'s "Room directory sync" section, and
-reinstall the refreshed bundle. Without it the tool returns an empty list, not an error.
+Buildings and resources), then run `scripts/sync_room_directory.py --output rooms.json` from a second
+Cloud project as described in [`google-cloud-setup.md`](google-cloud-setup.md)'s "Room directory sync"
+section, and upload `rooms.json` on the Admin page's Features section. Without it the tool returns an
+empty list, not an error.
 
 | Optional rule | Predicate | Value | Operations |
 |---|---|---|---|
@@ -410,7 +411,7 @@ Confluence) and Salesforce, in that order. Each step opens a browser tab for con
 
 | Option | Effect |
 |---|---|
-| `--org-config PATH` | Installs `PATH` as `org/org_config.json` first, backing up an existing file as `org_config.json.bak.<UTC timestamp>`. |
+| `--org-config PATH` | Installs `PATH` as `org/org_bundle.json` first, backing up an existing file as `org_bundle.json.bak.<UTC timestamp>`. |
 | `--only NAME ...` | Runs only these groups (`google`, `slack`, `atlassian`, `salesforce`) or connectors (`gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `atlassian`, `salesforce`, `miro`). |
 | `--continue-on-error` | Runs every requested step instead of stopping at the first failure. |
 | `--config PATH` | Settings file passed through to the daemon. Default: `config/settings.yaml`. |
@@ -496,7 +497,7 @@ every run, and fail with `##[error] … not found` if any of these is missing:
 ~/privacyfence/
 ├── credentials/              # token files from "Authenticating connectors", plus telegram.session
 ├── org/
-│   └── org_config.json       # the QA bundle, under exactly this name
+│   └── org_bundle.json       # the QA bundle, under exactly this name
 └── tests/
     └── fixtures/
         └── qa_environment.yaml
@@ -578,7 +579,7 @@ Never add a QA credential as a GitHub Actions secret as a workaround.
 | `manifest not found` from the recorder | `qa_environment.yaml` was not copied in; see [Seed data](#seed-data). |
 | A result says the fetched object "does not carry [QATEST]" | The manifest id points at the wrong object, or the seed artifact was renamed. Repair the artifact or the id. |
 | `Telegram app credentials not available in this build.` | The `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` repository secrets are missing. An error naming `credentials/telegram.session` instead means the session file is missing from `~/privacyfence/credentials/`. |
-| Atlassian `401`/`403` while refreshing the token | Check that the copy-back step ran and that the runner user can write to `~/privacyfence/credentials/`. A spent Atlassian refresh token needs a fresh reconnect; a rerun will not fix it. A `403` from the token endpoint can also mean the client id/secret in `org_config.json` does not match the app at developer.atlassian.com. |
+| Atlassian `401`/`403` while refreshing the token | Check that the copy-back step ran and that the runner user can write to `~/privacyfence/credentials/`. A spent Atlassian refresh token needs a fresh reconnect; a rerun will not fix it. A `403` from the token endpoint can also mean the client id/secret in `org_bundle.json` does not match the app at developer.atlassian.com. |
 | `--lifecycle` shows `n/a` under Cleanup for Confluence, Grist or Salesforce | Expected; see [Seed: Confluence](#seed-confluence). Grist and Salesforce have no delete either. |
 
 The runner holds real QA grants: patch it, watch its health, require review on changes to the two

@@ -1293,8 +1293,8 @@ def _require_single_user_start(server_config: org_mode.ServerConfig, startup_adm
     if not org_mode.is_loopback_issuer(server_config.issuer_url):
         raise org_mode.ConfigurationError(
             "Organization mode without an identity provider is single-user mode and runs only at "
-            "http://localhost or http://127.0.0.1. Add an \"idp\" section to org_bundle.json to "
-            "serve any other address."
+            "http://localhost or http://127.0.0.1. Set PRIVACYFENCE_IDP_ISSUER and "
+            "PRIVACYFENCE_IDP_CLIENT_ID (docs/org-mode-docker.md) to serve any other address."
         )
     admin = startup_admin if startup_admin is not None else (admin_config.load() or {})
     pinned_keys = (

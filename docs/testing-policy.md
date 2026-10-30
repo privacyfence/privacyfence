@@ -123,7 +123,7 @@ Key modules in the suite:
 
 **What a green `org-mode-smoke` does not prove.** It proves org mode deploys and authenticates:
 fail-closed startup, reverse-proxy Host handling, per-principal sessions, MCP OAuth discovery, an
-approval audited under the right principal, state surviving a restart. Its `org_config.json` has no
+approval audited under the right principal, state surviving a restart. Its organization server has no
 connectors, so it cannot see a principal's tool list or auto-accept rules; those are proven by
 `tests/unit/web/test_routes_mcp.py::TestListTools` and
 `tests/unit/test_daemon_main.py::TestLoadPrincipalSettings`.
@@ -182,7 +182,8 @@ The app and the website share one design system from `src/privacyfence/resources
 `test` job:
 
 - **Phone layout** — `test_browser_smoke.py`'s `TestPhoneLayout` loads every app surface
-  (`/approvals`, every `/settings` section as admin and as a member, `/settings/privacy`,
+  (`/approvals`, every `/settings` section as admin and as a member, every section of the
+  Admin page (`/admin`) in organization and desktop mode,
   `/connect` and its Telegram sign-in steps, `/security`, the three fallback pages without a
   shell, and a WIDE read card of each preview kind) at 320 px, in the 393 px phone emulation
   and at 1024 px, and checks the measurable shared rules the way `test_website_layout.py` does

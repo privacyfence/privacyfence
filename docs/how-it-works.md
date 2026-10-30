@@ -275,8 +275,9 @@ that connection:
 - `privacyfence_propose_policy_change` is refused.
 
 The flag ends with `privacyfence_end_unattended_session` or when the connection closes. The tool
-works only when the organization config bundle turns it on (`unattended_sessions.enabled`, set with
-`build_org_bundle.py --enable-unattended-sessions`); otherwise it returns an error. The flag is
+works only when the administrator turns it on (the unattended-sessions switch under **Admin → Features**;
+it is stored as `unattended_sessions.enabled` in `org/admin_config.json`, and a change needs a restart);
+otherwise it returns an error. The flag is
 advisory: it changes what happens when nothing authorizes a call, never what is authorized
 ([ADR 0015](adr/0015-unattended-session-flag-is-advisory-only.md)). Pair it with
 `privacyfence_check_policy` to plan which steps can run unattended. A scheduled data sync that needs no AI model at all is run by [`privacyfence-sync`](privacyfence-sync.md).
