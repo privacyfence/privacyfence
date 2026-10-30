@@ -345,3 +345,19 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
 | [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165 |
+| [0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) | Built-in OAuth apps ship in the server distributions | Accepted; relates to 0040 |
+| [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md) | The org config holds only startup settings and app credentials | Accepted; amends 0016, 0196 |
+| [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md) | Operational settings live in a daemon-written admin config | Accepted; amends 0196, 0253; relates to 0016, 0034, 0068, 0070, 0200 |
+| [0258](0258-administration-is-a-separate-admin-page.md) | Administration is a separate Admin page | Accepted; amends 0217; relates to 0033 |
+| [0259](0259-org-servers-use-built-in-apps-through-a-domain-verified-relay.md) | Organization servers use the built-in apps through a domain-verified relay | Accepted; relates to 0011, 0186 |
+| [0260](0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md) | Organization mode can start from the environment and run single-user on localhost | Accepted; relates to 0011, 0177, 0213 |
+| [0261](0261-local-mode-is-deprecated-in-7-and-removed-in-8.md) | Local mode is deprecated in 7.x and removed in 8.x | Accepted; relates to 0002, 0003 |
+| [0262](0262-7x-is-the-migration-checkpoint-for-8x.md) | 7.x is the migration checkpoint for 8.x | Accepted; relates to 0041, 0047, 0171, 0172, 0228, 0236 |
+| [0263](0263-the-6-to-7-upgrade-is-reversible.md) | The 6 to 7 upgrade is reversible | Accepted; amends 0016, 0200; relates to 0262 |
+| [0264](0264-an-organization-server-can-start-from-environment-variables.md) | An organization server can start from environment variables | Accepted; amends 0011, 0016 |
+| [0265](0265-admins-can-be-named-by-verified-email.md) | Admins can be named by verified email | Accepted; relates to 0011 |
+| [0266](0266-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md) | Live checks run on a dedicated runner and test the built-in apps | Accepted; amends 0019, 0181; relates to 0255, 0259 |
+| [0267](0267-an-organization-server-may-opt-in-to-the-built-in-google-sign-in.md) | An organization server may opt in to the built-in Google sign-in | Accepted; relates to 0259, 0263, 0264 |
+| [0268](0268-pre-releases-publish-the-organization-image-under-their-exact-version.md) | Pre-releases publish the organization image under their exact version | Accepted; amends 0208 |
+| [0269](0269-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md) | Organization servers use signed connector configs instead of a bundle | Accepted; amends 0016, 0200; relates to 0256, 0263, 0264 |
+| [0270](0270-the-built-in-slack-app-reads-through-search-while-slack-throttles-it.md) | The built-in Slack app reads through search while Slack throttles it | Accepted; relates to 0255, 0269 |

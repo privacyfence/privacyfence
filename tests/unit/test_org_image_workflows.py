@@ -7,7 +7,7 @@ that nothing in build.yml touches a registry (ADR 0209).
 
 It also covers publish-org-image.yml, the only workflow that pushes the image: its job chain, its
 permissions, that it pushes the images build.yml tested instead of building, and that no step
-is skipped for a pre-release (ADR 0267).
+is skipped for a pre-release (ADR 0268).
 """
 
 from __future__ import annotations

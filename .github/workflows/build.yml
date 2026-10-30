@@ -801,7 +801,7 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: python3 scripts/telegram_credentials.py write
 
-      # The org image carries the built-in OAuth apps its servers sign in with (ADR 0254). The
+      # The org image carries the built-in OAuth apps its servers sign in with (ADR 0255). The
       # desktop jobs get none: desktop mode has no built-in apps. Secrets reach only this step.
       - name: Write built-in app credentials
         env:
@@ -831,7 +831,7 @@ jobs:
           python3 scripts/telegram_credentials.py check-dist "${REQUIRE[@]}" dist/*.whl
 
       # Every release tag, pre-release included, must ship the apps: the alpha image is how 7.0 is
-      # tested (ADR 0254). Only an untagged workflow_dispatch run warns.
+      # tested (ADR 0255). Only an untagged workflow_dispatch run warns.
       - name: Check built-in app credentials are packaged
         run: |
           REQUIRE=()

@@ -255,7 +255,7 @@ def _load_admin_client_secret(path: str) -> dict[str, Any]:
 
 
 _ORG_CONFIG_REFUSED = (
-    "error: --org-config has been replaced by --output; upload the file on the Admin page (ADR 0256)."
+    "error: --org-config has been replaced by --output; upload the file on the Admin page (ADR 0257)."
 )
 
 

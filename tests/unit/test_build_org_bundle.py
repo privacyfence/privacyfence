@@ -193,15 +193,15 @@ _ORG_MODE_OPTIONS: list[tuple[str, list[str]]] = [
     ("--idp-step-up-acr-value", ["mfa"]),
 ]
 
-_MOVED_TEXT = "error: {option} has moved to the Admin page (ADR 0256); remove it."
+_MOVED_TEXT = "error: {option} has moved to the Admin page (ADR 0257); remove it."
 _MOVED_ENV_TEXT = (
     "error: {option} has moved to the Admin page and PRIVACYFENCE_PEEK_BASE_URL / "
-    "PRIVACYFENCE_GRIST_SERVER_URL / PRIVACYFENCE_GRIST_PROVISIONER_URL on the server (ADR 0256, 0263); "
+    "PRIVACYFENCE_GRIST_SERVER_URL / PRIVACYFENCE_GRIST_PROVISIONER_URL on the server (ADR 0257, 0264); "
     "remove it."
 )
 _ORG_TEXT = (
     "error: {option}: organization servers take their settings from privacyfence.env and their own "
-    "apps from signed connector configs (docs/org-mode-setup-guide.md, ADR 0268)."
+    "apps from signed connector configs (docs/org-mode-setup-guide.md, ADR 0269)."
 )
 
 
@@ -554,7 +554,7 @@ class TestMerge:
 
         assert code == 2
         assert capsys.readouterr().err == (
-            f"error: {out_path} is an organization bundle; organization servers no longer take bundles (ADR 0268).\n"
+            f"error: {out_path} is an organization bundle; organization servers no longer take bundles (ADR 0269).\n"
         )
         assert out_path.read_bytes() == before
 

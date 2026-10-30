@@ -4,7 +4,7 @@
 The built-in apps are PrivacyFence-owned OAuth apps (Google, Slack, Salesforce, Atlassian, Miro and
 the Google sign-in client) that organization servers use through the OAuth relay. Their client IDs
 and secrets identify the PrivacyFence *application* to each provider, as Telegram's api_id/api_hash
-do (scripts/telegram_credentials.py, ADR 0040), and are public in effect (ADR 0254). This repo is
+do (scripts/telegram_credentials.py, ADR 0040), and are public in effect (ADR 0255). This repo is
 public, so they are never committed: CI supplies them as the PF_APP_* secrets, and the builds that
 ship a server -- the org image's wheel in .github/workflows/build.yml and
 .github/workflows/publish-pypi.yml -- write them into the git-ignored
@@ -122,7 +122,7 @@ def check_dist(paths: list[Path], require: bool) -> int:
         return 0
     message = f"{', '.join(missing)} lack {MODULE_SUFFIX}; built-in OAuth apps will not work on this install."
     if require:
-        print(f"::error::{message} A stable release must ship it (ADR 0254).")
+        print(f"::error::{message} A stable release must ship it (ADR 0255).")
         return 1
     print(f"::warning::{message}")
     return 0

@@ -182,7 +182,7 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: python3 scripts/telegram_credentials.py write
 
-      # The built-in OAuth apps ship in the PyPI build too (ADR 0254): servers installed from PyPI
+      # The built-in OAuth apps ship in the PyPI build too (ADR 0255): servers installed from PyPI
       # sign in through the relay with them. The secrets go only to this step.
       - name: Write built-in app credentials
         env:

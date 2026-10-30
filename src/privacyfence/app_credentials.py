@@ -15,7 +15,7 @@ PRIVACYFENCE_TELEGRAM_API_ID / PRIVACYFENCE_TELEGRAM_API_HASH env vars.
 The built-in OAuth apps (Google, Slack, Salesforce, Atlassian, Miro and the Google sign-in client)
 work the same way: scripts/builtin_apps.py writes the git-ignored ``_builtin_apps`` module from the
 PF_APP_* CI secrets into the org image's wheel and the PyPI build, and ``builtin_app`` reads it
-(ADR 0254). Desktop installers ship none. Local/dev builds point PRIVACYFENCE_BUILTIN_APPS at a
+(ADR 0255). Desktop installers ship none. Local/dev builds point PRIVACYFENCE_BUILTIN_APPS at a
 JSON file of the same shape.
 """
 from __future__ import annotations

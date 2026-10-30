@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-10-20. Implemented: `.github/workflows/publish-org-image.yml`, `docs/org-mode-docker.md`.
+Amended by [0268](0268-pre-releases-publish-the-organization-image-under-their-exact-version.md): pre-releases publish the image under their exact version tag only.
 
 ## Context
 

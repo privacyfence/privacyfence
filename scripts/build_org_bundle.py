@@ -68,16 +68,16 @@ _LEGACY_BUNDLE_KEYS = (
 
 _ORG_MODE_MESSAGE = (
     "error: {option}: organization servers take their settings from privacyfence.env and their own "
-    "apps from signed connector configs (docs/org-mode-setup-guide.md, ADR 0268)."
+    "apps from signed connector configs (docs/org-mode-setup-guide.md, ADR 0269)."
 )
-_MOVED_MESSAGE = "error: {option} has moved to the Admin page (ADR 0256); remove it."
+_MOVED_MESSAGE = "error: {option} has moved to the Admin page (ADR 0257); remove it."
 _MOVED_WITH_ENV_MESSAGE = (
     "error: {option} has moved to the Admin page and PRIVACYFENCE_PEEK_BASE_URL / "
-    "PRIVACYFENCE_GRIST_SERVER_URL / PRIVACYFENCE_GRIST_PROVISIONER_URL on the server (ADR 0256, 0263); "
+    "PRIVACYFENCE_GRIST_SERVER_URL / PRIVACYFENCE_GRIST_PROVISIONER_URL on the server (ADR 0257, 0264); "
     "remove it."
 )
 _BUNDLE_IS_ORG_MESSAGE = (
-    "error: {file} is an organization bundle; organization servers no longer take bundles (ADR 0268)."
+    "error: {file} is an organization bundle; organization servers no longer take bundles (ADR 0269)."
 )
 
 # Options that wrote an operational setting into the bundle. They stay parseable, hidden from --help,

@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-17. Implemented.
 Amends [ADR 0016](0016-org-config-bundle-hash-log-and-signing.md): signing proved who made a bundle, not that it was the newest.
+Amended by [0263](0263-the-6-to-7-upgrade-is-reversible.md): the serial pin file name. Amended by [0269](0269-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md): connector configs carry per-provider serials.
 
 ## Context
 

@@ -6,6 +6,7 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-08-28 in
 `docs/https-connector-refactor-plan.md` §9.4 and §15 D5, deleted in `96cd5af4`). The own
 authorization server is implemented (phase P7, 2026-09-03). The IdP-delegation configuration the
 decision also allowed for has not been built (see Consequences).
+Amended by [0264](0264-an-organization-server-can-start-from-environment-variables.md): the IdP may come from environment variables.
 
 ## Context
 

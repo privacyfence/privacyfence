@@ -9,7 +9,7 @@ floating tags only move forward -- re-running an older patch release never drags
 
 A pre-release (PEP 440 short form: `X.Y.ZaN`, `X.Y.ZbN`, `X.Y.ZrcN`) gets exactly its own version
 and nothing else, however high it is, so `latest` never points at a pre-release and the floating
-tags, and the unattended upgrades that follow them, never reach one (ADR 0267). Pre-release and
+tags, and the unattended upgrades that follow them, never reach one (ADR 0268). Pre-release and
 malformed git tags are ignored when comparing stable versions, and any other version string is
 refused.
 

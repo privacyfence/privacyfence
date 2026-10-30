@@ -1,5 +1,5 @@
 """Tests for scripts/builtin_apps.py -- the one generator of the build-time built-in OAuth apps
-module, and the check build.yml and publish-pypi.yml run over the built wheel and sdist (ADR 0254).
+module, and the check build.yml and publish-pypi.yml run over the built wheel and sdist (ADR 0255).
 
 Imported by file path, same pattern as tests/unit/test_telegram_credentials.py.
 """
@@ -214,7 +214,7 @@ def test_check_dist_fails_when_required_and_missing(tmp_path: Path, capsys: pyte
     assert out.count("::error::") == 1
     assert "p-1.tar.gz" in out.split("::error::")[1]
     assert "p-1-py3-none-any.whl" not in out.split("::error::")[1]
-    assert "built-in OAuth apps will not work on this install. A stable release must ship it (ADR 0254)." in out
+    assert "built-in OAuth apps will not work on this install. A stable release must ship it (ADR 0255)." in out
 
 
 def test_check_dist_only_warns_otherwise(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

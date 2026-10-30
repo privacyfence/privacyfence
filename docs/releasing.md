@@ -124,7 +124,7 @@ image test ran against. A failed publish is rerun with `workflow_dispatch` from 
 days (how long the tested images are kept as workflow artifacts). It is a workflow of its own so a
 GHCR outage can never hold back PyPI, whereas `build-org-image` inside `build.yml` does gate PyPI,
 the MCP registry and the GitHub Release on every tag (see "Packaged-artifact release gating"
-below). See ADRs 0209, 0210, 0215 and 0267 (which amends 0208's stable-only rule).
+below). See ADRs 0209, 0210, 0215 and 0268 (which amends 0208's stable-only rule).
 
 If the repository restricts allowed Actions, `publish-org-image.yml` needs both
 `actions/attest-build-provenance@*` and `actions/attest@*` on the allowlist (the former calls the

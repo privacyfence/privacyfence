@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-22. Implemented.
 Relates to ADR 0032, ADR 0033 and ADR 0035.
+Amended by [0258](0258-administration-is-a-separate-admin-page.md): the Stats section is on the Admin page.
 
 ## Context
 

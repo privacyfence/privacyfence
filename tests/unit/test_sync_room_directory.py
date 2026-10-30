@@ -365,7 +365,7 @@ class TestMain:
 
         assert rc == 2
         assert capsys.readouterr().err == (
-            "error: --org-config has been replaced by --output; upload the file on the Admin page (ADR 0256).\n"
+            "error: --org-config has been replaced by --output; upload the file on the Admin page (ADR 0257).\n"
         )
         flow.assert_not_called()
         assert org_config.read_text(encoding="utf-8") == '{"version": 1}'
