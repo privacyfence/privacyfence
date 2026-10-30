@@ -36,7 +36,7 @@ Telegram. You sign in with a setup code from the container's log and then a pass
 closest replacement for a desktop install, with the same one person on one computer. Read the
 limits in [Security and compliance](security-and-compliance.md#single-user-mode) first: anyone who can
 run `docker` on that computer controls the install. The steps are in the "Run it on this computer"
-section of [Organization deployment with Docker](org-mode-docker.md).
+section of [Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer).
 
 **An organization server.** One PrivacyFence server for a team, behind your identity provider and an
 HTTPS address, reachable by claude.ai and ChatGPT as well as desktop clients. Follow

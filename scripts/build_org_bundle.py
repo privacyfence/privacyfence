@@ -4,9 +4,9 @@
 Run this once per organization after registering each cloud app (see the
 "For IT admins" section of docs/google-cloud-setup.md, docs/slack-setup.md,
 docs/salesforce-setup.md, and docs/atlassian-setup.md). The output file is
-what you distribute to your users -- they install it via "Install/Update
-Organization Config…" on the General page of PrivacyFence Settings (the
-embedded web page).
+what you distribute to your users -- they install it on their desktop via
+Admin -> Organization configuration -> "Install configuration file…" in
+PrivacyFence Settings (the embedded web page).
 
 A bundle carries the connector app credentials (Google, Slack, Salesforce,
 Atlassian, Grist, Miro) and its own bookkeeping (the organization name, and
@@ -527,8 +527,9 @@ def main(argv: list[str] | None = None) -> int:
             "afterwards, including any future unsigned one, must verify against that same key."
         )
     print(
-        'Distribute this file to your users. They install it via "Install/Update '
-        'Organization Config…" on the General page of PrivacyFence Settings.'
+        'Distribute this file to your desktop users. They install it in PrivacyFence Settings '
+        'under Admin → Organization configuration → "Install configuration file…". '
+        'An organization server takes no bundle (docs/org-mode-setup-guide.md).'
     )
     return 0
 

@@ -6,8 +6,8 @@
 #
 #   - Organization-level app credentials (the Google OAuth client, Slack app,
 #     Telegram app, Salesforce Connected App, Atlassian OAuth app) are
-#     installed as one bundle via "Install/Update Organization Config…" in
-#     PrivacyFence Settings (the embedded web page, web.settings below). IT
+#     installed as one bundle via "Install configuration file…" under
+#     Admin → Organization configuration in PrivacyFence Settings (the embedded web page, web.settings below). IT
 #     admins build that bundle once with scripts/build_org_bundle.py and
 #     distribute it.
 #   - Per-user sign-in (browser OAuth, or Telegram's phone + code login) is

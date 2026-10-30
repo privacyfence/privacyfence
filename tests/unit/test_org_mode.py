@@ -60,7 +60,7 @@ class TestResolveModeEnvironment:
         with pytest.raises(org_mode.ConfigurationError) as excinfo:
             org_mode.resolve_mode({"mode": "local"})
         assert str(excinfo.value) == (
-            'org_config.json says "mode": "local" but PRIVACYFENCE_MODE says "org"; remove one of them'
+            'org_bundle.json says "mode": "local" but PRIVACYFENCE_MODE says "org"; remove one of them'
         )
 
     def test_resolve_mode_invalid_env_value(self, monkeypatch):

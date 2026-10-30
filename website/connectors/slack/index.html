@@ -60,7 +60,7 @@
           <div class="page-copy stack">
             <p>Before a reviewed read is shown to you, PrivacyFence scans the <strong>message text</strong> locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Sender names and channel names are not scanned. Email addresses and phone numbers are deliberately not flagged, because nearly every signature has them.</p>
             <p>A match sends the read to a card even if an always-allow rule covers the channel, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
-            <p>The privacy filter can also withhold whole kinds of Slack data from the assistant: message content, thread content, people's identities, and the channel, direct-message and group-chat lists. Each is set in <strong>Settings → Privacy Filter → Slack</strong>.</p>
+            <p>The privacy filter can also withhold whole kinds of Slack data from the assistant: message content, thread content, people's identities, and the channel, direct-message and group-chat lists. Each is set under <strong>Privacy Filter → Slack</strong> (in Settings on a desktop install, on the Admin page of an organization server).</p>
             <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>
           </div>
         </div>
@@ -92,8 +92,9 @@
         <h2 id="setup-heading">One Slack app per workspace, then each person approves it.</h2>
       </div>
       <ol class="steps page-copy">
-        <li>An administrator creates a Slack app once per workspace, with user token scopes only, and packages its client ID and secret into an organization config bundle. The app is never publicly distributed.</li>
-        <li>Each person installs the bundle, connects Slack from PrivacyFence's Settings page, and approves the app in the browser.</li>
+        <li>On an organization server, Slack works at once with PrivacyFence's built-in Slack app, with nothing to register; the sign-in redirect goes through the PrivacyFence relay. Slack limits apps that are not listed in its Marketplace, so the built-in app runs in limited mode: channel history is read through Slack search, and thread replies stop at 15.</li>
+        <li>For full speed, or on a desktop install, an administrator creates a Slack app once per workspace, with user token scopes only, and installs its client ID and secret as an organization config. That app is never publicly distributed.</li>
+        <li>Each person connects Slack from PrivacyFence and approves the app in the browser.</li>
         <li>The Slack tools appear to the assistant. The token stays with PrivacyFence and is never given to the AI client.</li>
       </ol>
       <p class="actions cluster">

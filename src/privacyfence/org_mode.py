@@ -106,7 +106,7 @@ def resolve_mode(org_config: dict[str, Any]) -> Mode:
             raise ConfigurationError(f"org_bundle.json's \"mode\" must be \"local\" or \"org\", got {mode!r}")
         if env_mode and env_mode != mode:
             raise ConfigurationError(
-                f"org_config.json says \"mode\": \"{mode}\" but {MODE_ENV} says \"{env_mode}\"; "
+                f"org_bundle.json says \"mode\": \"{mode}\" but {MODE_ENV} says \"{env_mode}\"; "
                 "remove one of them"
             )
         return mode

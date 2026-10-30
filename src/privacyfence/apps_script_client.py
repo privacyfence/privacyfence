@@ -130,8 +130,8 @@ class AppsScriptClient:
         """
         if not self._client_config:
             raise AppsScriptClientError(
-                "No Google organization config installed. Install/Update "
-                "Organization Config from PrivacyFence Settings first."
+                "No Google organization config installed. Install the configuration file on "
+                "Admin → Organization configuration in PrivacyFence Settings first."
             )
         logger.info("Starting Apps Script interactive OAuth flow")
         creds = authorize_local(self._client_config, SCOPES)

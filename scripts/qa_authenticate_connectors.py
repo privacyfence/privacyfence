@@ -23,7 +23,7 @@ Prerequisite: the QA org config bundle (`org_config.qa.json`, built by
 setup, see `docs/connector-qa.md`'s "QA accounts and organization config")
 must already be installed at `org/org_bundle.json` -- `--org-config` below
 can do that copy for you, or do it by hand (or via PrivacyFence Settings'
-"Install/Update Organization Config...").
+"Install configuration file...").
 
     .venv/bin/python scripts/qa_authenticate_connectors.py
         Runs every QA connector's OAuth flow, in this order: Gmail, Drive,

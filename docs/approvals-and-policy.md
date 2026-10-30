@@ -212,8 +212,8 @@ identity and where it came from (`agent_source`). See
 ### Gmail signature on drafts
 
 The Gmail draft tools can append your Gmail signature — the one Gmail stores for the sending
-address. Turn it on for every draft with **Settings → Privacy Filter → Gmail → Append Gmail
-signature to drafts** (`gmail.append_signature_to_drafts`, off by default); each call can override
+address. Turn it on for every draft with **Privacy Filter → Gmail → Append Gmail
+signature to drafts** (**Settings** on a desktop install, **Admin** on an organization server; `gmail.append_signature_to_drafts`, off by default); each call can override
 it with `include_signature`.
 
 The signature is fetched before the card is shown, so the card's preview shows the draft exactly as
@@ -542,8 +542,8 @@ organization deployment. A group that is present but malformed — an unknown po
 non-mapping `categories` — stops PrivacyFence from starting rather than falling back to `allow`.
 
 The filter applies only to tools that return content from the service; writes are not filtered.
-Other connectors have no categories. **Settings → Privacy Filter → Calendar** has one switch
-instead: whether `calendar_get_free_busy` may show event titles and status
+Other connectors have no categories. **Privacy Filter → Calendar** (on **Settings** for a desktop install, on **Admin** for an
+organization server) has one switch instead: whether `calendar_get_free_busy` may show event titles and status
 (`calendar.free_busy_full_event_details`, on by default) or only busy/free blocks.
 
 If `file_metadata` and `file_list` are set differently, PrivacyFence logs a warning at startup:

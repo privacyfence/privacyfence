@@ -41,7 +41,7 @@ The guides above install PrivacyFence **locally**: it runs on your own computer 
 claude.ai cannot. For claude.ai, or to run PrivacyFence once for a whole team, deploy it in
 **organization mode** on a server: see [Organization deployment](org-mode-setup-guide.md). To try
 organization mode on your own computer, run the Docker image in single-user mode
-([Organization deployment with Docker](org-mode-docker.md)). If your organization already runs it
+([Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer)). If your organization already runs it
 and gave you a URL such as `https://pf.example.com`, there is nothing to install: add
 `https://pf.example.com/mcp` to your client as an MCP server, sign in with your organization account
 when asked, and connect your services at `https://pf.example.com/connect`.
