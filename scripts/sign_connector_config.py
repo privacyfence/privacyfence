@@ -101,6 +101,8 @@ def _write_new_file(path: Path, data: bytes) -> None:
         try:
             path.unlink()
         except OSError:
+            # Best-effort cleanup of the half-written file; a failure here must not hide the
+            # original error that is re-raised below.
             pass
         raise
 

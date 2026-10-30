@@ -481,8 +481,7 @@ _AUTO_PROVISION_UNAVAILABLE = {
         "so the provisioning key only goes where the server's operator points it."
     ),
     "grist": (
-        "Automatic accounts need PRIVACYFENCE_GRIST_SERVER_URL and "
-        "PRIVACYFENCE_GRIST_PROVISIONER_URL on the server."
+        f"Automatic accounts need {_ADDRESS_VARIABLE['grist']} and {_PROVISIONER_VARIABLE} on the server."
     ),
 }
 _GRIST_OAUTH_REASON = "Automatic accounts work only with API keys; this server uses a Grist OAuth app."

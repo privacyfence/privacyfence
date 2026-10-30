@@ -2147,6 +2147,8 @@ class SettingsController:
                 if org_bundle_signing.sha256_hex(bundle.read_bytes()) == recorded:
                     return legacy.stat().st_mtime
             except OSError:
+                # An unreadable bundle or legacy file only costs the older install date: fall
+                # back to the bundle's own mtime below.
                 pass
         return bundle.stat().st_mtime
 
