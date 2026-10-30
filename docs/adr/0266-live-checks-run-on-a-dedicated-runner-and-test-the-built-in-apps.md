@@ -2,9 +2,10 @@
 
 ## Status
 
-Accepted — 2026-10-30. Not yet implemented: the live-check workflows still target the runner labelled
-`privacyfence-test`, and the QA server's deploy files do not exist yet. They land in later changes; this
-ADR records the decision they follow.
+Accepted — 2026-10-30. Implemented on the repository side: the live-check workflows target the runner
+labelled `privacyfence-live`, the recorder runs in organization mode as `qa-live`, and the QA server's
+deploy workflow and host files exist. The host itself is set up by hand, as
+[`docs/connector-qa.md`](../connector-qa.md#self-hosted-runner) describes.
 Amends [ADR 0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md): the runner host.
 Amends [ADR 0181](0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md): the runner group and label.
 Relates to [ADR 0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) and [ADR 0259](0259-org-servers-use-built-in-apps-through-a-domain-verified-relay.md).

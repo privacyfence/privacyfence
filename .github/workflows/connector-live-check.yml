@@ -2,9 +2,11 @@ name: Connector live check
 
 # Runs only on a schedule or by explicit maintainer trigger -- never on
 # pull_request, never on push from a branch a non-maintainer controls.
-# Targets the self-hosted runner provisioned in docs/connector-qa.md's
-# "Runner requirements" section (label `privacyfence-test`), which is the only place
-# these connectors' live OAuth credentials ever exist. See docs/testing-policy.md's
+# Targets the self-hosted runner runner.privacyfence.eu, provisioned as docs/connector-qa.md's
+# "Runner requirements" section describes (label `privacyfence-live`, runner group
+# `privacyfence-live`), which is the only place these connectors' live OAuth tokens ever
+# exist. The checks run in organization mode as the principal `qa-live`, with the built-in
+# apps. See docs/testing-policy.md's
 # "Layer 5: live connector" section and ADR 0019
 # (docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md) for why.
 on:
@@ -23,12 +25,18 @@ concurrency:
                                # provider call sequence
 
 env:
-  # This runner's one persistent, hand-provisioned home for the QA
-  # credentials -- outside any Actions-managed workspace, never a GitHub
-  # Actions secret. Everything else about this job's checkout is
-  # ephemeral and rebuilt every run (see the two steps below): only this
-  # directory needs to survive between runs.
+  # The runner's hand-placed configuration (tests/fixtures/qa_environment.yaml, and an
+  # optional org/org_bundle.json) -- outside any Actions-managed workspace, never a GitHub
+  # Actions secret. The tokens are not kept here: they live in the QA organization server's
+  # data directory ($HOME/qa-org-data), and scripts/qa_runner_tokens.py copies them in and back.
   QA_SECRETS_DIR: ~/privacyfence
+  # Peek and Grist have no relay app; their addresses come from the environment
+  # (docs/connector-qa.md, "The QA server").
+  PRIVACYFENCE_PEEK_BASE_URL: https://peek-qa.privacyfence.eu
+  PRIVACYFENCE_GRIST_SERVER_URL: https://docs.getgrist.com
+  # Names the QA principal's folder under the QA server's users/ when more than one holds
+  # tokens; empty when the repository variable is unset.
+  PF_QA_PRINCIPAL_ID: ${{ vars.PF_QA_PRINCIPAL_ID }}
   # Telegram's api_id/api_hash are NOT a per-account credential like the
   # other four connectors' OAuth grants -- they're a single, shared app
   # identity, the same for every user and every phone number, already
@@ -38,16 +46,16 @@ env:
   # build.yml uses on GitHub-hosted runners for exactly that -- reusing
   # them here doesn't touch the "never provision a connector credential
   # to GitHub Actions" policy at all, since that policy is specifically
-  # about the four real per-account OAuth grants. The actual per-account
-  # Telegram credential (the session file from --telegram-setup,
-  # credentials/telegram.session) still lives only in QA_SECRETS_DIR
-  # like the others -- this only supplies the app-level id/hash pair.
+  # about the real per-account OAuth grants. The actual per-account
+  # Telegram credential (the session file connected on the QA server)
+  # still lives only in the QA server's data directory, like the other
+  # tokens -- this only supplies the app-level id/hash pair.
   PRIVACYFENCE_TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
   PRIVACYFENCE_TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
 
 jobs:
   live-check:
-    runs-on: [self-hosted, privacyfence-test]
+    runs-on: [self-hosted, privacyfence-live]
     timeout-minutes: 20   # generous but bounded -- a few minutes of read
                            # calls plus one venv build, not an open-ended job
     permissions:
@@ -62,8 +70,8 @@ jobs:
           # clean: true (the default) is exactly what we want here: this
           # checkout is fully ephemeral, rebuilt from scratch every run,
           # and never holds anything worth preserving between runs --
-          # the one thing that does need to persist (QA_SECRETS_DIR) lives
-          # outside this workspace entirely and gets copied in below.
+          # the QA tokens and configuration live outside this workspace
+          # entirely and get copied in below.
 
       # Built fresh every run rather than kept as a persistent runner-local
       # venv: costs an extra ~1-2 minutes on this weekly/on-demand job, but
@@ -83,34 +91,45 @@ jobs:
           .venv/bin/pip install --require-hashes -r requirements/dev.lock.txt
           .venv/bin/pip install --no-deps --no-build-isolation -e .
 
-      # The only step that touches this runner's permanent state.
-      # QA_SECRETS_DIR (org_config.json, credentials/,
-      # tests/fixtures/qa_environment.yaml) is deliberately kept outside
-      # any Actions workspace and copied in fresh each run -- see the
-      # module comment above and docs/connector-qa.md's
-      # "Persistent QA state" section. paths.py's data_dir() resolves credential storage
-      # relative to wherever this checkout physically sits on disk, so
-      # the copy has to land at these exact paths for the script to see
-      # it. qa_environment.yaml isn't a credential (it's non-secret
-      # seed-artifact ids), but it lives in the same place for the same
-      # reason: it's runner-local state that has to survive an ephemeral,
-      # every-run-wiped checkout.
-      - name: Copy this runner's QA credentials into the checkout
+      # Written from CI secrets into this one step's environment, never the job's or the
+      # workflow's, and deleted by the last step of this job: the runner is not ephemeral.
+      # The Google sign-in client is not used by the live checks, so it is not passed.
+      - name: Write built-in app credentials
+        env:
+          PF_APP_GOOGLE_WEB_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_ID }}
+          PF_APP_GOOGLE_WEB_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_SECRET }}
+          PF_APP_SLACK_CLIENT_ID: ${{ secrets.PF_APP_SLACK_CLIENT_ID }}
+          PF_APP_SLACK_CLIENT_SECRET: ${{ secrets.PF_APP_SLACK_CLIENT_SECRET }}
+          PF_APP_SALESFORCE_CLIENT_ID: ${{ secrets.PF_APP_SALESFORCE_CLIENT_ID }}
+          PF_APP_SALESFORCE_CLIENT_SECRET: ${{ secrets.PF_APP_SALESFORCE_CLIENT_SECRET }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_ID: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_ID }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET }}
+          PF_APP_MIRO_CLIENT_ID: ${{ secrets.PF_APP_MIRO_CLIENT_ID }}
+          PF_APP_MIRO_CLIENT_SECRET: ${{ secrets.PF_APP_MIRO_CLIENT_SECRET }}
+        run: python3 scripts/builtin_apps.py write
+
+      # The tokens come from the QA organization server's data directory, where the maintainer
+      # connected the accounts in a browser (docs/connector-qa.md, "The QA server"). They land
+      # in users/qa-live/credentials/ of this checkout, where the recorder's qa-live principal
+      # reads them. qa_environment.yaml isn't a credential (non-secret seed-artifact ids), and
+      # org/org_bundle.json is optional (an organization's own app to test); both are
+      # runner-local files that have to survive an every-run-wiped checkout.
+      - name: Copy this runner's QA tokens and configuration into the checkout
         run: |
           set -euo pipefail
           secrets_dir="$(eval echo "${QA_SECRETS_DIR}")"
-          for required in credentials org/org_config.json tests/fixtures/qa_environment.yaml; do
-            if [ ! -e "${secrets_dir}/${required}" ]; then
-              echo "##[error] ${secrets_dir}/${required} not found." \
-                   "See docs/connector-qa.md's 'Persistent QA state' section" \
-                   "for how this runner's QA credentials are provisioned."
-              exit 1
-            fi
-          done
-          mkdir -p org tests/fixtures
-          cp -a "${secrets_dir}/credentials/." credentials/
-          cp -a "${secrets_dir}/org/org_config.json" org/org_config.json
+          if [ ! -e "${secrets_dir}/tests/fixtures/qa_environment.yaml" ]; then
+            echo "##[error] ${secrets_dir}/tests/fixtures/qa_environment.yaml not found." \
+                 "See docs/connector-qa.md's 'Persistent QA state' section."
+            exit 1
+          fi
+          .venv/bin/python scripts/qa_runner_tokens.py pull --data-dir "$HOME/qa-org-data"
+          mkdir -p tests/fixtures
           cp -a "${secrets_dir}/tests/fixtures/qa_environment.yaml" tests/fixtures/qa_environment.yaml
+          if [ -f "${secrets_dir}/org/org_bundle.json" ]; then
+            mkdir -p org
+            cp -a "${secrets_dir}/org/org_bundle.json" org/org_bundle.json
+          fi
 
       - name: Run qa_fixture_recorder.py --check
         id: check
@@ -158,31 +177,35 @@ jobs:
           path: /tmp/qa-record-report.md
           retention-days: 7
 
+      # Weekly external check of the oauth relay (docs/oauth-relay.md). A failure is reported
+      # in the summary and does not fail the job: the relay is not what this job tests.
+      - name: Check the relay's health
+        id: relay
+        continue-on-error: true
+        run: |
+          if curl -fsSI --max-time 30 https://oauth.privacyfence.eu/health >/dev/null; then
+            echo "relay: up" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "relay: down" >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+
       # Mirrors the copy-in step above, reversed. Each *_client.py that
       # refreshes an expired OAuth access token already persists the
       # refreshed token back to disk in place (e.g. confluence_client.py's
       # _try_refresh() -> save_token_file(), which even already handles
-      # Atlassian rotating the refresh token on use) -- but until now that
-      # write only ever landed inside this run's disposable checkout, never
-      # back in QA_SECRETS_DIR. Google's refresh tokens aren't single-use,
-      # so this silently didn't matter for calendar/tasks/contacts/drive/
-      # gmail, but Atlassian's are: every run after the first was refreshing
-      # Jira/Confluence with an already-spent seed token, which is exactly
-      # what broke run
-      # https://github.com/privacyfence/privacyfence/actions/runs/34639046673
-      # ("token refresh failed: ... 403 Forbidden") right after this
-      # runner's Atlassian credentials were freshly re-authenticated.
+      # Atlassian rotating the refresh token on use) -- but that write only
+      # lands inside this run's disposable checkout. Atlassian's refresh
+      # tokens are single-use, so a token that is not written back leaves the
+      # next run refreshing with an already-spent one. `push` writes back
+      # only the files this run changed, and skips one the maintainer
+      # reconnected on the QA server meanwhile.
       # `if: always()`: a token can be refreshed (and rotated) by an early
       # step even when a later one fails -- losing that refreshed value
-      # here would just reproduce the same bug on the very next run.
-      - name: Copy any refreshed QA credentials back to this runner's persistent store
+      # here would reproduce the same bug on the very next run.
+      - name: Copy any refreshed QA tokens back to the QA server's data directory
         if: always()
-        run: |
-          set -euo pipefail
-          secrets_dir="$(eval echo "${QA_SECRETS_DIR}")"
-          if [ -d credentials ]; then
-            cp -a credentials/. "${secrets_dir}/credentials/"
-          fi
+        run: .venv/bin/python scripts/qa_runner_tokens.py push --data-dir "$HOME/qa-org-data"
 
       - name: Upload report artifact
         if: always()
@@ -191,6 +214,12 @@ jobs:
           name: connector-live-check-report
           path: /tmp/qa-*-report.md
           retention-days: 90
+
+      # Last on purpose, and always: the runner is not ephemeral, so the generated module that
+      # holds the built-in app credentials must not outlive the run.
+      - name: Delete built-in app credentials
+        if: always()
+        run: rm -f src/privacyfence/_builtin_apps.py
 
   # Opens a PR only when --record actually changed a fixture file -- a
   # maintainer reviews the redacted diff exactly as the manual process in

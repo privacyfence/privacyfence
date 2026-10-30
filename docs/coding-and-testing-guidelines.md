@@ -429,7 +429,8 @@ Parser/client unit tests replay committed, redacted live fixtures from
 `tests/fixtures/live/<connector>/`; they must not require a network connection.
 
 Real provider checks run through `scripts/qa_fixture_recorder.py` (`--check`, `--record`,
-`--lifecycle`) against dedicated QA accounts, on a developer machine or on the self-hosted runner
+`--lifecycle`) against dedicated QA accounts, in organization mode as the principal `qa-live`, on a
+developer machine or on the self-hosted runner (`runner.privacyfence.eu`, label `privacyfence-live`)
 through `connector-live-check.yml` (weekly, or dispatched) and `qa-record-fixture.yml` (records one
 connector's fixture, dispatched on `main`, and commits it to the branch named in its `branch` input). See
 [`connector-qa.md`](connector-qa.md) for the accounts, the runner and both workflows, and
@@ -526,7 +527,7 @@ runtime or in review, so work through them deliberately.
 |---|---|---|
 | Live check and recorded fixture | `scripts/qa_fixture_recorder.py`: `CONNECTOR_CHECKS` and `EXPECTED_FIXTURES` | **enforced**: import-time assertion that both have the same keys, plus `tests/unit/test_qa_fixture_recorder.py`'s `TestFixturePresence` (each listed fixture file exists and is valid JSON) |
 | QA seed objects for the connector | `tests/fixtures/qa_environment.yaml.example` (the real, git-ignored `qa_environment.yaml` lives on the QA machine and runner) | review |
-| QA account authentication step (OAuth connectors) | `scripts/qa_authenticate_connectors.py`'s `STEPS` | review |
+| QA account connection (OAuth connectors) | the connector's `/connect` entry, connected in a browser on the QA server; the runner copies the token (`scripts/qa_runner_tokens.py`) | review |
 | Record the fixture | dispatch `qa-record-fixture.yml` on `main` with inputs `connector=<name>` and `branch=<feature branch>`; the hosted `commit-fixture` job commits `tests/fixtures/live/<name>/…` to that branch — see [`connector-qa.md`](connector-qa.md#recording-one-connector) | the fixture-presence test above |
 | Privacy-matrix rows (tool, direction, gate) | the doc `test_readme_manifest_alignment.py` parses (its `README_PATH`) | **enforced**: every tool documented, direction matches `read_only` |
 | User-facing setup guide and a `CHANGELOG.md` line | `docs/<service>-setup.md` (or the shared Google guide), `## [Unreleased]` | review |

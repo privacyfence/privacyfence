@@ -22,7 +22,8 @@ name: Record QA fixture
 #
 # workflow_dispatch only. Never `pull_request`, never `push` -- the rule
 # connector-live-check.yml states, for the reason it gives: this is the
-# only runner where the QA connectors' live OAuth credentials exist (see
+# only runner where the QA connectors' live OAuth tokens exist -- runner.privacyfence.eu, label
+# `privacyfence-live`, runner group `privacyfence-live` (see
 # docs/connector-qa.md's "Runner requirements" section,
 # docs/testing-policy.md's "Layer 5: live connector", and ADR 0019
 # (docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md)
@@ -50,19 +51,25 @@ permissions:
 
 concurrency:
   # Deliberately the *same* group as connector-live-check.yml, not a group
-  # of its own: both jobs copy this runner's single persistent credential
-  # store into their own checkout and copy refreshed tokens back out again
-  # at the end. Two of them overlapping would race on that store and could
+  # of its own: both jobs copy the QA principal's tokens from the QA server's
+  # data directory into their own checkout and write refreshed ones back at
+  # the end. Two of them overlapping would race on those tokens and could
   # write back a stale token over a freshly refreshed one.
   group: connector-live-check
   cancel-in-progress: false
 
 env:
+  # The runner's hand-placed configuration (tests/fixtures/qa_environment.yaml, and an optional
+  # org/org_bundle.json); the tokens of the `qa-live` principal come from the QA server's data
+  # directory instead -- see connector-live-check.yml.
   QA_SECRETS_DIR: ~/privacyfence
+  PRIVACYFENCE_PEEK_BASE_URL: https://peek-qa.privacyfence.eu
+  PRIVACYFENCE_GRIST_SERVER_URL: https://docs.getgrist.com
+  PF_QA_PRINCIPAL_ID: ${{ vars.PF_QA_PRINCIPAL_ID }}
 
 jobs:
   record:
-    runs-on: [self-hosted, privacyfence-test]
+    runs-on: [self-hosted, privacyfence-live]
     timeout-minutes: 20
     permissions:
       contents: read   # this job holds live credentials and never gets a write token
@@ -126,25 +133,40 @@ jobs:
           .venv/bin/pip install --require-hashes -r requirements/dev.lock.txt
           .venv/bin/pip install --no-deps --no-build-isolation -e .
 
+      # Same step as connector-live-check.yml's, for the same reasons: the secrets reach only this
+      # step's environment, and the last step of this job deletes the module they produce.
+      - name: Write built-in app credentials
+        env:
+          PF_APP_GOOGLE_WEB_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_ID }}
+          PF_APP_GOOGLE_WEB_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_SECRET }}
+          PF_APP_SLACK_CLIENT_ID: ${{ secrets.PF_APP_SLACK_CLIENT_ID }}
+          PF_APP_SLACK_CLIENT_SECRET: ${{ secrets.PF_APP_SLACK_CLIENT_SECRET }}
+          PF_APP_SALESFORCE_CLIENT_ID: ${{ secrets.PF_APP_SALESFORCE_CLIENT_ID }}
+          PF_APP_SALESFORCE_CLIENT_SECRET: ${{ secrets.PF_APP_SALESFORCE_CLIENT_SECRET }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_ID: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_ID }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET }}
+          PF_APP_MIRO_CLIENT_ID: ${{ secrets.PF_APP_MIRO_CLIENT_ID }}
+          PF_APP_MIRO_CLIENT_SECRET: ${{ secrets.PF_APP_MIRO_CLIENT_SECRET }}
+        run: python3 scripts/builtin_apps.py write
+
       # Mirrors connector-live-check.yml's copy-in step exactly -- see that
-      # workflow's comment for why QA_SECRETS_DIR lives outside the
-      # (every-run-wiped) Actions workspace and has to be copied in.
-      - name: Copy this runner's QA credentials into the checkout
+      # workflow's comment for where the tokens and the configuration come from.
+      - name: Copy this runner's QA tokens and configuration into the checkout
         run: |
           set -euo pipefail
           secrets_dir="$(eval echo "${QA_SECRETS_DIR}")"
-          for required in credentials org/org_config.json tests/fixtures/qa_environment.yaml; do
-            if [ ! -e "${secrets_dir}/${required}" ]; then
-              echo "##[error] ${secrets_dir}/${required} not found." \
-                   "See docs/connector-qa.md's 'Persistent QA state' section" \
-                   "for how this runner's QA credentials are provisioned."
-              exit 1
-            fi
-          done
-          mkdir -p org tests/fixtures
-          cp -a "${secrets_dir}/credentials/." credentials/
-          cp -a "${secrets_dir}/org/org_config.json" org/org_config.json
+          if [ ! -e "${secrets_dir}/tests/fixtures/qa_environment.yaml" ]; then
+            echo "##[error] ${secrets_dir}/tests/fixtures/qa_environment.yaml not found." \
+                 "See docs/connector-qa.md's 'Persistent QA state' section."
+            exit 1
+          fi
+          .venv/bin/python scripts/qa_runner_tokens.py pull --data-dir "$HOME/qa-org-data"
+          mkdir -p tests/fixtures
           cp -a "${secrets_dir}/tests/fixtures/qa_environment.yaml" tests/fixtures/qa_environment.yaml
+          if [ -f "${secrets_dir}/org/org_bundle.json" ]; then
+            mkdir -p org
+            cp -a "${secrets_dir}/org/org_bundle.json" org/org_bundle.json
+          fi
 
       # Guards the same silent-success hole the CONNECTOR default above
       # does, for the other way in: a mistyped dispatch input. The recorder
@@ -179,8 +201,8 @@ jobs:
             --report-file /tmp/qa-record-report.md
 
       # Hands only the recorded fixture to the `commit-fixture` job. The checkout also holds
-      # this runner's copied-in credentials and qa_environment.yaml at this point -- all three
-      # are git-ignored, but uploading just this directory keeps them out of the artifact.
+      # this runner's copied-in tokens and qa_environment.yaml at this point -- all of it
+      # is git-ignored, but uploading just this directory keeps them out of the artifact.
       - name: Upload the recorded fixture
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -192,16 +214,11 @@ jobs:
       # Mirrors connector-live-check.yml's copy-back step, and matters for
       # the same reason: a *_client.py that refreshed an expired access
       # token during this run persisted it into this disposable checkout,
-      # and losing it here would leave QA_SECRETS_DIR holding a token this
-      # run may already have spent.
-      - name: Copy any refreshed QA credentials back to this runner's persistent store
+      # and losing it here would leave the QA server's data directory holding
+      # a token this run may already have spent.
+      - name: Copy any refreshed QA tokens back to the QA server's data directory
         if: always()
-        run: |
-          set -euo pipefail
-          secrets_dir="$(eval echo "${QA_SECRETS_DIR}")"
-          if [ -d credentials ]; then
-            cp -a credentials/. "${secrets_dir}/credentials/"
-          fi
+        run: .venv/bin/python scripts/qa_runner_tokens.py push --data-dir "$HOME/qa-org-data"
 
       - name: Upload report artifact
         if: always()
@@ -210,6 +227,11 @@ jobs:
           name: qa-record-report-${{ inputs.connector || 'apps_script' }}
           path: /tmp/qa-record-report.md
           retention-days: 90
+
+      # Last on purpose, and always: the runner is not ephemeral.
+      - name: Delete built-in app credentials
+        if: always()
+        run: rm -f src/privacyfence/_builtin_apps.py
 
   # The only job here that can push. Runs on a GitHub-hosted runner, so the write token never
   # reaches the machine that holds the QA credentials.
@@ -244,5 +266,5 @@ jobs:
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit \
                 -m "Record live ${CONNECTOR} fixture" \
-                -m "Recorded on the privacyfence-test runner by .github/workflows/qa-record-fixture.yml against the QA account's [QATEST]-tagged seed artifact. Identity fields and structural resource ids/URLs are de-identified by scripts/qa_fixture_recorder.py before writing; review this diff before merging, per docs/testing-policy.md 2.1."
+                -m "Recorded on the privacyfence-live runner by .github/workflows/qa-record-fixture.yml against the QA account's [QATEST]-tagged seed artifact. Identity fields and structural resource ids/URLs are de-identified by scripts/qa_fixture_recorder.py before writing; review this diff before merging, per docs/testing-policy.md 2.1."
           git push origin "HEAD:refs/heads/${BRANCH}"

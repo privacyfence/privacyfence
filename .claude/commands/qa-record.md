@@ -20,13 +20,14 @@ is explicit that the real QA grants live only on the self-hosted runner. So this
 
 2. **Dispatch `qa-record-fixture.yml`** with `ref` set to `main` and inputs `connector` set to
    that name and `branch` set to the current branch (it must already be pushed). It runs on the
-   `privacyfence-test` self-hosted runner, which admits only the workflow as it stands on `main`;
+   `privacyfence-live` self-hosted runner (`runner.privacyfence.eu`), which admits only the workflow
+   as it stands on `main`;
    a GitHub-hosted job then commits the recorded fixture to the named branch. It refuses `main`,
    `stable`, `releases/*`, `refs/…`, `pull/…` and any branch that does not exist.
 
 3. **Expect to queue.** It shares a concurrency group (`connector-live-check`,
-   `cancel-in-progress: false`) with `connector-live-check.yml`, because both copy the runner's one
-   persistent credential store into their checkout and copy refreshed tokens back out. A queued run
+   `cancel-in-progress: false`) with `connector-live-check.yml`, because both copy the QA principal's
+   tokens from the QA server's data directory into their checkout and write refreshed ones back. A queued run
    is correct behaviour. Wait; do not re-dispatch, and do not cancel the run that is holding the group.
 
 4. **When it finishes**, `git pull` so the committed fixture reaches this checkout, then **read the
@@ -36,5 +37,5 @@ is explicit that the real QA grants live only on the self-hosted runner. So this
    recorded by hand.
 
 5. **Report** the run URL, whether the fixture changed, and what you saw in the diff. If the run
-   failed, give me the actual error from its log — an expired QA grant needs a reconnect on the
-   runner and is not something to retry.
+   failed, give me the actual error from its log — an expired QA grant needs a reconnect on
+   the QA server's `/connect` page and is not something to retry.

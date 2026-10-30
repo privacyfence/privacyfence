@@ -222,11 +222,12 @@ Paste the report into the PR description under `## Web smoke check`.
 
 ## Layer 5: live connector
 
-Live provider credentials exist only on the project's self-hosted runner (label
-`privacyfence-test`), as local files — never as GitHub Actions secrets, never on a GitHub-hosted
-runner, never reachable from `pull_request` ([ADR
-0019](adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md)). Runner and QA-account
-setup: [`connector-qa.md`](connector-qa.md).
+Live provider credentials exist only on the project's self-hosted runner, `runner.privacyfence.eu`
+(label `privacyfence-live`), as local files — never as GitHub Actions secrets, never on a
+GitHub-hosted runner, never reachable from `pull_request` ([ADR
+0019](adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md)). The checks run in
+organization mode with the built-in apps, as the principal `qa-live`, against tokens connected on the
+QA organization server in a browser. Runner and QA-account setup: [`connector-qa.md`](connector-qa.md).
 
 - **`connector-live-check.yml`** — weekly (Monday 06:00 UTC) and on dispatch. Its `live-check` job
   (self-hosted, read-only) runs `qa_fixture_recorder.py --check` over every connector in
@@ -234,11 +235,13 @@ setup: [`connector-qa.md`](connector-qa.md).
   `open-drift-pr` job on a GitHub-hosted runner, the only one with write access, opens a PR on
   `chore/connector-live-fixture-drift` from it, reviewed like any other PR. Then `--lifecycle` (create, read back and update a tagged QA object in `calendar`, `confluence`, `grist`,
   `jira`, `miro`, `peek`, `salesforce` and `tasks`, and delete it where the connector can); a lifecycle failure fails the job.
+  It also fetches the relay's health endpoint and reports `relay: up` or `relay: down` in the job
+  summary, without failing the job.
 - **`qa-record-fixture.yml`** — dispatch only, **on `main`**, with inputs `connector` and `branch` (the
   pushed branch to record for). Its read-only `record` job on the self-hosted runner refuses any
   other ref, `main`, `stable`, `releases/*`, `refs/…`, `pull/…` and a branch that does not exist, then
   records the one connector; a `commit-fixture` job on `ubuntu-latest` commits the fixture to `branch`.
-  The runner group admits only `main`'s two workflow files. Use it for a
+  The runner group admits only `main`'s copies of the two workflows (and the QA server's deploy). Use it for a
   connector with no fixture yet, which the drift-only record step never records. It shares the
   `connector-live-check` concurrency group, so it queues behind a running check.
 - **`/qa-record <connector>`** (`.claude/commands/qa-record.md`) — dispatches `qa-record-fixture.yml`
