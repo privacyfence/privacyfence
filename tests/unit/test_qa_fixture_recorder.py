@@ -3963,6 +3963,18 @@ class TestLifecycleMiro:
         assert shape["style"] == {"fillColor": "#fff9b1"}
         assert frame["data"]["title"].startswith(recorder.LIFECYCLE_TAG)
 
+    def test_the_shape_lies_inside_the_frame_it_is_moved_into(self, monkeypatch):
+        # Miro answers 400 "Child item cannot be placed outside the bounds of its parent" otherwise.
+        api = _FakeMiroApi()
+
+        self._run(monkeypatch, api)
+
+        shape = next(i for i in api.items.values() if i["type"] == "shape")
+        frame = next(i for i in api.items.values() if i["type"] == "frame")
+        half_w, half_h = frame["geometry"]["width"] / 2, frame["geometry"]["height"] / 2
+        assert abs(shape["position"]["x"] - frame["position"]["x"]) < half_w
+        assert abs(shape["position"]["y"] - frame["position"]["y"]) < half_h
+
     def test_never_touches_the_seed_board(self, monkeypatch):
         api = _FakeMiroApi()
 
