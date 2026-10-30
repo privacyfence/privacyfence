@@ -3122,14 +3122,48 @@ class TestSearchChannelHistory:
         assert [m.id for m in messages] == ["100.1"]
         assert (has_more, cursor) == (True, "2")
 
-    def test_falls_back_to_the_channel_name_then_gives_up(self):
+    def test_an_empty_result_for_a_scoped_channel_is_an_empty_history(self):
         web_client = MagicMock()
         web_client.conversations_info.return_value = {"channel": {"name": "general"}}
         web_client.search_messages.return_value = {"messages": {"matches": []}}
         client = make_client(web_client)
-        assert client.search_channel_history("C1") is None
+        assert client.search_channel_history("C1") == ([], False, "")
         queries = [call.kwargs["query"] for call in web_client.search_messages.call_args_list]
         assert queries == ["in:<#C1>", "in:#general"]
+        web_client.conversations_history.assert_not_called()
+
+    def test_an_unresolvable_channel_with_no_match_falls_back_to_history(self):
+        web_client = MagicMock()
+        web_client.conversations_info.side_effect = slack_error("channel_not_found")
+        web_client.search_messages.return_value = {"messages": {"matches": []}}
+        assert make_client(web_client).search_channel_history("C1") is None
+
+    def test_page_two_keeps_the_scope_page_one_came_from(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"name": "general"}}
+        by_scope = {
+            "in:<#C1>": {"messages": {"matches": []}},
+            "in:#general": {"messages": {"matches": [self._match("100.1")], "paging": {"pages": 2}}},
+        }
+        web_client.search_messages.side_effect = lambda **kw: by_scope[kw["query"]]
+        client = make_client(web_client)
+        messages, has_more, cursor = client.search_channel_history("C1")
+        assert [m.id for m in messages] == ["100.1"] and (has_more, cursor) == (True, "2:name")
+        web_client.search_messages.reset_mock()
+        by_scope["in:#general"] = {"messages": {"matches": [self._match("50.1")], "paging": {"pages": 2}}}
+        messages, has_more, cursor = client.search_channel_history("C1", cursor="2:name")
+        assert [m.id for m in messages] == ["50.1"] and (has_more, cursor) == (False, "")
+        queries = [call.kwargs["query"] for call in web_client.search_messages.call_args_list]
+        assert queries == ["in:#general"]
+        assert web_client.search_messages.call_args.kwargs["page"] == 2
+
+    def test_page_two_by_id_does_not_try_the_name(self):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"name": "general"}}
+        web_client.search_messages.return_value = {"messages": {"matches": []}}
+        assert make_client(web_client).search_channel_history("C1", cursor="2") == ([], False, "")
+        queries = [call.kwargs["query"] for call in web_client.search_messages.call_args_list]
+        assert queries == ["in:<#C1>"]
 
     def test_a_direct_message_is_not_searched(self):
         web_client = MagicMock()
