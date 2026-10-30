@@ -96,6 +96,8 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/grist_provisioner_api.py": 100.0,
     # Org bundle trust.
     "src/privacyfence/org_bundle_signing.py": 99.0,
+    # Signed connector configs: the pin, the serials and the stored files' re-verification.
+    "src/privacyfence/connector_configs.py": 100.0,
     # The admin config: what an administrator offers, and the one-time import that must never
     # overwrite an Admin-page decision.
     "src/privacyfence/admin_config.py": 100.0,

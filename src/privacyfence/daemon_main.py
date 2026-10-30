@@ -98,6 +98,7 @@ from . import (
     agent_label,
     agent_overrides,
     audit_forwarding,
+    connector_configs,
     data_format,
     grist_provisioning,
     oauth_apps,
@@ -148,6 +149,7 @@ from .safe_errors import SecretRedactingFormatter, public_message
 from .secure_files import (
     InsecurePermissionsError,
     atomic_write_bytes,
+    atomic_write_json,
     atomic_write_text,
     audit_directory_permissions,
 )
@@ -662,10 +664,18 @@ def record_admin_config_import(bundle: dict[str, Any], imported: bool) -> None:
         logger.warning("Audit log write failed for the admin config import: %s", exc)
 
 
+def _stored_connector_configs(mode: str) -> dict[str, connector_configs.LoadedConfig] | None:
+    """The connector configs an organization server reads from its own data directory."""
+    return connector_configs.load_all(org_dir()) if mode == "org" else None
+
+
 def effective_org_config(bundle: dict[str, Any], admin: dict[str, Any]) -> dict[str, Any]:
-    """The one dict every org-config reader sees: bundle, admin config and built-in apps composed."""
+    """The one dict every org-config reader sees: bundle, admin config, connector configs and
+    built-in apps composed."""
+    mode = org_mode.resolve_mode(bundle)
     return oauth_apps.effective_org_config(
-        bundle, admin, mode=org_mode.resolve_mode(bundle), single_user=org_mode.is_single_user(bundle),
+        bundle, admin, mode=mode, single_user=org_mode.is_single_user(bundle),
+        connectors=_stored_connector_configs(mode),
     )
 
 
@@ -688,7 +698,29 @@ def _release_org_config() -> dict[str, Any]:
         admin = admin_config.config_for(bundle, mode=mode, single_user=single_user)
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
-    return oauth_apps.effective_org_config(bundle, admin, mode=mode, single_user=single_user)
+    return oauth_apps.effective_org_config(
+        bundle, admin, mode=mode, single_user=single_user, connectors=_stored_connector_configs(mode),
+    )
+
+
+def prepare_connector_configs(bundle: dict[str, Any]) -> None:
+    """The organization-mode start's connector-config step.
+
+    A bundle on disk must be the one this server adopted when it was upgraded: an organization
+    server takes no new bundle. The adopted bundle's app credentials are imported once, the
+    bundle's remaining role is warned about, and every stored connector config is verified
+    again, so a file that no longer verifies refuses the start."""
+    path = org_dir() / ORG_BUNDLE_FILENAME
+    if path.exists():
+        try:
+            digest = org_bundle_signing.sha256_hex(path.read_bytes())
+        except OSError as exc:
+            raise org_mode.ConfigurationError(f"Could not read organization config at {path}: {exc}") from exc
+        if digest != org_bundle_signing.load_adopted_record(org_dir()).get("sha256"):
+            raise org_mode.ConfigurationError(connector_configs.NEW_BUNDLE_REFUSAL)
+        connector_configs.import_from_legacy_bundle(org_dir(), bundle, digest)
+        logger.warning(connector_configs.LEGACY_BUNDLE_WARNING)
+    connector_configs.load_all(org_dir())
 
 
 def _audit_org_bundle_adopted() -> None:
@@ -2325,6 +2357,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # ConfigurationError -- refuse to start rather than quietly advertise something other than
     # what the administrator configured.
     org_mode.reject_removed_tool_annotations(bundle)
+    if org_mode.resolve_mode(bundle) == "org":
+        prepare_connector_configs(bundle)
     admin, admin_imported = load_admin_config(bundle)
     # Before the web server is built (it loads the scoped token store, whose tokens must already
     # hold their own rules) and for every person, signed in or not.
@@ -2597,6 +2631,135 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 # --relay-dns-records
 # ---------------------------------------------------------------------------- #
 
+def _bundle_section(bundle: dict[str, Any], key: str) -> dict[str, Any]:
+    value = bundle.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _bundle_for_migration() -> dict[str, Any] | None:
+    """The adopted legacy bundle, verified, for the two commands that move its settings to the
+    environment; None (after saying why) when this server has no organization bundle."""
+    bundle = load_org_config()
+    if not (org_dir() / ORG_BUNDLE_FILENAME).exists():
+        print("There is no org/org_bundle.json on this server.", file=sys.stderr)
+        return None
+    if bundle.get("mode") != "org":
+        print("org/org_bundle.json is not an organization bundle.", file=sys.stderr)
+        return None
+    return bundle
+
+
+def run_print_env_from_bundle(secret_file: str | None) -> int:
+    """Print the ``PRIVACYFENCE_*`` lines that say what the legacy bundle's ``mode``, ``server`` and
+    ``idp`` say. The identity provider's client secret is never printed: it goes to
+    ``secret_file`` (new, mode 0600) or is a placeholder."""
+    try:
+        bundle = _bundle_for_migration()
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if bundle is None:
+        return 1
+    secret_path = Path(os.path.abspath(Path(secret_file).expanduser())) if secret_file else None
+    if secret_path is not None and secret_path.exists():
+        print(f"{secret_path} already exists; it is not overwritten.", file=sys.stderr)
+        return 1
+
+    def listed(value: Any) -> str:
+        return ",".join(str(item) for item in value) if isinstance(value, list) else str(value)
+
+    lines = [f"{org_mode.MODE_ENV}=org"]
+    server = _bundle_section(bundle, "server")
+    for key, name in (
+        ("bind_host", org_mode.BIND_HOST_ENV), ("port", org_mode.PORT_ENV),
+        ("issuer_url", org_mode.ISSUER_URL_ENV), ("trusted_proxies", org_mode.TRUSTED_PROXIES_ENV),
+    ):
+        if server.get(key) not in (None, "", []):
+            lines.append(f"{name}={listed(server[key])}")
+    if server.get("tls"):
+        lines.append("# server.tls has no variable: end TLS at the reverse proxy (see the Docker guide).")
+    idp = _bundle_section(bundle, "idp")
+    for key, name in (
+        ("issuer", org_mode.IDP_ISSUER_ENV), ("client_id", org_mode.IDP_CLIENT_ID_ENV),
+        ("admin_group_claim", org_mode.IDP_ADMIN_GROUP_CLAIM_ENV),
+        ("admin_group_values", org_mode.IDP_ADMIN_GROUP_VALUES_ENV),
+        ("step_up_acr_values", org_mode.IDP_STEP_UP_ACR_VALUES_ENV),
+        ("admin_emails", org_mode.ADMIN_EMAILS_ENV),
+    ):
+        if idp.get(key) not in (None, "", []):
+            lines.append(f"{name}={listed(idp[key])}")
+    if "trust_unverified_email" in idp:
+        lines.append(f"{org_mode.IDP_TRUST_UNVERIFIED_EMAIL_ENV}={'true' if idp['trust_unverified_email'] else 'false'}")
+    secret = idp.get("client_secret")
+    if secret:
+        if secret_path is None:
+            lines.append(f"{org_mode.IDP_CLIENT_SECRET_ENV}=<the identity provider's client secret>")
+        else:
+            try:
+                fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(f"{secret}\n")
+            except OSError as exc:
+                print(f"Could not write {secret_path}: {exc.strerror}", file=sys.stderr)
+                return 1
+            lines.append(f"{org_mode.IDP_CLIENT_SECRET_FILE_ENV}={secret_path}")
+    for line in lines:
+        print(line)
+    return 0
+
+
+def _first_bundle_difference(bundle: dict[str, Any]) -> str | None:
+    """What the environment says differently from the legacy bundle for ``mode``, the server's
+    address and the identity provider's issuer and client id, or None when it says the same."""
+    mode = org_mode.resolve_mode({})
+    if mode != "org":
+        return f"{org_mode.MODE_ENV} is not \"org\", which org_bundle.json says."
+    server = _bundle_section(bundle, "server")
+    bundle_address = str(server.get("issuer_url") or "").strip()
+    env_address = os.environ.get(org_mode.ISSUER_URL_ENV, "").strip()
+    if bundle_address and env_address != bundle_address:
+        return f"{org_mode.ISSUER_URL_ENV} is not the server address org_bundle.json has ({bundle_address})."
+    bundle_idp = _bundle_section(bundle, "idp")
+    env_idp = org_mode.idp_section({}) or {}
+    for key, name in (("issuer", org_mode.IDP_ISSUER_ENV), ("client_id", org_mode.IDP_CLIENT_ID_ENV)):
+        if str(env_idp.get(key) or "") != str(bundle_idp.get(key) or ""):
+            return f"{name} is not the identity provider {key.replace('_', ' ')} org_bundle.json has ({bundle_idp.get(key)})."
+    return None
+
+
+def run_retire_bundle() -> int:
+    """End the legacy bundle once the environment says what it said: import its app credentials
+    (a server that was never started under 7 still has them only there), record ``retired`` and
+    delete ``org/org_bundle.json``."""
+    try:
+        bundle = _bundle_for_migration()
+        if bundle is None:
+            return 1
+        difference = _first_bundle_difference(bundle)
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if difference is not None:
+        print(f"Not retiring org_bundle.json: {difference}", file=sys.stderr)
+        return 1
+    path = org_dir() / ORG_BUNDLE_FILENAME
+    record = org_bundle_signing.load_adopted_record(org_dir())
+    try:
+        digest = org_bundle_signing.sha256_hex(path.read_bytes())
+        if digest != record.get("sha256"):
+            raise org_mode.ConfigurationError(connector_configs.NEW_BUNDLE_REFUSAL)
+        connector_configs.import_from_legacy_bundle(org_dir(), bundle, digest)
+        record = org_bundle_signing.load_adopted_record(org_dir())
+        record["retired"] = True
+        atomic_write_json(org_bundle_signing.adopted_record_path(org_dir()), record, indent=2)
+        path.unlink()
+    except (OSError, org_mode.ConfigurationError) as exc:
+        print(f"Could not retire org_bundle.json: {exc}", file=sys.stderr)
+        return 1
+    print("org_bundle.json is retired. Its app credentials are connector configs; the environment now holds the rest.")
+    return 0
+
+
 def run_relay_dns_records() -> int:
     """Print the lines the server logs for each sign-in domain the relay has not found proven in
     DNS, so an administrator can publish the records before anyone can sign in. Reads the last
@@ -2805,6 +2968,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--print-env-from-bundle", action="store_true",
+        help=(
+            "Print the PRIVACYFENCE_* lines that say what the legacy org/org_bundle.json says about the "
+            "mode, the server and the identity provider, and exit. The identity provider's client secret "
+            "is never printed."
+        ),
+    )
+    parser.add_argument(
+        "--idp-secret-file", metavar="PATH", default=None,
+        help=(
+            "With --print-env-from-bundle: write the identity provider's client secret to PATH (a new "
+            "file, mode 0600) and print the variable that names it."
+        ),
+    )
+    parser.add_argument(
+        "--retire-bundle", action="store_true",
+        help=(
+            "Retire the legacy org/org_bundle.json once the environment says the same mode, server address "
+            "and identity provider: its app credentials become connector configs and the file is deleted."
+        ),
+    )
+    parser.add_argument(
         "--peek-release", metavar="PRINCIPAL_ID", default=None,
         help=(
             "Revoke the Peek token PrivacyFence minted for the account PRINCIPAL_ID, stop renewing it, "
@@ -2827,7 +3012,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # tries after reading it out of `sc qc` gets a message saying so
     # (windows_service.run_service()).
     parser.add_argument("--windows-service", action="store_true", help=argparse.SUPPRESS)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.idp_secret_file and not args.print_env_from_bundle:
+        parser.error("--idp-secret-file goes with --print-env-from-bundle")
+    return args
 
 
 # Why main() last returned 1, for a caller with no stderr to read it from: a Windows service has
@@ -2914,6 +3102,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
     if args.relay_dns_records:
         return run_relay_dns_records()
+    if args.print_env_from_bundle:
+        return run_print_env_from_bundle(args.idp_secret_file)
+    if args.retire_bundle:
+        return run_retire_bundle()
     if args.peek_release is not None:
         return run_peek_release(args.peek_release)
     if args.grist_release is not None:

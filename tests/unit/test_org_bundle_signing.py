@@ -409,6 +409,20 @@ class TestAdoptLegacyFiles:
         record = obs.load_adopted_record(tmp_path)
         assert record["from"] == "" and record["sha256"] == ""
 
+    def test_a_retired_bundle_is_not_adopted_again(self, tmp_path):
+        import json
+
+        raw = _legacy_install(tmp_path)
+        assert obs.adopt_legacy_files(tmp_path) is True
+        record = obs.load_adopted_record(tmp_path)
+        record["retired"] = True
+        (tmp_path / "org_bundle_adopted.json").write_text(json.dumps(record))
+        (tmp_path / "org_bundle.json").unlink()
+
+        assert obs.adopt_legacy_files(tmp_path) is False
+        assert not (tmp_path / "org_bundle.json").exists()
+        assert (tmp_path / "org_config.json").read_bytes() == raw
+
     def test_nothing_to_adopt_returns_false_and_writes_nothing(self, tmp_path):
         assert obs.adopt_legacy_files(tmp_path) is False
         assert list(tmp_path.iterdir()) == []

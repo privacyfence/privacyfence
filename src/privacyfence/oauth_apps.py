@@ -15,9 +15,10 @@ from __future__ import annotations
 import copy
 import os
 import threading
+from collections.abc import Mapping
 from typing import Any, Literal
 
-from . import admin_config, app_credentials
+from . import admin_config, app_credentials, connector_configs
 from .grist_auth import GristClientError, normalize_server_url
 from .org_mode import ConfigurationError, Mode
 from .peek_client import PeekClientError, normalize_base_url
@@ -41,7 +42,7 @@ BUILTIN_KEY = {
 # approval.
 SLACK_MARKETPLACE_LISTED: bool = False
 
-AppSource = Literal["bundle", "builtin", "none"]
+AppSource = Literal["bundle", "connector", "builtin", "none"]
 
 _ENV_PEEK_BASE_URL = "PRIVACYFENCE_PEEK_BASE_URL"
 _ENV_GRIST_SERVER_URL = "PRIVACYFENCE_GRIST_SERVER_URL"
@@ -55,15 +56,36 @@ def _section(config: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def credentials_source(bundle: dict[str, Any], service: str, *, mode: Mode) -> AppSource:
-    """Where ``service``'s OAuth app comes from: the bundle, a built-in app, or nowhere."""
+def _connectors(
+    mode: Mode, connectors: Mapping[str, connector_configs.LoadedConfig] | None
+) -> Mapping[str, connector_configs.LoadedConfig]:
+    """The stored connector configs an organization server uses; none in local mode."""
+    if mode != "org":
+        return {}
+    if connectors is not None:
+        return connectors
+    return connector_configs.load_all(connector_configs.default_org_dir())
+
+
+def credentials_source(
+    bundle: dict[str, Any],
+    service: str,
+    *,
+    mode: Mode,
+    connectors: Mapping[str, connector_configs.LoadedConfig] | None = None,
+) -> AppSource:
+    """Where ``service``'s OAuth app comes from.
+
+    Local mode reads the bundle. An organization server reads a connector config, then a built-in
+    app, then nothing; its bundle's credential sections were imported as connector configs and are
+    never read again."""
+    if mode == "org":
+        if service in _connectors(mode, connectors):
+            return "connector"
+        return "builtin" if app_credentials.builtin_app(BUILTIN_KEY[service]) is not None else "none"
     section = _section(bundle, service)
     field = "consumer_key" if service == "salesforce" else "client_id"
-    if section.get(field):
-        return "bundle"
-    if mode == "org" and app_credentials.builtin_app(BUILTIN_KEY[service]) is not None:
-        return "builtin"
-    return "none"
+    return "bundle" if section.get(field) else "none"
 
 
 def environment_addresses() -> dict[str, str]:
@@ -103,9 +125,22 @@ def _builtin_section(service: str, app: dict[str, str]) -> dict[str, Any]:
     return section
 
 
-def _credentials_section(bundle: dict[str, Any], service: str, *, mode: Mode) -> dict[str, Any] | None:
-    if credentials_source(bundle, service, mode=mode) == "bundle":
+def _credentials_section(
+    bundle: dict[str, Any],
+    service: str,
+    *,
+    mode: Mode,
+    connectors: Mapping[str, connector_configs.LoadedConfig],
+) -> dict[str, Any] | None:
+    source = credentials_source(bundle, service, mode=mode, connectors=connectors)
+    if source == "bundle":
         return copy.deepcopy(_section(bundle, service))
+    if source == "connector":
+        section = connectors[service].section()
+        if service == "google":
+            section.setdefault("auth_uri", GOOGLE_AUTH_URI)
+            section.setdefault("token_uri", GOOGLE_TOKEN_URI)
+        return section
     app = app_credentials.builtin_app(BUILTIN_KEY[service]) if mode == "org" else None
     return _builtin_section(service, app) if app is not None else None
 
@@ -185,10 +220,22 @@ def _cleaned_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def effective_org_config(
-    bundle: dict[str, Any], admin: dict[str, Any], *, mode: Mode, single_user: bool = False
+    bundle: dict[str, Any],
+    admin: dict[str, Any],
+    *,
+    mode: Mode,
+    single_user: bool = False,
+    connectors: Mapping[str, connector_configs.LoadedConfig] | None = None,
 ) -> dict[str, Any]:
-    """The one dict every reader of the organization config uses. Mutates neither input."""
+    """The one dict every reader of the organization config uses. Mutates neither input.
+
+    In organization mode ``connectors`` are the stored connector configs (read from disk when not
+    given) and the bundle's credential sections are ignored."""
     cleaned = _cleaned_bundle(bundle)
+    connectors = _connectors(mode, connectors)
+    if mode == "org":
+        for provider in connector_configs.PROVIDERS:
+            cleaned.pop(provider, None)
     result = dict(cleaned)
     services = admin.get("services", {})
 
@@ -204,13 +251,13 @@ def effective_org_config(
     env = environment_addresses()
     for name in ("google", "slack", "salesforce", "miro"):
         if offered[name]:
-            section = _credentials_section(cleaned, name, mode=mode)
+            section = _credentials_section(cleaned, name, mode=mode, connectors=connectors)
             if section is None:
                 result.pop(name, None)
             else:
                 result[name] = section
     if offered["atlassian"]:
-        section = _credentials_section(cleaned, "atlassian", mode=mode)
+        section = _credentials_section(cleaned, "atlassian", mode=mode, connectors=connectors)
         if section is None:
             result.pop("atlassian", None)
         else:
@@ -223,7 +270,11 @@ def effective_org_config(
         if app_credentials.telegram_app_credentials() is not None:
             result["telegram"] = {"enabled": True}
     if offered["grist"]:
-        grist = _grist_section(cleaned, service_config("grist"), env, mode=mode, single_user=single_user)
+        own_app = connectors.get("grist")
+        grist = (
+            own_app.section() if own_app is not None
+            else _grist_section(cleaned, service_config("grist"), env, mode=mode, single_user=single_user)
+        )
         if grist is None:
             result.pop("grist", None)
         else:

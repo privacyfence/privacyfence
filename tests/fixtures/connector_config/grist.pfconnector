@@ -1,0 +1,10 @@
+privacyfence-connector-config v1
+provider: grist
+serial: 7
+client_id: grist-fixture-client
+client_secret: fixture-grist-secret-0003
+auth_server_url: https://auth.grist.example
+server_url: https://grist.example
+signed_at: 2026-11-02T10:10:00Z
+key: xJbYgy4CzYPNVXpvpQeLvxtmTlJuuqlmmryfpLD9Cfc=
+signature: X2CFSbSdJFJ11A6rq2UxzgKLVr6DdDpXJl1PxvQOxjp6UASNEsrTayxBy75xuLpaGKmSYkTEUc8IlmKAKzLSDQ==

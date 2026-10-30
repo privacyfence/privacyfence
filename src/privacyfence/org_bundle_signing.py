@@ -183,7 +183,8 @@ def adopt_legacy_files(org_dir: Path) -> bool:
     modified or deleted. A failed copy raises ``ConfigurationError``, so the
     daemon refuses to start rather than run with half a configuration.
 
-    The bundle is copied only while ``org_bundle.json`` does not exist. Each
+    The bundle is copied only while ``org_bundle.json`` does not exist and the adopted record
+    does not say ``retired``. Each
     pin is copied, independently of the bundle, when its new name is missing
     -- but only until ``org_bundle_adopted.json`` records ``pins_adopted``,
     so that deleting the new-name pin (the documented key rotation) never
@@ -205,7 +206,8 @@ def adopt_legacy_files(org_dir: Path) -> bool:
                 copied_pin = True
 
     adopted_bundle = False
-    if not bundle.exists() and legacy_bundle.exists():
+    # A retired bundle stays retired: 6.x's untouched org_config.json is not copied back.
+    if not bundle.exists() and legacy_bundle.exists() and not record.get("retired"):
         raw = _copy_unchanged(legacy_bundle, bundle)
         record.update({
             "from": LEGACY_ORG_CONFIG_FILENAME,
