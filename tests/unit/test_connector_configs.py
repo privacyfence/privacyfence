@@ -9,6 +9,7 @@ import base64
 import json
 import logging
 import stat
+import sys
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -320,9 +321,11 @@ class TestAccept:
         assert (result.provider, result.serial, result.fingerprint, result.newly_pinned) == ("slack", 5, KEY_FP, True)
         stored = connector_configs.stored_path(org, "slack")
         assert stored.read_bytes() == raw
-        assert stat.S_IMODE(stored.stat().st_mode) == 0o600
+        if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+            assert stat.S_IMODE(stored.stat().st_mode) == 0o600
         assert connector_configs.load_pin(org) == public_bytes(fixture_key())
-        assert stat.S_IMODE(connector_configs.pinned_key_path(org).stat().st_mode) == 0o600
+        if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+            assert stat.S_IMODE(connector_configs.pinned_key_path(org).stat().st_mode) == 0o600
         assert json.loads(connector_configs.serials_path(org).read_text()) == {"slack": 5}
 
     def test_the_pinned_key_needs_no_confirmation_again(self, org):
@@ -655,7 +658,8 @@ class TestImportFromLegacyBundle:
             "source": "legacy-bundle", "provider": "slack", "sha256": BUNDLE_SHA,
             "fields": {"client_id": "s-id", "client_secret": SENTINEL, "user_scopes": ["search:read"]},
         }
-        assert stat.S_IMODE(connector_configs.legacy_path(org, "slack").stat().st_mode) == 0o600
+        if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+            assert stat.S_IMODE(connector_configs.legacy_path(org, "slack").stat().st_mode) == 0o600
         loaded = load_all(org)
         assert sorted(loaded) == sorted(connector_configs.PROVIDERS)
         assert loaded["google"].section()["token_uri"] == "https://t"

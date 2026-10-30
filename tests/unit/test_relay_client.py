@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import stat
+import sys
 import threading
 import time
 from typing import Any
@@ -62,7 +63,8 @@ class TestToken:
         token = relay_client.relay_secret()
         assert len(token) == 43
         assert relay_client.relay_secret() == token
-        assert stat.S_IMODE((tmp_path / "org" / "relay_token.txt").stat().st_mode) == 0o600
+        if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+            assert stat.S_IMODE((tmp_path / "org" / "relay_token.txt").stat().st_mode) == 0o600
 
     @pytest.mark.parametrize("content", ["short", "!" * 43, ""])
     def test_regenerated_when_corrupt(self, tmp_path, content):

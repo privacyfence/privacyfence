@@ -1,0 +1,6 @@
+# Files compared byte for byte (signed fixtures, a page whose CSP hashes cover its inline script) or
+# run by sh keep LF in a Windows checkout.
+tests/fixtures/connector_config/* text eol=lf
+website/tools/connector-config/index.html text eol=lf
+deploy/qa-runner/* text eol=lf
+*.sh text eol=lf

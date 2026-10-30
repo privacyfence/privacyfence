@@ -2686,7 +2686,7 @@ class TestSettingsPageRendering:
         self._screenshot(page, "org-admin-privacy")
         page.locator('.pf-navitem[data-nav="stats"]').click()
         page.wait_for_selector("[data-stat-tile]")
-        assert page.get_by_text("signed in").first.is_visible()
+        assert page.locator("[data-stat-tile] .pf-stat-label", has_text="signed in").first.is_visible()
         self._screenshot(page, "org-admin-stats")
 
 

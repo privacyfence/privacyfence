@@ -62,7 +62,8 @@ def test_reproduces_the_fixture_byte_for_byte(provider, secret_file, tmp_path, c
     out = tmp_path / f"{provider}.pfconnector"
     assert tool.main(_sign_args(provider, secret_file(provider), out)) == 0
     assert out.read_bytes() == expected_file(provider)
-    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+        assert stat.S_IMODE(out.stat().st_mode) == 0o600
     shown = capsys.readouterr().out
     assert "SHA256:" in shown
     assert dict(fixture_inputs()[provider]["fields"])[tool.field_names(provider)[1]] not in shown
@@ -139,7 +140,7 @@ def test_a_salesforce_prompt_names_the_consumer_secret(tmp_path, monkeypatch):
 def test_a_secret_file_loses_one_trailing_line_ending_only(tmp_path):
     path = tmp_path / "s"
     for raw, expected in [("abc\n", "abc"), ("abc\r\n", "abc"), ("abc", "abc"), ("abc\n\n", "abc\n"), ("a b ", "a b ")]:
-        path.write_text(raw)
+        path.write_bytes(raw.encode())
         assert tool.read_secret(path, "x") == expected
 
 
@@ -170,13 +171,15 @@ def test_the_output_is_0600_whatever_the_umask(secret_file, tmp_path):
         assert tool.main(_sign_args("slack", secret_file("slack"), out)) == 0
     finally:
         os.umask(previous)
-    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+        assert stat.S_IMODE(out.stat().st_mode) == 0o600
 
 
 def test_keygen_writes_a_parseable_key_and_prints_only_public_facts(tmp_path, capsys):
     out = tmp_path / "key.pem"
     assert tool.main(["keygen", "--out", str(out)]) == 0
-    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+        assert stat.S_IMODE(out.stat().st_mode) == 0o600
     assert out.read_text().startswith("-----BEGIN PRIVATE KEY-----")
     key = tool.load_private_key(out)
     public = tool._public_bytes(key)

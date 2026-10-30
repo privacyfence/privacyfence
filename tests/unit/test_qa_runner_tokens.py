@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -108,7 +109,8 @@ def test_pulled_files_are_owner_only(tokens, dirs):
     put(data, "alice")
     os.chmod(data / "users" / "alice" / "credentials" / "slack_token.json", 0o644)
     run(tokens, "pull", data, checkout)
-    assert stat.S_IMODE(pulled(checkout).stat().st_mode) == 0o600
+    if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+        assert stat.S_IMODE(pulled(checkout).stat().st_mode) == 0o600
 
 
 def test_pull_records_each_files_digest(tokens, dirs):
@@ -129,7 +131,8 @@ def test_push_writes_only_changed_files(tokens, dirs, capsys):
     before = same.stat().st_mtime_ns
     assert run(tokens, "push", data, checkout) == 0
     assert changed.read_text() == "refreshed"
-    assert stat.S_IMODE(changed.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+        assert stat.S_IMODE(changed.stat().st_mode) == 0o600
     assert same.stat().st_mtime_ns == before
     assert "refreshed" not in capsys.readouterr().out
     assert [p.name for p in changed.parent.iterdir() if p.name.startswith(".")] == []

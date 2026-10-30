@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 from typing import Any
@@ -139,6 +140,7 @@ class TestDeployScript:
         assert script.startswith("#!/bin/sh\n") and "set -eu" in script
         assert subprocess.run(["sh", "-n", str(HOST / "pf-qa-deploy")], capture_output=True).returncode == 0
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="a POSIX shell script run through sh and its executable bit; the QA host is Linux")
     def test_it_is_executable(self):
         assert (HOST / "pf-qa-deploy").stat().st_mode & 0o111
 
@@ -176,6 +178,7 @@ exit 0
 """
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="a POSIX shell script run through sh and its executable bit; the QA host is Linux")
 class TestDeployScriptBehaviour:
     """Runs the real script with the fixed paths pointed at a temporary directory and a fake docker."""
 

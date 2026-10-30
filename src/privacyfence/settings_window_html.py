@@ -127,7 +127,8 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-row-sub[aria-disabled="true"] .pf-row-title { color: var(--muted); }
 .pf-row-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
 .pf-row-controls > input.field { flex: 1 1 16rem; min-width: 0; }
-.pf-admin-check { flex-direction: row; align-items: flex-start; justify-content: flex-start; cursor: pointer; }
+.pf-admin-check { flex-direction: row; align-items: flex-start; justify-content: flex-start; cursor: pointer; min-height: var(--tap); min-width: var(--tap); }
+.pf-doc-link { display: inline-flex; align-items: center; min-height: var(--tap); }
 .pf-admin-check > input { margin-top: 3px; flex: none; }
 @container pf-settings (min-width: 900px) {
   .pf-row { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-m); }
@@ -2265,7 +2266,7 @@ _JS = r"""
       }
       var slug = SERVICE_DOC_SLUGS[row.key];
       if (slug) {
-        lines.push('<div><a href="https://privacyfence.eu/docs/' + slug + '/" target="_blank" rel="noopener">' +
+        lines.push('<div><a class="pf-doc-link" href="https://privacyfence.eu/docs/' + slug + '/" target="_blank" rel="noopener">' +
           'How to use your own app</a></div>');
       }
       var action = row.offered ? 'withdraw_service' : 'offer_service';

@@ -200,7 +200,7 @@ def test_starts_in_single_user_mode_without_a_bundle(request, volume):
     assert status == "healthy"
     logs = _docker("logs", name)
     output = logs.stdout + logs.stderr
-    assert "No organization bundle: starting in single-user mode at http://localhost:8765" in output
+    assert f"No organization bundle: starting in single-user mode at http://localhost:{port} " in output
     assert "Single-user mode: one administrator, no identity provider, on this computer only." in output
 
 

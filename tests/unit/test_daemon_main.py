@@ -3915,6 +3915,11 @@ class _FakeWebServer:
         return self._loop
 
 
+
+# The real audit, which TestRunApp._patch_common replaces for the tests that are not about it.
+_check_storage_permissions = daemon_main.check_storage_permissions
+
+
 class TestRunApp:
     """run_app() ends by blocking on _wait_for_shutdown() (a plain
     threading.Event), not inside a native UI run loop, so this whole class
@@ -3949,6 +3954,9 @@ class TestRunApp:
         fake_audit_logger = MagicMock()
         monkeypatch.setattr(daemon_main, "init_audit_logger", lambda path, **kwargs: fake_audit_logger)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+        # An organization start refuses a data directory that grants group or other access, and
+        # Windows reports every directory as 0777; the audit has its own tests above.
+        monkeypatch.setattr(daemon_main, "check_storage_permissions", lambda org_mode_active: None)
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: (connectors, {}))
         monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
         monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
@@ -4102,6 +4110,7 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        monkeypatch.setattr(daemon_main, "check_storage_permissions", _check_storage_permissions)
         # Writing admin_config.json would tighten the directory this test deliberately loosens,
         # and the import is not what is under test here.
         monkeypatch.setattr(daemon_main, "load_admin_config", lambda bundle: ({}, False))
@@ -6025,7 +6034,8 @@ class TestPrintEnvFromBundle:
         assert f"PRIVACYFENCE_IDP_CLIENT_SECRET_FILE={target}" in out.splitlines()
         assert "PRIVACYFENCE_IDP_CLIENT_SECRET=" not in out
         assert target.read_text() == SENTINEL + "\n"
-        assert oct(target.stat().st_mode & 0o777) == "0o600"
+        if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+            assert oct(target.stat().st_mode & 0o777) == "0o600"
         assert SENTINEL not in out + err
 
     def test_it_refuses_to_overwrite_the_file_and_prints_nothing(self, legacy_org, tmp_path, capsys):
