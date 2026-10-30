@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-22. Implemented.
 Amends ADR 0173. Relates to ADR 0164 and ADR 0216.
+Amended by [ADR 0254](0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md): the flag also covers `drive_get_file_content`.
 
 ## Context
 

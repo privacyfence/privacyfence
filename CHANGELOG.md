@@ -91,6 +91,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Pre-releases publish the organization Docker image too.** An alpha, beta or release candidate now gets `ghcr.io/privacyfence/privacyfence-org:<exact version>` with the same build-provenance attestation. It gets no other tag, so `X.Y`, `X` and `latest`, and with them unattended upgrades, still only follow stable releases.
 - **The live connector checks moved to a new runner and run in organization mode.** For contributors: `connector-live-check.yml` and `qa-record-fixture.yml` now run on `runner.privacyfence.eu` (label `privacyfence-live`) as the principal `qa-live` with the built-in apps, take their tokens from the QA organization server, and the weekly check also reports whether the OAuth relay's health endpoint answers.
 
+## [6.13.0] — 2026-10-29
+
+### Changed
+
+- **A scoped token's "Let reads return personal data" box now covers Drive file content reads.** A routine whose token has the box ticked and a rule covering a Drive folder can read a file's text with `drive_get_file_content` even when the file holds personal data (a salary sheet, say); before, the call was denied with "needs a person's confirmation". The scan still runs and the audit log records what it found. Tokens without the box are unchanged ([ADR 0254](docs/adr/0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md)).
+
 ## [6.12.0] — 2026-10-28
 
 ### Added
@@ -3567,7 +3573,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...HEAD
+[6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
 [6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0
 [6.11.0]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...v6.11.0
 [6.10.0]: https://github.com/privacyfence/privacyfence/compare/v6.9.1...v6.10.0

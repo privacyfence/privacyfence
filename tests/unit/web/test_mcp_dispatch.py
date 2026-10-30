@@ -642,6 +642,12 @@ class TestCheckPolicy:
             "so the personal-data scan applies to slack_search_messages"
         )
 
+    def test_pii_gate_is_allowed_by_token_for_a_drive_file_content_read_with_the_reads_flag(self):
+        allowed = self._pii("drive", "drive_get_file_content", self._reads_token(reads=True))
+        assert (allowed["pii_gate"], allowed["pii_gate_detail"]) == ("allowed_by_token", "")
+        denied = self._pii("drive", "drive_get_file_content", self._reads_token(reads=False, exports=True))
+        assert denied["pii_gate"] == "applies"
+
     def test_pii_gate_for_a_read_ignores_the_exports_flag(self):
         result = self._pii("gmail", "gmail_get_thread", self._reads_token(reads=False, exports=True))
         assert result["pii_gate"] == "applies"

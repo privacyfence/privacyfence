@@ -222,7 +222,7 @@ APPLIES = {**COVERED, "pii_gate": "applies", "pii_gate_detail": "the personal-da
 WARNING = "; WARNING: the personal-data scan applies to x: a run is denied if the result holds personal data"
 NOTE = (
     "note: a WARNING step is denied only when what it returns holds personal data; a scoped token can allow "
-    "that for exports, downloads and page uploads, and for Gmail and Slack reads (see the README)"
+    "that for exports, downloads and page uploads, and for Gmail, Slack and Drive file content reads (see the README)"
 )
 
 

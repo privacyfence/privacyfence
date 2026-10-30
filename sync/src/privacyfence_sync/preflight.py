@@ -29,7 +29,7 @@ _UNKNOWN = (
 )
 _PII_NOTE = (
     "note: a WARNING step is denied only when what it returns holds personal data; a scoped token can allow "
-    "that for exports, downloads and page uploads, and for Gmail and Slack reads (see the README)"
+    "that for exports, downloads and page uploads, and for Gmail, Slack and Drive file content reads (see the README)"
 )
 
 

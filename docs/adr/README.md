@@ -345,6 +345,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
 | [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165 |
+| [0254](0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md) | The reads flag of a scoped token covers Drive file content | Accepted; amends 0219 |
 | [0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) | Built-in OAuth apps ship in the server distributions | Accepted; relates to 0040 |
 | [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md) | The org config holds only startup settings and app credentials | Accepted; amends 0016, 0196 |
 | [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md) | Operational settings live in a daemon-written admin config | Accepted; amends 0196, 0253; relates to 0016, 0034, 0068, 0070, 0200 |

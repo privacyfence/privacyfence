@@ -102,7 +102,7 @@ organization mode.
 Instead of its own credential, a client can hold a **scoped token** created in Settings: a named
 bearer token with an expiry, its own rules and a list of tools. It sees only those tools,
 and a call it makes is auto-accepted only through one of its own rules; otherwise it is denied at
-once, with no approval card. A box on the token lets covered Gmail and Slack reads return personal data, which the scan still reports in the audit log. Revoking it affects no other client. In organization mode the
+once, with no approval card. A box on the token lets covered Gmail, Slack and Drive file content reads return personal data, which the scan still reports in the audit log. Revoking it affects no other client. In organization mode the
 administrator must turn the feature on. Claude can also propose a token for you to review and create ([ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md)). See [Scoped tokens](security-and-compliance.md#scoped-tokens).
 
 ### What the AI system is told
