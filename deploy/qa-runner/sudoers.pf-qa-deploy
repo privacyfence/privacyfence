@@ -1,0 +1,3 @@
+# Install as /etc/sudoers.d/pf-qa-deploy, mode 0440, root-owned, checked with `visudo -cf`.
+# The trailing "" allows the script with no arguments and forbids any other.
+pfrunner ALL=(root) NOPASSWD: /usr/local/sbin/pf-qa-deploy ""

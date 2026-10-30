@@ -1,0 +1,38 @@
+# Used with deploy/docker/compose.yaml in /opt/pf-qa/run:
+#   docker compose --project-directory /opt/pf-qa/run up -d --no-build
+# compose.yaml, not the image, fixes the read-only root, the dropped capabilities and
+# no-new-privileges, so an image built from main cannot run as root on the host.
+services:
+  privacyfence:
+    image: privacyfence-org:qa-main
+    pull_policy: never
+    user: "10001:10001"
+    volumes:
+      # The one directory shared with pfrunner: the server writes the tokens, the runner reads them.
+      - /home/pfrunner/qa-org-data:/var/lib/privacyfence-org/.privacyfence
+    secrets:
+      - idp_client_secret
+
+  caddy:
+    environment:
+      PF_CF_RANGES: ${PF_CF_RANGES:?set PF_CF_RANGES in .env to Cloudflare's published ranges}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/pf-qa:/etc/pf-qa:ro
+
+  peek:
+    image: ghcr.io/privacyfence/peek:main
+    restart: unless-stopped
+    environment:
+      PEEK_BASE_URL: https://peek-qa.privacyfence.eu
+    volumes:
+      - peek-data:/data
+    networks:
+      - pf
+
+secrets:
+  idp_client_secret:
+    file: ./idp_client_secret
+
+volumes:
+  peek-data:

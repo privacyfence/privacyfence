@@ -1,0 +1,50 @@
+#!/bin/sh
+# Redeploys the QA server from the image tarball the deploy workflow downloaded. Installed
+# root-owned, mode 0755, at /usr/local/sbin/pf-qa-deploy; pfrunner may run it through sudo and
+# nothing else (sudoers.pf-qa-deploy). It takes no arguments: every path is fixed here.
+set -eu
+
+TARBALL=/home/pfrunner/qa-deploy/privacyfence-org-qa.tar.gz
+IMAGE=privacyfence-org:qa-main
+PROJECT_DIR=/opt/pf-qa/run
+
+if [ "$#" -ne 0 ]; then
+    echo "pf-qa-deploy takes no arguments" >&2
+    exit 2
+fi
+
+# pfrunner owns the directory, so the file is untrusted: refuse a link or anything but a file.
+if [ -L "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
+    echo "$TARBALL is missing, a symlink or not a regular file" >&2
+    exit 1
+fi
+gunzip -t "$TARBALL"
+
+loaded="$(gunzip -c "$TARBALL" | docker load)"
+echo "$loaded"
+if [ "$loaded" != "Loaded image: $IMAGE" ]; then
+    echo "the tarball did not load exactly $IMAGE" >&2
+    exit 1
+fi
+
+docker compose --project-directory "$PROJECT_DIR" up -d --no-build
+
+waited=0
+while [ "$waited" -lt 120 ]; do
+    container="$(docker compose --project-directory "$PROJECT_DIR" ps -q privacyfence)"
+    if [ -n "$container" ]; then
+        status="$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || true)"
+        if [ "$status" = "healthy" ]; then
+            docker image prune -f
+            rm -f "$TARBALL"
+            echo "QA server is healthy"
+            exit 0
+        fi
+    fi
+    sleep 5
+    waited=$((waited + 5))
+done
+
+echo "the privacyfence service did not become healthy within 120 s" >&2
+docker compose --project-directory "$PROJECT_DIR" logs --tail 50 privacyfence >&2 || true
+exit 1

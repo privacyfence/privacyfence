@@ -14,6 +14,10 @@ is explicit that the real QA grants live only on the self-hosted runner. So this
    recorder implementation yet" and then *exit 0*: a green run that recorded nothing. If no
    connector was named above, ask me which one rather than guessing.
 
+   For a connector that is new, its token must first be connected on the QA server
+   (`https://runner.privacyfence.eu`, `/connect`), which needs the connect pull request merged and
+   deployed (`docs/connector-qa.md`, "The QA server"). Without it the run has no token to copy.
+
 2. **Dispatch `qa-record-fixture.yml`** with `ref` set to `main` and inputs `connector` set to
    that name and `branch` set to the current branch (it must already be pushed). It runs on the
    `privacyfence-test` self-hosted runner, which admits only the workflow as it stands on `main`;

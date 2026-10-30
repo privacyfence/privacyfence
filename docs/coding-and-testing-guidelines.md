@@ -531,6 +531,22 @@ runtime or in review, so work through them deliberately.
 | Privacy-matrix rows (tool, direction, gate) | the doc `test_readme_manifest_alignment.py` parses (its `README_PATH`) | **enforced**: every tool documented, direction matches `read_only` |
 | User-facing setup guide and a `CHANGELOG.md` line | `docs/<service>-setup.md` (or the shared Google guide), `## [Unreleased]` | review |
 
+**A new connector is two pull requests.** Live recording needs a token, and the token comes from
+`/connect` on the QA server, which runs `main` ([`connector-qa.md`](connector-qa.md#the-qa-server)). So
+the rows above land in two changes, in this order:
+
+1. **Connect.** The sign-in and token storage, the `/connect` entry, a built-in app key when the
+   provider needs one (with its manual "register the app, add the secrets" step), and unit tests.
+   Add the service to `oauth_apps.PREVIEW_SERVICES`, so no release shows it yet. After the merge the
+   QA server redeploys; the maintainer then connects the QA account in a browser on
+   `https://runner.privacyfence.eu` (this is a manual step between the two PRs) and seeds the data
+   `connector-qa.md` describes.
+2. **Tools.** The connector's tools, recorded live with `/qa-record <connector>`, the live-check
+   manifest entries, and the removal of the service from `PREVIEW_SERVICES`.
+
+A release cut between the two never shows a half-built service. `PRIVACYFENCE_PREVIEW_SERVICES`
+(a comma-separated list, or `*`) shows preview services on one server; the QA server sets `*`.
+
 ## 4. Packaging changes
 
 When changing PyInstaller specs, installers, Debian metadata, startup registration, MCPB contents,

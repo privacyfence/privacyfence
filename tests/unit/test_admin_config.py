@@ -1211,6 +1211,22 @@ class TestServiceRows:
         assert all(set(row) == {"key", "label", "offered", "app_source", "client_id", "relay", "options"} for row in rows)
         assert rows[0]["label"] == "Google" and rows[0]["offered"] is False
 
+    def test_a_preview_service_row_is_dropped_until_named(self, monkeypatch):
+        from privacyfence import oauth_apps
+
+        monkeypatch.setattr(oauth_apps, "PREVIEW_SERVICES", frozenset({"miro"}))
+        assert "miro" not in self._rows()
+        monkeypatch.setenv("PRIVACYFENCE_PREVIEW_SERVICES", "miro")
+        assert "miro" in self._rows()
+        monkeypatch.setenv("PRIVACYFENCE_PREVIEW_SERVICES", "*")
+        assert "miro" in self._rows()
+
+    def test_an_empty_preview_set_keeps_every_row(self, monkeypatch):
+        from privacyfence import oauth_apps
+
+        monkeypatch.setattr(oauth_apps, "PREVIEW_SERVICES", frozenset())
+        assert list(self._rows()) == list(admin_config.SERVICES)
+
     def test_builtin_apps_use_the_relay_in_org_mode(self):
         rows = self._rows()
         assert (rows["google"]["app_source"], rows["google"]["client_id"], rows["google"]["relay"]) == ("builtin", "g-id", True)

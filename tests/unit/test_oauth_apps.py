@@ -62,6 +62,36 @@ def compose_core(bundle, admin, **kwargs):
     return {k: v for k, v in result.items() if k not in admin_config.OPERATIONAL_SECTIONS}
 
 
+class TestPreviewServices:
+    VAR = "PRIVACYFENCE_PREVIEW_SERVICES"
+
+    @pytest.fixture(autouse=True)
+    def _slack_is_preview(self, monkeypatch, builtins):
+        builtins("slack", "miro")
+        monkeypatch.setattr(oauth_apps, "PREVIEW_SERVICES", frozenset({"slack"}))
+
+    def test_a_preview_service_section_is_dropped(self):
+        result = compose({}, make_admin("slack", "miro"))
+        assert "slack" not in result and "miro" in result
+
+    @pytest.mark.parametrize("value", ["slack", "miro,slack", " slack , miro", "*"])
+    def test_a_named_preview_service_is_kept(self, monkeypatch, value):
+        monkeypatch.setenv(self.VAR, value)
+        assert "slack" in compose({}, make_admin("slack"))
+
+    def test_naming_another_service_keeps_it_hidden(self, monkeypatch):
+        monkeypatch.setenv(self.VAR, "miro")
+        assert "slack" not in compose({}, make_admin("slack"))
+
+    def test_an_empty_set_changes_nothing(self, monkeypatch):
+        admin = make_admin("slack", "miro")
+        monkeypatch.setattr(oauth_apps, "PREVIEW_SERVICES", frozenset())
+        with_empty = compose({}, admin)
+        monkeypatch.setenv(self.VAR, "*")
+        assert compose({}, admin) == with_empty
+        assert "slack" in with_empty
+
+
 class TestLegacyKeys:
     def test_every_legacy_key_is_dropped_from_the_bundle(self):
         bundle = {key: {"x": 1} for key in admin_config.LEGACY_BUNDLE_KEYS}

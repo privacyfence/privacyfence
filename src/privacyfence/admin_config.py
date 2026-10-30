@@ -1082,9 +1082,12 @@ def service_rows(
 ) -> list[dict[str, Any]]:
     """One row per service for the Admin page. A row never carries a secret: not a client
     secret, not a provisioning key, only whether the key is set."""
+    from . import oauth_apps
+
     env = _env_addresses()
     connectors = connector_configs.load_all(connector_configs.default_org_dir()) if mode == "org" else {}
     return [
         _service_row(bundle, admin, name, env, mode=mode, single_user=single_user, connectors=connectors, issuer_url=issuer_url)
         for name in SERVICES
+        if not oauth_apps.preview_hidden(name)
     ]
