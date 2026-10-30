@@ -31,7 +31,7 @@ Design:
         reimplementing TLS-over-syslog by hand for one Python module.
       - ``http``: a plain HTTPS POST of one JSON object per entry, with an
         optional bearer token read from an environment variable at send
-        time (never stored in ``org_config.json`` -- see
+        time (never stored in the admin config -- see
         ``AuditForwardingConfig.http_bearer_token_env``'s own docstring).
         This is deliberately NOT a full OTLP SDK -- it's a generic
         JSON-over-HTTPS webhook, which is what most "OTLP-over-HTTP/JSON"

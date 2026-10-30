@@ -128,7 +128,7 @@ class IdpConfig:
         raises ``org_mode.ConfigurationError`` rather than returning
         ``None`` for those, since unlike a genuinely absent ``idp`` section
         this is a *broken* config, the same distinction startup draws between
-        an absent and a malformed ``org_config.json``."""
+        an absent and a malformed ``org_bundle.json``."""
         idp = org_mode.idp_section(org_config)
         if not isinstance(idp, dict):
             return None
@@ -442,7 +442,7 @@ class AuthorizationDenied(PermissionError):
 def check_authz_policy(principal: Principal, claims: dict[str, Any], policy: AuthzPolicyConfig) -> None:
     """The one place a principal the IdP already authenticated can still be
     turned away by PrivacyFence itself. ``policy.enabled is False`` (the
-    default -- no ``authz`` section in org_config.json, see AuthzPolicyConfig's
+    default -- no ``authz`` section in the admin config, see AuthzPolicyConfig's
     own docstring) is a complete no-op, so an existing org-mode install
     keeps admitting every IdP-authenticated principal exactly as before
     this landed.

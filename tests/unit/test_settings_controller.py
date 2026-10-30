@@ -793,7 +793,7 @@ class TestOrgConfigInstall:
         state = controller.snapshot()
 
         assert state["general"]["org_installed"] is True
-        assert state["general"]["org_button_label"] == "Install/Update Organization Config…"
+        assert "org_button_label" not in state["general"]
 
     def test_live_connectors_are_rebuilt_from_the_new_bundle(self, controller, monkeypatch):
         recorded = []
@@ -833,10 +833,9 @@ class TestOrgConfigInstall:
 
         assert refreshes == []
 
-    def test_snapshot_not_installed_label(self, controller):
+    def test_snapshot_not_installed(self, controller):
         state = controller.snapshot()
         assert state["general"]["org_installed"] is False
-        assert state["general"]["org_button_label"] == "Install Organization Config…"
 
 
 @pytest.mark.usefixtures("stub_connector_build")

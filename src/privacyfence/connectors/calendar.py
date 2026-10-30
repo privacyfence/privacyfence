@@ -173,7 +173,7 @@ class CalendarConnector(Connector):
         # for colleagues the authenticated account has full calendar access
         # to -- see _get_free_busy.
         self.free_busy_full_details: bool = True
-        # Static room directory synced into org_config.json by IT (see
+        # Static room directory uploaded into the admin config by IT (see
         # scripts/sync_room_directory.py) — never a live Admin SDK call, so this
         # connector's own client never needs Workspace-admin directory scope.
         self._rooms: list[dict] = rooms or []
@@ -650,7 +650,7 @@ class CalendarConnector(Connector):
         return {"visibility": event.visibility}
 
     async def _list_rooms(self, query: str = "") -> Any:
-        """Filters the static room directory synced into org_config.json — no
+        """Filters the static room directory held in the admin config — no
         network call, so no Workspace-admin directory scope is ever needed here."""
         t0 = time.time()
         if query:

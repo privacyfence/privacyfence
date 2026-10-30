@@ -7,7 +7,7 @@
 - ``POST``/``DELETE /api/push/subscription``: store or remove the signed-in principal's push
   subscription. Same auth as every other org-mode write: the ``pf_org_session`` cookie, the
   double-submit CSRF token in the body, and the Origin check. Mounted only when push is on for the
-  org (``org_config.json``'s ``web_push.enabled``, default on). A stored subscription records a
+  org (the admin config's ``web_push.enabled``, default on). A stored subscription records a
   hash of the session that posted it, which is how ``POST /logout`` stops pushes to the browser
   that signs out.
 

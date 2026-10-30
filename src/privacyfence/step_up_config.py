@@ -99,7 +99,7 @@ def widest_scope(*scopes: str) -> StepUpScope:
 # --------------------------------------------------------------------- #
 # A principal's own hardening on top of the configured scope (ADR 0091).
 #
-# ``step_up.scope`` -- org_config.json's in org mode, config/settings.yaml's
+# ``step_up.scope`` -- the admin config's in org mode, config/settings.yaml's
 # in local mode -- is the *minimum*: nothing a person does from the
 # Settings page can make an install ask for a passkey on less than that.
 # What a person can do is ask for more, for their own approvals only: one
@@ -225,7 +225,7 @@ class StepUpConfig:
     as the org-mode alternative and OIDC re-auth as the fallback there
     (ADR 0034 for what it gates, ADR 0055 for which authenticators
     enroll). Org mode reads this
-    from ``org_config.json``'s ``step_up`` section (``from_org_config``);
+    from the admin config's ``step_up`` section (``from_org_config``);
     local mode reads it from ``config/settings.yaml``'s own ``step_up:``
     section (``from_local_config``) -- see this module's own docstring for
     why local mode gets one at all.
@@ -242,8 +242,8 @@ class StepUpConfig:
 
     Both default to False *on this class*, which is the value a caller that
     constructs one directly gets and the value org mode resolves for an
-    ``org_config.json`` with no ``step_up`` section -- org mode has an IdP
-    and a human administrator writing that bundle, so an unstated opinion
+    an organization config with no ``step_up`` section -- org mode has an IdP
+    and a human administrator writing that config, so an unstated opinion
     there stays an unstated opinion. Local mode does not read these
     field defaults for an absent key: ``from_local_config`` resolves its
     own from ``default_local_step_up()``, which is True on a packaged

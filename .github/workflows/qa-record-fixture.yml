@@ -195,6 +195,11 @@ jobs:
       # qa_fixture_recorder.py writes a fixture only for a result it marked
       # ok, so a refused recording can never reach the commit step below.
       - name: Record the fixture
+        # Telegram's shared app id and hash, the same pair connector-live-check.yml passes: the
+        # recorder cannot build the Telegram connector without them. Only this step gets them.
+        env:
+          PRIVACYFENCE_TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          PRIVACYFENCE_TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: |
           .venv/bin/python scripts/qa_fixture_recorder.py \
             --record "${CONNECTOR}" \

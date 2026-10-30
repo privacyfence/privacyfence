@@ -42,7 +42,7 @@ def _make_state(**overrides):
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
             "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
-            "org_button_label": "Install/Update Organization Config…", "version": "3.1.1",
+            "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "standard",
             "step_up_available": True, "step_up_on": False, "step_up_has_passkey": False,
         },
@@ -569,7 +569,7 @@ class TestNotificationsCard:
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
             "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
-            "org_button_label": "x", "version": "3.1.1",
+            "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "detailed",
             "step_up_available": True, "step_up_on": False, "step_up_has_passkey": False,
         })
@@ -605,7 +605,7 @@ class TestStepUpCard:
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
             "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
-            "org_button_label": "x", "version": "3.1.1",
+            "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "standard",
             "step_up_available": True, "step_up_on": True, "step_up_has_passkey": True,
         })
