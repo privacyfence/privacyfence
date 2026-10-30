@@ -1325,7 +1325,7 @@ def _start_org_web_server(
     mounted here too now -- see web/server.py's own module docstring for
     exactly what it does and does not cover. Raises ``org_mode.
     ConfigurationError`` (surfaced as a startup failure, the same
-    posture a missing/invalid settings.yaml already has) if org_config.json
+    posture a missing/invalid settings.yaml already has) if the organization config
     is missing the ``idp``/``server`` sections org mode requires -- there is
     no silent partial-org-mode fallback.
 
@@ -1447,7 +1447,7 @@ def _start_org_web_server(
 
     # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't
-    # change. Absent "authz" section in org_config.json -> disabled,
+    # change. Absent "authz" section in the admin config -> disabled,
     # every IdP-authenticated principal is admitted, unchanged from before.
     # Bound to the IdP so the allowed-domain check knows the issuer and the unverified-email setting.
     authz_policy = org_identity.IdpAuthzPolicy.bind(org_mode.AuthzPolicyConfig.from_org_config(org_config), idp)
@@ -1659,7 +1659,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         # keeps build_connectors self-contained (safe to call from a test
         # or from ConnectorRegistry's own per-principal factory with no
         # other org-mode wiring already in scope) at the cost of one cheap
-        # re-parse of org_config.json's own "server" section.
+        # re-parse of the organization config's own "server" section.
         download_base_url = org_mode.ServerConfig.from_org_config(org_config).issuer_url.rstrip("/")
 
     # Gmail
@@ -2382,7 +2382,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     # Centralized audit forwarding is org-mode-only (see
     # org_mode.AuditForwardingConfig's own docstring) -- a local-mode
-    # install's org_config.json could theoretically carry an
+    # install's organization config could theoretically carry an
     # "audit_forwarding" section, but there is no "centralize" to speak of
     # for a single employee's own machine, so it's ignored outside org
     # mode regardless of what the section says.

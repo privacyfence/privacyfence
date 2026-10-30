@@ -153,3 +153,26 @@ def test_the_commit_message_names_the_live_runner() -> None:
 
 def test_the_two_workflows_share_one_concurrency_group() -> None:
     assert _load(LIVE_CHECK)["concurrency"]["group"] == _load(RECORD)["concurrency"]["group"]
+
+
+TELEGRAM_APP = {
+    "PRIVACYFENCE_TELEGRAM_API_ID": "${{ secrets.TELEGRAM_API_ID }}",
+    "PRIVACYFENCE_TELEGRAM_API_HASH": "${{ secrets.TELEGRAM_API_HASH }}",
+}
+
+
+def test_the_live_check_has_the_telegram_app_identity() -> None:
+    env = _load(LIVE_CHECK)["env"]
+    assert {name: env[name] for name in TELEGRAM_APP} == TELEGRAM_APP
+
+
+def test_the_recorder_step_has_the_same_telegram_app_identity_and_nothing_else_does() -> None:
+    workflow = _load(RECORD)
+    job = workflow["jobs"]["record"]
+    step = _step(job, "Record the fixture")
+    assert {name: step["env"][name] for name in TELEGRAM_APP} == TELEGRAM_APP
+    assert "qa_fixture_recorder.py" in step["run"]
+    assert not set(TELEGRAM_APP) & (set(workflow.get("env", {})) | set(job.get("env", {})))
+    for other in job["steps"]:
+        if other is not step:
+            assert not set(TELEGRAM_APP) & set(other.get("env", {})), other.get("name")

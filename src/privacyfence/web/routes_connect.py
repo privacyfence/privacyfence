@@ -110,7 +110,7 @@ SERVICE_LABELS: dict[str, str] = {
     "peek": "Peek",
 }
 
-# service -> org_config.json section name.
+# service -> section name in the organization config.
 _ORG_CONFIG_SECTION: dict[str, str] = {s: "google" for s in GOOGLE_SERVICES}
 _ORG_CONFIG_SECTION.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "miro": "miro", "jira": "atlassian", "confluence": "atlassian"})
 
@@ -350,13 +350,13 @@ def _section_client_id(org_config: dict[str, Any], service: str) -> str:
 
 
 class _NotConfigured(Exception):
-    """Raised when org_config.json has no (usable) section for a service."""
+    """Raised when the organization config has no (usable) section for a service."""
 
 
 def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri: str, state: str) -> tuple[str, str]:
     """Returns ``(authorize_url, code_verifier)`` -- ``code_verifier`` is
     ``""`` for Slack (no PKCE, see slack_client.build_authorize_url's own
-    docstring). Raises ``_NotConfigured`` if org_config.json has no usable
+    docstring). Raises ``_NotConfigured`` if the organization config has no usable
     section for ``service``."""
     if service in GOOGLE_SERVICES:
         client_config = google_oauth.web_client_config(_google_client_section(org_config))

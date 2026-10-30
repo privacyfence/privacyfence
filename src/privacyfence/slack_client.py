@@ -790,25 +790,33 @@ class SlackClient:
         """A channel's recent messages through ``search.messages`` instead of
         ``conversations.history``, for an app Slack throttles on the latter.
 
-        Same return shape as ``get_channel_history``; ``cursor`` is a page number. Returns None
-        when the search cannot be scoped to this conversation (a direct message, or neither the
-        id nor the name finds it), and the caller reads the history instead. Search misses some
-        message subtypes and lags behind a just-posted message.
+        Same return shape as ``get_channel_history``; ``cursor`` is a page number, followed by
+        ``:name`` when the page came from the ``in:#name`` scope so the next page uses the same
+        one. A search that finds nothing for a channel it could scope (by id and by name) is an
+        empty history. Returns None when it cannot be scoped to this conversation (a direct
+        message, or a channel whose name cannot be resolved and whose id finds nothing), and the
+        caller reads the history instead. Search misses some message subtypes and lags behind a
+        just-posted message.
         """
         if not channel_id or channel_id[0] not in "CG":
             return None
         limit = self._clamp(limit, default=50, hi=1000)
-        page = int(cursor) if cursor.isdigit() and int(cursor) > 0 else 1
+        page_text, _, scope_tag = cursor.partition(":")
+        page = int(page_text) if page_text.isdigit() and int(page_text) > 0 else 1
         cutoff = None
         if oldest:
             try:
                 cutoff = datetime.fromtimestamp(float(oldest), tz=timezone.utc)
             except ValueError:
                 cutoff = None
-        scopes = [f"in:<#{channel_id}>"]
+        id_scope = f"in:<#{channel_id}>"
         name = self.resolve_channel_name(channel_id)
-        if name:
-            scopes.append(f"in:#{name}")
+        name_scope = f"in:#{name}" if name else ""
+        if page > 1:
+            # The scope that produced the earlier pages; the other one may count differently.
+            scopes = [name_scope] if scope_tag == "name" and name_scope else [id_scope]
+        else:
+            scopes = [id_scope] + ([name_scope] if name_scope else [])
         for scope in scopes:
             query = self._recent_search_query(scope, cutoff) if cutoff else scope
             try:
@@ -838,8 +846,12 @@ class SlackClient:
                 "search_channel_history %s returned %d message(s), has_more=%s",
                 channel_id, len(messages), has_more,
             )
-            return messages[:limit], has_more, str(page + 1) if has_more else ""
-        return None
+            next_cursor = ""
+            if has_more:
+                next_cursor = f"{page + 1}:name" if scope == name_scope else str(page + 1)
+            return messages[:limit], has_more, next_cursor
+        # Both scopes found nothing: an empty history, unless the name could not be tried.
+        return ([], False, "") if name_scope else None
 
     def get_thread_replies(
         self, channel_id: str, thread_ts: str, cursor: str = "", limit: int = 0,

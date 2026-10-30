@@ -42,7 +42,7 @@ approvals to whoever holds any valid token. ``/approvals``/``/security``
 here are a separate, principal-aware route set (ADR 0033): every read and
 write is authorized against ``current_principal()`` via ``org_session``,
 and a *write* decision additionally demands a fresh WebAuthn step-up when
-``org_config.json``'s ``step_up.enabled`` is set --
+the admin config's ``step_up.enabled`` is set --
 web/routes_approvals.py's own module docstring covers both.
 
 **`/settings` in org mode** is, likewise, *not*
@@ -740,7 +740,7 @@ class OrgAuth:
     install_wide_settings_path: str = ""
     # Org mode's web push (ADR 0081): the notifier daemon_main.py registered on the approval
     # registry, and the per-principal subscription store it reads. Both None when the org has
-    # turned push off (org_config.json's web_push.enabled: false) and in any test that does not
+    # turned push off (the admin config's web_push.enabled: false) and in any test that does not
     # care about push: the subscription routes are then not mounted and no page offers to
     # subscribe. The manifest is mounted either way.
     push_notifier: "PushNotifier | None" = None
@@ -1427,6 +1427,7 @@ def _build_org_app(
     if org.idp is not None:
         extra_routes.extend(routes_org_stepup.build_routes(
             web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
+            policy=IdpAuthzPolicy.bind(AuthzPolicyConfig.from_org_config(org.org_config), org.idp),
         ))
     if step_up.rp_id:
         extra_routes.extend(routes_security.build_routes(

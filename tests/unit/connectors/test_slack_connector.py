@@ -1494,6 +1494,16 @@ class TestLimitedMode:
         assert "Read through Slack search, because Slack limits history reads for this app" in result["note"]
         assert "switch to your workspace's own app on the Admin page" in result["note"]
 
+    async def test_an_empty_search_result_is_an_empty_history_not_a_fallback(self, gated_call_spy):
+        connector, client = make_limited_connector()
+        client.search_channel_history.return_value = ([], False, "")
+
+        result = await connector.call("slack_get_channel_history", {"channel_id": "C123"})
+
+        client.get_channel_history.assert_not_called()
+        assert "could not be scoped" not in result["note"]
+        assert "Read through Slack search" in result["note"]
+
     async def test_history_falls_back_and_says_why_when_search_cannot_be_scoped(self, gated_call_spy):
         connector, client = make_limited_connector()
         client.search_channel_history.return_value = None

@@ -43,6 +43,7 @@ from starlette.routing import Route
 
 from .. import org_identity
 from ..org_identity import IdpConfig
+from ..org_mode import AuthzPolicyConfig
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from . import org_session
@@ -96,7 +97,11 @@ class _StepUpAuthAttemptStore:
 
 def build_routes(
     *, web_ui: WebApprovalUI, sessions: OrgSessionStore, step_up: StepUpConfig, idp: IdpConfig, issuer_url: str,
+    policy: AuthzPolicyConfig | None = None,
 ) -> list[Route]:
+    """``policy`` is the sign-in policy (allowed domains, required groups): a step-up is a fresh
+    sign-in, so it applies the same check before it accepts the re-authentication."""
+    policy = policy or AuthzPolicyConfig()
     stepup_attempts = _StepUpAuthAttemptStore()
     # With the built-in Google sign-in the IdP redirects to the relay's "stepup" URI, and the relay
     # forwards the browser to this server's callback below.
@@ -182,6 +187,9 @@ def build_routes(
                 raise ValueError("IdP token response carried no id_token")
             claims = await asyncio.to_thread(org_identity.verify_id_token, idp, id_token, nonce=attempt.nonce)
             reauthed = org_identity.principal_from_claims(claims, idp)
+            # The same check as sign-in: a person whose domain or group was removed since they
+            # signed in cannot approve with a fresh IdP sign-in either.
+            org_identity.check_authz_policy(reauthed, claims, policy)
         except Exception as exc:  # noqa: BLE001 -- any IdP-side failure ends the same way
             logger.warning("Step-up re-authentication failed: %s", exc)
             return RedirectResponse(

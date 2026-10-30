@@ -820,7 +820,14 @@ class TestServerAddress:
     def test_refused_while_a_bundle_grist_app_owns_it(self, clean_env, public_dns):
         bundle = {"grist": {"client_id": "id", "client_secret": "s", "server_url": "https://g.example.com"}}
         with pytest.raises(admin_config.AdminConfigError, match="Grist app in the configuration file"):
-            _change("set_server_address", {"service": "grist", "value": "https://x.example.com"}, bundle=bundle)
+            _change(
+                "set_server_address", {"service": "grist", "value": "https://x.example.com"}, bundle=bundle, mode="local",
+            )
+
+    def test_an_org_server_ignores_the_bundle_grist_app_so_the_address_is_settable(self, clean_env, public_dns):
+        bundle = {"grist": {"client_id": "id", "client_secret": "s", "server_url": "https://g.example.com"}}
+        _change("set_server_address", {"service": "grist", "value": "https://x.example.com"}, bundle=bundle)
+        assert _stored()["services"]["grist"]["server_url"] == "https://x.example.com"
 
 
 class TestAutoProvisioning:
@@ -866,12 +873,14 @@ class TestAutoProvisioning:
         monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://prov.example.com")
         assert _change("set_auto_provisioning", params)[0] == "Turned automatic Grist accounts on"
 
-    def test_grist_with_a_bundle_oauth_app(self, clean_env, monkeypatch):
+    def test_an_org_server_does_not_read_a_bundle_grist_app(self, clean_env, monkeypatch):
+        # Its Grist app is a connector config; a bundle section left over from before does not
+        # make the server an OAuth-app one, so automatic accounts can still be turned on.
         monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://docs.example.com")
         monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://prov.example.com")
         params = {"service": "grist", "enabled": True, "trust_unverified_email": False}
-        with pytest.raises(admin_config.AdminConfigError, match="work only with API keys"):
-            _change("set_auto_provisioning", params, bundle={"grist": {"client_id": "x", "client_secret": "y"}})
+        message = _change("set_auto_provisioning", params, bundle={"grist": {"client_id": "x", "client_secret": "y"}})[0]
+        assert message == "Turned automatic Grist accounts on"
 
     def test_imported_locked_addresses_count_as_trusted(self, clean_env):
         grist = {
@@ -1306,12 +1315,21 @@ class TestServiceRows:
 
     def test_grist_bundle_oauth_app_locks_the_row(self):
         bundle = {"grist": {"client_id": "grist-id", "client_secret": "s", "server_url": "https://g.example.com"}}
-        row = self._rows(bundle)["grist"]
+        row = self._rows(bundle, mode="local")["grist"]
         assert row["client_id"] == "grist-id"
         assert row["options"]["address_source"] == "bundle" and row["options"]["locked"] is True
         assert row["options"]["server_url"] == "https://g.example.com"
         assert row["options"]["auto_provision"]["available"] is False
         assert "API keys" in row["options"]["auto_provision"]["reason"]
+
+    def test_an_org_server_whose_grist_connector_is_gone_does_not_lock_on_the_bundle(self):
+        bundle = {"grist": {"client_id": "grist-id", "client_secret": "s", "server_url": "https://g.example.com"}}
+        admin = _import({})
+        admin["services"]["grist"].update(offered=True, server_url="https://admin.example.com")
+        row = self._rows(bundle, admin)["grist"]
+        assert row["app_source"] == "server" and row["client_id"] == ""
+        assert (row["options"]["address_source"], row["options"]["locked"]) == ("admin", False)
+        assert row["options"]["server_url"] == "https://admin.example.com"
 
     def test_environment_addresses_win_and_lock(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://env.example.com/")

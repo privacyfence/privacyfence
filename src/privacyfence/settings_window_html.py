@@ -2439,13 +2439,38 @@ _JS = r"""
 
   // With the built-in Google sign-in the server admits nobody it was not told to: the admins the
   // server's operator named, read-only here, and the allowed domains.
+  // Each sign-in domain with the DNS proof state the relay last reported. What to publish is in the
+  // setup guide, which the line links to.
+  function signinDomainsHtml(signin) {
+    var domains = signin.domains || [];
+    var missing = domains.some(function (d) { return d.state === 'missing'; });
+    var refused = domains.some(function (d) { return d.state === 'refused'; });
+    var lines = domains.length
+      ? domains.map(function (d) {
+          var label = d.state === 'verified' ? 'verified' : d.state === 'refused' ? 'refused' : 'missing';
+          return '<div>' + esc(d.domain) + ': ' + label + '</div>';
+        }).join('')
+      : '<div>' + esc('No sign-in domain yet. Add an allowed domain or an admin address.') + '</div>';
+    var guide = missing
+      ? '<div>' + esc('Nobody from a domain marked missing can sign in until its DNS record is published. ') +
+        '<a href="' + CONNECTOR_DOCS_URL + '#built-in-google-sign-in" target="_blank" rel="noopener">' +
+        'What to publish</a></div>'
+      : '';
+    var why = refused
+      ? '<div>' + esc('A domain marked refused is a public suffix or a shared mail domain such as gmail.com. DNS cannot fix it: ' +
+          'take it out of the allowed domains and the admin addresses.') + '</div>'
+      : '';
+    return rowHtml('Sign-in domains', lines + guide + why);
+  }
+
   function builtinSigninHtml(signin) {
     var admins = (signin.admin_emails || []).map(function (e) { return '<div>' + esc(e) + '</div>'; }).join('');
     return '<div class="card pf-card pf-signin-builtin">' +
       '<div class="pf-row"><div class="pf-row-text"><div class="pf-row-desc">' +
       esc("Sign-in: PrivacyFence's built-in Google sign-in, through oauth.privacyfence.eu. Only the admins below and " +
         'people in the allowed domains can sign in.') + '</div></div></div>' +
-      rowHtml('Admins', admins + '<div>' + esc('Set by PRIVACYFENCE_ADMIN_EMAILS on the server.') + '</div>') + '</div>';
+      rowHtml('Admins', admins + '<div>' + esc('Set by PRIVACYFENCE_ADMIN_EMAILS on the server.') + '</div>') +
+      signinDomainsHtml(signin) + '</div>';
   }
 
   function renderAccess(state) {

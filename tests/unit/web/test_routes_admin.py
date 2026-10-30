@@ -365,8 +365,33 @@ class TestState:
         monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
         monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
         assert world.client.get("/api/admin/state").json()["signin"] == {
-            "builtin": True, "admin_emails": ["alice@acme.com"],
+            "builtin": True, "admin_emails": ["alice@acme.com"], "domains": [],
         }
+
+    def test_state_lists_each_sign_in_domain_with_its_dns_proof_state(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
+        monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
+        monkeypatch.setattr(
+            relay_client, "signin_domains", lambda org_config: ["acme.com", "beta.example", "co.uk"],
+        )
+        monkeypatch.setattr(relay_client, "status", lambda: {
+            "last_ok_at": 1.0, "last_error": "", "needed": True,
+            "signin_domains_verified": ["acme.com"], "signin_domains_refused": ["co.uk"],
+        })
+        world = World()
+        world.sign_in(ADMIN)
+        signin = world.client.get("/api/admin/state").json()["signin"]
+        assert signin["domains"] == [
+            {"domain": "acme.com", "state": "verified"}, {"domain": "beta.example", "state": "missing"},
+            {"domain": "co.uk", "state": "refused"},
+        ]
+        assert "pf-relay=" not in json.dumps(signin) and "_privacyfence-relay" not in json.dumps(signin)
+
+    def test_state_has_no_sign_in_domains_without_the_builtin_sign_in(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_IDP", raising=False)
+        world = World()
+        world.sign_in(ADMIN)
+        assert "domains" not in world.client.get("/api/admin/state").json()["signin"]
 
     def test_state_carries_the_upgrade_readiness(self, monkeypatch):
         monkeypatch.setitem(data_format._status, "ready", False)
@@ -676,13 +701,17 @@ class TestOrgRoomsUpload:
         world = World()
         _enrol(ADMIN)
         csrf = world.sign_in(ADMIN)
+        # Refused before the passkey is asked for, so no assertion is sent.
         first = _upload(world.client, self.URL, csrf, raw)
-        if first.status_code == 428:
-            with patch.object(wa.webauthn, "verify_authentication_response", return_value=VERIFIED):
-                first = _upload(world.client, self.URL, csrf, raw, assertion={"id": "Y3JlZC0x"})
         assert first.status_code == 400
         assert first.json() == {"error": "The file is not a room directory written by sync_room_directory.py."}
         assert admin_config.load()["rooms"] == []
+
+    def test_an_invalid_file_is_refused_even_without_an_enrolled_passkey(self, audit):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        assert _upload(world.client, self.URL, csrf, b'{"rooms": "x"}').status_code == 400
+        assert audit == []
 
     def test_a_file_over_2_mb_is_refused(self):
         world = World()
@@ -1338,7 +1367,7 @@ class TestLocalRoomsUpload:
         world = LocalWorld(local_controller, monkeypatch)
         _enrol_local()
         csrf = world.sign_in()
-        refused = _passkey_upload(world.client, self.URL, csrf, b"[1, 2]")
+        refused = _upload(world.client, self.URL, csrf, b"[1, 2]")  # no passkey asked for first
         assert (refused.status_code, refused.json()["error"]) == (
             400, "The file is not a room directory written by sync_room_directory.py.",
         )

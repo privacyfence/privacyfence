@@ -2192,9 +2192,6 @@ class SettingsController:
             "update_is_beta": bool(latest is not None and latest.is_beta),
             "org_installed": org_installed,
             "org_installed_date": org_installed_date,
-            "org_button_label": (
-                "Install/Update Organization Config…" if org_installed else "Install Organization Config…"
-            ),
             "version": __version__,
             # The General page's Security card reads these three to
             # decide whether to show "Turn on step-up", a disabled hint

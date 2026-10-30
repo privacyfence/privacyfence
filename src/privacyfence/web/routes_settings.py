@@ -190,7 +190,7 @@ logger = logging.getLogger(__name__)
 
 # Max upload size for an organization config bundle -- generous for a JSON
 # document that is, in practice, a handful of OAuth client IDs/secrets per
-# service (org_config.json today runs well under 10KB), while still a real
+# service (an org_bundle.json today runs well under 10KB), while still a real
 # bound against something absurd arriving on this endpoint.
 MAX_ORG_CONFIG_BYTES = 1_000_000
 
@@ -1759,7 +1759,7 @@ def build_org_routes(
             "general": {
                 "update_check_enabled": True, "update_check_beta": False,
                 "org_installed": False, "org_installed_date": "",
-                "org_button_label": "", "version": about["version"],
+                "version": about["version"],
                 "notifications_enabled": True, "notifications_detail": "minimal",
                 "step_up_available": False, "step_up_on": False, "step_up_has_passkey": False,
                 **step_up_scope_fields(step_up, principal),

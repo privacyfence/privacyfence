@@ -262,7 +262,7 @@ class AuditEntry:
                             #  "policy_check")
                             # ("org_config_startup": daemon_main.py's
                             #  log_org_config_bundle_hash(), recorded once per daemon startup that
-                            #  finds an org_config.json installed at all, carrying its sha256 in
+                            #  finds an organization bundle installed at all, carrying its sha256 in
                             #  `summary` so a tampered bundle between one startup and the next is
                             #  detectable by diffing hashes even on an install that hasn't adopted
                             #  full bundle signing -- see org_bundle_signing.py and ADR 0016)
@@ -466,7 +466,7 @@ class AuditEntry:
                               # below. Lets a reviewer (or an automated diff) tell whether the policy
                               # governing a given decision has since changed, without needing
                               # settings.yaml's own (unversioned) edit history. Deliberately does NOT
-                              # cover org_config.json -- see compute_security_config_hash()'s own
+                              # cover the organization bundle -- see compute_security_config_hash()'s own
                               # docstring for why that file's tamper-evidence is handled separately
                               # (daemon_main.log_org_config_bundle_hash, ADR 0016).
     prev_hash: str = ""      # This chain segment's previous entry's own entry_hash (or
@@ -497,17 +497,17 @@ def compute_security_config_hash(config: dict[str, Any]) -> str:
     """A stable fingerprint of the privacy-policy configuration in
     effect when a decision is recorded -- ``config`` is settings.yaml's own
     parsed content (see daemon_main.py's module docstring: that file
-    "carries no secrets", so hashing it whole -- unlike org_config.json --
+    "carries no secrets", so hashing it whole -- unlike the organization bundle --
     is safe to do on every single decision without redacting anything
     first). Two installs with byte-identical settings.yaml content get the
     same hash; that's deliberate, this fingerprints *which policy*, not
     *which install* (deployment_id, above, is the latter).
 
-    org_config.json is deliberately NOT folded in here: its own
+    The organization bundle is deliberately NOT folded in here: its own
     startup hash (daemon_main.log_org_config_bundle_hash) already gives
     that file tamper-evidence, separately, once per daemon startup --
     re-deriving the same signal on every decision would add nothing new,
-    and risks a future org_config.json field that isn't secret-free the
+    and risks a future bundle field that isn't secret-free the
     way settings.yaml is documented to be.
     """
     canonical = json.dumps(config, sort_keys=True, default=str)
