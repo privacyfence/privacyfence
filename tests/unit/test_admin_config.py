@@ -620,6 +620,123 @@ class TestAtlassianAssets:
             _change("set_atlassian_assets", {"enabled": True, "workspace_id": "a" * 201})
 
 
+ACCEPTED_LOGIN_URLS = [
+    ("https://login.salesforce.com", "https://login.salesforce.com"),
+    ("https://test.salesforce.com", "https://test.salesforce.com"),
+    ("https://acme.my.salesforce.com", "https://acme.my.salesforce.com"),
+    ("https://acme-corp2.my.salesforce.com", "https://acme-corp2.my.salesforce.com"),
+    ("https://acme--uat.sandbox.my.salesforce.com", "https://acme--uat.sandbox.my.salesforce.com"),
+    ("  https://Acme.My.Salesforce.com/  ", "https://acme.my.salesforce.com"),
+    ("HTTPS://LOGIN.SALESFORCE.COM", "https://login.salesforce.com"),
+]
+REFUSED_LOGIN_URLS = [
+    "https://evil.com",
+    "http://login.salesforce.com",
+    "login.salesforce.com",
+    "//login.salesforce.com",
+    "https://login.salesforce.com/path",
+    "https://login.salesforce.com//",
+    "https://acme.my.salesforce.com/services/oauth2",
+    "https://my.salesforce.com.evil.com",
+    "https://acme.my.salesforce.com.evil.com",
+    "https://login.salesforce.com.evil.com",
+    "https://evil.com/login.salesforce.com",
+    "https://evil.com#login.salesforce.com",
+    "https://evil.com?x=login.salesforce.com",
+    "https://login.salesforce.com@evil.com",
+    "https://login.salesforce.com:evil.com@evil.com",
+    "https://evil.com@login.salesforce.com",
+    "https://user:pw@login.salesforce.com",
+    "https://login.salesforce.com:443",
+    "https://login.salesforce.com:8443",
+    "https://login.salesforce.com.",
+    "https://acme.my.salesforce.com.",
+    "https://login.salesforce.com?next=https://evil.com",
+    "https://login.salesforce.com#frag",
+    "https://login.salesforce.com\\@evil.com",
+    "https://login.salesforce.com evil.com",
+    "https://login. salesforce.com",
+    "https://evil.com/.my.salesforce.com",
+    "https://.my.salesforce.com",
+    "https://-acme.my.salesforce.com",
+    "https://acme-.my.salesforce.com",
+    "https://a.b.my.salesforce.com",
+    "https://acme.sandbox.my.salesforce.com",
+    "https://--uat.sandbox.my.salesforce.com",
+    "https://acme--.sandbox.my.salesforce.com",
+    "https://acme--uat--x.my.salesforce.com.evil.com",
+    "https://salesforce.com",
+    "https://www.salesforce.com",
+    "https://acme.force.com",
+    "https://127.0.0.1",
+    "ftp://login.salesforce.com",
+    "https://l\u043egin.salesforce.com",
+    "https://login.salesforce.c\u043em",
+    "https://xn--lgin-6cd.salesforce.com",
+    "https://login.salesforce.com\u3002evil.com",
+    "https://login.salesforce.com\uff0eevil.com",
+    "https://acme.my.salesforce.com\u212a",
+    "https://\uff4cogin.salesforce.com",
+    "https://login.salesforce.com\u200b",
+]
+
+
+class TestSalesforceLoginUrl:
+    @pytest.mark.parametrize(("value", "stored"), ACCEPTED_LOGIN_URLS)
+    def test_accepts_salesforces_own_origins(self, clean_env, value, stored):
+        assert _change("set_salesforce_login_url", {"value": value}) == (
+            f"Set the Salesforce login URL to {stored}", ["services"]
+        )
+        assert _stored()["services"]["salesforce"]["login_url"] == stored
+        assert admin_config.salesforce_login_url(value) == stored
+
+    @pytest.mark.parametrize("value", REFUSED_LOGIN_URLS)
+    def test_refuses_everything_else_and_stores_nothing(self, clean_env, value):
+        _change("set_salesforce_login_url", {"value": "https://login.salesforce.com"})
+        with pytest.raises(admin_config.AdminConfigError) as refused:
+            _change("set_salesforce_login_url", {"value": value})
+        assert str(refused.value) == (
+            "Use login.salesforce.com, test.salesforce.com or your My Domain URL (\u2026my.salesforce.com)."
+        )
+        assert _stored()["services"]["salesforce"]["login_url"] == "https://login.salesforce.com"
+        assert admin_config.salesforce_login_url(value) is None
+
+    @pytest.mark.parametrize("value", ["https://login.salesforce.com\x00", "https://\tlogin.salesforce.com", "https://login.salesforce.com\n.evil.com"])
+    def test_refuses_control_characters(self, clean_env, value):
+        with pytest.raises(admin_config.AdminConfigError):
+            _change("set_salesforce_login_url", {"value": value})
+
+    def test_surrounding_whitespace_is_trimmed(self, clean_env):
+        assert _change("set_salesforce_login_url", {"value": "\thttps://login.salesforce.com\n"})[0].endswith("com")
+
+    def test_default_is_empty_and_an_empty_value_clears(self, clean_env):
+        assert _change("offer_service", {"service": "salesforce"})[0] == "Offered Salesforce"
+        assert _stored()["services"]["salesforce"]["login_url"] == ""
+        assert _change("set_salesforce_login_url", {"value": ""}) == ("", [])
+        _change("set_salesforce_login_url", {"value": "https://test.salesforce.com"})
+        assert _change("set_salesforce_login_url", {"value": " "}) == ("Cleared the Salesforce login URL", ["services"])
+        assert _stored()["services"]["salesforce"]["login_url"] == ""
+
+    def test_setting_the_same_value_changes_nothing(self, clean_env):
+        _change("set_salesforce_login_url", {"value": "https://test.salesforce.com"})
+        assert _change("set_salesforce_login_url", {"value": "https://TEST.salesforce.com/"}) == ("", [])
+
+    def test_requires_a_string_value(self, clean_env):
+        for params in ({}, {"value": None}, {"value": 5}):
+            with pytest.raises(admin_config.AdminConfigError):
+                _change("set_salesforce_login_url", params)
+
+    def test_an_older_file_without_the_field_reads_as_the_default(self, clean_env):
+        _change("offer_service", {"service": "salesforce"})
+        config = _stored()
+        del config["services"]["salesforce"]["login_url"]
+        admin_config.save(config)
+        assert _stored()["services"]["salesforce"]["login_url"] == ""
+
+    def test_available_in_both_modes(self, clean_env):
+        assert _change("set_salesforce_login_url", {"value": "https://test.salesforce.com"}, mode="local")[1] == ["services"]
+
+
 class TestServerAddress:
     def test_normalizes_and_clears(self, clean_env, public_dns):
         summary, sections = _change("set_server_address", {"service": "peek", "value": " https://Peek.Example.com/ "})

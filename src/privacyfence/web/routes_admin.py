@@ -110,6 +110,7 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "offer_service": AdminAction(_LOCAL_AND_ORG, True, "live"),
     "withdraw_service": AdminAction(_LOCAL_AND_ORG, False, "live"),
     "set_atlassian_assets": AdminAction(_LOCAL_AND_ORG, True, "live"),
+    "set_salesforce_login_url": AdminAction(_LOCAL_AND_ORG, True, "live"),
     "set_server_address": AdminAction(_LOCAL_AND_ORG, True, "live"),
     "set_auto_provisioning": AdminAction(_ORG_ONLY, True, "restart"),
     "set_unattended_sessions": AdminAction(_LOCAL_AND_ORG, True, "restart"),
@@ -136,6 +137,7 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     "offer_service": (("service", str, True),),
     "withdraw_service": (("service", str, True),),
     "set_atlassian_assets": (("enabled", bool, True), ("workspace_id", str, False)),
+    "set_salesforce_login_url": (("value", str, True),),
     "set_server_address": (("service", str, True), ("value", str, True)),
     "set_auto_provisioning": (
         ("service", str, True), ("enabled", bool, True), ("trust_unverified_email", bool, True),

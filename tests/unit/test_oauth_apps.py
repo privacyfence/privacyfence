@@ -180,6 +180,45 @@ class TestAtlassian:
         assert "atlassian" not in compose(bundle, admin)
 
 
+class TestSalesforceLoginUrl:
+    URL = "https://acme.my.salesforce.com"
+
+    def test_the_admin_login_url_reaches_the_builtin_section(self, builtins):
+        builtins("salesforce")
+        result = compose({}, make_admin("salesforce", salesforce={"login_url": self.URL}))
+        assert result["salesforce"] == {**expected_builtin("salesforce"), "login_url": self.URL}
+
+    def test_no_login_url_leaves_the_section_without_one(self, builtins):
+        builtins("salesforce")
+        assert "login_url" not in compose({}, make_admin("salesforce"))["salesforce"]
+
+    def test_a_connector_config_without_one_gets_the_admin_url(self):
+        connectors = connector("salesforce", consumer_key="k", consumer_secret="s")
+        result = compose({}, make_admin("salesforce", salesforce={"login_url": self.URL}), connectors=connectors)
+        assert result["salesforce"]["login_url"] == self.URL
+
+    def test_a_connector_configs_own_login_url_wins(self):
+        connectors = connector(
+            "salesforce", consumer_key="k", consumer_secret="s", login_url="https://test.salesforce.com"
+        )
+        result = compose({}, make_admin("salesforce", salesforce={"login_url": self.URL}), connectors=connectors)
+        assert result["salesforce"]["login_url"] == "https://test.salesforce.com"
+
+    def test_a_local_bundles_own_login_url_wins(self):
+        bundle = {"salesforce": {"consumer_key": "k", "consumer_secret": "s", "login_url": "https://test.salesforce.com"}}
+        result = compose(bundle, make_admin("salesforce", salesforce={"login_url": self.URL}), mode="local")
+        assert result["salesforce"]["login_url"] == "https://test.salesforce.com"
+
+    @pytest.mark.parametrize("stored", ["https://evil.com", "http://login.salesforce.com", "https://login.salesforce.com@evil.com"])
+    def test_a_stored_url_that_is_not_salesforces_is_ignored(self, builtins, stored):
+        builtins("salesforce")
+        assert "login_url" not in compose({}, make_admin("salesforce", salesforce={"login_url": stored}))["salesforce"]
+
+    def test_a_withdrawn_service_has_no_section(self, builtins):
+        builtins("salesforce")
+        assert "salesforce" not in compose({}, make_admin(salesforce={"login_url": self.URL}))
+
+
 class TestTelegram:
     def test_enabled_with_credentials(self, monkeypatch):
         monkeypatch.setattr(app_credentials, "telegram_app_credentials", lambda: (1, "hash"))

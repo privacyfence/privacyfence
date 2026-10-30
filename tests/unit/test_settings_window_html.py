@@ -1278,6 +1278,34 @@ class TestServicesSection:
         assert manifest == oauth_apps.slack_manifest("https://pf.example.org")
         assert "Upload a connector config" in page
 
+    def test_the_builtin_salesforce_row_shows_the_install_link_and_the_login_url_form(self):
+        url = "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tABC"
+        row = _row("salesforce", "Salesforce", client_id="b", relay=True, options={"install_url": url, "login_url": "https://test.salesforce.com"})
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Each Salesforce org installs PrivacyFence once: send its Salesforce admin this link." in page
+        assert f'href="{url}"' in page and f'data-copy-text="{url}"' in page
+        assert 'aria-label="Copy the Salesforce install link"' in page
+        assert 'data-admin-sflogin="1"' in page and 'value="https://test.salesforce.com"' in page
+        assert 'data-admin-sflogin-save="1"' in page
+
+    @pytest.mark.parametrize(
+        ("app_source", "options"),
+        [
+            ("builtin", {}),
+            ("connector", {"install_url": "https://login.salesforce.com/packaging/installPackage.apexp?p0=04t"}),
+            ("builtin", {"install_url": "https://evil.example/installPackage.apexp"}),
+        ],
+    )
+    def test_the_salesforce_install_link_needs_the_builtin_app_with_a_salesforce_install_url(self, app_source, options):
+        row = _row("salesforce", "Salesforce", app_source=app_source, client_id="b", options=options)
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "installs PrivacyFence once" not in page and "data-copy-text" not in page
+        assert 'data-admin-sflogin="1"' in page
+
+    def test_a_withdrawn_salesforce_row_has_no_login_url_form(self):
+        row = _row("salesforce", "Salesforce", offered=False)
+        assert "data-admin-sflogin" not in _render_admin(_admin_state(row), mode="org", is_admin=True)
+
     def test_a_listed_or_own_slack_app_shows_no_create_button(self):
         row = _row("slack", "Slack", client_id="b", relay=True)
         page = _render_admin(_admin_state(row), mode="org", is_admin=True)

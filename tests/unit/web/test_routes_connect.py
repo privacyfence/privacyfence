@@ -408,6 +408,36 @@ class TestOAuthCallback:
         assert r.status_code == 302
         assert r.headers["location"] == "/connect?error=slack"
 
+    @pytest.mark.parametrize(
+        ("service", "error", "location"),
+        [
+            ("salesforce", "OAUTH_APP_ACCESS_DENIED", "/connect?error=salesforce&reason=not_installed"),
+            ("salesforce", "invalid_client_id", "/connect?error=salesforce&reason=not_installed"),
+            ("salesforce", "access_denied", "/connect?error=salesforce"),
+            ("slack", "OAUTH_APP_ACCESS_DENIED", "/connect?error=slack"),
+        ],
+    )
+    def test_not_installed_errors_add_a_reason_for_salesforce_only(self, service, error, location):
+        app, sessions, _registry = _app(org_config={
+            "salesforce": {"consumer_key": "k", "consumer_secret": "s"},
+            "slack": {"client_id": "c", "client_secret": "s"},
+        })
+        session_id, _principal = _signed_in(sessions)
+        client = _client(app)
+        start = client.get(f"/oauth/start/{service}", cookies={org_session.SESSION_COOKIE: session_id})
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+
+        r = client.get(f"/oauth/callback/{service}?error={error}&state={state}", cookies={org_session.SESSION_COOKIE: session_id})
+        assert (r.status_code, r.headers["location"]) == (302, location)
+
+    def test_the_not_installed_line_shows_for_salesforce_and_that_reason_only(self):
+        line = "Your Salesforce administrator has to install PrivacyFence in your org first."
+        assert line in rc._flash_html("", "salesforce", "not_installed")
+        assert line not in rc._flash_html("", "salesforce", "")
+        assert line not in rc._flash_html("", "salesforce", "other")
+        assert line not in rc._flash_html("", "slack", "not_installed")
+        assert line not in rc._flash_html("", "", "not_installed")
+
     def test_happy_path_saves_token_and_evicts_registry(self, monkeypatch):
         app, sessions, registry = _app()
         session_id, principal = _signed_in(sessions)
