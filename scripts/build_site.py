@@ -123,6 +123,7 @@ PAGES: dict[str, str] = {
     "/releases/": "releases/index.html",
     "/privacy/": "privacy/index.html",
     "/imprint/": "imprint/index.html",
+    "/relay-terms/": "relay-terms/index.html",
 }
 
 # Pages that are published but not part of the site: no navigation or footer link, no sitemap or
@@ -1154,6 +1155,7 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         f"- [Releases]({SITE_URL}/releases/): the newest release on every channel, stable and pre-release, with its installers and release notes",
         f"- [Privacy policy]({SITE_URL}/privacy/): what this website and the download service do with visitor data",
         f"- [Imprint]({SITE_URL}/imprint/): who publishes privacyfence.eu",
+        f"- [Relay terms]({SITE_URL}/relay-terms/): the terms for the sign-in relay at oauth.privacyfence.eu",
         "",
         "## Source",
         "",
