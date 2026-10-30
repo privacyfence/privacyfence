@@ -26,6 +26,8 @@ HEADER = "privacyfence-connector-config v1"
 SENTINEL = "SENTINEL-client-secret-do-not-leak"
 
 
+# key.pem is a throwaway test key that signs nothing real; it is checked in on purpose (the
+# repository ignores *.pem elsewhere) so that every checkout reproduces the expected files.
 def fixture_key() -> Ed25519PrivateKey:
     key = load_pem_private_key((FIXTURE_DIR / "key.pem").read_bytes(), password=None)
     assert isinstance(key, Ed25519PrivateKey)
