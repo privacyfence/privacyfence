@@ -1689,7 +1689,7 @@ means the account's domain has no proven DNS record yet.
 
 **The log says settings "are ignored".** Three warnings read this way, and none stops the server:
 
-- `org_config.json carries settings that are now managed on the Admin page and are ignored: …` : a
+- `The installed bundle carries settings that are now managed on the Admin page and are ignored: …` : a
   bundle still carries operational settings. They were imported once into `org/admin_config.json`;
   change them on the Admin page, not in the bundle.
 - `org/org_config.json changed after the upgrade and is ignored` : 7.x reads `org/org_bundle.json`.

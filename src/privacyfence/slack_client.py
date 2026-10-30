@@ -7,7 +7,7 @@ are a member of — without requiring a bot to be invited anywhere.
 The token is obtained via Slack's OAuth v2 browser flow (see
 ``authorize_interactive`` below), driven from PrivacyFence Settings. The
 Slack app itself (client id/secret) is organization-level config installed via
-the "Install/Update Organization Config…" action in PrivacyFence Settings — a user only ever
+the "Install configuration file…" action on Admin → Organization configuration — a user only ever
 sees a browser consent screen, never a token to copy/paste.
 
 Required user token scopes (see ``DEFAULT_USER_SCOPES``):

@@ -20,8 +20,8 @@ each organization generates an Ed25519 keypair once
 bundle it builds with it (``--sign-key``). The *first* signed bundle an
 install ever sees has its embedded public key trusted on that basis
 alone and pinned to disk (``pinned_public_key_path()``); every bundle
-after that -- installed via PrivacyFence Settings' "Install/Update
-Organization Config..." (``settings_controller.install_org_config_
+after that -- installed via PrivacyFence Settings' "Install
+configuration file..." (``settings_controller.install_org_config_
 bytes``) or dropped onto disk by hand and picked up at the next daemon
 start (``daemon_main.load_org_config``) -- must verify against that
 pinned key or is rejected outright. That closes the obvious downgrade

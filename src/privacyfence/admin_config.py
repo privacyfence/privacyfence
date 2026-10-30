@@ -276,7 +276,7 @@ def _seed_allowed_domains(config: dict[str, Any]) -> None:
     authz = config["authz"] if isinstance(config.get("authz"), dict) else {}
     if authz.get("allowed_domains"):
         logger.warning(
-            "%s is ignored: org_config.json already sets the allowed domains.", ALLOWED_DOMAINS_ENV,
+            "%s is ignored: the organization bundle already sets the allowed domains.", ALLOWED_DOMAINS_ENV,
         )
         return
     config["authz"] = {**authz, "allowed_domains": domains}

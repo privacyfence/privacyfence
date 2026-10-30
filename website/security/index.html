@@ -38,7 +38,7 @@
       <div class="card-grid grid-auto">
         <article class="card stack" id="deployment-modes">
           <h3>Where it runs</h3>
-          <p>On one person's own computer (local mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). No data passes through a PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. When an organization server uses PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead.</p>
+          <p>On one person's own computer (local mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). No data passes through a PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. When an organization server uses PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead. Slack’s built-in app sends no PKCE, so its sign-in code passes through the relay without it; an organization’s own Slack app avoids this.</p>
           <a class="text-link" href="/docs/security-and-compliance/#deployment-modes">Deployment modes →</a>
         </article>
         <article class="card stack" id="trust-boundary">

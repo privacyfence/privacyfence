@@ -465,9 +465,10 @@ def _warn_if_legacy_bundle_changed() -> None:
         return
     if current != recorded:
         logger.warning(
-            "org/org_config.json changed after the upgrade and is ignored: PrivacyFence 7 reads "
-            "org/org_bundle.json. Install the new bundle on the Admin page, or copy it to "
-            "org/org_bundle.json."
+            "org/org_config.json changed after the upgrade and is ignored: PrivacyFence 7 no longer "
+            "reads it, and an organization server takes no new bundle. Change settings in the "
+            "environment (privacyfence.env) or on the Admin page, and your own connector apps as "
+            "signed connector configs (docs/org-mode-setup-guide.md)."
         )
 
 
@@ -487,10 +488,10 @@ def load_org_config() -> dict[str, Any]:
     downgrade to no IdP-backed auth at all (org_mode.resolve_mode({})
     resolves to "local"), triggerable by anything that can truncate or
     corrupt the file — not a state this daemon should ever paper over.
-    A local-mode bundle is installed via PrivacyFence Settings'
-    "Install/Update Organization Config…"; an org-mode bundle is copied to
-    this path by hand and the daemon restarted, since org mode mounts no
-    local Settings page.
+    A desktop (local-mode) bundle is installed in PrivacyFence Settings under
+    Admin → Organization configuration → "Install configuration file…". An
+    organization server takes no new bundle (settings come from the
+    environment, its own apps from signed connector configs).
 
     Bundle signing (ADR 0016): a well-formed-but-hostile *replacement* of
     this file (as opposed to the malformed-file cases above) is a
@@ -609,8 +610,8 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
 def ignored_legacy_settings_message(names: list[str]) -> str:
     """The notice for a bundle that still carries settings the Admin page now owns."""
     return (
-        "org_config.json carries settings that are now managed on the Admin page and are ignored: "
-        f"{', '.join(names)}. Rebuild the bundle without them."
+        "The installed bundle carries settings that are now managed on the Admin page and are ignored: "
+        f"{', '.join(names)}. Change them on the Admin page; the bundle needs no edit."
     )
 
 

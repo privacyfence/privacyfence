@@ -263,7 +263,7 @@ class TestMainSigningIntegration:
         trust = org_bundle_signing.verify_and_maybe_pin(bundle, tmp_path / "orgdir")
         assert trust.ok and trust.signed
         out = capsys.readouterr().out
-        assert "Install/Update Organization Config" in out
+        assert "Install configuration file" in out
         assert "<data>/org/org_bundle.json" not in out
 
     def test_mode_local_is_still_accepted_and_written(self, tmp_path):
@@ -741,7 +741,7 @@ class TestInstructionsPrintedAfterWriting:
         build_org_bundle.main(_desktop_args(tmp_path))
 
         out = capsys.readouterr().out
-        assert "Install/Update Organization Config" in out
+        assert "Install configuration file" in out
         assert "<data>/org/org_bundle.json" not in out
         assert "/oauth/" not in out
 

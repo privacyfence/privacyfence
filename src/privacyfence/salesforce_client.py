@@ -4,7 +4,7 @@ Uses the `simple-salesforce` library if available; otherwise raises a clear
 error. Authentication is OAuth 2.0 (Web Server Flow with PKCE), driven from the
 PrivacyFence Settings via ``authorize_interactive`` below — no username/
 password/security-token entry. The Connected App (consumer key/secret) is
-organization-level config installed via "Install/Update Organization Config…";
+organization-level config installed via "Install configuration file…" on Admin → Organization configuration;
 the resulting access/refresh token is per-user, stored in a token file.
 """
 
