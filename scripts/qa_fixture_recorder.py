@@ -442,6 +442,8 @@ def redact_slack_messages(raw: dict[str, Any]) -> dict[str, Any]:
             message["bot_id"] = _REDACTED_SLACK_USER_ID
         if message.get("parent_user_id"):
             message["parent_user_id"] = _REDACTED_SLACK_USER_ID
+        if message.get("client_msg_id"):
+            message["client_msg_id"] = _REDACTED_UUID
         if message.get("reply_users"):
             message["reply_users"] = [_REDACTED_SLACK_USER_ID for _ in message["reply_users"]]
         edited = message.get("edited")
@@ -2271,7 +2273,9 @@ def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
             found_message = next((m for m in history if QATEST_TAG in (m.text or "")), None)
             if found_message is None:
                 raise SlackClientError(f"no message carrying {QATEST_TAG} found in {target} history")
-            seed_thread_ts = found_message.id
+            # Search also returns thread replies, and the seed reply carries the tag too: a reply's
+            # ts would make conversations.replies return that reply alone, so take its thread's root.
+            seed_thread_ts = found_message.thread_ts or found_message.id
 
         with RawCaptureApiCall(client) as cap:
             replies, _has_more, _next_cursor = client.get_thread_replies(

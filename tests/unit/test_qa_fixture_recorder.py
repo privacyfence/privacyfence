@@ -2175,6 +2175,44 @@ class TestCheckSlack:
         assert get_thread.raw["messages"][0]["text"] == self.SEED_TEXT
         assert get_thread.raw["messages"][0]["user"] == recorder._REDACTED_SLACK_USER_ID
 
+    def test_a_tagged_reply_found_by_search_reads_its_thread_from_the_root(self, monkeypatch):
+        # Search returns newest first, so the tagged seed reply comes before its starter; reading
+        # replies by the reply's ts would record that reply alone.
+        reply = "PrivacyFence QA seed reply [QATEST]. No real information."
+        client = self._client({
+            "conversations.list": {
+                "channels": [{"id": "C1", "name": "privacyfence-qa-control", "is_private": False, "num_members": 2}],
+            },
+            "conversations.info": {"channel": {"id": "C1", "name": "privacyfence-qa-control"}},
+            "search.messages": {"messages": {"matches": [
+                {"ts": "100.2", "user": "U1", "text": reply, "channel": {"id": "C1"},
+                 "permalink": "https://qa.slack.com/archives/C1/p1002?thread_ts=100.1&cid=C1"},
+                {"ts": "100.1", "user": "U1", "text": self.SEED_TEXT, "channel": {"id": "C1"},
+                 "permalink": "https://qa.slack.com/archives/C1/p1001"},
+            ], "paging": {"pages": 1}}},
+            "conversations.replies": {"messages": [
+                {"ts": "100.1", "user": "U1", "text": self.SEED_TEXT, "client_msg_id": "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"},
+                {"ts": "100.2", "user": "U1", "text": reply, "thread_ts": "100.1"},
+            ]},
+        })
+        asked = []
+        api_call = client._client.api_call
+
+        def recording_api_call(api_method, **kwargs):
+            if api_method == "conversations.replies":
+                asked.append((kwargs.get("params") or {}).get("ts") or (kwargs.get("json") or {}).get("ts"))
+            return api_call(api_method, **kwargs)
+
+        client._client.api_call = recording_api_call
+        monkeypatch.setattr(recorder, "_build_slack_client", lambda: client)
+
+        results = recorder.check_slack(record=True, manifest={})
+
+        get_thread = next(r for r in results if r.method == "get_thread_replies")
+        assert get_thread.ok, get_thread.note
+        assert asked == ["100.1"]
+        assert get_thread.raw["messages"][0]["client_msg_id"] == recorder._REDACTED_UUID
+
     def test_targets_configured_channel_and_thread_directly(self, monkeypatch):
         # channel_id and seed_thread_ts both configured -- no
         # conversations.list/conversations.history resolve calls needed.
