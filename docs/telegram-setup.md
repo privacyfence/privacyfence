@@ -7,7 +7,8 @@ sends you and, if you have one, your two-step verification password — in Priva
 never in a terminal.
 
 Unlike the other providers, Telegram needs **no administrator setup**: no app to register, no
-redirect URL, and no section in the organization config bundle.
+redirect URL, and no section in the organization config bundle. The only switch is the Telegram row
+on the Admin page.
 
 ## What you need
 
@@ -42,15 +43,19 @@ can get it rate-limited or blocked for every user of the build.
 | Local redirect | None — Telegram does not use a browser redirect |
 | Org redirect | None |
 | Scopes | None — the session has your account's full access; PrivacyFence's tools and approvals decide what is used |
-| Bundle flags | `--enable-telegram` (writes `telegram.enabled`; no secret) |
+| Switch | **Admin → Services → Telegram** (offer or stop offering it). The old bundle flag `--enable-telegram` is refused. |
 | Where the session is stored | `credentials/telegram.session` in PrivacyFence's data folder (see [platform-support.md](platform-support.md)); on an organization server, in each user's own folder on the server |
 
-## Build and distribute the bundle
+## Offer Telegram
 
-Add `--enable-telegram` to `build_org_bundle.py` (with `--merge` to extend an existing bundle). It
-writes a bare `telegram` section with no secret in it; without that section Telegram is neither
-listed in Settings nor offered on `/connect`, on any install, even one that carries the app
-credentials ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)).
+Telegram is offered or not on **Admin → Services**, with the switch on its row (on a desktop install
+for the owner, on an organization server for administrators; offering a service asks for a passkey,
+stopping it does not). A fresh Docker single-user install offers it already, a desktop
+install offers it when no bundle is installed, and a new multi-user server offers nothing until an
+administrator turns services on. Until it is offered, Telegram is neither listed in Settings nor on
+`/connect`, even in a build that carries the app credentials
+([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md),
+[ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md)).
 
 ## Users connect
 

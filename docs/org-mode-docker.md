@@ -1,6 +1,8 @@
 # Organization deployment with Docker
 
-This page runs the organization-mode daemon and its reverse proxy as containers. It replaces
+This page runs PrivacyFence from the container image: on your own computer for yourself ([Run it on
+this computer](#run-it-on-this-computer)), or as an organization server with its reverse proxy
+([Quick start](#quick-start)). The server flow replaces
 [section 3](org-mode-setup-guide.md#3-service-account-and-install) (service account and install),
 [section 7](org-mode-setup-guide.md#7-reverse-proxy-and-tls) (reverse proxy and TLS) and
 [section 8](org-mode-setup-guide.md#8-hardened-systemd-unit) (systemd unit) of the
@@ -8,27 +10,150 @@ This page runs the organization-mode daemon and its reverse proxy as containers.
 [section 14](org-mode-setup-guide.md#14-operations). Sections
 [4](org-mode-setup-guide.md#4-identity-provider),
 [5](org-mode-setup-guide.md#5-connector-apps),
-[6](org-mode-setup-guide.md#6-signing-key-and-bundle),
 [9](org-mode-setup-guide.md#9-first-sign-in-and-validation),
 [10](org-mode-setup-guide.md#10-install-wide-and-per-user-policy),
 [11](org-mode-setup-guide.md#11-ai-systems),
 [12](org-mode-setup-guide.md#12-approvals-and-step-up),
-[13](org-mode-setup-guide.md#13-file-delivery) apply unchanged.
+[13](org-mode-setup-guide.md#13-file-delivery) apply unchanged, and
+[section 6](org-mode-setup-guide.md#6-server-settings-and-your-own-apps) applies with the environment
+file being `privacyfence.env`.
 
 ## The image
 
 | | |
 |---|---|
 | Image | `ghcr.io/privacyfence/privacyfence-org` |
-| Tags | `X.Y.Z` for every stable release. `X.Y`, `X` and `latest` move forward only: each follows the newest stable release in its scope, and a patch release on an older line never moves them back. Pin `X.Y` in production. |
-| Releases | Stable releases only. A pre-release has no image. |
+| Tags | A stable release gets `X.Y.Z`, `X.Y`, `X` and `latest`. `X.Y`, `X` and `latest` move forward only: each follows the newest stable release in its scope, and a patch release on an older line never moves them back. Pin `X.Y` in production. |
+| Releases | Every release. A pre-release (`X.Y.ZaN`, `bN`, `rcN`) gets only its exact version as a tag, so `X.Y`, `X` and `latest`, and with them any unattended upgrade, never reach a pre-release; to try one, set `PRIVACYFENCE_IMAGE_TAG` to its exact version (ADR 0268). |
 | Platforms | `linux/amd64`, `linux/arm64` |
 | User | `privacyfence-org`, uid and gid `10001` |
 | Data volume | `/var/lib/privacyfence-org/.privacyfence` |
-| Port | `8765` (not published by the Compose file below) |
+| Port | `8765` (published to `127.0.0.1` only by the single-user command below, and not published by the Compose file) |
+| Mode | The image sets `PRIVACYFENCE_MODE=org` and `PRIVACYFENCE_BIND_HOST=0.0.0.0`; see [Environment variables](#environment-variables) |
 | Stop signal | `SIGINT`, so `docker stop` shuts the daemon down cleanly |
-| Health check | Probes the daemon's well-known endpoint from inside the container |
-| Without a bundle | Refuses to start (exit 78) and says how to install one |
+| Health check | Probes the daemon's well-known endpoint from inside the container, on `PRIVACYFENCE_PORT` (8765 by default) |
+| With no identity provider | Starts in single-user mode on localhost ([below](#run-it-on-this-computer)). It does not refuse to start. |
+
+## Run it on this computer
+
+This is PrivacyFence for one person, in a container, with its own built-in sign-in for Google, Slack,
+Salesforce, Atlassian and Miro (organization mode and this image only; desktop mode, which is
+deprecated, has none). It is the same image and the same mode as a server, with no identity
+provider: one administrator, served only at `http://localhost`.
+
+> **Anyone who can run `docker` on this computer controls the install.** They can read the setup
+> code from `docker logs`, open the data volume, or start another container against it. Single-user mode
+> protects against other computers and other web pages, not against a local user or an AI agent that has a
+> shell and the Docker socket. Run it under a separate operating system account (with rootless
+> Docker) or in a virtual machine, or use an organization server instead.
+
+```bash
+docker run --rm -p 127.0.0.1:8765:8765 \
+  -v pf-data:/var/lib/privacyfence-org/.privacyfence \
+  ghcr.io/privacyfence/privacyfence-org:latest
+```
+
+- **The `127.0.0.1:` in `-p` matters.** Without it Docker publishes the port on every network
+  interface, and anyone on your network can reach a server whose only protection is a setup code. The
+  image cannot check how you published it, so this is on you. Publish the same port number the
+  container listens on (`PRIVACYFENCE_PORT`, 8765 by default): the browser's address must be the one
+  the server believes.
+- **The data volume `pf-data`** keeps your passkey, your connected accounts and your settings. Without
+  `-v` they are lost when the container goes. To run in the background, add `-d --name privacyfence`
+  and drop `--rm`; use `docker logs privacyfence` instead of the terminal.
+- **Open `http://localhost:8765`, not `http://127.0.0.1:8765`.** The server accepts only requests
+  addressed to `localhost`, and your passkey is bound to that name.
+
+**Sign in.** The first start prints, in the container's output (`docker logs`):
+
+```text
+Setup code: XXXX-XXXX. Open http://localhost:8765/login to set up your passkey.
+```
+
+Open that address and enter the code (capitals and the dash do not matter). It signs you in as the
+one administrator and takes you to **Passkeys**, where you add a passkey; every later sign-in uses the
+passkey, and so do approvals. The code works once, is used up by five wrong attempts (restart the
+container for a new one), and **stops working for good once a passkey is enrolled**: a restart with no
+passkey enrolled prints a new code, and with one enrolled prints none. Step-up is on from the start, and
+every change on the Admin page asks for the passkey.
+
+**Connect a service.** A fresh install offers Google, Slack, Salesforce, Atlassian, Miro and Telegram;
+change that under **Admin → Services**. Open `/connect` and connect your accounts. The built-in apps
+sign in through the PrivacyFence relay, which needs nothing from you on `localhost` and sends the
+browser straight back to this computer ([built-in apps](org-mode-setup-guide.md#built-in-apps-through-the-relay)).
+Your container needs outbound HTTPS to `oauth.privacyfence.eu` for that.
+
+**Add it to an AI client.** Use `http://localhost:8765/mcp` as the connector address in a client that
+runs on this computer (Claude Desktop, Claude Code). claude.ai cannot reach `localhost`. The client
+sends you to `/login` to sign in with your passkey and then to a consent page; after adding your
+passkey for the first time, a **Continue** link on Passkeys takes the pending authorization on.
+[Section 9](org-mode-setup-guide.md#add-privacyfence-to-an-ai-client) has the steps per client.
+
+**If you lose your passkey.** Stop the container, delete the passkey file from the volume, and start
+it again; the next start prints a new setup code. With the volume above:
+
+```bash
+docker run --rm -v pf-data:/data --entrypoint sh ghcr.io/privacyfence/privacyfence-org:latest \
+  -c 'find /data/users/single-user -name webauthn_credentials.json -delete'
+```
+
+The file is `users/single-user/authority/webauthn_credentials.json` in the volume. Nothing else is
+lost. That is also why the volume belongs to you alone.
+
+### From one computer to a server
+
+Single-user mode never turns into a server by itself. To serve other people, give the same volume an
+identity provider and a public address: the `PRIVACYFENCE_IDP_*` variables and a public
+`PRIVACYFENCE_ISSUER_URL` in `privacyfence.env` ([Quick start](#quick-start)), or the `idp` section of
+a signed 6.x bundle. Before that, note what carries over: your single-user connections and settings
+stay in `users/single-user/`, which no identity-provider account can reach (the start logs that), and
+passkeys are bound to `localhost`. A new data volume is the cleaner start.
+
+## Quick start
+
+A multi-user server with the environment alone, no bundle to build:
+
+1. **DNS.** Point a public hostname at the Docker host. Ports 80 and 443 (TCP and UDP) must be
+   reachable; Caddy gets the certificate itself.
+2. **Register one OIDC app** with your identity provider, with the three redirect URIs for your
+   hostname ([the organization guide, section 4](org-mode-setup-guide.md#4-identity-provider)). Or, for
+   a small Google Workspace team, use the [built-in Google sign-in](org-mode-setup-guide.md#built-in-google-sign-in)
+   and register nothing: set `PRIVACYFENCE_IDP=builtin-google`, the admin emails and the allowed
+   domains instead of step 4's identity provider lines.
+3. **Fetch the deploy files** for the release you run (replace `vX.Y.Z`; see [Files](#files)).
+4. **Fill `privacyfence.env`** from `privacyfence.env.example`: the server address, the proxy address
+   (`172.30.87.2`), the identity provider and who is an admin. Keep the identity provider's client
+   secret out of `docker inspect`: put it in a file owned by the image's user and let Compose mount it as
+   a Docker secret.
+
+   ```bash
+   sudo install -m 0400 -o 10001 -g 10001 /dev/null idp_client_secret
+   sudo sh -c 'cat > idp_client_secret'   # paste the secret, then press Ctrl-D
+   ```
+
+   In `privacyfence.env` set `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret`, and
+   in `compose.yaml` uncomment the `secrets:` lines (under the service and at the bottom).
+5. **Set `PF_HOSTNAME`** in `.env` next to `compose.yaml` ([.env](#env)).
+6. **Start it:** `docker compose up -d`, then `docker compose logs -f privacyfence` until the
+   `Org mode active -- MCP-over-HTTP at https://...` line.
+7. **Sign in** as a listed admin (an email in `PRIVACYFENCE_ADMIN_EMAILS`, or a person in the admin
+   group), and open `/security` to add a passkey. With the built-in Google sign-in, first publish the DNS
+   records the log lists (`docker compose exec privacyfence privacyfence-app --relay-dns-records`).
+8. **Admin → Services → offer** the services you want. Services that use a built-in app work at
+   once (the server registers with the relay by itself; Admin → Services shows the status); to use your
+   own app for a provider, [sign and upload a connector config](org-mode-setup-guide.md#signed-connector-configs).
+9. **Optional, Peek and Grist:** give the server their addresses in `privacyfence.env`
+   (`PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL`),
+   put each provisioning key in its own secret file the same way as step 4
+   (`PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE=/run/secrets/peek_provisioning_key`, likewise
+   `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE`), uncomment those `secrets:` lines, restart, and turn
+   automatic accounts on under Admin → Services ([Peek setup](peek-setup.md#automatic-accounts-organization-mode),
+   [Grist setup](grist-setup.md#automatic-api-keys-organization-mode)).
+
+Everything else (file delivery, step-up, sign-in restrictions, scoped tokens, audit forwarding) is on
+the [Admin page](org-mode-setup-guide.md#the-admin-page). Outbound HTTPS from the container must reach your identity
+provider, the connectors' APIs, and `oauth.privacyfence.eu` when you use built-in apps or the built-in
+Google sign-in.
 
 ## Prerequisites
 
@@ -39,19 +164,21 @@ This page runs the organization-mode daemon and its reverse proxy as containers.
 
 ## Files
 
-Work in `/opt/privacyfence-org`. Fetch the two deploy files for the release you run (replace `vX.Y.Z`):
+Work in `/opt/privacyfence-org`. Fetch the deploy files for the release you run (replace `vX.Y.Z`):
 
 ```bash
 sudo install -d /opt/privacyfence-org && cd /opt/privacyfence-org
 sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/compose.yaml
 sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/Caddyfile
+sudo curl -fsSL -o privacyfence.env https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/privacyfence.env.example
+sudo chmod 600 privacyfence.env
 ```
 
 ### Compose file
 
 `compose.yaml` runs the daemon read-only, with no capabilities and no published port. Only Caddy is
-reachable from outside. Both containers sit on a private network with fixed addresses, so the bundle
-can name Caddy as the one trusted proxy.
+reachable from outside. Both containers sit on a private network with fixed addresses, so
+`PRIVACYFENCE_TRUSTED_PROXIES` can name Caddy as the one trusted proxy.
 
 ```yaml
 # PrivacyFence organization mode with Caddy in front. docs/org-mode-docker.md explains every line.
@@ -72,6 +199,15 @@ services:
     env_file:
       - path: privacyfence.env
         required: false
+    # Keep the identity provider's client secret out of `docker inspect`: put it in a file, name
+    # that file with PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret in
+    # privacyfence.env, and uncomment this and the top-level `secrets:` block below. The Peek and
+    # Grist provisioning keys work the same way, with PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE and
+    # PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE.
+    # secrets:
+    #   - idp_client_secret
+    #   - peek_provisioning_key
+    #   - grist_provisioning_key
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
     networks:
@@ -103,6 +239,14 @@ networks:
       config:
         - subnet: 172.30.87.0/24
 
+# secrets:
+#   idp_client_secret:
+#     file: ./idp_client_secret
+#   peek_provisioning_key:
+#     file: ./peek_provisioning_key
+#   grist_provisioning_key:
+#     file: ./grist_provisioning_key
+
 volumes:
   pf-data:
   caddy-data:
@@ -126,33 +270,8 @@ PF_HOSTNAME=pf.acme.example.com
 PRIVACYFENCE_IMAGE_TAG=X.Y
 ```
 
-`PF_HOSTNAME` is the public hostname from the bundle's `--server-issuer-url`. Compose refuses to
-start without it.
-
-## Build the bundle
-
-Build it as in [section 6](org-mode-setup-guide.md#6-signing-key-and-bundle), with
-`--server-bind-host 0.0.0.0 --server-trusted-proxy 172.30.87.2` in place of
-`--server-trusted-proxy 127.0.0.1`, and the default port. The daemon listens on the Compose network,
-which only Caddy can reach, and Caddy's fixed address is the one proxy it trusts.
-
-## Install the bundle
-
-The first time, while nothing runs, from `/opt/privacyfence-org`:
-
-```bash
-docker compose run --rm --no-deps -T --entrypoint sh privacyfence -c 'umask 077 && cat > /var/lib/privacyfence-org/.privacyfence/org/org_config.json' < org_config.json
-```
-
-To replace it later, while the daemon runs, use `exec` and restart:
-
-```bash
-docker compose exec -T privacyfence sh -c 'umask 077 && cat > /var/lib/privacyfence-org/.privacyfence/org/org_config.json' < org_config.json
-docker compose restart privacyfence
-```
-
-Use `exec` here, not `run`: a `run` container would claim the daemon's fixed address
-`172.30.87.10` while the daemon holds it.
+`PF_HOSTNAME` is the public hostname of `PRIVACYFENCE_ISSUER_URL` in `privacyfence.env`. Compose
+refuses to start without it.
 
 ## Start
 
@@ -162,18 +281,74 @@ docker compose logs -f privacyfence
 ```
 
 Wait for the `Org mode active -- MCP-over-HTTP at https://...` line, then go on with
-[section 9](org-mode-setup-guide.md#9-first-sign-in-and-validation).
+[section 9](org-mode-setup-guide.md#9-first-sign-in-and-validation). A change to `privacyfence.env`
+needs `docker compose up -d` again (it recreates the container); a change on the Admin page that
+needs a restart needs `docker compose restart privacyfence`.
 
 ## Environment variables
 
-For `--audit-forwarding-http-bearer-token-env NAME`, put `NAME=token` in `privacyfence.env` next to
-`compose.yaml`, mode `0600`. The file is optional. Never put the token in the bundle.
+`privacyfence.env` is read as the daemon's environment. It is optional: with nothing in it the image
+starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
+`PRIVACYFENCE_BIND_HOST=0.0.0.0`.
 
-For Peek auto-provisioning ([Peek setup](peek-setup.md#automatic-accounts-organization-mode)), put
-`PRIVACYFENCE_PEEK_PROVISIONING_KEY=peekprov_…` (or the name you gave `--peek-provisioning-key-env`) in the
-same file. Never put the key in the bundle.
-The same goes for the Grist provisioning key (`PRIVACYFENCE_GRIST_PROVISIONING_KEY`, or the name
-given to `--grist-provisioning-key-env`) when Grist auto-provisioning is on.
+| Variable | Default | Use |
+|---|---|---|
+| `PRIVACYFENCE_MODE` | `org` (set by the image) | Leave it. |
+| `PRIVACYFENCE_BIND_HOST` | `0.0.0.0` (set by the image) | The address inside the container. Only Caddy reaches it. |
+| `PRIVACYFENCE_PORT` | `8765` | The port inside the container. Change it only together with the Caddyfile (`reverse_proxy privacyfence:<port>`). |
+| `PRIVACYFENCE_ISSUER_URL` | `http://localhost:<port>` (single-user) | The public origin, such as `https://pf.acme.example.com`, which is also the `PF_HOSTNAME` in `.env`. |
+| `PRIVACYFENCE_TRUSTED_PROXIES` | none | `172.30.87.2`, the Caddy container's fixed address in `compose.yaml`. Without it the daemon ignores `X-Forwarded-For` and `X-Forwarded-Proto`. |
+| `PRIVACYFENCE_IDP_ISSUER`, `PRIVACYFENCE_IDP_CLIENT_ID` | none | Your identity provider. Both or neither. |
+| `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE` | none | A Docker secret file (`/run/secrets/idp_client_secret`). `PRIVACYFENCE_IDP_CLIENT_SECRET` is the plain form; never both. |
+| `PRIVACYFENCE_ADMIN_EMAILS` | none | Admins by verified email. Microsoft Entra ID uses `PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM` and `PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES` instead ([guide](org-mode-setup-guide.md#who-is-an-admin)). |
+| `PRIVACYFENCE_IDP`, `PRIVACYFENCE_ALLOWED_DOMAINS` | none | `builtin-google` for the [built-in Google sign-in](org-mode-setup-guide.md#built-in-google-sign-in), and its allowed domains (first start only). |
+| `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work. |
+| `PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL` | none | The Peek and Grist addresses. |
+| `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE` | none | The provisioning keys as Docker secret files. The plain `…_PROVISIONING_KEY` forms also work; never both. |
+
+The [configuration reference](configuration-reference.md#environment-variables) has the full list.
+For audit forwarding to an HTTPS endpoint with a bearer token, put `NAME=token` in `privacyfence.env`
+and name `NAME` as `audit_forwarding.http.bearer_token_env` in `org/admin_config.json`
+([configuration reference](configuration-reference.md#admin-config-orgadmin_configjson)). Never put
+a token or a key in the Compose file.
+
+## What stays in the data volume
+
+Besides each person's data, the volume holds, in `org/`, `admin_config.json` (everything set on the
+Admin page), `connector_configs/` and its signing-key pin (your own apps),
+`relay_token.txt` and `relay_status.json`. All of them are part of the backup. Replacing
+`relay_token.txt` means publishing the built-in Google sign-in's `_privacyfence-relay` DNS TXT
+records again with the new value, which the log lists. The configuration reference lists every file
+([org directory](configuration-reference.md#files-in-the-org-directory)).
+
+## Your own apps
+
+Built-in apps through the relay need no setup. For your organization's own app for a provider, sign
+its client ID and secret as a connector config and upload it on **Admin → Services**: both signing
+tools, the fingerprint check on the first upload, key rotation and the serial rule are in
+[the organization guide](org-mode-setup-guide.md#signed-connector-configs). There is no bundle to build
+or install: the files an organization server takes are `privacyfence.env`, the Admin page and
+connector configs.
+
+## An upgraded server's 6.x bundle
+
+A server upgraded from 6.x has `org/org_config.json` installed in its volume; 7.x copies it to
+`org/org_bundle.json` and reads it only for the server and identity-provider settings. To move those
+to `privacyfence.env` and retire the bundle:
+
+```bash
+docker compose exec privacyfence privacyfence-app --print-env-from-bundle \
+  --idp-secret-file /var/lib/privacyfence-org/.privacyfence/org/idp_client_secret
+docker compose cp privacyfence:/var/lib/privacyfence-org/.privacyfence/org/idp_client_secret ./idp_client_secret
+docker compose exec privacyfence rm /var/lib/privacyfence-org/.privacyfence/org/idp_client_secret
+# put the printed lines in privacyfence.env, mount ./idp_client_secret as the Docker secret, then:
+docker compose up -d
+docker compose exec privacyfence privacyfence-app --retire-bundle
+```
+
+[Section 6 of the guide](org-mode-setup-guide.md#a-6x-bundle-on-an-upgraded-server) explains each
+step. Keep `org/org_config.json` if you may go back to 6.x
+([Going back to 6.x](org-mode-setup-guide.md#going-back-to-6x)).
 
 ## Upgrade
 
@@ -185,10 +360,12 @@ docker compose up -d
 ```
 
 The advice in the guide's [Upgrade](org-mode-setup-guide.md#upgrade) applies: read the release's
-changelog entry first, use the `build_org_bundle.py` that matches the release for future bundle
-changes, and back up first. Going back is safe only if the older version reads the data as the newer
-one left it. After an upgrade, each person sees a strip linking to What's new (`/whats-new`) the first
-time they open PrivacyFence, listing the changelog sections since the version they last used.
+changelog entry first and back up first. Going back is safe only if the older version reads the data as
+the newer one left it ([Going back to 6.x](org-mode-setup-guide.md#going-back-to-6x)). Before moving
+to 8.x, check the Admin page says `Ready for PrivacyFence 8: yes.`
+([Upgrading to 8.x](org-mode-setup-guide.md#upgrading-to-8x)). After an upgrade, each person sees a
+strip linking to What's new (`/whats-new`) the first time they open PrivacyFence, listing the
+changelog sections since the version they last used.
 
 ## Backup and restore
 
@@ -201,8 +378,11 @@ docker compose start privacyfence
 ```
 
 To restore into an empty volume, run the same command with `-xzf - < privacyfence-backup.tgz`
-instead. The guide's [Backup](org-mode-setup-guide.md#backup) lists what the directory holds. The
-tarball holds every person's connector credentials: encrypt it and restrict access.
+instead. The guide's [Backup](org-mode-setup-guide.md#backup) lists what the directory holds,
+`org/admin_config.json`, `org/relay_token.txt` and `org/relay_status.json` among it. The tarball holds
+every person's connector credentials and your connector configs' client secrets: encrypt it and restrict
+access. `privacyfence.env`, `.env` and the Docker secret files are outside the volume: back them up
+separately.
 
 ## Administrative commands
 
@@ -212,6 +392,7 @@ Run them in the running container, for the same fixed-address reason as above:
 docker compose exec privacyfence privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID
 docker compose exec privacyfence privacyfence-app --peek-release PRINCIPAL_ID
 docker compose exec privacyfence privacyfence-app --grist-release PRINCIPAL_ID
+docker compose exec privacyfence privacyfence-app --relay-dns-records
 ```
 
 ## Verify the image

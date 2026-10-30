@@ -28,7 +28,7 @@ import sys
 import pytest
 import yaml
 
-from privacyfence import daemon_main, org_mode
+from privacyfence import admin_config, app_credentials, daemon_main, data_format, org_mode
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.paths import data_dir
@@ -249,6 +249,19 @@ class TestLoadConfig:
         # And kept for a caller with no stderr: windows_service puts it in the Event Log.
         assert "'auto_accept_grants'" in daemon_main.last_startup_error()
 
+    def test_main_refuses_data_from_a_newer_format_before_reading_any_config(self, tmp_path, monkeypatch, capsys):
+        marker = tmp_path / "data_format.json"
+        marker.write_text(json.dumps({"format": 8, "written_by": "8.0.0", "completed_at": "2030-01-01T00:00:00+00:00"}))
+        monkeypatch.setattr(data_format, "marker_path", lambda: marker)
+        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", lambda: None)
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+
+        assert daemon_main.main([]) == 1
+
+        err = capsys.readouterr().err
+        assert "This data was last used by PrivacyFence 8.0.0 (data format 8)." in err
+        assert "Install 8.0.0 or newer." in daemon_main.last_startup_error()
+
     def test_main_keeps_a_runtime_identity_refusal_for_the_event_log(self, monkeypatch, capsys):
         def refuse():
             raise daemon_main.privilege_separation.PrivilegeSeparationError("wrong account")
@@ -313,9 +326,16 @@ class TestLoadOrgConfig:
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         assert daemon_main.load_org_config() == {}
 
+    def test_an_unsigned_bundle_without_mode_is_refused_under_the_org_mode_variable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+        with pytest.raises(org_mode.ConfigurationError, match="not signed"):
+            daemon_main.load_org_config()
+
     def test_returns_parsed_dict_when_valid_with_no_mode_key(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
         assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
 
     def test_explicit_org_mode_unsigned_raises_configuration_error(self, tmp_path, monkeypatch):
@@ -323,25 +343,25 @@ class TestLoadOrgConfig:
         TestLoadOrgConfigSigning below for the signed-bundle path this
         gates behind."""
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"mode": "org"}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"mode": "org"}))
         with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle"):
             daemon_main.load_org_config()
 
     def test_raises_configuration_error_on_malformed_json(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text("{not valid json")
+        (tmp_path / "org_bundle.json").write_text("{not valid json")
         with pytest.raises(org_mode.ConfigurationError):
             daemon_main.load_org_config()
 
     def test_raises_configuration_error_when_top_level_not_an_object(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps(["not", "an", "object"]))
+        (tmp_path / "org_bundle.json").write_text(json.dumps(["not", "an", "object"]))
         with pytest.raises(org_mode.ConfigurationError):
             daemon_main.load_org_config()
 
     def test_raises_configuration_error_when_unreadable(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        path = tmp_path / "org_config.json"
+        path = tmp_path / "org_bundle.json"
         path.write_text(json.dumps({"mode": "org"}))
 
         real_open = open
@@ -356,12 +376,12 @@ class TestLoadOrgConfig:
             daemon_main.load_org_config()
 
     def test_a_broken_org_config_does_not_silently_fall_back_to_local_mode(self, tmp_path, monkeypatch):
-        """A corrupted org_config.json (e.g. tampering, a botched deploy,
+        """A corrupted org_bundle.json (e.g. tampering, a botched deploy,
         disk corruption) must not be indistinguishable from no org config
         at all, or an org-mode install would silently start with no
         IdP-backed auth wired up rather than refusing to start."""
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text('{"mode": "org", corrupted')
+        (tmp_path / "org_bundle.json").write_text('{"mode": "org", corrupted')
         with pytest.raises(org_mode.ConfigurationError):
             org_config = daemon_main.load_org_config()
             org_mode.resolve_mode(org_config)
@@ -370,14 +390,14 @@ class TestLoadOrgConfig:
 def _write_signed_bundle(tmp_path, bundle, private_key=None):
     """Signs ``bundle`` (with a fresh keypair, unless one is given) the
     same way scripts/build_org_bundle.py --sign-key does, and writes it
-    to tmp_path/org_config.json. Returns the private key used, so a test
+    to tmp_path/org_bundle.json. Returns the private key used, so a test
     can sign a second, deliberately different bundle with the same key."""
     from privacyfence import org_bundle_signing
 
     if private_key is None:
         private_key, _ = org_bundle_signing.generate_keypair()
     signed = org_bundle_signing.sign_bundle(bundle, private_key)
-    (tmp_path / "org_config.json").write_text(json.dumps(signed))
+    (tmp_path / "org_bundle.json").write_text(json.dumps(signed))
     return private_key
 
 
@@ -389,7 +409,7 @@ class TestLoadOrgConfigSigning:
 
     def test_unsigned_bundle_in_local_mode_is_unaffected(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
         assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
 
     def test_first_signed_bundle_is_accepted_and_pins_its_key(self, tmp_path, monkeypatch):
@@ -417,9 +437,9 @@ class TestLoadOrgConfigSigning:
         _write_signed_bundle(tmp_path, {"mode": "org", "server": {}, "idp": {}, "org_name": "Acme"})
         daemon_main.load_org_config()  # pins
 
-        data = json.loads((tmp_path / "org_config.json").read_text())
+        data = json.loads((tmp_path / "org_bundle.json").read_text())
         data["org_name"] = "Evil Corp"
-        (tmp_path / "org_config.json").write_text(json.dumps(data))
+        (tmp_path / "org_bundle.json").write_text(json.dumps(data))
 
         with pytest.raises(org_mode.ConfigurationError, match="signing-key verification"):
             daemon_main.load_org_config()
@@ -439,14 +459,25 @@ class TestLoadOrgConfigSigning:
         _write_signed_bundle(tmp_path, {"mode": "org", "server": {}, "idp": {}})
         daemon_main.load_org_config()  # pins
 
-        (tmp_path / "org_config.json").write_text(json.dumps({"mode": "org", "server": {}, "idp": {}}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"mode": "org", "server": {}, "idp": {}}))
 
         with pytest.raises(org_mode.ConfigurationError, match="signing-key verification"):
             daemon_main.load_org_config()
 
+    def test_an_unsigned_bundle_is_still_refused_when_the_idp_comes_from_the_environment(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "cid")
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"server": {"issuer_url": "https://pf.example.com"}}))
+        with pytest.raises(org_mode.ConfigurationError, match="not signed"):
+            daemon_main.load_org_config()
+
     def test_org_mode_still_rejected_when_unsigned(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_config.json").write_text(json.dumps({"mode": "org"}))
+        (tmp_path / "org_bundle.json").write_text(json.dumps({"mode": "org"}))
         with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle"):
             daemon_main.load_org_config()
 
@@ -483,7 +514,7 @@ class TestLogOrgConfigBundleHash:
 
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         raw = json.dumps({"slack": {"client_id": "abc"}}).encode("utf-8")
-        (tmp_path / "org_config.json").write_bytes(raw)
+        (tmp_path / "org_bundle.json").write_bytes(raw)
         init_audit_logger(str(tmp_path / "audit"))
 
         with caplog.at_level(logging.INFO):
@@ -506,7 +537,7 @@ class TestLogOrgConfigBundleHash:
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         private_key, _ = org_bundle_signing.generate_keypair()
         signed = org_bundle_signing.sign_bundle({"slack": {"client_id": "abc"}}, private_key)
-        (tmp_path / "org_config.json").write_text(json.dumps(signed))
+        (tmp_path / "org_bundle.json").write_text(json.dumps(signed))
         init_audit_logger(str(tmp_path / "audit"))
 
         daemon_main.log_org_config_bundle_hash(signed)
@@ -1785,6 +1816,27 @@ class TestMaybeStartWebServer:
 
         assert result.mcp_dispatcher._registry is get_web_approval_ui().deferred_registry
 
+    def test_the_admin_api_gets_the_startup_admin_config_and_the_shared_org_config(self, monkeypatch, tmp_path):
+        from privacyfence.web import server as web_server
+        self._no_bind(monkeypatch, tmp_path)
+        seen = {}
+
+        def fake_build_app(web_ui, **kwargs):
+            seen.update(kwargs)
+            return lambda scope, receive, send: None
+
+        monkeypatch.setattr(web_server, "build_app", fake_build_app)
+        org_config = {"slack": {"client_id": "s"}}
+        startup_admin = {"services": {}}
+
+        daemon_main._maybe_start_web_server(
+            {}, self._connector_host(), unattended_sessions_enabled=False,
+            org_config=org_config, startup_admin=startup_admin,
+        )
+
+        assert seen["org_config"] is org_config
+        assert seen["startup_admin"] is startup_admin
+
     def test_approvals_config_overrides_the_registrys_defaults(self, monkeypatch, tmp_path):
         from privacyfence.web_approval_ui import get_web_approval_ui
         self._no_bind(monkeypatch, tmp_path)
@@ -2265,6 +2317,290 @@ class TestMaybeStartWebServerOrgMode:
                 org_config={"mode": "org", "server": {"issuer_url": "https://pf.example.com"}},
             )
 
+    @staticmethod
+    def _single_user_config(issuer_url="http://localhost:8765", **server):
+        return {"mode": "org", "server": {"issuer_url": issuer_url, "port": 8765, **server}}
+
+    def test_single_user_mode_on_localhost_builds_the_org_app_without_an_idp(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert started.get("called") is True
+        assert result.org.idp is None
+        assert result.org.provider.single_user is True
+        assert result.base_url == "http://localhost:8765"
+
+    def test_single_user_mode_serves_its_own_sign_in_and_no_identity_provider_routes(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        import logging
+
+        from starlette.testclient import TestClient
+
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        with caplog.at_level(logging.WARNING, logger="privacyfence.web.single_user_auth"):
+            result = daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert "Open http://localhost:8765/login to set up your passkey." in caplog.text
+        client = TestClient(result._server.config.app, base_url="http://localhost:8765")
+        login = client.get("/login", follow_redirects=False)
+        assert login.status_code == 200 and "Setup code" in login.text
+        assert client.get("/oauth/idp/login-callback", follow_redirects=False).status_code == 404
+        assert client.get("/oauth/idp/callback", follow_redirects=False).status_code == 404
+
+    def test_single_user_mode_logs_single_user_in_place_of_the_idp(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert "IdP single-user," in caplog.text
+
+    def test_single_user_mode_defaults_the_issuer_to_localhost_from_the_environment(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9100")
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config={},
+        )
+        assert result.base_url == "http://localhost:9100"
+
+    @pytest.mark.parametrize("issuer_url", ["https://pf.example.com", "http://pf.example.com", "https://localhost"])
+    def test_single_user_mode_refuses_an_address_that_is_not_plain_http_localhost(
+        self, monkeypatch, tmp_path, issuer_url,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(issuer_url),
+            )
+        assert str(excinfo.value) == (
+            "Organization mode without an identity provider is single-user mode and runs only at "
+            "http://localhost or http://127.0.0.1. Set PRIVACYFENCE_IDP_ISSUER and "
+            "PRIVACYFENCE_IDP_CLIENT_ID (docs/org-mode-docker.md) to serve any other address."
+        )
+
+    @pytest.mark.parametrize("pin", ["org_bundle_signing_pubkey.txt", "org_config_signing_pubkey.txt"])
+    def test_single_user_mode_refuses_a_data_directory_with_a_pinned_signing_key(
+        self, monkeypatch, tmp_path, pin,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / pin).write_text("a2V5\n")
+        with pytest.raises(org_mode.ConfigurationError, match="belonged to an organization server"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+
+    def test_single_user_mode_refuses_a_data_directory_with_an_imported_admin_config(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(admin_config, "load", lambda: {"imported_from_bundle_sha256": "ab" * 32})
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert str(excinfo.value) == (
+            "This data directory belonged to an organization server; restore org_bundle.json, or "
+            "use a new data directory for single-user mode."
+        )
+
+    def test_single_user_mode_with_an_empty_import_hash_is_a_fresh_install(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(admin_config, "load", lambda: {"imported_from_bundle_sha256": ""})
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert started.get("called") is True
+
+    SECRET = "s3cret-sentinel-value"
+
+    def _env_idp(self, monkeypatch, **extra):
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "cid")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_SECRET", self.SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", "https://pf.example.com")
+        for name, value in extra.items():
+            monkeypatch.setenv(name, value)
+
+    def _start_from_environment(self, monkeypatch, tmp_path, *, org_config=None, bundle=None):
+        return daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False,
+            org_config={"mode": "org"} if org_config is None else org_config, bundle=bundle,
+        )
+
+    def test_org_mode_with_no_bundle_and_an_idp_from_the_environment_starts_the_org_app(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        with caplog.at_level(logging.DEBUG):
+            result = self._start_from_environment(monkeypatch, tmp_path)
+        assert started.get("called") is True
+        assert result.org.idp.issuer == "https://idp.example.com"
+        assert result.org.idp.client_secret == self.SECRET
+        assert result.org.provider.single_user is False
+        assert result.base_url == "https://pf.example.com"
+        assert self.SECRET not in caplog.text
+        assert self.SECRET not in repr(result.org.idp)
+
+    def test_an_idp_added_to_a_data_directory_with_single_user_data_logs_that_it_is_unreachable(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "single-user").mkdir(parents=True)
+        self._env_idp(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            self._start_from_environment(monkeypatch, tmp_path)
+        assert "users/single-user/" in caplog.text
+        assert "cannot reach it" in caplog.text
+
+    def test_no_single_user_data_means_no_unreachable_data_log(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            self._start_from_environment(monkeypatch, tmp_path)
+        assert "users/single-user/" not in caplog.text
+
+    def test_the_sign_in_policy_is_bound_to_the_idp(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL", "true")
+        result = self._start_from_environment(monkeypatch, tmp_path, org_config={
+            "mode": "org", "authz": {"allowed_domains": ["acme.com"]},
+        })
+        policy = result.org.provider._policy
+        assert policy.allowed_domains == ("acme.com",)
+        assert policy.trust_unverified_email is True
+        assert policy.issuer == "https://idp.example.com"
+
+    def test_the_first_start_with_an_idp_records_org_server(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        self._start_from_environment(monkeypatch, tmp_path)
+        assert admin_config.load()["org_server"] is True
+
+    def test_org_server_is_recorded_even_when_discovery_fails(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+
+        def down(issuer):
+            raise org_mode.ConfigurationError("idp is down")
+
+        monkeypatch.setattr("privacyfence.org_identity.discover_idp", down)
+        with caplog.at_level(logging.DEBUG), pytest.raises(org_mode.ConfigurationError, match="idp is down"):
+            self._start_from_environment(monkeypatch, tmp_path)
+        assert admin_config.load()["org_server"] is True
+        assert self.SECRET not in caplog.text
+
+    def test_a_later_start_without_the_idp_variables_is_refused_as_single_user(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        self._start_from_environment(monkeypatch, tmp_path)
+        for name in ("PRIVACYFENCE_IDP_ISSUER", "PRIVACYFENCE_IDP_CLIENT_ID", "PRIVACYFENCE_IDP_CLIENT_SECRET"):
+            monkeypatch.delenv(name)
+        monkeypatch.delenv("PRIVACYFENCE_ISSUER_URL")
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert str(excinfo.value) == (
+            "This data directory belonged to an organization server; restore org_bundle.json, or "
+            "use a new data directory for single-user mode."
+        )
+
+    def test_a_single_user_start_does_not_record_org_server(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert not (tmp_path / "org" / "admin_config.json").exists()
+
+    def test_a_partial_idp_environment_refuses_the_start_instead_of_falling_back_to_single_user(
+        self, monkeypatch, tmp_path,
+    ):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        with pytest.raises(org_mode.ConfigurationError, match="Set both"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+
+    def test_a_legacy_bundle_idp_wins_over_the_environment(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch, PRIVACYFENCE_IDP_ISSUER="https://env.example.com")
+        legacy = {
+            "mode": "org", "server": {"issuer_url": "https://pf.example.com"},
+            "idp": {"issuer": "https://bundle.example.com", "client_id": "bundle-client"},
+        }
+        with caplog.at_level(logging.WARNING):
+            result = self._start_from_environment(monkeypatch, tmp_path, org_config=legacy, bundle=legacy)
+        assert (result.org.idp.issuer, result.org.idp.client_id) == ("https://bundle.example.com", "bundle-client")
+        assert "are ignored: org_bundle.json has an \"idp\" section." in caplog.text
+        assert self.SECRET not in caplog.text
+
+    def test_a_legacy_organization_bundle_without_an_idp_refuses_the_start(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        legacy = {"mode": "org", "server": {"issuer_url": "http://localhost:8765"}}
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            self._start_from_environment(monkeypatch, tmp_path, org_config=legacy, bundle=legacy)
+        assert str(excinfo.value) == (
+            "org_bundle.json has no \"idp\" section; set PRIVACYFENCE_IDP_* and run "
+            "privacyfence-app --retire-bundle."
+        )
+
+    def test_a_legacy_bundle_without_an_idp_starts_when_the_environment_names_one(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._env_idp(monkeypatch)
+        legacy = {"mode": "org", "server": {"issuer_url": "https://pf.example.com"}}
+        result = self._start_from_environment(monkeypatch, tmp_path, org_config=legacy, bundle=legacy)
+        assert started.get("called") is True
+        assert result.org.idp is not None
+
+    def test_a_multi_user_server_ignores_a_pinned_signing_key(self, monkeypatch, tmp_path):
+        started = self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_bundle_signing_pubkey.txt").write_text("a2V5\n")
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        assert started.get("called") is True
+
     def test_local_mcp_dispatcher_gets_the_local_scoped_token_policy(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
 
@@ -2384,6 +2720,82 @@ class TestOrgModeConnectorRegistry:
                 {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
                 unattended_sessions_enabled=False, org_config=org_config,
             )
+
+    def test_org_server_starts_the_relay_registration_loop_on_the_shared_config(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        events: list = []
+        monkeypatch.setattr(
+            daemon_main.relay_client, "start_registration_loop",
+            lambda issuer_url, org_config, stop: events.append(("loop", issuer_url, org_config, stop)),
+        )
+        monkeypatch.setattr(daemon_main.relay_client, "request_check", lambda: events.append(("check",)))
+        org_config = self._org_config()
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=org_config,
+        )
+
+        assert [e[0] for e in events] == ["loop", "check"]
+        _, issuer_url, shared, stop = events[0]
+        assert shared is org_config and shared is result.org.org_config
+        assert stop is daemon_main._shutdown_event
+        assert issuer_url == result.org.issuer_url
+
+    _BUILTIN_IDP = {
+        "issuer": "https://accounts.google.com", "client_id": "builtin-signin", "client_secret": "builtin-secret",
+        "builtin": True, "relay": True, "admin_emails": ["alice@acme.com"], "trust_unverified_email": False,
+    }
+
+    def _start_builtin(self, monkeypatch, tmp_path, **overrides):
+        self._no_bind(monkeypatch, tmp_path)
+        events: list = []
+        monkeypatch.setattr(
+            daemon_main.relay_client, "start_registration_loop", lambda *a: events.append("loop"),
+        )
+        monkeypatch.setattr(daemon_main.relay_client, "request_check", lambda: None)
+        org_config = self._org_config(idp=dict(self._BUILTIN_IDP), **overrides)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=org_config,
+        )
+        return result, events
+
+    def test_the_builtin_sign_in_sends_the_idp_leg_through_the_relay(self, monkeypatch, tmp_path):
+        result, _events = self._start_builtin(monkeypatch, tmp_path)
+        assert result.org.provider._idp_callback_url == "https://oauth.privacyfence.eu/callback/idp"
+        assert result.org.provider._issuer_url == "https://pf.example.com"
+
+    def test_an_own_idp_keeps_todays_idp_callback_byte_for_byte(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main.relay_client, "start_registration_loop", lambda *a: None)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        assert result.org.provider._idp_callback_url == "https://pf.example.com/oauth/idp/callback"
+
+    def test_the_missing_dns_records_are_logged_at_start_before_registration(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level(logging.INFO):
+            _result, events = self._start_builtin(monkeypatch, tmp_path, authz={"allowed_domains": ["acme.org"]})
+        value = daemon_main.relay_client.dns_record_value("pf.example.com")
+        lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Built-in Google sign-in: add")]
+        assert lines == [
+            f"Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.{domain} with the value "
+            f"{value}. Until then nobody from {domain} can sign in."
+            for domain in ("acme.com", "acme.org")
+        ]
+        assert events == ["loop"]
+        assert daemon_main.relay_client.relay_secret() not in caplog.text
+
+    def test_the_startup_line_names_the_builtin_sign_in_rather_than_a_disabled_policy(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        with caplog.at_level(logging.INFO):
+            self._start_builtin(monkeypatch, tmp_path)
+        active = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Org mode active")]
+        assert len(active) == 1
+        assert "app-level authz policy built-in Google sign-in (1 admin(s), 0 allowed domain(s)" in active[0]
 
     def test_org_auth_carries_the_org_config_bundle(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
@@ -2510,6 +2922,8 @@ class TestPeekRelease:
         monkeypatch.setattr(daemon_main, "PeekProvisioningClient", fake)
         org_config = {
             "mode": "org",
+            # Without an idp this would be single-user mode, where auto-provisioning is off.
+            "idp": {"issuer": "https://idp.example.com", "client_id": "cid", "client_secret": "sec"},
             "peek": {"base_url": "https://peek.example.com", "auto_provision": {"enabled": True}},
         }
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: org_config)
@@ -2532,9 +2946,13 @@ class TestPeekRelease:
         assert capsys.readouterr().err == "No such account.\n"
 
     def test_configuration_error_is_printed(self, env, monkeypatch, capsys):
-        env.org_config["peek"]["auto_provision"]["enabled"] = "yes"
+        # The switch now lives in the admin config, whose key_env is validated when the
+        # provisioning settings are parsed.
+        admin = admin_config.import_from_bundle(env.org_config, mode="org", single_user=False)
+        admin["services"]["peek"]["auto_provision"]["key_env"] = "not a name"
+        admin_config.save(admin)
         assert daemon_main.run_peek_release("alice") == 1
-        assert "must be true or false" in capsys.readouterr().err
+        assert "environment variable name" in capsys.readouterr().err
         assert env.released == []
 
     def test_not_enabled(self, env, capsys):
@@ -2577,6 +2995,21 @@ class TestPeekRelease:
         assert captured.out == ""
         assert env.released == ["alice"]
 
+    def test_release_reads_the_key_from_a_file(self, env, monkeypatch, tmp_path):
+        key_file = tmp_path / "peek_key"
+        key_file.write_text("peekprov_file\n")
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(key_file))
+        assert daemon_main.run_peek_release("alice") == 0
+        assert env.fake.instances[0].key == "peekprov_file"
+
+    def test_release_with_an_unreadable_key_file_names_the_variable(self, env, monkeypatch, tmp_path, capsys):
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(tmp_path / "absent"))
+        assert daemon_main.run_peek_release("alice") == 1
+        assert self.KEY_ENV + "_FILE" in capsys.readouterr().err
+        assert env.fake.instances == []
+
     def test_release_called(self, env):
         assert daemon_main.run_peek_release("alice") == 0
         assert env.fake.instances[0].released == ["alice"]
@@ -2592,6 +3025,75 @@ class TestPeekRelease:
 
         assert daemon_main.main(["--peek-release", "alice"]) == 0
         assert calls == ["identity", "alice"]
+
+
+class TestRelayDnsRecords:
+    _BUILTIN = {"server": {"issuer_url": "https://pf.acme.example.com"}, "idp": {
+        "issuer": "https://accounts.google.com", "client_id": "builtin-signin", "builtin": True, "relay": True,
+        "admin_emails": ["alice@acme.com"],
+    }, "authz": {"allowed_domains": ["acme.org"]}}
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    def test_prints_one_line_per_missing_domain_and_exits(self, monkeypatch, capsys):
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
+        daemon_main.relay_client.relay_secret()
+        daemon_main.relay_client._persist_last_ok(1.0, ["acme.com"])
+        daemon_main.relay_client.reset_for_tests()
+        assert daemon_main.run_relay_dns_records() == 0
+        value = daemon_main.relay_client.dns_record_value("pf.acme.example.com")
+        assert capsys.readouterr().out == (
+            f"Built-in Google sign-in: add the DNS TXT record _privacyfence-relay.acme.org with the value "
+            f"{value}. Until then nobody from acme.org can sign in.\n"
+        )
+
+    def test_says_so_when_everything_is_proven(self, monkeypatch, capsys):
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
+        daemon_main.relay_client.relay_secret()
+        daemon_main.relay_client._persist_last_ok(1.0, ["acme.com", "acme.org"])
+        daemon_main.relay_client.reset_for_tests()
+        assert daemon_main.run_relay_dns_records() == 0
+        assert "every sign-in domain is proven in DNS" in capsys.readouterr().out
+
+    def test_without_the_builtin_sign_in_there_is_nothing_to_publish(self, monkeypatch, capsys):
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: {"mode": "org"})
+        assert daemon_main.run_relay_dns_records() == 0
+        assert "does not use the built-in Google sign-in" in capsys.readouterr().out
+
+    def test_a_broken_config_is_reported(self, monkeypatch, capsys):
+        def broken():
+            raise daemon_main.org_mode.ConfigurationError("bad config")
+
+        monkeypatch.setattr(daemon_main, "_release_org_config", broken)
+        assert daemon_main.run_relay_dns_records() == 1
+        assert "bad config" in capsys.readouterr().err
+
+    def test_after_a_replaced_secret_the_lines_give_the_new_values(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setattr(daemon_main, "_release_org_config", lambda: self._BUILTIN)
+        old = daemon_main.relay_client.dns_record_value("pf.acme.example.com")
+        daemon_main.relay_client._persist_last_ok(1.0, ["acme.com", "acme.org"])
+        daemon_main.relay_client.relay_token_path().unlink()
+        daemon_main.relay_client.reset_for_tests()
+        assert daemon_main.run_relay_dns_records() == 0
+        new = daemon_main.relay_client.dns_record_value("pf.acme.example.com")
+        out = capsys.readouterr().out
+        assert new != old
+        assert out.count(new) == 2
+        assert old not in out
+
+    def test_runs_after_the_runtime_identity_check_without_starting_the_daemon(self, monkeypatch):
+        from privacyfence import privilege_separation
+
+        calls: list[str] = []
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_relay_dns_records", lambda: calls.append("dns") or 0)
+        assert daemon_main.main(["--relay-dns-records"]) == 0
+        assert calls == ["identity", "dns"]
 
 
 class TestScopeRowsUpgrade:
@@ -2647,55 +3149,10 @@ class TestScopeRowsUpgrade:
         assert not (tmp_path / "settings.yaml.pre-scope-rules.bak").exists()
         assert daemon_main._deferred_warnings == []
 
-    def test_upgrade_all_principals_runs_before_the_token_store_loads(self, monkeypatch, tmp_path):
-        from privacyfence import org_identity, scoped_tokens
-        from privacyfence.web.server import WebServer
-
-        order: list[str] = []
-        real_upgrade = daemon_main._upgrade_all_principals
-        real_init = WebServer.__init__
-
-        def upgrade():
-            order.append("upgrade")
-            real_upgrade()
-
-        def server_init(self, *args, **kwargs):
-            order.append("server")
-            real_init(self, *args, **kwargs)
-
-        monkeypatch.setattr(daemon_main, "_upgrade_all_principals", upgrade)
-        monkeypatch.setattr(WebServer, "__init__", server_init)
-        monkeypatch.setattr(WebServer, "start", lambda self: None)
-        monkeypatch.setattr(
-            org_identity, "discover_idp",
-            lambda issuer: {
-                "authorization_endpoint": "https://idp.example.com/authorize",
-                "token_endpoint": "https://idp.example.com/token", "jwks_uri": "https://idp.example.com/jwks",
-            },
-        )
-        org_config = {
-            "mode": "org",
-            "server": {"issuer_url": "https://pf.example.com", "bind_host": "0.0.0.0", "port": 8765},
-            "idp": {"issuer": "https://idp.example.com", "client_id": "cid", "client_secret": "sec"},
-        }
-        alice_cfg = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
-        alice_cfg.parent.mkdir(parents=True)
-        self._write_v2(alice_cfg)
-
-        from privacyfence.connector_host import ConnectorHost
-        daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, ConnectorHost([]),
-            unattended_sessions_enabled=False, org_config=org_config,
-        )
-
-        assert order == ["upgrade", "server"]
-        assert yaml.safe_load(alice_cfg.read_text())["auto_accept"]["version"] == 3
-        assert scoped_tokens.current_store() is not None
-
-    def test_upgrade_all_principals_skips_a_principal_without_a_settings_file(self, tmp_path):
+    def test_migrate_everything_skips_a_principal_without_a_settings_file(self, tmp_path):
         (tmp_path / "users" / "bob").mkdir(parents=True)
 
-        daemon_main._upgrade_all_principals()
+        data_format.migrate_everything(log=daemon_main._deferred_warnings.append)
 
         assert not (tmp_path / "users" / "bob" / "authority" / "config" / "settings.yaml").exists()
 
@@ -2732,10 +3189,10 @@ class TestScopeRowsUpgrade:
             "Scoped token 'old' now holds its own copy of 1 rule(s); 0 rule(s) it named no longer existed",
         ]
 
-    def test_upgrade_all_principals_converts_a_token_of_a_principal_without_a_settings_file(self, tmp_path):
+    def test_migrate_everything_converts_a_token_of_a_principal_without_a_settings_file(self, tmp_path):
         token_file = self._legacy_token(tmp_path / "users" / "bob" / "authority", ["r-gone"])
 
-        daemon_main._upgrade_all_principals()
+        data_format.migrate_everything(log=daemon_main._deferred_warnings.append)
 
         (entry,) = json.loads(token_file.read_text())["tokens"]
         assert entry["rules"] == [] and "rule_ids" not in entry
@@ -2743,7 +3200,7 @@ class TestScopeRowsUpgrade:
             daemon_main._deferred_warnings
         )
 
-    def test_upgrade_all_principals_converts_a_principal_with_v3_rules(self, tmp_path):
+    def test_migrate_everything_converts_a_principal_with_v3_rules(self, tmp_path):
         from privacyfence.policy import scope_rows
 
         alice_cfg = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
@@ -2751,7 +3208,7 @@ class TestScopeRowsUpgrade:
         alice_cfg.write_text(yaml.safe_dump({"auto_accept": scope_rows.rows_to_config([])}))
         token_file = self._legacy_token(tmp_path / "users" / "alice" / "authority", ["r-gone"])
 
-        daemon_main._upgrade_all_principals()
+        data_format.migrate_everything(log=daemon_main._deferred_warnings.append)
 
         assert json.loads(token_file.read_text())["tokens"][0]["rules"] == []
 
@@ -3458,6 +3915,11 @@ class _FakeWebServer:
         return self._loop
 
 
+
+# The real audit, which TestRunApp._patch_common replaces for the tests that are not about it.
+_check_storage_permissions = daemon_main.check_storage_permissions
+
+
 class TestRunApp:
     """run_app() ends by blocking on _wait_for_shutdown() (a plain
     threading.Event), not inside a native UI run loop, so this whole class
@@ -3492,10 +3954,16 @@ class TestRunApp:
         fake_audit_logger = MagicMock()
         monkeypatch.setattr(daemon_main, "init_audit_logger", lambda path, **kwargs: fake_audit_logger)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+        # An organization start refuses a data directory that grants group or other access, and
+        # Windows reports every directory as 0777; the audit has its own tests above.
+        monkeypatch.setattr(daemon_main, "check_storage_permissions", lambda org_mode_active: None)
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: (connectors, {}))
         monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
         monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
         monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
+        # run_app tests must never walk the source checkout's own data.
+        monkeypatch.setattr(data_format, "migrate_everything", lambda *, log: [])
+        monkeypatch.setattr(data_format, "check_not_newer", lambda marker: None)
 
         _FakeWebServer.instances = []
         self._web_server_calls: list[dict[str, Any]] = []
@@ -3529,6 +3997,46 @@ class TestRunApp:
         assert "already running" in capsys.readouterr().err
         assert "already running" in caplog.text
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+    @pytest.mark.parametrize("org", [False, True])
+    def test_run_app_migrates_before_the_web_server_is_built(self, monkeypatch, org):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        order: list[str] = []
+        real_start = daemon_main._maybe_start_web_server
+
+        def migrate(*, log):
+            order.append("migrate")
+            assert log == daemon_main.logger.warning
+            return []
+
+        monkeypatch.setattr(data_format, "migrate_everything", migrate)
+        monkeypatch.setattr(
+            daemon_main, "_maybe_start_web_server",
+            lambda *args, **kwargs: order.append("server") or real_start(*args, **kwargs),
+        )
+        if org:
+            monkeypatch.setattr(org_mode, "resolve_mode", lambda bundle: "org")
+
+        assert daemon_main.run_app({}, "config.yaml") == 0
+        assert order == ["migrate", "server"]
+
+    def test_local_start_logs_the_deprecation_and_org_start_does_not(self, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+        deprecation = [r for r in caplog.records if r.getMessage() == org_mode.LOCAL_MODE_DEPRECATION]
+        assert [r.levelno for r in deprecation] == [logging.WARNING]
+
+        caplog.clear()
+        monkeypatch.setattr(org_mode, "resolve_mode", lambda bundle: "org")
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+        assert org_mode.LOCAL_MODE_DEPRECATION not in caplog.text
 
     def test_successful_startup_waits_for_shutdown_and_releases_lock(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -3602,6 +4110,10 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        monkeypatch.setattr(daemon_main, "check_storage_permissions", _check_storage_permissions)
+        # Writing admin_config.json would tighten the directory this test deliberately loosens,
+        # and the import is not what is under test here.
+        monkeypatch.setattr(daemon_main, "load_admin_config", lambda bundle: ({}, False))
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         monkeypatch.setattr(daemon_main, "user_dir", lambda: tmp_path)
@@ -3613,6 +4125,30 @@ class TestRunApp:
             daemon_main.run_app({}, "config.yaml")
 
         assert build_calls == []
+
+    def test_single_user_mode_logs_its_warning_at_every_start(self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        monkeypatch.setattr(daemon_main, "load_admin_config", lambda bundle: ({}, False))
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+
+        assert "Single-user mode: one administrator, no identity provider, on this computer only." in caplog.text
+
+    def test_a_server_with_an_idp_does_not_log_the_single_user_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org", "idp": {"issuer": "https://i"}})
+        monkeypatch.setattr(daemon_main, "load_admin_config", lambda bundle: ({}, False))
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+
+        assert "Single-user mode" not in caplog.text
 
     def test_background_cache_warm_skipped_silently_when_no_web_server_at_all(self, monkeypatch, caplog):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -4667,6 +5203,8 @@ class TestGristRelease:
         monkeypatch.setenv(self.KEY_ENV, "prov-key")
         org_config = {
             "mode": "org",
+            # Without an idp this would be single-user mode, where auto-provisioning is off.
+            "idp": {"issuer": "https://idp.example.com", "client_id": "cid", "client_secret": "sec"},
             "grist": {
                 "server_url": "https://grist.example.com",
                 "auto_provision": {"enabled": True, "provisioner_url": "https://prov.example.com"},
@@ -4768,6 +5306,23 @@ class TestGristRelease:
         assert captured.err.startswith("The Grist provisioner is unreachable.")
         assert captured.err.rstrip().endswith("run --grist-release again to delete it in Grist.")
 
+    def test_release_reads_the_key_from_a_file(self, env, monkeypatch, tmp_path):
+        client, _ = env
+        key_file = tmp_path / "grist_key"
+        key_file.write_text("gristprov_file\n")
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(key_file))
+        assert daemon_main.run_grist_release("alice") == 0
+        assert client.built_with[1] == "gristprov_file"
+
+    def test_release_with_an_unreadable_key_file_names_the_variable(self, env, monkeypatch, tmp_path, capsys):
+        client, _ = env
+        monkeypatch.delenv(self.KEY_ENV)
+        monkeypatch.setenv(self.KEY_ENV + "_FILE", str(tmp_path / "absent"))
+        assert daemon_main.run_grist_release("alice") == 1
+        assert self.KEY_ENV + "_FILE" in capsys.readouterr().err
+        assert client.released == []
+
     def test_release_runs_before_the_provisioner_call(self, env, monkeypatch):
         from privacyfence import grist_provisioning
 
@@ -4860,3 +5415,806 @@ class TestPersonalDataSweep:
         with caplog.at_level(logging.WARNING):
             daemon_main._run_personal_data_sweep()
         assert "personal data sweep failed" in caplog.text
+
+
+class TestLoadOrgConfigAdoption:
+    """7.x reads org/org_bundle.json and adopts a 6.x org_config.json by copying it,
+    leaving every 6.x file untouched so a downgrade keeps working."""
+
+    @staticmethod
+    def _legacy_files(tmp_path):
+        return {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.iterdir() if p.name.startswith("org_config")}
+
+    def test_a_data_dir_with_only_org_config_json_loads_through_adoption(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
+
+        assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
+        assert (tmp_path / "org_bundle.json").exists()
+        assert daemon_main._bundle_adopted_this_start is True
+
+    def test_the_flag_stays_true_across_later_loads(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text("{}")
+        daemon_main.load_org_config()
+        daemon_main.load_org_config()
+        assert daemon_main._bundle_adopted_this_start is True
+
+    def test_adoption_is_audited_once(self, tmp_path, monkeypatch):
+        from privacyfence.audit_log import init_audit_logger
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text("{}")
+        init_audit_logger(str(tmp_path / "audit"))
+        daemon_main.load_org_config()
+        daemon_main._audit_org_bundle_adopted()
+
+        entries = [
+            json.loads(line)
+            for f in (tmp_path / "audit").glob("*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+        assert [e["decision"] for e in entries] == ["org_bundle_adopted"]
+
+    def test_run_app_audits_adoption_right_after_the_bundle_hash(self):
+        import inspect
+
+        source = inspect.getsource(daemon_main.run_app)
+        assert source.index("log_org_config_bundle_hash(bundle)") < source.index("_audit_org_bundle_adopted()")
+        assert "if _bundle_adopted_this_start:" in source
+
+    def test_nothing_adopted_leaves_the_flag_false(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_bundle.json").write_text("{}")
+        daemon_main.load_org_config()
+        assert daemon_main._bundle_adopted_this_start is False
+
+    def test_a_changed_org_config_json_after_adoption_warns_and_is_not_read(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "old"}}))
+        daemon_main.load_org_config()
+        caplog.clear()
+
+        (tmp_path / "org_config.json").write_text(json.dumps({"slack": {"client_id": "new"}}))
+        with caplog.at_level(logging.WARNING):
+            assert daemon_main.load_org_config() == {"slack": {"client_id": "old"}}
+        assert "org/org_config.json changed after the upgrade and is ignored" in caplog.text
+
+    def test_an_unchanged_org_config_json_does_not_warn(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        (tmp_path / "org_config.json").write_text("{}")
+        daemon_main.load_org_config()
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            daemon_main.load_org_config()
+        assert "changed after the upgrade" not in caplog.text
+
+    def test_a_7x_bundle_install_leaves_the_6x_files_for_a_downgrade(self, tmp_path, monkeypatch):
+        from privacyfence import org_bundle_signing
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        private_key, _ = org_bundle_signing.generate_keypair()
+        old = org_bundle_signing.sign_bundle({"serial": 1, "slack": {"client_id": "a"}}, private_key)
+        (tmp_path / "org_config.json").write_text(json.dumps(old))
+        (tmp_path / "org_config_signing_pubkey.txt").write_text(old["signing_public_key"] + "\n")
+        (tmp_path / "org_config_serial.txt").write_text("1\n")
+        before = self._legacy_files(tmp_path)
+
+        daemon_main.load_org_config()
+        # What the Admin page / Settings upload does: install a newer bundle and advance the serial.
+        newer = org_bundle_signing.sign_bundle({"serial": 5, "slack": {"client_id": "b"}}, private_key)
+        (tmp_path / "org_bundle.json").write_text(json.dumps(newer))
+        assert daemon_main.load_org_config()["serial"] == 5
+
+        assert (tmp_path / "org_bundle_serial.txt").read_text().strip() == "5"
+        assert self._legacy_files(tmp_path) == before
+        assert (tmp_path / "org_config_serial.txt").read_text() == "1\n"
+
+
+# ---------------------------------------------------------------------------- #
+# run_app: the admin config import and the effective org config
+# ---------------------------------------------------------------------------- #
+
+def _patch_run_app(monkeypatch, bundle, *, audit=None):
+    """Stub everything run_app() touches except the admin config and the effective config."""
+    monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+    monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+    monkeypatch.setattr(daemon_main, "init_config_path", lambda path: None)
+    monkeypatch.setattr(daemon_main, "init_audit_logger", lambda path, **kwargs: MagicMock())
+    monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
+    monkeypatch.setattr(daemon_main, "check_storage_permissions", lambda org_active: None)
+    seen: dict[str, Any] = {}
+
+    def fake_build_connectors(config, org_config):
+        seen["org_config"] = org_config
+        return [], {}
+
+    monkeypatch.setattr(daemon_main, "build_connectors", fake_build_connectors)
+    monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
+    monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
+    monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
+    monkeypatch.setattr(
+        daemon_main, "_maybe_start_web_server", lambda config, host, **kwargs: seen.update(web=kwargs)
+    )
+    if audit is not None:
+        monkeypatch.setattr(daemon_main, "get_audit_logger", lambda: audit)
+    return seen
+
+
+class _RecordingAudit:
+    def __init__(self, events: list):
+        self.events = events
+
+    def record(self, entry):
+        self.events.append(entry.decision)
+
+
+class TestAdminConfigStartup:
+    BUNDLE = {
+        "slack": {"client_id": "s", "client_secret": "x"},
+        "authz": {"allowed_domains": ["example.com"]},
+    }
+
+    def test_first_start_imports_and_audits_after_the_bundle_hash(self, monkeypatch, tmp_path, caplog):
+        events: list = []
+        _patch_run_app(monkeypatch, self.BUNDLE, audit=_RecordingAudit(events))
+        monkeypatch.setattr(daemon_main, "log_org_config_bundle_hash", lambda b: events.append("bundle_hash"))
+
+        with caplog.at_level(logging.WARNING):
+            assert daemon_main.run_app({}, "config.yaml") == 0
+
+        stored = json.loads((tmp_path / "admin_config.json").read_text())
+        assert {name for name, row in stored["services"].items() if row["offered"]} == {"slack"}
+        assert stored["authz"] == {"allowed_domains": ["example.com"]}
+        assert "Imported 1 settings from org_config.json" in caplog.text
+        assert events == ["bundle_hash", "admin_config_imported"]
+
+    def test_second_start_does_not_import_again_and_says_the_settings_are_ignored(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        events: list = []
+        _patch_run_app(monkeypatch, self.BUNDLE, audit=_RecordingAudit(events))
+        daemon_main.run_app({}, "config.yaml")
+        stored = (tmp_path / "admin_config.json").read_text()
+        events.clear()
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+
+        assert (tmp_path / "admin_config.json").read_text() == stored
+        assert "Imported" not in caplog.text
+        assert "are now managed on the Admin page and are ignored: authz" in caplog.text
+        assert "admin_config_imported" not in events
+
+    def test_a_bundle_without_legacy_settings_logs_neither_notice(self, monkeypatch, caplog):
+        _patch_run_app(monkeypatch, {})
+        daemon_main.run_app({}, "config.yaml")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            daemon_main.run_app({}, "config.yaml")
+        assert "are ignored" not in caplog.text
+
+    def test_a_malformed_admin_config_refuses_to_start(self, monkeypatch, tmp_path):
+        _patch_run_app(monkeypatch, {})
+        (tmp_path / "admin_config.json").write_text("{not json")
+
+        with pytest.raises(org_mode.ConfigurationError, match="admin_config.json"):
+            daemon_main.run_app({}, "config.yaml")
+
+    def test_record_admin_config_import_hashes_the_bundle(self, monkeypatch):
+        import hashlib
+
+        recorded: list = []
+        monkeypatch.setattr(daemon_main, "get_audit_logger", lambda: SimpleNamespace(record=recorded.append))
+        daemon_main.record_admin_config_import(self.BUNDLE, False)
+        assert recorded == []
+
+        daemon_main.record_admin_config_import(self.BUNDLE, True)
+
+        digest = hashlib.sha256(json.dumps(self.BUNDLE, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert [e.decision for e in recorded] == ["admin_config_imported"]
+        assert digest in recorded[0].summary
+
+    def test_record_admin_config_import_survives_an_audit_failure(self, monkeypatch, caplog):
+        def broken():
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(daemon_main, "get_audit_logger", broken)
+        with caplog.at_level(logging.WARNING):
+            daemon_main.record_admin_config_import({}, True)
+        assert "Audit log write failed for the admin config import" in caplog.text
+
+
+class TestLoadAdminConfigSingleUser:
+    def test_a_single_user_install_gets_the_single_user_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(admin_config, "admin_config_path", lambda: tmp_path / "admin_config.json")
+        admin, imported = daemon_main.load_admin_config({"mode": "org"})
+        assert admin["step_up"] == {"enabled": True, "require_passkey": True, "scope": "writes_and_pii_reads"}
+        assert imported is True
+
+    def test_an_organization_server_does_not(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(admin_config, "admin_config_path", lambda: tmp_path / "admin_config.json")
+        idp = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+        admin, _ = daemon_main.load_admin_config({"mode": "org", "idp": idp})
+        assert admin["step_up"] != {"enabled": True, "require_passkey": True, "scope": "writes_and_pii_reads"}
+
+
+class TestSingleUserEffectiveConfig:
+    def test_it_never_carries_auto_provisioning(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example")
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://grist.example")
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://provisioner.example")
+        bundle = {"mode": "org"}
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=True)
+        for name in ("peek", "grist"):
+            admin["services"][name]["offered"] = True
+            admin["services"][name]["auto_provision"]["enabled"] = True
+
+        effective = daemon_main.effective_org_config(bundle, admin)
+
+        assert "auto_provision" not in effective["peek"]
+        assert "auto_provision" not in effective["grist"]
+
+
+class TestEffectiveOrgConfigWiring:
+    # An organization bundle with no idp is single-user mode, where auto-provisioning is off.
+    IDP = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+    ORG_BUNDLE = {
+        "mode": "org",
+        "server": {"issuer_url": "https://pf.example.com"},
+        "idp": {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"},
+    }
+
+    @staticmethod
+    def _builtin_slack(monkeypatch):
+        monkeypatch.setattr(
+            app_credentials, "builtin_app",
+            lambda key: {"client_id": "builtin", "client_secret": "secret"} if key == "slack" else None,
+        )
+
+    @staticmethod
+    def _offering_slack(bundle, mode):
+        admin = admin_config.import_from_bundle({}, mode=mode, single_user=False)
+        admin["services"]["slack"]["offered"] = True
+        return admin
+
+    def test_the_bundle_hash_is_logged_from_the_raw_bundle(self, monkeypatch):
+        bundle = {"slack": {"client_id": "s"}, "authz": {}}
+        seen = _patch_run_app(monkeypatch, bundle)
+        hashed: list = []
+        monkeypatch.setattr(daemon_main, "log_org_config_bundle_hash", hashed.append)
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert hashed == [bundle]
+        assert hashed[0] is bundle
+        # The effective config is what every other reader gets, and it is a different object.
+        assert seen["org_config"] is not bundle
+        assert "unattended_sessions" in seen["org_config"] and "unattended_sessions" not in bundle
+
+    def test_run_app_hands_the_bundle_and_startup_admin_to_the_web_server(self, monkeypatch):
+        bundle = {"slack": {"client_id": "s"}}
+        seen = _patch_run_app(monkeypatch, bundle)
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert seen["web"]["bundle"] is bundle
+        assert seen["web"]["startup_admin"]["services"]["slack"]["offered"] is True
+        assert seen["web"]["org_config"] is seen["org_config"]
+
+    def test_org_mode_reaches_the_slack_branch_through_a_builtin_app(self, monkeypatch):
+        self._builtin_slack(monkeypatch)
+        fake = fake_client_class(result="my-workspace")
+        monkeypatch.setattr(daemon_main, "SlackClient", fake)
+        monkeypatch.setattr(daemon_main, "load_slack_token", lambda path: {"access_token": "xoxp-1"})
+        org_config = daemon_main.effective_org_config(self.ORG_BUNDLE, self._offering_slack(self.ORG_BUNDLE, "org"))
+        assert org_config["slack"]["relay"] is True
+
+        connectors, _failures = daemon_main.build_connectors({}, org_config)
+
+        assert [c.name for c in connectors] == ["slack"]
+
+    def test_local_mode_does_not_use_a_builtin_app(self, monkeypatch):
+        self._builtin_slack(monkeypatch)
+        fake = fake_client_class(result="my-workspace")
+        monkeypatch.setattr(daemon_main, "SlackClient", fake)
+        monkeypatch.setattr(daemon_main, "load_slack_token", lambda path: {"access_token": "xoxp-1"})
+        org_config = daemon_main.effective_org_config({}, self._offering_slack({}, "local"))
+        assert "slack" not in org_config
+
+        connectors, _failures = daemon_main.build_connectors({}, org_config)
+
+        assert connectors == []
+        assert fake.instantiated is False
+
+    def test_the_cli_form_never_uses_a_builtin_app_even_in_an_org_bundle(self, monkeypatch):
+        self._builtin_slack(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: self.ORG_BUNDLE)
+        admin_config.save(self._offering_slack(self.ORG_BUNDLE, "org"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: {})
+        monkeypatch.setattr(daemon_main, "setup_logging", lambda cfg: None)
+        seen: list = []
+        monkeypatch.setattr(daemon_main, "run_slack_oauth", lambda org_config: seen.append(org_config) or 0)
+
+        assert daemon_main.main(["--slack-oauth"]) == 0
+
+        assert "slack" not in seen[0]
+
+    def test_a_malformed_admin_config_makes_the_cli_exit_non_zero(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+        (tmp_path / "admin_config.json").write_text("[]")
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: {})
+        monkeypatch.setattr(daemon_main, "setup_logging", lambda cfg: None)
+
+        assert daemon_main.main(["--slack-oauth"]) == 1
+        assert "admin_config.json" in capsys.readouterr().err
+
+    def test_the_org_web_server_keeps_the_bundle_and_startup_admin_on_org_auth(self, monkeypatch, tmp_path):
+        from privacyfence import paths
+        from privacyfence.connector_host import ConnectorHost
+        from privacyfence.web.server import WebServer
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(WebServer, "start", lambda self: None)
+        monkeypatch.setattr(
+            "privacyfence.org_identity.discover_idp",
+            lambda issuer: {
+                "authorization_endpoint": "https://idp.example.com/authorize",
+                "token_endpoint": "https://idp.example.com/token", "jwks_uri": "https://idp.example.com/jwks",
+            },
+        )
+        bundle = dict(self.ORG_BUNDLE, authz={})
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        org_config = daemon_main.effective_org_config(bundle, admin)
+
+        server = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, ConnectorHost([]), unattended_sessions_enabled=False,
+            org_config=org_config, bundle=bundle, startup_admin=admin,
+        )
+
+        assert server.org.bundle is bundle
+        assert server.org.startup_admin is admin
+        assert server.org.org_config is org_config
+
+    def test_a_withdrawn_peek_starts_no_provisioner(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "key")
+        bundle = {"mode": "org", "idp": self.IDP}
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        admin["services"]["peek"]["offered"] = True
+        admin["services"]["peek"]["auto_provision"]["enabled"] = True
+        started = []
+        monkeypatch.setattr(
+            daemon_main.peek_provisioning, "PeekProvisioner", lambda **kw: SimpleNamespace(start=lambda: started.append(kw))
+        )
+
+        assert daemon_main.peek_provisioning.start(
+            daemon_main.effective_org_config(bundle, admin), on_change=lambda p: None, stop_event=threading.Event()
+        ) is not None
+        assert len(started) == 1
+
+        started.clear()
+        admin["services"]["peek"]["offered"] = False
+        withdrawn = daemon_main.effective_org_config(bundle, admin)
+        assert "peek" not in withdrawn
+        assert daemon_main.peek_provisioning.start(
+            withdrawn, on_change=lambda p: None, stop_event=threading.Event()
+        ) is None
+        assert started == []
+
+    def test_a_malformed_admin_config_makes_the_release_command_print_it_and_fail(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "alice").mkdir(parents=True)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mode": "org"})
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        assert daemon_main.run_peek_release("alice") == 1
+        assert "admin_config.json" in capsys.readouterr().err
+
+    def test_peek_release_reads_the_switch_from_the_admin_config_and_the_address_from_the_environment(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
+        (tmp_path / "users" / "alice").mkdir(parents=True)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "peekprov_secret")
+        bundle = {"mode": "org", "idp": self.IDP}
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
+        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        admin["services"]["peek"]["offered"] = True
+        admin["services"]["peek"]["auto_provision"]["enabled"] = True
+        admin_config.save(admin)
+        clients: list = []
+
+        class Client:
+            def __init__(self, base_url, key):
+                clients.append((base_url, key))
+
+            def release_account(self, principal_id):
+                return True
+
+        monkeypatch.setattr(daemon_main, "PeekProvisioningClient", Client)
+        monkeypatch.setattr(daemon_main.peek_provisioning, "release", lambda principal_id: None)
+
+        assert daemon_main.run_peek_release("alice") == 0
+        assert clients == [("https://peek.example.com", "peekprov_secret")]
+        assert "Released the Peek connection of alice" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------- #
+# Connector configs on an organization server, and the legacy bundle
+# ---------------------------------------------------------------------------- #
+
+from privacyfence import connector_configs, org_bundle_signing  # noqa: E402
+from tests.connector_config_support import SENTINEL, fixture_key, public_bytes, sign  # noqa: E402
+
+LEGACY_ORG_BUNDLE = {
+    "mode": "org",
+    "server": {
+        "bind_host": "0.0.0.0", "port": 9000, "issuer_url": "https://pf.example.com",
+        "trusted_proxies": ["172.30.87.2", "10.0.0.1"], "tls": {"cert_file": "c.pem", "key_file": "k.pem"},
+    },
+    "idp": {
+        "issuer": "https://idp.example.com", "client_id": "pf-client", "client_secret": SENTINEL,
+        "admin_group_claim": "groups", "admin_group_values": ["pf-admins"],
+        "step_up_acr_values": ["mfa"], "admin_emails": ["a@example.com", "b@example.com"],
+        "trust_unverified_email": False,
+    },
+    "slack": {"client_id": "own-slack", "client_secret": SENTINEL},
+    "miro": {"client_id": "own-miro", "client_secret": SENTINEL},
+}
+
+
+@pytest.fixture
+def legacy_org(tmp_path, monkeypatch):
+    """An upgraded organization server: a signed bundle adopted from 6.x, in its own org directory."""
+    org = tmp_path / "org"
+    org.mkdir()
+    monkeypatch.setattr(daemon_main, "org_dir", lambda: org)
+    monkeypatch.setattr(connector_configs, "default_org_dir", lambda: org)
+    return org
+
+
+def install_legacy_bundle(org, bundle=None, *, adopted=True):
+    """Write a signed bundle and, unless ``adopted`` is False, the record adoption leaves."""
+    private_key, _ = org_bundle_signing.generate_keypair()
+    signed = org_bundle_signing.sign_bundle(dict(LEGACY_ORG_BUNDLE if bundle is None else bundle), private_key)
+    raw = json.dumps(signed).encode()
+    (org / "org_bundle.json").write_bytes(raw)
+    if adopted:
+        (org / "org_bundle_adopted.json").write_text(json.dumps({
+            "from": "org_config.json", "sha256": org_bundle_signing.sha256_hex(raw), "at": "x", "pins_adopted": True,
+        }))
+    return signed
+
+
+class TestConnectorConfigStartup:
+    LEGACY_WARNING = (
+        "org/org_bundle.json is read only for its server and identity-provider settings until PrivacyFence 8. "
+        "Move them to privacyfence.env (privacyfence-app --print-env-from-bundle), then run "
+        "privacyfence-app --retire-bundle."
+    )
+
+    def run(self, monkeypatch, bundle):
+        seen = _patch_run_app(monkeypatch, bundle)
+        monkeypatch.setattr(daemon_main.org_mode, "is_single_user", lambda config: False)
+        assert daemon_main.run_app({}, "config.yaml") == 0
+        return seen
+
+    def test_first_start_imports_the_credentials_and_warns(self, legacy_org, monkeypatch, caplog):
+        signed = install_legacy_bundle(legacy_org)
+        with caplog.at_level(logging.INFO):
+            seen = self.run(monkeypatch, signed)
+        assert self.LEGACY_WARNING in [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert seen["org_config"]["slack"] == {"client_id": "own-slack", "client_secret": SENTINEL}
+        assert "relay" not in seen["org_config"]["slack"]
+        assert json.loads((legacy_org / "connector_configs" / "slack.json").read_text())["source"] == "legacy-bundle"
+        assert SENTINEL not in caplog.text
+
+    def test_the_import_is_not_repeated_and_the_bundles_sections_are_ignored_afterwards(
+        self, legacy_org, monkeypatch
+    ):
+        signed = install_legacy_bundle(legacy_org)
+        self.run(monkeypatch, signed)
+        connector_configs.remove(legacy_org, "slack")
+        seen = self.run(monkeypatch, signed)
+        assert "slack" not in seen["org_config"]
+        assert seen["org_config"]["miro"]["client_id"] == "own-miro"
+
+    def test_an_uploaded_config_replaces_the_imported_one(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org)
+        self.run(monkeypatch, signed)
+        (legacy_org / "org_bundle_signing_pubkey.txt").write_text(
+            __import__("base64").b64encode(public_bytes(fixture_key())).decode() + "\n"
+        )
+        connector_configs.accept(legacy_org, sign("slack"), confirmed_fingerprint=connector_configs.fingerprint(public_bytes(fixture_key())))
+        seen = self.run(monkeypatch, signed)
+        assert seen["org_config"]["slack"] == {"client_id": "slack-id", "client_secret": SENTINEL}
+
+    def test_a_bundle_that_differs_from_the_adopted_one_is_refused(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org)
+        (legacy_org / "org_bundle.json").write_bytes((legacy_org / "org_bundle.json").read_bytes() + b"\n")
+        _patch_run_app(monkeypatch, signed)
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.run_app({}, "config.yaml")
+        assert str(excinfo.value) == (
+            "Organization servers no longer take a new org_bundle.json; set privacyfence.env and upload "
+            "connector configs on the Admin page."
+        )
+        assert not (legacy_org / "connector_configs").exists()
+
+    def test_a_bundle_on_a_server_that_adopted_none_is_refused(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org, adopted=False)
+        _patch_run_app(monkeypatch, signed)
+        with pytest.raises(org_mode.ConfigurationError, match="no longer take a new org_bundle.json"):
+            daemon_main.run_app({}, "config.yaml")
+
+    def test_an_unreadable_bundle_is_refused(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org)
+        (legacy_org / "org_bundle.json").unlink()
+        (legacy_org / "org_bundle.json").mkdir()
+        with pytest.raises(org_mode.ConfigurationError, match="Could not read organization config"):
+            daemon_main.prepare_connector_configs(signed)
+
+    def test_a_stored_config_that_no_longer_verifies_refuses_the_start(self, legacy_org, monkeypatch, caplog):
+        install_legacy_bundle(legacy_org, {"mode": "org"})
+        (legacy_org / "org_bundle_signing_pubkey.txt").write_text(
+            __import__("base64").b64encode(public_bytes(fixture_key())).decode() + "\n"
+        )
+        connector_configs.accept(legacy_org, sign("slack"))
+        path = connector_configs.stored_path(legacy_org, "slack")
+        path.write_bytes(path.read_bytes().replace(b"slack-id", b"slack-ie"))
+        _patch_run_app(monkeypatch, {"mode": "org"})
+        with pytest.raises(org_mode.ConfigurationError, match="stored slack connector config") as excinfo:
+            daemon_main.run_app({}, "config.yaml")
+        assert SENTINEL not in str(excinfo.value) and SENTINEL not in caplog.text
+
+    def test_an_org_server_without_a_bundle_checks_its_configs_and_does_not_warn(
+        self, legacy_org, monkeypatch, caplog
+    ):
+        with caplog.at_level(logging.WARNING):
+            self.run(monkeypatch, {"mode": "org"})
+        assert self.LEGACY_WARNING not in caplog.text
+
+    def test_local_mode_is_untouched(self, legacy_org, monkeypatch, caplog):
+        (legacy_org / "org_bundle.json").write_text("{}")
+        bundle = {"slack": {"client_id": "own", "client_secret": SENTINEL}}
+        seen = _patch_run_app(monkeypatch, bundle)
+        with caplog.at_level(logging.WARNING):
+            assert daemon_main.run_app({}, "config.yaml") == 0
+        assert self.LEGACY_WARNING not in caplog.text
+        assert seen["org_config"]["slack"] == bundle["slack"]
+        assert not (legacy_org / "connector_configs").exists()
+
+    def test_effective_org_config_reads_the_stored_configs_of_this_servers_directory(self, legacy_org):
+        install_legacy_bundle(legacy_org)
+        daemon_main.prepare_connector_configs(LEGACY_ORG_BUNDLE)
+        admin = admin_config.import_from_bundle(LEGACY_ORG_BUNDLE, mode="org", single_user=False)
+        assert daemon_main.effective_org_config(LEGACY_ORG_BUNDLE, admin)["miro"]["client_id"] == "own-miro"
+        assert daemon_main._stored_connector_configs("local") is None
+
+
+class TestPrintEnvFromBundle:
+    def test_prints_every_variable_and_never_the_secret(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_print_env_from_bundle(None) == 0
+        out, err = capsys.readouterr()
+        assert out.splitlines() == [
+            "PRIVACYFENCE_MODE=org",
+            "PRIVACYFENCE_BIND_HOST=0.0.0.0",
+            "PRIVACYFENCE_PORT=9000",
+            "PRIVACYFENCE_ISSUER_URL=https://pf.example.com",
+            "PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2,10.0.0.1",
+            "# server.tls has no variable: end TLS at the reverse proxy (see the Docker guide).",
+            "PRIVACYFENCE_IDP_ISSUER=https://idp.example.com",
+            "PRIVACYFENCE_IDP_CLIENT_ID=pf-client",
+            "PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM=groups",
+            "PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES=pf-admins",
+            "PRIVACYFENCE_IDP_STEP_UP_ACR_VALUES=mfa",
+            "PRIVACYFENCE_ADMIN_EMAILS=a@example.com,b@example.com",
+            "PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL=false",
+            "PRIVACYFENCE_IDP_CLIENT_SECRET=<the identity provider's client secret>",
+        ]
+        assert SENTINEL not in out + err
+
+    def test_the_secret_goes_to_a_new_file_with_mode_0600(self, legacy_org, tmp_path, capsys):
+        install_legacy_bundle(legacy_org)
+        target = tmp_path / "idp-secret"
+        assert daemon_main.run_print_env_from_bundle(str(target)) == 0
+        out, err = capsys.readouterr()
+        assert f"PRIVACYFENCE_IDP_CLIENT_SECRET_FILE={target}" in out.splitlines()
+        assert "PRIVACYFENCE_IDP_CLIENT_SECRET=" not in out
+        assert target.read_text() == SENTINEL + "\n"
+        if sys.platform != "win32":  # POSIX permission bits; Windows has none to assert on
+            assert oct(target.stat().st_mode & 0o777) == "0o600"
+        assert SENTINEL not in out + err
+
+    def test_it_refuses_to_overwrite_the_file_and_prints_nothing(self, legacy_org, tmp_path, capsys):
+        install_legacy_bundle(legacy_org)
+        target = tmp_path / "idp-secret"
+        target.write_text("keep me")
+        assert daemon_main.run_print_env_from_bundle(str(target)) == 0 + 1
+        out, err = capsys.readouterr()
+        assert out == "" and "already exists" in err and SENTINEL not in err
+        assert target.read_text() == "keep me"
+
+    def test_a_secret_file_that_cannot_be_written(self, legacy_org, tmp_path, capsys):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_print_env_from_bundle(str(tmp_path / "missing" / "secret")) == 1
+        out, err = capsys.readouterr()
+        assert "Could not write" in err and SENTINEL not in out + err
+
+    def test_a_public_client_has_no_secret_line_and_no_file(self, legacy_org, tmp_path, capsys):
+        bundle = {"mode": "org", "idp": {"issuer": "https://idp.example.com", "client_id": "pf-client"}}
+        install_legacy_bundle(legacy_org, bundle)
+        target = tmp_path / "idp-secret"
+        assert daemon_main.run_print_env_from_bundle(str(target)) == 0
+        assert "SECRET" not in capsys.readouterr().out
+        assert not target.exists()
+
+    def test_trust_unverified_email_true_and_a_bundle_without_server_or_idp(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org, {"mode": "org", "idp": {"trust_unverified_email": True}})
+        assert daemon_main.run_print_env_from_bundle(None) == 0
+        assert capsys.readouterr().out.splitlines() == [
+            "PRIVACYFENCE_MODE=org", "PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL=true",
+        ]
+
+    def test_a_bundle_with_only_a_mode(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org, {"mode": "org"})
+        assert daemon_main.run_print_env_from_bundle(None) == 0
+        assert capsys.readouterr().out.splitlines() == ["PRIVACYFENCE_MODE=org"]
+
+    def test_no_bundle(self, legacy_org, capsys):
+        assert daemon_main.run_print_env_from_bundle(None) == 1
+        assert "no org/org_bundle.json" in capsys.readouterr().err
+
+    def test_a_desktop_bundle(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org, {"slack": {"client_id": "x"}})
+        assert daemon_main.run_print_env_from_bundle(None) == 1
+        assert "not an organization bundle" in capsys.readouterr().err
+
+    def test_an_unverifiable_bundle(self, legacy_org, capsys):
+        (legacy_org / "org_bundle.json").write_text("{not json")
+        assert daemon_main.run_print_env_from_bundle(None) == 1
+        assert "not valid JSON" in capsys.readouterr().err
+
+    def test_main_dispatches_before_reading_settings(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_print_env_from_bundle", lambda path: calls.append(path) or 0)
+        assert daemon_main.main(["--print-env-from-bundle", "--idp-secret-file", "x"]) == 0
+        assert calls == ["x"]
+
+    def test_the_secret_file_option_needs_the_command(self, capsys):
+        with pytest.raises(SystemExit):
+            daemon_main.main(["--idp-secret-file", "x"])
+        assert "--idp-secret-file goes with --print-env-from-bundle" in capsys.readouterr().err
+
+
+class TestRetireBundle:
+    @pytest.fixture
+    def matching_environment(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", "https://pf.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "pf-client")
+
+    def test_retires_once_the_environment_says_the_same(self, legacy_org, matching_environment, capsys):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_retire_bundle() == 0
+        out, err = capsys.readouterr()
+        assert not (legacy_org / "org_bundle.json").exists()
+        assert org_bundle_signing.load_adopted_record(legacy_org)["retired"] is True
+        assert "retired" in out and SENTINEL not in out + err
+
+    def test_the_credentials_are_imported_before_the_bundle_goes(self, legacy_org, matching_environment):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_retire_bundle() == 0
+        loaded = connector_configs.load_all(legacy_org)
+        assert sorted(loaded) == ["miro", "slack"]
+        assert loaded["slack"].section()["client_secret"] == SENTINEL
+
+    def test_a_restart_does_not_adopt_the_untouched_org_config_again(self, legacy_org, matching_environment):
+        signed = install_legacy_bundle(legacy_org)
+        legacy = legacy_org / "org_config.json"
+        legacy.write_text(json.dumps(signed))
+        record = org_bundle_signing.load_adopted_record(legacy_org)
+        record["sha256"] = org_bundle_signing.sha256_hex(legacy.read_bytes())
+        (legacy_org / "org_bundle_adopted.json").write_text(json.dumps(record))
+        (legacy_org / "org_bundle.json").write_bytes(legacy.read_bytes())
+        before = legacy.read_bytes()
+
+        assert daemon_main.run_retire_bundle() == 0
+        assert daemon_main.load_org_config() == {}
+        assert daemon_main.load_org_config() == {}
+        assert not (legacy_org / "org_bundle.json").exists()
+        assert legacy.read_bytes() == before
+
+    @pytest.mark.parametrize("variable, value, named", [
+        ("PRIVACYFENCE_ISSUER_URL", "https://other.example.com", "PRIVACYFENCE_ISSUER_URL"),
+        ("PRIVACYFENCE_IDP_ISSUER", "https://other-idp.example.com", "PRIVACYFENCE_IDP_ISSUER"),
+        ("PRIVACYFENCE_IDP_CLIENT_ID", "other-client", "PRIVACYFENCE_IDP_CLIENT_ID"),
+    ])
+    def test_refuses_while_the_environment_differs_and_changes_nothing(
+        self, legacy_org, matching_environment, monkeypatch, capsys, variable, value, named
+    ):
+        install_legacy_bundle(legacy_org)
+        before = (legacy_org / "org_bundle_adopted.json").read_text()
+        monkeypatch.setenv(variable, value)
+        assert daemon_main.run_retire_bundle() == 1
+        err = capsys.readouterr().err
+        assert named in err and "Not retiring" in err and SENTINEL not in err
+        assert (legacy_org / "org_bundle.json").exists()
+        assert (legacy_org / "org_bundle_adopted.json").read_text() == before
+        assert not (legacy_org / "connector_configs").exists()
+
+    @pytest.mark.parametrize("variable", [
+        "PRIVACYFENCE_MODE", "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_IDP_ISSUER", "PRIVACYFENCE_IDP_CLIENT_ID",
+    ])
+    def test_refuses_while_the_environment_lacks_a_value(self, legacy_org, matching_environment, monkeypatch, capsys, variable):
+        install_legacy_bundle(legacy_org)
+        monkeypatch.delenv(variable)
+        if variable == "PRIVACYFENCE_IDP_ISSUER":
+            monkeypatch.delenv("PRIVACYFENCE_IDP_CLIENT_ID")
+        assert daemon_main.run_retire_bundle() == 1
+        err = capsys.readouterr().err
+        assert variable in err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_a_mode_that_conflicts_with_the_bundle_is_refused_by_name(
+        self, legacy_org, matching_environment, monkeypatch, capsys
+    ):
+        install_legacy_bundle(legacy_org)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "local")
+        assert daemon_main.run_retire_bundle() == 1
+        assert "PRIVACYFENCE_MODE" in capsys.readouterr().err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_an_unusable_environment_is_reported(self, legacy_org, matching_environment, monkeypatch, capsys):
+        install_legacy_bundle(legacy_org)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "nonsense")
+        assert daemon_main.run_retire_bundle() == 1
+        assert "PRIVACYFENCE_MODE" in capsys.readouterr().err
+
+    def test_a_bundle_with_no_idp_and_no_address_retires_when_the_environment_has_none(
+        self, legacy_org, monkeypatch
+    ):
+        install_legacy_bundle(legacy_org, {"mode": "org", "slack": {"client_id": "i", "client_secret": "s"}})
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert daemon_main.run_retire_bundle() == 0
+
+    def test_a_bundle_that_is_not_the_adopted_one_is_not_retired(self, legacy_org, matching_environment, capsys):
+        install_legacy_bundle(legacy_org)
+        (legacy_org / "org_bundle.json").write_bytes((legacy_org / "org_bundle.json").read_bytes() + b"\n")
+        assert daemon_main.run_retire_bundle() == 1
+        assert "no longer take a new org_bundle.json" in capsys.readouterr().err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_a_failed_write_keeps_the_bundle(self, legacy_org, matching_environment, monkeypatch, capsys):
+        install_legacy_bundle(legacy_org)
+
+        def fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(daemon_main, "atomic_write_json", fail)
+        assert daemon_main.run_retire_bundle() == 1
+        assert "Could not retire" in capsys.readouterr().err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_no_bundle(self, legacy_org, capsys):
+        assert daemon_main.run_retire_bundle() == 1
+        assert "no org/org_bundle.json" in capsys.readouterr().err
+
+    def test_main_dispatches_it(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_retire_bundle", lambda: 7)
+        assert daemon_main.main(["--retire-bundle"]) == 7

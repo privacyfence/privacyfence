@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Local-only QA connector smoke-check and fixture recorder.
 
-Run this on a developer's own machine or on the self-hosted QA runner only
-(``connector-live-check.yml``, ``qa-record-fixture.yml``) -- never on a
-GitHub-hosted runner, never with any credential provisioned to GitHub Actions
-or any other cloud service (ADR 0019). It
-reuses the exact OAuth token files ``privacyfence-app --<connector>-oauth``
-already writes to the git-ignored ``credentials/`` directory
-(``daemon_main.TOKEN_FILES``), and talks to your real, already-authenticated
-accounts -- the same ones set up per ``docs/connector-qa.md``.
+Run this on the self-hosted QA runner (``runner.privacyfence.eu``, label ``privacyfence-live``;
+``connector-live-check.yml``, ``qa-record-fixture.yml``) or on a maintainer's own machine -- never
+on a GitHub-hosted runner, never with any credential provisioned to GitHub Actions or any other
+cloud service (ADR 0019).
+
+It runs in organization mode as the fixed principal ``qa-live`` (``_qa_context()``), so the
+connectors are built from the built-in OAuth apps (``_qa_org_config()``) and every token file
+(``daemon_main.TOKEN_FILES``) is read from, and refreshed into, the git-ignored
+``users/qa-live/credentials/`` folder of the checkout. The tokens are minted by connecting the QA
+accounts in a browser on the QA organization server, and ``scripts/qa_runner_tokens.py`` copies
+them in and back (``docs/connector-qa.md``, "The QA server"). Peek's and Grist's addresses come
+from ``PRIVACYFENCE_PEEK_BASE_URL`` and ``PRIVACYFENCE_GRIST_SERVER_URL``. It talks to your real,
+already-connected accounts.
 
 Run with the project's own venv, not whatever ``python3`` is first on PATH --
 this imports the same ``privacyfence`` package and third-party clients
@@ -74,7 +79,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from privacyfence import daemon_main  # noqa: E402
+from privacyfence import admin_config, daemon_main, oauth_apps, principal  # noqa: E402
 from privacyfence.app_credentials import telegram_app_credentials  # noqa: E402
 from privacyfence import grist_auth  # noqa: E402
 from privacyfence.assets_client import AssetsClient, AssetsClientError  # noqa: E402
@@ -106,6 +111,30 @@ FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "live"
 MANIFEST_PATH = REPO_ROOT / "tests" / "fixtures" / "qa_environment.yaml"
 
 QATEST_TAG = "[QATEST]"
+
+# The checks run in organization mode as one fixed principal, so every token path resolves to
+# <checkout>/users/qa-live/credentials/ -- the folder scripts/qa_runner_tokens.py fills from the
+# QA organization server's data directory.
+QA_PRINCIPAL_ID = "qa-live"
+
+# An admin config that offers every service: the checks test whatever the built-in apps (or a
+# runner bundle's own app) can reach, not what a particular server chose to offer.
+QA_ADMIN: dict[str, Any] = {
+    "services": {name: {**admin_config._default_service(name), "offered": True} for name in admin_config.SERVICES},
+}
+
+
+def _qa_context() -> principal.principal_scope:
+    """Scope for the whole run. Entered once, before any connector is built."""
+    return principal.principal_scope(principal.Principal(id=QA_PRINCIPAL_ID))
+
+
+def _qa_org_config() -> dict[str, Any]:
+    """The organization-mode config the connectors are built from: the built-in apps for the
+    Google, Slack, Salesforce, Atlassian and Miro sections, Peek's and Grist's addresses from the
+    environment, and anything the runner's optional bundle adds."""
+    bundle = daemon_main.load_org_config()
+    return oauth_apps.effective_org_config({"mode": "org", **bundle}, QA_ADMIN, mode="org")
 
 # Only used for the diagnostic logging around lifecycle_calendar/_tasks'
 # eventually-consistent-delete retries below -- every *_client.py already
@@ -861,7 +890,7 @@ class RawCaptureTelethon:
 # ---------------------------------------------------------------------------- #
 
 def _load_atlassian_config() -> tuple[dict[str, Any], str]:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     atlassian_org = org_config.get("atlassian") or {}
     if not atlassian_org.get("client_id"):
         raise SystemExit("Atlassian organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -942,7 +971,7 @@ def check_confluence(record: bool, manifest: dict[str, Any]) -> list[CheckResult
 
 
 def _build_peek_client() -> PeekClient:
-    pinned = peek_client.bundle_base_url(daemon_main.load_org_config().get("peek") or {}, org_mode=False)
+    pinned = peek_client.bundle_base_url(_qa_org_config().get("peek") or {}, org_mode=True)
     record = peek_client.load_token_file(daemon_main._resolve_path(daemon_main.TOKEN_FILES["peek"]))
     return PeekClient(peek_client.resolve_server(pinned, record), record["token"])
 
@@ -1280,7 +1309,7 @@ def _check_jira_export(client: JiraClient, page_jql: str, project_key: str) -> C
 def _build_grist_client() -> tuple[GristClient, bool]:
     """The client and whether its credential is an OAuth one. The runner holds
     an API-key file; the same code serves an OAuth sign-in."""
-    bundle = grist_auth.bundle_settings(daemon_main.load_org_config().get("grist") or {}, org_mode=False)
+    bundle = grist_auth.bundle_settings(_qa_org_config().get("grist") or {}, org_mode=True)
     token_path = daemon_main._resolve_path(daemon_main.TOKEN_FILES["grist"])
     server, credential = grist_auth.resolve_credential(bundle, grist_auth.load_token_file(token_path), token_path)
     return GristClient(server, credential), bool(credential.can_refresh)
@@ -1320,7 +1349,7 @@ def _miro_fixture(raw: Any) -> Any:
 
 
 def _build_miro_client() -> MiroClient:
-    config = miro_auth.bundle_settings(daemon_main.load_org_config().get("miro") or {})
+    config = miro_auth.bundle_settings(_qa_org_config().get("miro") or {})
     path = daemon_main._resolve_path(daemon_main.TOKEN_FILES["miro"])
     provider = MiroTokenProvider(config, path, miro_auth.load_token_file(path))
     client = MiroClient(provider)
@@ -1524,7 +1553,7 @@ def _check_grist_sql(client: GristClient, doc_id: str, table_id: str) -> CheckRe
 
 
 def _build_salesforce_client() -> SalesforceClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     sf_org = org_config.get("salesforce") or {}
     if not sf_org.get("consumer_key"):
         raise SystemExit("Salesforce organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -1787,7 +1816,7 @@ def check_salesforce(record: bool, manifest: dict[str, Any]) -> list[CheckResult
 
 
 def _build_gmail_client() -> GmailClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     client_config = daemon_main._google_client_config(org_config)
     if not client_config:
         raise SystemExit("Google organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -1877,7 +1906,7 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
 
 def _build_drive_client() -> DriveClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     client_config = daemon_main._google_client_config(org_config)
     if not client_config:
         raise SystemExit("Google organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -1934,7 +1963,7 @@ def check_drive(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
 
 def _build_calendar_client() -> CalendarClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     client_config = daemon_main._google_client_config(org_config)
     if not client_config:
         raise SystemExit("Google organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -1981,7 +2010,7 @@ def check_calendar(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
 
 def _build_contacts_client() -> ContactsClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     client_config = daemon_main._google_client_config(org_config)
     if not client_config:
         raise SystemExit("Google organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -2039,7 +2068,7 @@ def check_contacts(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
 
 def _build_tasks_client() -> TasksClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     client_config = daemon_main._google_client_config(org_config)
     if not client_config:
         raise SystemExit("Google organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -2090,7 +2119,7 @@ def check_tasks(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
 
 def _build_apps_script_client() -> AppsScriptClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     client_config = daemon_main._google_client_config(org_config)
     if not client_config:
         raise SystemExit("Google organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -2168,7 +2197,7 @@ def check_apps_script(record: bool, manifest: dict[str, Any]) -> list[CheckResul
 
 
 def _build_slack_client() -> SlackClient:
-    org_config = daemon_main.load_org_config()
+    org_config = _qa_org_config()
     slack_org = org_config.get("slack") or {}
     if not slack_org.get("client_id"):
         raise SystemExit("Slack organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
@@ -2227,16 +2256,23 @@ def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
             channel_id = found_channel.id
 
         if not seed_thread_ts:
-            # Single call, not a fan-out -- get_channel_history() is a
-            # cheap resolve, unlike Gmail's list_messages().
-            history, _has_more, _next_cursor = client.get_channel_history(channel_id, limit=200)
+            # The runner uses the built-in Slack app, which Slack throttles on
+            # conversations.history, so the connector reads history through search
+            # (limited mode); do the same here, and fall back to the history call where
+            # search cannot be scoped to the channel or has not indexed the seed yet.
+            read = client.search_channel_history(channel_id, limit=100)
+            if read is None or not read[0]:
+                read = client.get_channel_history(channel_id, limit=200)
+            history, _has_more, _next_cursor = read
             found_message = next((m for m in history if QATEST_TAG in (m.text or "")), None)
             if found_message is None:
                 raise SlackClientError(f"no message carrying {QATEST_TAG} found in {target} history")
             seed_thread_ts = found_message.id
 
         with RawCaptureApiCall(client) as cap:
-            replies, _has_more, _next_cursor = client.get_thread_replies(channel_id, seed_thread_ts)
+            replies, _has_more, _next_cursor = client.get_thread_replies(
+                channel_id, seed_thread_ts, limit=15
+            )
         tagged = bool(replies) and QATEST_TAG in (replies[0].text or "")
         # channel_name is deliberately not part of this gate -- unlike
         # title/summary on the other connectors, a missing channel_name has
@@ -3331,10 +3367,11 @@ def main() -> int:
         stream=sys.stderr,
     )
 
-    if args.lifecycle:
-        return run_lifecycle(args.connectors, args.report_file)
-    mode = "record" if args.record else "check"
-    return run(mode, args.connectors, args.report_file)
+    with _qa_context():
+        if args.lifecycle:
+            return run_lifecycle(args.connectors, args.report_file)
+        mode = "record" if args.record else "check"
+        return run(mode, args.connectors, args.report_file)
 
 
 if __name__ == "__main__":

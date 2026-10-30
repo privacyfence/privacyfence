@@ -37,7 +37,7 @@ Threading model:
     few hours -- see _run_personal_data_sweep().
 
 Configuration is split into two files (see paths.py):
-  - ``org/org_config.json``    — organization-level app registrations (Google
+  - ``org/org_bundle.json``    — organization-level app registrations (Google
     OAuth client, Slack app, Salesforce Connected App, Atlassian OAuth app),
     installed via PrivacyFence Settings (``/settings``, or by hand-editing
     this file). Optional per service; a connector is offered only if its
@@ -76,6 +76,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
@@ -93,15 +94,20 @@ import yaml
 
 from . import (
     __version__,
+    admin_config,
     agent_label,
     agent_overrides,
     audit_forwarding,
+    connector_configs,
+    data_format,
     grist_provisioning,
+    oauth_apps,
     org_bundle_signing,
     org_mode,
     peek_provisioning,
     policy_upgrade,
     privilege_separation,
+    relay_client,
     scoped_tokens,
     step_up_config,
 )
@@ -109,9 +115,19 @@ from .policy import store as policy_store
 
 if TYPE_CHECKING:
     from .approvals import PendingApprovalRegistry
-from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, safe_principal_id, user_dir
+from .paths import (
+    LEGACY_ORG_CONFIG_FILENAME,
+    ORG_BUNDLE_FILENAME,
+    authority_dir,
+    authority_root,
+    data_dir,
+    handoff_dir,
+    org_dir,
+    safe_principal_id,
+    user_dir,
+)
 from .std_streams import ensure_std_streams
-from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
+from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal
 from .webauthn_stepup import StepUpRequirementChange, has_credentials as has_webauthn_credentials
 from .webauthn_stepup import observe_step_up_requirement, step_up_disabled_notice
 from .app_credentials import telegram_app_credentials
@@ -133,6 +149,7 @@ from .safe_errors import SecretRedactingFormatter, public_message
 from .secure_files import (
     InsecurePermissionsError,
     atomic_write_bytes,
+    atomic_write_json,
     atomic_write_text,
     audit_directory_permissions,
 )
@@ -428,27 +445,31 @@ def load_config(config_path: str, *, principal: Principal | None = None) -> dict
     return config
 
 
-def _upgrade_all_principals() -> None:
-    """Convert every principal's ``auto_accept:`` section to version 3 before the scoped token
-    store is built, so no scoped request is served with a token that still names a v2 rule id,
-    then give each principal's tokens written before tokens held their own rules their own copy
-    (ADR 0236). A principal without a settings file has no rules, so its old tokens get none; the
-    local principal is a no-op here after ``main``'s own ``load_config``."""
-    from .web.mcp_auth import scoped_token_principals
+# True once any load_org_config() call in this process copied org_config.json
+# to org_bundle.json; run_app() then records the org_bundle_adopted audit
+# entry. tests/conftest.py::_reset puts it back to False.
+_bundle_adopted_this_start = False
 
-    for principal in scoped_token_principals():
-        with principal_scope(principal):
-            resolved = _resolve_authority_path("config/settings.yaml")
-            if not os.path.exists(resolved):
-                # No rules to copy: the principal's legacy tokens get none, and stop warning.
-                policy_upgrade.ensure_token_rules({}, principal, log=_deferred_warnings.append)
-                continue
-            with open(resolved, encoding="utf-8") as fh:
-                config = yaml.safe_load(fh) or {}
-            if not isinstance(config, dict):
-                continue
-            policy_upgrade.ensure_scope_rows(config, resolved, principal, log=_deferred_warnings.append)
-            policy_upgrade.ensure_token_rules(config, principal, log=_deferred_warnings.append)
+
+def _warn_if_legacy_bundle_changed() -> None:
+    """After adoption 7.x ignores org_config.json. An operator who followed 6.x
+    docs and copied a new bundle to the old name is told, not met with silence."""
+    record = org_bundle_signing.load_adopted_record(org_dir())
+    recorded = record.get("sha256")
+    legacy = org_dir() / LEGACY_ORG_CONFIG_FILENAME
+    if not recorded or not legacy.exists():
+        return
+    try:
+        current = org_bundle_signing.sha256_hex(legacy.read_bytes())
+    except OSError:
+        return
+    if current != recorded:
+        logger.warning(
+            "org/org_config.json changed after the upgrade and is ignored: PrivacyFence 7 no longer "
+            "reads it, and an organization server takes no new bundle. Change settings in the "
+            "environment (privacyfence.env) or on the Admin page, and your own connector apps as "
+            "signed connector configs (docs/org-mode-setup-guide.md)."
+        )
 
 
 def load_org_config() -> dict[str, Any]:
@@ -467,10 +488,10 @@ def load_org_config() -> dict[str, Any]:
     downgrade to no IdP-backed auth at all (org_mode.resolve_mode({})
     resolves to "local"), triggerable by anything that can truncate or
     corrupt the file — not a state this daemon should ever paper over.
-    A local-mode bundle is installed via PrivacyFence Settings'
-    "Install/Update Organization Config…"; an org-mode bundle is copied to
-    this path by hand and the daemon restarted, since org mode mounts no
-    local Settings page.
+    A desktop (local-mode) bundle is installed in PrivacyFence Settings under
+    Admin → Organization configuration → "Install configuration file…". An
+    organization server takes no new bundle (settings come from the
+    environment, its own apps from signed connector configs).
 
     Bundle signing (ADR 0016): a well-formed-but-hostile *replacement* of
     this file (as opposed to the malformed-file cases above) is a
@@ -485,7 +506,11 @@ def load_org_config() -> dict[str, Any]:
     signing is unaffected — this call is then a no-op past the "no
     signing key pinned yet and no signature present" pass-through case.
     """
-    path = org_dir() / "org_config.json"
+    global _bundle_adopted_this_start
+    # Runs several times per process, so only ever set it to True.
+    _bundle_adopted_this_start |= org_bundle_signing.adopt_legacy_files(org_dir())
+    _warn_if_legacy_bundle_changed()
+    path = org_dir() / ORG_BUNDLE_FILENAME
     if not path.exists():
         return {}
     try:
@@ -533,7 +558,7 @@ def load_org_config() -> dict[str, Any]:
 
 
 def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
-    """Record a hash of the installed org_config.json at
+    """Record a hash of the installed org_bundle.json at
     every daemon startup, both to the regular log and to the audit trail,
     so tampering between one startup and the next is detectable by
     comparing hashes -- even for an install that hasn't adopted full
@@ -548,9 +573,9 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
     refreshing connector state) and shouldn't each add their own audit-log
     entry.
     """
-    path = org_dir() / "org_config.json"
+    path = org_dir() / ORG_BUNDLE_FILENAME
     if not path.exists():
-        logger.info("No organization config bundle installed (org_config.json absent)")
+        logger.info("No organization config bundle installed (org_bundle.json absent)")
         return
     try:
         raw = path.read_bytes()
@@ -580,6 +605,148 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
         ))
     except Exception as exc:
         logger.warning("Audit log write failed for organization config startup hash: %s", exc)
+
+
+def ignored_legacy_settings_message(names: list[str]) -> str:
+    """The notice for a bundle that still carries settings the Admin page now owns."""
+    return (
+        "The installed bundle carries settings that are now managed on the Admin page and are ignored: "
+        f"{', '.join(names)}. Change them on the Admin page; the bundle needs no edit."
+    )
+
+
+def load_admin_config(bundle: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """The admin config for this start, importing the bundle's settings the first time.
+
+    Returns ``(admin, imported)``. Called once from run_app() right after the bundle is loaded;
+    a malformed admin_config.json refuses to start the same way a malformed bundle does. The
+    audit entry is written later by ``record_admin_config_import``, once the audit logger exists.
+    """
+    try:
+        admin, imported = admin_config.ensure(
+            bundle, mode=org_mode.resolve_mode(bundle), single_user=org_mode.is_single_user(bundle),
+        )
+    except admin_config.AdminConfigError as exc:
+        raise org_mode.ConfigurationError(str(exc)) from exc
+    legacy = admin_config.legacy_keys_in(bundle)
+    if imported:
+        logger.warning(
+            "Imported %d settings from org_config.json into org/admin_config.json; "
+            "they are now managed on the Admin page", len(legacy),
+        )
+    elif legacy:
+        logger.warning(ignored_legacy_settings_message(legacy))
+    return admin, imported
+
+
+def record_admin_config_import(bundle: dict[str, Any], imported: bool) -> None:
+    """Audit record that this start imported the bundle's settings into the admin config."""
+    if not imported:
+        return
+    digest = hashlib.sha256(
+        json.dumps(bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="",
+            tool="",
+            tool_name="",
+            summary=f"Daemon startup: imported organization config settings into the admin config (bundle sha256={digest})",
+            sender="",
+            decision="admin_config_imported",
+            auto_accept_rule="",
+            latency_seconds=0.0,
+            pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for the admin config import: %s", exc)
+
+
+def _stored_connector_configs(mode: str) -> dict[str, connector_configs.LoadedConfig] | None:
+    """The connector configs an organization server reads from its own data directory."""
+    return connector_configs.load_all(org_dir()) if mode == "org" else None
+
+
+def effective_org_config(bundle: dict[str, Any], admin: dict[str, Any]) -> dict[str, Any]:
+    """The one dict every org-config reader sees: bundle, admin config, connector configs and
+    built-in apps composed."""
+    mode = org_mode.resolve_mode(bundle)
+    return oauth_apps.effective_org_config(
+        bundle, admin, mode=mode, single_user=org_mode.is_single_user(bundle),
+        connectors=_stored_connector_configs(mode),
+    )
+
+
+def _local_effective_org_config() -> dict[str, Any]:
+    """The CLI sign-in commands run loopback flows, so they always use the local apps."""
+    bundle = load_org_config()
+    try:
+        admin = admin_config.config_for(bundle, mode="local", single_user=False)
+    except admin_config.AdminConfigError as exc:
+        raise org_mode.ConfigurationError(str(exc)) from exc
+    return oauth_apps.effective_org_config(bundle, admin, mode="local")
+
+
+def _release_org_config() -> dict[str, Any]:
+    """The effective config of the server the release commands act on."""
+    bundle = load_org_config()
+    mode = org_mode.resolve_mode(bundle)
+    single_user = org_mode.is_single_user(bundle)
+    try:
+        admin = admin_config.config_for(bundle, mode=mode, single_user=single_user)
+    except admin_config.AdminConfigError as exc:
+        raise org_mode.ConfigurationError(str(exc)) from exc
+    return oauth_apps.effective_org_config(
+        bundle, admin, mode=mode, single_user=single_user, connectors=_stored_connector_configs(mode),
+    )
+
+
+def prepare_connector_configs(bundle: dict[str, Any]) -> None:
+    """The organization-mode start's connector-config step.
+
+    A bundle on disk must be the one this server adopted when it was upgraded: an organization
+    server takes no new bundle. The adopted bundle's app credentials are imported once, the
+    bundle's remaining role is warned about, and every stored connector config is verified
+    again, so a file that no longer verifies refuses the start."""
+    path = org_dir() / ORG_BUNDLE_FILENAME
+    if path.exists():
+        try:
+            digest = org_bundle_signing.sha256_hex(path.read_bytes())
+        except OSError as exc:
+            raise org_mode.ConfigurationError(f"Could not read organization config at {path}: {exc}") from exc
+        if digest != org_bundle_signing.load_adopted_record(org_dir()).get("sha256"):
+            raise org_mode.ConfigurationError(connector_configs.NEW_BUNDLE_REFUSAL)
+        connector_configs.import_from_legacy_bundle(org_dir(), bundle, digest)
+        logger.warning(connector_configs.LEGACY_BUNDLE_WARNING)
+    connector_configs.load_all(org_dir())
+
+
+def _audit_org_bundle_adopted() -> None:
+    """Audit record that this start copied the 6.x org_config.json to org_bundle.json."""
+    record = org_bundle_signing.load_adopted_record(org_dir())
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="",
+            tool="",
+            tool_name="",
+            summary=(
+                "Daemon startup: copied org/org_config.json to org/org_bundle.json for PrivacyFence 7 "
+                f"(sha256={record.get('sha256', '')}); the original is kept for a downgrade to 6.x"
+            ),
+            sender="",
+            decision="org_bundle_adopted",
+            auto_accept_rule="",
+            latency_seconds=0.0,
+            pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for organization bundle adoption: %s", exc)
 
 
 def _audit_step_up_requirement_change(change: StepUpRequirementChange) -> None:
@@ -752,6 +919,8 @@ def _maybe_start_web_server(
     controller: Any = None,
     org_config: dict[str, Any] | None = None,
     config_path: str = "",
+    bundle: dict[str, Any] | None = None,
+    startup_admin: dict[str, Any] | None = None,
 ) -> Any:
     """Returns the started WebServer -- always, in local mode, since the
     web approval UI is the only one there is (see this section's own
@@ -822,6 +991,7 @@ def _maybe_start_web_server(
         return _start_org_web_server(
             web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
             install_wide_config=config, install_wide_config_path=config_path,
+            bundle=bundle, startup_admin=startup_admin,
         )
 
     use_web_settings = bool(settings_config.get("enabled", False)) and controller is not None
@@ -968,6 +1138,10 @@ def _maybe_start_web_server(
         step_up=cast(step_up_config.StepUpConfig, local_step_up),
         # ADR 0006 option D / ADR 0037: a relabel only, never an attested source.
         agent_overrides=agent_overrides.from_config(config),
+        # The Admin API compares the admin config against this one to list what waits for a
+        # restart, and refreshes org_config -- the dict the connector factory above closes over.
+        startup_admin=startup_admin,
+        org_config=org_config,
     )
     server.start()
     # The pending-result URL gate.py hands back to Claude is
@@ -1110,10 +1284,40 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     return cfg
 
 
+def _require_single_user_start(server_config: org_mode.ServerConfig, startup_admin: dict[str, Any] | None) -> None:
+    """Refuse a single-user start that would expose a one-administrator server, or that would
+    quietly turn a former organization server into one.
+
+    The second check is what stops deleting org_bundle.json from downgrading a production
+    server: it would otherwise come back as single-user mode on whatever address it was bound to.
+    """
+    if not org_mode.is_loopback_issuer(server_config.issuer_url):
+        raise org_mode.ConfigurationError(
+            "Organization mode without an identity provider is single-user mode and runs only at "
+            "http://localhost or http://127.0.0.1. Set PRIVACYFENCE_IDP_ISSUER and "
+            "PRIVACYFENCE_IDP_CLIENT_ID (docs/org-mode-docker.md) to serve any other address."
+        )
+    admin = startup_admin if startup_admin is not None else (admin_config.load() or {})
+    pinned_keys = (
+        org_bundle_signing.pinned_public_key_path(org_dir()),
+        org_dir() / org_bundle_signing.LEGACY_PINNED_PUBKEY_FILENAME,
+    )
+    if (
+        any(path.exists() for path in pinned_keys)
+        or admin.get("org_server")
+        or admin.get("imported_from_bundle_sha256")
+    ):
+        raise org_mode.ConfigurationError(
+            "This data directory belonged to an organization server; restore org_bundle.json, or "
+            "use a new data directory for single-user mode."
+        )
+
+
 def _start_org_web_server(
     web_config: dict[str, Any], org_config: dict[str, Any], connector_host: ConnectorHost,
     *, unattended_sessions_enabled: bool, install_wide_config: dict[str, Any],
     install_wide_config_path: str = "",
+    bundle: dict[str, Any] | None = None, startup_admin: dict[str, Any] | None = None,
 ) -> Any:
     """org mode's own boot path -- a real OAuth 2.1 authorization server on ``/mcp``
     instead of the local shared-secret ``StaticTokenVerifier``. The
@@ -1121,7 +1325,7 @@ def _start_org_web_server(
     mounted here too now -- see web/server.py's own module docstring for
     exactly what it does and does not cover. Raises ``org_mode.
     ConfigurationError`` (surfaced as a startup failure, the same
-    posture a missing/invalid settings.yaml already has) if org_config.json
+    posture a missing/invalid settings.yaml already has) if the organization config
     is missing the ``idp``/``server`` sections org mode requires -- there is
     no silent partial-org-mode fallback.
 
@@ -1152,9 +1356,10 @@ def _start_org_web_server(
     from .approvals import PendingApprovalRegistry
     from .connector_registry import ConnectorRegistry
     from .gate import configure_popup_executor
+    from . import org_identity
     from .org_identity import IdpConfig
     from .web.mcp_dispatch import McpDispatcher
-    from .web.oauth_provider import OrgOAuthProvider
+    from .web.oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
     from .web.org_session import OrgSessionStore
     from .web.server import OrgAuth, WebServer
     from .web_approval_ui import init_web_approval_ui
@@ -1163,14 +1368,31 @@ def _start_org_web_server(
     # Validated here so a broken "peek"."auto_provision" refuses startup; peek_provisioning.start
     # parses it again below.
     org_mode.PeekProvisioningConfig.from_org_config(org_config)
+    if org_mode._idp_present(org_config):
+        # Recorded before discovery, so a server whose IdP is down at this start is still known
+        # as a server at the next one.
+        admin_config.mark_org_server()
+        if startup_admin is not None:
+            startup_admin["org_server"] = True
     idp = IdpConfig.from_org_config(org_config)
     # Validated here so a broken "grist"."auto_provision" refuses startup; the provisioner
     # itself re-reads it in grist_provisioning.start below.
     org_mode.GristProvisioningConfig.from_org_config(org_config)
     if idp is None:
-        raise org_mode.ConfigurationError(
-            "org mode (org_config.json \"mode\": \"org\") requires an \"idp\" section "
-            "(issuer, client_id, client_secret)"
+        if bundle:
+            # A signed organization bundle always meant a real server, and 6.x never wrote an
+            # "idp" section into one; running it as single-user mode would drop the sign-in.
+            raise org_mode.ConfigurationError(
+                "org_bundle.json has no \"idp\" section; set PRIVACYFENCE_IDP_* and run "
+                "privacyfence-app --retire-bundle."
+            )
+        # No identity provider: single-user mode, which is only safe where nothing but this
+        # computer can reach the listener.
+        _require_single_user_start(server_config, startup_admin)
+    elif (data_dir() / "users" / "single-user").is_dir():
+        logger.warning(
+            "This data directory holds single-user data (users/single-user/); people who sign in "
+            "through the identity provider cannot reach it."
         )
 
     approvals_config = web_config.get("approvals", {}) or {}
@@ -1225,11 +1447,22 @@ def _start_org_web_server(
 
     # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't
-    # change. Absent "authz" section in org_config.json -> disabled,
+    # change. Absent "authz" section in the admin config -> disabled,
     # every IdP-authenticated principal is admitted, unchanged from before.
-    authz_policy = org_mode.AuthzPolicyConfig.from_org_config(org_config)
+    # Bound to the IdP so the allowed-domain check knows the issuer and the unverified-email setting.
+    authz_policy = org_identity.IdpAuthzPolicy.bind(org_mode.AuthzPolicyConfig.from_org_config(org_config), idp)
+    # With the built-in Google sign-in the IdP redirects to the relay, which forwards the browser
+    # to /oauth/idp/callback here.
+    idp_callback_url = (
+        org_identity.signin_redirect_uri(
+            idp, issuer_url=server_config.issuer_url, grant="idp", callback_path=IDP_CALLBACK_PATH,
+        )
+        if idp is not None else f"{server_config.issuer_url.rstrip('/')}{IDP_CALLBACK_PATH}"
+    )
     provider = OrgOAuthProvider(
-        idp, idp_callback_url=f"{server_config.issuer_url.rstrip('/')}/oauth/idp/callback", policy=authz_policy,
+        idp, idp_callback_url=idp_callback_url, policy=authz_policy, issuer_url=server_config.issuer_url,
+        # No identity provider is single-user mode: /authorize sends the browser to its own sign-in.
+        single_user=idp is None,
     )
     sessions = OrgSessionStore()
     mcp_dispatcher = McpDispatcher(
@@ -1242,8 +1475,6 @@ def _start_org_web_server(
 
     push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)
 
-    # Before WebServer builds the scoped token store: tokens must name row ids when it loads them.
-    _upgrade_all_principals()
     _flush_deferred_warnings()
 
     server = WebServer(
@@ -1256,21 +1487,40 @@ def _start_org_web_server(
             install_wide_settings=install_wide_config,
             install_wide_settings_path=install_wide_config_path,
             push_notifier=push_notifier, push_store=push_store,
+            bundle=bundle or {}, startup_admin=startup_admin or {},
         ),
         ssl_certfile=server_config.cert_file or None,
         ssl_keyfile=server_config.key_file or None,
         trusted_proxies=server_config.trusted_proxies,
     )
     server.start()
+    # Before the first registration: what the administrator still has to publish in DNS for the
+    # built-in Google sign-in, from the last registration's answer.
+    relay_client.log_missing_dns_records(org_config)
+    relay_client.start_registration_loop(server_config.issuer_url, org_config, _shutdown_event)
+    relay_client.request_check()
     approval_registry.set_base_url(server.base_url)
     step_up = step_up_config.StepUpConfig.from_org_config(org_config)
+    if authz_policy.builtin:
+        # The built-in sign-in refuses everyone it was not told to admit, restrictions or not.
+        authz_summary = (
+            f"built-in Google sign-in ({len(authz_policy.admin_emails)} admin(s), "
+            f"{len(authz_policy.allowed_domains)} allowed domain(s), "
+            f"{len(authz_policy.required_groups)} required group(s))"
+        )
+    elif authz_policy.enabled:
+        authz_summary = (
+            f"enabled ({len(authz_policy.allowed_domains)} allowed domain(s), "
+            f"{len(authz_policy.required_groups)} required group(s))"
+        )
+    else:
+        authz_summary = "disabled"
     logger.info(
         "Org mode active -- MCP-over-HTTP at %s (OAuth 2.1, DCR at %s/register), IdP %s, "
         "WebAuthn step-up %s, app-level authz policy %s, accepting Host %s",
-        server.mcp_url, server.base_url, idp.issuer,
+        server.mcp_url, server.base_url, idp.issuer if idp is not None else "single-user",
         f"enabled (scope={step_up.scope})" if step_up.enabled else "disabled",
-        f"enabled ({len(authz_policy.allowed_domains)} allowed domain(s), "
-        f"{len(authz_policy.required_groups)} required group(s))" if authz_policy.enabled else "disabled",
+        authz_summary,
         # The Host-allowlist set, named at startup: a reverse proxy
         # forwarding a hostname this doesn't contain gets a flat 400 on
         # every request, and without this line the only way to find out
@@ -1291,7 +1541,7 @@ def _start_web_push(
     from . import web_push
 
     if not org_mode.WebPushConfig.from_org_config(org_config).enabled:
-        logger.info("Web push is off for this organization (org_config.json web_push.enabled: false)")
+        logger.info("Web push is off for this organization (org_bundle.json web_push.enabled: false)")
         return None, None
     store = web_push.PushSubscriptionStore()
     notifier = web_push.PushNotifier(
@@ -1409,7 +1659,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         # keeps build_connectors self-contained (safe to call from a test
         # or from ConnectorRegistry's own per-principal factory with no
         # other org-mode wiring already in scope) at the cost of one cheap
-        # re-parse of org_config.json's own "server" section.
+        # re-parse of the organization config's own "server" section.
         download_base_url = org_mode.ServerConfig.from_org_config(org_config).issuer_url.rstrip("/")
 
     # Gmail
@@ -1550,7 +1800,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             # until a full users.list/conversations.list re-sync finished,
             # which read as "the app isn't running yet."
             logger.info("Slack connector ready for workspace %r", workspace)
-            slack_connector = SlackConnector(slack_client)
+            slack_connector = SlackConnector(slack_client, limited=oauth_apps.slack_limited(slack_org))
             slack_connector.my_email = token.get("email", "")
             connectors.append(slack_connector)
         except (SlackClientError, FileNotFoundError) as exc:
@@ -2103,23 +2353,36 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # privacy group -- still the one load_org_config() call for this whole
     # function, its ConfigurationError still surfacing through the
     # same top-level "print and refuse to start" path in main().
-    org_config = load_org_config()
+    bundle = load_org_config()
     # ADR 0089: a 5.0.0a1 bundle that still names the removed mcp.tool_annotations raises
     # ConfigurationError -- refuse to start rather than quietly advertise something other than
     # what the administrator configured.
-    org_mode.reject_removed_tool_annotations(org_config)
+    org_mode.reject_removed_tool_annotations(bundle)
+    if org_mode.resolve_mode(bundle) == "org":
+        prepare_connector_configs(bundle)
+    admin, admin_imported = load_admin_config(bundle)
+    # Before the web server is built (it loads the scoped token store, whose tokens must already
+    # hold their own rules) and for every person, signed in or not.
+    data_format.migrate_everything(log=logger.warning)
     # Same "org mode fails closed, local mode warns" posture as the
     # rest of this function's fail-safe defaults now that mode is known.
-    check_storage_permissions(org_mode.resolve_mode(org_config) == "org")
-    init_privacy_filter(config, org_managed=org_mode.resolve_mode(org_config) == "org")
+    check_storage_permissions(org_mode.resolve_mode(bundle) == "org")
+    init_privacy_filter(config, org_managed=org_mode.resolve_mode(bundle) == "org")
+    # From here on every reader gets the effective config; the raw bundle stays for the
+    # signature, the hash and the mode checks above.
+    org_config = effective_org_config(bundle, admin)
+    if org_mode.is_single_user(org_config):
+        logger.warning("Single-user mode: one administrator, no identity provider, on this computer only.")
+    if org_mode.resolve_mode(bundle) == "local":
+        logger.warning(org_mode.LOCAL_MODE_DEPRECATION)
     # ADR 0088: a local install shows every requester as "Undetected".
-    agent_label.set_local_mode(org_mode.resolve_mode(org_config) == "local")
+    agent_label.set_local_mode(org_mode.resolve_mode(bundle) == "local")
     for warning in check_consistency_warnings():
         logger.warning(warning)
 
     # Centralized audit forwarding is org-mode-only (see
     # org_mode.AuditForwardingConfig's own docstring) -- a local-mode
-    # install's org_config.json could theoretically carry an
+    # install's organization config could theoretically carry an
     # "audit_forwarding" section, but there is no "centralize" to speak of
     # for a single employee's own machine, so it's ignored outside org
     # mode regardless of what the section says.
@@ -2147,7 +2410,10 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # (it records to it, see its own docstring) -- org_config itself was
     # already loaded earlier, ahead of init_privacy_filter(), so its
     # org_managed fail-safe default is known before that call.
-    log_org_config_bundle_hash(org_config)
+    log_org_config_bundle_hash(bundle)
+    record_admin_config_import(bundle, admin_imported)
+    if _bundle_adopted_this_start:
+        _audit_org_bundle_adopted()
     connectors, connector_failures = build_connectors(config, org_config)
     if not connectors:
         logger.warning("No connectors could be initialized; daemon still starting.")
@@ -2174,7 +2440,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # _maybe_start_web_server's own docstring.
     server = _maybe_start_web_server(
         config, connector_host, unattended_sessions_enabled=unattended_enabled, controller=settings_controller,
-        org_config=org_config,
+        org_config=org_config, bundle=bundle, startup_admin=admin,
         # Resolved, not the raw --config argument -- org mode's
         # admin privacy page writes this file back, and it must land on the
         # same path run_app() read `config` from. Local mode ignores it;
@@ -2363,6 +2629,160 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --relay-dns-records
+# ---------------------------------------------------------------------------- #
+
+def _bundle_section(bundle: dict[str, Any], key: str) -> dict[str, Any]:
+    value = bundle.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _bundle_for_migration() -> dict[str, Any] | None:
+    """The adopted legacy bundle, verified, for the two commands that move its settings to the
+    environment; None (after saying why) when this server has no organization bundle."""
+    bundle = load_org_config()
+    if not (org_dir() / ORG_BUNDLE_FILENAME).exists():
+        print("There is no org/org_bundle.json on this server.", file=sys.stderr)
+        return None
+    if bundle.get("mode") != "org":
+        print("org/org_bundle.json is not an organization bundle.", file=sys.stderr)
+        return None
+    return bundle
+
+
+def run_print_env_from_bundle(secret_file: str | None) -> int:
+    """Print the ``PRIVACYFENCE_*`` lines that say what the legacy bundle's ``mode``, ``server`` and
+    ``idp`` say. The identity provider's client secret is never printed: it goes to
+    ``secret_file`` (new, mode 0600) or is a placeholder."""
+    try:
+        bundle = _bundle_for_migration()
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if bundle is None:
+        return 1
+    secret_path = Path(os.path.abspath(Path(secret_file).expanduser())) if secret_file else None
+    if secret_path is not None and secret_path.exists():
+        print(f"{secret_path} already exists; it is not overwritten.", file=sys.stderr)
+        return 1
+
+    def listed(value: Any) -> str:
+        return ",".join(str(item) for item in value) if isinstance(value, list) else str(value)
+
+    lines = [f"{org_mode.MODE_ENV}=org"]
+    server = _bundle_section(bundle, "server")
+    for key, name in (
+        ("bind_host", org_mode.BIND_HOST_ENV), ("port", org_mode.PORT_ENV),
+        ("issuer_url", org_mode.ISSUER_URL_ENV), ("trusted_proxies", org_mode.TRUSTED_PROXIES_ENV),
+    ):
+        if server.get(key) not in (None, "", []):
+            lines.append(f"{name}={listed(server[key])}")
+    if server.get("tls"):
+        lines.append("# server.tls has no variable: end TLS at the reverse proxy (see the Docker guide).")
+    idp = _bundle_section(bundle, "idp")
+    for key, name in (
+        ("issuer", org_mode.IDP_ISSUER_ENV), ("client_id", org_mode.IDP_CLIENT_ID_ENV),
+        ("admin_group_claim", org_mode.IDP_ADMIN_GROUP_CLAIM_ENV),
+        ("admin_group_values", org_mode.IDP_ADMIN_GROUP_VALUES_ENV),
+        ("step_up_acr_values", org_mode.IDP_STEP_UP_ACR_VALUES_ENV),
+        ("admin_emails", org_mode.ADMIN_EMAILS_ENV),
+    ):
+        if idp.get(key) not in (None, "", []):
+            lines.append(f"{name}={listed(idp[key])}")
+    if "trust_unverified_email" in idp:
+        lines.append(f"{org_mode.IDP_TRUST_UNVERIFIED_EMAIL_ENV}={'true' if idp['trust_unverified_email'] else 'false'}")
+    secret = idp.get("client_secret")
+    if secret:
+        if secret_path is None:
+            lines.append(f"{org_mode.IDP_CLIENT_SECRET_ENV}=<the identity provider's client secret>")
+        else:
+            try:
+                fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(f"{secret}\n")
+            except OSError as exc:
+                print(f"Could not write {secret_path}: {exc.strerror}", file=sys.stderr)
+                return 1
+            lines.append(f"{org_mode.IDP_CLIENT_SECRET_FILE_ENV}={secret_path}")
+    for line in lines:
+        print(line)
+    return 0
+
+
+def _first_bundle_difference(bundle: dict[str, Any]) -> str | None:
+    """What the environment says differently from the legacy bundle for ``mode``, the server's
+    address and the identity provider's issuer and client id, or None when it says the same."""
+    mode = org_mode.resolve_mode({})
+    if mode != "org":
+        return f"{org_mode.MODE_ENV} is not \"org\", which org_bundle.json says."
+    server = _bundle_section(bundle, "server")
+    bundle_address = str(server.get("issuer_url") or "").strip()
+    env_address = os.environ.get(org_mode.ISSUER_URL_ENV, "").strip()
+    if bundle_address and env_address != bundle_address:
+        return f"{org_mode.ISSUER_URL_ENV} is not the server address org_bundle.json has ({bundle_address})."
+    bundle_idp = _bundle_section(bundle, "idp")
+    env_idp = org_mode.idp_section({}) or {}
+    for key, name in (("issuer", org_mode.IDP_ISSUER_ENV), ("client_id", org_mode.IDP_CLIENT_ID_ENV)):
+        if str(env_idp.get(key) or "") != str(bundle_idp.get(key) or ""):
+            return f"{name} is not the identity provider {key.replace('_', ' ')} org_bundle.json has ({bundle_idp.get(key)})."
+    return None
+
+
+def run_retire_bundle() -> int:
+    """End the legacy bundle once the environment says what it said: import its app credentials
+    (a server that was never started under 7 still has them only there), record ``retired`` and
+    delete ``org/org_bundle.json``."""
+    try:
+        bundle = _bundle_for_migration()
+        if bundle is None:
+            return 1
+        difference = _first_bundle_difference(bundle)
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if difference is not None:
+        print(f"Not retiring org_bundle.json: {difference}", file=sys.stderr)
+        return 1
+    path = org_dir() / ORG_BUNDLE_FILENAME
+    record = org_bundle_signing.load_adopted_record(org_dir())
+    try:
+        digest = org_bundle_signing.sha256_hex(path.read_bytes())
+        if digest != record.get("sha256"):
+            raise org_mode.ConfigurationError(connector_configs.NEW_BUNDLE_REFUSAL)
+        connector_configs.import_from_legacy_bundle(org_dir(), bundle, digest)
+        record = org_bundle_signing.load_adopted_record(org_dir())
+        record["retired"] = True
+        atomic_write_json(org_bundle_signing.adopted_record_path(org_dir()), record, indent=2)
+        path.unlink()
+    except (OSError, org_mode.ConfigurationError) as exc:
+        print(f"Could not retire org_bundle.json: {exc}", file=sys.stderr)
+        return 1
+    print("org_bundle.json is retired. Its app credentials are connector configs; the environment now holds the rest.")
+    return 0
+
+
+def run_relay_dns_records() -> int:
+    """Print the lines the server logs for each sign-in domain the relay has not found proven in
+    DNS, so an administrator can publish the records before anyone can sign in. Reads the last
+    registration's answer from the data directory; a running server checks again within the hour,
+    and at its next start."""
+    try:
+        org_config = _release_org_config()
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if relay_client.signin_domains(org_config) is None:
+        print("This server does not use the built-in Google sign-in; it needs no DNS records.")
+        return 0
+    lines = relay_client.missing_dns_records(org_config)
+    for line in lines:
+        print(line)
+    if not lines:
+        print("Built-in Google sign-in: every sign-in domain is proven in DNS.")
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # --peek-release
 # ---------------------------------------------------------------------------- #
 
@@ -2386,14 +2806,18 @@ def run_peek_release(principal_id: str) -> int:
         print("No such account.", file=sys.stderr)
         return 1
     try:
-        config = org_mode.PeekProvisioningConfig.from_org_config(load_org_config())
+        config = org_mode.PeekProvisioningConfig.from_org_config(_release_org_config())
     except org_mode.ConfigurationError as exc:
         print(exc, file=sys.stderr)
         return 1
     if not config.enabled:
         print("Peek auto-provisioning is not enabled in the organization config.", file=sys.stderr)
         return 1
-    key = os.environ.get(config.key_env, "").strip()
+    try:
+        key = org_mode.provisioning_key(config.key_env)
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     if not key:
         print(f"Set {config.key_env} to the Peek provisioning key first.", file=sys.stderr)
         return 1
@@ -2436,14 +2860,18 @@ def run_grist_release(principal_id: str) -> int:
         print("No such account.", file=sys.stderr)
         return 1
     try:
-        config = org_mode.GristProvisioningConfig.from_org_config(load_org_config())
+        config = org_mode.GristProvisioningConfig.from_org_config(_release_org_config())
     except org_mode.ConfigurationError as exc:
         print(exc, file=sys.stderr)
         return 1
     if not config.enabled:
         print("Grist auto-provisioning is not enabled in the organization config.", file=sys.stderr)
         return 1
-    key = os.environ.get(config.key_env, "").strip()
+    try:
+        key = org_mode.provisioning_key(config.key_env)
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     if not key:
         print(f"Set {config.key_env} to the Grist provisioning key first.", file=sys.stderr)
         return 1
@@ -2534,6 +2962,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--relay-dns-records", action="store_true",
+        help=(
+            "Print the DNS TXT records the built-in Google sign-in still needs, one line per sign-in "
+            "domain the relay has not found yet, and exit."
+        ),
+    )
+    parser.add_argument(
+        "--print-env-from-bundle", action="store_true",
+        help=(
+            "Print the PRIVACYFENCE_* lines that say what the legacy org/org_bundle.json says about the "
+            "mode, the server and the identity provider, and exit. The identity provider's client secret "
+            "is never printed."
+        ),
+    )
+    parser.add_argument(
+        "--idp-secret-file", metavar="PATH", default=None,
+        help=(
+            "With --print-env-from-bundle: write the identity provider's client secret to PATH (a new "
+            "file, mode 0600) and print the variable that names it."
+        ),
+    )
+    parser.add_argument(
+        "--retire-bundle", action="store_true",
+        help=(
+            "Retire the legacy org/org_bundle.json once the environment says the same mode, server address "
+            "and identity provider: its app credentials become connector configs and the file is deleted."
+        ),
+    )
+    parser.add_argument(
         "--peek-release", metavar="PRINCIPAL_ID", default=None,
         help=(
             "Revoke the Peek token PrivacyFence minted for the account PRINCIPAL_ID, stop renewing it, "
@@ -2556,7 +3013,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # tries after reading it out of `sc qc` gets a message saying so
     # (windows_service.run_service()).
     parser.add_argument("--windows-service", action="store_true", help=argparse.SUPPRESS)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.idp_secret_file and not args.print_env_from_bundle:
+        parser.error("--idp-secret-file goes with --print-env-from-bundle")
+    return args
 
 
 # Why main() last returned 1, for a caller with no stderr to read it from: a Windows service has
@@ -2630,11 +3090,23 @@ def main(argv: list[str] | None = None) -> int:
     except privilege_separation.PrivilegeSeparationError as exc:
         return _refuse_to_start(f"Configuration error: {exc}")
 
+    # Before anything reads or rewrites data: a newer release's data is not ours to touch.
+    try:
+        data_format.check_not_newer(data_format.read_marker())
+    except org_mode.ConfigurationError as exc:
+        return _refuse_to_start(f"Configuration error: {exc}")
+
     # After the identity check, unlike --print-mcp-token above: this one reads
     # and writes the authority directory itself, so on a separated install it
     # must run as the account that owns it.
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
+    if args.relay_dns_records:
+        return run_relay_dns_records()
+    if args.print_env_from_bundle:
+        return run_print_env_from_bundle(args.idp_secret_file)
+    if args.retire_bundle:
+        return run_retire_bundle()
     if args.peek_release is not None:
         return run_peek_release(args.peek_release)
     if args.grist_release is not None:
@@ -2658,7 +3130,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if oauth_flag:
-            org_config = load_org_config()
+            org_config = _local_effective_org_config()
             if args.gmail_oauth:
                 return run_gmail_oauth(org_config)
             if args.drive_oauth:

@@ -15,6 +15,7 @@ import pytest
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationParams,
+    AuthorizeError,
     IdentityAssertionParams,
     RefreshToken,
     TokenError,
@@ -124,6 +125,173 @@ class TestClientRegistration:
         assert await provider.get_client("claude") is None
 
 
+class TestWithoutAnIdentityProvider:
+    """Single-user mode has no identity provider; the provider must refuse rather than dereference it."""
+
+    @staticmethod
+    def _single_user_provider(tmp_path, monkeypatch) -> op.OrgOAuthProvider:
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+        monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
+        return op.OrgOAuthProvider(None, idp_callback_url=IDP_CALLBACK_URL)
+
+    async def test_authorize_is_refused(self, tmp_path, monkeypatch):
+        provider = self._single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        with pytest.raises(AuthorizeError) as excinfo:
+            await provider.authorize(client, _params())
+        assert excinfo.value.error == "temporarily_unavailable"
+
+    async def test_an_idp_callback_is_refused(self, tmp_path, monkeypatch):
+        provider = self._single_user_provider(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="no identity provider"):
+            await provider.handle_idp_callback(state="s", code="c")
+
+
+SINGLE_USER = Principal(id="single-user", email="admin@localhost", display_name="Administrator", is_admin=True)
+
+
+def _single_user_provider(tmp_path, monkeypatch) -> op.OrgOAuthProvider:
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+    monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
+    return op.OrgOAuthProvider(None, idp_callback_url=IDP_CALLBACK_URL, single_user=True)
+
+
+async def _single_user_continue(provider: op.OrgOAuthProvider, client, *, params=None) -> str:
+    """register -> authorize -> continue with the administrator's session; where the browser goes next."""
+    import urllib.parse as up
+    await provider.register_client(client)
+    login_url = await provider.authorize(client, params or _params())
+    next_path = dict(up.parse_qsl(up.urlparse(login_url).query))["next"]
+    state = dict(up.parse_qsl(up.urlparse(next_path).query))["state"]
+    return await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+
+class TestSingleUser:
+    """Single-user mode: authorize sends the browser to /login, and the continue route finishes it."""
+
+    def test_an_identity_provider_cannot_be_combined_with_single_user(self, tmp_path, monkeypatch):
+        with pytest.raises(ValueError, match="no identity provider"):
+            op.OrgOAuthProvider(_idp(), idp_callback_url=IDP_CALLBACK_URL, single_user=True)
+
+    async def test_authorize_returns_the_sign_in_page_with_the_continue_route_as_next(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+
+        url = await provider.authorize(client, _params())
+
+        assert url.startswith("/login?next=/oauth/single-user/continue%3Fstate%3D")
+        next_path = dict(up.parse_qsl(up.urlparse(url).query))["next"]
+        state = next_path.split("state=", 1)[1]
+        assert state in provider._pending
+
+    async def test_continue_with_a_remembered_consent_issues_the_code(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _remember_consent(provider, client, SINGLE_USER.id)
+
+        redirect = await _single_user_continue(provider, client, params=_params(state="clients-state"))
+
+        assert redirect.startswith("https://claude.example.com/callback?")
+        qs = dict(up.parse_qsl(up.urlparse(redirect).query))
+        assert qs["state"] == "clients-state"
+        auth_code = await provider.load_authorization_code(client, qs["code"])
+        tokens = await provider.exchange_authorization_code(client, auth_code)
+        access = await provider.load_access_token(tokens.access_token)
+        assert access.subject == SINGLE_USER.id
+
+    async def test_continue_without_consent_stops_at_the_consent_page(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        client.client_name = "Claude"
+
+        location = await _single_user_continue(provider, client)
+
+        assert location.startswith(op.CONSENT_PATH + "/")
+        assert provider._codes == {}
+        consent_id = location.rsplit("/", 1)[1]
+        view = provider.consent_view(consent_id)
+        assert view.client_name == "Claude"
+        assert view.principal_label == "admin@localhost"
+        redirect = provider.decide_consent(consent_id, csrf=view.csrf, allow=True)
+        assert "code=" in redirect
+        assert provider._consents.has(SINGLE_USER, "claude", "https://claude.example.com/callback")
+
+    async def test_deny_on_the_consent_page_returns_access_denied(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        location = await _single_user_continue(provider, _client_info())
+        consent_id = location.rsplit("/", 1)[1]
+
+        redirect = provider.decide_consent(consent_id, csrf=provider.consent_view(consent_id).csrf, allow=False)
+
+        assert "error=access_denied" in redirect
+        assert provider._codes == {}
+
+    async def test_an_unknown_state_is_refused(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="invalid or expired"):
+            await provider.handle_single_user_continue(state="never-issued", principal=SINGLE_USER)
+
+    async def test_a_state_is_single_use(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(dict(up.parse_qsl(up.urlparse(url).query))["next"]).query))["state"]
+
+        await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+        with pytest.raises(ValueError, match="invalid or expired"):
+            await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+    async def test_an_expired_state_is_refused(self, tmp_path, monkeypatch):
+        import urllib.parse as up
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        url = await provider.authorize(client, _params())
+        state = dict(up.parse_qsl(up.urlparse(dict(up.parse_qsl(up.urlparse(url).query))["next"]).query))["state"]
+        real_now = time.time()
+        monkeypatch.setattr(op.time, "time", lambda: real_now + op._PENDING_AUTHORIZATION_TTL_SECONDS + 1)
+
+        with pytest.raises(ValueError, match="invalid or expired"):
+            await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+
+    async def test_a_multi_user_provider_refuses_the_continue_path(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        import urllib.parse as up
+        state = dict(up.parse_qsl(up.urlparse(await provider.authorize(client, _params())).query))["state"]
+
+        with pytest.raises(ValueError, match="identity provider"):
+            await provider.handle_single_user_continue(state=state, principal=SINGLE_USER)
+        assert state in provider._pending  # not consumed by the refused call
+
+    async def test_the_idp_callback_is_refused(self, tmp_path, monkeypatch):
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="no identity provider"):
+            await provider.handle_idp_callback(state="s", code="c")
+
+    async def test_a_single_user_sign_in_never_notifies_the_provisioners(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(op.peek_provisioning, "notify_sign_in", lambda *a, **kw: calls.append("peek"))
+        monkeypatch.setattr(op.grist_provisioning, "notify_sign_in", lambda *a, **kw: calls.append("grist"))
+        provider = _single_user_provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _remember_consent(provider, client, SINGLE_USER.id)
+
+        await _single_user_continue(provider, client)
+
+        assert calls == []
+
+
 class TestAuthorizeAndIdpCallback:
     async def test_authorize_redirects_to_the_idp(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
@@ -231,7 +399,7 @@ class TestAuthorizeAndIdpCallback:
         client = _client_info()
         await provider.register_client(client)
         _remember_consent(provider, client, "alice")
-        _patch_idp_exchange(monkeypatch, claims={"sub": "alice", "email": "alice@acme.com"})
+        _patch_idp_exchange(monkeypatch, claims={"sub": "alice", "email": "alice@acme.com", "email_verified": True})
         auth_url = await provider.authorize(client, _params())
         state = dict(up.parse_qsl(up.urlparse(auth_url).query))["state"]
         redirect_url = await provider.handle_idp_callback(state=state, code="idp-code")
@@ -990,3 +1158,120 @@ class TestRefreshTokenSurvivesARestart:
         with caplog.at_level("INFO"):
             _provider(tmp_path, monkeypatch)
         assert "restored 1 persisted refresh-token record(s)" in caplog.text
+
+
+class TestIdpLegThroughTheRelay:
+    """With the built-in Google sign-in, the IdP leg of an MCP client's authorization goes through
+    the relay's ``idp`` grant, with the same cross-server checks as the browser's own sign-in."""
+
+    RELAY_URI = "https://oauth.privacyfence.eu/callback/idp"
+    ISSUER = "https://pf.example.com"
+
+    def _setup(self, tmp_path, monkeypatch, *, prove: tuple[str, ...] | None = ("acme.com",), **idp_overrides):
+        from tests.unit.web.test_routes_org_identity import FakeGoogle, prove_relay
+
+        google = FakeGoogle(monkeypatch)
+        idp = google.idp(**idp_overrides)
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+        monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
+        callback = oi.signin_redirect_uri(
+            idp, issuer_url=self.ISSUER, grant="idp", callback_path=op.IDP_CALLBACK_PATH,
+        )
+        provider = op.OrgOAuthProvider(
+            idp, idp_callback_url=callback, issuer_url=self.ISSUER,
+            policy=oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(), idp),
+        )
+        if prove is not None:
+            prove_relay(*prove)
+        return google, provider
+
+    @staticmethod
+    def _query(url: str) -> dict[str, str]:
+        import urllib.parse as up
+
+        return dict(up.parse_qsl(up.urlparse(url).query))
+
+    async def _authorize(self, provider) -> str:
+        client = _client_info()
+        await provider.register_client(client)
+        return await provider.authorize(client, _params())
+
+    def test_a_relayed_idp_needs_the_issuer_url(self, monkeypatch):
+        from tests.unit.web.test_routes_org_identity import FakeGoogle
+
+        with pytest.raises(ValueError):
+            op.OrgOAuthProvider(FakeGoogle(monkeypatch).idp(), idp_callback_url=self.RELAY_URI)
+
+    async def test_the_relay_redirect_uri_for_authorize_and_exchange_and_a_host_state(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch)
+        url = await self._authorize(provider)
+        query = self._query(url)
+        assert query["redirect_uri"] == self.RELAY_URI
+        host, _, nonce = query["state"].partition("~")
+        assert host == "pf.example.com" and len(nonce) == 43
+        answer = google.sign_in(url)
+        redirect = await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        assert redirect.startswith("/oauth/consent/")
+        assert google.exchanges[0]["redirect_uri"] == self.RELAY_URI
+
+    async def test_before_registration_no_redirect_to_google(self, tmp_path, monkeypatch):
+        _google, provider = self._setup(tmp_path, monkeypatch, prove=None)
+        with pytest.raises(AuthorizeError) as raised:
+            await self._authorize(provider)
+        assert raised.value.error == "temporarily_unavailable"
+        assert provider._pending == {}
+
+    async def test_while_no_domain_is_proven_no_redirect_to_google(self, tmp_path, monkeypatch):
+        _google, provider = self._setup(tmp_path, monkeypatch, prove=())
+        with pytest.raises(AuthorizeError):
+            await self._authorize(provider)
+
+    async def test_a_code_from_another_attempt_fails_the_exchange(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch)
+        first = await self._authorize(provider)
+        second = await self._authorize(provider)
+        code = google.sign_in(first)["code"]
+        import requests
+
+        with pytest.raises(requests.HTTPError):
+            await provider.handle_idp_callback(state=self._query(second)["state"], code=code)
+
+    async def test_an_id_token_with_another_attempts_nonce_is_refused(self, tmp_path, monkeypatch):
+        import jwt
+
+        google, provider = self._setup(tmp_path, monkeypatch)
+        first = await self._authorize(provider)
+        second = await self._authorize(provider)
+        answer = google.sign_in(second, nonce=self._query(first)["nonce"])
+        with pytest.raises(jwt.InvalidTokenError):
+            await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+
+    async def test_a_replayed_unknown_or_foreign_state_is_refused(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch)
+        answer = google.sign_in(await self._authorize(provider))
+        await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        with pytest.raises(ValueError):
+            await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        answer = google.sign_in(await self._authorize(provider))
+        nonce = answer["state"].partition("~")[2]
+        for state in (f"other.example.com~{nonce}", f"pf.example.com~{'x' * 43}", nonce):
+            with pytest.raises(ValueError):
+                await provider.handle_idp_callback(state=state, code=answer["code"])
+        assert len(google.exchanges) == 1
+
+    async def test_an_admin_of_a_domain_not_proven_in_dns_is_refused(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch, prove=("acme.org",))
+        answer = google.sign_in(await self._authorize(provider))
+        with pytest.raises(oi.AuthorizationDenied):
+            await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+
+    async def test_an_own_idp_keeps_todays_redirect_uri_byte_for_byte(self, tmp_path, monkeypatch):
+        google, provider = self._setup(tmp_path, monkeypatch, prove=None, builtin=False, relay=False, admin_emails=())
+        url = await self._authorize(provider)
+        query = self._query(url)
+        assert query["redirect_uri"] == "https://pf.example.com/oauth/idp/callback"
+        assert "~" not in query["state"]
+        answer = google.sign_in(url)
+        await provider.handle_idp_callback(state=answer["state"], code=answer["code"])
+        assert google.exchanges[0]["redirect_uri"] == "https://pf.example.com/oauth/idp/callback"

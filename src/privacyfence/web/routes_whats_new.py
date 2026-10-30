@@ -90,7 +90,7 @@ def render_page(
 </div>"""
     return web_shell.wrap(
         body, title="PrivacyFence — What's new", active="whats-new", nonce=nonce,
-        nav_items=web_shell.ORG_NAV_ITEMS,
+        nav_items=web_shell.org_nav_items(principal.is_admin),
         principal_label=principal.email or principal.display_name or principal.id,
         live_updates=False, notifications_enabled=False,
     )

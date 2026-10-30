@@ -1,9 +1,10 @@
-# The Telegram app credentials module is git-ignored (generated at build time from CI secrets by
-# scripts/telegram_credentials.py), and setuptools_scm's file finder only packages tracked files,
-# so without this line it never reaches the sdist -- or the wheel, which `python -m build` builds
-# from the sdist. Absent (a local build without the secrets), this matches nothing and is skipped.
-# See ADR 0040.
+# The Telegram app credentials module and the built-in OAuth apps module are git-ignored (generated
+# at build time from CI secrets by scripts/telegram_credentials.py and scripts/builtin_apps.py), and
+# setuptools_scm's file finder only packages tracked files, so without these lines neither reaches
+# the sdist -- or the wheel, which `python -m build` builds from the sdist. Absent (a local build
+# without the secrets), each matches nothing and is skipped. See ADR 0040 and ADR 0255.
 include src/privacyfence/_telegram_credentials.py
+include src/privacyfence/_builtin_apps.py
 
 # sync/ is the separate privacyfence-sync distribution, published from its own pyproject.toml.
 # setuptools_scm's file finder packages every tracked file, so without this the privacyfence sdist

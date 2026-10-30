@@ -502,7 +502,7 @@ def _render_org_list_page(
         title="PrivacyFence — Approvals",
         active="approvals",
         nonce=nonce,
-        nav_items=web_shell.ORG_NAV_ITEMS,
+        nav_items=web_shell.org_nav_items(principal.is_admin),
         principal_label=principal.email or principal.display_name or principal.id,
         stream_url="/api/approvals/stream",
         notifications_enabled=False,
@@ -974,6 +974,7 @@ def create_app(
             notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
             banner_html=_banner_html(principal),
             dismissible_notice_html=_off_notice_html(), dismissible_notice_key="pf_step_up_off_dismissed",
+            deprecation_html=web_shell.local_mode_deprecation_html(),
         )
 
     def _unauthenticated_page(request: Request, next_path: str) -> Response:

@@ -2569,8 +2569,8 @@ class TestHostileContentStaysText:
 
         def hostile_snapshot():
             state = real_snapshot()
-            state["general"]["org_installed"] = True
-            state["general"]["org_installed_date"] = "<b id=pfxss3>x</b>"
+            state["general"]["update_available"] = True
+            state["general"]["update_latest_version"] = "<b id=pfxss3>x</b>"
             return state
 
         controller.snapshot = hostile_snapshot
@@ -2578,7 +2578,7 @@ class TestHostileContentStaysText:
             call_soon_threadsafe(controller._push_snapshot)
             page.wait_for_function("() => window.__pfRenders > 0")
             assert page.locator("#pfxss3").count() == 0
-            assert "Installed <b id=pfxss3>x</b>" in page.locator("#app").inner_text()
+            assert "PrivacyFence <b id=pfxss3>x</b> is available" in page.locator("#app").inner_text()
         finally:
             controller.snapshot = real_snapshot
 
@@ -2632,9 +2632,9 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        # Connectors is never applicable in org mode; Privacy Filter/AI
-        # systems are admin-only. General is every principal's (their own
-        # passkey scope lives there, ADR 0091) but its PII card is not.
+        # Connectors is never applicable in org mode; the install-wide Privacy
+        # Filter and Stats are Admin sections. General is every principal's
+        # (their own passkey scope lives there, ADR 0091) without a PII card.
         assert nav_labels == ["General", "Auto-accept", "Audit Log", "About"]
         assert page.get_by_text("Auto-accept").first.is_visible()
         page.locator('.pf-navitem[data-nav="general"]').click()
@@ -2659,15 +2659,35 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "Stats", "About"]
-        assert page.get_by_text("PII Detection Gate").is_visible()
+        # An administrator's Settings is the same page as anyone else's: the install-wide
+        # Privacy Filter and Stats are Admin sections.
+        assert nav_labels == ["General", "Auto-accept", "Audit Log", "About"]
+        page.locator('.pf-navitem[data-nav="general"]').click()
+        assert page.get_by_text("Manage passkeys").first.is_visible()
+        assert page.get_by_text("PII Detection Gate").count() == 0
         self._screenshot(page, "org-settings-admin")
 
+        # The old privacy address forwards to the Admin page.
         page.goto(f"{server.base_url}/settings/privacy")
         page.wait_for_load_state("load")
+        assert page.url == f"{server.base_url}/admin"
+
+    def test_org_admin_page_renders_privacy_and_stats(self, page, context, org_server):
+        server, sessions = org_server
+        principal = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
+        _sign_in_org(context, server, sessions, principal=principal)
+        page.goto(f"{server.base_url}/admin")
+        page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
-        assert page.get_by_text("Privacy Filter").is_visible()
-        self._screenshot(page, "org-settings-admin-privacy")
+        assert "Privacy Filter" in page.locator(".pf-navitem").all_inner_texts()
+        page.locator('.pf-navitem[data-nav="privacy"]').click()
+        page.wait_for_selector(".pf-privacy")
+        assert page.get_by_text("PII Detection Gate").first.is_visible()
+        self._screenshot(page, "org-admin-privacy")
+        page.locator('.pf-navitem[data-nav="stats"]').click()
+        page.wait_for_selector("[data-stat-tile]")
+        assert page.locator("[data-stat-tile] .pf-stat-label", has_text="signed in").first.is_visible()
+        self._screenshot(page, "org-admin-stats")
 
 
 # --------------------------------------------------------------------- #
@@ -2836,8 +2856,14 @@ def phone_page(browser, request):
     ctx.close()
 
 
-_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "stats", "about")
+_ADMIN_SECTIONS = ("general", "auto_accept", "audit", "about")
 _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
+# The Admin page: every section an organization administrator sees, and the three a desktop
+# install's owner sees.
+_ORG_ADMIN_PAGE_SECTIONS = (
+    "services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats",
+)
+_LOCAL_ADMIN_PAGE_SECTIONS = ("services", "features", "org_config")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 
 def _phone_cases(case_ids):
@@ -2939,23 +2965,43 @@ class TestPhoneLayout:
     @pytest.mark.parametrize(
         ("case", "width"),
         _phone_cases([f"settings-admin-{s}" for s in _ADMIN_SECTIONS]
-                     + [f"settings-member-{s}" for s in _MEMBER_SECTIONS]
-                     + ["settings-privacy-route"]),
+                     + [f"settings-member-{s}" for s in _MEMBER_SECTIONS]),
     )
     def test_settings(self, phone_page, org_server, case, width):
         server, sessions = org_server
         role, section = case.removeprefix("settings-").split("-", 1)
         principal = _MEMBER if role == "member" else _ADMIN
         _sign_in_org(phone_page.context, server, sessions, principal=principal)
-        phone_page.goto(f"{server.base_url}/settings{'/privacy' if case == 'settings-privacy-route' else ''}")
+        phone_page.goto(f"{server.base_url}/settings")
         phone_page.wait_for_selector(".pf-navitem")
-        if case != "settings-privacy-route":
-            # A script click: the point is the section's own layout; the tab strip's own tap
-            # targets are checked with the rest of the page by (c).
-            phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
-        # A section renders into .pf-page (About into .pf-about-page); Privacy Filter's editor,
-        # beside its group list, into .pf-detail-page.
+        # A script click: the point is the section's own layout; the tab strip's own tap
+        # targets are checked with the rest of the page by (c).
+        phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
+        # A section renders into .pf-page (About into .pf-about-page).
         region = ".pf-page, .pf-detail-page, .pf-about-page"
+        phone_page.wait_for_selector(region)
+        _phone_screenshot(phone_page, f"{case}-{width}")
+        _assert_phone_layout(phone_page, width, main=region)
+
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"admin-org-{s}" for s in _ORG_ADMIN_PAGE_SECTIONS]
+                     + [f"admin-local-{s}" for s in _LOCAL_ADMIN_PAGE_SECTIONS]),
+    )
+    def test_admin(self, phone_page, org_server, local_server_with_settings, case, width):
+        mode, section = case.removeprefix("admin-").split("-", 1)
+        if mode == "org":
+            server, sessions = org_server
+            _sign_in_org(phone_page.context, server, sessions, principal=_ADMIN)
+        else:
+            server, _web_ui = local_server_with_settings
+            _sign_in_local(phone_page, server)
+        response = phone_page.goto(f"{server.base_url}/admin")
+        assert response.status == 200, f"/admin answered {response.status}"
+        phone_page.wait_for_selector(".pf-navitem")
+        # A script click, as for Settings: the tab strip's tap targets are checked by (c).
+        phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
+        region = ".pf-page, .pf-detail-page, .pf-privacy"
         phone_page.wait_for_selector(region)
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=region)

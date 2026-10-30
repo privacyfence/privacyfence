@@ -1,17 +1,74 @@
 # Slack setup
 
 PrivacyFence uses a Slack **user token**: your AI client sees exactly the channels, direct messages
-and private groups you can see, as you. There is no bot to invite. One administrator creates a
-Slack app once per workspace and puts its client ID and secret into the organization config
-bundle; users then approve the app in their browser from PrivacyFence.
+and private groups you can see, as you. There is no bot to invite.
+
+You need this page only to use your organization's own app instead of the built-in one. The next two
+sections say why you might, and what the built-in app does.
+
+## The built-in app, and limited mode
+
+An organization server and the Docker image offer Slack with PrivacyFence's built-in app: nothing to
+register, and each person approves it in their browser from PrivacyFence. If your workspace requires
+admin approval for apps, a workspace admin approves it once on Slack's side.
+
+Slack limits apps that are not listed in the Slack Marketplace to one history or thread request a
+minute and 15 messages a call. PrivacyFence is not listed yet, so the built-in app runs in **limited
+mode**:
+
+- `slack_get_channel_history` reads through Slack search instead. Some message subtypes are missing,
+  a message posted a moment ago can take a while to appear, and thread replies come back as top-level
+  matches. The result carries a note, "Read through Slack search, because Slack limits history reads
+  for this app; an administrator can switch to your workspace's own app on the Admin page.", and so
+  does the tool description. For a conversation search cannot be scoped to, it falls back to the
+  history call and says why.
+- `slack_get_thread_replies` returns at most 15 replies and names the limit in a note.
+- Everything else (search, sending, read state) is unaffected.
+
+The built-in Slack row on **Admin → Services** explains the limit. Until PrivacyFence is listed, use
+your workspace's own internal app, which reads at full speed.
+
+Because Slack sends no PKCE, a sign-in code for the built-in app passes through
+`oauth.privacyfence.eu` without it; your own app avoids this. See
+[Security and compliance](security-and-compliance.md#built-in-apps-the-admin-config-and-the-relay).
+
+Do not mark the built-in PrivacyFence app as trusted or pre-approved: that trust would extend to
+every PrivacyFence server and to anyone using the public app. To trust an app, register your own.
+
+## Your workspace's own app, in one click
+
+On an organization server, **Admin → Services** has a **Create your workspace's own Slack app**
+button on the Slack row. It opens Slack's create page with a manifest filled in for your server (the
+redirect URL `<server>/oauth/callback/slack` and the user token scopes below, no bot). If Slack does
+not fill the page in, choose **Create New App → From an app manifest** and paste the manifest shown
+under **If Slack does not fill in the app**. Then:
+
+1. Leave the app undistributed. It is then an internal app, which serves **one workspace** and keeps
+   Slack's full rate limits. **Never activate public distribution** (**Manage Distribution →
+   Activate Public Distribution**): Slack would then apply the Marketplace limits to it.
+2. Copy the **Client ID** and **Client Secret** from **Basic Information → App Credentials**.
+3. Sign them as a connector config and upload the file on the same row (**Upload a connector
+   config…**): `python3 scripts/sign_connector_config.py sign --provider slack --serial 1 --client-id
+   <Client ID> --client-secret-file <file> --key <signing key> --output slack.connector.txt`, or the
+   signing page that works offline in a browser. The first upload asks you to check the signing key's
+   fingerprint, and a passkey. See [org-mode-setup-guide.md](org-mode-setup-guide.md).
+
+Switching to your own app, or back with **Remove our own app**, makes everyone who connected Slack
+sign in again. An internal app serves one workspace, so people in any other Slack workspace
+cannot sign in with it.
+
+On a desktop install the app is a `slack` section in the bundle instead; see below.
 
 ## What you need
 
 - Permission to create apps in your Slack workspace (and, if your workspace requires it, an admin
   who approves app installs).
-- Python 3 to run `scripts/build_org_bundle.py`.
+- Python 3 to run `scripts/sign_connector_config.py` (organization server) or
+  `scripts/build_org_bundle.py` (desktop install), or a browser for the offline signing page.
 
 ## Register the app
+
+If you did not use the Admin button, register the app by hand:
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**.
    Name it (for example `PrivacyFence`), pick your workspace and click **Create App**.
@@ -25,9 +82,9 @@ bundle; users then approve the app in their browser from PrivacyFence.
 4. **Basic Information → App Credentials:** copy the **Client ID** and **Client Secret**.
 
 **Never activate public distribution** (**Manage Distribution → Activate Public Distribution**),
-and never share the bundle outside your workspace. An app created from scratch and left
-undistributed is an internal app. Slack restricts apps distributed outside the Slack Marketplace
-to 1 request per minute and 15 messages per call on `conversations.history` and
+and never share the connector config or bundle outside your workspace. An app created from scratch
+and left undistributed is an internal app. Slack restricts apps distributed outside the Slack
+Marketplace to 1 request per minute and 15 messages per call on `conversations.history` and
 `conversations.replies`, which `slack_get_channel_history`, `slack_get_thread_replies` and
 single-message lookups (permalinks, thread previews on approval cards) rely on. Nothing fails outright; reads just become very slow and
 truncated.
@@ -90,9 +147,10 @@ See [ADR 0234](adr/0234-slack-reads-report-the-users-own-read-state.md) and
 | Item | Value |
 |---|---|
 | Local redirect (desktop installs) | `http://127.0.0.1:53682/callback` — exactly this; Slack requires an exact match |
-| Org redirect (organization server) | `<server-issuer-url>/oauth/callback/slack`, with `<server-issuer-url>` the bundle's `--server-issuer-url` (for example `https://pf.acme.example.com/oauth/callback/slack`) |
+| Org redirect (organization server) | `<server>/oauth/callback/slack`, with `<server>` your server's public address, `PRIVACYFENCE_ISSUER_URL` (for example `https://pf.acme.example.com/oauth/callback/slack`) |
 | User token scopes | `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `users:read.email`, `search:read`, `chat:write`, `im:write`, `channels:write`, `groups:write`, `mpim:write` |
-| Bundle flags | `--slack-client-id <Client ID>` and `--slack-client-secret <Client Secret>` (both required together); optional `--slack-scopes <scope> …` |
+| Connector config (organization server) | `sign_connector_config.py sign --provider slack --client-id <Client ID> --client-secret-file <file holding the Client Secret>` |
+| Bundle flags (desktop install) | `--slack-client-id <Client ID>` and `--slack-client-secret <Client Secret>` (both required together); optional `--slack-scopes <scope> …` |
 
 What the less obvious scopes are for: `users:read.email` resolves authors' email addresses;
 `im:write` and `mpim:write` open a new direct or group message (`slack_create_group_chat`);
@@ -103,26 +161,26 @@ What the less obvious scopes are for: `users:read.email` resolves authors' email
 organization server alike. A scope you leave out breaks the tools that need it, so leave it unset
 unless you have a reason.
 
-## Build and distribute the bundle
+## Give PrivacyFence the app
 
-`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
-stable GitHub Release. It needs only Python 3; no PrivacyFence install is required.
+On an organization server, sign the Client ID and Client Secret as a connector config and upload it
+on **Admin → Services** (see [above](#your-workspaces-own-app-in-one-click)). On a desktop install,
+put them in the bundle:
 
 ```bash
 python3 scripts/build_org_bundle.py \
   --slack-client-id 1234567890.1234567890 \
   --slack-client-secret abcdef0123456789abcdef0123456789 \
-  -o org_config.json --merge
+  -o org_bundle.json --merge
 ```
 
-`--merge` adds Slack to an existing `org_config.json`; drop it if this is the first service in the
-bundle. Distribute the bundle to desktop users, or build it with the server flags and install it on
-your organization server — see [org-mode-setup-guide.md](org-mode-setup-guide.md) for signing and
-the server flags.
+`--merge` adds Slack to an existing bundle; drop it if this is the first service in the bundle.
+Install the bundle on **Admin → Organization configuration**
+([connecting-a-service.md](connecting-a-service.md)).
 
 ## Users connect
 
-Users install the bundle and click **Authenticate…** next to Slack (desktop) or **Connect**
+Users click **Authenticate…** next to Slack (desktop install, after the bundle is installed) or **Connect**
 (organization server), then review the permissions on Slack's page and click **Allow**. The shared
 flow is described in [connecting-a-service.md](connecting-a-service.md).
 
@@ -141,11 +199,15 @@ admin uninstalled it). **Reconnect…**.
 back** — the URL Slack names after `Passed URI:` is missing from the app's **Redirect URLs**. Add
 exactly that URL and click **Save URLs**, then connect again; no bundle rebuild or restart is
 needed. It must be exactly `http://127.0.0.1:53682/callback` for desktop installs, or
-`<server-issuer-url>/oauth/callback/slack` for an organization server; `localhost` in place of
+`<server>/oauth/callback/slack` for an organization server; `localhost` in place of
 `127.0.0.1` does not match. If the URL is already listed, check that the app you edited is the one
-whose Client ID is in the bundle (`--slack-client-id`).
+whose Client ID is in the connector config or bundle.
 
-**Reads became slow, or channel history stops at 15 messages** — check **Manage Distribution**.
+**Channel history reads through search, or thread replies stop at 15** — the server uses the built-in
+app, which Slack limits until PrivacyFence is in the Marketplace. Switch to your workspace's own app
+([above](#your-workspaces-own-app-in-one-click)).
+
+**Reads became slow, or channel history stops at 15 messages with your own app** — check **Manage Distribution**.
 If public distribution was ever activated, Slack may treat the app as distributed outside the
 Marketplace and apply the reduced limits described under
 [Register the app](#register-the-app). Deactivate it; if the limits persist, ask Slack support to

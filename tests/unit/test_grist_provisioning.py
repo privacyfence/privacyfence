@@ -579,6 +579,24 @@ class TestModuleFunctions:
         ) in caplog.text
         assert gp._INSTANCE is None
 
+    def test_start_reads_the_key_from_a_file(self, data, changes, monkeypatch, tmp_path):
+        key_file = tmp_path / "grist_key"
+        key_file.write_text("gristprov_file\n")
+        monkeypatch.delenv("PRIVACYFENCE_GRIST_PROVISIONING_KEY", raising=False)
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE", str(key_file))
+        provisioner = gp.start(self.org_config(), on_change=changes.append, stop_event=_instant_stop())
+        assert provisioner is not None
+        assert provisioner._client._headers["Authorization"] == "Bearer gristprov_file"
+        for t in threading.enumerate():
+            if t.name.startswith("grist-provisioning"):
+                t.join(2)
+
+    def test_start_refuses_a_key_file_that_cannot_be_read(self, data, changes, monkeypatch, tmp_path):
+        monkeypatch.delenv("PRIVACYFENCE_GRIST_PROVISIONING_KEY", raising=False)
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE", str(tmp_path / "absent"))
+        with pytest.raises(gp.org_mode.ConfigurationError, match="PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE"):
+            gp.start(self.org_config(), on_change=changes.append, stop_event=threading.Event())
+
     def test_start_builds_and_starts_the_provisioner(self, data, changes, monkeypatch):
         monkeypatch.setenv("MY_KEY", " gristprov_abc ")
         stop = _instant_stop()

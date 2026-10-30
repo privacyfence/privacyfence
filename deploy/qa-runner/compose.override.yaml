@@ -1,0 +1,45 @@
+# Used with deploy/docker/compose.yaml in /opt/pf-qa/run:
+#   docker compose --project-directory /opt/pf-qa/run up -d --no-build
+# compose.yaml, not the image, fixes the read-only root, the dropped capabilities and
+# no-new-privileges, so an image built from main cannot run as root on the host.
+services:
+  privacyfence:
+    image: privacyfence-org:qa-main
+    pull_policy: never
+    user: "10001:10001"
+    volumes:
+      # The one directory shared with pfrunner: the server writes the tokens, the runner reads them.
+      - /home/pfrunner/qa-org-data:/var/lib/privacyfence-org/.privacyfence
+    secrets:
+      - idp_client_secret
+
+  caddy:
+    # Pinned by digest: the host's image store is writable by the deploy script, and a floating tag
+    # would run whatever is tagged caddy:2 locally with the origin key and ports 80 and 443. Bump it
+    # by hand (README, "Updating the pinned images").
+    image: caddy:2@sha256:5e5286cb37d44086d651a5363f05f43a692ce4d649d88fb1bd844579f45fa9e8
+    environment:
+      PF_CF_RANGES: ${PF_CF_RANGES:?set PF_CF_RANGES in .env to Cloudflare's published ranges}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/pf-qa:/etc/pf-qa:ro
+
+  peek:
+    # Pinned by digest, like Caddy (README, "Updating the pinned images").
+    image: ghcr.io/privacyfence/peek:main@sha256:c194fac1373438219a640aa41902f492a0b56ebb2d6df01e76db813d2cc51d03
+    restart: unless-stopped
+    environment:
+      PEEK_BASE_URL: https://peek-qa.privacyfence.eu
+    volumes:
+      - peek-data:/data
+    networks:
+      - pf
+
+# The file is bind-mounted with its host owner and mode, so the host file must be owned by uid 10001
+# (the container user) with mode 0400: README, "Installing", step 4.
+secrets:
+  idp_client_secret:
+    file: ./idp_client_secret
+
+volumes:
+  peek-data:

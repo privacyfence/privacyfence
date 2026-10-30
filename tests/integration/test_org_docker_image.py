@@ -12,8 +12,10 @@ Covers:
     the SIGINT stop signal, the health check and the OCI labels.
   - **A fresh volume**: it inherits the image's private (``10001:10001``, mode ``0700``) data
     directory and its ``org/`` subdirectory.
-  - **Strict startup**: no bundle (the entrypoint refuses, exit 78) and an unsigned bundle (the
-    daemon refuses) both stop the container instead of degrading to local mode.
+  - **Strict startup**: an unsigned bundle (the daemon refuses) stops the container instead of
+    degrading to local mode. No bundle at all starts single-user mode on localhost.
+  - **No bundle, an IdP from the environment**: the server starts as an organization server, says
+    so, and ``/login`` redirects to the identity provider.
   - **A running container**: the issuer host is served, an unexpected Host header is rejected,
     ``/login`` redirects to the identity provider, and Docker's own health check turns healthy.
   - **Lifecycle**: ``docker stop`` ends the daemon cleanly and promptly (SIGINT, exit 0), and state
@@ -112,11 +114,12 @@ def _install_bundle(volume: str, payload: bytes | str) -> None:
     )
 
 
-def _start(request: pytest.FixtureRequest, volume: str, name: str) -> None:
+def _start(request: pytest.FixtureRequest, volume: str, name: str, *env: str) -> None:
     _docker(
         "run", "-d", "--name", name, "--network", "host", "--read-only", "--tmpfs", "/tmp",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "-e", "PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP=1",
+        *(arg for value in env for arg in ("-e", value)),
         "--health-interval", "2s", "--health-start-period", "60s",
         "-v", f"{volume}:{DATA_DIR}", IMAGE,
     )
@@ -127,7 +130,7 @@ def _get(port: int, path: str, host: str = ISSUER_HOST, **kwargs) -> requests.Re
     return requests.get(f"http://127.0.0.1:{port}{path}", headers={"Host": host}, timeout=5, **kwargs)
 
 
-def _wait_ready(port: int, name: str, timeout: float = 90) -> None:
+def _wait_ready(port: int, name: str, timeout: float = 90, host: str = ISSUER_HOST) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         state = _docker("inspect", "--format", "{{.State.Status}}", name).stdout.strip()
@@ -135,7 +138,7 @@ def _wait_ready(port: int, name: str, timeout: float = 90) -> None:
             logs = _docker("logs", name, check=False)
             raise AssertionError(f"container {name} is {state}, not running -- logs:\n{logs.stdout}\n{logs.stderr}")
         try:
-            if _get(port, "/.well-known/oauth-authorization-server").status_code == 200:
+            if _get(port, "/.well-known/oauth-authorization-server", host=host).status_code == 200:
                 return
         except requests.RequestException:
             pass  # not listening yet; retry until the deadline, then fail with the container logs
@@ -182,10 +185,23 @@ def test_the_image_bundles_the_changelog():
     assert result.stdout.strip() == "True"
 
 
-def test_refuses_to_start_without_a_bundle(volume):
-    result = _docker("run", "--rm", "-v", f"{volume}:{DATA_DIR}", IMAGE, check=False)
-    assert result.returncode == 78, result.stderr
-    assert "No organization bundle at" in result.stderr
+def test_starts_in_single_user_mode_without_a_bundle(request, volume):
+    port = _free_port()
+    name = f"pf-docker-test-{uuid.uuid4().hex[:8]}"
+    _start(request, volume, name, f"PRIVACYFENCE_PORT={port}")
+    _wait_ready(port, name, host="localhost")
+    deadline = time.monotonic() + 90
+    status = ""
+    while time.monotonic() < deadline:
+        status = _docker("inspect", "--format", "{{.State.Health.Status}}", name).stdout.strip()
+        if status == "healthy":
+            break
+        time.sleep(1)
+    assert status == "healthy"
+    logs = _docker("logs", name)
+    output = logs.stdout + logs.stderr
+    assert f"No organization bundle: starting in single-user mode at http://localhost:{port} " in output
+    assert "Single-user mode: one administrator, no identity provider, on this computer only." in output
 
 
 def test_refuses_to_start_on_an_unsigned_bundle(volume, mock_idp):
@@ -231,6 +247,44 @@ class TestRunningContainer:
                 return
             time.sleep(1)
         pytest.fail(f"container never became healthy, last status {status!r}")
+
+
+class TestRunningContainerFromEnvironment:
+    """The same server with no bundle at all: the identity provider and the address come from the
+    environment."""
+
+    @pytest.fixture(scope="class", autouse=True)
+    @classmethod
+    def _service(cls, request, mock_idp):
+        name = f"pf-docker-test-{uuid.uuid4().hex[:8]}"
+        port = _free_port()
+        _docker("volume", "create", name)
+        request.addfinalizer(lambda: _docker("volume", "rm", "-f", name, check=False))
+        _start(
+            request, name, name,
+            f"PRIVACYFENCE_IDP_ISSUER={mock_idp.base_url}",
+            "PRIVACYFENCE_IDP_CLIENT_ID=privacyfence-docker",
+            f"PRIVACYFENCE_ISSUER_URL=https://{ISSUER_HOST}",
+            f"PRIVACYFENCE_PORT={port}",
+        )
+        _wait_ready(port, name)
+        cls.port = port
+        cls.container = name
+
+    def test_the_entrypoint_says_the_environment_is_used(self):
+        logs = _docker("logs", self.container)
+        output = logs.stdout + logs.stderr
+        assert "No organization bundle: using the IdP and server from the environment." in output
+
+    def test_no_single_user_line_is_logged(self):
+        logs = _docker("logs", self.container)
+        output = logs.stdout + logs.stderr
+        assert "single-user" not in output.lower()
+
+    def test_login_redirects_to_the_identity_provider(self, mock_idp):
+        response = _get(self.port, "/login", allow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"].startswith(mock_idp.base_url)
 
 
 def test_docker_stop_shuts_down_cleanly(request, volume, mock_idp):

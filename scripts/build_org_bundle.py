@@ -1,41 +1,34 @@
 #!/usr/bin/env python3
-"""Build a PrivacyFence organization config bundle (org_config.json).
+"""Build a PrivacyFence desktop (local mode) config bundle (org_bundle.json).
 
 Run this once per organization after registering each cloud app (see the
 "For IT admins" section of docs/google-cloud-setup.md, docs/slack-setup.md,
-docs/salesforce-setup.md, and docs/atlassian-setup.md). For a local-mode
-bundle, the output file is what you distribute to your users — they install
-it via "Install/Update Organization Config…" on the General page of
-PrivacyFence Settings (the embedded web page). An org-mode bundle (--mode org)
-is installed on the server instead: copy it to <data>/org/org_config.json
-and restart the daemon (see docs/org-mode-setup-guide.md) — Settings has no
-install button in org mode.
+docs/salesforce-setup.md, and docs/atlassian-setup.md). The output file is
+what you distribute to your users -- they install it on their desktop via
+Admin -> Organization configuration -> "Install configuration file…" in
+PrivacyFence Settings (the embedded web page).
+
+A bundle carries the connector app credentials (Google, Slack, Salesforce,
+Atlassian, Grist, Miro) and its own bookkeeping (the organization name, and
+with --sign-key a serial and a signature). Everything operational -- which
+services are offered, file delivery, web push, sign-in restrictions, step-up,
+scoped tokens, audit forwarding and unattended sessions -- is set on the Admin
+page of PrivacyFence Settings, not here; the options that used to write those
+settings are still recognised only to tell you so.
+
+Organization servers take no bundle: their settings come from privacyfence.env
+and their own connector apps from signed connector configs (see
+docs/org-mode-setup-guide.md). This script refuses --mode org and every
+--server-* and --idp-* option, and --merge refuses an organization bundle.
 
 Telegram's api_id/api_hash identify the PrivacyFence app itself (not your
-organization) and are baked into the release build — see docs/telegram-setup.md
-and src/privacyfence/app_credentials.py — so the bundle carries no secret for it,
-only the --enable-telegram switch.
+organization) and are baked into the release build -- see docs/telegram-setup.md
+and src/privacyfence/app_credentials.py -- so a bundle carries no secret for it.
 
-Only pass the flags for services you've set up; a connector is offered to
-users only if its section is present in the bundle (--enable-telegram,
---enable-peek and --enable-grist write the bare section for the three that
-need nothing else, ADR 0196). Stdlib only — no
-PrivacyFence install required to run this -- except --sign-key/
---generate-signing-key (bundle signing, below), which need the
+Stdlib only -- no PrivacyFence install required to run this -- except
+--sign-key/--generate-signing-key (bundle signing, below), which need the
 `cryptography` package (pip install cryptography) specifically, not a
 full PrivacyFence install.
-
---enable-unattended-sessions turns on privacyfence_begin_unattended_session
-for every install of this bundle — a deliberate per-organization choice, see
-docs/how-it-works.md's "Unattended sessions" section.
-
---enable-scoped-tokens lets each person create scoped AI client tokens in
-Settings (--scoped-token-max-days N caps how long one lasts, 1-365); without
-it the feature is off in organization mode (ADR 0165).
-
---enable-scoped-token-proposals also lets an AI client propose a scoped token for
-a person to review and create (--disable-scoped-token-proposals turns it off);
-it has no effect unless --enable-scoped-tokens is set (ADR 0253).
 
 --sign-key also signs a "serial" into the bundle (--serial N, default: the
 current Unix time); an install refuses a bundle whose serial is lower than the
@@ -48,7 +41,7 @@ Example:
         --slack-client-id 1234.5678 --slack-client-secret abcdef \\
         --salesforce-consumer-key 3MVG9... --salesforce-consumer-secret abc \\
         --atlassian-client-id abc123 --atlassian-client-secret def456 \\
-        -o org_config.json
+        -o org_bundle.json
 """
 
 from __future__ import annotations
@@ -56,7 +49,6 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -64,24 +56,66 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-# Each bundle section's org-mode connector callbacks
-# (<issuer-url>/oauth/callback/<name>); Jira and Confluence share one
-# Atlassian app and therefore one callback.
-_CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
-    "google": ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"),
-    "slack": ("slack",),
-    "salesforce": ("salesforce",),
-    "atlassian": ("atlassian",),
-    "grist": ("grist",),
-    "miro": ("miro",),
-}
+# The bundle sections that hold connector app credentials; a bundle with none of
+# them has nothing worth writing.
+_CREDENTIAL_SECTIONS = ("google", "slack", "salesforce", "atlassian", "grist", "miro")
 
-# Mirrors assets_client.WORKSPACE_ID_RE; this script stays standard-library only.
-WORKSPACE_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+# Mirrors admin_config.LEGACY_BUNDLE_KEYS; this script stays standard-library only.
+_LEGACY_BUNDLE_KEYS = (
+    "download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding",
+    "unattended_sessions", "rooms", "rooms_synced_at", "telegram", "peek",
+)
 
+_ORG_MODE_MESSAGE = (
+    "error: {option}: organization servers take their settings from privacyfence.env and their own "
+    "apps from signed connector configs (docs/org-mode-setup-guide.md, ADR 0269)."
+)
+_MOVED_MESSAGE = "error: {option} has moved to the Admin page (ADR 0257); remove it."
+_MOVED_WITH_ENV_MESSAGE = (
+    "error: {option} has moved to the Admin page and PRIVACYFENCE_PEEK_BASE_URL / "
+    "PRIVACYFENCE_GRIST_SERVER_URL / PRIVACYFENCE_GRIST_PROVISIONER_URL on the server (ADR 0257, 0264); "
+    "remove it."
+)
+_BUNDLE_IS_ORG_MESSAGE = (
+    "error: {file} is an organization bundle; organization servers no longer take bundles (ADR 0269)."
+)
 
-# Mirrors org_mode.DEFAULT_GRIST_PROVISIONING_KEY_ENV; this script stays standard-library only.
-_DEFAULT_GRIST_PROVISIONING_KEY_ENV = "PRIVACYFENCE_GRIST_PROVISIONING_KEY"
+# Options that wrote an operational setting into the bundle. They stay parseable, hidden from --help,
+# only so that main() can say where the setting went.
+_MOVED_OPTIONS = (
+    "--enable-telegram", "--enable-peek", "--enable-grist", "--peek-base-url",
+    "--atlassian-assets", "--atlassian-assets-workspace-id",
+    "--authz-allowed-domain", "--authz-groups-claim", "--authz-required-group",
+    "--step-up-enabled", "--step-up-disabled", "--step-up-scope", "--step-up-rp-id", "--step-up-rp-name",
+    "--step-up-require-passkey", "--step-up-no-require-passkey",
+    "--enable-unattended-sessions", "--disable-unattended-sessions",
+    "--enable-scoped-tokens", "--disable-scoped-tokens", "--scoped-token-max-days",
+    "--enable-scoped-token-proposals", "--disable-scoped-token-proposals",
+    "--downloads-inline-max-bytes", "--downloads-link-ttl-seconds", "--downloads-disable-staging",
+    "--agent-links", "--no-agent-links", "--exports", "--no-exports",
+    "--web-push", "--no-web-push",
+    "--enable-audit-forwarding", "--disable-audit-forwarding", "--audit-forwarding-kind",
+    "--audit-forwarding-syslog-host", "--audit-forwarding-syslog-port", "--audit-forwarding-syslog-protocol",
+    "--audit-forwarding-http-url", "--audit-forwarding-http-bearer-token-env",
+)
+# The auto-provisioning options also have environment variables on the server.
+_MOVED_WITH_ENV_OPTIONS = (
+    "--peek-auto-provision", "--no-peek-auto-provision", "--peek-provisioning-key-env",
+    "--peek-trust-unverified-email", "--grist-auto-provision", "--no-grist-auto-provision",
+    "--grist-provisioner-url", "--grist-provisioning-key-env", "--grist-trust-unverified-email",
+)
+# Organization-mode options, by destination prefix so that a later --idp-* option is refused as well.
+_ORG_MODE_DEST_PREFIXES = ("server_", "idp_")
+# (option, dest) for the organization-mode options that are not simply the option name with "_" for "-".
+_ORG_MODE_OPTIONS = (
+    ("--server-issuer-url", "server_issuer_url"), ("--server-bind-host", "server_bind_host"),
+    ("--server-port", "server_port"), ("--server-tls-cert", "server_tls_cert"),
+    ("--server-tls-key", "server_tls_key"), ("--server-trusted-proxy", "server_trusted_proxies"),
+    ("--idp-issuer", "idp_issuer"), ("--idp-client-id", "idp_client_id"),
+    ("--idp-client-secret", "idp_client_secret"), ("--idp-admin-group-claim", "idp_admin_group_claim"),
+    ("--idp-admin-group-value", "idp_admin_group_values"),
+    ("--idp-step-up-acr-value", "idp_step_up_acr_values"),
+)
 
 
 def _grist_url(value: str) -> str:
@@ -104,34 +138,6 @@ def _grist_url(value: str) -> str:
             "fragment or /api."
         )
     return url
-
-
-# Mirrors org_mode.DEFAULT_PEEK_PROVISIONING_KEY_ENV (this script imports nothing from src/).
-_DEFAULT_PEEK_PROVISIONING_KEY_ENV = "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
-
-
-def _peek_url(value: str) -> str:
-    """Validate the Peek address and strip its trailing ``/`` (mirrors ``peek_client.normalize_base_url``;
-    this script stays standard-library only)."""
-    url = value.strip().rstrip("/")
-    parts = urlsplit(url)
-    if not parts.hostname or parts.scheme not in ("https", "http") or (
-        parts.scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1")
-    ):
-        raise SystemExit("--peek-base-url must be an https:// address (http:// only for localhost).")
-    if parts.username is not None or parts.password is not None or parts.query or parts.fragment:
-        raise SystemExit("--peek-base-url must not contain a user name, password, query or fragment.")
-    return url
-
-
-def _scoped_token_days(value: str) -> int:
-    try:
-        days = int(value)
-    except ValueError:
-        days = 0
-    if not 1 <= days <= 365:
-        raise argparse.ArgumentTypeError("must be a whole number of days from 1 to 365.")
-    return days
 
 
 def _positive_int(value: str) -> int:
@@ -195,7 +201,7 @@ def _generate_signing_key(path: str) -> int:
         "bundle each install sees pins that key and rejects anything that doesn't verify against "
         "it afterwards, unsigned bundles included. Losing this key means every install that has "
         "already pinned it can't accept an update until an administrator deletes their pinned "
-        "org_config_signing_pubkey.txt by hand."
+        "org_bundle_signing_pubkey.txt (and, to go back to 6.x, org_config_signing_pubkey.txt) by hand."
     )
     return 0
 
@@ -241,27 +247,45 @@ def _load_google_client_secret(path: str) -> dict[str, Any]:
     return inner
 
 
+def _add_refused_options(parser: argparse.ArgumentParser) -> None:
+    """Register every option that no longer builds anything, hidden from --help.
+
+    They take any number of values so that a leftover command line parses; main() then prints where
+    each one went and exits without writing.
+    """
+    for option in (*_MOVED_OPTIONS, *_MOVED_WITH_ENV_OPTIONS):
+        parser.add_argument(option, nargs="*", help=argparse.SUPPRESS)
+    for option, dest in _ORG_MODE_OPTIONS:
+        parser.add_argument(option, dest=dest, nargs="*", help=argparse.SUPPRESS)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build a PrivacyFence organization config bundle (org_config.json).",
+        description="Build a PrivacyFence desktop config bundle (org_bundle.json).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+        # Refused options are matched by their exact spelling in main(); a prefix must not slip past.
+        allow_abbrev=False,
     )
     parser.add_argument("--org-name", default="", help="Shown to users after they install the bundle.")
-    parser.add_argument("-o", "--output", default="org_config.json", help="Output path (default: org_config.json).")
+    parser.add_argument("-o", "--output", default="org_bundle.json", help="Output path (default: org_bundle.json).")
     parser.add_argument(
         "--merge", action="store_true",
-        help="Merge into an existing bundle at the output path instead of overwriting it "
-             "(useful for adding one more service to an already-distributed bundle).",
+        help="Merge into an existing desktop bundle at the output path instead of overwriting it "
+             "(useful for adding one more service to an already-distributed bundle). Operational keys an "
+             "older bundle still carries are dropped; they are managed on the Admin page now.",
+    )
+    parser.add_argument(
+        "--mode", choices=["local", "org"], default=None,
+        help="\"local\" is the only mode this script builds, and the default: leaving it out is the same. "
+             "Organization servers take no bundle.",
     )
 
     google = parser.add_argument_group("Google (Gmail, Drive, Calendar, Contacts, Tasks, Apps Script)")
     google.add_argument(
         "--google-client-secret", metavar="PATH",
         help="Path to the client_secret.json downloaded from Google Cloud Console "
-             "(OAuth client of type 'Desktop app' for local mode, or 'Web "
-             "application' for org mode -- see docs/org-mode-setup-guide.md's "
-             "\"Connector apps\" section).",
+             "(an OAuth client of type 'Desktop app').",
     )
 
     slack = parser.add_argument_group("Slack")
@@ -283,21 +307,12 @@ def build_parser() -> argparse.ArgumentParser:
     atlassian = parser.add_argument_group("Atlassian (Jira + Confluence)")
     atlassian.add_argument("--atlassian-client-id")
     atlassian.add_argument("--atlassian-client-secret")
-    atlassian.add_argument(
-        "--atlassian-assets", action="store_true",
-        help="Request Jira Assets permissions at Atlassian sign-in (the app must have the read:cmdb-* scopes)",
-    )
-    atlassian.add_argument(
-        "--atlassian-assets-workspace-id", metavar="ID",
-        help="The site's Assets workspace id (the workspaceId shown at "
-             "https://<site>.atlassian.net/rest/servicedeskapi/assets/workspace)",
-    )
 
-    grist = parser.add_argument_group("Grist")
+    grist = parser.add_argument_group("Grist (an OAuth app)")
     grist.add_argument(
         "--grist-server-url", metavar="URL",
-        help="The Grist server people connect to (for example https://docs.getgrist.com). Needed for every "
-             "Grist section; org mode offers Grist only with it.",
+        help="The Grist server the OAuth app belongs to (for example https://docs.getgrist.com); "
+             "needed with --grist-client-id and --grist-client-secret.",
     )
     grist.add_argument("--grist-client-id", help="A Grist OAuth app; give the client id and secret together.")
     grist.add_argument("--grist-client-secret")
@@ -306,343 +321,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Where Grist's sign-in discovery document is served, when the server itself does not serve it "
              "(only with the client id and secret). Default: the server URL.",
     )
-    grist.add_argument(
-        "--grist-auto-provision", action=argparse.BooleanOptionalAction, default=None,
-        help="Give each person a Grist API key at sign-in through the Grist provisioner and connect it for them "
-             "(organization mode, API keys only; needs --grist-server-url, --grist-provisioner-url and the "
-             "provisioning key in the daemon's environment).",
-    )
-    grist.add_argument(
-        "--grist-provisioner-url", metavar="URL",
-        help="The Grist provisioner service PrivacyFence calls (https://; http:// only for localhost).",
-    )
-    grist.add_argument(
-        "--grist-provisioning-key-env", metavar="NAME",
-        help="The environment variable the daemon reads the Grist provisioning key from "
-             "(default PRIVACYFENCE_GRIST_PROVISIONING_KEY).",
-    )
-    grist.add_argument(
-        "--grist-trust-unverified-email", action="store_true",
-        help="Provision people whose ID token does not say email_verified (only for identity providers that "
-             "issue only verified, organization-owned addresses). Give it again on every --grist-auto-provision "
-             "rebuild; leaving it out turns it off.",
-    )
 
     miro = parser.add_argument_group("Miro")
     miro.add_argument("--miro-client-id", help="The Miro app people sign in with; give the client id and secret together.")
     miro.add_argument("--miro-client-secret")
 
-    peek = parser.add_argument_group("Peek")
-    peek.add_argument(
-        "--peek-base-url", metavar="URL",
-        help="The Peek server people connect to (for example https://peek.example.com). Pins it in local mode; "
-             "organization mode offers Peek only with it.",
-    )
-    peek.add_argument(
-        "--peek-auto-provision", action=argparse.BooleanOptionalAction, default=None,
-        help="Create a Peek account for each person at sign-in and connect it for them (organization mode; "
-             "needs --peek-base-url and a Peek provisioning key in the daemon's environment).",
-    )
-    peek.add_argument(
-        "--peek-provisioning-key-env", metavar="NAME",
-        help="The environment variable the daemon reads the Peek provisioning key from "
-             "(default PRIVACYFENCE_PEEK_PROVISIONING_KEY).",
-    )
-    peek.add_argument(
-        "--peek-trust-unverified-email", action="store_true",
-        help="Provision people whose ID token does not say email_verified (only for identity providers that "
-             "issue only verified, organization-owned addresses, such as Microsoft Entra ID).",
-    )
-
-    enable = parser.add_argument_group("Connectors that need no credentials in the bundle")
-    enable.add_argument(
-        "--enable-telegram", action="store_true",
-        help="Offer Telegram. Its app credentials are baked into the build, so the section is just a switch.",
-    )
-    enable.add_argument(
-        "--enable-peek", action="store_true",
-        help="Offer Peek without pinning a server (local mode; people enter their own address). "
-             "Implied by --peek-base-url.",
-    )
-    enable.add_argument(
-        "--enable-grist", action="store_true",
-        help="Offer Grist with an API key and no pinned server (local mode). Implied by --grist-server-url.",
-    )
-
-    mode = parser.add_argument_group(
-        "Deployment mode",
-    )
-    mode.add_argument(
-        "--mode", choices=["local", "org"], default=None,
-        help="Absent (the default) leaves \"mode\" out of the bundle entirely, which "
-             "PrivacyFence itself treats as \"local\" -- an existing install/bundle needs no "
-             "change to keep working exactly as it always has. Pass --mode org together with "
-             "the --server-* and --idp-* flags below to turn this into an org-mode bundle.",
-    )
-    mode.add_argument(
-        "--server-issuer-url", metavar="URL",
-        help="This daemon's own externally-reachable origin, e.g. https://pf.acme.example.com "
-             "-- required with --mode org. Used to build the fixed OAuth/OIDC redirect URIs "
-             "you register with your IdP below (<issuer-url>/oauth/idp/callback, "
-             "<issuer-url>/oauth/idp/login-callback and <issuer-url>/oauth/stepup/callback).",
-    )
-    mode.add_argument(
-        "--server-bind-host", default="127.0.0.1",
-        help="Address the embedded server listens on (default: 127.0.0.1 -- loopback only, for a "
-             "reverse proxy on the same host to forward to). Never expose the listener directly; "
-             "pass another address only when the proxy runs on a different host.",
-    )
-    mode.add_argument("--server-port", type=int, default=8765, help="Default: 8765.")
-    mode.add_argument(
-        "--server-tls-cert", metavar="PATH",
-        help="TLS certificate file, terminated directly in the embedded server. Leave both "
-             "--server-tls-cert and --server-tls-key unset if a reverse proxy in front of this "
-             "daemon terminates TLS instead.",
-    )
-    mode.add_argument("--server-tls-key", metavar="PATH", help="TLS private key file (paired with --server-tls-cert).")
-    mode.add_argument(
-        "--server-trusted-proxy", action="append", default=[], metavar="IP", dest="server_trusted_proxies",
-        help="An X-Forwarded-For/X-Forwarded-Proto-trusted reverse proxy's own IP address -- "
-             "repeat for more than one. Forwarded headers are honored only when at least one is "
-             "given here, never by default.",
-    )
-    mode.add_argument(
-        "--idp-issuer", metavar="URL",
-        help="Your organization's OIDC identity provider's issuer URL (its "
-             "/.well-known/openid-configuration document must be reachable at "
-             "<this>/.well-known/openid-configuration) -- required with --mode org.",
-    )
-    mode.add_argument(
-        "--idp-client-id", metavar="ID",
-        help="The client_id PrivacyFence is registered under with your IdP -- required with "
-             "--mode org. Register it with three redirect URIs: <server-issuer-url>/oauth/idp/"
-             "callback, <server-issuer-url>/oauth/idp/login-callback and "
-             "<server-issuer-url>/oauth/stepup/callback.",
-    )
-    mode.add_argument("--idp-client-secret", metavar="SECRET", help="Paired with --idp-client-id.")
-    mode.add_argument(
-        "--idp-admin-group-claim", metavar="CLAIM",
-        help="ID token claim (e.g. \"groups\") whose value names the human as an admin when it "
-             "contains one of --idp-admin-group-value. Omit to leave nobody an admin via this "
-             "mechanism (the fail-closed default).",
-    )
-    mode.add_argument(
-        "--idp-admin-group-value", action="append", default=[], metavar="VALUE", dest="idp_admin_group_values",
-        help="A value of --idp-admin-group-claim that marks the human as an admin -- repeat "
-             "for more than one (e.g. --idp-admin-group-value privacyfence-admins "
-             "--idp-admin-group-value it-admins).",
-    )
-
-    authz = parser.add_argument_group(
-        "App-level authorization policy",
-    )
-    authz.add_argument(
-        "--authz-allowed-domain", action="append", default=[], metavar="DOMAIN", dest="authz_allowed_domains",
-        help="Only admit a principal whose (IdP-asserted) email is at this domain -- repeat for "
-             "more than one. Layered on top of the IdP's own authentication, not a replacement "
-             "for it. Omit to leave this unrestricted (the default).",
-    )
-    authz.add_argument(
-        "--authz-groups-claim", metavar="CLAIM",
-        help="ID token claim (e.g. \"groups\") whose value --authz-required-group is checked "
-             "against -- required if --authz-required-group is given. Independent of "
-             "--idp-admin-group-claim (a different question: who's an admin, not who may sign in "
-             "at all) even if your IdP happens to use the same claim name for both.",
-    )
-    authz.add_argument(
-        "--authz-required-group", action="append", default=[], metavar="VALUE", dest="authz_required_groups",
-        help="Only admit a principal whose --authz-groups-claim contains one of these -- repeat "
-             "for more than one. Requires --authz-groups-claim.",
-    )
-
-    step_up = parser.add_argument_group(
-        "WebAuthn step-up",
-    )
-    step_up_toggle = step_up.add_mutually_exclusive_group()
-    step_up_toggle.add_argument(
-        "--step-up-enabled", action="store_true",
-        help="Require a fresh passkey (or IdP re-authentication) before releasing a write "
-             "approval -- off by default. Only meaningful with --mode org; local mode reads its "
-             "step-up settings from settings.yaml's step_up: section instead.",
-    )
-    step_up_toggle.add_argument(
-        "--step-up-disabled", action="store_true", help="Explicitly turn step-up back off (useful with --merge).",
-    )
-    step_up.add_argument(
-        # Repeats step_up_config.STEP_UP_SCOPES rather than importing it:
-        # this script is stdlib-only on purpose (see the module docstring),
-        # so it runs with no PrivacyFence install. Keep the two in sync.
-        "--step-up-scope", choices=["writes", "writes_and_pii_reads", "writes_and_reads"], default=None,
-        help="Default: writes_and_pii_reads (StepUpConfig's own DEFAULT_STEP_UP_SCOPE -- an "
-             "unset scope here leaves the key out of the bundle rather than pinning one). "
-             "\"writes_and_pii_reads\" requires step-up before a "
-             "read that detected personal data as well as before a write; \"writes\" narrows it to "
-             "writes only; \"writes_and_reads\" requires it before every gated read, flagged or not.",
-    )
-    step_up.add_argument(
-        "--step-up-rp-id", metavar="DOMAIN",
-        help="WebAuthn Relying Party ID -- must be --server-issuer-url's own registrable domain "
-             "(WebAuthn only runs in a secure context). Defaults to that hostname, derived "
-             "automatically -- only set this to override it.",
-    )
-    step_up.add_argument("--step-up-rp-name", metavar="NAME", help='Shown in the OS passkey prompt. Default: "PrivacyFence".')
-    step_up.add_argument(
-        "--idp-step-up-acr-value", action="append", default=[], metavar="ACR", dest="idp_step_up_acr_values",
-        help="An acr_values your IdP accepts to request stronger authentication on step-up's "
-             "IdP re-auth path, for an IdP that already enforces stronger authentication "
-             "itself -- repeat for more than one. Omit to fall back to plain re-"
-             "authentication (prompt=login) with no acr_values hint.",
-    )
-    step_up_require_passkey_toggle = step_up.add_mutually_exclusive_group()
-    step_up_require_passkey_toggle.add_argument(
-        "--step-up-require-passkey", action="store_true",
-        help="Close the IdP-reauth fallback: a principal with no enrolled passkey gets a "
-             "hard failure pointing at /security instead of a silent downgrade to plain IdP "
-             "re-authentication. Off by default -- only meaningful with --step-up-enabled.",
-    )
-    step_up_require_passkey_toggle.add_argument(
-        "--step-up-no-require-passkey", action="store_true",
-        help="Explicitly turn --step-up-require-passkey back off (useful with --merge).",
-    )
-
-    unattended = parser.add_argument_group("Unattended / scheduled Cowork tasks")
-    unattended_toggle = unattended.add_mutually_exclusive_group()
-    unattended_toggle.add_argument(
-        "--enable-unattended-sessions", action="store_true",
-        help="Let Claude Cowork declare a connection unattended (privacyfence_"
-             "begin_unattended_session) for scheduled/triggered runs with no human "
-             "present. Off by default -- a deliberate per-organization opt-in, see "
-             "docs/how-it-works.md's \"Unattended sessions\" section.",
-    )
-    unattended_toggle.add_argument(
-        "--disable-unattended-sessions", action="store_true",
-        help="Explicitly turn unattended sessions back off (useful with --merge).",
-    )
-
-    scoped = parser.add_argument_group("Scoped AI client tokens (org mode)")
-    scoped_toggle = scoped.add_mutually_exclusive_group()
-    scoped_toggle.add_argument(
-        "--enable-scoped-tokens", action="store_true",
-        help="Let each person create scoped tokens in Settings: named, expiring bearer tokens for "
-             "one AI client, limited to the tools and auto-accept rules they pick (ADR 0165). "
-             "Off by default -- a deliberate per-organization opt-in.",
-    )
-    scoped_toggle.add_argument(
-        "--disable-scoped-tokens", action="store_true",
-        help="Explicitly turn scoped tokens back off (useful with --merge).",
-    )
-    proposals_toggle = scoped.add_mutually_exclusive_group()
-    proposals_toggle.add_argument(
-        "--enable-scoped-token-proposals", action="store_true",
-        help="Let AI clients propose scoped tokens for a person to review (off by default; "
-             "needs --enable-scoped-tokens).",
-    )
-    proposals_toggle.add_argument(
-        "--disable-scoped-token-proposals", action="store_true",
-        help="Explicitly turn scoped token proposals back off (useful with --merge).",
-    )
-    scoped.add_argument(
-        "--scoped-token-max-days", type=_scoped_token_days, metavar="N", default=None,
-        help="The longest a scoped token may last, in days (1-365). Default: 90.",
-    )
-
-    downloads = parser.add_argument_group(
-        "Download delivery (org mode)",
-    )
-    downloads.add_argument(
-        "--downloads-inline-max-bytes", type=int, metavar="BYTES", default=None,
-        help="drive_download_file/gmail_download_attachment/confluence_download_attachment: "
-             "a file is returned directly in the tool result when that whole result -- the "
-             "base64-encoded file plus its JSON envelope -- is at or under this size, and gets a "
-             "one-time staged link otherwise. Default: 100000, sized for claude.ai's and Claude "
-             "Desktop's ~150,000-character tool-result limit (ADR 0092). 0 forces every download "
-             "through a link.",
-    )
-    downloads.add_argument(
-        "--downloads-link-ttl-seconds", type=float, metavar="SECONDS", default=None,
-        help="How long a staged-download link stays claimable before it expires. Default: 300 "
-             "(5 minutes).",
-    )
-    downloads.add_argument(
-        "--downloads-disable-staging", action="store_true",
-        help="Refuse (rather than stage to disk, encrypted) a download too large for "
-             "--downloads-inline-max-bytes. Off by default -- see the plan doc's \"Org-level "
-             "opt-out\" section for when to turn this on.",
-    )
-    downloads.add_argument(
-        "--agent-links", action=argparse.BooleanOptionalAction, default=None,
-        help="Staged-download links an agent can fetch itself (/mcp-files/fetch/<token>, the "
-             "token is the credential). On by default; --no-agent-links writes "
-             "download_delivery.agent_links=false, so a staged download is served only through "
-             "the signed-in browser route (/downloads/<token>) instead.",
-    )
-
-    downloads.add_argument(
-        "--exports", action=argparse.BooleanOptionalAction, default=None,
-        help="The export tools (grist_export_records, grist_export_sql, salesforce_export_report, "
-             "jira_export_issues, assets_export_objects), which stage the whole file on the server "
-             "until the user claims it. On by default; --no-exports writes "
-             "download_delivery.allow_exports=false, which leaves them out of the tool list and "
-             "refuses them.",
-    )
-
-    push = parser.add_argument_group("Web push notifications (org mode, docs/adr/0081-*)")
-    push.add_argument(
-        "--web-push", action=argparse.BooleanOptionalAction, default=None,
-        help="Push a notification (\"N approvals pending\", nothing more) to a user's phone or "
-             "browser when an approval is waiting. It travels through the browser vendor's push "
-             "service (Apple, Google, Mozilla or Microsoft). On by default; --no-web-push writes "
-             "web_push.enabled=false and turns it off for the whole organization.",
-    )
-
-    audit_forwarding = parser.add_argument_group(
-        "Centralized audit-log forwarding (org mode, src/privacyfence/audit_forwarding.py)",
-    )
-    audit_forwarding.add_argument(
-        "--audit-forwarding-kind", choices=("syslog", "http"), default=None,
-        help='Forward every audit-log entry to a syslog server ("syslog") or post it as JSON to '
-             'an HTTPS webhook -- Splunk HEC, Datadog Logs API, an Elastic ingest pipeline, an '
-             'OTLP-over-HTTP/JSON log receiver ("http"). Default: "syslog". The local audit log '
-             '(with its own append-integrity hash chain) stays the authoritative record either '
-             "way -- this is additional visibility, not a replacement.",
-    )
-    audit_forwarding_toggle = audit_forwarding.add_mutually_exclusive_group()
-    audit_forwarding_toggle.add_argument(
-        "--enable-audit-forwarding", action="store_true",
-        help="Turn on centralized audit-log forwarding. Requires --audit-forwarding-kind and "
-             "the matching --audit-forwarding-syslog-host or --audit-forwarding-http-url.",
-    )
-    audit_forwarding_toggle.add_argument(
-        "--disable-audit-forwarding", action="store_true",
-        help="Explicitly turn audit-log forwarding back off (useful with --merge).",
-    )
-    audit_forwarding.add_argument(
-        "--audit-forwarding-syslog-host", metavar="HOST", default=None,
-        help="syslog server hostname/IP. Required (with --enable-audit-forwarding) when "
-             "--audit-forwarding-kind syslog.",
-    )
-    audit_forwarding.add_argument(
-        "--audit-forwarding-syslog-port", type=int, metavar="PORT", default=None,
-        help="Default: 6514 (RFC 5425's syslog-tls port -- see audit_forwarding.py's module "
-             "docstring for why TLS itself isn't implemented there and this port is still the "
-             "sane default).",
-    )
-    audit_forwarding.add_argument(
-        "--audit-forwarding-syslog-protocol", choices=("udp", "tcp"), default=None,
-        help="Default: tcp.",
-    )
-    audit_forwarding.add_argument(
-        "--audit-forwarding-http-url", metavar="URL", default=None,
-        help="HTTPS endpoint to POST each audit entry to (as one JSON object per request). "
-             "Required (with --enable-audit-forwarding) when --audit-forwarding-kind http. Must "
-             "start with https:// -- audit entries are sensitive.",
-    )
-    audit_forwarding.add_argument(
-        "--audit-forwarding-http-bearer-token-env", metavar="ENV_VAR", default=None,
-        help="Name of an environment variable the daemon process itself reads a bearer token "
-             "from at send time -- never stored in this bundle. Set that variable in the "
-             "systemd unit/environment on the server, not here.",
-    )
+    _add_refused_options(parser)
 
     signing = parser.add_argument_group(
         "Bundle signing (src/privacyfence/org_bundle_signing.py)",
@@ -658,9 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
     signing.add_argument(
         "--sign-key", metavar="PATH",
         help="Sign the bundle with the Ed25519 private key at PATH (from "
-             "--generate-signing-key). Required for --mode org -- PrivacyFence refuses to start "
-             "in org mode with an unsigned bundle. Optional but recommended otherwise. Needs the "
-             "`cryptography` package.",
+             "--generate-signing-key). Optional but recommended: an install that has pinned a "
+             "signing key refuses an unsigned bundle. Needs the `cryptography` package.",
     )
     signing.add_argument(
         "--serial", type=_positive_int, metavar="N", default=None,
@@ -671,9 +354,67 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _refused_option_lines(parser: argparse.ArgumentParser, args: argparse.Namespace, argv: list[str]) -> list[str]:
+    """One ``error:`` line per refused option the command line contains, in the order given."""
+    message_for: dict[str, str] = {}
+    for option in _MOVED_OPTIONS:
+        message_for[option] = _MOVED_MESSAGE
+    for option in _MOVED_WITH_ENV_OPTIONS:
+        message_for[option] = _MOVED_WITH_ENV_MESSAGE
+    for action in parser._actions:
+        if action.dest.startswith(_ORG_MODE_DEST_PREFIXES):
+            for option in action.option_strings:
+                message_for[option] = _ORG_MODE_MESSAGE
+    lines: list[str] = []
+    seen: set[str] = set()
+    for token in argv:
+        option = token.split("=", 1)[0] if token.startswith("--") else token
+        if option in seen:
+            continue
+        message = message_for.get(option)
+        label = option
+        if option == "--mode" and args.mode == "org":
+            message, label = _ORG_MODE_MESSAGE, "--mode org"
+        elif option == "--grist-server-url" and not args.grist_client_id:
+            # The address of a Grist OAuth app stays; on its own it only pinned an API-key server.
+            message = _MOVED_MESSAGE
+        if message is not None:
+            seen.add(option)
+            lines.append(message.format(option=label))
+    return lines
+
+
+def _drop_legacy_keys(bundle: dict[str, Any]) -> list[str]:
+    """Remove the operational settings an older bundle carries; return their dotted names.
+
+    Mirrors admin_config.legacy_keys_in, which names the same keys when the daemon imports a bundle.
+    """
+    dropped = [key for key in _LEGACY_BUNDLE_KEYS if bundle.pop(key, None) is not None]
+    atlassian = bundle.get("atlassian")
+    if isinstance(atlassian, dict):
+        for key in ("assets", "assets_workspace_id"):
+            if atlassian.pop(key, None) is not None:
+                dropped.append(f"atlassian.{key}")
+    grist = bundle.get("grist")
+    if isinstance(grist, dict):
+        if not grist.get("client_id") and grist.pop("server_url", None) is not None:
+            dropped.append("grist.server_url")
+        if grist.pop("auto_provision", None) is not None:
+            dropped.append("grist.auto_provision")
+        if not grist:
+            del bundle["grist"]
+    return dropped
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
+    refused = _refused_option_lines(parser, args, argv)
+    if refused:
+        for line in refused:
+            print(line, file=sys.stderr)
+        raise SystemExit(2)
     if args.serial is not None and not args.sign_key:
         parser.error("--serial needs --sign-key (only a signed bundle carries a serial).")
 
@@ -685,6 +426,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.merge and out_path.exists():
         with open(out_path, encoding="utf-8") as fh:
             bundle = json.load(fh)
+        if bundle.get("mode") == "org" or "server" in bundle or "idp" in bundle:
+            print(_BUNDLE_IS_ORG_MESSAGE.format(file=out_path), file=sys.stderr)
+            raise SystemExit(2)
     # Any existing signature was over the bundle as it stood at that
     # earlier signing -- it's stale the moment anything below changes it,
     # and even when nothing changes, whether to re-affirm it is exactly
@@ -693,6 +437,9 @@ def main(argv: list[str] | None = None) -> int:
     bundle.pop("signature", None)
     bundle.pop("signing_public_key", None)
     bundle.pop("serial", None)
+    dropped = _drop_legacy_keys(bundle)
+    if dropped:
+        print(f"note: dropped {', '.join(dropped)}; they are managed on the Admin page now.")
     # A 5.0.0a1 bundle may carry mcp.tool_annotations, which the daemon now
     # refuses to start with (ADR 0089). --merge is the way to rebuild one, so
     # drop the key here rather than carry forward a bundle that cannot load.
@@ -732,326 +479,37 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.atlassian_client_id and args.atlassian_client_secret):
             raise SystemExit("--atlassian-client-id and --atlassian-client-secret must be given together.")
         bundle["atlassian"] = {"client_id": args.atlassian_client_id, "client_secret": args.atlassian_client_secret}
-        if args.atlassian_assets:
-            bundle["atlassian"]["assets"] = True
-        if args.atlassian_assets_workspace_id:
-            workspace_id = args.atlassian_assets_workspace_id.strip()
-            if not WORKSPACE_ID_RE.fullmatch(workspace_id):
-                raise SystemExit("--atlassian-assets-workspace-id is not a workspace id (expected a UUID).")
-            bundle["atlassian"]["assets_workspace_id"] = workspace_id
-    elif args.atlassian_assets or args.atlassian_assets_workspace_id:
-        flag = "--atlassian-assets" if args.atlassian_assets else "--atlassian-assets-workspace-id"
-        raise SystemExit(f"{flag} needs --atlassian-client-id and --atlassian-client-secret.")
 
-    if (
-        args.grist_server_url or args.grist_client_id or args.grist_client_secret or args.grist_auth_server_url
-    ):
+    if args.grist_server_url or args.grist_client_id or args.grist_client_secret or args.grist_auth_server_url:
         if bool(args.grist_client_id) != bool(args.grist_client_secret):
             raise SystemExit("--grist-client-id and --grist-client-secret must be given together.")
         if not args.grist_server_url:
             raise SystemExit(
                 "--grist-client-id, --grist-client-secret and --grist-auth-server-url need --grist-server-url."
             )
-        grist_section: dict[str, Any] = {"server_url": _grist_url(args.grist_server_url)}
-        if args.grist_client_id:
-            grist_section["client_id"] = args.grist_client_id
-            grist_section["client_secret"] = args.grist_client_secret
-            if args.grist_auth_server_url:
-                grist_section["auth_server_url"] = _grist_url(args.grist_auth_server_url)
-        elif args.grist_auth_server_url:
-            raise SystemExit("--grist-auth-server-url needs --grist-client-id and --grist-client-secret.")
-        previous = bundle.get("grist")
-        if isinstance(previous, dict) and "auto_provision" in previous:
-            grist_section["auto_provision"] = previous["auto_provision"]
+        grist_section: dict[str, Any] = {
+            "server_url": _grist_url(args.grist_server_url),
+            "client_id": args.grist_client_id,
+            "client_secret": args.grist_client_secret,
+        }
+        if args.grist_auth_server_url:
+            grist_section["auth_server_url"] = _grist_url(args.grist_auth_server_url)
         bundle["grist"] = grist_section
-    elif args.enable_grist:
-        bundle["grist"] = {"enabled": True}
 
     if args.miro_client_id or args.miro_client_secret:
         if not (args.miro_client_id and args.miro_client_secret):
             raise SystemExit("--miro-client-id and --miro-client-secret must be given together.")
         bundle["miro"] = {"client_id": args.miro_client_id, "client_secret": args.miro_client_secret}
 
-    if args.peek_base_url:
-        peek_section = bundle.setdefault("peek", {})
-        peek_section["base_url"] = _peek_url(args.peek_base_url)
-        peek_section.pop("enabled", None)
-    elif args.enable_peek:
-        bundle.setdefault("peek", {})["enabled"] = True
-
-    if args.enable_telegram:
-        bundle["telegram"] = {"enabled": True}
-
-    if args.enable_unattended_sessions:
-        bundle["unattended_sessions"] = {"enabled": True}
-    elif args.disable_unattended_sessions:
-        bundle["unattended_sessions"] = {"enabled": False}
-
-    if (
-        args.enable_scoped_tokens or args.disable_scoped_tokens or args.scoped_token_max_days is not None
-        or args.enable_scoped_token_proposals or args.disable_scoped_token_proposals
-    ):
-        scoped_section: dict[str, Any] = dict(bundle.get("scoped_tokens") or {})
-        if args.enable_scoped_tokens:
-            scoped_section["enabled"] = True
-        elif args.disable_scoped_tokens:
-            scoped_section["enabled"] = False
-        if args.scoped_token_max_days is not None:
-            scoped_section["max_days"] = args.scoped_token_max_days
-        if args.enable_scoped_token_proposals:
-            scoped_section["allow_ai_proposals"] = True
-        elif args.disable_scoped_token_proposals:
-            scoped_section["allow_ai_proposals"] = False
-        bundle["scoped_tokens"] = scoped_section
-
-    if args.mode == "org":
-        if not args.server_issuer_url:
-            raise SystemExit("--mode org requires --server-issuer-url.")
-        if not (args.idp_issuer and args.idp_client_id and args.idp_client_secret):
-            raise SystemExit("--mode org requires --idp-issuer, --idp-client-id and --idp-client-secret.")
-        bundle["mode"] = "org"
-        server: dict[str, Any] = {
-            "issuer_url": args.server_issuer_url,
-            "bind_host": args.server_bind_host,
-            "port": args.server_port,
-        }
-        if args.server_tls_cert or args.server_tls_key:
-            if not (args.server_tls_cert and args.server_tls_key):
-                raise SystemExit("--server-tls-cert and --server-tls-key must be given together.")
-            server["tls"] = {"cert_file": args.server_tls_cert, "key_file": args.server_tls_key}
-        if args.server_trusted_proxies:
-            server["trusted_proxies"] = args.server_trusted_proxies
-        bundle["server"] = server
-
-        idp: dict[str, Any] = {
-            "issuer": args.idp_issuer, "client_id": args.idp_client_id, "client_secret": args.idp_client_secret,
-        }
-        if args.idp_admin_group_claim:
-            idp["admin_group_claim"] = args.idp_admin_group_claim
-            idp["admin_group_values"] = args.idp_admin_group_values
-        if args.idp_step_up_acr_values:
-            idp["step_up_acr_values"] = args.idp_step_up_acr_values
-        bundle["idp"] = idp
-    elif args.mode == "local":
+    if args.mode == "local":
         bundle["mode"] = "local"
-        bundle.pop("server", None)
-        bundle.pop("idp", None)
-        bundle.pop("step_up", None)
-        bundle.pop("download_delivery", None)
-        bundle.pop("authz", None)
-        bundle.pop("audit_forwarding", None)
-        bundle.pop("web_push", None)
-        if isinstance(bundle.get("peek"), dict):
-            bundle["peek"].pop("auto_provision", None)
-        if isinstance(bundle.get("grist"), dict):
-            bundle["grist"].pop("auto_provision", None)
-    elif any([
-        args.server_issuer_url, args.idp_issuer, args.idp_client_id, args.idp_client_secret,
-        args.server_tls_cert, args.server_tls_key, args.server_trusted_proxies, args.idp_step_up_acr_values,
-        args.idp_admin_group_claim, args.idp_admin_group_values,
-    ]):
-        # Without --mode org these would otherwise be dropped silently: idp is
-        # only ever written whole, from a --mode org run's flags, so e.g.
-        # "--merge --idp-admin-group-value new@x" alone used to exit 0 with
-        # the admin list unchanged.
+
+    services = [k for k in _CREDENTIAL_SECTIONS if k in bundle]
+    if not services:
         raise SystemExit(
-            "--server-*/--idp-* flags (including --idp-admin-group-*) require --mode org. "
-            "--mode org rebuilds the server and idp sections as a whole, so with --merge pass "
-            "every --server-* and --idp-* flag again, including the full admin list."
+            "No app credentials given (Google, Slack, Salesforce, Atlassian, Grist or Miro) -- nothing to write."
         )
 
-    if (
-        args.step_up_enabled or args.step_up_disabled or args.step_up_scope or args.step_up_rp_id
-        or args.step_up_rp_name or args.step_up_require_passkey or args.step_up_no_require_passkey
-    ):
-        # bundle["mode"] already reflects either this invocation's --mode
-        # or (with --merge and no --mode given) whatever mode the existing
-        # bundle on disk already had -- either way, "org" is what actually
-        # matters here, not args.mode by itself.
-        if bundle.get("mode") != "org":
-            raise SystemExit("--step-up-* flags require --mode org (or --merge against an existing org-mode bundle).")
-        step_up_section: dict[str, Any] = dict(bundle.get("step_up") or {})
-        if args.step_up_enabled:
-            step_up_section["enabled"] = True
-        elif args.step_up_disabled:
-            step_up_section["enabled"] = False
-        if args.step_up_scope:
-            step_up_section["scope"] = args.step_up_scope
-        if args.step_up_rp_id:
-            step_up_section["rp_id"] = args.step_up_rp_id
-        if args.step_up_rp_name:
-            step_up_section["rp_name"] = args.step_up_rp_name
-        if args.step_up_require_passkey:
-            step_up_section["require_passkey"] = True
-        elif args.step_up_no_require_passkey:
-            step_up_section["require_passkey"] = False
-        bundle["step_up"] = step_up_section
-
-    if (
-        args.downloads_inline_max_bytes is not None
-        or args.downloads_link_ttl_seconds is not None
-        or args.downloads_disable_staging
-        or args.agent_links is not None
-        or args.exports is not None
-    ):
-        if bundle.get("mode") != "org":
-            raise SystemExit(
-                "--downloads-*/--agent-links flags require --mode org (or --merge against an existing org-mode bundle)."
-            )
-        downloads_section: dict[str, Any] = dict(bundle.get("download_delivery") or {})
-        if args.downloads_inline_max_bytes is not None:
-            downloads_section["inline_max_bytes"] = args.downloads_inline_max_bytes
-        if args.downloads_link_ttl_seconds is not None:
-            downloads_section["link_ttl_seconds"] = args.downloads_link_ttl_seconds
-        if args.downloads_disable_staging:
-            downloads_section["allow_disk_staging"] = False
-        if args.agent_links is not None:
-            downloads_section["agent_links"] = args.agent_links
-        if args.exports is not None:
-            downloads_section["allow_exports"] = args.exports
-        bundle["download_delivery"] = downloads_section
-
-    if args.web_push is not None:
-        if bundle.get("mode") != "org":
-            raise SystemExit("--web-push/--no-web-push require --mode org (or --merge against an existing org-mode bundle).")
-        bundle["web_push"] = {"enabled": args.web_push}
-
-    if args.peek_auto_provision is not None:
-        if bundle.get("mode") != "org":
-            raise SystemExit(
-                "--peek-auto-provision/--no-peek-auto-provision require --mode org (or --merge against an "
-                "existing org-mode bundle)."
-            )
-        if not bundle.get("peek", {}).get("base_url"):
-            raise SystemExit(
-                "--peek-auto-provision requires --peek-base-url (or --merge against a bundle that has one)."
-            )
-        bundle["peek"]["auto_provision"] = {
-            "enabled": args.peek_auto_provision,
-            "key_env": args.peek_provisioning_key_env or _DEFAULT_PEEK_PROVISIONING_KEY_ENV,
-            "trust_unverified_email": args.peek_trust_unverified_email,
-        }
-    elif args.peek_provisioning_key_env or args.peek_trust_unverified_email:
-        raise SystemExit("--peek-provisioning-key-env and --peek-trust-unverified-email go with --peek-auto-provision.")
-    if args.grist_auto_provision is not None:
-        if bundle.get("mode") != "org":
-            raise SystemExit(
-                "--grist-auto-provision/--no-grist-auto-provision require --mode org (or --merge against an "
-                "existing org-mode bundle)."
-            )
-        existing = (bundle.get("grist") or {}).get("auto_provision")
-        existing = existing if isinstance(existing, dict) else {}
-        if not args.grist_auto_provision:
-            # Only where Grist is already configured: a bare grist section would offer Grist with no server.
-            if isinstance(bundle.get("grist"), dict) and bundle["grist"]:
-                bundle["grist"]["auto_provision"] = {"enabled": False}
-        else:
-            grist_bundle = bundle.get("grist") or {}
-            if not grist_bundle.get("server_url"):
-                raise SystemExit(
-                    "--grist-auto-provision requires --grist-server-url (or --merge against a bundle that has one)."
-                )
-            if grist_bundle.get("client_id"):
-                raise SystemExit(
-                    "--grist-auto-provision works only with API keys; it cannot be combined with --grist-client-id."
-                )
-            provisioner_url = args.grist_provisioner_url or existing.get("provisioner_url")
-            if not provisioner_url:
-                raise SystemExit("--grist-auto-provision requires --grist-provisioner-url.")
-            grist_bundle["auto_provision"] = {
-                "enabled": True,
-                "provisioner_url": _grist_url(provisioner_url),
-                "key_env": (
-                    args.grist_provisioning_key_env or existing.get("key_env")
-                    or _DEFAULT_GRIST_PROVISIONING_KEY_ENV
-                ),
-                "trust_unverified_email": args.grist_trust_unverified_email,
-            }
-    elif args.grist_provisioner_url or args.grist_provisioning_key_env or args.grist_trust_unverified_email:
-        raise SystemExit(
-            "--grist-provisioner-url, --grist-provisioning-key-env and --grist-trust-unverified-email go with "
-            "--grist-auto-provision."
-        )
-
-    if args.authz_allowed_domains or args.authz_groups_claim or args.authz_required_groups:
-        if bundle.get("mode") != "org":
-            raise SystemExit("--authz-* flags require --mode org (or --merge against an existing org-mode bundle).")
-        if args.authz_required_groups and not args.authz_groups_claim:
-            raise SystemExit("--authz-required-group requires --authz-groups-claim.")
-        authz_section: dict[str, Any] = dict(bundle.get("authz") or {})
-        if args.authz_allowed_domains:
-            authz_section["allowed_domains"] = args.authz_allowed_domains
-        if args.authz_groups_claim:
-            authz_section["groups_claim"] = args.authz_groups_claim
-        if args.authz_required_groups:
-            authz_section["required_groups"] = args.authz_required_groups
-        bundle["authz"] = authz_section
-
-    if (
-        args.enable_audit_forwarding or args.disable_audit_forwarding
-        or args.audit_forwarding_kind or args.audit_forwarding_syslog_host
-        or args.audit_forwarding_syslog_port is not None or args.audit_forwarding_syslog_protocol
-        or args.audit_forwarding_http_url or args.audit_forwarding_http_bearer_token_env
-    ):
-        if bundle.get("mode") != "org":
-            raise SystemExit(
-                "--audit-forwarding-* flags require --mode org (or --merge against an existing "
-                "org-mode bundle)."
-            )
-        forwarding_section: dict[str, Any] = dict(bundle.get("audit_forwarding") or {})
-        if args.enable_audit_forwarding:
-            forwarding_section["enabled"] = True
-        elif args.disable_audit_forwarding:
-            forwarding_section["enabled"] = False
-        if args.audit_forwarding_kind:
-            forwarding_section["kind"] = args.audit_forwarding_kind
-        kind = forwarding_section.get("kind", "syslog")
-        if kind == "syslog":
-            syslog_section: dict[str, Any] = dict(forwarding_section.get("syslog") or {})
-            if args.audit_forwarding_syslog_host:
-                syslog_section["host"] = args.audit_forwarding_syslog_host
-            if args.audit_forwarding_syslog_port is not None:
-                syslog_section["port"] = args.audit_forwarding_syslog_port
-            if args.audit_forwarding_syslog_protocol:
-                syslog_section["protocol"] = args.audit_forwarding_syslog_protocol
-            if syslog_section:
-                forwarding_section["syslog"] = syslog_section
-            if forwarding_section.get("enabled") and not syslog_section.get("host"):
-                raise SystemExit(
-                    "--enable-audit-forwarding with --audit-forwarding-kind syslog (the default) "
-                    "requires --audit-forwarding-syslog-host."
-                )
-        elif kind == "http":
-            http_section: dict[str, Any] = dict(forwarding_section.get("http") or {})
-            if args.audit_forwarding_http_url:
-                http_section["url"] = args.audit_forwarding_http_url
-            if args.audit_forwarding_http_bearer_token_env:
-                http_section["bearer_token_env"] = args.audit_forwarding_http_bearer_token_env
-            if http_section:
-                forwarding_section["http"] = http_section
-            if forwarding_section.get("enabled") and not http_section.get("url"):
-                raise SystemExit(
-                    "--enable-audit-forwarding with --audit-forwarding-kind http requires "
-                    "--audit-forwarding-http-url."
-                )
-        bundle["audit_forwarding"] = forwarding_section
-
-    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "miro", "peek", "telegram") if k in bundle]
-    if (
-        not services and "unattended_sessions" not in bundle and "scoped_tokens" not in bundle
-        and "mode" not in bundle
-    ):
-        raise SystemExit(
-            "No service, --mode, or --enable/disable-unattended-sessions or -scoped-tokens flags "
-            "given — nothing to write."
-        )
-
-    if bundle.get("mode") == "org" and not args.sign_key:
-        raise SystemExit(
-            "This bundle has \"mode\": \"org\" -- PrivacyFence refuses to start in org mode with "
-            "an unsigned bundle. Pass --sign-key <path to your Ed25519 private key> (generate one "
-            "first with --generate-signing-key if you haven't yet)."
-        )
     if args.sign_key:
         bundle["serial"] = args.serial if args.serial is not None else int(time.time())
         bundle = _sign_bundle(bundle, args.sign_key)
@@ -1061,63 +519,18 @@ def main(argv: list[str] | None = None) -> int:
         out_path.chmod(0o600)
     except OSError:  # pragma: no cover - best effort on non-POSIX
         pass
-    summary = ", ".join(services) or "none"
-    if "unattended_sessions" in bundle:
-        summary += f", unattended_sessions.enabled={bundle['unattended_sessions']['enabled']}"
-    if "scoped_tokens" in bundle:
-        summary += f", scoped_tokens={bundle['scoped_tokens']}"
-    if "mode" in bundle:
-        summary += f", mode={bundle['mode']}"
-    if "step_up" in bundle:
-        summary += f", step_up.enabled={bundle['step_up'].get('enabled', False)}"
-        if bundle["step_up"].get("require_passkey", False):
-            summary += ", step_up.require_passkey=True"
-    if "download_delivery" in bundle:
-        summary += f", download_delivery.allow_disk_staging={bundle['download_delivery'].get('allow_disk_staging', True)}"
-        summary += f", download_delivery.agent_links={bundle['download_delivery'].get('agent_links', True)}"
-        summary += f", download_delivery.allow_exports={bundle['download_delivery'].get('allow_exports', True)}"
-    if "authz" in bundle:
-        n_domains = len(bundle["authz"].get("allowed_domains") or [])
-        n_groups = len(bundle["authz"].get("required_groups") or [])
-        summary += f", authz.allowed_domains={n_domains}, authz.required_groups={n_groups}"
-    if "audit_forwarding" in bundle:
-        summary += f", audit_forwarding.enabled={bundle['audit_forwarding'].get('enabled', False)}"
-    if bundle.get("mode") == "org":
-        summary += f", web_push.enabled={(bundle.get('web_push') or {}).get('enabled', True)}"
-    summary += f", signed={'signature' in bundle}"
-    print(f"Wrote {out_path} with: {summary}")
-    if bundle.get("mode") == "org":
-        # Read from the bundle, not args: a --merge run without --mode org
-        # keeps the existing server/idp sections and has none of those flags set.
-        issuer = bundle["server"]["issuer_url"].rstrip("/")
-        print(
-            f"Org mode: register {issuer}/oauth/idp/callback, {issuer}/oauth/idp/login-callback and "
-            f"{issuer}/oauth/stepup/callback as redirect URIs for client_id "
-            f"{bundle['idp']['client_id']!r} with your IdP, if you haven't already."
-        )
-        connector_uris = [
-            f"{issuer}/oauth/callback/{name}" for section in services for name in _CONNECTOR_CALLBACKS.get(section, ())
-        ]
-        if connector_uris:
-            print("Register these redirect URIs with each connector's own app:")
-            for uri in connector_uris:
-                print(f"  {uri}")
+    print(f"Wrote {out_path} with: {', '.join(services)}, signed={'signature' in bundle}")
     if "signature" in bundle:
         print(
             "This bundle is signed. The first install that reads it will trust and pin its "
             "signing key (trust-on-first-use) -- every bundle installed on that machine "
             "afterwards, including any future unsigned one, must verify against that same key."
         )
-    if bundle.get("mode") == "org":
-        print(
-            "Install it on the server: copy it to <data>/org/org_config.json (owner-only, mode 0600) "
-            "and restart the daemon. Settings has no install button in org mode."
-        )
-    else:
-        print(
-            'Distribute this file to your users. They install it via "Install/Update '
-            'Organization Config…" on the General page of PrivacyFence Settings.'
-        )
+    print(
+        'Distribute this file to your desktop users. They install it in PrivacyFence Settings '
+        'under Admin → Organization configuration → "Install configuration file…". '
+        'An organization server takes no bundle (docs/org-mode-setup-guide.md).'
+    )
     return 0
 
 

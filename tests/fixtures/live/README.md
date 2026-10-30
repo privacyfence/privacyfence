@@ -3,7 +3,7 @@
 Populated by `scripts/qa_fixture_recorder.py --record <connector>`, run against a real,
 already-authenticated QA account seeded per
 [`connector-qa.md`](../../../docs/connector-qa.md#seed-data) — by hand, or on the self-hosted runner
-by `connector-live-check.yml` (on drift) and `qa-record-fixture.yml`. Never generated on a
+(`runner.privacyfence.eu`, label `privacyfence-live`) by `connector-live-check.yml` (on drift) and `qa-record-fixture.yml`. Never generated on a
 GitHub-hosted runner, never containing anything but a `[QATEST]`-tagged seed artifact with
 identity fields and structural (non-identity) resource ids/URLs already de-identified — see the
 `redact()`/`deidentify_structural_fields()` functions and their connector-specific passes in

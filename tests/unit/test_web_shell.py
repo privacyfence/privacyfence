@@ -8,6 +8,22 @@ import pytest
 from privacyfence import web_shell
 
 
+class TestDeprecationStrip:
+    def test_renders_with_deprecation_html_and_not_without(self):
+        with_strip = web_shell.wrap(
+            "<p>x</p>", title="t", active="settings", deprecation_html=web_shell.local_mode_deprecation_html(),
+        )
+        assert '<div class="pf-shell-deprecation" role="note">Desktop mode is deprecated' in with_strip
+        assert 'href="https://privacyfence.eu/docs/moving-to-organization-mode/"' in with_strip
+        assert 'class="pf-shell-deprecation"' not in web_shell.wrap("<p>x</p>", title="t", active="settings")
+
+    def test_sits_above_the_banner(self):
+        html = web_shell.wrap(
+            "", title="t", active="settings", banner_html="alarm", deprecation_html="old",
+        )
+        assert html.index('<div class="pf-shell-deprecation"') < html.index('<div class="pf-shell-banner"')
+
+
 class TestWrap:
     def test_returns_one_well_formed_document(self):
         html = web_shell.wrap("<p>hello</p>", title="Test Page", active="approvals")
@@ -324,6 +340,27 @@ class TestNavItems:
         assert 'class="pf-shell-nav-item active" href="/approvals"' in html
         for href in ("/connect", "/security", "/settings"):
             assert f'class="pf-shell-nav-item" href="{href}"' in html
+
+
+class TestAdminNavItem:
+    def test_the_local_nav_has_an_admin_item(self):
+        assert web_shell._NAV_ITEMS[-1] == ("admin", "Admin", "/admin")
+        html = web_shell.wrap("", title="t", active="admin")
+        assert 'class="pf-shell-nav-item active" href="/admin" aria-current="page"' in html
+
+    def test_an_admins_org_nav_ends_with_admin_and_other_nav_has_none(self):
+        assert web_shell.org_nav_items(True) == web_shell.ORG_NAV_ITEMS + (("admin", "Admin", "/admin"),)
+        assert web_shell.org_nav_items(True)[-1] == ("admin", "Admin", "/admin")
+        assert web_shell.org_nav_items(False) == web_shell.ORG_NAV_ITEMS
+        assert all(key != "admin" for key, _label, _href in web_shell.org_nav_items(False))
+
+    @pytest.mark.parametrize("is_admin", [True, False])
+    def test_wrap_treats_both_org_tuples_as_org(self, is_admin):
+        org = web_shell.wrap("", title="t", active="approvals", nav_items=web_shell.org_nav_items(is_admin))
+        local = web_shell.wrap("", title="t", active="approvals")
+        assert 'rel="manifest"' in org
+        assert 'rel="manifest"' not in local
+        assert ('href="/admin"' in org) is is_admin
 
 
 class TestPrincipalLabel:

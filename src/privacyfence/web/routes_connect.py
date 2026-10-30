@@ -63,7 +63,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, peek_client, peek_provisioning, google_oauth, grist_auth, grist_provisioning, miro_auth, org_identity, org_mode, paths, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
+from .. import atlassian_oauth, peek_client, peek_provisioning, google_oauth, grist_auth, grist_provisioning, miro_auth, oauth_apps, org_identity, org_mode, paths, relay_client, salesforce_client, slack_client, telegram_auth, web_shell, whats_new
 from ..app_credentials import telegram_app_credentials
 from ..assets_client import ASSETS_REQUIRED_SCOPE
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
@@ -110,7 +110,7 @@ SERVICE_LABELS: dict[str, str] = {
     "peek": "Peek",
 }
 
-# service -> org_config.json section name.
+# service -> section name in the organization config.
 _ORG_CONFIG_SECTION: dict[str, str] = {s: "google" for s in GOOGLE_SERVICES}
 _ORG_CONFIG_SECTION.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "miro": "miro", "jira": "atlassian", "confluence": "atlassian"})
 
@@ -207,6 +207,8 @@ class _PendingAuth:
     principal_id: str
     service: str
     code_verifier: str = ""
+    redirect_uri: str = ""
+    client_id: str = ""
     created_at: float = field(default_factory=time.time)
 
 
@@ -220,10 +222,16 @@ class _PendingAuthStore:
         self._lock = threading.Lock()
         self._pending: dict[str, _PendingAuth] = {}
 
-    def put(self, *, state: str, principal_id: str, service: str, code_verifier: str = "") -> None:
+    def put(
+        self, *, state: str, principal_id: str, service: str, code_verifier: str = "", redirect_uri: str = "",
+        client_id: str = "",
+    ) -> None:
         self._prune()
         with self._lock:
-            self._pending[state] = _PendingAuth(principal_id=principal_id, service=service, code_verifier=code_verifier)
+            self._pending[state] = _PendingAuth(
+                principal_id=principal_id, service=service, code_verifier=code_verifier,
+                redirect_uri=redirect_uri, client_id=client_id,
+            )
 
     def pop(self, state: str) -> _PendingAuth | None:
         with self._lock:
@@ -326,17 +334,32 @@ class _PeekAuthStore:
 # HTTP/PKCE mechanics.
 # ---------------------------------------------------------------------------- #
 
+def _google_client_section(org_config: dict[str, Any]) -> dict[str, Any]:
+    """The Google section without the relay marker, which google-auth's client config must not see."""
+    return {k: v for k, v in (org_config.get("google") or {}).items() if k != oauth_apps.RELAY_MARKER}
+
+
+def _section_client_id(org_config: dict[str, Any], service: str) -> str:
+    """The OAuth client a service signs in with right now, so a callback can tell that an admin
+    changed it while the person was at the provider."""
+    if service == "grist":
+        bundle = _grist_bundle(org_config)
+        return bundle.oauth.client_id if bundle is not None and bundle.oauth is not None else ""
+    section = org_config.get(_ORG_CONFIG_SECTION[service]) or {}
+    return str(section.get("client_id") or section.get("consumer_key") or "")
+
+
 class _NotConfigured(Exception):
-    """Raised when org_config.json has no (usable) section for a service."""
+    """Raised when the organization config has no (usable) section for a service."""
 
 
 def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri: str, state: str) -> tuple[str, str]:
     """Returns ``(authorize_url, code_verifier)`` -- ``code_verifier`` is
     ``""`` for Slack (no PKCE, see slack_client.build_authorize_url's own
-    docstring). Raises ``_NotConfigured`` if org_config.json has no usable
+    docstring). Raises ``_NotConfigured`` if the organization config has no usable
     section for ``service``."""
     if service in GOOGLE_SERVICES:
-        client_config = google_oauth.web_client_config(org_config.get("google") or {})
+        client_config = google_oauth.web_client_config(_google_client_section(org_config))
         if not client_config:
             raise _NotConfigured(service)
         return google_oauth.authorize_url(client_config, GOOGLE_SCOPES[service], redirect_uri, state)
@@ -402,7 +425,7 @@ def _exchange_and_save(
     token_file = _token_file_path(principal, service)
 
     if service in GOOGLE_SERVICES:
-        client_config = google_oauth.web_client_config(org_config.get("google") or {})
+        client_config = google_oauth.web_client_config(_google_client_section(org_config))
         creds = google_oauth.exchange_code(client_config, GOOGLE_SCOPES[service], redirect_uri, code, code_verifier)
         google_oauth.save_credentials(token_file, creds)
         return
@@ -465,6 +488,8 @@ def build_routes(
     peek_states = _PeekAuthStore()
     grist_errors: dict[str, str] = {}  # principal id -> the last API-key form error, cleared on success
     base_url = issuer_url.rstrip("/")
+    netloc = relay_client.issuer_host(issuer_url)
+    relay_loopback = relay_client.loopback_host(netloc)
 
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
@@ -486,6 +511,16 @@ def build_routes(
         # this is a no-op change for them.
         redirect_uri = f"{base_url}/oauth/callback/{_GRANT_KEY[service]}"
         state = secrets.token_urlsafe(32)
+        if oauth_apps.uses_relay(org_config.get(_ORG_CONFIG_SECTION[service]) or {}):
+            # The provider redirects to the relay, which forwards the browser to this server; the
+            # relay learns where from the host in front of the nonce. It does that only for a
+            # server it has verified, so do not send the person to the provider before that.
+            if not relay_loopback and relay_client.status()["last_ok_at"] is None:
+                logger.warning("relay registration has not succeeded yet")
+                return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
+            redirect_uri = oauth_apps.relay_redirect_uri(_GRANT_KEY[service])
+            state = f"{netloc}~{state}"
+        client_id = _section_client_id(org_config, service)
         try:
             if service == "grist":  # discovery makes network calls
                 authorize_url, code_verifier = await asyncio.to_thread(
@@ -495,7 +530,10 @@ def build_routes(
                 authorize_url, code_verifier = _build_authorize_url(service, org_config, redirect_uri, state)
         except (_NotConfigured, grist_auth.GristClientError):
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
-        attempts.put(state=state, principal_id=principal.id, service=service, code_verifier=code_verifier)
+        attempts.put(
+            state=state, principal_id=principal.id, service=service, code_verifier=code_verifier,
+            redirect_uri=redirect_uri, client_id=client_id,
+        )
         return RedirectResponse(authorize_url, status_code=302, headers={"Cache-Control": "no-store"})
 
     async def callback(request: Request) -> Response:
@@ -521,13 +559,19 @@ def build_routes(
             logger.info("OAuth callback for %s ignored: not finished by the principal that started it", service)
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
         if provider_error or not code:
+            location = f"/connect?error={service}"
+            if service == "salesforce" and provider_error in _SALESFORCE_NOT_INSTALLED_ERRORS:
+                location += f"&reason={_NOT_INSTALLED_REASON}"
+            return RedirectResponse(location, status_code=302, headers={"Cache-Control": "no-store"})
+
+        if _section_client_id(org_config, service) != pending.client_id:
+            logger.warning("OAuth app for %s changed during the sign-in; the attempt was dropped", service)
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
 
         principal = Principal(id=pending.principal_id)
-        redirect_uri = f"{base_url}/oauth/callback/{grant_key}"
         try:
             with principal_scope(principal):
-                _exchange_and_save(service, org_config, redirect_uri, code, pending.code_verifier, principal)
+                _exchange_and_save(service, org_config, pending.redirect_uri, code, pending.code_verifier, principal)
         except Exception as exc:  # noqa: BLE001 -- any provider/exchange failure ends the same way
             logger.warning("Service authorization failed for %s (%s): %s", principal.id, service, exc)
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
@@ -547,6 +591,7 @@ def build_routes(
             peek_state=peek_states.get(principal.id),
             flash_connected=request.query_params.get("connected", ""),
             flash_error=request.query_params.get("error", ""),
+            flash_reason=request.query_params.get("reason", ""),
             grist_error=grist_errors.get(principal.id, ""),
             csrf=session_id, nonce=_csp_nonce_for(request), whats_new_version=whats_new_version,
         )
@@ -831,7 +876,18 @@ li.assets{--stack-gap:var(--space-xs)}
 """
 
 
-def _flash_html(flash_connected: str, flash_error: str) -> str:
+# The OAuth errors Salesforce returns when the sign-in names an app the org has not installed.
+_SALESFORCE_NOT_INSTALLED_ERRORS = frozenset({"OAUTH_APP_ACCESS_DENIED", "invalid_client_id"})
+_NOT_INSTALLED_REASON = "not_installed"
+
+
+def _not_installed_line(service: str, reason: str) -> str:
+    if service == "salesforce" and reason == _NOT_INSTALLED_REASON:
+        return " Your Salesforce administrator has to install PrivacyFence in your org first."
+    return ""
+
+
+def _flash_html(flash_connected: str, flash_error: str, flash_reason: str = "") -> str:
     parts = []
     if flash_connected and flash_connected in SERVICE_LABELS:
         parts.append(
@@ -840,7 +896,8 @@ def _flash_html(flash_connected: str, flash_error: str) -> str:
     if flash_error and flash_error in SERVICE_LABELS:
         parts.append(
             f'<div class="card card-danger" role="alert">Could not connect {_esc(SERVICE_LABELS[flash_error])} -- '
-            "either sign-in was declined, or your organization hasn't configured it yet.</div>"
+            "either sign-in was declined, or your organization hasn't configured it yet."
+            f"{_not_installed_line(flash_error, flash_reason)}</div>"
         )
     return "".join(parts)
 
@@ -1049,7 +1106,7 @@ def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str 
 def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
     flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
-    peek_state: _PeekState | None = None, whats_new_version: str = "",
+    peek_state: _PeekState | None = None, whats_new_version: str = "", flash_reason: str = "",
 ) -> str:
     def offered(service: str) -> bool:  # ADR 0196: a service the org config doesn't enable is not listed
         return org_mode.connector_enabled_by_org(org_config, service)
@@ -1074,7 +1131,7 @@ def _render_connect_page(
         "<h1>Connect your accounts</h1>"
         f'<p class="lead">Signed in as {_esc(who)}. Connecting a service lets PrivacyFence act on it for you, still gated by '
         "the same approval rules as everything else.</p>"
-        f"{_flash_html(flash_connected, flash_error)}"
+        f"{_flash_html(flash_connected, flash_error, flash_reason)}"
         f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}{peek_row}{grist_row}</ul>'
         '<form class="cluster" method="post" action="/logout">'
         '<button type="submit" class="button secondary">Sign out</button></form>'
@@ -1082,7 +1139,7 @@ def _render_connect_page(
     )
     return web_shell.wrap(
         body, title="PrivacyFence — Connect your accounts", active="connections", nonce=nonce,
-        nav_items=web_shell.ORG_NAV_ITEMS, principal_label=who, live_updates=False, notifications_enabled=False,
+        nav_items=web_shell.org_nav_items(principal.is_admin), principal_label=who, live_updates=False, notifications_enabled=False,
         csrf=csrf, whats_new_version=whats_new_version,
     )
 

@@ -209,6 +209,16 @@ class TestSessionCookieHelpers:
         # web/session_auth.py's test_set_session_cookie_omits_secure_in_
         # local_mode: same flag, opposite mode-appropriate value.
 
+    def test_set_session_cookie_can_leave_out_secure_for_plain_http(self):
+        # Single-user mode runs on http://localhost, where a browser may drop a Secure cookie.
+        response = Response()
+        os_.set_session_cookie(response, "sess-123", secure=False)
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "sess-123" in set_cookie
+        assert "HttpOnly" in set_cookie
+        assert "secure" not in set_cookie.lower()
+        assert "samesite=lax" in set_cookie.lower()
+
     def test_set_session_cookie_is_not_samesite_strict(self):
         # Regression, found on a real browser against a real IdP: Strict
         # made every sign-in an infinite redirect loop. The cookie is set

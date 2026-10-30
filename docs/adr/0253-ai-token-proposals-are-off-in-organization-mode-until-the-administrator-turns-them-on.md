@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-10-28. Implemented.
+Amended by [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md): the AI token proposals switch is on the Admin page (`scoped_tokens.allow_ai_proposals` in `org/admin_config.json`).
 
 ## Context
 

@@ -13,7 +13,7 @@ import pytest
 import requests
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from privacyfence import org_identity as oi
+from privacyfence import org_identity as oi, relay_client
 from privacyfence.org_mode import AuthzPolicyConfig
 from privacyfence.principal import Principal
 
@@ -191,6 +191,51 @@ class TestIdpConfigFromOrgConfig:
         config = oi.IdpConfig.from_org_config({"idp": {"issuer": "https://idp.example.com", "client_id": "cid"}})
         assert config.admin_group_claim == ""
         assert config.admin_group_values == ()
+
+
+class TestIdpConfigFromEnvironment:
+    SECRET = "s3cret-sentinel-value"
+
+    @staticmethod
+    def _discovery(monkeypatch):
+        monkeypatch.setattr(
+            oi, "discover_idp",
+            lambda issuer: {"authorization_endpoint": "a", "token_endpoint": "t", "jwks_uri": "j"},
+        )
+
+    def test_builds_config_from_the_environment_alone(self, monkeypatch, caplog):
+        self._discovery(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "cid")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_SECRET", self.SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL", "true")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES", "admins,ops")
+        with caplog.at_level("DEBUG"):
+            config = oi.IdpConfig.from_org_config({"mode": "org"})
+        assert config == oi.IdpConfig(
+            issuer="https://idp.example.com", client_id="cid", client_secret=self.SECRET,
+            authorization_endpoint="a", token_endpoint="t", jwks_uri="j",
+            admin_group_values=("admins", "ops"), trust_unverified_email=True,
+        )
+        assert self.SECRET not in caplog.text
+
+    def test_trust_unverified_email_defaults_to_false_and_reads_a_bundle_section(self, monkeypatch):
+        self._discovery(monkeypatch)
+        base = {"issuer": "https://idp.example.com", "client_id": "cid"}
+        assert oi.IdpConfig.from_org_config({"idp": base}).trust_unverified_email is False
+        assert oi.IdpConfig.from_org_config({"idp": {**base, "trust_unverified_email": True}}).trust_unverified_email
+
+    def test_a_bundle_idp_wins_over_the_environment(self, monkeypatch):
+        self._discovery(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://env.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "env-client")
+        config = oi.IdpConfig.from_org_config({"idp": {"issuer": "https://idp.example.com", "client_id": "cid"}})
+        assert (config.issuer, config.client_id) == ("https://idp.example.com", "cid")
+
+    def test_repr_does_not_contain_the_secret(self):
+        config = _idp(client_secret=self.SECRET)
+        assert self.SECRET not in repr(config)
+        assert self.SECRET not in str(config)
 
 
 class TestGeneratePkcePair:
@@ -393,6 +438,104 @@ class TestPrincipalFromClaims:
         assert p.is_admin is True
 
 
+VERIFIED = {"email_verified": True}
+
+
+class TestPrincipalAdminByEmail:
+    @staticmethod
+    def _claims(**overrides):
+        claims = {"sub": "s", "email": "alice@acme.com", "email_verified": True}
+        claims.update(overrides)
+        return claims
+
+    def _admin(self, claims, **idp_overrides) -> bool:
+        idp = _idp(admin_emails=idp_overrides.pop("admin_emails", ("alice@acme.com",)), **idp_overrides)
+        return oi.principal_from_claims(claims, idp).is_admin
+
+    def test_a_verified_listed_email_is_admin(self):
+        assert self._admin(self._claims()) is True
+
+    def test_matching_is_case_insensitive_and_strips_whitespace(self):
+        assert self._admin(self._claims(email="  Alice@ACME.com ")) is True
+
+    def test_a_configured_email_with_whitespace_or_case_still_matches(self):
+        assert self._admin(self._claims(), admin_emails=("  ALICE@Acme.COM  ",)) is True
+
+    @pytest.mark.parametrize("verified", [False, "true", "True", 1, None])
+    def test_an_unverified_email_is_not_admin(self, verified):
+        assert self._admin(self._claims(email_verified=verified)) is False
+
+    def test_a_missing_email_verified_claim_is_not_admin(self):
+        claims = self._claims()
+        del claims["email_verified"]
+        assert self._admin(claims) is False
+
+    def test_an_unlisted_email_is_not_admin(self):
+        assert self._admin(self._claims(email="bob@acme.com")) is False
+
+    @pytest.mark.parametrize("email", [["alice@acme.com"], ("alice@acme.com",), {"a": 1}, 5, None])
+    def test_a_non_string_email_claim_is_not_admin(self, email):
+        assert self._admin(self._claims(email=email)) is False
+        assert oi.principal_from_claims(self._claims(email=email), _idp()).email == ""
+
+    @pytest.mark.parametrize("email", ["alice@acme.com\u212a", "al\u017fce@acme.com", "alice@acme.com\u00e9"])
+    def test_a_non_ascii_address_never_matches(self, email):
+        assert self._admin(self._claims(email=email), admin_emails=(email,)) is False
+        # A look-alike of a listed address (Kelvin sign lower-cases to "k", long s to "s" under casefold).
+        assert self._admin(self._claims(email="al\u017fce@acme.com")) is False
+        assert self._admin(self._claims(email="BOB@acme.com"), admin_emails=("bo\u212a@acme.com",)) is False
+        assert self._admin(self._claims(email="bok@acme.com"), admin_emails=("bo\u212a@acme.com",)) is False
+
+    def test_an_empty_or_malformed_email_never_matches(self):
+        for email in ("", " ", "@", "alice@", "@acme.com", "a@b@acme.com"):
+            assert self._admin(self._claims(email=email), admin_emails=(email,)) is False
+
+    def test_no_admin_list_means_nobody_is_admin_by_email(self):
+        assert self._admin(self._claims(), admin_emails=()) is False
+
+    def test_the_trust_unverified_flag_never_makes_an_email_admin(self):
+        claims = self._claims(email_verified=False)
+        assert self._admin(claims, trust_unverified_email=True) is False
+        del claims["email_verified"]
+        assert self._admin(claims, trust_unverified_email=True) is False
+
+    def test_the_group_rule_still_works_alone_and_with_the_email_list(self):
+        groups = dict(admin_group_claim="groups", admin_group_values=("admins",))
+        by_group = self._claims(email="bob@acme.com", email_verified=False, groups=["admins"])
+        assert self._admin(by_group, **groups) is True
+        by_email = self._claims(groups=["engineers"])
+        assert self._admin(by_email, **groups) is True
+        neither = self._claims(email="bob@acme.com", groups=["engineers"])
+        assert self._admin(neither, **groups) is False
+
+    GOOGLE = "https://accounts.google.com"
+
+    def test_google_needs_hd_to_equal_the_email_domain(self):
+        assert self._admin(self._claims(hd="acme.com"), issuer=self.GOOGLE) is True
+        assert self._admin(self._claims(hd="ACME.com"), issuer=self.GOOGLE) is True
+        assert self._admin(self._claims(), issuer=self.GOOGLE) is False
+        assert self._admin(self._claims(hd="other.com"), issuer=self.GOOGLE) is False
+        assert self._admin(self._claims(hd=["acme.com"]), issuer=self.GOOGLE) is False
+        assert self._admin(self._claims(hd=""), issuer=self.GOOGLE) is False
+        assert self._admin(self._claims(), issuer=self.GOOGLE + "/") is False
+
+    def test_other_issuers_do_not_need_hd(self):
+        assert self._admin(self._claims()) is True
+
+
+class TestReservedSubs:
+    @pytest.mark.parametrize("sub", ["local", "single-user", "os-alice", "os-", "LOCAL", "Single-User", "OS-x"])
+    def test_a_reserved_form_is_hashed(self, sub):
+        import hashlib
+
+        p = oi.principal_from_claims({"sub": sub}, _idp())
+        assert p.id == "idp-" + hashlib.sha256(sub.encode()).hexdigest()[:32]
+
+    @pytest.mark.parametrize("sub", ["locally", "single-users", "pos-1", "alice"])
+    def test_a_near_miss_is_left_alone(self, sub):
+        assert oi.principal_from_claims({"sub": sub}, _idp()).id == sub
+
+
 class TestCheckAuthzPolicy:
     """Allowed-domain and required-group authorization policy enforcement."""
 
@@ -406,11 +549,11 @@ class TestCheckAuthzPolicy:
 
     def test_allowed_domain_admits(self):
         policy = AuthzPolicyConfig(allowed_domains=("acme.com",))
-        oi.check_authz_policy(self._principal(email="alice@acme.com"), {}, policy)  # must not raise
+        oi.check_authz_policy(self._principal(email="alice@acme.com"), VERIFIED, policy)  # must not raise
 
     def test_allowed_domain_is_case_insensitive(self):
         policy = AuthzPolicyConfig(allowed_domains=("acme.com",))
-        oi.check_authz_policy(self._principal(email="alice@ACME.COM"), {}, policy)  # must not raise
+        oi.check_authz_policy(self._principal(email="alice@ACME.COM"), VERIFIED, policy)  # must not raise
 
     def test_disallowed_domain_is_denied(self):
         policy = AuthzPolicyConfig(allowed_domains=("acme.com",))
@@ -449,9 +592,320 @@ class TestCheckAuthzPolicy:
         # Right domain, wrong group -> still denied.
         with pytest.raises(oi.AuthorizationDenied):
             oi.check_authz_policy(
-                self._principal(email="alice@acme.com"), {"groups": ["engineers"]}, policy,
+                self._principal(email="alice@acme.com"), {**VERIFIED, "groups": ["engineers"]}, policy,
             )
         # Both satisfied -> admitted.
         oi.check_authz_policy(
-            self._principal(email="alice@acme.com"), {"groups": ["privacyfence-users"]}, policy,
+            self._principal(email="alice@acme.com"), {**VERIFIED, "groups": ["privacyfence-users"]}, policy,
         )
+
+
+class TestAllowedDomainsNeedAVerifiedAddress:
+    POLICY = AuthzPolicyConfig(allowed_domains=("acme.com",))
+
+    @staticmethod
+    def _check(policy, claims, idp_issuer="https://login.example.com", trust=False, email="alice@acme.com"):
+        idp = _idp(issuer=idp_issuer, trust_unverified_email=trust)
+        bound = oi.IdpAuthzPolicy.bind(policy, idp)
+        oi.check_authz_policy(Principal(id="p", email=email, display_name="P"), claims, bound)
+
+    @pytest.mark.parametrize("verified", [False, "true", None, 1])
+    def test_an_unverified_address_is_denied(self, verified):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check(self.POLICY, {"email_verified": verified})
+
+    def test_a_missing_email_verified_claim_is_denied_by_default(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check(self.POLICY, {})
+
+    def test_a_plain_policy_without_an_idp_is_strict(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            oi.check_authz_policy(Principal(id="p", email="a@acme.com", display_name="P"), {}, self.POLICY)
+
+    def test_entra_style_claims_are_allowed_with_the_trust_flag(self):
+        self._check(self.POLICY, {}, trust=True)
+        self._check(self.POLICY, {"email_verified": False}, trust=True)
+
+    def test_the_trust_flag_does_not_admit_the_wrong_domain(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check(self.POLICY, {}, trust=True, email="mallory@evil.example")
+
+    @pytest.mark.parametrize("email", ["alice@acme.com\u212a", "alice@ac\u212ae.com", "alice@acme.com\u00e9"])
+    def test_a_non_ascii_address_is_denied(self, email):
+        policy = AuthzPolicyConfig(allowed_domains=("acme.com", "ackme.com"))
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check(policy, VERIFIED, email=email)
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check(policy, VERIFIED, email="alice@ac\u212ame.com", trust=True)
+
+    def test_a_malformed_address_is_denied(self):
+        for email in ("", "acme.com", "@acme.com", "a@b@acme.com"):
+            with pytest.raises(oi.AuthorizationDenied):
+                self._check(self.POLICY, VERIFIED, email=email)
+
+    def test_google_needs_hd_even_for_a_verified_address(self):
+        google = "https://accounts.google.com"
+        self._check(self.POLICY, {"email_verified": True, "hd": "acme.com"}, idp_issuer=google)
+        for claims in ({"email_verified": True}, {"email_verified": True, "hd": "other.com"}):
+            with pytest.raises(oi.AuthorizationDenied):
+                self._check(self.POLICY, claims, idp_issuer=google)
+
+    def test_google_hd_still_applies_with_the_trust_flag(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check(self.POLICY, {}, idp_issuer="https://accounts.google.com", trust=True)
+
+    def test_a_disabled_policy_still_admits_everyone(self):
+        self._check(AuthzPolicyConfig(), {}, email="")
+
+    def test_bind_carries_the_policy_fields(self):
+        policy = AuthzPolicyConfig(allowed_domains=("a.com",), groups_claim="g", required_groups=("x",))
+        bound = oi.IdpAuthzPolicy.bind(policy, _idp(trust_unverified_email=True))
+        assert (bound.allowed_domains, bound.groups_claim, bound.required_groups) == (("a.com",), "g", ("x",))
+        assert bound.trust_unverified_email is True and bound.issuer == "https://idp.example.com"
+        assert bound.enabled
+
+
+class TestAdminEmailsFromConfig:
+    def test_the_section_list_is_normalized_and_non_ascii_or_non_string_entries_are_dropped(self, monkeypatch):
+        monkeypatch.setattr(
+            oi, "discover_idp",
+            lambda issuer: {"authorization_endpoint": "a", "token_endpoint": "t", "jwks_uri": "j"},
+        )
+        section = {
+            "issuer": "https://idp.example.com", "client_id": "cid",
+            "admin_emails": ["  Alice@Acme.COM ", "bo\u212a@acme.com", 5, None, ["x@y.com"], ""],
+        }
+        assert oi.IdpConfig.from_org_config({"idp": section}).admin_emails == ("alice@acme.com",)
+
+    def test_the_environment_list_reaches_the_config(self, monkeypatch):
+        monkeypatch.setattr(
+            oi, "discover_idp",
+            lambda issuer: {"authorization_endpoint": "a", "token_endpoint": "t", "jwks_uri": "j"},
+        )
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "cid")
+        monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "Alice@acme.com, bob@acme.com")
+        config = oi.IdpConfig.from_org_config({"mode": "org"})
+        assert config.admin_emails == ("alice@acme.com", "bob@acme.com")
+
+
+def _prove_domains(*domains: str) -> None:
+    """As if the relay's last registration answered these sign-in domains as proven in DNS."""
+    relay_client._persist_last_ok(1.0, list(domains))
+    relay_client.reset_for_tests()
+
+
+class TestBuiltinGoogleSignin:
+    """PrivacyFence's own Google client: any Google account can finish Google's side, so the
+    server admits only listed admins and allowed domains, each with a matching ``hd``."""
+
+    CLIENT_ID = "builtin-signin.apps.googleusercontent.com"
+    GOOGLE = "https://accounts.google.com"
+
+    @pytest.fixture(autouse=True)
+    def _domains_proven(self):
+        _prove_domains("acme.com", "acme.org")
+
+    def _idp(self, **overrides):
+        values = dict(
+            issuer=self.GOOGLE, client_id=self.CLIENT_ID, builtin=True, relay=True,
+            admin_emails=("alice@acme.com",),
+        )
+        values.update(overrides)
+        return _idp(**values)
+
+    def _check(self, email, claims, *, domains=(), idp=None, policy=None):
+        idp = idp or self._idp()
+        claims = {"sub": "s", "email": email, "aud": self.CLIENT_ID, **claims}
+        principal = oi.principal_from_claims(claims, idp)
+        bound = policy if policy is not None else oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(allowed_domains=domains), idp)
+        oi.check_authz_policy(principal, claims, bound)
+        return principal
+
+    def test_an_outside_google_account_is_refused_with_an_empty_authz(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("eve@other.com", {"email_verified": True, "hd": "other.com"})
+
+    def test_a_consumer_account_is_refused(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("eve@gmail.com", {"email_verified": True}, domains=("gmail.com",))
+
+    def test_a_listed_admin_without_hd_is_refused_and_not_admin(self):
+        claims = {"sub": "s", "email": "alice@acme.com", "email_verified": True, "aud": self.CLIENT_ID}
+        assert oi.principal_from_claims(claims, self._idp()).is_admin is False
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("alice@acme.com", {"email_verified": True})
+
+    def test_a_listed_admin_with_matching_hd_signs_in_as_admin(self):
+        principal = self._check("Alice@Acme.com", {"email_verified": True, "hd": "acme.com"})
+        assert principal.is_admin is True
+
+    @pytest.mark.parametrize("claims", [
+        {"email_verified": False, "hd": "acme.com"},
+        {"email_verified": "true", "hd": "acme.com"},
+        {"hd": "acme.com"},
+        {"email_verified": True, "hd": "other.com"},
+        {"email_verified": True, "hd": ["acme.com"]},
+        {"email_verified": True, "hd": "acme.com.evil.com"},
+        {"email_verified": True, "hd": "sub.acme.com"},
+        {"email_verified": True, "hd": ""},
+    ])
+    def test_a_listed_admin_needs_a_verified_address_and_its_own_hd(self, claims):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("alice@acme.com", claims)
+
+    def test_hd_case_and_whitespace_are_normalized(self):
+        self._check("alice@acme.com", {"email_verified": True, "hd": " ACME.com "})
+
+    def test_an_allowed_domain_account_with_matching_hd_is_allowed(self):
+        principal = self._check("carol@acme.org", {"email_verified": True, "hd": "acme.org"}, domains=("acme.org",))
+        assert principal.is_admin is False
+
+    def test_an_allowed_domain_account_with_a_different_hd_is_refused(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("carol@acme.org", {"email_verified": True, "hd": "evil.com"}, domains=("acme.org",))
+
+    def test_an_allowed_domain_needs_a_verified_address(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("carol@acme.org", {"email_verified": False, "hd": "acme.org"}, domains=("acme.org",))
+
+    def test_an_unlisted_address_in_an_admin_domain_is_refused(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("mallory@acme.com", {"email_verified": True, "hd": "acme.com"})
+
+    def test_a_non_ascii_lookalike_of_an_admin_is_refused(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("alice@acKme.com", {"email_verified": True, "hd": "acKme.com"})
+
+    def test_the_trust_flag_never_lifts_the_rule(self):
+        policy = oi.IdpAuthzPolicy(
+            allowed_domains=("acme.org",), issuer=self.GOOGLE, trust_unverified_email=True, builtin=True,
+        )
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("carol@acme.org", {"hd": "acme.org"}, policy=policy)
+
+    def test_required_groups_still_narrow(self):
+        idp = self._idp()
+        policy = oi.IdpAuthzPolicy.bind(
+            AuthzPolicyConfig(allowed_domains=("acme.org",), groups_claim="groups", required_groups=("pf",)), idp,
+        )
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("carol@acme.org", {"email_verified": True, "hd": "acme.org"}, policy=policy)
+
+    def test_an_unbound_policy_still_denies_by_default_for_the_builtin_client(self, monkeypatch):
+        monkeypatch.setattr(oi.app_credentials, "builtin_app", lambda key: {"client_id": self.CLIENT_ID})
+        claims = {"email_verified": True, "hd": "other.com"}
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("eve@other.com", claims, policy=AuthzPolicyConfig())
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("eve@other.com", {**claims, "aud": [self.CLIENT_ID, "x"]}, policy=AuthzPolicyConfig())
+        self._check("carol@acme.org", {"email_verified": True, "hd": "acme.org"},
+                    policy=AuthzPolicyConfig(allowed_domains=("acme.org",)))
+
+    def test_an_own_idp_keeps_the_empty_authz_meaning(self):
+        idp = _idp(issuer=self.GOOGLE, client_id="own-client")
+        claims = {"sub": "s", "email": "eve@gmail.com", "aud": "own-client"}
+        oi.check_authz_policy(oi.principal_from_claims(claims, idp), claims, oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(), idp))
+
+    def test_an_admin_of_a_domain_not_proven_in_dns_is_refused(self):
+        _prove_domains("acme.org")
+        with pytest.raises(oi.AuthorizationDenied, match="not proven in DNS"):
+            self._check("alice@acme.com", {"email_verified": True, "hd": "acme.com"})
+
+    def test_an_allowed_domain_not_proven_in_dns_is_refused(self):
+        _prove_domains("acme.com")
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("carol@acme.org", {"email_verified": True, "hd": "acme.org"}, domains=("acme.org",))
+
+    def test_nothing_proven_refuses_even_the_admin(self):
+        relay_client.reset_for_tests()
+        relay_client.relay_status_path().unlink()
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("alice@acme.com", {"email_verified": True, "hd": "acme.com"})
+
+    def test_a_proven_domain_does_not_admit_an_unlisted_account(self):
+        with pytest.raises(oi.AuthorizationDenied):
+            self._check("eve@acme.org", {"email_verified": True, "hd": "acme.org"})
+
+    def test_an_own_idp_ignores_the_proven_domains(self):
+        relay_client.reset_for_tests()
+        relay_client.relay_status_path().unlink()
+        idp = _idp(issuer=self.GOOGLE, client_id="own-client")
+        claims = {"sub": "s", "email": "carol@acme.org", "email_verified": True, "hd": "acme.org", "aud": "own-client"}
+        policy = oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(allowed_domains=("acme.org",)), idp)
+        oi.check_authz_policy(oi.principal_from_claims(claims, idp), claims, policy)
+
+    def test_bind_carries_builtin_and_the_admins(self):
+        bound = oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(), self._idp())
+        assert bound.builtin is True and bound.admin_emails == ("alice@acme.com",)
+        assert oi.IdpAuthzPolicy.bind(AuthzPolicyConfig(), None).builtin is False
+
+
+class TestBuiltinIdpConfig:
+    @staticmethod
+    def _discovery(monkeypatch):
+        monkeypatch.setattr(
+            oi, "discover_idp",
+            lambda issuer: {"authorization_endpoint": "a", "token_endpoint": "t", "jwks_uri": "j"},
+        )
+
+    SECTION = {
+        "issuer": "https://accounts.google.com", "client_id": "cid", "client_secret": "sec",
+        "relay": True, "builtin": True, "admin_emails": ["Alice@acme.com"], "trust_unverified_email": False,
+    }
+
+    def test_builtin_and_relay_come_from_the_section(self, monkeypatch):
+        self._discovery(monkeypatch)
+        config = oi.IdpConfig.from_org_config({"idp": self.SECTION})
+        assert (config.builtin, config.relay, config.admin_emails) == (True, True, ("alice@acme.com",))
+        own = oi.IdpConfig.from_org_config({"idp": {"issuer": "https://idp.example.com", "client_id": "c"}})
+        assert (own.builtin, own.relay) == (False, False)
+
+    def test_the_environment_builds_a_builtin_config(self, monkeypatch):
+        self._discovery(monkeypatch)
+        monkeypatch.setattr(
+            oi.org_mode.app_credentials, "builtin_app",
+            lambda key: {"client_id": "builtin-cid", "client_secret": "builtin-sec"} if key == "google_signin" else None,
+        )
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
+        monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", "https://pf.acme.com")
+        config = oi.IdpConfig.from_org_config({"mode": "org"})
+        assert (config.issuer, config.client_id, config.builtin, config.relay) == (
+            "https://accounts.google.com", "builtin-cid", True, True,
+        )
+        assert config.trust_unverified_email is False
+        assert "builtin-sec" not in repr(config)
+
+    def test_trust_unverified_email_is_refused_with_builtin(self, monkeypatch):
+        self._discovery(monkeypatch)
+        with pytest.raises(oi.ConfigurationError, match="cannot trust unverified email"):
+            oi.IdpConfig.from_org_config({"idp": {**self.SECTION, "trust_unverified_email": True}})
+
+    def test_builtin_with_another_issuer_is_refused(self, monkeypatch):
+        self._discovery(monkeypatch)
+        with pytest.raises(oi.ConfigurationError):
+            oi.IdpConfig.from_org_config({"idp": {**self.SECTION, "issuer": "https://idp.example.com"}})
+
+
+class TestSigninRedirect:
+    def test_an_own_idp_keeps_this_servers_callback_and_a_plain_state(self):
+        idp = _idp()
+        assert oi.signin_redirect_uri(
+            idp, issuer_url="https://pf.acme.com/", grant="idp-login", callback_path="/oauth/idp/login-callback",
+        ) == "https://pf.acme.com/oauth/idp/login-callback"
+        state = oi.new_signin_state(idp, issuer_url="https://pf.acme.com")
+        assert "~" not in state and len(state) == 43
+
+    @pytest.mark.parametrize("grant", ["idp", "idp-login", "stepup"])
+    def test_through_the_relay_the_relays_uri_and_a_host_state(self, grant):
+        idp = _idp(relay=True)
+        assert oi.signin_redirect_uri(
+            idp, issuer_url="https://PF.acme.com:8443", grant=grant, callback_path="/x",
+        ) == f"https://oauth.privacyfence.eu/callback/{grant}"
+        host, _, nonce = oi.new_signin_state(idp, issuer_url="https://PF.acme.com:8443").partition("~")
+        assert host == "pf.acme.com:8443" and len(nonce) == 43
+
+    def test_every_state_is_fresh(self):
+        idp = _idp(relay=True)
+        assert len({oi.new_signin_state(idp, issuer_url="https://pf.acme.com") for _ in range(50)}) == 50

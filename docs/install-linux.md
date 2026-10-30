@@ -1,5 +1,10 @@
 # Install on Linux
 
+> **Desktop mode is deprecated.** PrivacyFence's desktop install, the one this page sets up, is deprecated in
+> PrivacyFence 7 and will be removed in PrivacyFence 8. Its built-in sign-in works only in organization mode and the
+> Docker image. See [Moving to organization mode](moving-to-organization-mode.md) for the two ways forward and for what to
+> check before a later upgrade to 8.x: start 7.x once and look for "Ready for PrivacyFence 8" on the Admin page.
+
 Start with [Getting started](getting-started.md) if you haven't: it covers what you need and what
 happens after the install. This page covers the `.deb` for Debian and Ubuntu desktops; for other
 distributions and for arm64, see [Other Linux systems and arm64](#other-linux-systems-and-arm64).

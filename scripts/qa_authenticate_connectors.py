@@ -21,9 +21,9 @@ prompt shape. Run that one by hand if/when you need it.
 Prerequisite: the QA org config bundle (`org_config.qa.json`, built by
 `scripts/build_org_bundle.py --merge` from each provider's "For IT admins"
 setup, see `docs/connector-qa.md`'s "QA accounts and organization config")
-must already be installed at `org/org_config.json` -- `--org-config` below
+must already be installed at `org/org_bundle.json` -- `--org-config` below
 can do that copy for you, or do it by hand (or via PrivacyFence Settings'
-"Install/Update Organization Config...").
+"Install configuration file...").
 
     .venv/bin/python scripts/qa_authenticate_connectors.py
         Runs every QA connector's OAuth flow, in this order: Gmail, Drive,
@@ -38,7 +38,7 @@ can do that copy for you, or do it by hand (or via PrivacyFence Settings'
         account that wasn't ready yet.
 
     .venv/bin/python scripts/qa_authenticate_connectors.py --org-config org_config.qa.json
-        Copies org_config.qa.json into place as org/org_config.json first
+        Copies org_config.qa.json into place as org/org_bundle.json first
         (backing up any file already there), then runs every step.
 
 Stops at the first failed step by default -- a later connector's OAuth
@@ -58,7 +58,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = str(REPO_ROOT / "config" / "settings.yaml")
-DEFAULT_ORG_CONFIG_PATH = REPO_ROOT / "org" / "org_config.json"
+DEFAULT_ORG_CONFIG_PATH = REPO_ROOT / "org" / "org_bundle.json"
 
 
 @dataclass(frozen=True)
@@ -104,7 +104,7 @@ def resolve_steps(only: list[str] | None) -> list[OAuthStep]:
 
 
 def install_org_config(source: Path) -> None:
-    """Copies `source` into place as org/org_config.json (what
+    """Copies `source` into place as org/org_bundle.json (what
     daemon_main.load_org_config() always reads -- see paths.org_dir()),
     backing up any file already there rather than silently overwriting it.
     """
@@ -116,7 +116,7 @@ def install_org_config(source: Path) -> None:
         return
     if DEFAULT_ORG_CONFIG_PATH.exists():
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup = DEFAULT_ORG_CONFIG_PATH.with_name(f"org_config.json.bak.{stamp}")
+        backup = DEFAULT_ORG_CONFIG_PATH.with_name(f"{DEFAULT_ORG_CONFIG_PATH.name}.bak.{stamp}")
         shutil.copy2(DEFAULT_ORG_CONFIG_PATH, backup)
         print(f"Existing {DEFAULT_ORG_CONFIG_PATH} backed up to {backup}")
     shutil.copy2(source, DEFAULT_ORG_CONFIG_PATH)
@@ -138,7 +138,7 @@ def run_step(step: OAuthStep, config_path: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=DEFAULT_CONFIG, help=f"Passed through to privacyfence-app. Default: {DEFAULT_CONFIG}")
-    parser.add_argument("--org-config", metavar="PATH", help="Install this bundle as org/org_config.json before authenticating.")
+    parser.add_argument("--org-config", metavar="PATH", help="Install this bundle as org/org_bundle.json before authenticating.")
     parser.add_argument(
         "--only", nargs="+", metavar="NAME",
         help=f"Limit to these groups/connectors instead of all of them. Groups: {sorted(GROUPS)}. "

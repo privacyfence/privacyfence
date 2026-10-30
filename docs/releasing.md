@@ -68,6 +68,12 @@ nothing to R2, GitHub Releases, or PyPI — see that job's "Determine version an
 step, which resolves `channel="n/a (not a tag push)"` off a tag. A failure here is fixed on `main`
 like any other CI failure, then the pre-flight is re-run, before `release.yml` is dispatched at all.
 
+**Check the OAuth relay before tagging.** Organization servers that use the built-in OAuth apps
+sign in through the relay at `oauth.privacyfence.eu`, which ships on its own track and not with
+a release tag ([`oauth-relay.md`](oauth-relay.md)). Run `curl -fsSI https://oauth.privacyfence.eu/health`
+before dispatching `release.yml`; it must return 200. A relay that is down does not block a
+release, but a release published while it is down cannot be tested end to end.
+
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
 which reports *a* tag on the commit being built rather than specifically the one whose push started
 the run — so a commit carrying two release tags builds as whichever one `describe` prefers (the
@@ -103,27 +109,29 @@ outage can never hold back `build.yml` or PyPI. A release whose GitHub Release h
 (everything before this landed) cannot be listed: GitHub Releases here are immutable. See
 [ADR 0112](adr/0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md).
 
-**The organization Docker image is published for every stable release.**
+**The organization Docker image is published for every release, pre-releases included.**
 `.github/workflows/publish-org-image.yml` triggers on the same tag push, waits for `build.yml` to
 succeed on that commit (the same `wait_for_build` gate as PyPI), downloads the two images
 `build.yml`'s `build-org-image` jobs built and tested (`org-image-amd64`, `org-image-arm64`),
 pushes them to `ghcr.io/privacyfence/privacyfence-org`, combines them into one multi-architecture
-manifest, applies the tags `scripts/org_image_tags.py` chooses (the version always; `X.Y`, `X` and
-`latest` only when no higher stable release is already tagged in that scope) and attaches a GitHub
-build-provenance attestation. It authenticates with the workflow's own `GITHUB_TOKEN`, so there is
-no secret to set up; pre-release tags are skipped. It rebuilds nothing, so what ships is what the
+manifest, applies the tags `scripts/org_image_tags.py` chooses and attaches a GitHub
+build-provenance attestation. A stable release gets the version, `X.Y`, `X` and `latest` (the
+floating three only when no higher stable release is already tagged in that scope); a pre-release
+gets only its exact version, so the floating tags, and with them unattended upgrades, never reach a
+pre-release, and its run summary says no floating tag moved. It authenticates with the workflow's
+own `GITHUB_TOKEN`, so there is no secret to set up. It rebuilds nothing, so what ships is what the
 image test ran against. A failed publish is rerun with `workflow_dispatch` from the tag, within 30
 days (how long the tested images are kept as workflow artifacts). It is a workflow of its own so a
 GHCR outage can never hold back PyPI, whereas `build-org-image` inside `build.yml` does gate PyPI,
 the MCP registry and the GitHub Release on every tag (see "Packaged-artifact release gating"
-below). See ADRs 0209, 0210 and 0215.
+below). See ADRs 0209, 0210, 0215 and 0268 (which amends 0208's stable-only rule).
 
 If the repository restricts allowed Actions, `publish-org-image.yml` needs both
 `actions/attest-build-provenance@*` and `actions/attest@*` on the allowlist (the former calls the
 latter). Without `actions/attest` the job fails at setup, before pushing anything; add it and
 re-run the workflow from the release's tag.
 
-**First release only:** a new GHCR package starts private. After the first stable release pushes
+**First release only:** a new GHCR package starts private. After the first release pushes
 it, switch `privacyfence-org` to public once (the organization's Packages settings may first need
 public packages allowed), then pull it signed out and run
 `gh attestation verify oci://ghcr.io/privacyfence/privacyfence-org:X.Y.Z --owner privacyfence`.

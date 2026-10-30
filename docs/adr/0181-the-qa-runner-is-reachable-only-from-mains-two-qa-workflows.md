@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-15. Implemented in the workflows; the runner-group settings are made on GitHub.
 Amends [ADR 0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md).
+Amended by [0266](0266-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md): the runner group and label are `privacyfence-live`.
 
 ## Context
 

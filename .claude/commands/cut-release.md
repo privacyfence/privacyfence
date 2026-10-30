@@ -45,6 +45,10 @@ If any of those jobs fail, including either `build-org-image` architecture, or i
 push, and re-run this same pre-flight against the fixed commit — before touching `release.yml` at
 all. Do not proceed to the dry run on a red pre-flight.
 
+**Also check the OAuth relay is up** (`docs/oauth-relay.md`): `curl -fsSI https://oauth.privacyfence.eu/health`
+must return 200. Report the result. A relay that is down does not block the release, but say so,
+because organization servers using the built-in apps cannot sign in through it until it is back.
+
 **Only once the `build.yml` pre-flight is green, dispatch `release.yml` against `main` with
 `dry_run: true`** and report the result. The dry run performs every check and creates the tag on
 the runner without pushing it, so a failure costs nothing.

@@ -1,14 +1,15 @@
 version: 2
 
-# Six entries, matching the six places this repo declares a dependency version:
+# Seven entries, matching the seven places this repo declares a dependency version:
 # pyproject.toml (the daemon), mcpb/shim/package.json (the .mcpb shim),
 # cloudflare/downloads/package.json (the downloads.privacyfence.eu Worker,
-# docs/downloads-and-release-kpi.md), tests/integration/ai_clients/package.json
+# docs/downloads-and-release-kpi.md), cloudflare/oauth-relay/package.json (the
+# oauth.privacyfence.eu relay Worker, docs/oauth-relay.md), tests/integration/ai_clients/package.json
 # (the exact-pinned AI-client CLIs the T3 contract tests run), and the SHA-pinned `uses:`
 # lines in .github/workflows/*.yml themselves (see those files' own comments
 # on why they're pinned to a commit instead of a tag), and the digest-pinned base image in
 # deploy/docker/Dockerfile (the organization-mode Docker image). A PR from any of
-# these six updates only the manifest/pin — it does not regenerate
+# these seven updates only the manifest/pin — it does not regenerate
 # requirements/*.lock.txt, which is a derived file; the
 # `lockfile-freshness` job in dependency-audit.yml catches a merged bump
 # that leaves the lock file stale before it reaches main, and
@@ -57,6 +58,15 @@ updates:
       # step comment) -- batching keeps a Dependabot bump from reintroducing that mismatch across
       # two separate PRs.
       downloads-worker-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/cloudflare/oauth-relay"
+    schedule:
+      interval: "weekly"
+    groups:
+      # Same overrides.vitest pin and resolution bug as the downloads Worker above.
+      oauth-relay-worker-dependencies:
         patterns: ["*"]
 
   - package-ecosystem: "npm"

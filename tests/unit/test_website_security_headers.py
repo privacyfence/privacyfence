@@ -13,8 +13,17 @@ from html.parser import HTMLParser
 
 import pytest
 
-from tests.website_site import built_site  # first: puts scripts/ on sys.path
-from site_security_headers import CSP_DOCS, CSP_SITE, HSTS, NOSNIFF, REFERRER_POLICY, headers_for_path  # noqa: E402
+from tests.website_site import build_site, built_site  # first: puts scripts/ on sys.path
+from site_security_headers import (  # noqa: E402
+    CSP_DOCS,
+    CSP_SITE,
+    HASHED_INLINE_PAGES,
+    HSTS,
+    NOSNIFF,
+    REFERRER_POLICY,
+    headers_for_path,
+    inline_block_hashes,
+)
 
 SCRIPT_ORIGINS = ("https://www.googletagmanager.com",)
 
@@ -116,8 +125,12 @@ class _InlineFinder(HTMLParser):
 
 def _hand_written_pages():
     site = built_site()
+    unlisted = set(build_site.UNLISTED_PAGES.values())
     return sorted(
-        p.relative_to(site).as_posix() for p in site.rglob("*.html") if p.relative_to(site).parts[0] != "docs"
+        p.relative_to(site).as_posix()
+        for p in site.rglob("*.html")
+        # The unlisted pages carry their own hash-based policy instead.
+        if p.relative_to(site).parts[0] != "docs" and p.relative_to(site).as_posix() not in unlisted
     )
 
 
@@ -132,3 +145,60 @@ def test_hand_written_pages_need_no_unsafe_inline():
             offenders[rel] = finder.problems
     assert not offenders, f"pages the strict CSP would break: {offenders}"
     assert re.search(r"unsafe-inline", CSP_SITE) is None
+
+
+# ---- Pages with their own inline script and style ---------------------------------------------
+
+CONNECTOR_CONFIG = "/tools/connector-config/"
+
+
+def _page_source(path: str) -> str:
+    return (build_site.WEBSITE / HASHED_INLINE_PAGES[path]).read_text(encoding="utf-8")
+
+
+def _meta_csp_directives(html: str) -> dict[str, str]:
+    match = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)"', html)
+    assert match, "the page has no meta CSP"
+    return _directives(match.group(1))
+
+
+def test_the_connector_config_page_is_a_hashed_inline_page():
+    assert CONNECTOR_CONFIG in HASHED_INLINE_PAGES
+    assert HASHED_INLINE_PAGES[CONNECTOR_CONFIG] == build_site.UNLISTED_PAGES[CONNECTOR_CONFIG]
+
+
+def test_the_connector_config_page_gets_the_hashes_of_its_inline_blocks():
+    html = _page_source(CONNECTOR_CONFIG)
+    scripts, styles = inline_block_hashes(html, "script"), inline_block_hashes(html, "style")
+    assert len(scripts) == 1 and len(styles) == 1
+    csp = _directives(headers_for_path(CONNECTOR_CONFIG)["Content-Security-Policy"])
+    assert csp["script-src"] == f"'self' https://www.googletagmanager.com {scripts[0]}"
+    assert csp["style-src"] == f"'self' {styles[0]}"
+    assert "unsafe-inline" not in headers_for_path(CONNECTOR_CONFIG)["Content-Security-Policy"]
+    assert {k: v for k, v in csp.items() if k not in ("script-src", "style-src")} == {
+        k: v for k, v in _directives(CSP_SITE).items() if k not in ("script-src", "style-src")
+    }
+
+
+def test_the_header_hashes_are_the_ones_the_page_declares_in_its_meta_csp():
+    meta = _meta_csp_directives(_page_source(CONNECTOR_CONFIG))
+    header = _directives(headers_for_path(CONNECTOR_CONFIG)["Content-Security-Policy"])
+    assert meta["script-src"] in header["script-src"].split()
+    assert meta["style-src"] in header["style-src"].split()
+
+
+def test_the_built_page_has_the_hashed_blocks_unchanged():
+    built = (built_site() / CONNECTOR_CONFIG.strip("/") / "index.html").read_text(encoding="utf-8")
+    header = _directives(headers_for_path(CONNECTOR_CONFIG)["Content-Security-Policy"])
+    for tag, directive in (("script", "script-src"), ("style", "style-src")):
+        assert set(inline_block_hashes(built, tag)) <= set(header[directive].split())
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/", "/docs/", "/tools/", "/tools/connector-config", "/tools/connector-config/x", "/tools/other/"],
+)
+def test_other_paths_do_not_get_the_connector_config_hashes(path):
+    csp = headers_for_path(path)["Content-Security-Policy"]
+    assert csp == (CSP_DOCS if path.startswith("/docs") else CSP_SITE)
+    assert "sha256-" not in csp

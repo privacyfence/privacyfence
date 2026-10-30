@@ -3,12 +3,13 @@ mode's ~30-action dispatcher and org mode's own settings surface (ADR 0033).
 ``build_routes()`` (below) is local mode's entry point;
 ``build_org_routes()`` is org mode's.
 
-In org mode, both ``GET /settings`` and
-``GET /settings/privacy`` serve settings_window_html.build_html(), the
+In org mode, ``GET /settings`` serves settings_window_html.build_html(), the
 exact same capability-filtered renderer local mode's own settings page uses
 (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's own
-docstring for exactly what each combination hides), and org mode's four
-former bespoke POST routes are one generic ``POST /api/settings/{action}``,
+docstring for exactly what each combination hides) -- the same page for an
+administrator as for anyone else, because the install-wide privacy policy and
+the usage stats are Admin sections now (``GET /settings/privacy`` forwards
+there) -- and org mode's four former bespoke POST routes are one generic ``POST /api/settings/{action}``,
 restricted to ``_ORG_ALLOWED_ACTIONS`` -- the same path and JSON body shape
 local mode's own dispatcher already answers, since it's the same JS bridge
 posting either way now.
@@ -89,7 +90,7 @@ in this module's test file for why a derived set would silently swallow a
 future action nobody classified either way.
 
 **Bespoke routes:** the sensitive-action net above only covers the
-generic dispatcher. ``org_config_upload`` has its own route, and an
+generic dispatcher. The bundle upload has its own route (on the Admin page, web/routes_admin.py), and an
 uploaded bundle can rewrite the PII policy, every auto-accept rule and
 every connector's OAuth client config in one shot -- so it is gated the
 same two ways (``_needs_step_up`` and ``require_human_session``), by
@@ -137,10 +138,12 @@ from typing import Any, Callable
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
+from starlette.exceptions import HTTPException
+from starlette.formparsers import MultiPartException
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import (
-    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response,
 )
 from starlette.routing import BaseRoute, Route
 
@@ -161,12 +164,12 @@ from ..scoped_tokens import (
 )
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
-    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _rule_usage_map,
+    _parse_value_list, _rule_usage_map,
     audit_rows, cached_row_value, rule_resource_ids,
 )
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
-from . import org_install_policy, org_session, org_stats, step_up_decide
+from . import org_install_policy, org_session, step_up_decide
 from .personal_settings_shim import personal_transfer_shim
 from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks, build_personal_routes
 from .approval_step_up import _verify_or_challenge
@@ -187,7 +190,7 @@ logger = logging.getLogger(__name__)
 
 # Max upload size for an organization config bundle -- generous for a JSON
 # document that is, in practice, a handful of OAuth client IDs/secrets per
-# service (org_config.json today runs well under 10KB), while still a real
+# service (an org_bundle.json today runs well under 10KB), while still a real
 # bound against something absurd arriving on this endpoint.
 MAX_ORG_CONFIG_BYTES = 1_000_000
 
@@ -273,8 +276,8 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------- #
 # _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS above only cover the generic
 # POST /api/settings/{action} dispatcher. A bespoke route such as
-# org_config_upload (module docstring's own list of why: a multipart
-# upload, not a JSON action) would, for that reason alone, pass through
+# the scoped-token routes (module docstring's own list of why: a multipart
+# or bespoke body, not a JSON action) would, for that reason alone, pass through
 # neither _needs_step_up nor require_human_session, regardless of how much
 # policy an uploaded bundle can rewrite. Every path in _BESPOKE_SENSITIVE_ROUTE_PATHS is
 # wired through the same _needs_step_up-shaped/require_human_session-shaped
@@ -298,7 +301,6 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------- #
 
 _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
-    "/api/settings/org_config/upload",
     # Rotating cuts off every connected AI client at once -- the one token
     # action that earns the passkey step-up (ADR 0104).
     "/api/settings/mcp_token/rotate",
@@ -461,20 +463,27 @@ def _snapshot(controller: SettingsController) -> dict[str, Any]:
 # ``window.webkit.messageHandlers.pf.postMessage({action, ...payload})``
 # for a ``fetch()`` POST to /api/settings/<action>, the same technique
 # web/routes_approvals.py's own _bridge_shim already uses for the approval
-# card (see that module's docstring). Four actions are intercepted here
+# card (see that module's docstring). Five actions are intercepted here
 # instead of forwarded, because none of them is "POST an action, get a
 # snapshot back":
 #   - open_repo: a plain link, opened client-side -- no request at all.
 #   - install_org_config: triggers the hidden <input type=file> below,
-#     which itself POSTs a multipart body to /api/settings/org_config/upload.
+#     which itself POSTs a multipart body to <endpoint>/org_config/upload.
+#   - upload_rooms: the same, for the room directory, to <endpoint>/rooms/upload.
+#   - upload_connector_config: the same, for a signed connector config, to
+#     <endpoint>/connector_config/upload; its 409 carries the signing key's fingerprint, which
+#     the next attempt sends back as the confirmation.
 #   - export_audit_log: a same-origin navigation to the download route.
 #   - quit_app: a client-side confirm() first, then still POSTed
 #     through as an action, but to its own /api/settings/quit_app route
 #     (see build_routes below) rather than the generic dispatcher.
 # ---------------------------------------------------------------------------- #
 
-def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
-    """``pfSettingsPost``'s own ``428``/``403`` branches are
+def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str = "/api/settings") -> str:
+    """``endpoint`` is where the page's actions and uploads are posted: ``/api/settings`` for
+    Settings, ``/api/admin`` for the Admin page, which shares this renderer.
+
+    ``pfSettingsPost``'s own ``428``/``403`` branches are
     the settings-page counterpart of web/routes_approvals.py's own
     ``_bridge_shim`` step-up handling -- see that function's docstring for
     the shared shape (``428`` carries fresh ``webauthn_options`` to complete
@@ -485,64 +494,77 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
     than replacing the whole document's markup."""
     return (
         "<input type=\"file\" id=\"pf-org-config-input\" accept=\".json,application/json\" style=\"display:none\">"
+        "<input type=\"file\" id=\"pf-rooms-input\" accept=\".json,application/json\" style=\"display:none\">"
+        "<input type=\"file\" id=\"pf-connector-config-input\" accept=\".pfconnector,.txt,text/plain\" style=\"display:none\">"
         f'<script nonce="{nonce}">(function(){{'
         f"var CSRF = {csrf!r};"
+        f"var ENDPOINT = {endpoint!r};"
+        # An upload can answer 409 (would pin a new signing key -- ask first) and 428/403
+        # (step-up, same shape pfSettingsPost's own retry chain below already handles for JSON
+        # actions) as well as succeeding or 401/400/403-on-cross-origin. attemptUpload() re-POSTs
+        # the same file as a fresh FormData each round -- multipart has no way to resume a
+        # partially-approved request the way a JSON body's own retry does by copying `body`.
+        "function bindUpload(input, url) {"
+        "  input.addEventListener('change', function(){"
+        "    if (!input.files || !input.files[0]) return;"
+        "    var file = input.files[0];"
+        "    function attemptUpload(confirmPin, assertion) {"
+        "      var fd = new FormData();"
+        "      fd.append('file', file);"
+        "      fd.append('csrf', CSRF);"
+        "      if (confirmPin) { fd.append('confirm_pin', 'true'); }"
+        "      if (typeof confirmPin === 'string') { fd.append('confirm_fingerprint', confirmPin); }"
+        "      if (assertion) { fd.append('webauthn_assertion', JSON.stringify(assertion)); }"
+        "      return fetch(url, {method:'POST', credentials:'same-origin', body: fd})"
+        "        .then(function(r){"
+        "          if (r.status === 409) {"
+        "            return r.json().then(function(data){"
+        "              if (data.error === 'pin_confirmation_required' && window.confirm(data.detail + ' Continue?')) {"
+        "                return attemptUpload(data.fingerprint || true, assertion);"
+        "              }"
+        "              return null;"
+        "            });"
+        "          }"
+        "          if (r.status === 428) {"
+        "            return r.json().then(function(data){"
+        "              if (data.webauthn_options && window.PublicKeyCredential) {"
+        "                return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(newAssertion){"
+        "                  return attemptUpload(confirmPin, newAssertion);"
+        "                }).catch(function(err){"
+        "                  window.alert('This change needs your passkey, and the prompt failed: ' + err.message);"
+        "                  return null;"
+        "                });"
+        "              }"
+        "              window.alert('This change needs a passkey, and none is available in this browser.');"
+        "              return null;"
+        "            });"
+        "          }"
+        "          if (r.status === 403) {"
+        "            return r.json().then(function(data){"
+        "              if (data.enroll_url) {"
+        "                window.alert('This change requires a passkey. Set one up at ' + data.enroll_url + '.');"
+        "              }"
+        "              return null;"
+        "            });"
+        "          }"
+        "          return r.json().then(function(state){ return {ok: r.ok, state: state}; });"
+        "        });"
+        "    }"
+        "    attemptUpload(false, null).then(function(done){"
+        "      if (!done) return;"
+        "      if (done.ok && window.__pfRender) { window.__pfRender(done.state); }"
+        "      else if (!done.ok && done.state && typeof done.state.error === 'string' && window.__pfShowError) {"
+        "        window.__pfShowError(done.state.error);"
+        "      }"
+        "    }).finally(function(){ input.value = ''; });"
+        "  });"
+        "}"
         "var fileInput = document.getElementById('pf-org-config-input');"
-        "fileInput.addEventListener('change', function(){"
-        "  if (!fileInput.files || !fileInput.files[0]) return;"
-        "  var file = fileInput.files[0];"
-        # org_config_upload can answer 409 (would pin a new signing key --
-        # ask first) and 428/403 (step-up, same shape pfSettingsPost's own
-        # retry chain below already handles for JSON actions) as well as
-        # succeeding or 401/400/403-on-cross-origin. attemptOrgUpload() re-POSTs the same file as a
-        # fresh FormData each round -- multipart has no way to resume a
-        # partially-approved request the way a JSON body's own retry does
-        # by copying `body`.
-        "  function attemptOrgUpload(confirmPin, assertion) {"
-        "    var fd = new FormData();"
-        "    fd.append('file', file);"
-        "    fd.append('csrf', CSRF);"
-        "    if (confirmPin) { fd.append('confirm_pin', 'true'); }"
-        "    if (assertion) { fd.append('webauthn_assertion', JSON.stringify(assertion)); }"
-        "    return fetch('/api/settings/org_config/upload', {method:'POST', credentials:'same-origin', body: fd})"
-        "      .then(function(r){"
-        "        if (r.status === 409) {"
-        "          return r.json().then(function(data){"
-        "            if (data.error === 'pin_confirmation_required' && window.confirm(data.detail + ' Continue?')) {"
-        "              return attemptOrgUpload(true, assertion);"
-        "            }"
-        "            return null;"
-        "          });"
-        "        }"
-        "        if (r.status === 428) {"
-        "          return r.json().then(function(data){"
-        "            if (data.webauthn_options && window.PublicKeyCredential) {"
-        "              return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(newAssertion){"
-        "                return attemptOrgUpload(confirmPin, newAssertion);"
-        "              }).catch(function(err){"
-        "                window.alert('This change needs your passkey, and the prompt failed: ' + err.message);"
-        "                return null;"
-        "              });"
-        "            }"
-        "            window.alert('This change needs a passkey, and none is available in this browser.');"
-        "            return null;"
-        "          });"
-        "        }"
-        "        if (r.status === 403) {"
-        "          return r.json().then(function(data){"
-        "            if (data.enroll_url) {"
-        "              window.alert('This change requires a passkey. Set one up at ' + data.enroll_url + '.');"
-        "            }"
-        "            return null;"
-        "          });"
-        "        }"
-        "        return r.json();"
-        "      });"
-        "  }"
-        "  attemptOrgUpload(false, null).then(function(state){"
-        "    if (state && window.__pfRender) { window.__pfRender(state); }"
-        "  }).finally(function(){ fileInput.value = ''; });"
-        "});"
+        "var roomsInput = document.getElementById('pf-rooms-input');"
+        "var connectorInput = document.getElementById('pf-connector-config-input');"
+        "bindUpload(fileInput, ENDPOINT + '/org_config/upload');"
+        "bindUpload(roomsInput, ENDPOINT + '/rooms/upload');"
+        "bindUpload(connectorInput, ENDPOINT + '/connector_config/upload');"
         "function pfSettingsPost(url, body) {"
         "  return fetch(url, {method:'POST', credentials:'same-origin',"
         "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
@@ -553,8 +575,10 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  var action = payload.action; var rest = Object.assign({}, payload); delete rest.action;"
         f"  if (action === 'open_repo') {{ window.open({repo_url!r}, '_blank', 'noopener'); return; }}"
         "  if (action === 'install_org_config') { fileInput.click(); return; }"
+        "  if (action === 'upload_rooms') { roomsInput.click(); return; }"
+        "  if (action === 'upload_connector_config') { connectorInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
-        "  var url = '/api/settings/' + encodeURIComponent(action);"
+        "  var url = ENDPOINT + '/' + encodeURIComponent(action);"
         # The two AI client token actions (ADR 0104) have routes of their
         # own; rotating asks first, the same way quit_app does.
         "  var tokenAction = (action === 'copy_mcp_token' || action === 'rotate_mcp_token');"
@@ -699,22 +723,27 @@ def _record_settings_audit(principal: Principal, summary: str) -> None:
         logger.warning("Audit log write failed for a settings change: %s", exc)
 
 
-def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
+def _needs_step_up(
+    action: str, step_up: StepUpConfig | None, *, sensitive: bool | None = None, always: bool = False,
+) -> bool:
     """Shared by both modes (ADR 0033) -- identical once parameterized by
     ``step_up``: local mode's own is optional (``None`` until web/server.py
     resolves one), org mode's is always given, but "no config yet" and "a
     config that hasn't turned require_passkey on" both mean the same thing
     here, so one optional-typed check covers both without either caller
     special-casing the other's default."""
-    return (
-        step_up is not None and step_up.enabled and step_up.require_passkey
-        and action in _SENSITIVE_ACTIONS
-    )
+    # A caller whose actions are not in _SENSITIVE_ACTIONS (the Admin page) says for itself
+    # whether this one is sensitive. ``always`` asks for an assertion whatever the step-up
+    # configuration says, so the default configuration cannot leave such an action unguarded.
+    is_sensitive = action in _SENSITIVE_ACTIONS if sensitive is None else sensitive
+    if step_up is None or not is_sensitive:
+        return False
+    return always or (step_up.enabled and step_up.require_passkey)
 
 
 def _settings_step_up_response(
     principal: Principal, action: str, fingerprint_body: dict[str, Any], *,
-    step_up: StepUpConfig, challenges: StepUpChallengeStore,
+    step_up: StepUpConfig, challenges: StepUpChallengeStore, always: bool = False,
 ) -> JSONResponse:
     """Shared by both modes (ADR 0033; formerly one near-identical copy each:
     local mode's own hardcoded ``LOCAL_PRINCIPAL``, the former
@@ -729,9 +758,8 @@ def _settings_step_up_response(
         principal, rp_id=step_up.rp_id, subject_key=action, fingerprint=fingerprint, challenges=challenges,
     )
     if options_json is None:
-        return JSONResponse(
-            {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
-        )
+        error = "Add a passkey on /security first." if always else "passkey_enrollment_required"
+        return JSONResponse({"error": error, "enroll_url": "/security"}, status_code=403)
     return JSONResponse(
         {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
     )
@@ -740,6 +768,7 @@ def _settings_step_up_response(
 def _apply_step_up_gate(
     principal: Principal, action: str, form_body: dict[str, Any], assertion: object, *,
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
+    sensitive: bool | None = None, always: bool = False,
 ) -> JSONResponse | None:
     """The one settings-action step-up check both modes' dispatch reduces
     to (ADR 0033): ``None`` when ``action`` doesn't need a fresh assertion at
@@ -759,7 +788,7 @@ def _apply_step_up_gate(
     (``_parse_form_assertion``) -- a difference in request shape the two
     modes still don't share, so left to each call site.
     """
-    if not _needs_step_up(action, step_up):
+    if not _needs_step_up(action, step_up, sensitive=sensitive, always=always):
         return None
     assert step_up is not None  # nosec B101  # _needs_step_up() already proved this before calling us
     # A fresh, non-Optional-typed name for the lambda below to close over --
@@ -772,7 +801,122 @@ def _apply_step_up_gate(
         principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"), subject_key=action,
         fingerprint=_action_fingerprint(action, fingerprint_body), assertion=assertion, challenges=challenges,
         step_up_response=lambda: _settings_step_up_response(
-            principal, action, fingerprint_body, step_up=confirmed_step_up, challenges=challenges,
+            principal, action, fingerprint_body, step_up=confirmed_step_up, challenges=challenges, always=always,
+        ),
+    )
+
+
+async def read_bounded_form(
+    request: Request, *, max_bytes: int, slack: int = 32 * 1024, too_large: str = "The file is too large.",
+    refuse: Callable[[str, int], Response],
+) -> Any:  # noqa: ANN401 -- starlette's FormData
+    """An upload's multipart form, read only when its declared size is plausible and with a cap on
+    the parts, or the ``Response`` ``refuse`` builds. A body that does not declare its size is
+    refused, because there is no way to bound it before it is spooled to disk. ``max_bytes`` bounds
+    the one file; ``slack`` covers the multipart framing and the form's other fields."""
+    declared = request.headers.get("content-length", "")
+    if not declared.isdigit():
+        return refuse("The upload must declare its size.", 411)
+    if int(declared) > max_bytes + slack:
+        return refuse(too_large, 413)
+    try:
+        return await request.form(max_files=1, max_fields=8, max_part_size=max_bytes)
+    except (MultiPartException, HTTPException):
+        return refuse("Upload exactly one file.", 400)
+
+
+async def handle_org_config_upload(
+    request: Request, *,
+    controller: SettingsController,
+    sessions: LocalSessionStore,
+    step_up: StepUpConfig | None,
+    step_up_origin: str,
+    challenges: StepUpChallengeStore,
+    require_human_session: bool,
+    state_builder: Callable[[], dict[str, Any]],
+    always: bool = False,
+) -> Response:
+    """The bundle upload behind the Admin page: CSRF, human session,
+    size, the confirmation before a first signing key is pinned (409), then step-up. Only the
+    state it answers with differs, so each caller says what that is.
+
+    Unlike the JSON actions this route has no ``_SENSITIVE_ACTIONS`` entry: it is sensitive
+    whenever step-up is in force, and ``always`` (the Admin page) makes that unconditional, so a
+    passkey is asked for whatever the step-up configuration says."""
+    if not _session_authenticated(request, sessions):
+        return _unauthorized_response(request)
+    form = await read_bounded_form(
+        request, max_bytes=MAX_ORG_CONFIG_BYTES,
+        refuse=lambda message, status: JSONResponse({"error": message}, status_code=status),
+    )
+    if isinstance(form, Response):
+        return form
+    csrf = form.get("csrf")
+    if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not _origin_ok(request):
+        return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+    if require_human_session and not _is_human_session(request, sessions):
+        # Same rationale as settings_action's own check: an organization config bundle can
+        # rewrite the PII policy, every auto-accept rule, and every connector's OAuth client
+        # config in one shot -- at least as much "what gets gated" as any _SENSITIVE_ACTIONS entry.
+        body, status = _human_session_required_json("install an organization config bundle")
+        return JSONResponse(body, status_code=status)
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return JSONResponse({"error": "missing file"}, status_code=400)
+    raw = await upload.read()
+    if len(raw) > MAX_ORG_CONFIG_BYTES:
+        return JSONResponse({"error": "file too large"}, status_code=400)
+    # Pinning a signing key for the first time is a one-way trust decision (every future bundle
+    # is refused until an administrator deletes the pinned key file by hand) --
+    # controller.install_org_config_bytes still performs it unconditionally (daemon_main.
+    # load_org_config's own hand-edited-file path needs that), but this route, the only one
+    # reachable by an unsupervised local process, first asks for it explicitly rather than
+    # letting it happen as a side effect of an upload.
+    if controller.would_pin_new_org_signing_key(raw) and not _is_confirmed(form.get("confirm_pin")):
+        return JSONResponse(
+            {
+                "error": "pin_confirmation_required",
+                "detail": (
+                    "This is the first signed organization config bundle seen by this "
+                    "install. Installing it will trust and permanently pin its signing key "
+                    "for every future upload."
+                ),
+            },
+            status_code=409,
+        )
+    fingerprint_body = {"sha256": hashlib.sha256(raw).hexdigest()}
+    response = _gate_upload(
+        "org_config_upload", fingerprint_body, _parse_form_assertion(form.get("webauthn_assertion")),
+        principal=LOCAL_PRINCIPAL, step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
+        always=always,
+    )
+    if response is not None:
+        return response
+    controller.install_org_config_bytes(raw)
+    return JSONResponse(state_builder())
+
+
+def _gate_upload(
+    subject: str, fingerprint_body: dict[str, Any], assertion: dict[str, Any] | None, *,
+    principal: Principal, step_up: StepUpConfig | None, step_up_origin: str,
+    challenges: StepUpChallengeStore, always: bool,
+) -> JSONResponse | None:
+    """The step-up check of a multipart upload, bound to the file's hash so a ceremony completed
+    for one file cannot authorize another. ``None`` when nothing more is needed."""
+    in_force = step_up is not None and (always or (step_up.enabled and step_up.require_passkey))
+    if not in_force:
+        return None
+    assert step_up is not None  # nosec B101  # in_force already proved this
+    # A fresh, non-Optional-typed name for the lambda to close over -- see _apply_step_up_gate.
+    confirmed_step_up: StepUpConfig = step_up
+    return _verify_or_challenge(
+        principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"), subject_key=subject,
+        fingerprint=_action_fingerprint(subject, fingerprint_body), assertion=assertion, challenges=challenges,
+        step_up_response=lambda: _settings_step_up_response(
+            principal, subject, fingerprint_body, step_up=confirmed_step_up, challenges=challenges,
+            always=always,
         ),
     )
 
@@ -902,6 +1046,7 @@ def build_routes(
             notifications_enabled=general.get("notifications_enabled", notifications_enabled),
             notifications_detail=general.get("notifications_detail", notifications_detail),
             banner_html=_banner_html(),
+            deprecation_html=web_shell.local_mode_deprecation_html(),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -1004,84 +1149,11 @@ def build_routes(
         return JSONResponse({"status": "quitting"}, background=BackgroundTask(controller.quit_app))
 
     def _step_up_in_force() -> bool:
-        # Unlike _needs_step_up(action) above, the two bespoke sensitive
-        # routes (org_config_upload, and mcp_token_rotate -- ADR 0104) have
-        # no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check: both
-        # are listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and both are
-        # unconditionally sensitive whenever step-up is actually in force
-        # -- neither has a non-sensitive shape.
+        # Unlike _needs_step_up(action) above, the bespoke sensitive routes (mcp_token_rotate -- ADR 0104)
+        # have no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check: they are listed in
+        # _BESPOKE_SENSITIVE_ROUTE_PATHS, and are unconditionally sensitive whenever step-up is
+        # actually in force -- none has a non-sensitive shape.
         return step_up is not None and step_up.enabled and step_up.require_passkey
-
-    async def org_config_upload(request: Request) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        form = await request.form()
-        csrf = form.get("csrf")
-        if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not _origin_ok(request):
-            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        if require_human_session and not _is_human_session(request, sessions):
-            # Same rationale as settings_action's own check above: an
-            # organization config bundle can rewrite the PII policy, every
-            # auto-accept rule, and every connector's OAuth client config
-            # in one shot -- at least as much "what gets gated" as any
-            # single _SENSITIVE_ACTIONS entry.
-            body, status = _human_session_required_json("install an organization config bundle")
-            return JSONResponse(body, status_code=status)
-        upload = form.get("file")
-        if upload is None or not hasattr(upload, "read"):
-            return JSONResponse({"error": "missing file"}, status_code=400)
-        raw = await upload.read()
-        if len(raw) > MAX_ORG_CONFIG_BYTES:
-            return JSONResponse({"error": "file too large"}, status_code=400)
-        # Pinning a signing key for the first time is a one-way trust
-        # decision (every future bundle is refused until an administrator
-        # deletes the pinned key file by hand) -- controller.
-        # install_org_config_bytes still performs it unconditionally
-        # (daemon_main.load_org_config's own hand-edited-file path needs
-        # that), but this route, the only one reachable by an
-        # unsupervised local process, first asks for it explicitly rather
-        # than letting it happen as a side effect of an upload.
-        if controller.would_pin_new_org_signing_key(raw) and not _is_confirmed(form.get("confirm_pin")):
-            return JSONResponse(
-                {
-                    "error": "pin_confirmation_required",
-                    "detail": (
-                        "This is the first signed organization config bundle seen by this "
-                        "install. Installing it will trust and permanently pin its signing key "
-                        "for every future upload."
-                    ),
-                },
-                status_code=409,
-            )
-        if _step_up_in_force():
-            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
-            # See _apply_step_up_gate's own comment on why the lambda below
-            # needs this fresh, non-Optional-typed name rather than closing
-            # over `step_up` directly.
-            confirmed_step_up: StepUpConfig = step_up
-            fingerprint_body = {"sha256": hashlib.sha256(raw).hexdigest()}
-            assertion = _parse_form_assertion(form.get("webauthn_assertion"))
-            # org_config_upload has no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS
-            # membership (module docstring) -- unconditionally sensitive
-            # whenever step-up is active, so this goes straight to
-            # _verify_or_challenge rather than through _apply_step_up_gate,
-            # which gates on that membership.
-            response = _verify_or_challenge(
-                LOCAL_PRINCIPAL, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
-                subject_key="org_config_upload",
-                fingerprint=_action_fingerprint("org_config_upload", fingerprint_body), assertion=assertion,
-                challenges=challenges,
-                step_up_response=lambda: _settings_step_up_response(
-                    LOCAL_PRINCIPAL, "org_config_upload", fingerprint_body,
-                    step_up=confirmed_step_up, challenges=challenges,
-                ),
-            )
-            if response is not None:
-                return response
-        controller.install_org_config_bytes(raw)
-        return JSONResponse(_snapshot(controller))
 
     async def mcp_token_copy(request: Request) -> Response:
         # Only mounted when ai_client is given -- see the routes list below.
@@ -1445,7 +1517,6 @@ def build_routes(
         Route("/settings", settings_page),
         Route("/settings/connectors", settings_connectors_page),
         Route("/api/settings/quit_app", quit_action, methods=["POST"]),
-        Route("/api/settings/org_config/upload", org_config_upload, methods=["POST"]),
         Route("/api/settings/audit_log/download", audit_log_download),
     ]
     if ai_client is not None:
@@ -1521,13 +1592,11 @@ _RULE_NAME_WAIT_SECONDS = 3.0
 # store raises the same text from ``create``.
 _SCOPED_TOKENS_DISABLED = (
     "Scoped tokens are not enabled on this install. "
-    "Your administrator turns them on in the organization config bundle."
+    "Your administrator turns them on on the Admin page."
 )
 
 _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
-    "toggle_pii_detection", "toggle_pii_category",
-    "set_default_policy", "set_category_policy",
     "set_step_up_scope",
 })
 
@@ -1536,21 +1605,22 @@ def build_org_routes(
     *,
     sessions: OrgSessionStore,
     install_wide_settings: dict[str, Any],
-    install_wide_settings_path: str = "",
     step_up: StepUpConfig,
     step_up_origin: str,
     connector_registry: ConnectorRegistry | None = None,
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
-    org_config: dict[str, Any] | None = None,
 ) -> list[BaseRoute]:
-    """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
-    ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
+    """Org mode's own settings route list (ADR 0032, ADR 0033) --
+    ``GET /settings`` serves the exact same
     settings_window_html.build_html() local mode's own
     ``_render_settings_page`` above does, capability-filtered for org mode
     (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's
-    own docstring).
+    own docstring). It is the same page for an administrator as for anyone
+    else: the install-wide privacy policy and the usage stats are Admin
+    sections (web/routes_admin.py), and ``GET /settings/privacy`` redirects
+    there.
 
     Writes go through one generic
     ``POST /api/settings/{action}`` -- the exact same path and JSON body
@@ -1569,21 +1639,13 @@ def build_org_routes(
     ``_settings_step_up_response``/``_apply_step_up_gate``,
     ``_record_settings_audit``, ``org_settings_scope.is_action_permitted``).
 
-    ``install_wide_settings_path`` is the resolved path of the *server's
-    own* settings.yaml -- the file ``install_wide_settings`` was loaded
-    from, threaded down from ``daemon_main.run_app``'s ``--config``. The
-    install-wide privacy/PII write routes need it and nothing else here
-    does, so it defaults to empty: a caller that only wants the read
-    surface (this module's own tests, a hand-built ``OrgAuth``) keeps
-    working, and a policy write attempted without one is rejected with a
-    400 explaining exactly that rather than guessing at a path to
-    overwrite.
+    ``install_wide_settings`` is the server's live install-wide config; the page only reads it
+    to load each signed-in principal's own settings on top of it.
 
     ``step_up``/``step_up_origin`` gate org mode the way local mode's own
     dispatch is gated (ADR 0034): every org-routed
     ``_SENSITIVE_ACTIONS`` member below (``add_policy_rule``,
-    ``remove_policy_rule``, and the two install-wide privacy/PII writes)
-    demands the same fresh WebAuthn assertion whenever
+    ``remove_policy_rule``) demands the same fresh WebAuthn assertion whenever
     ``step_up.require_passkey`` is on. Required, as
     ``routes_approvals.build_routes``'s own ``step_up``/``issuer_url`` pair
     already is: web/server.py resolves one ``StepUpConfig`` per org and
@@ -1603,10 +1665,6 @@ def build_org_routes(
     mounted and answer 403 until it is enabled. ``scoped_token_store`` is the process-wide
     store unless a test passes its own; ``scoped_token_page_data`` builds the Settings
     section's data for the signed-in principal (``None``: the section is not drawn).
-
-    ``org_config`` is the installed org config bundle; the admin-only Stats page (ADR 0217,
-    web/org_stats.py) reads it to tell which connectors the org offers. ``None`` counts every
-    connector as not offered, so only those someone has connected are listed.
     """
     challenges = StepUpChallengeStore()
     token_policy = scoped_token_policy or ScopedTokenPolicy(enabled=False, max_days=DEFAULT_DAYS)
@@ -1638,7 +1696,7 @@ def build_org_routes(
         ``dict``, the same as local mode's own ``payload.get(
         "webauthn_assertion")``, not the JSON-encoded *string* a multipart
         form field carried it as (``_parse_form_assertion``, still used by
-        ``org_config_upload`` above, which is still a real multipart
+        ``handle_org_config_upload`` above, which is still a real multipart
         route)."""
         assertion = form_body.get("webauthn_assertion")
         response = _apply_step_up_gate(
@@ -1683,18 +1741,6 @@ def build_org_routes(
         principal's own on-disk files.
         """
         about = _about_state_dict()
-        privacy = _privacy_state_from_config(install_wide_settings, fail_safe_default="block")
-        # toggle_calendar_free_busy is LOCAL_MODE-only, admin_only, and
-        # hardcoded to a single desktop's own config (org_settings_scope.
-        # ACTION_SCOPES's own comment on it) -- Calendar has no install-
-        # wide/org-mode equivalent at all, so it's dropped from the group
-        # list entirely rather than rendered with a control that could
-        # only ever 404.
-        privacy["groups"] = [g for g in privacy["groups"] if g["key"] != "calendar"]
-        # Same for toggle_gmail_signature: the Gmail group stays (its
-        # category policy is install-wide), only the toggle card goes --
-        # settings_window_html renders it only when this key is present.
-        privacy.pop("gmail_append_signature", None)
 
         resolver = get_resolver()
         rows = auto_accept.get_policy_rows()
@@ -1711,10 +1757,9 @@ def build_org_routes(
         return {
             "error": "",
             "general": {
-                **_pii_general_fields(install_wide_settings),
                 "update_check_enabled": True, "update_check_beta": False,
                 "org_installed": False, "org_installed_date": "",
-                "org_button_label": "", "version": about["version"],
+                "version": about["version"],
                 "notifications_enabled": True, "notifications_detail": "minimal",
                 "step_up_available": False, "step_up_on": False, "step_up_has_passkey": False,
                 **step_up_scope_fields(step_up, principal),
@@ -1731,9 +1776,7 @@ def build_org_routes(
                 rows, _rule_usage_map(), resolve_value=lambda row: cached_row_value(row, resolver),
                 resolver=resolver,
             ),
-            "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
-            "stats": org_stats.collect(org_config or {}) if principal.is_admin else org_stats.empty(),
             "about": about,
         }
 
@@ -2098,7 +2141,7 @@ def build_org_routes(
                 )
                 page = web_shell.wrap(
                     body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
-                    nav_items=web_shell.ORG_NAV_ITEMS,
+                    nav_items=web_shell.org_nav_items(principal.is_admin),
                     principal_label=principal.email or principal.display_name or principal.id,
                     live_updates=False, notifications_enabled=False,
                 )
@@ -2123,7 +2166,7 @@ def build_org_routes(
         body += personal_transfer_shim(csrf=csrf, nonce=nonce)
         html = web_shell.wrap(
             body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
-            nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal.email or principal.display_name or principal.id,
+            nav_items=web_shell.org_nav_items(principal.is_admin), principal_label=principal.email or principal.display_name or principal.id,
             # Org mode has no per-request settings push to subscribe a
             # live stream to (state_stream.py's own StateStream.push_
             # settings is wired to one local SettingsController's own
@@ -2137,11 +2180,8 @@ def build_org_routes(
         principal = _current_principal(request)
         if principal is None:
             return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
-        # Auto-accept is the one section every org principal, admin or
-        # not, always gets (settings_window_html._capabilities_for) --
-        # General itself is empty (hidden entirely) for a non-admin.
-        initial_section = "general" if principal.is_admin else "auto_accept"
-        return await _wrap_org_settings(request, principal, initial_section=initial_section)
+        # An org admin's Settings is the same page as anyone else's: their own rules first.
+        return await _wrap_org_settings(request, principal, initial_section="auto_accept")
 
     async def privacy_page(request: Request) -> Response:
         principal = _current_principal(request)
@@ -2149,9 +2189,8 @@ def build_org_routes(
             return RedirectResponse(
                 "/login?next=/settings/privacy", status_code=302, headers={"Cache-Control": "no-store"},
             )
-        if not principal.is_admin:
-            return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
-        return await _wrap_org_settings(request, principal, initial_section="privacy")
+        # The install-wide privacy policy is an Admin section now.
+        return RedirectResponse("/admin", status_code=302, headers={"Cache-Control": "no-store"})
 
     def _scoped_tokens_page_principal(request: Request, *, proposals: bool) -> Principal | Response:
         """The signed-in principal, or the redirect that sends the page elsewhere: to login (and
@@ -2189,23 +2228,6 @@ def build_org_routes(
         return await _wrap_org_settings(
             request, principal, initial_section="scoped_tokens", scoped_proposal=shown,
         )
-
-    def _current_pii_flag(action: str, body: dict[str, Any]) -> bool:
-        """toggle_pii_detection/toggle_pii_category flip the *current*
-        value -- the same semantics local mode's own menu-item toggle
-        uses, and what the shared JS template's own toggleHtml() call
-        sites for these two actions already post (an empty payload,
-        exactly like local mode's), rather than org_install_policy.
-        apply_change's own explicit-``enabled``-field contract (right for
-        a plain HTML form that could be submitted stale or twice, see that
-        module's own ``_bool_field`` docstring -- not what this bridge-
-        driven control sends). Computing the flip here, once, keeps the
-        shared renderer's own JS unaware of this one mode-specific
-        difference."""
-        pii_cfg = install_wide_settings.get("pii_detection", {}) or {}
-        if action == "toggle_pii_detection":
-            return bool(pii_cfg.get("enabled", True))
-        return bool(pii_cfg.get(str(body.get("category_key", "")), True))
 
     def _apply_org_action(principal: Principal, action: str, body: dict[str, Any]) -> str | None:
         """Applies one ``_ORG_ALLOWED_ACTIONS`` mutation, scoped to
@@ -2263,14 +2285,7 @@ def build_org_routes(
             )
         if action == "set_step_up_scope":
             return _set_step_up_scope(principal, body)
-        # The remaining four actions are all install-wide admin writes,
-        # applied through org_install_policy.apply_change.
-        if action in ("toggle_pii_detection", "toggle_pii_category"):
-            body = {**body, "enabled": not _current_pii_flag(action, body)}
-        summary = org_install_policy.apply_change(
-            install_wide_settings, install_wide_settings_path, action=action, payload=body,
-        )
-        return f"{summary} (admin={principal.id})"
+        raise AssertionError(f"unrouted org action {action!r}")  # pragma: no cover -- _ORG_ALLOWED_ACTIONS gates it
 
     def _set_step_up_scope(principal: Principal, body: dict[str, Any]) -> str | None:
         """This principal's own step-up scope (ADR 0091): widens, never

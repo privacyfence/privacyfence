@@ -83,7 +83,9 @@ def test_caddy_is_the_documented_trusted_proxy() -> None:
     subnet = compose["networks"]["pf"]["ipam"]["config"][0]["subnet"]
     assert address == CADDY_ADDRESS
     assert ipaddress.ip_address(address) in ipaddress.ip_network(subnet)
-    assert f"--server-trusted-proxy {CADDY_ADDRESS}" in DOC.read_text(encoding="utf-8")
+    assert f"`PRIVACYFENCE_TRUSTED_PROXIES` | none | `{CADDY_ADDRESS}`" in DOC.read_text(encoding="utf-8")
+    env_example = (DEPLOY / "privacyfence.env.example").read_text(encoding="utf-8")
+    assert re.search(rf"^PRIVACYFENCE_TRUSTED_PROXIES={re.escape(CADDY_ADDRESS)}$", env_example, flags=re.MULTILINE)
 
 
 def test_caddy_proxies_to_the_daemon_port() -> None:

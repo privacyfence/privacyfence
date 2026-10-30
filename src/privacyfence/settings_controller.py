@@ -47,7 +47,7 @@ from .calendar_client import CalendarClient
 from .contacts_client import ContactsClient
 from .drive_client import DriveClient
 from .gmail_client import GmailClient
-from .paths import authority_root, data_dir, org_dir
+from .paths import LEGACY_ORG_CONFIG_FILENAME, ORG_BUNDLE_FILENAME, authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
@@ -1142,7 +1142,7 @@ class SettingsController:
                 "pinned to %s", org_bundle_signing.pinned_public_key_path(org_dir()),
             )
 
-        dest = org_dir() / "org_config.json"
+        dest = org_dir() / ORG_BUNDLE_FILENAME
         try:
             atomic_write_json(dest, data, indent=2)
         except OSError as exc:
@@ -1151,10 +1151,30 @@ class SettingsController:
 
         org_bundle_signing.record_accepted_serial(trust, org_dir())
         self.error = ""
+        self._warn_if_bundle_settings_ignored(data)
         # The live connectors were built from the previous bundle's client
         # credentials and download settings; rebuild them now, or they keep
         # serving the old values until the next restart.
         self.refresh_connectors()
+
+    def _warn_if_bundle_settings_ignored(self, data: dict[str, Any]) -> None:
+        """Say so when an installed bundle carries settings the admin config now owns.
+
+        An admin config created with no bundle (empty recorded hash) imports the next start
+        instead, so nothing is ignored then and nothing is shown.
+        """
+        from . import admin_config
+        from .daemon_main import ignored_legacy_settings_message
+
+        legacy = admin_config.legacy_keys_in(data)
+        if not legacy:
+            return
+        try:
+            stored = admin_config.load()
+        except admin_config.AdminConfigError:
+            return
+        if stored is not None and stored["imported_from_bundle_sha256"] != "":
+            self.error = ignored_legacy_settings_message(legacy)
 
     def would_pin_new_org_signing_key(self, raw: bytes) -> bool:
         """Read-only precheck for web/routes_settings.py's org_config_
@@ -1187,7 +1207,7 @@ class SettingsController:
 
     def _org_config_or_empty(self) -> dict[str, Any]:
         """load_org_config() now raises ``org_mode.ConfigurationError`` for
-        a present-but-broken org_config.json instead of silently
+        a present-but-broken org_bundle.json instead of silently
         treating it as absent -- exactly the fail-closed behavior daemon_
         main.py's startup path needs, since that's where "mode" gets
         resolved and org-mode auth gets wired from it. This settings
@@ -1198,10 +1218,15 @@ class SettingsController:
         surface it as this controller's usual error banner instead of
         taking the whole settings page down.
         """
-        from .daemon_main import load_org_config
+        from . import admin_config
+        from .daemon_main import effective_org_config, load_org_config
         try:
-            return load_org_config()
-        except org_mode.ConfigurationError as exc:
+            bundle = load_org_config()
+            admin = admin_config.config_for(
+                bundle, mode=org_mode.resolve_mode(bundle), single_user=False,
+            )
+            return effective_org_config(bundle, admin)
+        except (org_mode.ConfigurationError, admin_config.AdminConfigError) as exc:
             self.error = str(exc)
             return {}
 
@@ -1234,11 +1259,16 @@ class SettingsController:
         effect immediately instead of requiring a restart."""
 
         def work() -> tuple[list, dict[str, str]]:
-            from .daemon_main import build_connectors, load_org_config
+            from . import admin_config
+            from .daemon_main import build_connectors, effective_org_config, load_org_config
             cfg = self._load_config()
             try:
-                org_config = load_org_config()
-            except org_mode.ConfigurationError:
+                bundle = load_org_config()
+                admin = admin_config.config_for(
+                    bundle, mode=org_mode.resolve_mode(bundle), single_user=False,
+                )
+                org_config = effective_org_config(bundle, admin)
+            except (org_mode.ConfigurationError, admin_config.AdminConfigError):
                 # Reported to the user by snapshot()'s own call to
                 # _org_config_or_empty() right after -- work() itself must
                 # not touch self (see _run_async's own docstring).
@@ -1296,7 +1326,10 @@ class SettingsController:
             org_config = self._org_config_or_empty()
         if connector in ORG_CONFIG_SERVICE and org_mode.connector_enabled_by_org(org_config, connector):
             return True
-        self.error = f"{connector_label(connector)} isn't enabled in your organization config."
+        self.error = (
+            f"{connector_label(connector)} isn't offered on this install. "
+            "Turn it on on the Admin page (Services)."
+        )
         return False
 
     def _authenticate_google(self, cname: str, org_config: dict[str, Any]) -> None:
@@ -2101,16 +2134,34 @@ class SettingsController:
             "about": self._about_state(),
         }
 
+    @staticmethod
+    def _org_bundle_installed_mtime(bundle: Path) -> float:
+        """While the bundle still equals the copy adoption made from 6.x's
+        org_config.json, the date it was installed is that file's, not the
+        copy's."""
+        record = org_bundle_signing.load_adopted_record(org_dir())
+        legacy = org_dir() / LEGACY_ORG_CONFIG_FILENAME
+        recorded = record.get("sha256")
+        if recorded and legacy.exists():
+            try:
+                if org_bundle_signing.sha256_hex(bundle.read_bytes()) == recorded:
+                    return legacy.stat().st_mtime
+            except OSError:
+                # An unreadable bundle or legacy file only costs the older install date: fall
+                # back to the bundle's own mtime below.
+                pass
+        return bundle.stat().st_mtime
+
     def _general_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         update_cfg = cfg.get("update_check", {}) or {}
         notifications_cfg = (cfg.get("web", {}) or {}).get("notifications", {}) or {}
 
-        org_path = org_dir() / "org_config.json"
+        org_path = org_dir() / ORG_BUNDLE_FILENAME
         org_installed = org_path.exists()
         org_installed_date = ""
         if org_installed:
             try:
-                mtime = datetime.fromtimestamp(org_path.stat().st_mtime)
+                mtime = datetime.fromtimestamp(self._org_bundle_installed_mtime(org_path))
                 # Not strftime("%b %-d, %Y") -- %-d (no leading zero) is a
                 # glibc/macOS strftime extension; Windows' CRT raises
                 # ValueError: Invalid format string on it. Building the
@@ -2143,9 +2194,6 @@ class SettingsController:
             "update_is_beta": bool(latest is not None and latest.is_beta),
             "org_installed": org_installed,
             "org_installed_date": org_installed_date,
-            "org_button_label": (
-                "Install/Update Organization Config…" if org_installed else "Install Organization Config…"
-            ),
             "version": __version__,
             # The General page's Security card reads these three to
             # decide whether to show "Turn on step-up", a disabled hint

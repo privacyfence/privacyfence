@@ -223,6 +223,41 @@ class TestSecurityPage:
         r = client.get("/security")
         assert "My Phone" in r.text
 
+    def test_a_safe_next_gets_a_continue_link_once_a_passkey_is_enrolled(self):
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        next_path = "/oauth/single-user/continue?state=abc"
+        before = client.get("/security", params={"next": next_path})
+        assert 'id="pf-continue"' not in before.text
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0,
+            device_type="single_device", backed_up=False, label="My Phone",
+        ))
+        after = client.get("/security", params={"next": next_path})
+        assert 'id="pf-continue" href="/oauth/single-user/continue?state=abc"' in after.text
+
+    @pytest.mark.parametrize("next_path", [
+        "//evil.example", "/\\evil.example", "https://evil.example/", "/\t/evil.example", "/\n/evil.example",
+        "/ok path",
+    ])
+    def test_an_unsafe_next_gets_no_continue_link(self, next_path):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0,
+            device_type="single_device", backed_up=False, label="My Phone",
+        ))
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/security", params={"next": next_path})
+        assert r.status_code == 200
+        assert 'id="pf-continue"' not in r.text
+
+    def test_safe_next_path_keeps_a_plain_path_and_refuses_control_characters(self):
+        assert rs.safe_next_path("/approvals?x=1", default="") == "/approvals?x=1"
+        assert rs.safe_next_path("/a\x7fb", default="d") == "d"
+        assert rs.safe_next_path(None, default="d") == "d"
+
     def test_org_mode_links_back_to_connect_by_default(self):
         app, sessions = _app()
         client = _client(app)

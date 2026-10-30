@@ -1,0 +1,42 @@
+#:schema node_modules/wrangler/config-schema.json
+# Cloudflare Worker backing https://oauth.privacyfence.eu -- the OAuth redirect relay for
+# PrivacyFence's built-in apps. See docs/oauth-relay.md (the maintainer runbook) and
+# cloudflare/oauth-relay/README.md (the contract).
+name = "privacyfence-oauth-relay"
+main = "src/index.ts"
+compatibility_date = "2026-08-22"
+
+# `workers_dev = false` plus the custom domain below: no `*.workers.dev` URL ever exists for this
+# Worker, and a later `wrangler deploy` from CI cannot re-enable one. Same reasoning as
+# cloudflare/downloads/wrangler.toml.
+workers_dev = false
+
+[[routes]]
+pattern = "oauth.privacyfence.eu"
+custom_domain = true
+
+# The Worker writes no logs (docs/oauth-relay.md, "Checks"): observability stays off.
+[observability]
+enabled = false
+
+# One SQLite-backed Durable Object holds the registry. Unlike a D1 database it needs no
+# dashboard-provisioned id.
+[[durable_objects.bindings]]
+name = "REGISTRY"
+class_name = "Registry"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Registry"]
+
+[vars]
+# The Gmail "Send mail as" alias that sends the new-registration notifications (src/notify.ts).
+# The recipient is a constant in the code, never configuration. Empty disables sending.
+NOTIFY_FROM = "relay-notify@privacyfence.eu"
+# "true" (the default): a built-in Google sign-in code is forwarded only when Google's `hd`
+# redirect parameter names a domain the server proved in DNS. "false" is the kill switch if Google
+# ever stops sending `hd` (docs/oauth-relay.md).
+SIGNIN_REQUIRE_HD = "true"
+
+# Worker secrets, set by .github/workflows/deploy-oauth-relay-worker.yml and never in this file:
+# REVOKE_TOKEN, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN.

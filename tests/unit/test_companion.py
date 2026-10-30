@@ -14,6 +14,7 @@ _open_path -- that nothing else reaches.
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
 
@@ -22,6 +23,7 @@ import pytest
 from types import SimpleNamespace
 
 from privacyfence import companion
+from privacyfence.org_mode import LOCAL_MODE_DEPRECATION
 from privacyfence.web import control_channel as cc
 from privacyfence.web.session_auth import BootstrapStore
 
@@ -989,7 +991,7 @@ class TestTrayLoop:
         patched to a value ``_run_tray`` never actually waits out, since the
         fake ``Icon.run()`` returns immediately and ``finally:`` stops it
         right after)."""
-        captured = SimpleNamespace(icon=None, ran=False, stopped=False, run_until=None)
+        captured = SimpleNamespace(icon=None, ran=False, stopped=False, run_until=None, setup=None)
 
         class _Icon:
             def __init__(self, name, image, title, menu):
@@ -999,7 +1001,8 @@ class TestTrayLoop:
                 self.update_menu_calls = 0
                 captured.icon = self
 
-            def run(self):
+            def run(self, setup=None):
+                captured.setup = setup
                 # By default returns immediately, same as every other test
                 # here needs (the tray "loop" is over as soon as this
                 # returns). test_the_poll_loop_redraws_the_icon_and_menu
@@ -1090,6 +1093,16 @@ class TestTrayLoop:
 
     def _items(self, tray):
         return {row["label"]: row["action"] for row in self._model(tray) if isinstance(row["label"], str)}
+
+    def test_the_tray_shows_the_deprecation_notice_once_the_icon_is_up(self, tray, tmp_path, monkeypatch):
+        monkeypatch.setattr(companion, "_notice_state_path", lambda: tmp_path / "notices.json")
+        monkeypatch.setattr(companion, "_on_ui_thread", lambda fn: fn())
+        assert companion._run_tray() == 0
+        tray.setup(tray.icon)
+        assert tray.icon.visible is True
+        assert tray.icon.notified == [LOCAL_MODE_DEPRECATION]
+        tray.setup(tray.icon)
+        assert tray.icon.notified == [LOCAL_MODE_DEPRECATION]
 
     def test_the_menu_matches_the_documented_layout(self, tray):
         assert companion._run_tray() == 0
@@ -1327,3 +1340,90 @@ class TestLaunch:
         monkeypatch.setattr(companion, "_open_path", lambda path: opened.append(path) or True)
         assert companion._launch() == 0
         assert opened == ["/approvals"]
+
+
+class TestDeprecationNotice:
+    @pytest.fixture
+    def marker(self, tmp_path, monkeypatch):
+        path = tmp_path / "state" / "notices.json"
+        monkeypatch.setattr(companion, "_notice_state_path", lambda: path)
+        return path
+
+    def test_shows_once_and_writes_the_marker(self, marker):
+        shown = []
+        companion._show_deprecation_notice_once(shown.append)
+        assert shown == [LOCAL_MODE_DEPRECATION]
+        assert json.loads(marker.read_text()) == {"local_mode_deprecated_7": True}
+
+    def test_a_second_start_shows_nothing(self, marker):
+        companion._show_deprecation_notice_once(lambda text: None)
+        shown = []
+        companion._show_deprecation_notice_once(shown.append)
+        assert shown == []
+
+    def test_an_unwritable_path_still_shows_and_raises_nothing(self, tmp_path, monkeypatch):
+        blocker = tmp_path / "file"
+        blocker.write_text("x")
+        monkeypatch.setattr(companion, "_notice_state_path", lambda: blocker / "sub" / "notices.json")
+        shown = []
+        companion._show_deprecation_notice_once(shown.append)
+        companion._show_deprecation_notice_once(shown.append)
+        assert len(shown) == 2
+
+    def test_an_unreadable_marker_shows_the_notice_again(self, marker):
+        marker.parent.mkdir(parents=True)
+        marker.write_text("not json")
+        shown = []
+        companion._show_deprecation_notice_once(shown.append)
+        assert len(shown) == 1
+
+    def test_a_failing_notifier_does_not_stop_startup(self, marker):
+        def boom(text):
+            raise RuntimeError("no notifier")
+
+        companion._show_deprecation_notice_once(boom)
+
+    def test_a_failing_notifier_leaves_no_marker_so_the_notice_shows_next_start(self, marker):
+        def boom(text):
+            raise RuntimeError("no notifier")
+
+        companion._show_deprecation_notice_once(boom)
+        assert not marker.exists()
+        shown = []
+        companion._show_deprecation_notice_once(shown.append)
+        assert shown == [LOCAL_MODE_DEPRECATION]
+
+    @pytest.mark.parametrize(
+        ("platform", "expected"),
+        [
+            ("darwin", "Library/Application Support/PrivacyFence Companion/notices.json"),
+            ("win32", "PrivacyFence Companion/notices.json"),
+            ("linux", "privacyfence-companion/notices.json"),
+        ],
+    )
+    def test_state_path_per_platform(self, monkeypatch, tmp_path, platform, expected):
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(companion.Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+        assert companion._notice_state_path().as_posix().endswith(expected)
+
+    def test_linux_state_path_defaults_under_home(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(companion.Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+        assert companion._notice_state_path() == tmp_path / ".local/state/privacyfence-companion/notices.json"
+
+    def test_windows_state_path_without_appdata(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(companion.Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.delenv("APPDATA", raising=False)
+        assert companion._notice_state_path() == tmp_path / "AppData/Roaming/PrivacyFence Companion/notices.json"
+
+    def test_serve_shows_it_through_notify_send(self, marker, monkeypatch):
+        sent = []
+        monkeypatch.setattr(companion, "_notify_send", sent.append)
+        monkeypatch.setattr(companion, "_start_pending_separation_check", lambda: None)
+        monkeypatch.setattr(companion, "CompanionChannelServer", _SilentChannel)
+        assert companion._run_serve(wait=lambda: None) == 0
+        assert len(sent) == 1 and "PrivacyFence 8" in sent[0]

@@ -123,6 +123,14 @@ PAGES: dict[str, str] = {
     "/releases/": "releases/index.html",
     "/privacy/": "privacy/index.html",
     "/imprint/": "imprint/index.html",
+    "/relay-terms/": "relay-terms/index.html",
+}
+
+# Pages that are published but not part of the site: no navigation or footer link, no sitemap or
+# llms.txt entry, and no shared partials, because the page carries its own Content-Security-Policy
+# whose hashes cover its inline script and style byte for byte. Copied unchanged.
+UNLISTED_PAGES: dict[str, str] = {
+    "/tools/connector-config/": "tools/connector-config/index.html",
 }
 
 # Output path -> source path relative to the repository root, copied byte for byte.
@@ -183,6 +191,7 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "connector-qa.md",
         "ai-client-qa.md",
         "downloads-and-release-kpi.md",
+        "oauth-relay.md",
         "releasing.md",
     }
 )
@@ -1146,6 +1155,7 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         f"- [Releases]({SITE_URL}/releases/): the newest release on every channel, stable and pre-release, with its installers and release notes",
         f"- [Privacy policy]({SITE_URL}/privacy/): what this website and the download service do with visitor data",
         f"- [Imprint]({SITE_URL}/imprint/): who publishes privacyfence.eu",
+        f"- [Relay terms]({SITE_URL}/relay-terms/): the terms for the sign-in relay at oauth.privacyfence.eu",
         "",
         "## Source",
         "",
@@ -1297,7 +1307,7 @@ class BuildReport:
 
 def check_manifest() -> None:
     """Refuses a manifest that would publish a file it also says stays private."""
-    published = set(PAGES.values()) | {s.removeprefix("website/") for s in STATIC.values() if s.startswith("website/")}
+    published = set(PAGES.values()) | set(UNLISTED_PAGES.values()) | {s.removeprefix("website/") for s in STATIC.values() if s.startswith("website/")}
     leaked = sorted(published & (REPOSITORY_ONLY | BUILD_INPUTS))
     if leaked:
         raise BuildError(f"the build manifest publishes files it lists as repository-only or build inputs: {leaked}")
@@ -1332,6 +1342,11 @@ def build(
     version = str(manifest["version"]) if manifest else None
     if releases is None and fetch_manifest:
         releases = fetch_all_releases()
+
+    for source in UNLISTED_PAGES.values():
+        target = out / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(WEBSITE / source, target)
 
     for url_path, source in PAGES.items():
         page = set_clients(assemble_page((WEBSITE / source).read_text(encoding="utf-8")))

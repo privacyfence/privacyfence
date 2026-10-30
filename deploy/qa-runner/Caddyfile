@@ -1,0 +1,24 @@
+# The QA server's proxy. PF_CF_RANGES is Cloudflare's published ranges, space-separated.
+{
+	servers {
+		trusted_proxies static {$PF_CF_RANGES}
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+runner.privacyfence.eu {
+	tls /etc/pf-qa/origin.pem /etc/pf-qa/origin.key
+
+	# The QA server exists to connect accounts in a browser. Nothing here may reach /mcp or the
+	# MCP OAuth endpoints, so no AI client can use a server that holds live QA tokens.
+	@mcp path /mcp /mcp/* /authorize /token /register /revoke /oauth/idp/callback /oauth/consent/* /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource*
+	respond @mcp 404
+
+	reverse_proxy privacyfence:8765
+}
+
+# Peek's device sign-in opens in the maintainer's browser and needs a public https address.
+peek-qa.privacyfence.eu {
+	tls /etc/pf-qa/origin.pem /etc/pf-qa/origin.key
+	reverse_proxy peek:7700
+}

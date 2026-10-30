@@ -1,0 +1,132 @@
+name: Deploy OAuth relay Worker
+
+# docs/oauth-relay.md. Deploys cloudflare/oauth-relay/ -- the Worker backing
+# https://oauth.privacyfence.eu, the redirect relay for PrivacyFence's built-in OAuth apps --
+# whenever it changes on `main`. Like the download Worker it ships on every merge to `main`, not on
+# a release tag: a release tag never changes the relay, and a relay change never needs an app
+# release. It must stay compatible with every released 7.x server (docs/oauth-relay.md,
+# "Compatibility rule").
+#
+# `verify-oauth-relay` also runs on `pull_request` (same path filter as `push`) so a PR that
+# breaks the Worker fails its own checks. `deploy-oauth-relay` only runs on a push to `main` (or a
+# manual dispatch on `main`): it needs the verify job to pass first and needs Cloudflare and Gmail
+# credentials a fork PR's `pull_request` run must never receive. The job names differ from
+# deploy-download-worker.yml's `verify`/`deploy` so the PR checks list has no ambiguous duplicates.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/oauth-relay/**"
+      - ".github/workflows/deploy-oauth-relay-worker.yml"
+  pull_request:
+    paths:
+      - "cloudflare/oauth-relay/**"
+      - ".github/workflows/deploy-oauth-relay-worker.yml"
+  workflow_dispatch:   # allow manual redeploys from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  verify-oauth-relay:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare/oauth-relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloudflare/oauth-relay/package-lock.json
+
+      # A plain `npm ci`: package.json's `overrides.vitest` pin works around the npm/arborist
+      # resolution bug described in deploy-download-worker.yml.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Runs entirely against local Miniflare/workerd -- no Cloudflare or Google credentials.
+      - name: Run unit/integration tests
+        run: npm test
+
+      - name: Dry-run bundle
+        run: npm run dry-run
+
+  deploy-oauth-relay:
+    needs: verify-oauth-relay
+    # Never on a `pull_request` run, and never from a ref other than `main`. The
+    # `oauth-relay-worker` environment holds the secrets, restricts deployment branches to `main`
+    # and requires reviewers other than the author (docs/oauth-relay.md, "Provisioning").
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    environment: oauth-relay-worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare/oauth-relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloudflare/oauth-relay/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The env var names on the left are fixed by wrangler's own CLI; only the GitHub secrets on
+      # the right (CF_OAUTH_RELAY_WORKER_*) are this repo's to name. There is no database migration step: the
+      # registry is a SQLite Durable Object created by wrangler.toml's migration.
+      - name: Deploy Worker
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_OAUTH_RELAY_WORKER_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_OAUTH_RELAY_WORKER_ACCOUNT_ID }}
+
+      # The maintainer token (/registrations, /admin/revoke, /admin/restore). The value goes in on
+      # stdin and the secret lives only in this step's `env:`, never on a command line.
+      - name: Set revoke token
+        run: printf '%s' "$REVOKE_TOKEN" | npx wrangler secret put REVOKE_TOKEN
+        env:
+          REVOKE_TOKEN: ${{ secrets.CF_OAUTH_RELAY_REVOKE_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_OAUTH_RELAY_WORKER_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_OAUTH_RELAY_WORKER_ACCOUNT_ID }}
+
+      # The Gmail credential for the new-registration notification (src/notify.ts):
+      # an OAuth client of the privacyfence.eu Workspace and a refresh token for the single scope
+      # gmail.send. Same handling as REVOKE_TOKEN.
+      - name: Set Gmail client id
+        run: printf '%s' "$GMAIL_CLIENT_ID" | npx wrangler secret put GMAIL_CLIENT_ID
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.CF_OAUTH_RELAY_GMAIL_CLIENT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_OAUTH_RELAY_WORKER_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_OAUTH_RELAY_WORKER_ACCOUNT_ID }}
+
+      - name: Set Gmail client secret
+        run: printf '%s' "$GMAIL_CLIENT_SECRET" | npx wrangler secret put GMAIL_CLIENT_SECRET
+        env:
+          GMAIL_CLIENT_SECRET: ${{ secrets.CF_OAUTH_RELAY_GMAIL_CLIENT_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_OAUTH_RELAY_WORKER_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_OAUTH_RELAY_WORKER_ACCOUNT_ID }}
+
+      - name: Set Gmail refresh token
+        run: printf '%s' "$GMAIL_REFRESH_TOKEN" | npx wrangler secret put GMAIL_REFRESH_TOKEN
+        env:
+          GMAIL_REFRESH_TOKEN: ${{ secrets.CF_OAUTH_RELAY_GMAIL_REFRESH_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_OAUTH_RELAY_WORKER_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_OAUTH_RELAY_WORKER_ACCOUNT_ID }}
+
+      # HEAD: /health touches no state, and a smoke check must never register anything.
+      - name: Smoke-test /health
+        run: |
+          status="$(curl -s -o /dev/null -w '%{http_code}' --head https://oauth.privacyfence.eu/health)"
+          if [ "$status" != "200" ]; then
+            echo "::error::HEAD /health returned $status, expected 200"
+            exit 1
+          fi

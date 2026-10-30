@@ -22,7 +22,9 @@ popup, so there's nothing to prioritize or exclude.
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime
 import json
+import os
 import pathlib
 import threading
 import time
@@ -31,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from privacyfence import auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, update_checker
+from privacyfence import admin_config, app_credentials, auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, update_checker
 from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
 from privacyfence import peek_client, policy_upgrade
@@ -74,6 +76,8 @@ def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
     monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
     monkeypatch.setattr(daemon_main, "load_org_config", lambda: dict(ORG_CONFIG_ENABLING_EVERY_CONNECTOR))
+    # Telegram is offered only where the build carries its app credentials.
+    monkeypatch.setattr(app_credentials, "telegram_app_credentials", lambda: (123, "hash"))
 
     org_dir_path = tmp_path / "org"
     org_dir_path.mkdir()
@@ -656,6 +660,108 @@ def stub_connector_build(monkeypatch):
 
 
 @pytest.mark.usefixtures("stub_connector_build")
+class TestAdminConfigWiring:
+    """The settings page reads the same effective config the daemon does: the bundle, the admin
+    config and, in organization mode only, the built-in apps."""
+
+    MIRO_APP = {"client_id": "builtin", "client_secret": "secret"}
+
+    def test_local_snapshot_does_not_list_miro_through_a_builtin_app(self, controller, monkeypatch):
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
+        monkeypatch.setattr(
+            app_credentials, "builtin_app", lambda key: self.MIRO_APP if key == "miro" else None
+        )
+
+        keys = {row["key"] for row in controller.snapshot()["connectors"]}
+
+        assert "miro" not in keys
+
+    def test_a_service_withdrawn_in_the_admin_config_is_refused(self, controller, monkeypatch):
+        bundle = dict(ORG_CONFIG_ENABLING_EVERY_CONNECTOR)
+        admin = admin_config.import_from_bundle(bundle, mode="local", single_user=False)
+        admin["services"]["miro"]["offered"] = False
+        admin_config.save(admin)
+        monkeypatch.setattr(sc.miro_auth, "authorize_interactive", lambda *a: pytest.fail("must not run"))
+        monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
+
+        controller.authenticate_connector("miro")
+
+        assert controller.error == "Miro isn't offered on this install. Turn it on on the Admin page (Services)."
+
+    def test_a_bundle_with_authz_over_an_imported_config_installs_and_says_it_is_ignored(self, controller):
+        admin_config.save(admin_config.import_from_bundle(
+            {"slack": {"client_id": "s"}}, mode="local", single_user=False,
+        ))
+        bundle = {"version": 1, "authz": {"allowed_domains": ["example.com"]}}
+
+        controller.install_org_config_bytes(json.dumps(bundle).encode())
+
+        assert json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8")) == bundle
+        assert "are now managed on the Admin page and are ignored: authz" in controller.error
+
+    def test_a_bundle_over_a_config_made_without_one_shows_nothing(self, controller):
+        admin_config.save(admin_config.import_from_bundle({}, mode="local", single_user=False))
+
+        controller.install_org_config_bytes(json.dumps({"version": 1, "authz": {}}).encode())
+
+        assert controller.error == ""
+
+    def test_a_bundle_without_an_admin_config_shows_nothing(self, controller):
+        controller.install_org_config_bytes(json.dumps({"version": 1, "authz": {}}).encode())
+
+        assert controller.error == ""
+
+    def test_a_bundle_without_legacy_settings_shows_nothing(self, controller):
+        admin_config.save(admin_config.import_from_bundle(
+            {"slack": {"client_id": "s"}}, mode="local", single_user=False,
+        ))
+
+        controller.install_org_config_bytes(json.dumps({"version": 1, "slack": {"client_id": "t"}}).encode())
+
+        assert controller.error == ""
+
+    def test_a_malformed_admin_config_does_not_block_the_install(self, controller, tmp_path):
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        controller.install_org_config_bytes(json.dumps({"version": 1, "authz": {}}).encode())
+
+        assert (sc.org_dir() / "org_bundle.json").exists()
+
+    def test_refresh_connectors_builds_from_the_effective_config(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        built = []
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: built.append(org) or ([], {}))
+        bundle = {"slack": {"client_id": "s"}, "authz": {"x": 1}}
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
+        admin = admin_config.import_from_bundle(bundle, mode="local", single_user=False)
+        admin["authz"] = {"y": 2}
+        admin_config.save(admin)
+
+        controller.refresh_connectors()
+        assert wait_until(lambda: len(recorded) == 1)
+        _drain_run_async(recorded)
+
+        assert built[0]["slack"] == {"client_id": "s"}
+        assert built[0]["authz"] == {"y": 2}
+
+    def test_refresh_connectors_with_a_malformed_admin_config_builds_from_an_empty_one(
+        self, controller, monkeypatch, tmp_path
+    ):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        built = []
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: built.append(org) or ([], {}))
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        controller.refresh_connectors()
+        assert wait_until(lambda: len(recorded) == 1)
+        _drain_run_async(recorded)
+
+        assert built == [{}]
+
+
+@pytest.mark.usefixtures("stub_connector_build")
 class TestOrgConfigInstall:
     """install_org_config_bytes is the validate-then-write step behind
     web/routes_settings.py's multipart upload."""
@@ -664,20 +770,20 @@ class TestOrgConfigInstall:
         controller.install_org_config_bytes(b"not valid json")
 
         assert controller.error
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_json_without_version_field_is_rejected(self, controller):
         controller.install_org_config_bytes(json.dumps({"google": {"client_id": "x"}}).encode())
 
         assert controller.error
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_valid_bundle_is_installed(self, controller):
         bundle = {"version": 1, "org_name": "Acme", "google": {"client_id": "x", "client_secret": "y"}}
 
         controller.install_org_config_bytes(json.dumps(bundle).encode())
 
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == bundle
         assert controller.error == ""
 
@@ -687,14 +793,14 @@ class TestOrgConfigInstall:
         state = controller.snapshot()
 
         assert state["general"]["org_installed"] is True
-        assert state["general"]["org_button_label"] == "Install/Update Organization Config…"
+        assert "org_button_label" not in state["general"]
 
     def test_live_connectors_are_rebuilt_from_the_new_bundle(self, controller, monkeypatch):
         recorded = []
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         def _load_installed():
-            path = sc.org_dir() / "org_config.json"
+            path = sc.org_dir() / "org_bundle.json"
             return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
         def _build(cfg, org):
@@ -727,10 +833,9 @@ class TestOrgConfigInstall:
 
         assert refreshes == []
 
-    def test_snapshot_not_installed_label(self, controller):
+    def test_snapshot_not_installed(self, controller):
         state = controller.snapshot()
         assert state["general"]["org_installed"] is False
-        assert state["general"]["org_button_label"] == "Install Organization Config…"
 
 
 @pytest.mark.usefixtures("stub_connector_build")
@@ -746,7 +851,7 @@ class TestOrgConfigInstallSigning:
         controller.install_org_config_bytes(json.dumps(bundle).encode())
 
         assert controller.error == ""
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == bundle
 
     def test_org_mode_bundle_without_signature_is_rejected(self, controller):
@@ -755,7 +860,7 @@ class TestOrgConfigInstallSigning:
         controller.install_org_config_bytes(json.dumps(bundle).encode())
 
         assert "requires a signed" in controller.error
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_first_signed_bundle_is_installed_and_pins_its_key(self, controller):
         from privacyfence import org_bundle_signing
@@ -783,7 +888,7 @@ class TestOrgConfigInstallSigning:
         controller.install_org_config_bytes(json.dumps(second_bundle).encode())
 
         assert "verification" in controller.error
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == first_bundle  # unchanged -- the bad update was never written
 
     def test_install_org_config_refuses_an_older_serial_and_keeps_the_installed_file(self, controller):
@@ -800,7 +905,7 @@ class TestOrgConfigInstallSigning:
 
         assert "rollback refused" in controller.error
         assert str(org_bundle_signing.pinned_serial_path(sc.org_dir())) in controller.error
-        installed = json.loads((sc.org_dir() / "org_config.json").read_text(encoding="utf-8"))
+        installed = json.loads((sc.org_dir() / "org_bundle.json").read_text(encoding="utf-8"))
         assert installed == newer
         assert org_bundle_signing.load_pinned_serial(sc.org_dir()) == 200
 
@@ -846,7 +951,7 @@ class TestWouldPinNewOrgSigningKey:
         assert controller.would_pin_new_org_signing_key(json.dumps(bundle).encode()) is True
         # Read-only -- nothing pinned or installed by merely checking.
         assert not org_bundle_signing.pinned_public_key_path(sc.org_dir()).exists()
-        assert not (sc.org_dir() / "org_config.json").exists()
+        assert not (sc.org_dir() / "org_bundle.json").exists()
 
     def test_false_for_an_unsigned_bundle(self, controller):
         assert controller.would_pin_new_org_signing_key(json.dumps({"version": 1}).encode()) is False
@@ -1044,9 +1149,21 @@ class TestOrgConfigOrEmpty:
         assert "not valid JSON" in controller.error
 
     def test_passes_through_the_parsed_config_when_valid(self, controller, monkeypatch):
-        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"slack": {"client_id": "abc"}})
+        bundle = {"slack": {"client_id": "abc"}}
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
 
-        assert controller._org_config_or_empty() == {"slack": {"client_id": "abc"}}
+        expected = daemon_main.effective_org_config(
+            bundle, admin_config.import_from_bundle(bundle, mode="local", single_user=False)
+        )
+        assert controller._org_config_or_empty() == expected
+        assert expected["slack"] == {"client_id": "abc"}
+        assert controller.error == ""
+
+    def test_a_malformed_admin_config_sets_the_error_and_returns_empty(self, controller, tmp_path):
+        (tmp_path / "admin_config.json").write_text("{nope")
+
+        assert controller._org_config_or_empty() == {}
+        assert "admin_config.json" in controller.error
 
     def test_snapshot_surfaces_the_error_instead_of_raising(self, controller, monkeypatch):
         monkeypatch.setattr(
@@ -1408,7 +1525,7 @@ class TestAuthenticateMiro:
         monkeypatch.setattr(sc.miro_auth, "authorize_interactive", lambda *a: pytest.fail("must not run"))
         monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
         controller.authenticate_connector("miro")
-        assert controller.error == "Miro isn't enabled in your organization config."
+        assert controller.error == "Miro isn't offered on this install. Turn it on on the Admin page (Services)."
 
     def test_row_has_org_follows_the_bundle(self, controller, monkeypatch):
         row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "miro")
@@ -2986,7 +3103,7 @@ class TestSnapshotStructure:
         controller.peek_start_login("https://peek.example.com")
         controller.grist_connect("key", "https://docs.getgrist.com")
         assert calls == []
-        assert "isn't enabled in your organization config" in controller.error
+        assert "isn't offered on this install" in controller.error
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()
@@ -3306,3 +3423,39 @@ class TestPrivacyPolicyFailClosed:
             controller.set_default_policy("privacy", "redact")
 
         assert "Privacy filter hot-reload failed" in caplog.text
+
+
+class TestOrgBundleInstalledDate:
+    """The General page's "installed" date for an adopted 6.x bundle is the legacy file's
+    mtime, not the time of the copy; once the bundle changes it is the bundle's own."""
+
+    @staticmethod
+    def _install(org, name, text, mtime):
+        path = org / name
+        path.write_text(text, encoding="utf-8")
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_adopted_copy_shows_the_legacy_files_date(self, controller):
+        from privacyfence import org_bundle_signing
+
+        org = sc.org_dir()
+        jan_5_2025 = datetime(2025, 1, 5, 12, 0).timestamp()
+        self._install(org, "org_config.json", '{"version": 1}', jan_5_2025)
+        org_bundle_signing.adopt_legacy_files(org)
+
+        general = controller.snapshot()["general"]
+        assert general["org_installed"] is True
+        assert general["org_installed_date"] == "Jan 5, 2025"
+
+    def test_a_newer_installed_bundle_shows_its_own_date(self, controller):
+        from privacyfence import org_bundle_signing
+
+        org = sc.org_dir()
+        jan_5_2025 = datetime(2025, 1, 5, 12, 0).timestamp()
+        mar_9_2026 = datetime(2026, 3, 9, 12, 0).timestamp()
+        self._install(org, "org_config.json", '{"version": 1}', jan_5_2025)
+        org_bundle_signing.adopt_legacy_files(org)
+        self._install(org, "org_bundle.json", '{"version": 2}', mar_9_2026)
+
+        assert controller.snapshot()["general"]["org_installed_date"] == "Mar 9, 2026"

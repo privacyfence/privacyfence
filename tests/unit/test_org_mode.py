@@ -9,6 +9,14 @@ import pytest
 from privacyfence import org_mode
 
 
+class TestLocalModeDeprecation:
+    def test_names_the_release_that_removes_desktop_mode(self):
+        assert "PrivacyFence 8" in org_mode.LOCAL_MODE_DEPRECATION
+
+    def test_points_at_the_migration_guide(self):
+        assert org_mode.LOCAL_MODE_DEPRECATION.endswith("https://privacyfence.eu/docs/moving-to-organization-mode/")
+
+
 class TestResolveMode:
     def test_absent_key_defaults_to_local(self):
         assert org_mode.resolve_mode({}) == "local"
@@ -26,6 +34,133 @@ class TestResolveMode:
         # ValueError-raising failure further down the same startup path.
         with pytest.raises(org_mode.ConfigurationError):
             org_mode.resolve_mode({"mode": "something-else"})
+
+
+class TestResolveModeEnvironment:
+    def test_resolve_mode_bundle_only(self):
+        assert org_mode.resolve_mode({"mode": "org"}) == "org"
+
+    def test_resolve_mode_env_only(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.resolve_mode({}) == "org"
+
+    def test_resolve_mode_neither_is_local(self):
+        assert org_mode.resolve_mode({}) == "local"
+
+    def test_resolve_mode_empty_env_counts_as_unset(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "  ")
+        assert org_mode.resolve_mode({}) == "local"
+
+    def test_resolve_mode_bundle_and_env_equal(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.resolve_mode({"mode": "org"}) == "org"
+
+    def test_resolve_mode_bundle_and_env_differ(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.resolve_mode({"mode": "local"})
+        assert str(excinfo.value) == (
+            'org_bundle.json says "mode": "local" but PRIVACYFENCE_MODE says "org"; remove one of them'
+        )
+
+    def test_resolve_mode_invalid_env_value(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "cloud")
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.resolve_mode({})
+        assert str(excinfo.value) == 'PRIVACYFENCE_MODE must be "local" or "org", got cloud'
+
+    def test_resolve_mode_invalid_env_value_is_refused_even_with_a_bundle_mode(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "cloud")
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_MODE"):
+            org_mode.resolve_mode({"mode": "org"})
+
+
+class TestIsSingleUser:
+    IDP = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+
+    def test_is_single_user_org_without_idp(self):
+        assert org_mode.is_single_user({"mode": "org"}) is True
+
+    def test_is_single_user_org_with_idp(self):
+        assert org_mode.is_single_user({"mode": "org", "idp": self.IDP}) is False
+
+    def test_is_single_user_local_is_never(self):
+        assert org_mode.is_single_user({}) is False
+
+    def test_is_single_user_follows_the_mode_from_the_env(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.is_single_user({}) is True
+
+    @pytest.mark.parametrize("issuer_url, expected", [
+        ("http://localhost:8765", True),
+        ("http://127.0.0.1", True),
+        ("https://localhost", False),
+        ("http://pf.example.com", False),
+        ("http://localhost.evil.example", False),
+    ])
+    def test_is_loopback_issuer(self, issuer_url, expected):
+        assert org_mode.is_loopback_issuer(issuer_url) is expected
+
+
+class TestServerConfigEnvironment:
+    BUNDLE = {"server": {"issuer_url": "https://pf.example.com"}}
+
+    def test_env_fills_every_value_the_bundle_leaves_unset(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_BIND_HOST", "0.0.0.0")
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9000")
+        monkeypatch.setenv("PRIVACYFENCE_TRUSTED_PROXIES", "172.30.87.2, 10.0.0.1")
+        config = org_mode.ServerConfig.from_org_config({"server": {"issuer_url": "https://pf.example.com"}})
+        assert (config.bind_host, config.port) == ("0.0.0.0", 9000)
+        assert config.trusted_proxies == ("172.30.87.2", "10.0.0.1")
+
+    def test_env_issuer_url_when_the_bundle_has_none(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", " https://env.example.com ")
+        assert org_mode.ServerConfig.from_org_config({}).issuer_url == "https://env.example.com"
+
+    def test_bundle_wins_over_env(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_BIND_HOST", "0.0.0.0")
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9000")
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", "https://env.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_TRUSTED_PROXIES", "10.0.0.1")
+        config = org_mode.ServerConfig.from_org_config({"server": {
+            "issuer_url": "https://pf.example.com", "bind_host": "127.0.0.2", "port": 8000,
+            "trusted_proxies": ["172.30.87.2"],
+        }})
+        assert config.bind_host == "127.0.0.2"
+        assert config.port == 8000
+        assert config.issuer_url == "https://pf.example.com"
+        assert config.trusted_proxies == ("172.30.87.2",)
+
+    @pytest.mark.parametrize("value", ["0", "65536", "http", "-1"])
+    def test_env_port_must_be_a_valid_port(self, monkeypatch, value):
+        monkeypatch.setenv("PRIVACYFENCE_PORT", value)
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_PORT"):
+            org_mode.ServerConfig.from_org_config(self.BUNDLE)
+
+    def test_a_missing_issuer_is_still_an_error_outside_single_user_mode(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        idp = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+        with pytest.raises(org_mode.ConfigurationError, match="issuer_url"):
+            org_mode.ServerConfig.from_org_config({"idp": idp})
+
+    def test_single_user_issuer_defaults_to_localhost_on_the_port(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert org_mode.ServerConfig.from_org_config({}).issuer_url == "http://localhost:8765"
+        monkeypatch.setenv("PRIVACYFENCE_PORT", "9100")
+        assert org_mode.ServerConfig.from_org_config({}).issuer_url == "http://localhost:9100"
+
+    @pytest.mark.parametrize("proxy", ["*", "0.0.0.0/0", "::/0"])
+    def test_trusted_proxies_refuse_a_wildcard_from_the_bundle(self, proxy):
+        with pytest.raises(org_mode.ConfigurationError, match="not a wildcard"):
+            org_mode.ServerConfig.from_org_config(
+                {"server": {"issuer_url": "https://pf.example.com", "trusted_proxies": ["10.0.0.1", proxy]}}
+            )
+
+    @pytest.mark.parametrize("proxy", ["*", "0.0.0.0/0", "::/0"])
+    def test_trusted_proxies_refuse_a_wildcard_from_the_env(self, monkeypatch, proxy):
+        monkeypatch.setenv("PRIVACYFENCE_TRUSTED_PROXIES", f"10.0.0.1,{proxy}")
+        with pytest.raises(org_mode.ConfigurationError, match="trusted_proxies must name specific proxies"):
+            org_mode.ServerConfig.from_org_config(self.BUNDLE)
 
 
 class TestServerConfigFromOrgConfig:
@@ -94,9 +229,8 @@ class TestServerConfigFromOrgConfig:
 
 class TestDefaults:
     def test_default_bind_host_is_loopback(self):
-        # An org bundle with no "bind_host" must never listen on the
-        # network: the same 127.0.0.1 scripts/build_org_bundle.py writes
-        # by default (test_build_org_bundle.py pins the two together).
+        # A server config with no "bind_host" must never listen on the
+        # network: loopback, for a reverse proxy on the same host.
         assert org_mode.ServerConfig().bind_host == "127.0.0.1"
 
     def test_default_has_no_tls(self):
@@ -467,7 +601,7 @@ class TestPeekProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(self._cfg(**{key: "yes"}))
         assert str(exc.value) == (
-            f"org_config.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got 'yes'"
+            f"org_bundle.json's \"peek\".\"auto_provision\".\"{key}\" must be true or false, got 'yes'"
         )
 
     @pytest.mark.parametrize("value", ["lower", "1ABC", "A-B", 5])
@@ -475,7 +609,7 @@ class TestPeekProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True, key_env=value))
         assert str(exc.value) == (
-            "org_config.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable name, "
+            "org_bundle.json's \"peek\".\"auto_provision\".\"key_env\" must be an environment variable name, "
             f"got {value!r}"
         )
 
@@ -484,21 +618,21 @@ class TestPeekProvisioningConfigFromOrgConfig:
         cfg["mode"] = "local"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(cfg)
-        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
+        assert str(exc.value) == "org_bundle.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
 
     def test_enabled_without_base_url_raises(self):
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(
                 {"mode": "org", "peek": {"auto_provision": {"enabled": True}}}
             )
-        assert str(exc.value) == "org_config.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\""
+        assert str(exc.value) == "org_bundle.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\""
 
     def test_unusable_base_url_raises(self):
         cfg = self._cfg(enabled=True)
         cfg["peek"]["base_url"] = "http://peek.example.com"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(cfg)
-        assert str(exc.value).startswith("org_config.json's \"peek\".\"base_url\" is not usable: ")
+        assert str(exc.value).startswith("org_bundle.json's \"peek\".\"base_url\" is not usable: ")
 
 
 class TestGristProvisioningConfigFromOrgConfig:
@@ -538,14 +672,14 @@ class TestGristProvisioningConfigFromOrgConfig:
     def test_non_bool_enabled(self):
         with pytest.raises(
             org_mode.ConfigurationError,
-            match=r'^org_config.json\'s "grist"."auto_provision"."enabled" must be true or false, got \'yes\'$',
+            match=r'^org_bundle.json\'s "grist"."auto_provision"."enabled" must be true or false, got \'yes\'$',
         ):
             org_mode.GristProvisioningConfig.from_org_config(self._org(enabled="yes"))
 
     def test_non_bool_trust_unverified_email(self):
         with pytest.raises(
             org_mode.ConfigurationError,
-            match=r'^org_config.json\'s "grist"."auto_provision"."trust_unverified_email" must be true or false, got 1$',
+            match=r'^org_bundle.json\'s "grist"."auto_provision"."trust_unverified_email" must be true or false, got 1$',
         ):
             org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(trust_unverified_email=1)))
 
@@ -554,7 +688,7 @@ class TestGristProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled(key_env=value)))
         assert str(exc.value) == (
-            'org_config.json\'s "grist"."auto_provision"."key_env" must be an environment variable name, '
+            'org_bundle.json\'s "grist"."auto_provision"."key_env" must be an environment variable name, '
             f"got {value!r}"
         )
 
@@ -573,14 +707,14 @@ class TestGristProvisioningConfigFromOrgConfig:
         org["mode"] = "local"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
-        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "mode": "org"'
+        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "mode": "org"'
 
     def test_enabled_without_server_url(self):
         org = self._org(**self._enabled())
         del org["grist"]["server_url"]
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
-        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "grist"."server_url"'
+        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "grist"."server_url"'
 
     def test_enabled_with_oauth_app(self):
         org = self._org(**self._enabled())
@@ -588,28 +722,28 @@ class TestGristProvisioningConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
         assert str(exc.value) == (
-            'org_config.json\'s "grist"."auto_provision" works only with API keys; '
+            'org_bundle.json\'s "grist"."auto_provision" works only with API keys; '
             "remove the Grist OAuth app or turn auto-provisioning off"
         )
 
     def test_enabled_without_provisioner_url(self):
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(self._org(enabled=True))
-        assert str(exc.value) == 'org_config.json\'s "grist"."auto_provision" needs "provisioner_url"'
+        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "provisioner_url"'
 
     def test_bad_server_url(self):
         org = self._org(**self._enabled())
         org["grist"]["server_url"] = "http://grist.example.com"
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
-        assert str(exc.value).startswith('org_config.json\'s "grist"."server_url" is not usable: ')
+        assert str(exc.value).startswith('org_bundle.json\'s "grist"."server_url" is not usable: ')
 
     def test_bad_provisioner_url(self):
         org = self._org(enabled=True, provisioner_url="http://prov.example.com")
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.GristProvisioningConfig.from_org_config(org)
         assert str(exc.value).startswith(
-            'org_config.json\'s "grist"."auto_provision"."provisioner_url" is not usable: '
+            'org_bundle.json\'s "grist"."auto_provision"."provisioner_url" is not usable: '
         )
 
 
@@ -632,3 +766,317 @@ class TestConnectorEnabledByOrg:
     def test_missing_or_empty_section_does_not(self):
         assert org_mode.connector_enabled_by_org({}, "grist") is False
         assert org_mode.connector_enabled_by_org({"grist": {}}, "grist") is False
+
+
+SECRET = "s3cret-sentinel-value"
+
+
+class TestIdpSection:
+    BUNDLE_IDP = {"issuer": "https://bundle.example.com", "client_id": "bundle-client", "client_secret": "b"}
+
+    @staticmethod
+    def _env(monkeypatch, **values):
+        for name, value in values.items():
+            monkeypatch.setenv(f"PRIVACYFENCE_{name}", value)
+
+    def test_idp_section_none_without_a_bundle_or_environment(self):
+        assert org_mode.idp_section({"mode": "org"}) is None
+
+    def test_idp_section_bundle_only(self):
+        assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+
+    def test_idp_section_env_only(self, monkeypatch):
+        self._env(monkeypatch, IDP_ISSUER="https://idp.example.com", IDP_CLIENT_ID="cid")
+        assert org_mode.idp_section({}) == {"issuer": "https://idp.example.com", "client_id": "cid"}
+
+    def test_idp_section_bundle_wins_and_warns_once(self, monkeypatch, caplog):
+        self._env(monkeypatch, IDP_ISSUER="https://env.example.com", IDP_CLIENT_ID="env-client")
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+            assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+        warnings = [r for r in caplog.records if "are ignored" in r.getMessage()]
+        assert len(warnings) == 1
+        assert "PRIVACYFENCE_ADMIN_EMAILS" in warnings[0].getMessage()
+
+    def test_idp_section_admin_emails_alone_triggers_the_ignored_warning(self, monkeypatch, caplog):
+        self._env(monkeypatch, ADMIN_EMAILS="a@example.com")
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            assert org_mode.idp_section({"idp": self.BUNDLE_IDP}) == self.BUNDLE_IDP
+        assert any("are ignored" in r.getMessage() for r in caplog.records)
+
+    def test_idp_section_bundle_without_environment_does_not_warn(self, caplog):
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            org_mode.idp_section({"idp": self.BUNDLE_IDP})
+        assert not caplog.records
+
+    def test_idp_section_secret_from_a_value(self, monkeypatch, caplog):
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET=SECRET)
+        with caplog.at_level("DEBUG"):
+            assert org_mode.idp_section({})["client_secret"] == SECRET
+        assert SECRET not in caplog.text
+
+    def test_idp_section_secret_from_a_file_strips_the_trailing_newline(self, monkeypatch, tmp_path):
+        secret_file = tmp_path / "secret"
+        secret_file.write_text(SECRET + "\n")
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET_FILE=str(secret_file))
+        assert org_mode.idp_section({})["client_secret"] == SECRET
+
+    def test_idp_section_both_secret_forms_is_an_error(self, monkeypatch, tmp_path, caplog):
+        secret_file = tmp_path / "secret"
+        secret_file.write_text("x")
+        self._env(
+            monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET=SECRET,
+            IDP_CLIENT_SECRET_FILE=str(secret_file),
+        )
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.idp_section({})
+        assert str(excinfo.value) == (
+            "Set PRIVACYFENCE_IDP_CLIENT_SECRET or PRIVACYFENCE_IDP_CLIENT_SECRET_FILE, not both."
+        )
+        assert SECRET not in str(excinfo.value) and SECRET not in caplog.text
+
+    def test_idp_section_unreadable_secret_file_names_the_variable_not_the_content(self, monkeypatch, tmp_path):
+        secret_file = tmp_path / "secret"
+        secret_file.write_bytes(SECRET.encode() + b"\xff\xfe")
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_CLIENT_SECRET_FILE=str(secret_file))
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.idp_section({})
+        assert "PRIVACYFENCE_IDP_CLIENT_SECRET_FILE" in str(excinfo.value)
+        assert SECRET not in str(excinfo.value)
+        assert excinfo.value.__suppress_context__ is True
+
+    def test_idp_section_missing_secret_file_is_an_error(self, monkeypatch, tmp_path):
+        self._env(
+            monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c",
+            IDP_CLIENT_SECRET_FILE=str(tmp_path / "absent"),
+        )
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_IDP_CLIENT_SECRET_FILE"):
+            org_mode.idp_section({})
+
+    @pytest.mark.parametrize("missing", ["IDP_CLIENT_ID", "IDP_ISSUER"])
+    def test_idp_section_partial_environment_is_an_error(self, monkeypatch, missing):
+        values = {"IDP_ISSUER": "https://i", "IDP_CLIENT_ID": "c", "IDP_CLIENT_SECRET": SECRET}
+        del values[missing]
+        self._env(monkeypatch, **values)
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.idp_section({})
+        assert str(excinfo.value) == "Set both PRIVACYFENCE_IDP_ISSUER and PRIVACYFENCE_IDP_CLIENT_ID, or neither."
+
+    def test_idp_section_only_admin_emails_is_an_error(self, monkeypatch):
+        self._env(monkeypatch, ADMIN_EMAILS="a@example.com")
+        with pytest.raises(org_mode.ConfigurationError, match="Set both"):
+            org_mode.idp_section({})
+
+    def test_idp_section_comma_lists_and_scalars(self, monkeypatch):
+        self._env(
+            monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_ADMIN_GROUP_CLAIM="groups",
+            IDP_ADMIN_GROUP_VALUES=" admins , ops,,", IDP_STEP_UP_ACR_VALUES="mfa",
+            ADMIN_EMAILS="a@example.com, b@example.com",
+        )
+        section = org_mode.idp_section({})
+        assert section["admin_group_claim"] == "groups"
+        assert section["admin_group_values"] == ["admins", "ops"]
+        assert section["step_up_acr_values"] == ["mfa"]
+        assert section["admin_emails"] == ["a@example.com", "b@example.com"]
+
+    @pytest.mark.parametrize("value, expected", [("true", True), ("false", False)])
+    def test_idp_section_trust_unverified_email(self, monkeypatch, value, expected):
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_TRUST_UNVERIFIED_EMAIL=value)
+        assert org_mode.idp_section({})["trust_unverified_email"] is expected
+
+    @pytest.mark.parametrize("value", ["yes", "1", "TRUE"])
+    def test_idp_section_trust_unverified_email_rejects_anything_else(self, monkeypatch, value):
+        self._env(monkeypatch, IDP_ISSUER="https://i", IDP_CLIENT_ID="c", IDP_TRUST_UNVERIFIED_EMAIL=value)
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL"):
+            org_mode.idp_section({})
+
+
+class TestProvisioningKey:
+    KEY_ENV = "TEST_PROVISIONING_KEY"
+    FILE_ENV = "TEST_PROVISIONING_KEY_FILE"
+
+    @pytest.fixture(autouse=True)
+    def _clean(self, monkeypatch):
+        monkeypatch.delenv(self.KEY_ENV, raising=False)
+        monkeypatch.delenv(self.FILE_ENV, raising=False)
+
+    def test_unset_is_none(self):
+        assert org_mode.provisioning_key(self.KEY_ENV) is None
+
+    def test_empty_values_count_as_unset(self, monkeypatch):
+        monkeypatch.setenv(self.KEY_ENV, "  ")
+        monkeypatch.setenv(self.FILE_ENV, "")
+        assert org_mode.provisioning_key(self.KEY_ENV) is None
+
+    def test_a_plain_value_is_stripped(self, monkeypatch):
+        monkeypatch.setenv(self.KEY_ENV, f" {SECRET} ")
+        assert org_mode.provisioning_key(self.KEY_ENV) == SECRET
+
+    def test_a_file_has_its_trailing_newline_stripped(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "key"
+        key_file.write_text(SECRET + "\n")
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        assert org_mode.provisioning_key(self.KEY_ENV) == SECRET
+
+    def test_an_empty_file_is_none(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "key"
+        key_file.write_text("\n")
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        assert org_mode.provisioning_key(self.KEY_ENV) is None
+
+    def test_both_forms_is_an_error_without_the_key(self, monkeypatch, tmp_path, caplog):
+        key_file = tmp_path / "key"
+        key_file.write_text("x")
+        monkeypatch.setenv(self.KEY_ENV, SECRET)
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.provisioning_key(self.KEY_ENV)
+        assert str(excinfo.value) == "Set TEST_PROVISIONING_KEY or TEST_PROVISIONING_KEY_FILE, not both."
+        assert SECRET not in caplog.text
+
+    def test_an_undecodable_file_names_the_variable_not_the_content(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "key"
+        key_file.write_bytes(SECRET.encode() + b"\xff\xfe")
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.provisioning_key(self.KEY_ENV)
+        assert self.FILE_ENV in str(excinfo.value)
+        assert SECRET not in str(excinfo.value)
+        assert excinfo.value.__suppress_context__ is True
+
+    def test_a_missing_file_is_an_error(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(self.FILE_ENV, str(tmp_path / "absent"))
+        with pytest.raises(org_mode.ConfigurationError, match=self.FILE_ENV):
+            org_mode.provisioning_key(self.KEY_ENV)
+
+
+class TestIsSingleUserWithEnvironmentIdp:
+    def test_is_single_user_with_an_env_idp_is_false(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "c")
+        assert org_mode.is_single_user({"mode": "org"}) is False
+
+    def test_is_single_user_never_opens_the_secret_file(self, monkeypatch, tmp_path):
+        secret_file = tmp_path / "secret"
+        secret_file.write_text(SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "c")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_SECRET_FILE", str(secret_file))
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("the secret file was opened")
+
+        monkeypatch.setattr("builtins.open", refuse)
+        assert org_mode.is_single_user({"mode": "org"}) is False
+
+    def test_is_single_user_with_only_one_idp_variable_is_still_single_user(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")
+        assert org_mode.is_single_user({"mode": "org"}) is True
+
+
+class TestBuiltinGoogleIdpSection:
+    """``PRIVACYFENCE_IDP=builtin-google``: PrivacyFence's own Google sign-in client."""
+
+    SECRET = "builtin-signin-secret-sentinel"
+    APP = {"client_id": "builtin-signin.apps.googleusercontent.com", "client_secret": SECRET}
+
+    @pytest.fixture(autouse=True)
+    def _builtin(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_IDP", raising=False)
+        monkeypatch.setattr(
+            org_mode.app_credentials, "builtin_app", lambda key: dict(self.APP) if key == "google_signin" else None,
+        )
+
+    @staticmethod
+    def _env(monkeypatch, **values):
+        values = {"IDP": "builtin-google", "ADMIN_EMAILS": "alice@acme.com, bob@acme.com",
+                  "ISSUER_URL": "https://pf.acme.com", **values}
+        for name, value in values.items():
+            monkeypatch.setenv(f"PRIVACYFENCE_{name}", value)
+
+    def test_builds_the_builtin_section(self, monkeypatch):
+        self._env(monkeypatch)
+        assert org_mode.idp_section({"mode": "org"}) == {
+            "issuer": "https://accounts.google.com",
+            "client_id": "builtin-signin.apps.googleusercontent.com",
+            "client_secret": self.SECRET,
+            "relay": True,
+            "builtin": True,
+            "admin_emails": ["alice@acme.com", "bob@acme.com"],
+            "trust_unverified_email": False,
+        }
+
+    def test_the_server_address_may_come_from_the_bundle(self, monkeypatch):
+        self._env(monkeypatch)
+        monkeypatch.delenv("PRIVACYFENCE_ISSUER_URL")
+        section = org_mode.idp_section({"server": {"issuer_url": "https://pf.acme.com"}})
+        assert section["builtin"] is True
+
+    @pytest.mark.parametrize("variable", [
+        "IDP_ISSUER", "IDP_CLIENT_ID", "IDP_CLIENT_SECRET", "IDP_CLIENT_SECRET_FILE",
+        "IDP_ADMIN_GROUP_CLAIM", "IDP_ADMIN_GROUP_VALUES", "IDP_STEP_UP_ACR_VALUES", "IDP_TRUST_UNVERIFIED_EMAIL",
+    ])
+    def test_own_idp_settings_cannot_be_combined(self, monkeypatch, variable):
+        self._env(monkeypatch, **{variable: "true"})
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "PRIVACYFENCE_IDP=builtin-google cannot be combined with your own IdP settings."
+
+    @pytest.mark.parametrize("emails", ["", " , ,"])
+    def test_admin_emails_are_required(self, monkeypatch, emails):
+        self._env(monkeypatch, ADMIN_EMAILS=emails)
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "The built-in Google sign-in needs PRIVACYFENCE_ADMIN_EMAILS."
+
+    @pytest.mark.parametrize("app", [None, {}, {"client_id": "x"}, {"client_id": "", "client_secret": "s"}])
+    def test_a_build_without_the_builtin_app_is_refused(self, monkeypatch, app):
+        self._env(monkeypatch)
+        monkeypatch.setattr(org_mode.app_credentials, "builtin_app", lambda key: app)
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "This build has no built-in Google sign-in; use your own IdP app."
+
+    @pytest.mark.parametrize("address", [
+        "", "http://pf.acme.com", "https://localhost", "https://localhost:8765", "https://pf.localhost",
+        "https://127.0.0.1", "https://[::1]", "https://10.0.0.5", "https://192.168.1.2", "https://0.0.0.0",
+        "ftp://pf.acme.com",
+    ])
+    def test_a_non_public_https_server_address_is_refused(self, monkeypatch, address):
+        self._env(monkeypatch, ISSUER_URL=address)
+        if not address:
+            monkeypatch.delenv("PRIVACYFENCE_ISSUER_URL")
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert str(exc.value) == "The built-in Google sign-in needs a public https:// server address."
+
+    @pytest.mark.parametrize("value", ["builtin", "google", "Builtin-Google", "builtin-google2", "own"])
+    def test_any_other_value_names_the_accepted_one(self, monkeypatch, value):
+        self._env(monkeypatch, IDP=value)
+        with pytest.raises(org_mode.ConfigurationError, match='PRIVACYFENCE_IDP must be "builtin-google"'):
+            org_mode.idp_section({})
+
+    def test_a_legacy_bundle_idp_wins_and_warns_once(self, monkeypatch, caplog):
+        self._env(monkeypatch)
+        bundle_idp = {"issuer": "https://idp.example.com", "client_id": "own"}
+        with caplog.at_level("WARNING", logger="privacyfence.org_mode"):
+            assert org_mode.idp_section({"idp": bundle_idp}) == bundle_idp
+            assert org_mode.idp_section({"idp": bundle_idp}) == bundle_idp
+        assert len([r for r in caplog.records if "are ignored" in r.getMessage()]) == 1
+        assert org_mode.builtin_signin_selected({"idp": bundle_idp}) is False
+
+    def test_errors_and_logs_never_carry_the_secret(self, monkeypatch, caplog):
+        self._env(monkeypatch, IDP_CLIENT_ID="own")
+        with caplog.at_level("DEBUG"), pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.idp_section({})
+        assert self.SECRET not in str(exc.value) and self.SECRET not in caplog.text
+
+    def test_builtin_counts_as_an_idp_so_the_server_is_never_single_user(self, monkeypatch):
+        self._env(monkeypatch)
+        assert org_mode.is_single_user({"mode": "org"}) is False
+        assert org_mode.builtin_signin_selected({}) is True
+
+    def test_a_mistyped_value_is_not_single_user_either(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "bultin-google")
+        assert org_mode.is_single_user({"mode": "org"}) is False
+        assert org_mode.builtin_signin_selected({}) is False

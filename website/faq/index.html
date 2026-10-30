@@ -83,13 +83,14 @@
 
         <article class="faq-item page-copy stack" id="certification">
           <h2>Is PrivacyFence certified?</h2>
-          <p><strong>No.</strong> PrivacyFence has no security certification, no business-continuity plan and no service-level agreement. It is open-source software that you run yourself, so there is no PrivacyFence-operated infrastructure to certify, and installed copies keep running without the maintainer.</p>
+          <p><strong>No.</strong> PrivacyFence has no security certification, no business-continuity plan and no service-level agreement. It is open-source software that you run yourself, so the only infrastructure the maintainer operates is the download service and the sign-in relay, and neither sees your tokens, mail or files. Installed copies keep running without the maintainer. New sign-ins with the built-in apps on a server depend on the PrivacyFence relay, which carries only the sign-in redirect; existing connections and your own apps do not.</p>
           <p>Using it does not by itself satisfy a regulation or a contract either: that depends on your configuration, identity provider, retention and your own assessment. Where policy asks for a certification, organizations typically approve PrivacyFence through an exception process, pin a reviewed release, and assign an internal owner to track releases.</p>
           <p><a href="/security/#what-privacyfence-does-not-claim">What PrivacyFence does not claim</a></p>
         </article>
 
         <article class="faq-item page-copy stack" id="modes">
           <h2>Local or organization mode?</h2>
+          <p><strong>PrivacyFence 7 deprecates desktop (local) mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x. Plan new deployments on <a href="/enterprise/">organization mode</a>.</p>
           <p><strong>Local mode</strong> is the default: the installer for macOS, Windows or Linux runs PrivacyFence on one person's computer, under its own service account, for Claude Desktop, Claude Code or ChatGPT desktop (macOS) on that computer. No server and no sign-in are needed.</p>
           <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, behind your HTTPS reverse proxy. People sign in through your identity provider, administrators set the privacy filter and PII check for everyone, and web clients can connect too.</p>
           <p><a href="/enterprise/">Local and organization mode side by side</a></p>

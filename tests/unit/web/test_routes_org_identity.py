@@ -396,7 +396,7 @@ class TestLoginCallback:
         app, sessions = _app(policy=policy)
         cb = self._drive_login(
             client=_client(app), monkeypatch=monkeypatch,
-            claims={"sub": "alice", "email": "alice@acme.com"},
+            claims={"sub": "alice", "email": "alice@acme.com", "email_verified": True},
         )
         assert cb.status_code == 302
         assert org_session.SESSION_COOKIE in cb.cookies
@@ -503,9 +503,242 @@ class TestLoginAttemptStorePruning:
         store = roi._LoginAttemptStore()
         fake_now = [1000.0]
         monkeypatch.setattr(roi.time, "time", lambda: fake_now[0])
-        old_state, _attempt, _challenge = store.create(next_path="/x")
+        old_state, _attempt, _challenge = store.create(next_path="/x", redirect_uri="https://pf.example.com/cb")
 
         fake_now[0] += roi._LOGIN_ATTEMPT_TTL_SECONDS + 1
-        store.create(next_path="/y")  # triggers _prune()
+        store.create(next_path="/y", redirect_uri="https://pf.example.com/cb")  # triggers _prune()
 
         assert store.pop(old_state) is None
+
+
+# --------------------------------------------------------------------------- #
+# Built-in Google sign-in through the relay
+# --------------------------------------------------------------------------- #
+
+class _TokenResponse:
+    def __init__(self, status_code: int, body: dict) -> None:
+        self.status_code = status_code
+        self._body = body
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(f"{self.status_code}")
+
+    def json(self) -> dict:
+        return self._body
+
+
+class FakeGoogle:
+    """Google's side of the built-in sign-in, which every server using it shares: one client, and a
+    code that only exchanges with the PKCE verifier, redirect_uri and client of the authorization
+    request it was issued for, and an ID token carrying that request's nonce. The real
+    ``exchange_code_for_tokens`` and ``verify_id_token`` run against it."""
+
+    ISSUER = "https://accounts.google.com"
+    CLIENT_ID = "builtin-signin.apps.googleusercontent.com"
+
+    def __init__(self, monkeypatch) -> None:
+        import types
+
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        self._key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key = self._key.public_key()
+        self.codes: dict[str, dict] = {}
+        self.exchanges: list[dict] = []
+        monkeypatch.setattr(oi.requests, "post", self._token_endpoint)
+        monkeypatch.setattr(
+            oi.PyJWKClient, "get_signing_key_from_jwt", lambda _self, token: types.SimpleNamespace(key=public_key),
+        )
+
+    def idp(self, **overrides) -> oi.IdpConfig:
+        values = dict(
+            issuer=self.ISSUER, client_id=self.CLIENT_ID, client_secret="builtin-secret",
+            authorization_endpoint="https://accounts.google.com/o/oauth2/v2/auth",
+            token_endpoint="https://oauth2.googleapis.com/token",
+            jwks_uri="https://www.googleapis.com/oauth2/v3/certs",
+            builtin=True, relay=True, admin_emails=("alice@acme.com",),
+        )
+        values.update(overrides)
+        return oi.IdpConfig(**values)
+
+    def sign_in(self, authorization_url: str, *, email: str = "alice@acme.com", hd: str = "acme.com",
+                nonce: str | None = None, sub: str = "alice-sub") -> dict[str, str]:
+        """The person signs in at Google; returns the query Google redirects with (through the
+        relay, unchanged). ``nonce`` overrides the one in the request, as a token minted for another
+        attempt would carry."""
+        import secrets as _secrets
+
+        query = dict(_up.parse_qsl(_up.urlsplit(authorization_url).query))
+        code = _secrets.token_urlsafe(16)
+        self.codes[code] = {
+            "challenge": query["code_challenge"], "redirect_uri": query["redirect_uri"],
+            "client_id": query["client_id"], "nonce": nonce if nonce is not None else query["nonce"],
+            "claims": {"sub": sub, "email": email, "email_verified": True, "hd": hd},
+        }
+        return {"code": code, "state": query["state"], "hd": hd}
+
+    def _token_endpoint(self, url, data, timeout):
+        import base64
+        import hashlib
+        import time as _time
+
+        import jwt
+
+        self.exchanges.append(dict(data))
+        entry = self.codes.pop(data["code"], None)  # single use, like Google's
+        verifier = data.get("code_verifier", "")
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        if (
+            entry is None or challenge != entry["challenge"] or data.get("redirect_uri") != entry["redirect_uri"]
+            or data.get("client_id") != entry["client_id"]
+        ):
+            return _TokenResponse(400, {"error": "invalid_grant"})
+        now = int(_time.time())
+        claims = {
+            **entry["claims"], "iss": self.ISSUER, "aud": self.CLIENT_ID, "iat": now, "exp": now + 300,
+            "nonce": entry["nonce"],
+        }
+        return _TokenResponse(200, {"id_token": jwt.encode(claims, self._key, algorithm="RS256")})
+
+
+def prove_relay(*domains: str) -> None:
+    """As if this server had registered with the relay, which found these sign-in domains in DNS."""
+    from privacyfence import relay_client
+
+    relay_client._persist_last_ok(1.0, list(domains))
+    relay_client.reset_for_tests()
+
+
+class TestLoginThroughTheRelay:
+    RELAY_URI = "https://oauth.privacyfence.eu/callback/idp-login"
+
+    def _app(self, google: FakeGoogle, **idp_overrides):
+        from privacyfence.org_identity import IdpAuthzPolicy
+
+        idp = google.idp(**idp_overrides)
+        sessions = org_session.OrgSessionStore()
+        routes = roi.build_routes(
+            idp=idp, sessions=sessions, base_url=BASE_URL, policy=IdpAuthzPolicy.bind(AuthzPolicyConfig(), idp),
+        )
+        return Starlette(routes=routes), sessions
+
+    def _callback(self, client, query: dict[str, str]):
+        # What the relay forwards: the same query, on this server's login callback.
+        return client.get(f"{roi.LOGIN_CALLBACK_PATH}?{_up.urlencode(query)}")
+
+    def test_the_starting_up_page_before_registration_and_google_after(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, _sessions = self._app(google)
+        client = _client(app)
+        r = client.get("/login")
+        assert r.status_code == 503 and "location" not in r.headers
+        assert roi.STARTING_UP_TEXT in r.text
+        assert r.text.count("Sign-in is starting up: this server is registering with the PrivacyFence relay. "
+                            "Try again in a minute.") == 1
+        assert roi.LOGIN_BINDING_COOKIE not in r.headers.get("set-cookie", "")
+        assert r.headers["cache-control"] == "no-store"
+        prove_relay("acme.com")
+        r = client.get("/login")
+        assert r.status_code == 302 and r.headers["location"].startswith("https://accounts.google.com/")
+
+    def test_the_waiting_for_dns_page_while_no_domain_is_proven(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, _sessions = self._app(google)
+        prove_relay()
+        r = _client(app).get("/login")
+        assert r.status_code == 503 and "location" not in r.headers
+        assert ("Sign-in is waiting for DNS: the administrator must publish the record shown in the server log."
+                in r.text)
+
+    def test_the_relay_redirect_uri_for_authorize_and_exchange_and_a_host_state(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, sessions = self._app(google)
+        prove_relay("acme.com")
+        client = _client(app)
+        url = client.get("/login").headers["location"]
+        query = dict(_up.parse_qsl(_up.urlsplit(url).query))
+        assert query["redirect_uri"] == self.RELAY_URI
+        host, _, nonce = query["state"].partition("~")
+        assert host == "pf.example.com" and len(nonce) == 43
+        cb = self._callback(client, google.sign_in(url))
+        assert cb.status_code == 302 and cb.headers["location"] == roi.DEFAULT_NEXT_PATH
+        assert google.exchanges[0]["redirect_uri"] == self.RELAY_URI
+        principal = sessions.get(cb.cookies[org_session.SESSION_COOKIE])
+        assert principal.is_admin is True
+
+    def test_a_code_from_another_attempt_fails_the_exchange(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, sessions = self._app(google)
+        prove_relay("acme.com")
+        client = _client(app)
+        first = client.get("/login").headers["location"]
+        second = client.get("/login").headers["location"]  # this browser's binding is now the second
+        code_for_first = google.sign_in(first)["code"]
+        state_second = dict(_up.parse_qsl(_up.urlsplit(second).query))["state"]
+        cb = self._callback(client, {"code": code_for_first, "state": state_second, "hd": "acme.com"})
+        assert cb.status_code == 400 and org_session.SESSION_COOKIE not in cb.cookies
+        # The server sent the second attempt's own verifier, which does not match the first's challenge.
+        assert len(google.exchanges) == 1
+
+    def test_an_id_token_with_another_attempts_nonce_is_refused(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, _sessions = self._app(google)
+        prove_relay("acme.com")
+        client = _client(app)
+        other = client.get("/login").headers["location"]
+        mine = client.get("/login").headers["location"]
+        other_nonce = dict(_up.parse_qsl(_up.urlsplit(other).query))["nonce"]
+        cb = self._callback(client, google.sign_in(mine, nonce=other_nonce))
+        assert cb.status_code == 400 and org_session.SESSION_COOKIE not in cb.cookies
+
+    def test_a_replayed_unknown_or_foreign_state_is_refused(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, _sessions = self._app(google)
+        prove_relay("acme.com")
+        client = _client(app)
+        url = client.get("/login").headers["location"]
+        query = google.sign_in(url)
+        assert self._callback(client, query).status_code == 302
+        assert self._callback(client, query).status_code == 400  # replayed
+        url = client.get("/login").headers["location"]
+        query = google.sign_in(url)
+        _host, _, nonce = query["state"].partition("~")
+        for state in (f"other.example.com~{nonce}", f"pf.example.com~{'x' * 43}", nonce):
+            assert self._callback(client, {**query, "state": state}).status_code == 400
+        assert len(google.exchanges) == 1
+
+    def test_an_admin_of_a_domain_not_proven_in_dns_is_refused(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, _sessions = self._app(google)
+        prove_relay("acme.org")
+        client = _client(app)
+        cb = self._callback(client, google.sign_in(client.get("/login").headers["location"]))
+        assert cb.status_code == 400 and org_session.SESSION_COOKIE not in cb.cookies
+
+    def test_a_cancelled_sign_in_shows_the_servers_own_page(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        app, _sessions = self._app(google)
+        prove_relay("acme.com")
+        client = _client(app)
+        state = dict(_up.parse_qsl(_up.urlsplit(client.get("/login").headers["location"]).query))["state"]
+        cb = self._callback(client, {"error": "access_denied", "state": state})
+        assert cb.status_code == 400 and google.exchanges == []
+
+
+class TestLoginWithoutTheRelay:
+    def test_an_own_idp_keeps_todays_redirect_uri_byte_for_byte_and_ignores_the_relay(self, monkeypatch):
+        google = FakeGoogle(monkeypatch)
+        idp = google.idp(builtin=False, relay=False, admin_emails=())
+        app = Starlette(routes=roi.build_routes(idp=idp, sessions=org_session.OrgSessionStore(), base_url=BASE_URL))
+        client = _client(app)
+        r = client.get("/login")  # never registered with the relay: no starting-up page
+        assert r.status_code == 302
+        query = dict(_up.parse_qsl(_up.urlsplit(r.headers["location"]).query))
+        assert query["redirect_uri"] == "https://pf.example.com/oauth/idp/login-callback"
+        assert "~" not in query["state"]
+        cb = client.get(f"{roi.LOGIN_CALLBACK_PATH}?{_up.urlencode(google.sign_in(r.headers['location']))}")
+        assert cb.status_code == 302
+        assert google.exchanges[0]["redirect_uri"] == "https://pf.example.com/oauth/idp/login-callback"

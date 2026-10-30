@@ -21,10 +21,11 @@
     <article class="prose">
       <p class="kicker">Legal</p>
       <h1>Privacy policy</h1>
-      <p class="updated">Last updated: 25 September 2026</p>
+      <p class="updated">Last updated: 30 October 2026</p>
       <p>
         This policy covers the website <strong>privacyfence.eu</strong> and the download service at
-        <strong>downloads.privacyfence.eu</strong>, and nothing else.
+        <strong>downloads.privacyfence.eu</strong> and the sign-in relay at
+        <strong>oauth.privacyfence.eu</strong>, and nothing else.
       </p>
 
       <h2 id="controller">Who is responsible, and for what</h2>
@@ -45,8 +46,10 @@
         We do not operate the PrivacyFence software for you and never receive the data it
         processes. You, or your organization, install and run it on your own computer or your own
         server. It sends nothing to the project: no emails, files, messages, approvals, audit
-        records, usage statistics or crash reports, because there is no PrivacyFence server to send
-        them to. Its only connections are to the AI assistant and the services you connect it to
+        records, usage statistics or crash reports. There is one exception: an organization server
+        that uses PrivacyFence's built-in apps registers its host name with the sign-in relay and
+        sends its sign-in redirects through it, and a single-user install on its own computer
+        sends them through it without registering, as described <a href="#relay">below</a>. Apart from that, its only connections are to the AI assistant and the services you connect it to
         (such as Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server,
         and in an organization deployment your identity provider), in an organization deployment
         with push notifications turned on to the browser vendor's push service (Apple, Google,
@@ -114,6 +117,64 @@
         count, so the counts cannot be linked to you. Cloudflare processes the request itself as
         described under hosting. Legal basis: legitimate interest in knowing how often the software
         is downloaded (Art. 6(1)(f) GDPR).
+      </p>
+
+      <h2 id="relay">Sign-in relay (oauth.privacyfence.eu)</h2>
+      <p>
+        PrivacyFence ships OAuth apps of its own for Google, Slack, Salesforce, Atlassian and Miro.
+        A provider sends the sign-in redirect only to a fixed address, so the redirect for these
+        apps goes to <strong>oauth.privacyfence.eu</strong>, a small service run on Cloudflare
+        (a Worker and a Durable Object). The relay forwards the redirect to the PrivacyFence server
+        that started the sign-in, and only to a server that proved in advance that it controls its
+        own host name; a single-user install on its own computer, which uses a local address, needs no
+        registration. It is used only by organization servers and single-user installs that use
+        the built-in apps. An organization's own apps never touch it, and desktop (local) installs
+        do not use it.
+      </p>
+      <ul>
+        <li>The redirect it forwards carries a one-time authorization code and the server's host name. It never sees a token, mail or file content. The relay processes the IP address of the request in transit.</li>
+        <li>Servers using the built-in Google sign-in also send their sign-in redirects through the relay. The relay sees a one-time code and the signing-in account's Google Workspace domain (<code>hd</code>), checks it against the sign-in domains the server proved in DNS, and stores those domains with the server's registration.</li>
+        <li>It stores each registered server's host name, its registration and renewal dates and its proven sign-in domains. This list is visible only to the PrivacyFence maintainers.</li>
+        <li>To limit abuse it also keeps the requesting IP address next to each registration attempt for one hour, and a per-address count of new servers for the current day (UTC). Both are deleted automatically.</li>
+        <li>It writes no logs.</li>
+        <li>When a new server registers, or a server changes its sign-in domains, it emails the maintainers the host name, the IP address and the country of the request. The email is sent through PrivacyFence's Google Workspace mail, where Google is the processor, and is kept in that mailbox for up to 12 months.</li>
+      </ul>
+      <p>
+        Legal basis: legitimate interest in operating and securing the service (Art. 6(1)(f) GDPR).
+        Cloudflare is the processor, as for the download service. The terms for the relay are at
+        <a href="/relay-terms/">Relay terms</a>.
+      </p>
+
+      <h2 id="google-user-data">Google user data in the PrivacyFence app</h2>
+      <p>
+        This section covers the Google connectors of PrivacyFence's built-in Google app.
+      </p>
+      <h3>What it accesses</h3>
+      <p>
+        Gmail, Drive, Calendar, Contacts, Tasks and Apps Script, only after the person signs in and
+        consents. Each scope is used for what the connector pages describe.
+      </p>
+      <h3>Where it goes</h3>
+      <ul>
+        <li>Tokens and data stay on the person's computer or their organization's server, never on PrivacyFence's.</li>
+        <li>Content reaches the AI assistant the person connected only when they approve it on a card, or when a rule they set allows it, after the local personal-data check.</li>
+        <li>The sign-in relay sees a one-time sign-in code, never mail or file content.</li>
+      </ul>
+      <h3>What never happens</h3>
+      <p>
+        No ads, no sale of data, no human reading, and no use to train AI models by PrivacyFence.
+        What the AI assistant does with content it is given is governed by that assistant's own terms.
+      </p>
+      <h3>Revoking access</h3>
+      <p>
+        Disconnect Google on the <code>/connect</code> page of your PrivacyFence, or remove access at
+        <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+      </p>
+      <p>
+        PrivacyFence's use and transfer to any other app of information received from Google APIs
+        will adhere to the
+        <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+        including the Limited Use requirements.
       </p>
 
       <h2 id="analytics">Google Analytics (only with your consent)</h2>

@@ -10,10 +10,11 @@ due is in [`release-testing.md`](release-testing.md).
 
 ## Credential boundary
 
-Live connector credentials — the per-account OAuth token files, the Telegram session and the QA
-`org_config.json` — exist only as local files on a developer's own machine or on the
-project-controlled self-hosted runner labelled `privacyfence-test`. They are never stored as GitHub
-Actions secrets and never reach a GitHub-hosted runner or a `pull_request`-triggered workflow. Both
+Live connector credentials — the per-account OAuth token files and the Telegram session, and the
+optional QA `org_bundle.json` — exist only as local files on a developer's own machine or on the
+project-controlled self-hosted runner `runner.privacyfence.eu`, labelled `privacyfence-live`. They
+are never stored as GitHub Actions secrets and never reach a GitHub-hosted runner or a
+`pull_request`-triggered workflow. Both
 workflows that use them (`connector-live-check.yml`, `qa-record-fixture.yml`) trigger only on
 `schedule` or `workflow_dispatch`. The reasoning is in
 [ADR 0019](adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md).
@@ -21,8 +22,13 @@ workflows that use them (`connector-live-check.yml`, `qa-record-fixture.yml`) tr
 Telegram's `api_id`/`api_hash` are not a per-account credential: they are the one shared app
 identity every release build carries. `connector-live-check.yml` maps the repository secrets
 `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` to `PRIVACYFENCE_TELEGRAM_API_ID`/
-`PRIVACYFENCE_TELEGRAM_API_HASH`. The per-account Telegram session stays runner-local with the
-other credentials.
+`PRIVACYFENCE_TELEGRAM_API_HASH`. The per-account Telegram session stays on the runner host with the
+other tokens.
+
+The built-in OAuth apps' client IDs and secrets are different again: they identify the PrivacyFence
+application, not an account. Both workflows write them from the `PF_APP_*` repository secrets in the
+environment of one step, and delete the generated module in a last step that always runs (see
+[Organization mode and the `qa-live` principal](#organization-mode-and-the-qa-live-principal)).
 
 ## QA accounts and organization config
 
@@ -31,22 +37,22 @@ Use dedicated accounts that share nothing with a personal or production identity
 | Service | Account | Notes |
 |---|---|---|
 | Google | A dedicated Google Workspace account, ideally on its own domain | A consumer Gmail account covers every Google connector except `calendar_list_rooms`, which needs Workspace admin rights (see [Seed: Calendar](#seed-calendar)). |
-| Slack | A Slack Developer Program sandbox | Register the app inside the sandbox and never activate public distribution (see [`slack-setup.md`](slack-setup.md)). Sandboxes expire; check the expiry date whenever you rotate credentials and extend it from **Sandboxes → Extend**. |
+| Slack | A Slack Developer Program sandbox | Connect the built-in Slack app to the sandbox's workspace. Sandboxes expire; check the expiry date whenever you reconnect and extend it from **Sandboxes → Extend**. |
 | Atlassian | A free Jira + Confluence Cloud site | One OAuth app covers both products. |
-| Salesforce | A Developer Edition org | Use `--salesforce-login-url https://login.salesforce.com` when building the bundle. |
-| Grist | A getgrist.com account holding nothing real | The runner connects with that account's personal API key, in `credentials/grist_token.json` written by hand as `{"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "…"}` with mode 600. There is no bundle section. |
-| Miro | A free Miro account holding nothing real, with a Developer team and the QA app | The runner's `credentials/miro_token.json` was obtained by hand once with the form-body token exchange, is refreshed by the runner, and is rotated with `scripts/qa_authenticate_connectors.py --only miro`. The QA app's client id and secret are the `miro` section of the QA bundle. |
-| Peek | A QA account on a QA Peek server | Peek's own Docker image, `ghcr.io/privacyfence/peek:main`, runs on the self-hosted runner's host, bound to `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`. The recorder reaches it as `http://localhost:7700`, so no TLS is involved. The runner's token is in `credentials/peek_token.json`, written by hand as `{"base_url": "http://localhost:7700", "token": "…"}` with mode 600; take the token from `peek login --host http://localhost:7700` through an SSH tunnel. There is no bundle section. |
-| Telegram | Your own account | No dedicated account; `privacyfence-app --telegram-setup` signs in with a phone number and code. |
+| Salesforce | A Developer Edition org | Connect the built-in Salesforce app; the login host is `https://login.salesforce.com`. |
+| Grist | A getgrist.com account holding nothing real | Connected with that account's personal API key on the QA server's `/connect` page. The server address comes from `PRIVACYFENCE_GRIST_SERVER_URL`, set to `https://docs.getgrist.com` in the workflows. |
+| Miro | A free Miro account holding nothing real | Connect the built-in Miro app on `/connect`; the runner refreshes the token. |
+| Peek | A QA account on the QA Peek server | Peek's own Docker image, `ghcr.io/privacyfence/peek:main`, runs on the runner's host next to the QA server at `https://peek-qa.privacyfence.eu` (the workflows set `PRIVACYFENCE_PEEK_BASE_URL` to it). Connect it on `/connect` with the device sign-in, which opens in the maintainer's browser. |
+| Telegram | Your own account | No dedicated account; connect it on `/connect` with the phone number and code. |
 
-For each of Google, Slack, Atlassian and Salesforce, follow the "For IT admins" section of
+The runner uses the built-in OAuth apps, so there is no QA app to register. Every account is connected
+on the QA organization server in a browser (see [The QA server](#the-qa-server)). An organization's
+own app can still be tested: build a QA bundle for it as the "For IT admins" section of
 [`google-cloud-setup.md`](google-cloud-setup.md), [`slack-setup.md`](slack-setup.md),
-[`atlassian-setup.md`](atlassian-setup.md) and [`salesforce-setup.md`](salesforce-setup.md), and
-merge every client id/secret into one QA bundle with `scripts/build_org_bundle.py --merge` (for
-example `-o org_config.qa.json`). Keep it separate from any production bundle. It is installed as
-`org/org_config.json`, by `scripts/qa_authenticate_connectors.py --org-config` (see
-[Authenticating connectors](#authenticating-connectors)) or by **Install/Update Organization
-Config…** in PrivacyFence Settings.
+[`atlassian-setup.md`](atlassian-setup.md) or [`salesforce-setup.md`](salesforce-setup.md) describes
+(`scripts/build_org_bundle.py --merge`), and place it on the runner as the optional
+`~/privacyfence/org/org_bundle.json` (see [Persistent QA state](#persistent-qa-state)). Keep it
+separate from any production bundle.
 
 ## Seed data
 
@@ -148,11 +154,12 @@ carries `[QATEST]` and has text and a user id.
 calendar, whatever `calendar_id` is passed; exploratory runs that exercise them leave entries on
 primary, and neither has a delete tool.
 
-`calendar_list_rooms` returns the `rooms` list in `org_config.json` and makes no live call. To
+`calendar_list_rooms` returns the room list in `org/admin_config.json` and makes no live call. To
 cover it, you need Workspace admin rights: create a calendar resource (Admin console → Directory →
-Buildings and resources), then run `scripts/sync_room_directory.py` from a second Cloud project as
-described in [`google-cloud-setup.md`](google-cloud-setup.md)'s "Room directory sync" section, and
-reinstall the refreshed bundle. Without it the tool returns an empty list, not an error.
+Buildings and resources), then run `scripts/sync_room_directory.py --output rooms.json` from a second
+Cloud project as described in [`google-cloud-setup.md`](google-cloud-setup.md)'s "Room directory sync"
+section, and upload `rooms.json` on the Admin page's Features section. Without it the tool returns an
+empty list, not an error.
 
 | Optional rule | Predicate | Value | Operations |
 |---|---|---|---|
@@ -398,35 +405,25 @@ connector added to one without the other fails at import time.
 
 ## Authenticating connectors
 
-With the QA bundle installed, authenticate each connector against its QA account:
+On the runner, nobody runs a loopback sign-in or copies a token file: every account is connected in a
+browser on the QA server's `/connect` page, and `scripts/qa_runner_tokens.py` copies the tokens (see
+[Connecting the QA accounts](#connecting-the-qa-accounts)). Reconnecting an account there is how a
+token is minted again.
 
-```bash
-.venv/bin/python scripts/qa_authenticate_connectors.py --org-config org_config.qa.json
-```
-
-The script runs `privacyfence.daemon_main --config config/settings.yaml --<connector>-oauth` for
-Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Atlassian (one flow for Jira and
-Confluence) and Salesforce, in that order. Each step opens a browser tab for consent.
-
-| Option | Effect |
-|---|---|
-| `--org-config PATH` | Installs `PATH` as `org/org_config.json` first, backing up an existing file as `org_config.json.bak.<UTC timestamp>`. |
-| `--only NAME ...` | Runs only these groups (`google`, `slack`, `atlassian`, `salesforce`) or connectors (`gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `atlassian`, `salesforce`, `miro`). |
-| `--continue-on-error` | Runs every requested step instead of stopping at the first failure. |
-| `--config PATH` | Settings file passed through to the daemon. Default: `config/settings.yaml`. |
-
-Grist and Peek have no step here: their QA credentials are token files written by hand (see
-[QA accounts and organization config](#qa-accounts-and-organization-config)).
-
-Telegram is not included; run `privacyfence-app --telegram-setup` by hand (see
-[`telegram-setup.md`](telegram-setup.md)). Tokens are written to the git-ignored `credentials/`
-directory under the file names in `daemon_main.TOKEN_FILES` (`token.json` for Gmail,
-`<connector>_token.json` for the others, `atlassian_token.json` shared by Jira and Confluence,
-`telegram.session`).
+`scripts/qa_authenticate_connectors.py` and the per-connector `--<connector>-oauth` flags remain for
+local mode on a developer's own machine, where the recorder is run with the checkout's own
+`credentials/` folder. The runner does not use them, and they go away with local mode in 8.
+Telegram's local sign-in is `privacyfence-app --telegram-setup` (see
+[`telegram-setup.md`](telegram-setup.md)). The token files are named in `daemon_main.TOKEN_FILES`
+(`token.json` for Gmail, `<connector>_token.json` for the others, `atlassian_token.json` shared by
+Jira and Confluence, `telegram.session`).
 
 ## Running the recorder
 
-Always use the project venv; the recorder imports the same third-party clients as the daemon.
+Always use the project venv; the recorder imports the same third-party clients as the daemon. It
+runs in organization mode as the principal `qa-live`, so it reads its tokens from
+`users/qa-live/credentials/` of the checkout; on a developer's machine, copy a QA server's folder
+there with `scripts/qa_runner_tokens.py pull`, or connect the accounts to a local QA server.
 
 ```bash
 .venv/bin/python scripts/qa_fixture_recorder.py --check [connector ...]
@@ -460,56 +457,155 @@ removed.
 The committed fixtures are replayed through each client's parsers by the `TestLiveFixtureParsing`
 classes (see [`tests/fixtures/live/README.md`](../tests/fixtures/live/README.md)).
 
+## The QA server
+
+`https://runner.privacyfence.eu` runs the organization server built from the latest `main`. It
+exists so the maintainer can connect the QA accounts in a browser, which organization mode makes
+possible for every service, and so the built-in apps can be tested against a public server. The
+live checks copy the QA principal's tokens from its data directory.
+
+- **Deploy.** `.github/workflows/deploy-qa-server.yml` builds the organization image on a push to
+  `main` that touches the server, its container files or the workflow, and on a manual dispatch. The
+  `deploy` job runs on the live runner and runs exactly `sudo -n /usr/local/sbin/pf-qa-deploy`, a
+  root-owned script that takes no arguments; the `verify` job then checks the public address from the
+  internet. It shares the runner with the live checks, so a deploy never overlaps one. The host files
+  are in [`deploy/qa-runner/`](../deploy/qa-runner/README.md).
+- **`/mcp` is blocked.** The proxy answers 404 for `/mcp` and every MCP OAuth endpoint, and a
+  Cloudflare WAF rule blocks the same paths. No AI client can reach a public server that holds live QA
+  tokens, and nothing on the server builds the QA principal's connectors, so nothing there uses or
+  refreshes the tokens. The runner is their only user, which matters for Atlassian's rotating refresh
+  tokens and for Telegram, whose session must not be used from two places at once.
+- **Connecting accounts.** Sign in as `test@privacyfence.eu`, the server's only administrator, offer
+  every service on Admin → Services, then connect on `/connect`: Google (all six), Slack, Salesforce,
+  Atlassian and Miro through the relay with the built-in apps; Telegram with the phone number and code;
+  Grist with its API key; Peek with the device sign-in at `peek-qa.privacyfence.eu`. Reconnecting on
+  `/connect` re-mints a token. The server sets `PRIVACYFENCE_PREVIEW_SERVICES=*`, so a service whose
+  tools have not shipped is connectable here.
+- **How the runner gets the tokens.** `scripts/qa_runner_tokens.py pull` copies the QA principal's
+  `credentials/` from `/home/pfrunner/qa-org-data/users/<id>/` into the checkout before the recorder;
+  `push` writes back only the files the run changed, and skips one that was reconnected during the run.
+  Set the repository variable `PF_QA_PRINCIPAL_ID` to the principal's folder name when more than one
+  folder holds tokens; without it the script uses the single folder that does, and otherwise fails
+  and names the candidates.
+- **A new connector** is connected here first. See
+  [Adding a connector](coding-and-testing-guidelines.md#3-adding-a-connector).
+
 ## Self-hosted runner
+
+The runner also hosts [the QA server](#the-qa-server), where the QA accounts are connected.
 
 ### Runner requirements
 
-A dedicated Linux host or VM, not shared with other repositories or workloads:
+A dedicated Linux host, not shared with other repositories or workloads. It is set up by hand; the
+repository holds the workflows and the QA server's host files
+([`deploy/qa-runner/`](../deploy/qa-runner/README.md)), never a secret.
 
-- a GitHub Actions runner registered in the organization runner group `privacyfence-test` (not to
-  this repository) with the label `privacyfence-test`. The group allows public repositories but is set to
-  **Selected workflows**: only `connector-live-check.yml` and `qa-record-fixture.yml` as they stand
-  on `main`, so a pull request, a fork or any other branch's copy of a workflow can never be
-  scheduled on it. Fork pull requests from outside collaborators also require approval before any
-  workflow runs;
-- installed as a service in persistent (non-ephemeral) mode — an `--ephemeral` registration
-  deregisters itself after one job;
-- running as a dedicated unprivileged user whose home directory holds the persistent QA state;
+- **The host.** A Hetzner Cloud server named `runner.privacyfence.eu`: Ubuntu 24.04 LTS, x86-64, at
+  least 2 vCPU, 4 GB RAM and 40 GB disk, with unattended upgrades on.
+- **Cloudflare.** The name is a proxied (orange-cloud) record in the `privacyfence.eu` zone, with SSL
+  mode Full (strict) and a Cloudflare Origin CA certificate on the origin. Cloudflare's Bot Fight
+  Mode is off for the zone, or a WAF skip rule covers `/.well-known/privacyfence-relay` and
+  `/oauth/callback/*` on this host; otherwise the relay's proof fetch and the sign-in redirects are
+  challenged. A WAF custom rule also blocks `/mcp` and the MCP OAuth endpoints, in case the proxy
+  configuration is changed by mistake.
+- **Firewall.** A Hetzner Cloud Firewall admits inbound TCP 443 from Cloudflare's published ranges
+  (`https://www.cloudflare.com/ips-v4` and `-v6`) and nothing else: no 22, no 80. Outbound is open
+  (GitHub, the provider APIs and `oauth.privacyfence.eu`).
+- **Administration over Tailscale only.** The Cloudflare proxy does not carry SSH. cloud-init joins
+  the tailnet at first boot with a one-off, pre-approved auth key and runs `tailscale up --ssh`; the
+  tailnet ACL lets only the maintainer reach the host; OpenSSH is disabled
+  (`systemctl disable --now ssh`). Keep the auth key out of the repository and out of every doc. No
+  token is ever moved by hand.
+- **Users and Docker.** The runner service runs as `pfrunner` (uid and gid 10001, the image's
+  `privacyfence` user), which is not in the `docker` group, because that group is root-equivalent.
+  Its only sudo rule runs the QA server's no-argument deploy script. The QA server and Peek run as
+  containers of one compose project and share exactly one directory with `pfrunner`: the server's
+  data directory, `/home/pfrunner/qa-org-data` (mode 0700). The live checks need no Docker.
+- **The GitHub runner.** It is registered as `runner-privacyfence-eu` with the labels
+  `self-hosted,privacyfence-live`, in the organization runner group `privacyfence-live` (not to this
+  repository). The group allows public repositories but is set to **Selected workflows**:
+  `connector-live-check.yml`, `qa-record-fixture.yml` and `deploy-qa-server.yml`, as they stand on
+  `main`, so a pull request, a fork or any other branch's copy of a workflow can never be scheduled
+  on it. GitHub accepts only a workflow that exists on `main`, so add `deploy-qa-server.yml` once it
+  has merged. Fork pull requests from outside collaborators also require approval before any workflow
+  runs. It is installed as a service in persistent (non-ephemeral) mode, because an `--ephemeral`
+  registration deregisters itself after one job.
 - Python 3.11 or newer as `python3`, with a working `venv` module (on Debian/Ubuntu, the
-  `pythonX.Y-venv` package matching `python3 --version`);
-- the build prerequisites of PrivacyFence's dependencies;
-- outbound HTTPS to GitHub and the provider APIs (no inbound ports are needed);
-- the QA Peek container (`ghcr.io/privacyfence/peek:main`, bound to `127.0.0.1:7700`, with
-  `PEEK_BASE_URL=http://localhost:7700`) running on the same host;
-- OS updates enabled and key-only SSH.
+  `pythonX.Y-venv` package matching `python3 --version`), and the build prerequisites of
+  PrivacyFence's dependencies.
 
 If the repository restricts allowed actions, `peter-evans/create-pull-request` must be on the
 allowlist for the drift PR step, which runs in `connector-live-check.yml`'s `open-drift-pr` job on a
 GitHub-hosted runner, not on this host.
 
+### Organization mode and the `qa-live` principal
+
+The recorder runs in organization mode as the fixed principal `qa-live`, so it needs no change when
+local mode is removed, and it tests the apps most people use. `_qa_context()` enters that principal's
+scope once, before any connector is built, and every token path then resolves to
+`users/qa-live/credentials/` of the checkout, in the same file formats as before. `_qa_org_config()`
+builds the connector configuration the way an organization server does, offering every service:
+
+- the Google, Slack, Salesforce, Atlassian and Miro sections are the built-in apps, unless the
+  runner's optional bundle carries an organization's own app to test;
+- Peek's and Grist's addresses come from `PRIVACYFENCE_PEEK_BASE_URL`
+  (`https://peek-qa.privacyfence.eu`) and `PRIVACYFENCE_GRIST_SERVER_URL`
+  (`https://docs.getgrist.com`), set in both workflows.
+
+The built-in credentials are written for the run only. Both workflows have a "Write built-in app
+credentials" step that runs `scripts/builtin_apps.py write` with the ten connector `PF_APP_*`
+secrets (Google web, Slack, Salesforce, Atlassian relay and Miro, each an ID and a secret; not the
+Google sign-in client) in that step's environment and nowhere else. The last step of the job, which
+always runs, deletes `src/privacyfence/_builtin_apps.py`, because the runner is not ephemeral. Only
+the client ID and secret are used: refreshing a token needs no redirect.
+
+Local-mode loopback sign-in, and an organization's own app unless the optional bundle carries one,
+are no longer live-tested. Unit tests cover both.
+
+### Connecting the QA accounts
+
+All in a browser, on [the QA server](#the-qa-server): nobody copies an authorization URL, opens a
+tunnel or places a token file by hand.
+
+1. Sign in at `https://runner.privacyfence.eu` as `test@privacyfence.eu`, the server's only
+   administrator and the account whose tokens the runner uses.
+2. On Admin → Services, offer every service.
+3. On `/connect`, connect Google (all six), Slack, Salesforce, Atlassian and Miro through the relay
+   with the built-in apps; Telegram with the phone number and code; Grist with its API key; and Peek
+   with the device sign-in at `peek-qa.privacyfence.eu`.
+
+Before each run the workflows run `scripts/qa_runner_tokens.py pull --data-dir "$HOME/qa-org-data"`,
+which copies the QA principal's `credentials/` from the server's data directory to
+`users/qa-live/credentials/` of the checkout (files mode 0600) and records each file's hash. The
+principal's folder is the one named by the repository variable `PF_QA_PRINCIPAL_ID` when it is set;
+otherwise the single folder under `users/` that holds a token file, and with none or several the step
+fails and names the candidate ids. After the run, `push` writes back only the files the run changed,
+and skips one that was reconnected on the server meanwhile.
+
 ### Persistent QA state
 
-Both workflows copy the runner user's `~/privacyfence` into their fresh checkout at the start of
-every run, and fail with `##[error] … not found` if any of these is missing:
+The tokens are not kept in the home directory of `pfrunner`: the QA server's data directory holds
+them, and the copy steps above move them. What the runner user's `~/privacyfence` holds is the
+configuration the workflows copy into their fresh checkout at the start of every run:
 
 ```text
 ~/privacyfence/
-├── credentials/              # token files from "Authenticating connectors", plus telegram.session
 ├── org/
-│   └── org_config.json       # the QA bundle, under exactly this name
+│   └── org_bundle.json       # optional: an organization's own app to test
 └── tests/
     └── fixtures/
         └── qa_environment.yaml
 ```
 
-The copy lands at the same relative paths in the checkout, because a source checkout resolves
-`credentials/` and `org/` relative to the repository root. `~/privacyfence` is not a git clone and
-holds no code or venv. Keep it owned by the runner user and `chmod 600` the credential files.
+`qa_environment.yaml` is required (see [Seed data](#seed-data)); the run fails with
+`##[error] … not found` without it. `org/org_bundle.json` is copied only when present. Neither is a
+secret in the sense of a token, but keep `~/privacyfence` owned by the runner user, and a bundle's
+client secrets with it. `~/privacyfence` is not a git clone and holds no code or venv. No step
+writes `users/` by hand.
 
-At the end of every run, whatever its outcome, the workflow copies `credentials/` back into
-`~/privacyfence/credentials/`. Clients save a refreshed OAuth token in place, and Atlassian issues a
-new refresh token on every refresh, so without the copy-back the next run would use an
-already-spent token.
+At the end of every run, whatever its outcome, `qa_runner_tokens.py push` writes the refreshed tokens
+back. Clients save a refreshed OAuth token in place, and Atlassian issues a new refresh token on every
+refresh, so without the write-back the next run would use an already-spent token.
 
 ### Scheduled live check
 
@@ -518,15 +614,19 @@ already-spent token.
 
 1. checks out the repository (full history) and builds a fresh `.venv` from the hash-pinned lock
    (`pip install --require-hashes -r requirements/dev.lock.txt`, then `pip install --no-deps -e .`);
-2. copies the persistent QA state into the checkout;
-3. runs `--check` with `continue-on-error`, since drift is a finding, not a crash;
-4. if the check failed, runs `--record`;
-5. runs `--lifecycle`, which fails the job on any failure;
-6. if the check failed, the separate `open-drift-pr` job (on a GitHub-hosted runner) opens or updates a PR from `chore/connector-live-fixture-drift` that
+2. writes the built-in app credentials;
+3. copies the QA tokens and configuration into the checkout;
+4. runs `--check` with `continue-on-error`, since drift is a finding, not a crash;
+5. if the check failed, runs `--record`;
+6. runs `--lifecycle`, which fails the job on any failure;
+7. if the check failed, the separate `open-drift-pr` job (on a GitHub-hosted runner) opens or updates a PR from `chore/connector-live-fixture-drift` that
    contains only `tests/fixtures/live/**`, with the record report as its body;
-7. copies refreshed credentials back (always);
-8. uploads `/tmp/qa-*-report.md` as the `connector-live-check-report` artifact, kept for 90 days
-   (always).
+8. fetches `https://oauth.privacyfence.eu/health` with `continue-on-error` and reports `relay: up` or
+   `relay: down` in the job summary, which makes the run a weekly external check of the relay;
+9. writes the refreshed tokens back (always);
+10. uploads `/tmp/qa-*-report.md` as the `connector-live-check-report` artifact, kept for 90 days
+    (always);
+11. deletes the built-in app credentials (always, and last).
 
 The drift PR goes through the normal credential-free `tests.yml` gate and the fixture review
 above.
@@ -543,43 +643,58 @@ check never records because its `--check` does not fail. It:
   one that does not exist on `origin` as a branch, so no pull-request ref (fork code included) can
   reach the runner; the branch is passed through an environment variable, never interpolated into a
   script;
+- writes the built-in app credentials and copies the QA tokens and configuration in, as the live
+  check does;
 - fails unless the connector is registered in `CONNECTOR_CHECKS`;
 - runs `--record <connector>` without `continue-on-error`, so a refused recording fails the job;
-- copies refreshed credentials back, uploads the report as `qa-record-report-<connector>` and the
-  recorded `tests/fixtures/live/<connector>` as the `recorded-fixture` artifact;
+- writes the refreshed tokens back, uploads the report as `qa-record-report-<connector>` and the
+  recorded `tests/fixtures/live/<connector>` as the `recorded-fixture` artifact, then deletes the
+  built-in app credentials;
 - the `commit-fixture` job (`ubuntu-latest`, the only one with `contents: write`) checks out
   `branch`, restores that artifact, commits as `github-actions[bot]` and pushes, skipping when
   nothing changed.
 
 It shares the `connector-live-check` concurrency group with the live check (no cancellation), so
-the two never race on the credential store. A queued run is waiting for the other one. GitHub
+the two never race on the tokens. A queued run is waiting for the other one. GitHub
 offers `workflow_dispatch` only for workflows present on the default branch.
 
 ### Rotating credentials
 
 When a QA grant is revoked or expires, or on a regular rotation:
 
-1. re-authenticate the connector against its QA account
-   (`scripts/qa_authenticate_connectors.py --only <name>`, or `--telegram-setup`);
-2. replace the file under `~/privacyfence/credentials/`, keeping its ownership and permissions;
-3. revoke the old grant in the provider's console;
-4. dispatch `connector-live-check.yml` and review any drift PR it opens.
+1. reconnect the account on the QA server's `/connect` page, signed in as `test@privacyfence.eu`;
+2. revoke the old grant in the provider's console;
+3. dispatch `connector-live-check.yml` and review any drift PR it opens.
 
 Never add a QA credential as a GitHub Actions secret as a workaround.
+
+### Cutover and decommissioning
+
+The workflows move to the new label together, in one change: until it merges, the old runner keeps
+serving `main`'s workflows and the new one sits idle. After it merges:
+
+1. connect every QA account on the QA server (above). Until then the live check fails at its token
+   copy; the fix is to finish connecting, not to point the workflows back;
+2. dispatch `connector-live-check.yml` and `qa-record-fixture.yml` on `main` and confirm a green run;
+3. remove the old runner, its organization runner group (named after its old label) and its QA
+   state, and revoke the grants the old runner held, in each provider's console.
 
 ### Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
-| The run stays queued | The runner is offline, not registered to this repository, or missing the `self-hosted`/`privacyfence-test` labels; or the other QA workflow holds the concurrency group. |
+| The run stays queued | The runner is offline, not registered to this repository's organization, or missing the `self-hosted`/`privacyfence-live` labels; the workflow is not in the group's selected workflows; or the other QA workflow, or a QA server deploy, holds the runner. |
 | The runner disappears after one job | It was registered with `--ephemeral`. Re-register without it and reinstall the service. |
 | `python3 -m venv` fails with "ensurepip is not available" | Install the `pythonX.Y-venv` package for the runner's Python. |
-| `##[error] ~/privacyfence/… not found` | The service user or its home directory differs from the owner of `~/privacyfence`, or a file from [Persistent QA state](#persistent-qa-state) is missing. |
+| `##[error] ~/privacyfence/… not found` | The service user or its home directory differs from the owner of `~/privacyfence`, or `tests/fixtures/qa_environment.yaml` from [Persistent QA state](#persistent-qa-state) is missing. |
+| `qa_runner_tokens.py pull` names several candidate ids, or none | More than one `users/` folder holds tokens (set the repository variable `PF_QA_PRINCIPAL_ID` to the right folder name), or the QA accounts are not connected yet. |
 | `manifest not found` from the recorder | `qa_environment.yaml` was not copied in; see [Seed data](#seed-data). |
+| A connector reports no organization config | Its `PF_APP_*` secrets are missing, so the built-in app was not written; check the "Write built-in app credentials" step. For Peek or Grist, check the two address variables in the workflow. |
 | A result says the fetched object "does not carry [QATEST]" | The manifest id points at the wrong object, or the seed artifact was renamed. Repair the artifact or the id. |
-| `Telegram app credentials not available in this build.` | The `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` repository secrets are missing. An error naming `credentials/telegram.session` instead means the session file is missing from `~/privacyfence/credentials/`. |
-| Atlassian `401`/`403` while refreshing the token | Check that the copy-back step ran and that the runner user can write to `~/privacyfence/credentials/`. A spent Atlassian refresh token needs a fresh reconnect; a rerun will not fix it. A `403` from the token endpoint can also mean the client id/secret in `org_config.json` does not match the app at developer.atlassian.com. |
+| `Telegram app credentials not available in this build.` | The `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` repository secrets are missing. An error naming `telegram.session` instead means Telegram is not connected on the QA server. |
+| Atlassian `401`/`403` while refreshing the token | Check that the write-back step ran. A spent Atlassian refresh token needs a fresh reconnect on `/connect`; a rerun will not fix it. |
 | `--lifecycle` shows `n/a` under Cleanup for Confluence, Grist or Salesforce | Expected; see [Seed: Confluence](#seed-confluence). Grist and Salesforce have no delete either. |
+| The summary says `relay: down` | The relay at `oauth.privacyfence.eu` did not answer its health endpoint. See [`oauth-relay.md`](oauth-relay.md). It does not fail the job. |
 
 The runner holds real QA grants: patch it, watch its health, require review on changes to the two
 workflows above, and revoke every QA grant if the host is compromised.

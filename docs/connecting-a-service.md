@@ -4,41 +4,70 @@ A **connector** is PrivacyFence's link to one of your accounts: Gmail, Drive, Ca
 Tasks, Apps Script, Slack, Jira, Confluence, Salesforce, Grist, Miro, Peek or Telegram. Connecting
 one takes two steps, done by different people:
 
-1. **An administrator registers an app with the provider once** and packages its credentials into
-   an organization config bundle (`org_config.json`). Each provider has its own guide — see
-   [Provider guides](#provider-guides) below. Telegram and Peek need no registration.
+1. **An administrator offers the service on the Admin page**, once. In organization mode and the
+   Docker image, Google, Slack, Salesforce, Atlassian, Miro and Telegram come with built-in
+   PrivacyFence apps, so there is nothing to register and no bundle: a fresh Docker single-user
+   install offers all six already, and a multi-user server offers a service when an administrator
+   switches it on. An organization that wants its own app instead registers one with the provider
+   (see [Provider guides](#provider-guides)) and gives it to PrivacyFence as a signed connector
+   config on **Admin → Services** (organization server) or as a bundle section (desktop install).
 2. **Each user signs in once**, from PrivacyFence, with the provider's own sign-in page. Nobody
    copies or pastes a token.
 
-This page covers step 2, on a desktop install and on an organization server. Every connector
-except Telegram uses the same browser sign-in; Telegram asks for a phone number and a code
-instead.
+This page covers the Admin page's part and step 2, on a desktop install and on an organization
+server. Every connector except Telegram uses the same browser sign-in; Telegram asks for a phone
+number and a code instead.
+
+## The Admin page
+
+**Admin** is an item in the navigation. On an organization server it is for administrators; anyone
+else who opens it sees "Only administrators can open this page." On a desktop install it is for the
+install owner (the person who owns the install, who also opens Settings from the companion). Every
+sensitive change on it asks for a passkey, even when step-up is otherwise off.
+
+- **Services** lists every service with a switch to offer or stop offering it, the app it uses (your
+  organization's own, or the built-in PrivacyFence app through `oauth.privacyfence.eu`), a link to the
+  provider's setup guide and, per provider, what it needs: Salesforce's install link and login URL,
+  Slack's own-app button, Peek and Grist addresses and automatic accounts.
+- **Features** holds Jira Assets, the Grist and Peek server addresses, unattended sessions, web push
+  and the room directory.
+- **Organization configuration** (desktop installs) installs the bundle.
+- An organization server's administrators also get File delivery, Sign-in, Step-up, Scoped tokens,
+  Audit forwarding, Privacy Filter and Stats.
+
+**Changing a service's app makes people reconnect.** Uploading a connector config, removing it
+(**Remove our own app**) or installing a bundle with different credentials means everyone who
+connected that service has to connect again; the Admin page says so next to the row.
+
+Settings is personal: it holds your own connections, rules and tokens, on a desktop install and for
+administrators on an organization server alike.
 
 ## Install the organization config bundle (desktop install)
 
-Your IT team gives you an `org_config.json` file. Install it once; it covers every provider in it.
+The bundle now carries only your organization's own app credentials. Your IT team gives you an
+`org_bundle.json` file (6.x called it `org_config.json`). Install it once; it covers every provider in it. Everything else it used to hold, such as which services are
+offered, is on the Admin page.
 
-1. Open **Settings** from the PrivacyFence menu-bar icon (macOS) or tray icon (Windows) — **Open
-   Settings** — or, on Linux, from the **Settings** action of the PrivacyFence launcher.
-2. On the **General** page, find the **Organization Configuration** card and click **Install
-   Organization Config…** (the button reads **Install/Update Organization Config…** once a bundle
-   is installed; the card shows **Installed** with a date, or **Not installed**).
-3. Choose the `org_config.json` file.
+1. Open PrivacyFence from the menu-bar icon (macOS) or tray icon (Windows) — **Open Settings** — or,
+   on Linux, from the **Settings** action of the PrivacyFence launcher, and choose **Admin** in the
+   navigation.
+2. Go to **Organization configuration** and click **Install configuration file…**.
+3. Choose the bundle file.
 
 What can stop the install:
 
 - **A page not opened from the companion.** On a privilege-separated install (see
-  [security-and-compliance.md](security-and-compliance.md)), only a Settings page opened through
-  the companion app can install a bundle. Reopen Settings from the menu-bar/tray icon or launcher.
-- **Passkey step-up.** Installing a bundle is a sensitive settings change; with step-up on (the
-  default) you confirm it with your passkey.
+  [security-and-compliance.md](security-and-compliance.md)), only a page opened through the
+  companion app can install a bundle. Reopen it from the menu-bar/tray icon or launcher.
+- **Passkey.** Installing a bundle always asks for your passkey.
 - **A new signing key.** The first signed bundle an install sees asks you to confirm that its
   signing key should be trusted. After that, only bundles signed with the same key are accepted.
 - **Size.** A bundle larger than 1,000,000 bytes is refused.
 
-You can authenticate connectors straight after installing it, without restarting PrivacyFence.
-On an organization server there is nothing for users to install: the administrator puts the bundle on the server (see
-[org-mode-setup-guide.md](org-mode-setup-guide.md)).
+You can authenticate connectors straight after installing it, without restarting PrivacyFence. A
+bundle that adds a provider's credentials later still needs that service switched on under **Admin →
+Services**. On an organization server there is nothing for users to install: an administrator
+uploads connector configs on the Admin page (see [org-mode-setup-guide.md](org-mode-setup-guide.md)).
 
 ## Connect on a desktop install
 
@@ -100,17 +129,17 @@ sign-in already in progress?"*
   number, then the code Telegram sends you, then your two-step verification password if your
   account has one. See [telegram-setup.md](telegram-setup.md).
 - **Peek** uses Peek's own device sign-in, so there is no OAuth app to register: PrivacyFence shows
-  a code, you approve it in Peek in your browser, then choose **Done**. Your organization pins the
-  Peek server in the bundle (`--peek-base-url`); without that you type the server's address, and
-  organization mode offers Peek only when it is pinned. A connector the organization config does not
-  enable is not listed in Settings. See [peek-setup.md](peek-setup.md).
+  a code, you approve it in Peek in your browser, then choose **Done**. The Peek server's address is
+  set on **Admin → Features** (or by `PRIVACYFENCE_PEEK_BASE_URL` on the server); where it is not set
+  you type the server's address, and organization mode offers Peek only when it is set. A service
+  that is not offered on the Admin page is not listed in Settings. See [peek-setup.md](peek-setup.md).
 
 ### Reconnect
 
 **Reconnect…** runs the same sign-in again and replaces the stored credentials. Use it when:
 
 - an administrator changed the app's scopes (existing tokens keep the scopes they were issued
-  with until you reconnect);
+  with until you reconnect) or switched the service to a different app;
 - you want a different account or, for Atlassian, a different site;
 - the provider rejects the stored credentials (for example, you removed PrivacyFence from your
   account on the provider's side).
@@ -138,7 +167,7 @@ applies:
 | **Connecting…** | A sign-in is in progress. The Authenticate link is disabled until it finishes or times out. | Finish the sign-in in the browser tab. |
 | **Connected** | The connector is signed in and loaded; its tools are available. | Nothing. |
 | **Disabled** | The connector is switched off. | Turn the switch on to use it. |
-| **Organization config missing** | The installed bundle has no section for this provider (Google, Slack, Salesforce, Atlassian or Miro), or no bundle is installed. | [Install the bundle](#install-the-organization-config-bundle-desktop-install), or ask your administrator to add the provider. Grist never shows this pill: a malformed Grist section shows a disabled Authenticate link with the error instead. |
+| **Organization config missing** | No app is available for this provider (Google, Slack, Salesforce, Atlassian or Miro): the installed bundle has no section for it, or no bundle is installed. A desktop install has no built-in apps. | [Install the bundle](#install-the-organization-config-bundle-desktop-install), or ask your administrator to add the provider. Grist never shows this pill: a malformed Grist section shows a disabled Authenticate link with the error instead. |
 | **App credentials missing** | Telegram only: this build of PrivacyFence carries no Telegram app credentials. | See [telegram-setup.md](telegram-setup.md). |
 | **Not connected** | The provider is configured but the connector is not loaded: you never signed in, the credentials expired or were revoked, or the connector failed its check when PrivacyFence built it. | Click **Authenticate…**. If it keeps failing, check the log (see [platform-support.md](platform-support.md)). |
 
@@ -149,13 +178,14 @@ reported as authenticated or not, with `no_org_config` (never configured), `not_
 ## Connect on an organization server
 
 On an organization deployment there is no Settings page for connectors. Each user connects their
-own accounts on the server's **Connections** page:
+own accounts on the server's **Connections** page (a service appears there once an administrator
+offers it on **Admin → Services**):
 
 1. Go to `https://<your-server>/connect`. If you are not signed in, you are sent to `/login` first
    to sign in with your organization's identity provider.
 2. Each service has one row:
-   - **Not set up by your organization** — the server's bundle has no section for it; there is
-     nothing to click.
+   - **Not set up by your organization** — the service is not offered on the Admin page, or no app
+     is available for it; there is nothing to click.
    - no badge and a **Connect** link — configured, not yet connected by you.
    - **Connected** and a **Reconnect** link — connected.
 3. Click **Connect**. Your browser goes to the provider's consent page and then back to
@@ -178,7 +208,8 @@ Differences from a desktop install:
 
 ## Provider guides
 
-Each guide covers registering the app, the values to enter, building the bundle and
+The built-in apps need none of these. Each guide is for an organization that wants its own app
+instead: it covers registering the app, the values to enter, the connector config or bundle, and
 provider-specific troubleshooting:
 
 | Connectors | Guide |

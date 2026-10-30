@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -40,7 +42,7 @@ def _make_state(**overrides):
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
             "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
-            "org_button_label": "Install/Update Organization Config…", "version": "3.1.1",
+            "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "standard",
             "step_up_available": True, "step_up_on": False, "step_up_has_passkey": False,
         },
@@ -260,7 +262,7 @@ class TestWelcomeBanner:
     def test_explains_what_privacyfence_does_and_the_setup_order(self):
         html = build_html(_make_state())
         assert "Welcome to PrivacyFence" in html
-        assert "organization config bundle" in html
+        assert "Admin page" in html
 
 
 class TestAutoAcceptTemplate:
@@ -567,7 +569,7 @@ class TestNotificationsCard:
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
             "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
-            "org_button_label": "x", "version": "3.1.1",
+            "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "detailed",
             "step_up_available": True, "step_up_on": False, "step_up_has_passkey": False,
         })
@@ -603,7 +605,7 @@ class TestStepUpCard:
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
             "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
-            "org_button_label": "x", "version": "3.1.1",
+            "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "standard",
             "step_up_available": True, "step_up_on": True, "step_up_has_passkey": True,
         })
@@ -623,10 +625,13 @@ class TestStepUpCard:
         for field in ("g.step_up_scope_floor", "g.step_up_scope"):
             assert field in fn
 
-    def test_pii_card_is_admin_only_in_org_mode(self):
+    def test_pii_card_is_local_mode_only(self):
+        # On an organization server the PII gate is an Admin section, not a Settings one.
         fn = self._general_fn(build_html(_make_state()))
-        guard = fn.index("CAPS.mode !== 'org' || CAPS.is_admin")
-        assert guard < fn.index("'PII Detection Gate'")
+        guard = fn.index("CAPS.mode !== 'org')")
+        assert guard < fn.index("piiGateCardHtml(g)")
+        assert "CAPS.is_admin" not in fn[guard:fn.index("piiGateCardHtml(g)")]
+        assert "'PII Detection Gate'" not in fn
 
 
 class TestAiClientSection:
@@ -980,18 +985,19 @@ class TestOrgCapabilities:
         html = build_html(state, mode="org", is_admin=True)
         assert _extract_initial_state(html) == state
 
-    def test_org_admin_sees_general_and_privacy(self):
+    def test_org_admin_sees_general_but_not_privacy(self):
+        # The install-wide Privacy Filter is an Admin section: an administrator's Settings is
+        # the same page as anyone else's.
         caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))
         assert caps["mode"] == "org"
         assert caps["is_admin"] is True
         assert caps["sections"]["general"] is True
-        assert caps["sections"]["privacy"] is True
+        assert caps["sections"]["privacy"] is False
         assert caps["sections"]["auto_accept"] is True
         assert caps["sections"]["about"] is True
 
     def test_org_non_admin_sees_general_but_not_privacy(self):
-        # General carries every principal's own passkey scope (ADR 0091);
-        # its install-wide PII card is drawn for an admin only (renderGeneral).
+        # General carries every principal's own passkey scope (ADR 0091).
         caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))
         assert caps["sections"]["general"] is True
         assert caps["sections"]["privacy"] is False
@@ -1016,9 +1022,9 @@ class TestOrgCapabilities:
         assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]
         assert "agents" not in self._extract_capabilities(build_html(_make_state(), mode="local"))["sections"]
 
-    def test_stats_page_is_org_admin_only(self):
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["stats"] is True
-        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["stats"] is False
+    def test_stats_is_not_a_settings_section_for_anyone(self):
+        for is_admin in (True, False):
+            assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=is_admin))["sections"]["stats"] is False
 
     def test_not_applicable_actions_match_org_settings_scope(self):
         from privacyfence.web.org_settings_scope import NOT_APPLICABLE_ACTIONS
@@ -1031,9 +1037,10 @@ class TestOrgCapabilities:
         # BESPOKE_ACTIONS) are also covered, open_repo deliberately excluded.
         assert {"install_org_config", "export_audit_log", "quit_app", "check_for_updates"} <= not_applicable
         assert "open_repo" not in not_applicable
+        # The install-wide privacy actions are the Admin dispatcher's now.
+        assert {"toggle_pii_detection", "toggle_pii_category", "set_default_policy", "set_category_policy"} <= not_applicable
         # Actions org mode genuinely keeps must never be marked inapplicable.
-        assert not {"add_policy_rule", "remove_policy_rule", "toggle_pii_detection",
-                    "toggle_pii_category", "set_default_policy", "set_category_policy"} & not_applicable
+        assert not {"add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs"} & not_applicable
 
     def test_nav_filters_hidden_sections(self):
         html_non_admin = build_html(_make_state(), mode="org", is_admin=False)
@@ -1072,3 +1079,826 @@ class TestPersonalTransferCard:
         html = build_html(_make_state(), personal_transfer=True)
         body = html.split("function renderAutoAccept", 1)[1]
         assert body.index("pf-page-subtitle") < body.index("CAPS.personalTransfer") < body.index("pf-aa-filterbar")
+
+
+# --------------------------------------------------------------------------- #
+# The Admin surface
+# --------------------------------------------------------------------------- #
+
+def _admin_caps(html: str) -> dict:
+    match = re.search(r"window\.__pfCapabilities = (\{.*?\});</script>", html, re.DOTALL)
+    assert match
+    return json.loads(match.group(1))
+
+
+def _row(key, label, *, offered=True, app_source="builtin", client_id="", relay=False, options=None):
+    return {
+        "key": key, "label": label, "offered": offered, "app_source": app_source, "client_id": client_id,
+        "relay": relay, "options": options or {},
+    }
+
+
+def _admin_state(*rows, **extra):
+    state = {
+        "services": list(rows), "rooms": {"count": 0, "synced_at": ""}, "unattended_sessions": {},
+        "restart_needed": [],
+    }
+    state.update(extra)
+    return state
+
+
+class TestAdminSurfaceCapabilities:
+    def test_the_settings_surface_names_itself_and_is_otherwise_unchanged(self):
+        for mode in ("local", "org"):
+            caps = _admin_caps(build_html(_make_state(), mode=mode, is_admin=True))
+            assert caps["surface"] == "settings"
+            assert "services" not in caps["sections"] and "org_config" not in caps["sections"]
+
+    def test_local_mode_gets_services_and_the_bundle_upload(self):
+        caps = _admin_caps(build_html(_admin_state(), surface="admin"))
+        assert (caps["surface"], caps["mode"]) == ("admin", "local")
+        assert caps["sections"] == {"services": True, "features": True, "org_config": True}
+
+    def test_local_mode_suppresses_the_org_only_admin_actions(self):
+        caps = _admin_caps(build_html(_admin_state(), surface="admin"))
+        suppressed = set(caps["not_applicable_actions"])
+        assert {"set_auto_provisioning", "set_web_push", "set_authz", "tighten_step_up"} <= suppressed
+        assert not suppressed & {"offer_service", "withdraw_service", "set_server_address", "clear_rooms"}
+
+    def test_an_org_admin_gets_every_section_and_nothing_is_suppressed(self):
+        caps = _admin_caps(build_html(_admin_state(), surface="admin", mode="org", is_admin=True))
+        assert caps["sections"] == dict.fromkeys(
+            ("services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"), True,
+        )
+        assert caps["not_applicable_actions"] == []
+
+    def test_an_org_non_admin_gets_no_section(self):
+        caps = _admin_caps(build_html(_admin_state(), surface="admin", mode="org", is_admin=False))
+        assert not any(caps["sections"].values())
+
+    def test_settings_only_inputs_do_not_reach_the_admin_surface(self):
+        html = build_html(
+            _admin_state(), surface="admin", ai_client={"mcp_url": "http://x"}, scoped_tokens={"a": 1},
+            personal_transfer=True,
+        )
+        caps = _admin_caps(html)
+        assert "ai_client" not in caps["sections"] and "personalTransfer" not in caps
+        assert "window.__pfAiClient" not in html.split("<script", 4)[0] and "__pfScopedTokens = " not in html
+
+    def test_initial_section_services_is_embedded(self):
+        html = build_html(_admin_state(), surface="admin", initial_section="services")
+        assert 'window.__pfInitialSection = "services";' in html
+
+    def test_render_branches_to_the_admin_renderer_first(self):
+        html = build_html(_admin_state(), surface="admin")
+        body = html.split("function render(state) {", 1)[1]
+        assert body.index("renderAdmin(state); return;") < body.index("renderNav(state)")
+        assert "function renderServices" in html
+        admin = html.split("function renderAdmin(state) {", 1)[1].split("function renderSection(state)", 1)[0]
+        assert "renderNav(" not in admin and "renderSection(" not in admin
+
+    def test_both_readiness_lines_are_in_the_script_and_escaped(self):
+        html = build_html(_admin_state(), surface="admin")
+        assert "Ready for PrivacyFence 8: yes." in html
+        assert "Ready for PrivacyFence 8: not yet. '" in html
+        assert "Fix them and restart; see the upgrade notes." in html
+        assert "problems.slice(0, 3)" in html
+        assert "esc(text)" in html
+
+    def test_the_admin_nav_keys_and_labels_are_in_order(self):
+        html = build_html(_admin_state(), surface="admin")
+        nav = html.split("var ADMIN_NAV_ITEMS = [", 1)[1].split("];", 1)[0]
+        pairs = re.findall(r"\['(\w+)', '([^']+)'\]", nav)
+        assert pairs == [
+            ("services", "Services"), ("features", "Features"), ("org_config", "Organization configuration"),
+            ("delivery", "File delivery"), ("access", "Sign-in"), ("step_up", "Step-up"),
+            ("tokens", "Scoped tokens"), ("audit", "Audit forwarding"), ("privacy", "Privacy Filter"),
+            ("stats", "Stats"),
+        ]
+
+
+_RENDER_HARNESS = r"""
+const vm = require('vm');
+const scripts = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const app = { innerHTML: '' };
+const document = {
+  getElementById: () => app, querySelector: () => null, querySelectorAll: () => [],
+  addEventListener: (name, fn) => { if (name === 'DOMContentLoaded') fn(); },
+  body: { addEventListener: () => {} }, activeElement: null,
+};
+const window = { addEventListener: () => {} };
+window.window = window;
+vm.runInNewContext(scripts.join('\n'), { window, document, console, Date, JSON, Object, Array, String, parseInt });
+console.log(app.innerHTML);
+"""
+
+
+def _render_admin(state, *, mode="local", is_admin=False, section="services"):
+    """The Admin page's markup as the browser would draw it: the page's own scripts run in node
+    against a stub document that keeps what the renderer writes."""
+    return _render(build_html(state, surface="admin", initial_section=section, mode=mode, is_admin=is_admin))
+
+
+def _render(html):
+    scripts = re.findall(r"<script nonce=\"[^\"]+\">(.*?)</script>", html, re.DOTALL)
+    done = subprocess.run(
+        ["node", "-e", _RENDER_HARNESS], input=json.dumps(scripts),
+        capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+
+
+@needs_node
+class TestServicesSection:
+    def test_the_page_says_whether_the_install_is_ready_for_the_next_release(self):
+        ready = _render_admin(_admin_state(upgrade_ready={"ready": True, "problems": []}))
+        assert "Ready for PrivacyFence 8: yes." in ready
+        problems = ["a <b>x</b>", "two", "three", "four"]
+        page = _render_admin(_admin_state(upgrade_ready={"ready": False, "problems": problems}))
+        assert "Ready for PrivacyFence 8: not yet. 4 problem(s): a &lt;b&gt;x&lt;/b&gt;; two; three." in page
+        assert "four" not in page and "<b>x" not in page
+        assert "Fix them and restart; see the upgrade notes." in page
+        assert "Ready for PrivacyFence 8" not in _render_admin(_admin_state())
+
+    def test_the_nav_shows_only_the_sections_the_capabilities_include(self):
+        local = _render_admin(_admin_state(_row("google", "Google")))
+        assert re.findall(r'aria-label="([^"]+)" data-nav', local) == ["Services", "Features", "Organization configuration"]
+        org = _render_admin(_admin_state(_row("google", "Google")), mode="org", is_admin=True)
+        assert re.findall(r'aria-label="([^"]+)" data-nav', org) == [
+            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Audit forwarding",
+            "Privacy Filter", "Stats",
+        ]
+        assert 'aria-selected="true"' in org
+
+    def test_a_bundle_app_names_its_client_and_warns_about_reconnecting(self):
+        page = _render_admin(_admin_state(_row("slack", "Slack", app_source="bundle", client_id="slack-id")))
+        assert "Uses your organization&#39;s own app (client slack-id), from the configuration file." in page \
+            or "Uses your organization's own app (client slack-id), from the configuration file." in page
+        assert "Changing the app makes everyone who connected Slack connect again." in page
+        assert "Sign-in codes for this service pass through" not in page
+
+    def test_a_connector_config_app_names_its_client_serial_date_and_key(self):
+        row = _row(
+            "slack", "Slack", app_source="connector", client_id="own-id",
+            options={"serial": 7, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": "SHA256:abc", "imported": False},
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert (
+            "Your organization&#39;s own app (client own-id), connector config serial 7, signed 2026-11-02 "
+            "with key SHA256:abc."
+        ) in page or (
+            "Your organization's own app (client own-id), connector config serial 7, signed 2026-11-02 with key SHA256:abc."
+        ) in page
+        assert "Changing the app makes everyone who connected Slack connect again." in page
+        assert "without PKCE" not in page
+
+    def test_the_builtin_slack_row_offers_the_workspaces_own_app(self):
+        import html as html_lib
+        from urllib.parse import parse_qs, urlparse
+
+        from privacyfence import oauth_apps
+
+        url = oauth_apps.slack_create_app_url("https://pf.example.org")
+        row = _row(
+            "slack", "Slack", client_id="b", relay=True,
+            options={
+                "slack_limited": True, "create_app_url": url,
+                "manifest": oauth_apps.slack_manifest("https://pf.example.org"),
+            },
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Slack limits channel history and thread reads for apps outside the Slack Marketplace." in html_lib.unescape(page)
+        assert "Create your workspace" in page and "own Slack app" in page
+        href = re.search(r'href="(https://api\.slack\.com/apps[^"]+)"', page).group(1)
+        manifest = json.loads(parse_qs(urlparse(html_lib.unescape(href)).query)["manifest_json"][0])
+        assert manifest == oauth_apps.slack_manifest("https://pf.example.org")
+        assert "Upload a connector config" in page
+
+    def test_the_builtin_salesforce_row_shows_the_install_link_and_the_login_url_form(self):
+        url = "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tABC"
+        row = _row("salesforce", "Salesforce", client_id="b", relay=True, options={"install_url": url, "login_url": "https://test.salesforce.com"})
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Each Salesforce org installs PrivacyFence once: send its Salesforce admin this link." in page
+        assert f'href="{url}"' in page and f'data-copy-text="{url}"' in page
+        assert 'aria-label="Copy the Salesforce install link"' in page
+        assert 'data-admin-sflogin="1"' in page and 'value="https://test.salesforce.com"' in page
+        assert 'data-admin-sflogin-save="1"' in page
+
+    @pytest.mark.parametrize(
+        ("app_source", "options"),
+        [
+            ("builtin", {}),
+            ("connector", {"install_url": "https://login.salesforce.com/packaging/installPackage.apexp?p0=04t"}),
+            ("builtin", {"install_url": "https://evil.example/installPackage.apexp"}),
+        ],
+    )
+    def test_the_salesforce_install_link_needs_the_builtin_app_with_a_salesforce_install_url(self, app_source, options):
+        row = _row("salesforce", "Salesforce", app_source=app_source, client_id="b", options=options)
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "installs PrivacyFence once" not in page and "data-copy-text" not in page
+        assert 'data-admin-sflogin="1"' in page
+
+    def test_a_withdrawn_salesforce_row_has_no_login_url_form(self):
+        row = _row("salesforce", "Salesforce", offered=False)
+        assert "data-admin-sflogin" not in _render_admin(_admin_state(row), mode="org", is_admin=True)
+
+    def test_a_listed_or_own_slack_app_shows_no_create_button(self):
+        row = _row("slack", "Slack", client_id="b", relay=True)
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "own Slack app" not in page and "Slack limits channel history" not in page
+
+    def test_an_imported_connector_config_says_where_it_came_from(self):
+        row = _row(
+            "slack", "Slack", app_source="connector", client_id="old-id",
+            options={"serial": None, "signed_at": "", "fingerprint": "", "imported": True},
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "(client old-id), imported from the organization configuration file." in page
+        assert "connector config serial" not in page
+
+    def test_an_organization_row_has_the_upload_control_and_the_tool_links(self):
+        keys = ["google", "slack", "salesforce", "atlassian", "miro", "grist"]
+        page = _render_admin(_admin_state(*[_row(k, k.title()) for k in keys]), mode="org", is_admin=True)
+        for key in keys:
+            assert f'aria-label="Upload a connector config for {key.title()}"' in page, key
+        assert page.count('data-action="upload_connector_config"') == len(keys)
+        assert page.count('href="https://privacyfence.eu/tools/connector-config/"') == len(keys)
+        assert page.count('href="https://privacyfence.eu/docs/org-mode-setup-guide/"') == len(keys)
+        assert "Remove our own app" not in page
+
+    def test_telegram_and_peek_have_no_connector_config_control(self):
+        page = _render_admin(
+            _admin_state(_row("telegram", "Telegram"), _row("peek", "Peek")), mode="org", is_admin=True,
+        )
+        assert "connector config" not in page.lower()
+
+    def test_a_desktop_install_has_no_connector_config_control(self):
+        page = _render_admin(_admin_state(_row("slack", "Slack", app_source="none")))
+        assert "upload_connector_config" not in page and "tools/connector-config" not in page
+        assert "Add your organization" in page and "to the configuration file." in page
+
+    def test_remove_our_own_app_posts_the_service_and_asks_first(self):
+        row = _row(
+            "miro", "Miro", app_source="connector", client_id="own",
+            options={"serial": 1, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": "SHA256:k", "imported": False},
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert 'aria-label="Remove our own app for Miro"' in page and ">Remove our own app</div>" in page
+        assert 'data-action="remove_connector_config"' in page
+        assert "{&quot;service&quot;:&quot;miro&quot;}" in page or '{"service":"miro"}' in page
+        assert "Remove our own app for Miro? Everyone who connected Miro has to connect again." in page
+
+    def test_an_organization_row_with_no_app_points_to_the_upload(self):
+        page = _render_admin(_admin_state(_row("miro", "Miro", app_source="none")), mode="org", is_admin=True)
+        assert "Upload a connector config for your organization&#39;s own app." in page \
+            or "Upload a connector config for your organization's own app." in page
+        assert "to the configuration file." not in page
+
+    def test_a_grist_connector_config_names_where_the_server_address_comes_from(self):
+        row = _row(
+            "grist", "Grist", app_source="connector", client_id="g",
+            options={
+                "serial": 1, "signed_at": "2026-11-02T10:00:00Z", "fingerprint": "SHA256:k", "imported": False,
+                "server_url": "https://grist.example", "address_source": "connector", "locked": True,
+            },
+        )
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Server: https://grist.example (from your organization" in page
+        assert "Grist connector config)." in page
+
+    def test_the_legacy_bundle_line_shows_only_when_the_state_carries_it(self):
+        line = "org/org_bundle.json is read only for its server and identity-provider settings until PrivacyFence 8."
+        with_line = _render_admin(
+            _admin_state(_row("slack", "Slack"), legacy_bundle_warning=line + " <b>x</b>"), mode="org", is_admin=True,
+        )
+        assert line in with_line and "&lt;b&gt;x&lt;/b&gt;" in with_line and "<b>x</b>" not in with_line
+        assert "identity-provider settings" not in _render_admin(
+            _admin_state(_row("slack", "Slack")), mode="org", is_admin=True,
+        )
+
+    def test_a_relayed_builtin_app_says_so(self):
+        page = _render_admin(
+            _admin_state(_row("atlassian", "Atlassian", relay=True)), mode="org", is_admin=True,
+        )
+        assert "Uses the built-in PrivacyFence app through oauth.privacyfence.eu." in page
+        assert "Changing the app makes everyone who connected Atlassian connect again." in page
+        assert "without PKCE" not in page
+
+    @pytest.mark.parametrize("key,label", [("slack", "Slack"), ("miro", "Miro")])
+    def test_relayed_slack_and_miro_warn_that_codes_pass_through_the_relay_without_pkce(self, key, label):
+        page = _render_admin(_admin_state(_row(key, label, relay=True)), mode="org", is_admin=True)
+        assert (
+            "Sign-in codes for this service pass through oauth.privacyfence.eu without PKCE. "
+            "Use your own app to avoid this."
+        ) in page
+
+    def test_an_own_app_for_slack_has_no_pkce_warning(self):
+        page = _render_admin(_admin_state(_row("slack", "Slack", app_source="bundle", client_id="x")), mode="org", is_admin=True)
+        assert "without PKCE" not in page
+
+    def test_an_offered_service_with_no_app_says_how_to_add_one(self):
+        page = _render_admin(_admin_state(_row("salesforce", "Salesforce", app_source="none")))
+        assert "No app is available for this service." in page
+        assert "Add your organization" in page and "to the configuration file." in page
+        assert "Changing the app makes everyone" not in page
+
+    def test_a_service_that_is_not_offered_says_so_and_offers_a_switch(self):
+        page = _render_admin(_admin_state(_row("google", "Google", offered=False, app_source="none")))
+        assert "Not offered." in page
+        assert "No app is available" not in page
+        assert '"offer_service"' in page.replace("&quot;", '"') or "data-action=\"offer_service\"" in page
+
+    def test_the_switch_posts_offer_or_withdraw_for_the_service(self):
+        off = _render_admin(_admin_state(_row("google", "Google", offered=False)))
+        on = _render_admin(_admin_state(_row("google", "Google", offered=True)))
+        assert 'data-action="offer_service"' in off and 'data-action="withdraw_service"' not in off
+        assert 'data-action="withdraw_service"' in on and 'data-action="offer_service"' not in on
+        assert "{&quot;service&quot;:&quot;google&quot;}" in on or '{"service":"google"}' in on
+
+    def test_each_row_links_to_its_provider_setup_doc(self):
+        keys = ["google", "slack", "salesforce", "atlassian", "miro", "telegram", "grist", "peek"]
+        page = _render_admin(_admin_state(*[_row(k, k.title()) for k in keys]))
+        for key, slug in zip(keys, [
+            "google-cloud-setup", "slack-setup", "salesforce-setup", "atlassian-setup", "miro-setup",
+            "telegram-setup", "grist-setup", "peek-setup",
+        ], strict=True):
+            assert f'href="https://privacyfence.eu/docs/{slug}/"' in page, key
+        assert page.count("How to use your own app") == len(keys)
+
+    def test_the_initial_section_is_services(self):
+        page = _render_admin(_admin_state(_row("google", "Google")))
+        assert '<h1 class="pf-page-title">Services</h1>' in page
+
+    def test_a_pending_restart_is_announced(self):
+        page = _render_admin(_admin_state(_row("google", "Google"), restart_needed=["Web push", "Step-up"]))
+        assert "Saved. Restart PrivacyFence for these changes to take effect: Web push, Step-up." in page
+        assert "Saved. Restart" not in _render_admin(_admin_state(_row("google", "Google")))
+
+    def test_the_controller_error_is_shown(self):
+        page = _render_admin(_admin_state(_row("google", "Google"), error="org_config.json carries settings ... are ignored"))
+        assert "are ignored" in page and "pf-error-banner" in page
+
+
+@needs_node
+class TestRelayStatusLine:
+    def _line(self, status):
+        page = _render_admin(_admin_state(_row("google", "Google"), relay_status=status), mode="org", is_admin=True)
+        match = re.search(r'<div class="pf-row-desc pf-relay-status">(.*?)</div>', page)
+        assert match, page
+        return match.group(1)
+
+    def test_registered(self):
+        line = self._line({"last_ok_at": 1_700_000_000, "last_error": "", "needed": True})
+        assert line.startswith("Relay registration: registered ") and "Relay terms" in line
+
+    def test_failed(self):
+        line = self._line({"last_ok_at": None, "last_error": "unreachable", "needed": True})
+        assert line.startswith(
+            "Relay registration failed: unreachable. Built-in apps cannot sign in until it succeeds."
+        )
+
+    def test_not_needed(self):
+        line = self._line({"last_ok_at": None, "last_error": "", "needed": False})
+        assert line.startswith("Relay registration: not needed.")
+
+    def test_every_variant_ends_with_the_relay_terms_link(self):
+        for status in (
+            {"last_ok_at": 1_700_000_000, "last_error": "", "needed": True},
+            {"last_ok_at": None, "last_error": "unreachable", "needed": True},
+            {"last_ok_at": None, "last_error": "", "needed": False},
+        ):
+            assert self._line(status).endswith(
+                '<a href="https://privacyfence.eu/relay-terms/" target="_blank" rel="noopener">Relay terms</a>'
+            )
+
+    def test_local_mode_has_no_relay_line(self):
+        assert "pf-relay-status" not in _render_admin(_admin_state(_row("google", "Google")))
+
+
+def _server_row(key, *, source, address="", locked=None, auto=None):
+    field = "base_url" if key == "peek" else "server_url"
+    options = {
+        field: address, "address_source": source, "locked": (source != "admin") if locked is None else locked,
+        "auto_provision": auto or {
+            "enabled": False, "trust_unverified_email": False, "available": True, "reason": "", "key_set": True,
+        },
+    }
+    return _row(key, key.title(), app_source="server", options=options)
+
+
+@needs_node
+class TestServerAndAutomaticAccounts:
+    def _org(self, *rows):
+        return _render_admin(_admin_state(*rows), mode="org", is_admin=True)
+
+    def test_a_server_from_the_environment_names_the_variable_and_has_no_address_form(self):
+        page = self._org(_server_row("peek", source="environment", address="https://peek.example.com"))
+        assert "Server: https://peek.example.com (set by PRIVACYFENCE_PEEK_BASE_URL on the server)." in page
+        assert "data-admin-address" not in page
+        page = self._org(_server_row("grist", source="environment", address="https://grist.example.com"))
+        assert "(set by PRIVACYFENCE_GRIST_SERVER_URL on the server)." in page
+
+    def test_no_server_in_org_mode_asks_for_one_and_shows_the_form(self):
+        page = self._org(_server_row("peek", source="admin"))
+        assert "Set the server address below." in page
+        assert 'data-admin-address="peek"' in page and 'data-admin-address-save="peek"' in page
+
+    def test_a_server_that_is_not_offered_has_no_server_line_or_form(self):
+        row = _server_row("peek", source="admin")
+        row["offered"] = False
+        page = self._org(row)
+        assert "Set the server address below." not in page and "data-admin-address" not in page
+        assert "Automatic accounts" not in page
+
+    def test_a_locked_imported_or_bundle_address_has_no_form(self):
+        page = self._org(_server_row("peek", source="imported", address="https://p.example.com"))
+        assert "Server: https://p.example.com" in page and "data-admin-address" not in page
+        page = self._org(_server_row("grist", source="bundle", address="https://g.example.com"))
+        assert "data-admin-address" not in page
+
+    def test_automatic_accounts_on_shows_the_switch_and_the_trust_checkbox(self):
+        auto = {"enabled": True, "trust_unverified_email": False, "available": True, "reason": "", "key_set": True}
+        page = self._org(_server_row("peek", source="environment", address="https://p.example.com", auto=auto))
+        assert "Automatic accounts: on. Each person who signs in gets a Peek account connected for them." in page
+        assert 'data-action="set_auto_provisioning"' in page
+        assert "Trust email addresses the identity provider does not mark verified" in page
+        assert "is not set on the server" not in page
+        grist = self._org(_server_row("grist", source="environment", address="https://g.example.com", auto=auto))
+        assert "gets a Grist key connected for them." in grist
+
+    def test_the_switch_and_the_checkbox_post_the_whole_section(self):
+        auto = {"enabled": True, "trust_unverified_email": False, "available": True, "reason": "", "key_set": True}
+        page = self._org(_server_row("peek", source="environment", address="https://p.example.com", auto=auto))
+        payloads = [p.replace("&quot;", '"') for p in re.findall(r"data-payload='([^']*)'", page)]
+        assert '{"service":"peek","enabled":false,"trust_unverified_email":false}' in payloads
+        assert '{"service":"peek","enabled":true,"trust_unverified_email":true}' in payloads
+
+    def test_automatic_accounts_on_without_the_key_says_which_variable_is_missing(self):
+        auto = {"enabled": True, "trust_unverified_email": True, "available": True, "reason": "", "key_set": False}
+        page = self._org(_server_row("peek", source="environment", address="https://p.example.com", auto=auto))
+        assert "Automatic accounts: on, but PRIVACYFENCE_PEEK_PROVISIONING_KEY is not set on the server." in page
+        grist = self._org(_server_row("grist", source="environment", address="https://g.example.com", auto=auto))
+        assert "PRIVACYFENCE_GRIST_PROVISIONING_KEY is not set on the server." in grist
+
+    def test_unavailable_automatic_accounts_show_the_reason_and_no_switch(self):
+        reason = (
+            "Automatic accounts need the Peek address from PRIVACYFENCE_PEEK_BASE_URL on the server, so the "
+            "provisioning key only goes where the server's operator points it."
+        )
+        auto = {"enabled": False, "trust_unverified_email": False, "available": False, "reason": reason, "key_set": False}
+        page = self._org(_server_row("peek", source="admin", address="https://p.example.com", auto=auto))
+        assert "Automatic accounts need the Peek address from PRIVACYFENCE_PEEK_BASE_URL" in page
+        assert 'data-action="set_auto_provisioning"' not in page
+        assert "Trust email addresses" not in page
+
+    def test_a_bundle_grist_oauth_app_shows_its_reason(self):
+        reason = "Automatic accounts work only with API keys; this server uses a Grist OAuth app."
+        auto = {"enabled": False, "trust_unverified_email": False, "available": False, "reason": reason, "key_set": False}
+        row = _server_row("grist", source="bundle", address="https://g.example.com", auto=auto)
+        row["client_id"] = "grist-client"
+        page = self._org(row)
+        assert "Automatic accounts work only with API keys; this server uses a Grist OAuth app." in page
+        assert "data-admin-address" not in page
+        assert "client grist-client" in page
+
+    def test_local_mode_has_the_address_form_but_no_automatic_accounts(self):
+        auto = {
+            "enabled": False, "trust_unverified_email": False, "available": False, "key_set": False,
+            "reason": "Automatic accounts are available only on an organization server.",
+        }
+        page = _render_admin(_admin_state(_server_row("peek", source="admin", auto=auto)))
+        assert 'data-admin-address="peek"' in page
+        assert "Automatic accounts" not in page
+        assert "Set the server address below." not in page
+
+
+def _features_state(**overrides):
+    state = _admin_state(
+        _row("atlassian", "Atlassian", options={"assets": True, "assets_workspace_id": "ws-1"}),
+        _row("grist", "Grist", app_source="server", options={"server_url": "https://grist.example.com", "locked": False}),
+        _row("peek", "Peek", app_source="server", options={"base_url": "https://peek.example.com", "locked": False}),
+        rooms={"count": 3, "synced_at": "2026-10-01T08:00:00Z"}, unattended_sessions={"enabled": True},
+    )
+    state.update(overrides)
+    return state
+
+
+@needs_node
+class TestFeaturesSection:
+    def _page(self, state=None, **kwargs):
+        return _render_admin(state or _features_state(), section="features", **kwargs)
+
+    def test_each_form_is_prefilled_from_the_state(self):
+        page = self._page()
+        assert 'data-admin-assets-enabled="1" checked' in page
+        assert 'value="ws-1" data-admin-assets-workspace="1"' in page
+        assert 'value="https://grist.example.com" data-admin-address="grist"' in page
+        assert 'value="https://peek.example.com" data-admin-address="peek"' in page
+        assert 'aria-checked="true"' in page and "set_unattended_sessions" in page
+
+    def test_the_unattended_switch_posts_the_opposite_value(self):
+        assert '"enabled":false' in self._page()
+        off = self._page(_features_state(unattended_sessions={"enabled": False}))
+        assert '"enabled":true' in off
+
+    def test_a_locked_server_has_no_form(self):
+        state = _features_state()
+        for row in state["services"]:
+            if row["key"] in ("grist", "peek"):
+                row["options"]["locked"] = True
+        page = self._page(state)
+        assert "data-admin-address" not in page
+        assert "cannot be changed here" in page
+        state = _features_state()
+        state["services"][1]["options"]["locked"] = True
+        page = self._page(state)
+        assert 'data-admin-address="grist"' not in page and 'data-admin-address="peek"' in page
+
+    def test_the_rooms_control_uploads_and_clears(self):
+        page = self._page()
+        assert "3 rooms, synced 2026-10-01T08:00:00Z." in page
+        assert 'data-action="upload_rooms"' in page
+        assert 'data-action="clear_rooms"' in page
+        empty = self._page(_features_state(rooms={"count": 0, "synced_at": ""}))
+        assert "No room directory uploaded." in empty
+        assert 'data-action="upload_rooms"' in empty and "clear_rooms" not in empty
+
+    def test_org_mode_shows_the_same_section(self):
+        page = self._page(mode="org", is_admin=True)
+        assert "data-admin-assets-save" in page and 'data-action="upload_rooms"' in page
+
+
+@needs_node
+class TestOrganizationConfigurationCard:
+    def test_the_admin_surface_has_the_card_with_the_new_description(self):
+        page = _render_admin(_admin_state(), section="org_config")
+        assert "Organization Configuration" in page
+        assert "Your own app credentials, and the server and identity-provider settings, from your IT administrator." in page
+        assert 'data-action="install_org_config"' in page
+
+    def test_the_error_banner_shows_when_the_state_has_one(self):
+        page = _render_admin(_admin_state(error="Settings in this file are ignored."), section="org_config")
+        assert "Settings in this file are ignored." in page
+
+    def test_the_local_settings_surface_no_longer_has_the_card(self):
+        page = _render(build_html(_make_state(), initial_section="general"))
+        assert "Check for Updates" in page
+        assert "Organization Configuration" not in page and "install_org_config" not in page
+
+
+_SENTINEL = "sk-SENTINEL-secret-value"
+
+
+def _org_state(**overrides):
+    state = _features_state(
+        restart_needed=[],
+        download_delivery={
+            "inline_max_bytes": 262144, "link_ttl_seconds": 900, "allow_disk_staging": True,
+            "agent_links": False, "allow_exports": True,
+        },
+        web_push={"enabled": True},
+        authz={"allowed_domains": ["example.com", "example.org"], "groups_claim": "groups", "required_groups": ["pf-users"]},
+        step_up={"enabled": True, "require_passkey": False, "scope": "writes_and_pii_reads"},
+        scoped_tokens={"enabled": True, "max_days": 30, "allow_ai_proposals": True},
+        audit_forwarding={
+            "enabled": True, "kind": "http", "syslog": {"host": "logs.example.com", "port": 6514, "protocol": "tcp"},
+            "http": {"url": "https://siem.example.com/in", "bearer_token_env": "SIEM_TOKEN"},
+        },
+        privacy={
+            "groups": [{"key": "privacy", "label": "Gmail"}],
+            "default_policy": {"privacy": "block"},
+            "categories": {"privacy": [{"key": "body", "label": "Message body", "policy": "redact"}]},
+            "pii_enabled": True, "pii_ip": True, "pii_financial": False,
+        },
+        stats={
+            "users": {"total": 4, "with_connectors": 3, "with_rules": 1},
+            "connectors": [{"service": "gmail", "label": "Gmail", "configured": True, "users": 3}],
+            "rules": {"total": 2, "by_connector": []},
+        },
+    )
+    state.update(overrides)
+    return state
+
+
+def _render_org(section, state=None):
+    return _render_admin(state or _org_state(), mode="org", is_admin=True, section=section)
+
+
+@needs_node
+class TestOrgAdminSections:
+    def test_the_org_admin_surface_has_all_of_the_org_sections(self):
+        caps = _admin_caps(build_html(_org_state(), surface="admin", mode="org", is_admin=True))
+        keys = [k for k, v in caps["sections"].items() if v]
+        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"]
+        page = _render_org("services")
+        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Audit forwarding", "Privacy Filter", "Stats"):
+            assert f'aria-label="{label}"' in page
+
+    def test_the_local_admin_surface_has_none_of_them(self):
+        caps = _admin_caps(build_html(_admin_state(), surface="admin"))
+        assert not {"delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"} & set(caps["sections"])
+
+    def test_the_delivery_form_is_prefilled(self):
+        page = _render_org("delivery")
+        assert 'data-f="inline_max_bytes" data-t="int" aria-label="Largest file sent inline (bytes)" value="262144"' in page
+        assert 'data-f="link_ttl_seconds" data-t="int" aria-label="Download link lifetime (seconds)" value="900"' in page
+        assert 'data-f="allow_disk_staging" data-t="bool" checked' in page
+        assert 'data-f="agent_links" data-t="bool" aria-label' in page
+        assert 'data-f="allow_exports" data-t="bool" checked' in page
+        assert 'data-admin-form-save="delivery"' in page
+
+    def test_the_sign_in_form_is_prefilled_with_one_item_per_line(self):
+        page = _render_org("access")
+        assert ">example.com\nexample.org</textarea>" in page
+        assert 'data-f="groups_claim" data-t="text" aria-label="Groups claim" value="groups"' in page
+        assert ">pf-users</textarea>" in page
+
+    def test_the_step_up_form_offers_nothing_looser_than_the_current_value(self):
+        page = _render_org("step_up")
+        options = re.findall(r'<option value="(\w+)"', page)
+        assert options == ["writes_and_pii_reads", "writes_and_reads"]
+        assert 'data-f="enabled" data-t="bool" checked disabled' in page
+        assert 'data-f="require_passkey" data-t="bool" aria-label' in page and "disabled" not in page.split('data-f="require_passkey"')[1].split(">")[0]
+        assert "Relaxing step-up is a file edit (ADR 0068)." in page
+
+    def test_the_widest_step_up_scope_offers_only_itself(self):
+        state = _org_state(step_up={"enabled": False, "require_passkey": False, "scope": "writes_and_reads"})
+        page = _render_org("step_up", state)
+        assert re.findall(r'<option value="(\w+)"', page) == ["writes_and_reads"]
+        assert 'data-f="enabled" data-t="bool" aria-label' in page
+
+    def test_the_scoped_tokens_form_carries_the_ai_proposals_checkbox(self):
+        page = _render_org("tokens")
+        assert "Let AI clients propose a scoped token for a person to review and create." in page
+        assert 'data-f="allow_ai_proposals" data-t="bool" checked' in page
+        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime (days)" value="30"' in page
+        assert "Needs scoped tokens turned on." not in page
+        off = _render_org("tokens", _org_state(scoped_tokens={"enabled": False, "max_days": 30, "allow_ai_proposals": False}))
+        assert "Needs scoped tokens turned on." in off
+
+    def test_the_audit_form_is_prefilled_and_the_bearer_token_name_has_no_input(self):
+        page = _render_org("audit")
+        assert '<option value="http" selected>' in page and '<option value="tcp" selected>' in page
+        assert 'data-f="syslog_host" data-t="text" aria-label="Syslog host" value="logs.example.com"' in page
+        assert 'data-f="syslog_port" data-t="int" aria-label="Syslog port" value="6514"' in page
+        assert 'data-f="http_url" data-t="text" aria-label="HTTP URL" value="https://siem.example.com/in"' in page
+        assert "SIEM_TOKEN" in page and "Set by editing org/admin_config.json on the server." in page
+        assert "bearer" not in page.split("data-f=")[-1].split(">")[0].lower()
+        assert not re.search(r'data-f="[^"]*bearer', page) and 'value="SIEM_TOKEN"' not in page
+
+    def test_privacy_has_the_pii_gate_toggles_and_the_policy_editor(self):
+        page = _render_org("privacy")
+        assert 'aria-label="PII Detection Gate"' in page and "toggle_pii_detection" in page
+        assert "toggle_pii_category" in page and "detect_financial_figures" in page
+        assert "set_default_policy" in page and "set_category_policy" in page
+
+    def test_stats_renders_in_the_admin_surface(self):
+        page = _render_org("stats")
+        assert "data-stat-tile" in page and 'data-stat-connector="gmail"' in page
+
+    def test_the_web_push_switch_is_on_features_in_org_mode_only(self):
+        assert "set_web_push" in _render_org("features")
+        assert "set_web_push" not in _render_admin(_features_state(), section="features")
+
+    def test_the_restart_banner_renders(self):
+        page = _render_org("delivery", _org_state(restart_needed=["File delivery", "Step-up"]))
+        assert "Saved. Restart PrivacyFence for these changes to take effect: File delivery, Step-up." in page
+        assert "Restart PrivacyFence" not in _render_org("delivery")
+
+    def test_no_rendered_html_contains_a_secret_placed_in_the_state(self):
+        state = _org_state()
+        state["audit_forwarding"]["http"]["bearer_token"] = _SENTINEL
+        state["audit_forwarding"]["bearer_token_value"] = _SENTINEL
+        state["step_up"]["secret"] = _SENTINEL
+        state["authz"]["client_secret"] = _SENTINEL
+        for section in ("delivery", "access", "step_up", "tokens", "audit", "privacy", "stats", "features", "services"):
+            assert _SENTINEL not in _render_org(section, state)
+
+
+_SAVE_HARNESS = r"""
+const vm = require('vm');
+const input = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const posted = [];
+const handlers = {};
+const field = (f, t, extra) => Object.assign({ getAttribute: (n) => ({ 'data-f': f, 'data-t': t })[n] }, extra);
+const root = { querySelectorAll: () => input.fields.map((x) => field(x[0], x[1], { value: x[2], checked: x[2] })) };
+const saveButton = { getAttribute: () => input.form };
+const document = {
+  getElementById: () => ({ innerHTML: '' }), querySelectorAll: () => [],
+  querySelector: (sel) => (sel === '[data-admin-form="' + input.form + '"]' ? root : null),
+  addEventListener: (name, fn) => { if (name === 'DOMContentLoaded') fn(); },
+  body: { addEventListener: (name, fn) => { handlers[name] = fn; } }, activeElement: null,
+};
+const window = { addEventListener: () => {}, webkit: { messageHandlers: { pf: { postMessage: (m) => posted.push(m) } } } };
+window.window = window;
+vm.runInNewContext(input.scripts.join('\n'), { window, document, console, Date, JSON, Object, Array, String, parseInt });
+handlers.click({ target: { closest: (sel) => (sel === '[data-admin-form-save]' ? saveButton : null) } });
+console.log(JSON.stringify(posted));
+"""
+
+
+@needs_node
+class TestAdminFormSave:
+    def _save(self, form, fields):
+        html = build_html(_org_state(), surface="admin", mode="org", is_admin=True, initial_section=form)
+        scripts = re.findall(r"<script nonce=\"[^\"]+\">(.*?)</script>", html, re.DOTALL)
+        done = subprocess.run(
+            ["node", "-e", _SAVE_HARNESS], input=json.dumps({"scripts": scripts, "form": form, "fields": fields}),
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)
+
+    def test_a_form_posts_its_whole_section_with_typed_values(self):
+        posted = self._save("tokens", [["enabled", "bool", True], ["max_days", "int", "45"], ["allow_ai_proposals", "bool", False]])
+        assert posted == [{"action": "set_scoped_tokens", "enabled": True, "max_days": 45, "allow_ai_proposals": False}]
+
+    def test_a_number_field_that_is_not_a_number_is_sent_as_typed(self):
+        posted = self._save("delivery", [["inline_max_bytes", "int", "lots"], ["allow_exports", "bool", True]])
+        assert posted == [{"action": "set_download_delivery", "inline_max_bytes": "lots", "allow_exports": True}]
+
+    def test_each_form_names_its_action(self):
+        actions = {
+            "delivery": "set_download_delivery", "access": "set_authz", "step_up": "tighten_step_up",
+            "tokens": "set_scoped_tokens", "audit": "set_audit_forwarding",
+        }
+        for form, action in actions.items():
+            assert self._save(form, [])[0]["action"] == action
+
+
+@needs_node
+def test_a_fresh_server_shows_the_defaults_in_force():
+    page = _render_org("delivery", _org_state(download_delivery={}))
+    assert 'value="100000"' in page and 'value="300"' in page and 'data-f="agent_links" data-t="bool" checked' in page
+    assert 'value="90"' in _render_org("tokens", _org_state(scoped_tokens={}))
+    assert 'value="6514"' in _render_org("audit", _org_state(audit_forwarding={}))
+
+
+_BUILTIN_SIGNIN_LINE = (
+    "Sign-in: PrivacyFence&#39;s built-in Google sign-in, through oauth.privacyfence.eu. Only the admins below "
+    "and people in the allowed domains can sign in."
+)
+
+
+@needs_node
+class TestBuiltinSignin:
+    def test_the_sign_in_line_and_the_admins_render_for_the_builtin_sign_in(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": ["alice@acme.com", "<b>@acme.com"]})
+        page = _render_org("access", state)
+        assert _BUILTIN_SIGNIN_LINE in page
+        assert "<div>alice@acme.com</div>" in page and "<div>&lt;b&gt;@acme.com</div>" in page
+        assert "Set by PRIVACYFENCE_ADMIN_EMAILS on the server." in page
+        assert "Empty allows only the admins." in page
+        assert "Empty allows every domain the identity provider vouches for." not in page
+        assert 'data-admin-form-save="access"' in page
+
+    def test_each_sign_in_domain_shows_its_state_and_links_the_guide_when_one_is_missing(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": ["a@acme.com"], "domains": [
+            {"domain": "acme.com", "state": "verified"}, {"domain": "<b>.example", "state": "missing"},
+        ]})
+        page = _render_org("access", state)
+        assert "Sign-in domains" in page
+        assert "<div>acme.com: verified</div>" in page and "<div>&lt;b&gt;.example: missing</div>" in page
+        assert "https://privacyfence.eu/docs/org-mode-setup-guide/#built-in-google-sign-in" in page
+        assert "_privacyfence-relay" not in page and "pf-relay=" not in page
+
+    def test_a_refused_domain_says_why_and_dns_is_not_the_fix(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": [], "domains": [
+            {"domain": "co.uk", "state": "refused"},
+        ]})
+        page = _render_org("access", state)
+        assert "<div>co.uk: refused</div>" in page
+        assert "public suffix or a shared mail domain" in page and "What to publish" not in page
+
+    def test_no_guide_link_when_every_domain_is_verified(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": [], "domains": [
+            {"domain": "acme.com", "state": "verified"},
+        ]})
+        page = _render_org("access", state)
+        assert "<div>acme.com: verified</div>" in page and "What to publish" not in page
+
+    def test_an_empty_domain_list_says_so(self):
+        page = _render_org("access", _org_state(signin={"builtin": True, "admin_emails": [], "domains": []}))
+        assert "No sign-in domain yet." in page
+
+    @pytest.mark.parametrize("signin", [None, {"builtin": False, "admin_emails": ["alice@acme.com"]}])
+    def test_no_sign_in_line_without_the_builtin_sign_in(self, signin):
+        state = _org_state() if signin is None else _org_state(signin=signin)
+        page = _render_org("access", state)
+        assert "built-in Google sign-in" not in page and "alice@acme.com" not in page
+        assert "Empty allows every domain the identity provider vouches for." in page
+
+
+@needs_node
+class TestProvisioningKeyVariableName:
+    def test_the_missing_key_line_names_the_row_s_variable(self):
+        auto = {"enabled": True, "trust_unverified_email": False, "available": True, "reason": "", "key_set": False}
+        row = _server_row("peek", source="environment", address="https://p.example.com", auto=auto)
+        row["options"]["key_env"] = "ACME_PEEK_KEY"
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Automatic accounts: on, but ACME_PEEK_KEY is not set on the server." in page
+        assert "PRIVACYFENCE_PEEK_PROVISIONING_KEY" not in page

@@ -1,7 +1,7 @@
 # Getting started
 
 PrivacyFence sits between your AI client and your business accounts (Google, Slack, Salesforce,
-Atlassian, Telegram) and asks you before anything sensitive happens. This page is the overview:
+Atlassian, Miro, Telegram and more) and asks you before anything sensitive happens. This page is the overview:
 what you need, which guide to follow, and what your first approval looks like.
 
 ## What you need
@@ -15,7 +15,8 @@ what you need, which guide to follow, and what your first approval looks like.
   Hello on Windows, a USB or NFC security key, or your phone (the browser shows a QR code). On
   Linux, where there is usually nothing built in, use a security key or your phone.
 - The accounts you want PrivacyFence to govern, and the organization configuration file your IT
-  administrator gave you, if any.
+  administrator gave you, if any. A desktop install needs one for Google, Slack, Salesforce,
+  Atlassian and Miro, because it has no built-in apps.
 
 ## Pick your platform
 
@@ -30,13 +31,26 @@ connect your AI client: [Claude Desktop](connect-claude-desktop.md),
 
 ## Local or organization deployment
 
+> **Desktop mode is deprecated.** The guides above install PrivacyFence in desktop (local) mode,
+> which is deprecated in PrivacyFence 7 and will be removed in PrivacyFence 8. Organization mode
+> and the Docker image are the way forward: see
+> [Moving to organization mode](moving-to-organization-mode.md).
+
 The guides above install PrivacyFence **locally**: it runs on your own computer and listens on
 `localhost` only, so a client on the same computer (Claude Desktop, Claude Code) can reach it and
 claude.ai cannot. For claude.ai, or to run PrivacyFence once for a whole team, deploy it in
-**organization mode** on a server: see [Organization deployment](org-mode-setup-guide.md). If your
-organization already runs it and gave you a URL such as `https://pf.example.com`, there is nothing
-to install: add `https://pf.example.com/mcp` to your client as an MCP server, sign in with your
-organization account when asked, and connect your services at `https://pf.example.com/connect`.
+**organization mode** on a server: see [Organization deployment](org-mode-setup-guide.md). To try
+organization mode on your own computer, run the Docker image in single-user mode
+([Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer)). If your organization already runs it
+and gave you a URL such as `https://pf.example.com`, there is nothing to install: add
+`https://pf.example.com/mcp` to your client as an MCP server, sign in with your organization account
+when asked, and connect your services at `https://pf.example.com/connect`.
+
+Organization mode and the Docker image offer Google, Slack, Salesforce, Atlassian, Miro and Telegram
+with PrivacyFence's built-in apps, so a fresh single-user install needs no bundle and no app
+registration. An administrator decides which services are offered on the **Admin** page (on a desktop
+install, the install owner does). A bundle or a signed connector config is only for an organization's
+own apps. See [Connecting a service](connecting-a-service.md#the-admin-page).
 
 ## Your first approval
 
@@ -45,9 +59,9 @@ organization account when asked, and connect your services at `https://pf.exampl
    until one is enrolled. Until then PrivacyFence approves nothing. Write down the one-time
    recovery code it shows: it is the only way back from a lost authenticator. The companion's
    **New Recovery Code…** issues a new one later but never shows the old one again.
-2. **Connect your services.** Open **Settings** from the companion, upload your organization
-   configuration if you have one, and sign in to the services you want on the **Connectors** page
-   ([Connecting a service](connecting-a-service.md)). Your AI client sees the new tools without
+2. **Connect your services.** Open **Settings** from the companion, install your organization
+   configuration if you have one (**Admin → Organization configuration**), and sign in to the
+   services you want on the **Connectors** page ([Connecting a service](connecting-a-service.md)). Your AI client sees the new tools without
    reconnecting. Moving to an organization server later? You can bring your always-allow rules with you:
    [Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
 3. **Ask your AI client for something**, such as "summarize my last email". If policy allows it,

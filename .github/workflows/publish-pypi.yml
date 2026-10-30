@@ -182,6 +182,25 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: python3 scripts/telegram_credentials.py write
 
+      # The built-in OAuth apps ship in the PyPI build too (ADR 0255): servers installed from PyPI
+      # sign in through the relay with them. The secrets go only to this step.
+      - name: Write built-in app credentials
+        env:
+          PF_APP_GOOGLE_WEB_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_ID }}
+          PF_APP_GOOGLE_WEB_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_SECRET }}
+          PF_APP_SLACK_CLIENT_ID: ${{ secrets.PF_APP_SLACK_CLIENT_ID }}
+          PF_APP_SLACK_CLIENT_SECRET: ${{ secrets.PF_APP_SLACK_CLIENT_SECRET }}
+          PF_APP_SALESFORCE_CLIENT_ID: ${{ secrets.PF_APP_SALESFORCE_CLIENT_ID }}
+          PF_APP_SALESFORCE_CLIENT_SECRET: ${{ secrets.PF_APP_SALESFORCE_CLIENT_SECRET }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_ID: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_ID }}
+          PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET }}
+          PF_APP_MIRO_CLIENT_ID: ${{ secrets.PF_APP_MIRO_CLIENT_ID }}
+          PF_APP_MIRO_CLIENT_SECRET: ${{ secrets.PF_APP_MIRO_CLIENT_SECRET }}
+          PF_APP_GOOGLE_SIGNIN_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_SIGNIN_CLIENT_ID }}
+          PF_APP_GOOGLE_SIGNIN_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_SIGNIN_CLIENT_SECRET }}
+          PF_APP_SALESFORCE_INSTALL_URL: ${{ vars.PF_APP_SALESFORCE_INSTALL_URL }}
+        run: python3 scripts/builtin_apps.py write
+
       - name: Build sdist and wheel
         run: |
           pip install --require-hashes -r requirements/release.lock.txt
@@ -234,6 +253,13 @@ jobs:
           REQUIRE=()
           if [[ "${{ steps.release.outputs.channel }}" == "stable" ]]; then REQUIRE=(--require); fi
           python3 scripts/telegram_credentials.py check-dist "${REQUIRE[@]}" dist/*.whl dist/*.tar.gz
+
+      # Same rule as build.yml's: every release tag requires the built-in apps.
+      - name: Check built-in app credentials are packaged
+        run: |
+          REQUIRE=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then REQUIRE=(--require); fi
+          python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl dist/*.tar.gz
 
   # Always published first -- rehearses the real upload (same files, same
   # metadata) against TestPyPI before anything reaches the real index.

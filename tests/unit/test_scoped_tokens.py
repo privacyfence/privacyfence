@@ -73,7 +73,7 @@ class TestCreateValidation:
             _create(_store(), policy=ScopedTokenPolicy(False, 90))
         assert str(err.value) == (
             "Scoped tokens are not enabled on this install. "
-            "Your administrator turns them on in the organization config bundle."
+            "Your administrator turns them on on the Admin page."
         )
 
     @pytest.mark.parametrize("label", ["", " x", "-x", "x" * 61, "a/b"])
@@ -1205,3 +1205,114 @@ class TestRuleRequests:
         token, _ = _create(_store(), rules=[_new()])
 
         assert len(token.rules) == 1
+
+
+class TestCanonicalizeVerbsInFile:
+    """``canonicalize_verbs_in_file``: retired verb names rewritten in place, nothing else touched."""
+
+    @staticmethod
+    def _row(row_id="r-1", verbs=("read", "copy", "archive", "move"), **extra):
+        return {
+            "id": row_id, "scope": "drive.folder", "value": ["V1"], "verbs": list(verbs),
+            "operations": ["drive.download_file", "drive.copy_file"], "former_ids": ["old-1"], **extra,
+        }
+
+    @staticmethod
+    def _write(path, tokens, **top):
+        path.write_text(json.dumps({"version": 2, **top, "tokens": tokens}), encoding="utf-8")
+
+    def test_rewrites_only_the_verbs_and_keeps_a_backup(self, tmp_path):
+        path = tmp_path / "scoped_tokens.json"
+        row = self._row(note="unknown key")
+        legacy = {"id": "st-old", "label": "old", "rule_ids": ["x"], "unknown": 1}
+        self._write(path, [{"id": "st-1", "label": "a", "extra": 5, "rules": [row]}, legacy], flavour="kept")
+        original = path.read_bytes()
+
+        changed, problems = scoped_tokens.canonicalize_verbs_in_file(path)
+
+        assert (changed, problems) == (True, [])
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["flavour"] == "kept" and data["tokens"][1] == legacy
+        (entry, _) = data["tokens"]
+        assert entry["extra"] == 5
+        assert entry["rules"] == [{**row, "verbs": ["move", "read"]}]
+        backup = tmp_path / "scoped_tokens.json.pre-canonical-verbs.bak"
+        assert backup.read_bytes() == original
+        if sys.platform != "win32":
+            assert backup.stat().st_mode & 0o777 == 0o600
+
+    def test_an_existing_backup_is_not_overwritten(self, tmp_path):
+        path = tmp_path / "scoped_tokens.json"
+        backup = tmp_path / "scoped_tokens.json.pre-canonical-verbs.bak"
+        backup.write_text("older")
+        self._write(path, [{"id": "st-1", "rules": [self._row()]}])
+
+        assert scoped_tokens.canonicalize_verbs_in_file(path)[0] is True
+
+        assert backup.read_text() == "older"
+
+    def test_a_canonical_file_is_not_rewritten_even_with_odd_ordering(self, tmp_path):
+        path = tmp_path / "scoped_tokens.json"
+        self._write(path, [{"id": "st-1", "rules": [self._row(verbs=("read", "move"))]}])
+        before = (path.read_bytes(), path.stat().st_mtime_ns)
+
+        assert scoped_tokens.canonicalize_verbs_in_file(path) == (False, [])
+
+        assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+        assert not (tmp_path / "scoped_tokens.json.pre-canonical-verbs.bak").exists()
+
+    def test_an_unreadable_row_is_a_problem_and_stays_as_it_is(self, tmp_path):
+        path = tmp_path / "scoped_tokens.json"
+        bad = {"id": "r-bad", "verbs": ["copy"]}
+        self._write(path, [{"id": "st-1", "rules": [bad, "text", self._row()]}, {"rules": [{"verbs": ["copy"]}]}])
+
+        changed, problems = scoped_tokens.canonicalize_verbs_in_file(path)
+
+        assert changed is True
+        assert problems == [
+            "scoped token st-1 rule r-bad could not be read",
+            "scoped token st-1 rule without an id could not be read",
+            "scoped token without an id rule without an id could not be read",
+        ]
+        rules = json.loads(path.read_text(encoding="utf-8"))["tokens"][0]["rules"]
+        assert rules[0] == bad and rules[1] == "text"
+
+    def test_only_unreadable_rows_means_no_write(self, tmp_path):
+        path = tmp_path / "scoped_tokens.json"
+        self._write(path, [{"id": "st-1", "rules": [{"id": "r-bad"}]}])
+        before = path.read_bytes()
+
+        assert scoped_tokens.canonicalize_verbs_in_file(path) == (
+            False, ["scoped token st-1 rule r-bad could not be read"],
+        )
+        assert path.read_bytes() == before
+
+    @pytest.mark.parametrize("content", ["not json", "[]", '{"tokens": 5}', '{"version": 2}'])
+    def test_an_unreadable_file_is_left_alone(self, tmp_path, content):
+        path = tmp_path / "scoped_tokens.json"
+        path.write_text(content)
+
+        assert scoped_tokens.canonicalize_verbs_in_file(path) == (False, [])
+        assert path.read_text() == content
+
+    def test_a_missing_file_gives_nothing(self, tmp_path):
+        assert scoped_tokens.canonicalize_verbs_in_file(tmp_path / "scoped_tokens.json") == (False, [])
+
+    def test_a_failed_write_is_a_problem(self, tmp_path, monkeypatch):
+        path = tmp_path / "scoped_tokens.json"
+        self._write(path, [{"id": "st-1", "rules": [self._row()]}])
+        before = path.read_bytes()
+
+        def fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(scoped_tokens.secure_files, "atomic_write_json", fail)
+
+        assert scoped_tokens.canonicalize_verbs_in_file(path) == (False, ["scoped_tokens.json could not be rewritten"])
+        assert path.read_bytes() == before
+
+    def test_renamed_verbs_ignores_lists_it_cannot_judge(self):
+        assert scoped_tokens.renamed_verbs("copy") is None
+        assert scoped_tokens.renamed_verbs(["copy", 3]) is None
+        assert scoped_tokens.renamed_verbs(["read", "move"]) is None
+        assert scoped_tokens.renamed_verbs(["share", "send", "read"]) == ["read", "send"]

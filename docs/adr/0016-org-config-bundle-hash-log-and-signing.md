@@ -10,6 +10,7 @@ landed together** in one commit, `04cb47db` (2026-09-07, "Phase 1.1(a+b)"), so t
 plan argued for never happened as a gap in time. What survives is the layering: the hash log was
 kept as an independent record next to signing, not treated as scaffolding.
 Amended by [0200](0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md): a signed bundle carries a serial and an older one is refused.
+Amended by [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md): the signature no longer covers operational settings. Amended by [0263](0263-the-6-to-7-upgrade-is-reversible.md): the bundle and pin file names. Amended by [0264](0264-an-organization-server-can-start-from-environment-variables.md): org mode no longer always needs a signed bundle. Amended by [0269](0269-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md): organization servers read no bundle; own apps are signed connector configs.
 
 ## Context
 

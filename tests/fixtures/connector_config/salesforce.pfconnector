@@ -1,0 +1,9 @@
+privacyfence-connector-config v1
+provider: salesforce
+serial: 2026110201
+consumer_key: 3MVG9fixtureConsumerKey
+consumer_secret: fixture-salesforce-secret-0002
+login_url: https://acme.my.salesforce.com
+signed_at: 2026-11-02T10:05:00Z
+key: xJbYgy4CzYPNVXpvpQeLvxtmTlJuuqlmmryfpLD9Cfc=
+signature: fPbRTeFgCS1ADmqF705J0ZJShJ3sp6FK4UuhNOaL3akb7k1QDRXHxdRafsnYwWgYAlVIYsKcy2bEiGKJ/NOaAQ==

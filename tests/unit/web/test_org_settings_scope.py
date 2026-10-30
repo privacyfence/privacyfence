@@ -18,7 +18,7 @@ import pytest
 
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.settings_controller import SettingsController
-from privacyfence.web.org_settings_scope import ACTION_SCOPES, LOCAL_MODE, ORG_MODE, is_action_permitted
+from privacyfence.web.org_settings_scope import ACTION_SCOPES, LOCAL_MODE, ORG_MODE, ActionScope, is_action_permitted
 from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, _ORG_ALLOWED_ACTIONS
 
 _ADMIN = Principal(id="alice", is_admin=True)
@@ -64,14 +64,26 @@ def test_every_local_action_actually_exists_on_the_controller():
         assert callable(getattr(SettingsController, action, None)), action
 
 
-@pytest.mark.parametrize("action", sorted(_ORG_ROUTED_ADMIN_ONLY_ACTIONS))
-def test_org_routed_admin_only_actions_are_permitted_for_an_admin(action):
-    assert is_action_permitted(action, _ADMIN, mode=ORG_MODE) is True
+def test_no_action_is_org_routed_and_admin_only():
+    # An organization's install-wide changes go through the Admin dispatcher (web/routes_admin.py),
+    # which has its own gate; the settings table holds only what every principal may do to their
+    # own settings in org mode.
+    assert _ORG_ROUTED_ADMIN_ONLY_ACTIONS == frozenset()
 
 
-@pytest.mark.parametrize("action", sorted(_ORG_ROUTED_ADMIN_ONLY_ACTIONS))
-def test_org_routed_admin_only_actions_are_denied_for_a_non_admin(action):
-    assert is_action_permitted(action, _NON_ADMIN, mode=ORG_MODE) is False
+def test_the_install_wide_privacy_actions_are_local_mode_only():
+    for action in ("toggle_pii_detection", "toggle_pii_category", "set_default_policy", "set_category_policy"):
+        assert ACTION_SCOPES[action].modes == frozenset({LOCAL_MODE}), action
+        assert ACTION_SCOPES[action].admin_only is True, action
+
+
+def test_an_org_routed_admin_only_action_would_need_an_admin(monkeypatch):
+    # Nothing is routed this way today; the gate stays so that a future one cannot skip it.
+    monkeypatch.setitem(
+        ACTION_SCOPES, "hypothetical_admin_action", ActionScope(modes=frozenset({ORG_MODE}), admin_only=True),
+    )
+    assert is_action_permitted("hypothetical_admin_action", _ADMIN, mode=ORG_MODE) is True
+    assert is_action_permitted("hypothetical_admin_action", _NON_ADMIN, mode=ORG_MODE) is False
 
 
 @pytest.mark.parametrize("action", sorted(_ORG_ROUTED_PER_PRINCIPAL_ACTIONS))
@@ -117,8 +129,8 @@ def test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_setting
     # action stays permitted for LOCAL_PRINCIPAL under LOCAL_MODE.
     assert LOCAL_PRINCIPAL.is_admin is False
     assert is_action_permitted(next(iter(_ORG_ROUTED_PER_PRINCIPAL_ACTIONS)), LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
-    # Picked from the admin-only actions that also have a local route.
-    admin_only_local = min(_ORG_ROUTED_ADMIN_ONLY_ACTIONS & _LOCAL_ROUTED_ACTIONS)
+    # Picked from the admin-only actions, which are all local-only now.
+    admin_only_local = min(a for a in _LOCAL_ONLY_ACTIONS if ACTION_SCOPES[a].admin_only)
     assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
     # ...but the same admin-only action, asked about ORG_MODE for a
     # principal who (like LOCAL_PRINCIPAL) isn't an admin, is still denied

@@ -17,9 +17,9 @@ or a `pull_request`-triggered workflow, and a cloud session is neither trusted n
 be an exception. Hence `qa-record-fixture.yml` and `connector-live-check.yml` in `ci.dispatchable`.
 
 - **`qa-record-fixture.yml` and `connector-live-check.yml` share a concurrency group**
-  (`group: connector-live-check`, `cancel-in-progress: false`). They copy the runner's single
-  persistent credential store into their checkout and copy refreshed tokens back out, so overlapping
-  runs could write a stale token over a fresh one. A queued run is correct behaviour, not a hang.
+  (`group: connector-live-check`, `cancel-in-progress: false`). They copy the QA principal's
+  tokens from the QA server's data directory into their checkout and write refreshed ones back, so
+  overlapping runs could write a stale token over a fresh one. A queued run is correct behaviour, not a hang.
 - **A recorded fixture is still a diff to read.** `docs/connector-qa.md` ("Reviewing recorded
   fixtures") says to review fixture diffs before committing them regardless of how they were produced:
   no real account identifier, tenant URL, token or private content may enter the repository.

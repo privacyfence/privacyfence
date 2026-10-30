@@ -6,8 +6,8 @@
 #
 #   - Organization-level app credentials (the Google OAuth client, Slack app,
 #     Telegram app, Salesforce Connected App, Atlassian OAuth app) are
-#     installed as one bundle via "Install/Update Organization Config…" in
-#     PrivacyFence Settings (the embedded web page, web.settings below). IT
+#     installed as one bundle via "Install configuration file…" under
+#     Admin → Organization configuration in PrivacyFence Settings (the embedded web page, web.settings below). IT
 #     admins build that bundle once with scripts/build_org_bundle.py and
 #     distribute it.
 #   - Per-user sign-in (browser OAuth, or Telegram's phone + code login) is
@@ -173,10 +173,8 @@ update_check:
 
 # Note: unattended_sessions.enabled (privacyfence_begin_unattended_session's
 # opt-in gate) is NOT set here. It's a deliberate per-organization choice,
-# not a per-user setting, so it lives in the organization config bundle
-# (org_config.json, installed via "Install/Update Organization Config…" in
-# PrivacyFence Settings) — see docs/how-it-works.md's "Unattended
-# sessions" section.
+# not a per-user setting, so an administrator sets it on the Admin page
+# (Features) — see docs/how-it-works.md's "Unattended sessions" section.
 
 # Auto-accept rules: requests PrivacyFence approves without showing you a
 # card. Managed from PrivacyFence Settings' "Auto-accept" page, the approval

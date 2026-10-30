@@ -25,20 +25,26 @@ from pathlib import Path
 import pytest
 
 from privacyfence import (
+    admin_config,
     agent_label,
+    app_credentials,
     approval_ui,
     auto_accept,
     audit_log,
+    connector_configs,
     daemon_main,
+    data_format,
     download_staging,
     gate,
     grist_auth,
     grist_provisioning,
     local_files,
+    org_mode,
     peek_provisioning,
     pii_detector,
     privacy_filter,
     privilege_separation,
+    relay_client,
     resource_names,
     scoped_token_proposals,
     scoped_tokens,
@@ -101,6 +107,7 @@ def _reset() -> None:
     web_approval_ui._INSTANCE = None
     download_staging._INSTANCE = None
     grist_auth._DISCOVERY_CACHE.clear()
+    org_mode._env_ignored_warned = False
     # The Grist provisioner is a process-wide singleton started by the org server.
     grist_provisioning._INSTANCE = None
     grist_provisioning._LOCKS.clear()
@@ -115,6 +122,7 @@ def _reset() -> None:
     local_files.configure_file_bridge()
     local_files.force_bridge_for_tests(False)
     settings_controller._main_dispatch = None
+    daemon_main._bundle_adopted_this_start = False
     state_stream._loop = None
     control_channel._mint_nonces.clear()
     # privilege_separation caches the parsed marker file for
@@ -154,6 +162,9 @@ def _reset() -> None:
     # are keyed by principal id and must not carry over.
     peek_provisioning._INSTANCE = None
     peek_provisioning._LOCKS.clear()
+    # The relay registration state is process-wide.
+    relay_client.reset_for_tests()
+    data_format.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)
@@ -161,6 +172,20 @@ def _reset_singletons():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _clear_server_environment(monkeypatch):
+    # These variables choose the mode and the listener; a developer's shell must never change what
+    # a test sees. The identity-provider variables are cleared by prefix so a new one is covered
+    # without touching this list.
+    for name in (
+        "PRIVACYFENCE_MODE", "PRIVACYFENCE_BIND_HOST", "PRIVACYFENCE_PORT",
+        "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES", "PRIVACYFENCE_ADMIN_EMAILS",
+        "PRIVACYFENCE_IDP", "PRIVACYFENCE_ALLOWED_DOMAINS", "PRIVACYFENCE_PREVIEW_SERVICES",
+        *(name for name in os.environ if name.startswith("PRIVACYFENCE_IDP_")),
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -173,6 +198,36 @@ def _isolate_whats_new_state(monkeypatch, request):
         whats_new, "state_path",
         lambda principal: request.getfixturevalue("tmp_path") / "whats_new_state" / principal.id / whats_new.STATE_FILENAME,
     )
+
+
+# Modules that test the real functions below patch paths.data_dir to tmp_path themselves, so the
+# real path functions run and count toward their coverage.
+_ADMIN_CONFIG_FIXTURE_EXEMPT = (
+    "test_app_credentials", "test_admin_config", "test_relay_client", "test_data_format", "test_connector_configs",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
+    # In a source checkout paths.data_dir() is the repository root, so a test that forgot to patch
+    # it would write org/admin_config.json into the checkout; and a developer with a generated
+    # _builtin_apps.py or PRIVACYFENCE_BUILTIN_APPS set would see unrelated tests change. Any test
+    # that needs built-in apps patches app_credentials.builtin_app itself.
+    if request.module.__name__.endswith(_ADMIN_CONFIG_FIXTURE_EXEMPT):
+        return
+    monkeypatch.setattr(
+        admin_config, "admin_config_path", lambda: request.getfixturevalue("tmp_path") / "admin_config.json"
+    )
+    monkeypatch.setattr(app_credentials, "builtin_app", lambda key: None)
+    monkeypatch.setattr(data_format, "marker_path", lambda: request.getfixturevalue("tmp_path") / "data_format.json")
+    monkeypatch.setattr(relay_client, "relay_token_path", lambda: request.getfixturevalue("tmp_path") / "relay_token.txt")
+    monkeypatch.setattr(
+        relay_client, "relay_status_path", lambda: request.getfixturevalue("tmp_path") / "relay_status.json"
+    )
+    # An org server started by a test must not leave a registration thread behind that outlives
+    # the test's patched paths and could reach the real relay.
+    monkeypatch.setattr(connector_configs, "default_org_dir", lambda: request.getfixturevalue("tmp_path"))
+    monkeypatch.setattr(relay_client, "start_registration_loop", lambda issuer_url, org_config, stop: None)
 
 
 # Stashes each phase's own outcome (setup/call/teardown) onto the test item

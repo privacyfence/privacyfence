@@ -28,7 +28,7 @@ separate ``Flow`` instances) and pass it back in on the second one.
 Google Cloud Console OAuth clients are typed at creation ("Desktop app" vs.
 "Web application"); only a "Web application" client can have an arbitrary
 HTTPS redirect URI registered against it. An org running ``mode: org``
-needs its ``org_config.json`` "google" section to hold a *Web application*
+needs its connector config's "google" section to hold a *Web application*
 OAuth client's credentials (registered with ``{issuer_url}/oauth/callback/
 <service>`` for each Google connector), separate from whatever "Desktop
 app" client an install might otherwise use for local mode's loopback flow
@@ -55,7 +55,7 @@ class GoogleOAuthError(Exception):
 
 
 def web_client_config(google_org: dict[str, Any]) -> dict[str, Any]:
-    """Wraps ``org_config.json``'s flat "google" section into the "web"
+    """Wraps the flat "google" section of an organization's connector config into the "web"
     client-config shape ``Flow.from_client_config`` requires (see module
     docstring). Returns ``{}`` if the required fields aren't present --
     same "connector skipped, not fatal" posture every other missing-config

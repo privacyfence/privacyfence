@@ -42,7 +42,7 @@ approvals to whoever holds any valid token. ``/approvals``/``/security``
 here are a separate, principal-aware route set (ADR 0033): every read and
 write is authorized against ``current_principal()`` via ``org_session``,
 and a *write* decision additionally demands a fresh WebAuthn step-up when
-``org_config.json``'s ``step_up.enabled`` is set --
+the admin config's ``step_up.enabled`` is set --
 web/routes_approvals.py's own module docstring covers both.
 
 **`/settings` in org mode** is, likewise, *not*
@@ -51,9 +51,9 @@ wholesale -- ``routes_settings.build_org_routes()`` mounts a
 capability-filtered subset instead,
 restricted to ``org_settings_scope.ACTION_SCOPES``'s own ``ORG_MODE``
 members: ``GET /settings``, every signed-in principal's own auto-accept
-rules, read-only except for adding or removing one; and ``GET
-/settings/privacy``, an admin-only (``Principal.is_admin``) view of the
-install-wide PII/privacy policy, editable through web/org_install_policy.py.
+rules, read-only except for adding or removing one. The install-wide PII/privacy
+policy (web/org_install_policy.py) is an administrator's, changed on the Admin page
+(web/routes_admin.py); ``GET /settings/privacy`` redirects there.
 That subset renders through the exact same settings_window_html.build_html()
 local mode's own settings page does (capability-filtered per
 mode/``is_admin``) and dispatches every write through the same generic
@@ -96,12 +96,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import (
-    __version__, agent_label, auto_accept, latency, paths, privilege_separation, scoped_token_proposals, scoped_tokens,
-    web_shell, webauthn_stepup,
+    __version__, agent_label, auto_accept, latency, paths, privilege_separation, relay_client,
+    scoped_token_proposals, scoped_tokens, web_shell, webauthn_stepup,
 )
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
-from ..org_identity import IdpConfig
+from ..org_identity import IdpAuthzPolicy, IdpConfig
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe
 from ..policy import scope_rows
@@ -692,6 +692,9 @@ class _SecurityHeadersMiddleware:
         await self._app(scope, receive, send_with_headers)
 
 
+_WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})  # nosec B104  # names to keep out of the allowlist, not an address bound
+
+
 @dataclass(frozen=True)
 class OrgAuth:
     """Everything build_app()/WebServer need to run org mode -- one
@@ -704,7 +707,8 @@ class OrgAuth:
 
     provider: OrgOAuthProvider
     sessions: OrgSessionStore
-    idp: IdpConfig
+    # None in single-user mode, where there is no identity provider to sign in through.
+    idp: IdpConfig | None
     issuer_url: str
     # Per-user service
     # authorization (Google/Slack/Salesforce/Atlassian/Telegram) and the
@@ -718,29 +722,33 @@ class OrgAuth:
     connector_registry: ConnectorRegistry | None = None
     org_config: dict = field(default_factory=dict)
     # The server's own install-wide settings.yaml (run_app()'s
-    # ``config``) -- routes_settings.build_org_routes()'s admin-only
-    # privacy-policy view reads this directly, and
+    # ``config``) -- routes_admin.build_org_routes()'s privacy section
+    # reads and rewrites this directly, and
     # daemon_main._start_org_web_server threads the
     # same dict into every org principal's own privacy-filter registration
     # (see _load_principal_settings()'s docstring). Defaults to {} for the
     # same "every existing OrgAuth() caller keeps working" reason
     # connector_registry/org_config already do.
     install_wide_settings: dict = field(default_factory=dict)
-    # Where that dict was loaded from, so the admin privacy page
-    # can write it back. Separate from the dict rather than derived from it
+    # Where that dict was loaded from, so the Admin page's privacy
+    # actions can write it back. Separate from the dict rather than derived from it
     # because nothing in a parsed settings.yaml records its own path.
-    # Empty means "read-only": routes_settings.build_org_routes() renders
-    # the policy without edit controls and rejects a hand-written write, which is
+    # Empty means "read-only": routes_admin.build_org_routes() shows
+    # the policy and rejects a write, which is
     # exactly what an OrgAuth built by a test that never had a real
     # settings.yaml on disk should do.
     install_wide_settings_path: str = ""
     # Org mode's web push (ADR 0081): the notifier daemon_main.py registered on the approval
     # registry, and the per-principal subscription store it reads. Both None when the org has
-    # turned push off (org_config.json's web_push.enabled: false) and in any test that does not
+    # turned push off (the admin config's web_push.enabled: false) and in any test that does not
     # care about push: the subscription routes are then not mounted and no page offers to
     # subscribe. The manifest is mounted either way.
     push_notifier: "PushNotifier | None" = None
     push_store: "PushSubscriptionStore | None" = None
+    # The raw signed bundle, and the admin config as loaded at startup. org_config above is
+    # composed from both; the Admin page recomputes it after a change and needs the inputs.
+    bundle: dict[str, Any] = field(default_factory=dict)
+    startup_admin: dict[str, Any] = field(default_factory=dict)
 
 
 def _local_principal_resolver(sessions: LocalSessionStore) -> Callable[[Request], Principal]:
@@ -1071,6 +1079,8 @@ def build_app(
     agent_overrides: AgentOverrides | None = None,
     mint_mcp_token: Callable[[bool], str] | None = None,
     mcp_url: str | None = None,
+    startup_admin: dict[str, Any] | None = None,
+    org_config: dict[str, Any] | None = None,
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -1212,6 +1222,14 @@ def build_app(
             require_human_session=require_human_session, ai_client=ai_client,
             scoped_tokens=build_scoped_token_wiring(mcp_dispatcher) if mcp_dispatcher is not None else None,
         )))
+        from . import routes_admin
+
+        extra_routes.extend(_owner_only_routes(routes_admin.build_routes(
+            controller=controller, sessions=sessions, step_up=step_up, step_up_origin=step_up_issuer_url,
+            require_human_session=require_human_session,
+            startup_admin=startup_admin if startup_admin is not None else {},
+            org_config=org_config if org_config is not None else {},
+        )))
 
     # The /security enrollment surface: mounted whenever step_up.rp_id is
     # set -- which, unlike org mode, local mode's own
@@ -1294,6 +1312,17 @@ def build_app(
     return _SecurityHeadersMiddleware(wrapped)
 
 
+async def _relay_well_known(request: Request) -> Response:
+    """The SHA-256 of the relay secret, which the sign-in relay fetches to check that this server
+    controls its host name. Public by design: only the secret, which the server sends to the relay
+    alone, can register the host. It is withheld until a service actually uses the relay, so
+    nobody else can register a server whose administrator never offered a built-in service."""
+    if not relay_client.status()["needed"]:
+        return PlainTextResponse("Not Found", status_code=404, headers={"Cache-Control": "no-store"})
+    proof = await asyncio.to_thread(relay_client.well_known_proof)
+    return PlainTextResponse(proof, headers={"Cache-Control": "no-store"})
+
+
 def _build_org_app(
     org: OrgAuth, *, web_ui: WebApprovalUI, mcp_dispatcher: McpDispatcher | None, allowed_hosts: frozenset[str],
     principal_resolver: Callable[[Request], Principal] | None, stopping: threading.Event | None = None,
@@ -1311,9 +1340,16 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig
-    from . import routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new
+    from . import (
+        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new,
+        single_user_auth,
+    )
     from .routes_settings import build_org_routes
 
+    if org.provider.single_user != (org.idp is None):
+        # The sign-in routes follow org.idp and the authorize path follows the provider; the two
+        # must agree on whether there is an identity provider.
+        raise ValueError("OrgAuth.idp and OrgOAuthProvider.single_user disagree about single-user mode")
     extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
@@ -1335,7 +1371,7 @@ def _build_org_app(
         # is reachable to mint a capability link in the first place.
         extra_routes.extend(mount_capability_routes())
 
-    extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url))
+    extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url, sessions=org.sessions))
     # Mounted unconditionally here (every _build_org_app call is already
     # org mode) -- needs nothing from org.connector_registry, only
     # org.sessions, same reasoning /approvals'/security's own unconditional
@@ -1349,23 +1385,32 @@ def _build_org_app(
     # that surface alone, with /connect and /oauth/start|callback left out
     # (see test_server_org_mode.py's TestConnectSurfaceOrgMode).
     default_next_path = routes_org_identity.DEFAULT_NEXT_PATH
+    extra_routes.append(Route("/.well-known/privacyfence-relay", _relay_well_known, methods=["GET"]))
     if org.connector_registry is not None:
         extra_routes.extend(routes_connect.build_routes(
             sessions=org.sessions, connector_registry=org.connector_registry,
             org_config=org.org_config, issuer_url=org.issuer_url,
         ))
         default_next_path = "/connect"
-    extra_routes.extend(routes_org_identity.build_routes(
-        idp=org.idp, sessions=org.sessions, base_url=org.issuer_url, default_next_path=default_next_path,
-        # Derived from org.org_config directly here, the same
-        # "self-contained, cheap re-parse" pattern StepUpConfig below
-        # already uses -- see that call's own comment.
-        policy=AuthzPolicyConfig.from_org_config(org.org_config),
-        push_store=org.push_store,
-    ))
-
     issuer_host = urlparse(org.issuer_url).hostname or ""
     step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)
+    if org.idp is not None:
+        extra_routes.extend(routes_org_identity.build_routes(
+            idp=org.idp, sessions=org.sessions, base_url=org.issuer_url, default_next_path=default_next_path,
+            # Derived from org.org_config directly here, the same
+            # "self-contained, cheap re-parse" pattern StepUpConfig above
+            # already uses -- see that call's own comment. Bound to the IdP like the OAuth
+            # provider's copy, so browser sign-in applies the same rules.
+            policy=IdpAuthzPolicy.bind(AuthzPolicyConfig.from_org_config(org.org_config), org.idp),
+            push_store=org.push_store,
+        ))
+    else:
+        # Single-user mode: a setup code, then the passkey /security enrolls, with the same
+        # relying-party ID and origin.
+        extra_routes.extend(single_user_auth.build_routes(
+            sessions=org.sessions, issuer_url=org.issuer_url, step_up=step_up,
+            default_next_path=default_next_path, push_store=org.push_store,
+        ))
     # One approval route module builds both modes' routes (ADR 0033) --
     # only the IdP step-up routes (no local-mode analogue at all) stay a
     # separate mount, see routes_org_stepup.py's own module docstring.
@@ -1379,9 +1424,11 @@ def _build_org_app(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
         push_public_key=push_public_key, stopping=stopping,
     ))
-    extra_routes.extend(routes_org_stepup.build_routes(
-        web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
-    ))
+    if org.idp is not None:
+        extra_routes.extend(routes_org_stepup.build_routes(
+            web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
+            policy=IdpAuthzPolicy.bind(AuthzPolicyConfig.from_org_config(org.org_config), org.idp),
+        ))
     if step_up.rp_id:
         extra_routes.extend(routes_security.build_routes(
             resolve_principal=lambda request: org_session.authenticated(request, org.sessions),
@@ -1416,7 +1463,6 @@ def _build_org_app(
     # -- see build_org_routes's own docstring.
     extra_routes.extend(build_org_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
-        install_wide_settings_path=org.install_wide_settings_path,
         # The same StepUpConfig/origin routes_approvals.build_routes
         # above already resolves from org.org_config -- see that call and
         # this function's own build_org_routes docstring.
@@ -1427,8 +1473,16 @@ def _build_org_app(
         # needs /mcp, so without a dispatcher the page offers none.
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
         scoped_token_page_data=org_scoped_token_page_data,
-        # The admin's Stats page (ADR 0217) lists the connectors this bundle offers.
-        org_config=org.org_config,
+    ))
+    # The Admin API shares the effective config dict, so a live change reaches every holder.
+    extra_routes.extend(routes_admin.build_org_routes(
+        sessions=org.sessions, step_up=step_up, step_up_origin=org.issuer_url,
+        connector_registry=org.connector_registry, org_config=org.org_config,
+        bundle=org.bundle, startup_admin=org.startup_admin,
+        # The privacy actions rewrite the server's settings.yaml; the Stats section (ADR 0217)
+        # lists the connectors org_config offers.
+        install_wide_settings=org.install_wide_settings,
+        install_wide_settings_path=org.install_wide_settings_path,
     ))
 
     lifespan = None
@@ -1470,6 +1524,8 @@ class WebServer:
         trusted_proxies: tuple[str, ...] = (),
         step_up: StepUpConfig | None = None,
         agent_overrides: AgentOverrides | None = None,
+        startup_admin: dict[str, Any] | None = None,
+        org_config: dict[str, Any] | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own -- every local-mode caller leaves them unset.
@@ -1491,6 +1547,11 @@ class WebServer:
         ``agent_overrides`` (local mode only) is ``settings.yaml``'s ``agent_overrides:`` section,
         parsed once by daemon_main.py (``agent_overrides.from_config``) -- a relabel only, never
         an attested source (see that module).
+
+        ``startup_admin`` and ``org_config`` (local mode) are the admin config as loaded at start
+        and the effective organization config dict the connector factories read: the Admin API
+        compares the first to find what waits for a restart, and refreshes the second in place
+        after a live change so every principal sees it.
         """
         self.host = host
         self.port = port
@@ -1616,7 +1677,9 @@ class WebServer:
         # as) -- _parse_host_header normalizes every incoming Host header
         # the same way urlsplit's own .hostname does below, brackets
         # stripped, so the allowlist has to speak that same bare form.
-        allowed_hosts = frozenset({host, "127.0.0.1", "::1"})
+        # A wildcard bind address is where the socket listens, never a name a client addresses it
+        # by, so it stays out of the allowlist.
+        allowed_hosts = frozenset({host, "127.0.0.1", "::1"}) - _WILDCARD_BIND_HOSTS
         if org is not None:
             issuer_host = urlsplit(org.issuer_url).hostname
             if issuer_host:
@@ -1650,6 +1713,8 @@ class WebServer:
             agent_overrides=agent_overrides,
             mint_mcp_token=self._mint_mcp_token if self.mcp_verifier is not None else None,
             mcp_url=f"http://{host}:{port}{MCP_PATH}" if self.mcp_verifier is not None else None,
+            startup_admin=startup_admin,
+            org_config=org_config,
         )
         if trusted_proxies:
             # Honored only when this explicit list is non-empty --

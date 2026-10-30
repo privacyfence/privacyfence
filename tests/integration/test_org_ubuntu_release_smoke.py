@@ -465,8 +465,9 @@ def _complete_browser_login(
     ``/oauth/idp/login-callback`` round trip and returns the resulting
     session cookie value. ``email`` defaults to ``f"{sub}@example.com"`` --
     overridable so TestAppLevelAuthzPolicy below can put a principal in (or
-    outside of) an allowed domain without changing their ``sub``."""
-    idp.enqueue_identity(sub=sub, email=email or f"{sub}@example.com", name=sub.title())
+    outside of) an allowed domain without changing their ``sub``. The address is reported as
+    verified, as a real IdP does, since the allowed-domain rule requires that."""
+    idp.enqueue_identity(sub=sub, email=email or f"{sub}@example.com", email_verified=True, name=sub.title())
     query = f"?next={next_path}" if next_path else ""
     to_idp = client.get(f"/login{query}")
     assert to_idp.status_code == 302, to_idp.text
@@ -512,7 +513,7 @@ def _mcp_bearer_token_for(client: LoopbackClient, idp: MockIdp, *, sub: str) -> 
     client_id = registration.json()["client_id"]
 
     verifier, challenge = oi.generate_pkce_pair()
-    idp.enqueue_identity(sub=sub, email=f"{sub}@example.com", name=sub.title())
+    idp.enqueue_identity(sub=sub, email=f"{sub}@example.com", email_verified=True, name=sub.title())
     to_idp = client.get("/authorize", params={
         "response_type": "code", "client_id": client_id, "redirect_uri": CLAUDE_REDIRECT_URI,
         "code_challenge": challenge, "code_challenge_method": "S256", "state": "mcp-token-state",
@@ -706,7 +707,7 @@ class TestRunningOrgModeService:
         from privacyfence import org_identity as oi
 
         verifier, challenge = oi.generate_pkce_pair()
-        self.idp.enqueue_identity(sub="carol", email="carol@example.com", name="Carol")
+        self.idp.enqueue_identity(sub="carol", email="carol@example.com", email_verified=True, name="Carol")
         to_idp = self.client.get("/authorize", params={
             "response_type": "code", "client_id": client_id, "redirect_uri": CLAUDE_REDIRECT_URI,
             "code_challenge": challenge, "code_challenge_method": "S256", "state": "claude-state",
@@ -917,7 +918,7 @@ class TestAppLevelAuthzPolicy:
         # the same generic 400 an IdP-side failure gets, with no session
         # cookie set -- indistinguishable from any other failed sign-in,
         # by design.
-        self.idp.enqueue_identity(sub="mallory", email="mallory@evil.example", name="Mallory")
+        self.idp.enqueue_identity(sub="mallory", email="mallory@evil.example", email_verified=True, name="Mallory")
         to_idp = self.client.get("/login")
         assert to_idp.status_code == 302, to_idp.text
         at_idp = requests.get(to_idp.headers["location"], allow_redirects=False, timeout=10)

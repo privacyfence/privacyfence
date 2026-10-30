@@ -117,8 +117,24 @@ _READ_STATE_MAX_MESSAGES = 20
 _READ_STATE_MAX_THREADS = 3
 
 
+_LIMITED_SWITCH = "an administrator can switch to your workspace's own app on the Admin page"
+_SEARCH_READ_NOTE = f"Read through Slack search, because Slack limits history reads for this app; {_LIMITED_SWITCH}."
+_THREAD_LIMIT = 15
+_THREAD_LIMIT_NOTE = (
+    f"Slack limits thread reads for this app to {_THREAD_LIMIT} replies; {_LIMITED_SWITCH}."
+)
+_SEARCH_DESCRIPTION_NOTE = (
+    " Slack limits history reads for this app, so this reads through Slack search: some message "
+    "subtypes are missing, a just-posted message can take a moment to appear, and a thread's "
+    "replies come back as top-level matches."
+)
+_THREAD_DESCRIPTION_NOTE = (
+    f" Slack limits thread reads for this app, so at most {_THREAD_LIMIT} replies are returned."
+)
+
+
 def _message_page_result(
-    filtered: list[dict[str, Any]], has_more: bool, next_cursor: str
+    filtered: list[dict[str, Any]], has_more: bool, next_cursor: str, extra_note: str = "",
 ) -> dict[str, Any]:
     """The value slack_get_channel_history/slack_get_thread_replies actually
     return to Claude for one page of messages -- {messages, has_more,
@@ -129,15 +145,20 @@ def _message_page_result(
     result: dict[str, Any] = {
         "messages": filtered, "has_more": has_more, "next_cursor": next_cursor,
     }
-    if has_more:
-        result["note"] = "More messages exist; call again with cursor=<next_cursor>."
+    notes = ["More messages exist; call again with cursor=<next_cursor>."] if has_more else []
+    if extra_note:
+        notes.insert(0, extra_note)
+    if notes:
+        result["note"] = " ".join(notes)
     return result
 
 
 class SlackConnector(Connector):
-    def __init__(self, client: SlackClient) -> None:
+    def __init__(self, client: SlackClient, *, limited: bool = False) -> None:
         self._slack = client
         self.my_email: str = ""
+        # Slack throttles history and thread reads for the built-in app until it is listed.
+        self._limited = limited
 
     @property
     def client(self) -> SlackClient:
@@ -148,6 +169,16 @@ class SlackConnector(Connector):
         return "slack"
 
     def tool_specs(self) -> list[ToolSpec]:
+        specs = self._base_tool_specs()
+        if self._limited:
+            for spec in specs:
+                if spec.name == "slack_get_channel_history":
+                    spec.description += _SEARCH_DESCRIPTION_NOTE
+                elif spec.name == "slack_get_thread_replies":
+                    spec.description += _THREAD_DESCRIPTION_NOTE
+        return specs
+
+    def _base_tool_specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(
                 name="slack_list_channels",
@@ -734,9 +765,20 @@ class SlackConnector(Connector):
             if minutes
             else None
         )
-        messages, has_more, next_cursor = await self._fetch(
-            self._slack.get_channel_history, channel_id, limit, cursor=cursor, oldest=oldest
-        )
+        history_note = ""
+        read = None
+        if self._limited:
+            read = await self._fetch(self._slack.search_channel_history, channel_id, limit, oldest, cursor)
+            history_note = (
+                _SEARCH_READ_NOTE if read is not None
+                else "Slack search could not be scoped to this conversation, so it was read through "
+                     "conversations.history, which Slack throttles for this app."
+            )
+        if read is None:
+            read = await self._fetch(
+                self._slack.get_channel_history, channel_id, limit, cursor=cursor, oldest=oldest
+            )
+        messages, has_more, next_cursor = read
         n = len(messages)
         # First, so the group-DM/self-DM/one-to-one checks below hit the caches
         # this one conversations.info call fills. Never cached itself: a rule
@@ -782,7 +824,7 @@ class SlackConnector(Connector):
             summary=f"{n} message{'s' if n != 1 else ''} from {channel_display}",
             sender=channel_id,
             raw_data=messages,
-            filtered_data=_message_page_result(filtered, has_more, next_cursor),
+            filtered_data=_message_page_result(filtered, has_more, next_cursor, history_note),
             gate="review",
             preview=preview,
             new_info=new_info,
@@ -809,8 +851,11 @@ class SlackConnector(Connector):
         self, channel_id: str, thread_ts: str, cursor: str = ""
     ) -> Any:
         messages, has_more, next_cursor = await self._fetch(
-            self._slack.get_thread_replies, channel_id, thread_ts, cursor=cursor
+            self._slack.get_thread_replies, channel_id, thread_ts, cursor=cursor,
+            **({"limit": _THREAD_LIMIT} if self._limited else {}),
         )
+        if self._limited and len(messages) > _THREAD_LIMIT:
+            messages, has_more = messages[:_THREAD_LIMIT], True
         n = len(messages)
         # First, so the group-DM/self-DM/one-to-one checks below hit the caches
         # this one conversations.info call fills. Never cached itself: a rule
@@ -856,7 +901,9 @@ class SlackConnector(Connector):
             summary=f"{n} repl{'ies' if n != 1 else 'y'} in {channel_display}",
             sender=channel_id,
             raw_data=messages,
-            filtered_data=_message_page_result(filtered, has_more, next_cursor),
+            filtered_data=_message_page_result(
+                filtered, has_more, next_cursor, _THREAD_LIMIT_NOTE if self._limited else ""
+            ),
             gate="review",
             preview=preview,
             new_info=new_info,
@@ -1053,11 +1100,12 @@ class SlackConnector(Connector):
     ) -> Any:
         channel_display = await self._channel_display(channel_id)
         preview = {"Channel": channel_display}
-        if thread_ts:
+        if thread_ts and not self._limited:
             # The thread's root message, not the raw timestamp id -- one
             # single-message conversations.history lookup (get_message),
             # not a full conversations.replies fetch of the whole thread
-            # just to read its first entry. Best-effort:
+            # just to read its first entry. Left out when Slack throttles that
+            # lookup for this app, so the card never waits on it. Best-effort:
             # falls back to the raw thread_ts if the message can't be
             # found, same as other lookups in this file.
             root_message = await self._fetch(self._slack.get_message, channel_id, thread_ts)

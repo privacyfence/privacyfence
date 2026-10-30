@@ -6,11 +6,17 @@ which don't), TLS/trusted-proxies plumbing, and base_url/allowed_hosts.
 """
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+
+import pytest
 from starlette.testclient import TestClient
 
 from privacyfence import org_identity as oi
+from privacyfence import relay_client
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
+from privacyfence.web import routes_org_identity
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.org_session import SESSION_COOKIE, OrgSessionStore
@@ -117,16 +123,25 @@ class TestBuildAppOrgMode:
         assert client.get("/api/state/stream").status_code == 404
 
     def test_readonly_settings_surface_is_mounted(self, tmp_path, monkeypatch):
-        # /settings and /settings/privacy are real routes -- a
-        # small, purpose-built surface (web/routes_settings.py's build_org_routes),
-        # not the local-mode dispatcher above. An unauthenticated request is
-        # redirected to /login, same as /approvals.
+        # /settings is a real route -- a small, purpose-built surface
+        # (web/routes_settings.py's build_org_routes), not the local-mode
+        # dispatcher above. An unauthenticated request is redirected to
+        # /login, same as /approvals. /settings/privacy only forwards to the
+        # Admin page, where the install-wide privacy policy lives.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
         client = TestClient(app, base_url=ISSUER, follow_redirects=False)
         r = client.get("/settings")
         assert r.status_code == 302
         assert r.headers["location"] == "/login?next=/settings"
+        client.cookies.set(SESSION_COOKIE, org.sessions.create(Principal(id="alice", email="alice@example.com")))
+        r = client.get("/settings/privacy")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/admin"
+        # The install-wide privacy actions are Admin actions; Settings no longer answers them.
+        assert client.post(
+            "/api/settings/toggle_pii_detection", json={"csrf": client.cookies.get(SESSION_COOKIE)},
+        ).status_code == 404
 
     def test_local_mode_approval_surface_is_not_what_gets_mounted(self, tmp_path, monkeypatch):
         # /approvals exists, but it's web/routes_approvals.py's
@@ -186,6 +201,28 @@ class TestConnectSurfaceOrgMode:
         # as that default once a connector registry is present (see
         # test_routes_org_identity.py::TestLogin for the equivalent
         # no-registry case, which keeps the "/approvals" default).
+
+
+class TestRelayWellKnown:
+    def _client(self, tmp_path, monkeypatch) -> TestClient:
+        org = _org_auth(tmp_path, monkeypatch)
+        app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
+        return TestClient(app, base_url=ISSUER, follow_redirects=False)
+
+    def test_serves_the_hash_of_the_secret_without_a_session_once_a_service_uses_the_relay(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(relay_client, "status", lambda: {"last_ok_at": None, "last_error": "", "needed": True})
+        r = self._client(tmp_path, monkeypatch).get("/.well-known/privacyfence-relay")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/plain")
+        assert r.headers["cache-control"] == "no-store"
+        assert r.text == hashlib.sha256(relay_client.relay_secret().encode()).hexdigest()
+        assert relay_client.relay_secret() not in r.text
+
+    def test_is_not_found_while_no_service_uses_the_relay(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/.well-known/privacyfence-relay")
+        assert r.status_code == 404
+        assert r.headers["cache-control"] == "no-store"
+        assert not (tmp_path / "relay_token.txt").exists()
 
 
 class TestApprovalsAndSecuritySurfaceOrgMode:
@@ -409,7 +446,20 @@ class TestWebServerOrgMode:
         org = _org_auth(tmp_path, monkeypatch)
         server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
         assert "pf.example.com" in server.allowed_hosts
-        assert {"0.0.0.0", "127.0.0.1", "::1"} <= server.allowed_hosts
+        assert {"127.0.0.1", "::1"} <= server.allowed_hosts
+
+    @pytest.mark.parametrize("bind_host", ["0.0.0.0", "::"])
+    def test_a_wildcard_bind_address_is_not_an_allowed_host(self, tmp_path, monkeypatch, bind_host):
+        org = _org_auth(tmp_path, monkeypatch)
+        server = WebServer(WebApprovalUI(), host=bind_host, port=443, org=org)
+        assert bind_host not in server.allowed_hosts
+
+    def test_a_request_addressed_to_the_wildcard_bind_address_is_refused(self, tmp_path, monkeypatch):
+        org = _org_auth(tmp_path, monkeypatch)
+        server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
+        client = TestClient(server._server.config.app, base_url=ISSUER)
+        r = client.get("/.well-known/oauth-authorization-server", headers={"Host": "0.0.0.0"})
+        assert r.status_code == 400
 
     def test_issuer_hostname_is_added_to_the_allowed_hosts(self, tmp_path, monkeypatch):
         # Bound to 0.0.0.0 (a real org deployment's own bind host), which
@@ -481,3 +531,174 @@ class TestWebServerOrgMode:
         }
         await config.loaded_app(scope, noop, noop)
         assert seen == {"scheme": "http", "client": ("127.0.0.1", 50000)}
+
+
+SINGLE_USER_ISSUER = "http://localhost:8765"
+
+
+def _single_user_org(tmp_path, monkeypatch) -> OrgAuth:
+    """A single-user server as daemon_main builds one: no IdP, and the admin config a fresh
+    single-user install starts with (step-up on, a passkey required, PII reads included)."""
+    from privacyfence import admin_config, oauth_apps, paths
+    from privacyfence.audit_log import init_audit_logger
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    init_audit_logger(str(tmp_path / "audit"))
+    monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
+    monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
+    admin = admin_config.import_from_bundle({}, mode="org", single_user=True)
+    org_config = oauth_apps.effective_org_config({}, admin, mode="org", single_user=True)
+    provider = OrgOAuthProvider(None, idp_callback_url="", single_user=True)
+    return OrgAuth(
+        provider=provider, sessions=OrgSessionStore(), idp=None, issuer_url=SINGLE_USER_ISSUER,
+        org_config=org_config, bundle={}, startup_admin=admin,
+    )
+
+
+def _single_user_app(org: OrgAuth, caplog, web_ui=None):
+    """The app, and the setup code it logged."""
+    import logging
+    import re
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="privacyfence.web.single_user_auth"):
+        app = build_app(web_ui or WebApprovalUI(), org=org, allowed_hosts=frozenset({"localhost"}))
+    code = re.search(r"Setup code: ([0-9A-F]{4}-[0-9A-F]{4})\.", caplog.text).group(1)
+    return app, code
+
+
+def _sign_in_with_the_setup_code(client: TestClient, code: str) -> str:
+    import re
+
+    page = client.get("/login")
+    binding = re.search(r'data-binding="([^"]+)"', page.text).group(1)
+    r = client.post("/login/setup", data={"code": code, "next": "/approvals", "binding": binding})
+    assert r.status_code == 303, r.text
+    return r.cookies[SESSION_COOKIE]
+
+
+class TestSingleUserMode:
+    def test_login_is_the_single_user_sign_in_page(self, tmp_path, monkeypatch, caplog):
+        app, _code = _single_user_app(_single_user_org(tmp_path, monkeypatch), caplog)
+        client = TestClient(app, base_url=SINGLE_USER_ISSUER, follow_redirects=False)
+        r = client.get("/login")
+        assert r.status_code == 200
+        assert "Setup code" in r.text
+
+    def test_there_is_no_idp_callback_and_there_is_a_continue_route(self, tmp_path, monkeypatch, caplog):
+        app, _code = _single_user_app(_single_user_org(tmp_path, monkeypatch), caplog)
+        client = TestClient(app, base_url=SINGLE_USER_ISSUER, follow_redirects=False)
+        assert client.get("/oauth/idp/callback", params={"state": "s", "code": "c"}).status_code == 404
+        assert client.get("/oauth/idp/login-callback", params={"state": "s", "code": "c"}).status_code == 404
+        r = client.get("/oauth/single-user/continue", params={"state": "s"})
+        assert r.status_code == 302 and r.headers["location"].startswith("/login?next=")
+
+    def test_the_setup_code_session_reaches_security_with_localhost_as_the_relying_party(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        app, code = _single_user_app(_single_user_org(tmp_path, monkeypatch), caplog)
+        client = TestClient(app, base_url=SINGLE_USER_ISSUER, follow_redirects=False)
+        session_id = _sign_in_with_the_setup_code(client, code)
+        page = client.get("/security", params={"next": "/approvals"})
+        assert page.status_code == 200
+        assert "admin@localhost" in page.text
+        options = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
+        assert options.status_code == 200
+        assert options.json()["options"]["rp"]["id"] == "localhost"
+
+    def test_an_idp_and_a_single_user_provider_must_agree(self, tmp_path, monkeypatch):
+        org = _org_auth(tmp_path, monkeypatch)
+        mismatched = OrgAuth(provider=org.provider, sessions=org.sessions, idp=None, issuer_url=ISSUER)
+        with pytest.raises(ValueError, match="single-user"):
+            build_app(WebApprovalUI(), org=mismatched, allowed_hosts=frozenset({"pf.example.com"}))
+
+
+class TestSingleUserSessionAloneCannotApproveOrChangeAdmin:
+    """Anyone who can read the log gets a session; the passkey is what a sensitive step needs."""
+
+    @staticmethod
+    def _approval(web_ui, *, gate_kind: str, pii_detected: bool = False):
+        from privacyfence.principal import principal_scope
+        from privacyfence.web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+        with principal_scope(SINGLE_USER_PRINCIPAL):
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key=f"k-{gate_kind}-{pii_detected}", connector="gmail", tool="gmail_send",
+                gate_kind=gate_kind, request_id="r1", summary="a message", tool_name="Send",
+                pii_detected=pii_detected,
+            )
+        web_ui.deferred_registry.set_html(approval.id, "<!doctype html><html><head></head><body>CARD</body></html>")
+        return approval
+
+    def _world(self, tmp_path, monkeypatch, caplog):
+        from privacyfence.approvals import PendingApprovalRegistry
+
+        web_ui = WebApprovalUI(registry=PendingApprovalRegistry())
+        app, code = _single_user_app(_single_user_org(tmp_path, monkeypatch), caplog, web_ui=web_ui)
+        client = TestClient(app, base_url=SINGLE_USER_ISSUER, follow_redirects=False)
+        return client, _sign_in_with_the_setup_code(client, code), web_ui
+
+    @pytest.mark.parametrize("gate_kind,pii", [("popup", False), ("review", True)])
+    def test_an_approval_without_a_passkey_is_refused(self, tmp_path, monkeypatch, caplog, gate_kind, pii):
+        client, session_id, web_ui = self._world(tmp_path, monkeypatch, caplog)
+        approval = self._approval(web_ui, gate_kind=gate_kind, pii_detected=pii)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert (r.status_code, r.json()["error"]) == (403, "passkey_enrollment_required")
+        assert web_ui.deferred_registry.get(approval.id) is not None
+
+    @pytest.mark.parametrize("gate_kind,pii", [("popup", False), ("review", True)])
+    def test_an_approval_without_an_assertion_gets_the_step_up_challenge(
+        self, tmp_path, monkeypatch, caplog, gate_kind, pii,
+    ):
+        from privacyfence import webauthn_stepup as wa
+        from privacyfence.web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+        client, session_id, web_ui = self._world(tmp_path, monkeypatch, caplog)
+        wa.add_credential(SINGLE_USER_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        approval = self._approval(web_ui, gate_kind=gate_kind, pii_detected=pii)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+        assert web_ui.deferred_registry.get(approval.id) is not None
+
+    def test_a_sensitive_admin_action_without_a_passkey_is_refused(self, tmp_path, monkeypatch, caplog):
+        client, session_id, _web_ui = self._world(tmp_path, monkeypatch, caplog)
+        r = client.post("/api/admin/set_web_push", json={"enabled": False, "csrf": session_id})
+        assert (r.status_code, r.json()) == (
+            403, {"error": "Add a passkey on /security first.", "enroll_url": "/security"},
+        )
+
+    def test_a_sensitive_admin_action_without_an_assertion_gets_the_challenge(self, tmp_path, monkeypatch, caplog):
+        from privacyfence import webauthn_stepup as wa
+        from privacyfence.web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+        client, session_id, _web_ui = self._world(tmp_path, monkeypatch, caplog)
+        wa.add_credential(SINGLE_USER_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        r = client.post("/api/admin/set_web_push", json={"enabled": False, "csrf": session_id})
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+
+
+class TestBrowserSignInPolicy:
+    def test_the_login_routes_get_the_policy_bound_to_the_idp(self, tmp_path, monkeypatch):
+        seen = {}
+        real = routes_org_identity.build_routes
+
+        def spy(**kwargs):
+            seen["policy"] = kwargs["policy"]
+            return real(**kwargs)
+
+        monkeypatch.setattr(routes_org_identity, "build_routes", spy)
+        org = _org_auth(tmp_path, monkeypatch)
+        builtin = dataclasses.replace(org.idp, builtin=True, admin_emails=("alice@acme.com",))
+        org = OrgAuth(provider=org.provider, sessions=org.sessions, idp=builtin, issuer_url=ISSUER,
+                      org_config={"authz": {"allowed_domains": ["acme.org"]}})
+        build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
+        policy = seen["policy"]
+        assert isinstance(policy, oi.IdpAuthzPolicy)
+        assert policy.builtin is True and policy.admin_emails == ("alice@acme.com",)
+        assert policy.allowed_domains == ("acme.org",) and policy.issuer == "https://idp.example.com"

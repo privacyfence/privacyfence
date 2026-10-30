@@ -70,6 +70,8 @@ verify:
         plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md.
     - when: ["cloudflare/downloads/**"]
       do: "In cloudflare/downloads/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
+    - when: ["cloudflare/oauth-relay/**"]
+      do: "In cloudflare/oauth-relay/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
   dod_manual:
     - >-
       Is there a user-visible change? It needs a line under CHANGELOG.md's `## [Unreleased]`, never under a
@@ -94,7 +96,7 @@ ci:
     - workflow: qa-record-fixture.yml
       use_when: A fixture for a newly added connector
       notes: >-
-        Dispatch it on `main` (the self-hosted runner admits only workflows as they stand on `main`) with
+        Dispatch it on `main` (the `privacyfence-live` self-hosted runner admits only workflows as they stand on `main`) with
         inputs `connector` (one of CONNECTOR_CHECKS in scripts/qa_fixture_recorder.py) and `branch` (the pushed
         branch to record for). It records on the self-hosted runner, then commits the fixture to that branch:
         pull before continuing.

@@ -1,7 +1,7 @@
 """Shared Atlassian OAuth 2.0 (3LO) helper for Jira + Confluence.
 
 One Atlassian OAuth app (organization-level config, installed via the
-"Install/Update Organization Config…" action in PrivacyFence Settings) covers both products —
+"Install configuration file…" action on Admin → Organization configuration) covers both products —
 a single browser consent grants access to whichever Atlassian site the user
 picks, and the resulting token is shared by jira_client.py and
 confluence_client.py (``credentials/atlassian_token.json``).
