@@ -22,10 +22,12 @@ Cloudflare sends the headers; the repository holds the expected set and checks t
   `CSP_DOCS` and `headers_for_path(path)`. Running it prints the three Cloudflare rules to create.
 - `CSP_SITE` allows `'self'` and Google Tag Manager and Analytics hosts only, `object-src 'none'`,
   `frame-ancestors 'none'`. `CSP_DOCS` is the same with `'unsafe-inline'` added to `script-src` and `style-src`.
-  `/docs` and `/docs/...` get `CSP_DOCS`; everything else gets `CSP_SITE`.
+  `/docs` and `/docs/...` get `CSP_DOCS`; everything else gets `CSP_SITE`, except the pages in
+  `HASHED_INLINE_PAGES` (the connector-config signing tool), which get `CSP_SITE` plus the sha256 of their
+  inline script and style, computed from the page file, and a rule of their own in Cloudflare.
 - Three Modify Response Header Transform Rules on the zone: `pf-security-headers-all` (the three
   plain headers), `pf-csp-site` and `pf-csp-docs`. `www.privacyfence.eu` is a 301 to the apex and needs none.
-- `scripts/check_site_headers.py <base-url>` fetches `/`, `/docs/` and `/download/` without following
+- `scripts/check_site_headers.py <base-url>` fetches `/`, `/docs/`, `/download/` and each hashed page without following
   redirects and compares each header to `headers_for_path`. The `deploy` job in
   `.github/workflows/pages.yml` runs it as `Check the security headers` after every deploy, and the
   workflow also runs when either script changes.
