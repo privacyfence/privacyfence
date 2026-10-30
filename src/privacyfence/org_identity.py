@@ -36,7 +36,7 @@ import jwt
 import requests
 from jwt import PyJWKClient
 
-from . import org_mode
+from . import app_credentials, org_mode
 from .org_mode import AuthzPolicyConfig, ConfigurationError
 from .paths import safe_principal_id
 from .principal import Principal
@@ -106,6 +106,12 @@ class IdpConfig:
     # Addresses that make their owner an admin. Only an address the IdP reports as verified
     # counts, and (for Google) one that belongs to the person's Workspace domain.
     admin_emails: tuple[str, ...] = ()
+    # PrivacyFence's own Google client rather than the organization's: any Google account in the
+    # world can finish Google's side of it, so check_authz_policy refuses everyone it was not told
+    # to admit.
+    builtin: bool = False
+    # Sign-in redirects go through the PrivacyFence relay rather than straight to this server.
+    relay: bool = False
 
     @staticmethod
     def from_org_config(org_config: dict[str, Any]) -> "IdpConfig | None":
@@ -130,6 +136,14 @@ class IdpConfig:
         client_id = idp.get("client_id")
         if not issuer or not client_id:
             return None
+        builtin = idp.get("builtin") is True
+        trust_unverified_email = idp.get("trust_unverified_email") is True
+        if builtin and issuer != GOOGLE_ISSUER:
+            raise ConfigurationError("The built-in Google sign-in must use Google as its identity provider.")
+        if builtin and trust_unverified_email:
+            # Anyone can create a Google account showing any address; only a verified address in
+            # a Workspace domain says who the person is.
+            raise ConfigurationError("The built-in Google sign-in cannot trust unverified email addresses.")
         discovered = discover_idp(issuer)
         return IdpConfig(
             issuer=issuer,
@@ -141,10 +155,12 @@ class IdpConfig:
             admin_group_claim=idp.get("admin_group_claim", "") or "",
             admin_group_values=tuple(idp.get("admin_group_values") or ()),
             step_up_acr_values=tuple(idp.get("step_up_acr_values") or ()),
-            trust_unverified_email=idp.get("trust_unverified_email") is True,
+            trust_unverified_email=trust_unverified_email,
             admin_emails=tuple(
                 email for email in map(_normalized_email, idp.get("admin_emails") or ()) if email
             ),
+            builtin=builtin,
+            relay=idp.get("relay") is True,
         )
 
 
@@ -288,7 +304,7 @@ def verify_id_token(idp: IdpConfig, id_token: str, *, nonce: str) -> dict[str, A
     return claims
 
 
-GOOGLE_ISSUER = "https://accounts.google.com"
+GOOGLE_ISSUER = org_mode.GOOGLE_ISSUER
 # Principal ids the data directory already uses for itself (local mode's ``local``, org
 # single-user mode's ``single-user``, and ``os-*`` for per-OS-user installs); an IdP ``sub`` that
 # looks like one is hashed so a person can never land in someone else's directory.
@@ -360,12 +376,15 @@ def principal_from_claims(claims: dict[str, Any], idp: IdpConfig) -> Principal:
 
 @dataclass(frozen=True)
 class IdpAuthzPolicy(AuthzPolicyConfig):
-    """``AuthzPolicyConfig`` plus the two facts about the IdP that the allowed-domain check needs:
-    which issuer signed the claims, and whether this organization trusts an address the IdP does
-    not call verified. A plain ``AuthzPolicyConfig`` gets the strict defaults."""
+    """``AuthzPolicyConfig`` plus the facts about the IdP that the sign-in checks need: which
+    issuer signed the claims, whether this organization trusts an address the IdP does not call
+    verified, and, for the built-in Google client, who the admins are. A plain
+    ``AuthzPolicyConfig`` gets the strict defaults."""
 
     issuer: str = ""
     trust_unverified_email: bool = False
+    builtin: bool = False
+    admin_emails: tuple[str, ...] = ()
 
     @staticmethod
     def bind(policy: AuthzPolicyConfig, idp: "IdpConfig | None") -> "IdpAuthzPolicy":
@@ -375,6 +394,8 @@ class IdpAuthzPolicy(AuthzPolicyConfig):
             required_groups=policy.required_groups,
             issuer=idp.issuer if idp is not None else "",
             trust_unverified_email=idp.trust_unverified_email if idp is not None else False,
+            builtin=idp.builtin if idp is not None else False,
+            admin_emails=idp.admin_emails if idp is not None else (),
         )
 
 
@@ -414,10 +435,15 @@ def check_authz_policy(principal: Principal, claims: dict[str, Any], policy: Aut
     (carried forward on the Principal for other code to use later) an
     authz-policy failure has nowhere to be carried to -- there's no
     Principal to finish building, only a decision to raise on.
+
+    With the built-in Google client it denies by default instead, ``authz`` empty or not: see
+    ``_admit_builtin_signin``.
     """
-    if not policy.enabled:
+    if getattr(policy, "builtin", False) is True or _issued_to_builtin_signin(claims):
+        _admit_builtin_signin(principal, claims, policy)
+    elif not policy.enabled:
         return
-    if policy.allowed_domains:
+    elif policy.allowed_domains:
         email = _normalized_email(principal.email)
         domain = _email_domain(email)
         trust_unverified = getattr(policy, "trust_unverified_email", False) is True
@@ -439,6 +465,40 @@ def check_authz_policy(principal: Principal, claims: dict[str, Any], policy: Aut
             raise AuthorizationDenied(
                 f"principal {principal.id!r} (email {principal.email!r}) is not in a required group"
             )
+
+
+def _issued_to_builtin_signin(claims: dict[str, Any]) -> bool:
+    """Whether the ID token was issued to PrivacyFence's built-in Google sign-in client. A caller
+    that passes a policy not bound to the IdP still gets the built-in client's default deny."""
+    app = app_credentials.builtin_app(org_mode.BUILTIN_SIGNIN_APP_KEY) or {}
+    client_id = app.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        return False
+    audience = claims.get("aud")
+    audiences = [audience] if isinstance(audience, str) else audience if isinstance(audience, list) else []
+    return client_id in audiences
+
+
+def _admit_builtin_signin(principal: Principal, claims: dict[str, Any], policy: AuthzPolicyConfig) -> None:
+    """The built-in Google client's rule: the address must be verified and belong to the
+    person's Google Workspace domain (``hd``), and it must either be a listed admin's or be in an
+    allowed domain. Everyone else is refused. A personal Google account has no ``hd``, so it never
+    signs in this way, and an unverified address is never trusted."""
+    email = _normalized_email(principal.email)
+    domain = _email_domain(email)
+    workspace_domain = _normalized_email(claims.get("hd"))
+    admins = {listed for listed in map(_normalized_email, getattr(policy, "admin_emails", ())) if listed}
+    if (
+        domain
+        and claims.get("email_verified") is True
+        and workspace_domain == domain
+        and (email in admins or domain in policy.allowed_domains)
+    ):
+        return
+    raise AuthorizationDenied(
+        f"principal {principal.id!r} (email {principal.email!r}) is neither an admin nor in an allowed"
+        " Google Workspace domain"
+    )
 
 
 __all__ = [

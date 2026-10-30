@@ -1280,3 +1280,92 @@ class TestOrgServerFlag:
         assert imported is True
         assert merged["org_server"] is True
         assert _stored()["org_server"] is True
+
+
+class TestAllowedDomainsSeed:
+    """``PRIVACYFENCE_ALLOWED_DOMAINS`` seeds Admin → Sign-in on the first import only."""
+
+    @pytest.fixture(autouse=True)
+    def _no_env(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_ALLOWED_DOMAINS", raising=False)
+
+    def test_the_first_import_seeds_lower_cased_and_de_duplicated(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", " Acme.com, acme.org ,ACME.COM,")
+        config, imported = admin_config.ensure({}, mode="org", single_user=False)
+        assert imported is True
+        assert config["authz"] == {"allowed_domains": ["acme.com", "acme.org"]}
+        assert admin_config.load()["authz"] == {"allowed_domains": ["acme.com", "acme.org"]}
+
+    def test_the_seed_happens_once_and_later_starts_log_that_it_is_ignored(self, monkeypatch, caplog):
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
+        admin_config.ensure({}, mode="org", single_user=False)
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com,evil.com")
+        with caplog.at_level(logging.INFO, logger="privacyfence.admin_config"):
+            config, imported = admin_config.ensure({}, mode="org", single_user=False)
+        assert imported is False
+        assert config["authz"] == {"allowed_domains": ["acme.com"]}
+        ignored = [r for r in caplog.records if "PRIVACYFENCE_ALLOWED_DOMAINS is ignored" in r.getMessage()]
+        assert len(ignored) == 1
+
+    def test_an_admin_edit_survives_a_restart_with_the_variable_set(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
+        admin_config.ensure({}, mode="org", single_user=False)
+        _change("set_authz", {"allowed_domains": "", "groups_claim": "", "required_groups": ""})
+        config, _ = admin_config.ensure({}, mode="org", single_user=False)
+        assert config["authz"]["allowed_domains"] == []
+
+    def test_an_existing_config_without_the_seed_is_not_seeded(self, monkeypatch):
+        admin_config.ensure({}, mode="org", single_user=False)
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
+        config, _ = admin_config.ensure({}, mode="org", single_user=False)
+        assert config["authz"] == {}
+
+    def test_a_later_legacy_bundle_is_merged_without_the_variable(self, monkeypatch):
+        admin_config.ensure({}, mode="org", single_user=False)
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "env.example.com")
+        bundle = {"authz": {"allowed_domains": ["bundle.example.com"]}}
+        config, imported = admin_config.ensure(bundle, mode="org", single_user=False)
+        assert imported is True
+        assert config["authz"] == {"allowed_domains": ["bundle.example.com"]}
+
+    def test_a_bundle_s_own_allowed_domains_win(self, monkeypatch, caplog):
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "env.example.com")
+        with caplog.at_level(logging.WARNING, logger="privacyfence.admin_config"):
+            config = _import({"authz": {"allowed_domains": ["bundle.example.com"]}})
+        assert config["authz"] == {"allowed_domains": ["bundle.example.com"]}
+        assert any("PRIVACYFENCE_ALLOWED_DOMAINS is ignored" in r.getMessage() for r in caplog.records)
+
+    def test_local_mode_is_not_seeded(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
+        assert _import({}, mode="local")["authz"] == {}
+
+    @pytest.mark.parametrize("value", [
+        "*", "*.acme.com", "@acme.com", "alice@acme.com", "acme", "com", "acme..com", "-acme.com", "acme-.com",
+        "acme.com/", "https://acme.com", "acme com", "1.2.3.4", "acme.cöm", "acKme.com", "acme.com,bad_domain.com",
+    ])
+    def test_a_value_that_is_not_a_domain_refuses_the_start(self, monkeypatch, value):
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", value)
+        with pytest.raises(admin_config.ConfigurationError, match="PRIVACYFENCE_ALLOWED_DOMAINS"):
+            admin_config.ensure({}, mode="org", single_user=False)
+        assert admin_config.load() is None
+
+    def test_config_for_shows_the_seed_without_writing(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
+        assert admin_config.config_for({}, mode="org", single_user=False)["authz"] == {"allowed_domains": ["acme.com"]}
+        assert admin_config.load() is None
+
+
+class TestSigninState:
+    def test_not_builtin_without_the_variable(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_IDP", raising=False)
+        monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
+        assert admin_config.signin_state({}) == {"builtin": False, "admin_emails": []}
+
+    def test_builtin_lists_the_admins_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
+        monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com, bob@acme.com")
+        assert admin_config.signin_state({}) == {"builtin": True, "admin_emails": ["alice@acme.com", "bob@acme.com"]}
+
+    def test_a_bundle_idp_is_not_builtin(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
+        assert admin_config.signin_state({"idp": {"issuer": "https://i", "client_id": "c"}})["builtin"] is False

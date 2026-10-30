@@ -349,6 +349,17 @@ class TestState:
         assert {"privacy", "stats"} <= set(state)
         assert state["restart_needed"] == []
 
+    def test_state_says_whether_sign_in_is_the_builtin_google_one(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_IDP", raising=False)
+        world = World()
+        world.sign_in(ADMIN)
+        assert world.client.get("/api/admin/state").json()["signin"] == {"builtin": False, "admin_emails": []}
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
+        monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
+        assert world.client.get("/api/admin/state").json()["signin"] == {
+            "builtin": True, "admin_emails": ["alice@acme.com"],
+        }
+
     def test_state_carries_the_upgrade_readiness(self, monkeypatch):
         monkeypatch.setitem(data_format._status, "ready", False)
         monkeypatch.setitem(data_format._status, "problems", ["alice: settings.yaml cannot be read"])

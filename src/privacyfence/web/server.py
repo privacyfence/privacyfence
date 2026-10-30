@@ -101,7 +101,7 @@ from .. import (
 )
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
-from ..org_identity import IdpConfig
+from ..org_identity import IdpAuthzPolicy, IdpConfig
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe
 from ..policy import scope_rows
@@ -1398,8 +1398,9 @@ def _build_org_app(
             idp=org.idp, sessions=org.sessions, base_url=org.issuer_url, default_next_path=default_next_path,
             # Derived from org.org_config directly here, the same
             # "self-contained, cheap re-parse" pattern StepUpConfig above
-            # already uses -- see that call's own comment.
-            policy=AuthzPolicyConfig.from_org_config(org.org_config),
+            # already uses -- see that call's own comment. Bound to the IdP like the OAuth
+            # provider's copy, so browser sign-in applies the same rules.
+            policy=IdpAuthzPolicy.bind(AuthzPolicyConfig.from_org_config(org.org_config), org.idp),
             push_store=org.push_store,
         ))
     else:

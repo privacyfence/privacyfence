@@ -1697,3 +1697,40 @@ def test_a_fresh_server_shows_the_defaults_in_force():
     assert 'value="100000"' in page and 'value="300"' in page and 'data-f="agent_links" data-t="bool" checked' in page
     assert 'value="90"' in _render_org("tokens", _org_state(scoped_tokens={}))
     assert 'value="6514"' in _render_org("audit", _org_state(audit_forwarding={}))
+
+
+_BUILTIN_SIGNIN_LINE = (
+    "Sign-in: PrivacyFence&#39;s built-in Google sign-in, through oauth.privacyfence.eu. Only the admins below "
+    "and people in the allowed domains can sign in."
+)
+
+
+@needs_node
+class TestBuiltinSignin:
+    def test_the_sign_in_line_and_the_admins_render_for_the_builtin_sign_in(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": ["alice@acme.com", "<b>@acme.com"]})
+        page = _render_org("access", state)
+        assert _BUILTIN_SIGNIN_LINE in page
+        assert "<div>alice@acme.com</div>" in page and "<div>&lt;b&gt;@acme.com</div>" in page
+        assert "Set by PRIVACYFENCE_ADMIN_EMAILS on the server." in page
+        assert "Empty allows only the admins." in page
+        assert "Empty allows every domain the identity provider vouches for." not in page
+        assert 'data-admin-form-save="access"' in page
+
+    @pytest.mark.parametrize("signin", [None, {"builtin": False, "admin_emails": ["alice@acme.com"]}])
+    def test_no_sign_in_line_without_the_builtin_sign_in(self, signin):
+        state = _org_state() if signin is None else _org_state(signin=signin)
+        page = _render_org("access", state)
+        assert "built-in Google sign-in" not in page and "alice@acme.com" not in page
+        assert "Empty allows every domain the identity provider vouches for." in page
+
+
+@needs_node
+class TestProvisioningKeyVariableName:
+    def test_the_missing_key_line_names_the_row_s_variable(self):
+        auto = {"enabled": True, "trust_unverified_email": False, "available": True, "reason": "", "key_set": False}
+        row = _server_row("peek", source="environment", address="https://p.example.com", auto=auto)
+        row["options"]["key_env"] = "ACME_PEEK_KEY"
+        page = _render_admin(_admin_state(row), mode="org", is_admin=True)
+        assert "Automatic accounts: on, but ACME_PEEK_KEY is not set on the server." in page
+        assert "PRIVACYFENCE_PEEK_PROVISIONING_KEY" not in page

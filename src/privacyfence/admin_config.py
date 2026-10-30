@@ -23,6 +23,8 @@ import ipaddress
 import json
 import logging
 import math
+import os
+import re
 import socket
 import threading
 import unicodedata
@@ -32,12 +34,14 @@ from urllib.parse import urlsplit
 
 from . import app_credentials, grist_auth, paths, peek_client, scoped_tokens, secure_files
 from .org_mode import (
+    ADMIN_EMAILS_ENV,
     AuditForwardingConfig,
     AuthzPolicyConfig,
     ConfigurationError,
     DownloadDeliveryConfig,
     Mode,
     WebPushConfig,
+    builtin_signin_selected,
     provisioning_key,
 )
 from .step_up_config import DEFAULT_STEP_UP_SCOPE, STEP_UP_SCOPES, StepUpConfig
@@ -233,8 +237,56 @@ def _import_auto_provision(service: dict[str, Any], name: str, section: dict[str
                 target["provisioner_url"] = provisioner_url
 
 
-def import_from_bundle(bundle: dict[str, Any], *, mode: Mode, single_user: bool) -> dict[str, Any]:
-    """A fresh admin config built from a bundle's operational settings."""
+ALLOWED_DOMAINS_ENV = "PRIVACYFENCE_ALLOWED_DOMAINS"
+# A DNS name of at least two labels, lower-case ASCII, ending in a letter label: no IP address, no
+# "@", no wildcard and no bare top-level domain.
+_DOMAIN_RE = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+
+def allowed_domains_from_env() -> list[str]:
+    """``PRIVACYFENCE_ALLOWED_DOMAINS`` as a list of lower-cased domain names; empty when unset.
+
+    A value that is not a domain name refuses the start rather than being dropped, so a typo never
+    leaves the server admitting fewer, or other, people than the operator meant."""
+    domains: list[str] = []
+    for part in os.environ.get(ALLOWED_DOMAINS_ENV, "").split(","):
+        raw = part.strip()
+        if not raw:
+            continue
+        # The ASCII check comes first: str.lower maps the Kelvin sign to "k".
+        domain = raw.lower() if raw.isascii() else ""
+        if not _DOMAIN_RE.match(domain):
+            raise ConfigurationError(
+                f"{ALLOWED_DOMAINS_ENV} must be a comma-separated list of domain names such as "
+                f"acme.com; {raw!r} is not one."
+            )
+        if domain not in domains:
+            domains.append(domain)
+    return domains
+
+
+def _seed_allowed_domains(config: dict[str, Any]) -> None:
+    """Start the allowed domains from the environment, unless the bundle already brought some.
+    Only a brand-new admin config is seeded: afterwards the list belongs to Admin → Sign-in."""
+    domains = allowed_domains_from_env()
+    if not domains:
+        return
+    authz = config["authz"] if isinstance(config.get("authz"), dict) else {}
+    if authz.get("allowed_domains"):
+        logger.warning(
+            "%s is ignored: org_config.json already sets the allowed domains.", ALLOWED_DOMAINS_ENV,
+        )
+        return
+    config["authz"] = {**authz, "allowed_domains": domains}
+
+
+def import_from_bundle(
+    bundle: dict[str, Any], *, mode: Mode, single_user: bool, seed_from_environment: bool = True,
+) -> dict[str, Any]:
+    """A fresh admin config built from a bundle's operational settings.
+
+    On an organization server ``PRIVACYFENCE_ALLOWED_DOMAINS`` seeds the allowed domains, unless
+    ``seed_from_environment`` is false (a later bundle merged into an existing config)."""
     config = _default_config()
     services = config["services"]
 
@@ -269,6 +321,8 @@ def import_from_bundle(bundle: dict[str, Any], *, mode: Mode, single_user: bool)
             config[key] = copy.deepcopy(bundle[key])
     if single_user and "step_up" not in bundle:
         config["step_up"] = dict(_SINGLE_USER_STEP_UP)
+    if mode == "org" and seed_from_environment:
+        _seed_allowed_domains(config)
 
     config["imported_from_bundle_sha256"] = _bundle_hash(bundle)
     return config
@@ -358,9 +412,14 @@ def ensure(bundle: dict[str, Any], *, mode: Mode, single_user: bool) -> tuple[di
         created = import_from_bundle(bundle, mode=mode, single_user=single_user)
         save(created)
         return created, True
+    if mode == "org" and os.environ.get(ALLOWED_DOMAINS_ENV, "").strip():
+        logger.info(
+            "%s is ignored: it only seeds the allowed domains on the first start; change them on "
+            "Admin → Sign-in.", ALLOWED_DOMAINS_ENV,
+        )
     if loaded["imported_from_bundle_sha256"] == "" and legacy_keys_in(bundle):
-        incoming = import_from_bundle(bundle, mode=mode, single_user=single_user)
-        defaults = import_from_bundle({}, mode=mode, single_user=single_user)
+        incoming = import_from_bundle(bundle, mode=mode, single_user=single_user, seed_from_environment=False)
+        defaults = import_from_bundle({}, mode=mode, single_user=single_user, seed_from_environment=False)
         merged = _merge_reimport(loaded, incoming, defaults)
         save(merged)
         return merged, True
@@ -912,6 +971,16 @@ def _service_row(
         "relay": mode == "org" and app_source == "builtin" and name != "telegram",
         "options": options,
     }
+
+
+def signin_state(bundle: dict[str, Any]) -> dict[str, Any]:
+    """What the Admin page's Sign-in section says about the identity provider: whether it is
+    PrivacyFence's built-in Google sign-in and, if so, the admin addresses from the environment
+    (shown read-only, since only the server's operator can change them)."""
+    if not builtin_signin_selected(bundle):
+        return {"builtin": False, "admin_emails": []}
+    emails = [part.strip() for part in os.environ.get(ADMIN_EMAILS_ENV, "").split(",") if part.strip()]
+    return {"builtin": True, "admin_emails": emails}
 
 
 def service_rows(

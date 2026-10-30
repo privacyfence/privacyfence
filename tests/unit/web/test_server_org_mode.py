@@ -6,6 +6,8 @@ which don't), TLS/trusted-proxies plumbing, and base_url/allowed_hosts.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -13,6 +15,7 @@ from privacyfence import org_identity as oi
 from privacyfence import relay_client
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
+from privacyfence.web import routes_org_identity
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.org_session import SESSION_COOKIE, OrgSessionStore
@@ -677,3 +680,24 @@ class TestSingleUserSessionAloneCannotApproveOrChangeAdmin:
         r = client.post("/api/admin/set_web_push", json={"enabled": False, "csrf": session_id})
         assert r.status_code == 428
         assert "webauthn_options" in r.json()
+
+
+class TestBrowserSignInPolicy:
+    def test_the_login_routes_get_the_policy_bound_to_the_idp(self, tmp_path, monkeypatch):
+        seen = {}
+        real = routes_org_identity.build_routes
+
+        def spy(**kwargs):
+            seen["policy"] = kwargs["policy"]
+            return real(**kwargs)
+
+        monkeypatch.setattr(routes_org_identity, "build_routes", spy)
+        org = _org_auth(tmp_path, monkeypatch)
+        builtin = dataclasses.replace(org.idp, builtin=True, admin_emails=("alice@acme.com",))
+        org = OrgAuth(provider=org.provider, sessions=org.sessions, idp=builtin, issuer_url=ISSUER,
+                      org_config={"authz": {"allowed_domains": ["acme.org"]}})
+        build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
+        policy = seen["policy"]
+        assert isinstance(policy, oi.IdpAuthzPolicy)
+        assert policy.builtin is True and policy.admin_emails == ("alice@acme.com",)
+        assert policy.allowed_domains == ("acme.org",) and policy.issuer == "https://idp.example.com"

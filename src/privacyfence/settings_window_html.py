@@ -2072,6 +2072,7 @@ _JS = r"""
     miro: 'miro-setup', grist: 'grist-setup', peek: 'peek-setup', telegram: 'telegram-setup',
   };
   var SERVER_ADDRESS_VARIABLES = { peek: 'PRIVACYFENCE_PEEK_BASE_URL', grist: 'PRIVACYFENCE_GRIST_SERVER_URL' };
+  // The default names; a row names the variable its server actually reads in options.key_env.
   var PROVISIONING_KEY_VARIABLES = { peek: 'PRIVACYFENCE_PEEK_PROVISIONING_KEY', grist: 'PRIVACYFENCE_GRIST_PROVISIONING_KEY' };
   var PROVISIONED_WHAT = { peek: 'a Peek account', grist: 'a Grist key' };
   var RELAY_TERMS_URL = 'https://privacyfence.eu/relay-terms/';
@@ -2149,7 +2150,8 @@ _JS = r"""
     if (auto.enabled) {
       lines.push('Automatic accounts: on. Each person who signs in gets ' + PROVISIONED_WHAT[row.key] + ' connected for them.');
       if (!auto.key_set) {
-        lines.push('Automatic accounts: on, but ' + PROVISIONING_KEY_VARIABLES[row.key] + ' is not set on the server.');
+        var keyVariable = (row.options || {}).key_env || PROVISIONING_KEY_VARIABLES[row.key];
+        lines.push('Automatic accounts: on, but ' + keyVariable + ' is not set on the server.');
       }
     }
     var payload = { service: row.key, enabled: !auto.enabled, trust_unverified_email: !!auto.trust_unverified_email };
@@ -2339,16 +2341,31 @@ _JS = r"""
     return '<div class="pf-page"><h1 class="pf-page-title">File delivery</h1>' + formCardHtml('delivery', rows, 'file delivery') + '</div>';
   }
 
+  // With the built-in Google sign-in the server admits nobody it was not told to: the admins the
+  // server's operator named, read-only here, and the allowed domains.
+  function builtinSigninHtml(signin) {
+    var admins = (signin.admin_emails || []).map(function (e) { return '<div>' + esc(e) + '</div>'; }).join('');
+    return '<div class="card pf-card pf-signin-builtin">' +
+      '<div class="pf-row"><div class="pf-row-text"><div class="pf-row-desc">' +
+      esc("Sign-in: PrivacyFence's built-in Google sign-in, through oauth.privacyfence.eu. Only the admins below and " +
+        'people in the allowed domains can sign in.') + '</div></div></div>' +
+      rowHtml('Admins', admins + '<div>' + esc('Set by PRIVACYFENCE_ADMIN_EMAILS on the server.') + '</div>') + '</div>';
+  }
+
   function renderAccess(state) {
     var a = sectionWithDefaults(state, 'authz');
+    var signin = state.signin || {};
+    var domainsDesc = signin.builtin
+      ? 'One per line or separated by commas. People whose verified Google Workspace address is in one of these domains can sign in. Empty allows only the admins.'
+      : 'One per line or separated by commas. Empty allows every domain the identity provider vouches for.';
     var rows = [
-      areaFieldRow('Allowed email domains', 'One per line or separated by commas. Empty allows every domain the identity provider vouches for.',
-        'allowed_domains', a.allowed_domains),
+      areaFieldRow('Allowed email domains', domainsDesc, 'allowed_domains', a.allowed_domains),
       textFieldRow('Groups claim', 'The claim in the identity provider’s token that lists a person’s groups.', 'groups_claim', a.groups_claim || ''),
       areaFieldRow('Required groups', 'One per line or separated by commas. A person must be in at least one. Empty requires none.',
         'required_groups', a.required_groups),
     ];
-    return '<div class="pf-page"><h1 class="pf-page-title">Sign-in</h1>' + formCardHtml('access', rows, 'sign-in restrictions') + '</div>';
+    return '<div class="pf-page"><h1 class="pf-page-title">Sign-in</h1>' + (signin.builtin ? builtinSigninHtml(signin) : '') +
+      formCardHtml('access', rows, 'sign-in restrictions') + '</div>';
   }
 
   // Step-up can only get stricter here: a checkbox that is on stays on (disabled), and the scope

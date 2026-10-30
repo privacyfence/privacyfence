@@ -14,6 +14,7 @@ keeps meaning exactly what it already means, with no migration.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from . import app_credentials
 from .grist_auth import GristClientError, normalize_server_url
 from .peek_client import PeekClientError, normalize_base_url
 
@@ -51,6 +53,11 @@ IDP_STEP_UP_ACR_VALUES_ENV = "PRIVACYFENCE_IDP_STEP_UP_ACR_VALUES"
 IDP_TRUST_UNVERIFIED_EMAIL_ENV = "PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL"
 ADMIN_EMAILS_ENV = "PRIVACYFENCE_ADMIN_EMAILS"
 _IDP_ENV_PREFIX = "PRIVACYFENCE_IDP_"
+# Chooses an identity provider PrivacyFence supplies instead of the organization's own app.
+IDP_ENV = "PRIVACYFENCE_IDP"
+BUILTIN_GOOGLE_IDP = "builtin-google"
+BUILTIN_SIGNIN_APP_KEY = "google_signin"
+GOOGLE_ISSUER = "https://accounts.google.com"
 
 # Hostnames a single-user install may be served at: it has one administrator who signs in with a
 # setup code, which is only acceptable when nothing but this computer can reach it.
@@ -106,19 +113,34 @@ def resolve_mode(org_config: dict[str, Any]) -> Mode:
     return env_mode or DEFAULT_MODE  # type: ignore[return-value]  # validated against both literals above
 
 
+def _own_idp_env_names_set() -> bool:
+    """Whether any ``PRIVACYFENCE_IDP_*`` variable (the organization's own IdP app) is set."""
+    return any(name.startswith(_IDP_ENV_PREFIX) and value.strip() for name, value in os.environ.items())
+
+
 def _idp_env_names_set() -> bool:
     """Whether any variable that configures the identity provider is set."""
-    return bool(_env(ADMIN_EMAILS_ENV)) or any(
-        name.startswith(_IDP_ENV_PREFIX) and value.strip() for name, value in os.environ.items()
-    )
+    return bool(_env(ADMIN_EMAILS_ENV)) or bool(_env(IDP_ENV)) or _own_idp_env_names_set()
 
 
 def _idp_present(org_config: dict[str, Any]) -> bool:
     """Whether an identity provider is configured, by the bundle or by the environment.
 
     Reads no secret, writes no log line and does no network discovery, so the mode checks that run
-    before the server is built can call it freely."""
-    return bool(org_config.get("idp")) or bool(_env(IDP_ISSUER_ENV) and _env(IDP_CLIENT_ID_ENV))
+    before the server is built can call it freely. Any ``PRIVACYFENCE_IDP`` value counts, even one
+    ``idp_section`` will refuse: a typo there must stop the start, not make a single-user install."""
+    return (
+        bool(org_config.get("idp"))
+        or bool(_env(IDP_ENV))
+        or bool(_env(IDP_ISSUER_ENV) and _env(IDP_CLIENT_ID_ENV))
+    )
+
+
+def builtin_signin_selected(org_config: dict[str, Any]) -> bool:
+    """Whether the server signs people in with PrivacyFence's built-in Google client: the
+    environment asks for it and no bundle ``idp`` section overrides it. Secret-free, like
+    ``_idp_present``; ``idp_section`` is what validates the rest."""
+    return not org_config.get("idp") and _env(IDP_ENV) == BUILTIN_GOOGLE_IDP
 
 
 def is_single_user(org_config: dict[str, Any]) -> bool:
@@ -177,7 +199,8 @@ def idp_section(org_config: dict[str, Any]) -> dict[str, Any] | None:
     A non-empty bundle section wins, unchanged. Otherwise a section built from the
     ``PRIVACYFENCE_IDP_*`` variables and ``PRIVACYFENCE_ADMIN_EMAILS``, when the issuer and the
     client id are both set; a partial environment is an error rather than single-user mode, so a
-    typo never turns a real server into one. ``None`` when nothing configures an IdP."""
+    typo never turns a real server into one. ``PRIVACYFENCE_IDP=builtin-google`` builds the section
+    for PrivacyFence's own Google client instead. ``None`` when nothing configures an IdP."""
     global _env_ignored_warned
     bundle_idp = org_config.get("idp")
     if bundle_idp:
@@ -188,6 +211,11 @@ def idp_section(org_config: dict[str, Any]) -> dict[str, Any] | None:
                 "\"idp\" section."
             )
         return bundle_idp
+    chosen = _env(IDP_ENV)
+    if chosen:
+        if chosen != BUILTIN_GOOGLE_IDP:
+            raise ConfigurationError(f"{IDP_ENV} must be \"{BUILTIN_GOOGLE_IDP}\", got {chosen!r}.")
+        return _builtin_google_section(org_config)
     issuer, client_id = _env(IDP_ISSUER_ENV), _env(IDP_CLIENT_ID_ENV)
     if not issuer and not client_id:
         if _idp_env_names_set():
@@ -215,6 +243,54 @@ def idp_section(org_config: dict[str, Any]) -> dict[str, Any] | None:
             raise ConfigurationError(f"{IDP_TRUST_UNVERIFIED_EMAIL_ENV} must be \"true\" or \"false\".")
         section["trust_unverified_email"] = trust == "true"
     return section
+
+
+def _public_https_address(url: str) -> bool:
+    """Whether ``url`` is https at a host other machines can reach: not a loopback name, nor a
+    loopback or private address. The built-in sign-in goes through the relay, which only forwards
+    to such a host; single-user mode is the way to run on this computer alone."""
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").rstrip(".")
+    if parsed.scheme != "https" or not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        return True
+
+
+def _builtin_google_section(org_config: dict[str, Any]) -> dict[str, Any]:
+    """The ``idp`` section for PrivacyFence's built-in Google sign-in client.
+
+    It cannot be mixed with the organization's own IdP variables: half of each would sign people
+    in with one client and name admins for the other. Admins by email are required, because
+    nobody else can sign in until an admin adds allowed domains."""
+    if _own_idp_env_names_set():
+        raise ConfigurationError(f"{IDP_ENV}={BUILTIN_GOOGLE_IDP} cannot be combined with your own IdP settings.")
+    admin_emails = _comma_list(ADMIN_EMAILS_ENV)
+    if not admin_emails:
+        raise ConfigurationError(f"The built-in Google sign-in needs {ADMIN_EMAILS_ENV}.")
+    app = app_credentials.builtin_app(BUILTIN_SIGNIN_APP_KEY) or {}
+    client_id = str(app.get("client_id") or "").strip()
+    client_secret = str(app.get("client_secret") or "")
+    if not client_id or not client_secret:
+        raise ConfigurationError("This build has no built-in Google sign-in; use your own IdP app.")
+    server = org_config.get("server")
+    server = server if isinstance(server, dict) else {}
+    server_address = str(server.get("issuer_url") or "").strip() or _env(ISSUER_URL_ENV)
+    if not _public_https_address(server_address):
+        raise ConfigurationError("The built-in Google sign-in needs a public https:// server address.")
+    return {
+        "issuer": GOOGLE_ISSUER,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "relay": True,
+        "builtin": True,
+        "admin_emails": admin_emails,
+        "trust_unverified_email": False,
+    }
 
 
 def is_loopback_issuer(issuer_url: str) -> bool:
@@ -898,6 +974,7 @@ __all__ = [
     "SyslogProtocol",
     "WebPushConfig",
     "base64_length",
+    "builtin_signin_selected",
     "inline_result_length",
     "resolve_mode",
 ]
