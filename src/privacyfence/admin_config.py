@@ -526,9 +526,14 @@ def _env_addresses() -> dict[str, str]:
         return {}
 
 
-def _address_source(bundle: dict[str, Any], name: str, admin_service: dict[str, Any], env: dict[str, str]) -> str:
+def _address_source(
+    bundle: dict[str, Any], name: str, admin_service: dict[str, Any], env: dict[str, str], *, mode: Mode,
+) -> str:
+    """What fixes a server address. Follows the effective config: an organization server never
+    reads the bundle's Grist section (its app is a connector config), so only local mode lets it
+    lock the address."""
     grist = bundle.get("grist")
-    if name == "grist" and isinstance(grist, dict) and grist.get("client_id"):
+    if mode != "org" and name == "grist" and isinstance(grist, dict) and grist.get("client_id"):
         return "bundle"
     if env.get(name):
         return "environment"
@@ -557,7 +562,7 @@ def _auto_provision_state(
 ) -> tuple[bool, str]:
     """Whether automatic accounts can be turned on for ``name``, and why not. The conditions are
     the ones the effective config applies before it passes ``auto_provision`` on."""
-    source = _address_source(bundle, name, admin_service, env)
+    source = _address_source(bundle, name, admin_service, env, mode=mode)
     if source == "bundle":
         return False, _GRIST_OAUTH_REASON
     if mode != "org":
@@ -706,7 +711,7 @@ def _apply_server_address(
     value = _param(params, "value", str)
     address = _normalized_address(name, value, mode=mode)
     service = config["services"][name]
-    _refuse_locked_address(name, _address_source(bundle, name, service, _env_addresses()))
+    _refuse_locked_address(name, _address_source(bundle, name, service, _env_addresses(), mode=mode))
     field = _ADDRESS_FIELD[name]
     if service[field] == address:
         return "", []
@@ -1017,7 +1022,7 @@ def _service_row(
     elif name == "telegram":
         app_source = "builtin" if app_credentials.telegram_app_credentials() is not None else "none"
     elif name == "grist":
-        client_id = str(section.get("client_id") or "")
+        client_id = "" if mode == "org" else str(section.get("client_id") or "")
         if mode == "org" and "grist" in (connectors or {}):
             app_source = "connector"
             loaded = (connectors or {})[name]
@@ -1040,7 +1045,7 @@ def _service_row(
             if app and app.get("install_url"):
                 options["install_url"] = str(app["install_url"])
     elif name in _ADDRESS_FIELD:
-        source = "connector" if app_source == "connector" else _address_source(bundle, name, stored, env)
+        source = "connector" if app_source == "connector" else _address_source(bundle, name, stored, env, mode=mode)
         if source == "connector":
             address = str((connectors or {})[name].fields.get("server_url") or "")
         elif source == "bundle":
