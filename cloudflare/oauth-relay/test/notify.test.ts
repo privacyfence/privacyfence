@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMessage, notifyConfigured, resetNotifyCache, sendNotification } from "../src/notify";
 import {
   PROOF,
-  SECRET,
   bearer,
   call,
   decodeRaw,
