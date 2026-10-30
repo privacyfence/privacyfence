@@ -1426,6 +1426,7 @@ def _build_org_app(
     if org.idp is not None:
         extra_routes.extend(routes_org_stepup.build_routes(
             web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
+            policy=IdpAuthzPolicy.bind(AuthzPolicyConfig.from_org_config(org.org_config), org.idp),
         ))
     if step_up.rp_id:
         extra_routes.extend(routes_security.build_routes(

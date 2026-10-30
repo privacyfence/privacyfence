@@ -38,7 +38,7 @@ def _idp(**overrides) -> oi.IdpConfig:
     return oi.IdpConfig(**defaults)
 
 
-def _app(*, step_up: StepUpConfig | None = None, sessions=None, idp=None, web_ui=None, stopping=None):
+def _app(*, step_up: StepUpConfig | None = None, sessions=None, idp=None, web_ui=None, stopping=None, policy=None):
     sessions = sessions or org_session.OrgSessionStore()
     web_ui = web_ui or WebApprovalUI(registry=PendingApprovalRegistry())
     step_up = step_up or StepUpConfig()
@@ -47,6 +47,7 @@ def _app(*, step_up: StepUpConfig | None = None, sessions=None, idp=None, web_ui
     )
     routes += routes_org_stepup.build_routes(
         web_ui=web_ui, sessions=sessions, step_up=step_up, idp=idp or _idp(), issuer_url=ISSUER,
+        policy=policy,
     )
     app = Starlette(routes=routes)
     return app, sessions, web_ui
@@ -904,6 +905,60 @@ class TestIdpStepUp:
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
         r = cb_client.get(f"/oauth/stepup/callback?code=abc&state={qs['state']}")
         assert r.status_code == 302
+        assert r.headers["location"] == f"/approvals/{approval.id}?stepup=error"
+        assert not web_ui.deferred_registry.get(approval.id).event.is_set()
+
+    @pytest.mark.parametrize(("domains", "outcome"), [(("example.com",), "ok"), (("other.example",), "error")])
+    def test_callback_applies_the_sign_in_domain_check(self, monkeypatch, domains, outcome):
+        from privacyfence.org_mode import AuthzPolicyConfig
+
+        policy = AuthzPolicyConfig(allowed_domains=domains)
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"), policy=policy)
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
+
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
+            lambda idp, token, *, nonce: {
+                "sub": "alice", "nonce": nonce, "email": "alice@example.com", "email_verified": True,
+            },
+        )
+        cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        r = cb_client.get(f"/oauth/stepup/callback?code=abc&state={qs['state']}")
+        assert r.status_code == 302
+        stored = web_ui.deferred_registry.get(approval.id)
+        if outcome == "ok":
+            assert r.headers["location"] == "/approvals?stepup=ok" and stored.event.is_set()
+        else:
+            assert r.headers["location"] == f"/approvals/{approval.id}?stepup=error"
+            assert not stored.event.is_set()
+
+    def test_callback_applies_the_required_group_check(self, monkeypatch):
+        from privacyfence.org_mode import AuthzPolicyConfig
+
+        policy = AuthzPolicyConfig(groups_claim="groups", required_groups=("pf-users",))
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"), policy=policy)
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        start = _start(client, approval.id, csrf=session_id)
+        qs = dict(up.parse_qsl(up.urlparse(start.json()["redirect"]).query))
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
+            lambda idp, token, *, nonce: {"sub": "alice", "nonce": nonce, "groups": ["other"]},
+        )
+        r = TestClient(app, base_url=ISSUER, follow_redirects=False).get(
+            f"/oauth/stepup/callback?code=abc&state={qs['state']}"
+        )
         assert r.headers["location"] == f"/approvals/{approval.id}?stepup=error"
         assert not web_ui.deferred_registry.get(approval.id).event.is_set()
 
