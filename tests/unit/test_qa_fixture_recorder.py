@@ -954,10 +954,24 @@ class TestDeidentifyAssets:
         assert not recorder._UUID_RE.search(recorder._REDACTED_UUID)
 
 
+_WORKSPACE_ID = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+
+
 class TestCheckAssets:
     def _run(self, monkeypatch, client, record=True, cfg=None):
-        monkeypatch.setattr(recorder, "_build_assets_client", lambda: client)
+        monkeypatch.setattr(recorder, "_build_assets_client", lambda workspace_id="": client)
         return recorder.check_assets(record=record, manifest={"assets": cfg or {}})
+
+    def test_the_manifest_workspace_id_reaches_the_client(self, monkeypatch):
+        seen = []
+
+        def build(workspace_id=""):
+            seen.append(workspace_id)
+            return _FakeAssetsClient()
+
+        monkeypatch.setattr(recorder, "_build_assets_client", build)
+        recorder.check_assets(record=False, manifest={"assets": {"workspace_id": _WORKSPACE_ID}})
+        assert seen == [_WORKSPACE_ID]
 
     def test_all_three_fixtures_record(self, monkeypatch):
         client = _FakeAssetsClient()
@@ -1060,6 +1074,12 @@ class TestCheckAssets:
         monkeypatch.setattr(recorder, "_load_atlassian_config", lambda: (
             {"access_token": "t", "cloud_id": "c", "scopes": ["read:cmdb-object:jira"]}, "/tmp/tok"))
         assert recorder._build_assets_client()._jira_url.endswith("/c")
+
+    def test_build_assets_client_takes_the_manifest_workspace_id(self, monkeypatch):
+        monkeypatch.setattr(recorder, "_load_atlassian_config", lambda: (
+            {"access_token": "t", "cloud_id": "c", "scopes": ["read:cmdb-object:jira"]}, "/tmp/tok"))
+        assert recorder._build_assets_client(_WORKSPACE_ID)._workspace_id == _WORKSPACE_ID
+        assert recorder._build_assets_client()._workspace_id is None
 
 
 class TestCheckJira:

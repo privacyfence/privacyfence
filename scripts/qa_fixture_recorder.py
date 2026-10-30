@@ -909,8 +909,12 @@ def _build_jira_client() -> JiraClient:
     return JiraClient(config=config, token_file=token_path)
 
 
-def _build_assets_client() -> AssetsClient:
+def _build_assets_client(workspace_id: str = "") -> AssetsClient:
     config, token_path = _load_atlassian_config()
+    # The QA server keeps its workspace id in its own admin_config.json, which the runner never
+    # reads, so the manifest carries it.
+    if workspace_id:
+        config = {**config, "assets_workspace_id": workspace_id}
     return AssetsClient(config=config, token_file=token_path)
 
 
@@ -1212,7 +1216,7 @@ def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
     results: list[CheckResult] = []
     try:
-        client = _build_assets_client()
+        client = _build_assets_client(str(cfg.get("workspace_id") or ""))
         # Resolve the workspace id first so its lookup is not among the captured calls.
         client.check_connection()
     except AssetsClientError as exc:
