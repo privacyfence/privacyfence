@@ -5,6 +5,7 @@
 Accepted — 2026-10-17. Implemented: `org_mode.CONNECTOR_ORG_SECTION` and
 `org_mode.connector_enabled_by_org`, used by `daemon_main.build_connectors`,
 `settings_controller.SettingsController` and `web/routes_connect.py`.
+Amended by [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md) and [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md).
 
 ## Context
 

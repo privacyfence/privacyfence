@@ -9,6 +9,7 @@ Implemented: `.github/workflows/connector-live-check.yml` (`93697e93`, 2026-09-1
 `--ephemeral` runner registration was reversed in `214a4b6d` (2026-09-11); see Decision.
 
 Amended by [ADR 0181](0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md): an organization runner group now enforces Decision 2, and the recording workflow is dispatched on `main`.
+Amended by [0266](0266-live-checks-run-on-a-dedicated-runner-and-test-the-built-in-apps.md): the runner host. The setup doc this ADR cites is now `docs/connector-qa.md`.
 
 ## Context
 

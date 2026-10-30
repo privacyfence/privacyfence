@@ -11,7 +11,7 @@ name: Publish org Docker image
 # images build.yml built and tested (`docker save` -> artifact -> `docker load`) instead of
 # building again, so the bytes pushed are the bytes a test ran against.
 #
-# Every channel is published (ADR 0267, amending 0208): an alpha image is how a release is tested
+# Every channel is published (ADR 0268, amending 0208): an alpha image is how a release is tested
 # before it is stable. The version tag always moves; X.Y, X and latest move only for a stable
 # release, and only when no already-tagged stable release is higher in that scope. A pre-release
 # gets its exact version tag alone. Both rules live in scripts/org_image_tags.py (ADR 0210). The attestation is GitHub's own
