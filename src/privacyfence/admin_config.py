@@ -23,7 +23,6 @@ import ipaddress
 import json
 import logging
 import math
-import os
 import socket
 import threading
 import unicodedata
@@ -39,6 +38,7 @@ from .org_mode import (
     DownloadDeliveryConfig,
     Mode,
     WebPushConfig,
+    provisioning_key,
 )
 from .step_up_config import DEFAULT_STEP_UP_SCOPE, STEP_UP_SCOPES, StepUpConfig
 
@@ -471,6 +471,15 @@ def _address_source(bundle: dict[str, Any], name: str, admin_service: dict[str, 
     return "admin"
 
 
+def _provisioning_key_set(key_env: str) -> bool:
+    """Whether the server has a provisioning key; an unreadable key file counts as not set here,
+    because the daemon refuses to start on it and the page only shows the state."""
+    try:
+        return provisioning_key(key_env) is not None
+    except ConfigurationError:
+        return False
+
+
 def _auto_provision_state(
     bundle: dict[str, Any],
     name: str,
@@ -884,13 +893,14 @@ def _service_row(
         options = {
             _ADDRESS_FIELD[name]: address,
             "address_source": source,
+            "key_env": key_env,
             "locked": source != "admin",
             "auto_provision": {
                 "enabled": bool(auto.get("enabled", False)),
                 "trust_unverified_email": bool(auto.get("trust_unverified_email", False)),
                 "available": available,
                 "reason": reason,
-                "key_set": bool(os.environ.get(key_env, "").strip()),
+                "key_set": _provisioning_key_set(key_env),
             },
         }
     return {

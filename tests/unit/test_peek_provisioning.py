@@ -367,6 +367,24 @@ class TestStart:
             "people connect Peek by hand on /connect."
         ) in caplog.text
 
+    def test_start_reads_the_key_from_a_file(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "peek_key"
+        key_file.write_text("peekprov_file\n")
+        monkeypatch.delenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", raising=False)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE", str(key_file))
+        stop = threading.Event()
+        stop.set()
+        monkeypatch.setattr("privacyfence.peek_provisioning.PeekProvisioningClient.check", lambda self: 0)
+        provisioner = peek_provisioning.start(self._org(), on_change=lambda _p: None, stop_event=stop)
+        assert provisioner is not None
+        assert provisioner._client._key == "peekprov_file"
+
+    def test_start_refuses_a_key_file_that_cannot_be_read(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", raising=False)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE", str(tmp_path / "absent"))
+        with pytest.raises(peek_provisioning.org_mode.ConfigurationError, match="PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE"):
+            peek_provisioning.start(self._org(), on_change=lambda _p: None, stop_event=threading.Event())
+
     def test_start_runs_threads_and_sets_instance(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", " peekprov_x ")
         stop = threading.Event()

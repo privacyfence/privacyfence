@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import queue
 import threading
 import time
@@ -355,7 +354,7 @@ def start(
     config = org_mode.GristProvisioningConfig.from_org_config(org_config)
     if not config.enabled:
         return None
-    key = os.environ.get(config.key_env, "").strip()
+    key = org_mode.provisioning_key(config.key_env)
     if not key:
         logger.warning(
             "Grist auto-provisioning is on, but %s is not set; people connect Grist by hand on /connect.",

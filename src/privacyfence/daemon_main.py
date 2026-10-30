@@ -2600,7 +2600,11 @@ def run_peek_release(principal_id: str) -> int:
     if not config.enabled:
         print("Peek auto-provisioning is not enabled in the organization config.", file=sys.stderr)
         return 1
-    key = os.environ.get(config.key_env, "").strip()
+    try:
+        key = org_mode.provisioning_key(config.key_env)
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     if not key:
         print(f"Set {config.key_env} to the Peek provisioning key first.", file=sys.stderr)
         return 1
@@ -2650,7 +2654,11 @@ def run_grist_release(principal_id: str) -> int:
     if not config.enabled:
         print("Grist auto-provisioning is not enabled in the organization config.", file=sys.stderr)
         return 1
-    key = os.environ.get(config.key_env, "").strip()
+    try:
+        key = org_mode.provisioning_key(config.key_env)
+    except org_mode.ConfigurationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     if not key:
         print(f"Set {config.key_env} to the Grist provisioning key first.", file=sys.stderr)
         return 1

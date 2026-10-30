@@ -891,6 +891,65 @@ class TestIdpSection:
             org_mode.idp_section({})
 
 
+class TestProvisioningKey:
+    KEY_ENV = "TEST_PROVISIONING_KEY"
+    FILE_ENV = "TEST_PROVISIONING_KEY_FILE"
+
+    @pytest.fixture(autouse=True)
+    def _clean(self, monkeypatch):
+        monkeypatch.delenv(self.KEY_ENV, raising=False)
+        monkeypatch.delenv(self.FILE_ENV, raising=False)
+
+    def test_unset_is_none(self):
+        assert org_mode.provisioning_key(self.KEY_ENV) is None
+
+    def test_empty_values_count_as_unset(self, monkeypatch):
+        monkeypatch.setenv(self.KEY_ENV, "  ")
+        monkeypatch.setenv(self.FILE_ENV, "")
+        assert org_mode.provisioning_key(self.KEY_ENV) is None
+
+    def test_a_plain_value_is_stripped(self, monkeypatch):
+        monkeypatch.setenv(self.KEY_ENV, f" {SECRET} ")
+        assert org_mode.provisioning_key(self.KEY_ENV) == SECRET
+
+    def test_a_file_has_its_trailing_newline_stripped(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "key"
+        key_file.write_text(SECRET + "\n")
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        assert org_mode.provisioning_key(self.KEY_ENV) == SECRET
+
+    def test_an_empty_file_is_none(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "key"
+        key_file.write_text("\n")
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        assert org_mode.provisioning_key(self.KEY_ENV) is None
+
+    def test_both_forms_is_an_error_without_the_key(self, monkeypatch, tmp_path, caplog):
+        key_file = tmp_path / "key"
+        key_file.write_text("x")
+        monkeypatch.setenv(self.KEY_ENV, SECRET)
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.provisioning_key(self.KEY_ENV)
+        assert str(excinfo.value) == "Set TEST_PROVISIONING_KEY or TEST_PROVISIONING_KEY_FILE, not both."
+        assert SECRET not in caplog.text
+
+    def test_an_undecodable_file_names_the_variable_not_the_content(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "key"
+        key_file.write_bytes(SECRET.encode() + b"\xff\xfe")
+        monkeypatch.setenv(self.FILE_ENV, str(key_file))
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.provisioning_key(self.KEY_ENV)
+        assert self.FILE_ENV in str(excinfo.value)
+        assert SECRET not in str(excinfo.value)
+        assert excinfo.value.__suppress_context__ is True
+
+    def test_a_missing_file_is_an_error(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(self.FILE_ENV, str(tmp_path / "absent"))
+        with pytest.raises(org_mode.ConfigurationError, match=self.FILE_ENV):
+            org_mode.provisioning_key(self.KEY_ENV)
+
+
 class TestIsSingleUserWithEnvironmentIdp:
     def test_is_single_user_with_an_env_idp_is_false(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://i")

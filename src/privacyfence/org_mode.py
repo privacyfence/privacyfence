@@ -150,6 +150,27 @@ def _client_secret_from_env() -> str:
     return inline
 
 
+def provisioning_key(key_env: str) -> str | None:
+    """The Peek or Grist provisioning key, from ``key_env`` or from the file ``key_env_FILE`` names.
+
+    ``None`` when neither is set. Setting both is an error, and so is a file that cannot be
+    read; the message names the variable and never the file's content or the key."""
+    file_env = f"{key_env}_FILE"
+    inline = _env(key_env)
+    path = _env(file_env)
+    if inline and path:
+        raise ConfigurationError(f"Set {key_env} or {file_env}, not both.")
+    if path:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                key = handle.read().rstrip("\r\n").strip()
+        except (OSError, UnicodeDecodeError):
+            # The reason is dropped on purpose: a decode error quotes the bytes it choked on.
+            raise ConfigurationError(f"{file_env} could not be read.") from None
+        return key or None
+    return inline or None
+
+
 def idp_section(org_config: dict[str, Any]) -> dict[str, Any] | None:
     """The ``idp`` section the identity-provider settings are read from.
 
