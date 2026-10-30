@@ -3,21 +3,23 @@
 A service offered with a built-in app has one redirect URI registered with its provider, at
 ``oauth.privacyfence.eu``. The relay receives the provider's redirect and sends the browser on to
 the organization server that started the sign-in. It will only do that for a server that proved
-it controls its own host name: the server publishes a random token at
-``/.well-known/privacyfence-relay`` and asks the relay to fetch it (``register``).
+it controls its own host name: the server keeps a random secret in ``org/relay_token.txt``,
+publishes its SHA-256 at ``/.well-known/privacyfence-relay``, and sends the secret to the relay,
+which fetches the hash and compares (``register``). Only the holder of the secret can register the
+host or change its registration; the published hash alone proves nothing.
 
 This module keeps that registration alive. ``start_registration_loop`` runs a daemon thread that
 registers when a service needs the relay and re-registers daily, backing off after a failure.
 ``status`` is what the connect routes read before they send a person to a provider, so a sign-in
 the relay would refuse never starts.
 
-The token proves control of the domain and grants nothing, which is why the well-known route is
-public. It is still never logged.
+The secret is sent only to the relay and is never served or logged; the hash is public by design.
 
 With PrivacyFence's built-in Google sign-in, the relay also needs the server to prove each Google
 Workspace domain it signs people in from: a DNS TXT record at ``_privacyfence-relay.<domain>``
-holding the SHA-256 of the token. ``register`` sends those domains, and the set the relay found
-verified is kept in ``org/relay_status.json``: sign-in admits an account only from a domain in it.
+whose value is bound to this server's host (``dns_record_value``). ``register`` sends those
+domains, and the set the relay found verified is kept in ``org/relay_status.json``: sign-in admits
+an account only from a domain in it.
 """
 from __future__ import annotations
 
@@ -51,6 +53,7 @@ _NOT_PUBLIC_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa", ".lan
 # Error codes the relay's /register answers with; anything else is reported as "HTTP <status>".
 _WORKER_CODES = frozenset({
     "invalid_request", "host_not_public", "revoked", "too_soon", "too_many_new_hosts", "proof_failed",
+    "unsupported_media_type",
 })
 
 _UNREACHABLE = "could not reach oauth.privacyfence.eu"
@@ -64,11 +67,13 @@ _FIRST_BACKOFF_SECONDS = 60
 # The relay checks at most this many sign-in domains per server.
 MAX_SIGNIN_DOMAINS = 20
 DNS_RECORD_PREFIX = "_privacyfence-relay."
+# The sign-in domain record format, as the relay computes it. A new format gets a new version tag.
+DNS_RECORD_VERSION = "v1"
 # Personal Google accounts: never a Workspace domain, and the relay refuses them as sign-in domains.
 _FREE_MAIL_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
 _REPLACED_NOTICE = (
     "org/relay_token.txt was missing or unreadable and has been replaced. The server registers again "
-    "with the new token. With the built-in Google sign-in, every _privacyfence-relay DNS TXT record "
+    "with the new secret. With the built-in Google sign-in, every _privacyfence-relay DNS TXT record "
     "must be updated; the lines below give the new values."
 )
 
@@ -91,6 +96,8 @@ class _State:
     replaced_logged: bool = False
     # The sign-in domains the relay found proven in DNS at the last successful registration.
     signin_domains_verified: tuple[str, ...] = ()
+    # The sign-in domains the relay refused outright (a public suffix or a shared mail domain).
+    signin_domains_refused: tuple[str, ...] = ()
     skipped_logged: bool = False
 
 
@@ -160,8 +167,8 @@ def _persisted_last_ok(persisted: dict[str, Any]) -> float | None:
     return float(value)
 
 
-def _persisted_verified(persisted: dict[str, Any]) -> tuple[str, ...]:
-    value = persisted.get("signin_domains_verified")
+def _persisted_domains(persisted: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = persisted.get(key)
     if not isinstance(value, list):
         return ()
     return tuple(sorted({domain for domain in value if isinstance(domain, str) and _signin_domain_ok(domain)}))
@@ -171,7 +178,8 @@ def _read_persisted_last_ok() -> float | None:
     return _persisted_last_ok(_read_persisted())
 
 
-def well_known_token() -> str:
+def relay_secret() -> str:
+    """The secret behind this server's relay registration, created on first need and then kept."""
     with _token_lock:
         path = relay_token_path()
         try:
@@ -185,16 +193,22 @@ def well_known_token() -> str:
             with _lock:
                 first = not _state.replaced_logged
                 _state.replaced_logged = True
-                # Every DNS record holds the hash of the old token, so none of them proves a
+                # Every DNS record is bound to the old secret's hash, so none of them proves a
                 # domain any more: sign-in waits until the relay checks the new records.
                 _load_persisted()
                 _state.signin_domains_verified = ()
-            _persist_last_ok(last_ok, ())
+                refused = _state.signin_domains_refused
+            _persist_last_ok(last_ok, (), refused)
             if first:
                 logger.error(_REPLACED_NOTICE)
         token = secrets.token_urlsafe(32)
         atomic_write_text(path, token)
         return token
+
+
+def well_known_proof() -> str:
+    """What ``/.well-known/privacyfence-relay`` serves: the hex SHA-256 of the secret."""
+    return hashlib.sha256(relay_secret().encode("ascii")).hexdigest()
 
 
 def _load_persisted() -> None:
@@ -204,14 +218,23 @@ def _load_persisted() -> None:
     _state.loaded = True
     persisted = _read_persisted()
     _state.last_ok_at = _persisted_last_ok(persisted)
-    _state.signin_domains_verified = _persisted_verified(persisted)
+    _state.signin_domains_verified = _persisted_domains(persisted, "signin_domains_verified")
+    _state.signin_domains_refused = _persisted_domains(persisted, "signin_domains_refused")
 
 
-def _persist_last_ok(when: float, signin_domains_verified: tuple[str, ...] | list[str] = ()) -> None:
+def _persist_last_ok(
+    when: float,
+    signin_domains_verified: tuple[str, ...] | list[str] = (),
+    signin_domains_refused: tuple[str, ...] | list[str] = (),
+) -> None:
     try:
         atomic_write_json(
             relay_status_path(),
-            {"last_ok_at": when, "signin_domains_verified": sorted(signin_domains_verified)},
+            {
+                "last_ok_at": when,
+                "signin_domains_verified": sorted(signin_domains_verified),
+                "signin_domains_refused": sorted(signin_domains_refused),
+            },
         )
     except OSError as exc:
         logger.warning("Could not save the relay registration status: %s", exc)
@@ -225,6 +248,7 @@ def status() -> dict[str, Any]:
             "last_error": _state.last_error,
             "needed": _state.needed,
             "signin_domains_verified": list(_state.signin_domains_verified),
+            "signin_domains_refused": list(_state.signin_domains_refused),
         }
 
 
@@ -244,9 +268,11 @@ def request_check() -> None:
 # --------------------------------------------------------------------------- #
 
 def _signin_domain_ok(domain: str) -> bool:
-    """A name the relay accepts as a sign-in domain: a public host name with no port that is not a
-    free-mail domain. The relay refuses the whole registration over one bad name, which would
-    stop the connectors too, so the server never sends one."""
+    """A name worth sending as a sign-in domain: a public host name with no port that is not a
+    free-mail domain. A malformed name would make the relay refuse the whole registration, which
+    would stop the connectors too, so the server never sends one. A public suffix (``co.uk``,
+    ``github.io``) passes here, since the server has no copy of the Public Suffix List; the relay
+    refuses that one domain on its own and the registration still succeeds."""
     return ":" not in domain and public_host(domain) and domain not in _FREE_MAIL_DOMAINS
 
 
@@ -290,25 +316,51 @@ def signin_domains(org_config: dict[str, Any]) -> list[str] | None:
     return domains[:MAX_SIGNIN_DOMAINS]
 
 
-def dns_record_value() -> str:
-    """The TXT value that proves a sign-in domain: the SHA-256 of the public well-known token."""
-    return "pf-relay=" + hashlib.sha256(well_known_token().encode("ascii")).hexdigest()
+def dns_record_value(host: str) -> str:
+    """The TXT value that lets ``host`` sign people in from a domain: ``pf-relay=v1:`` and the hex
+    SHA-256 of the UTF-8 string ``v1|<host>|<well-known proof>``. ``host`` is the issuer URL's host,
+    lower-case, with its port if it has one. Binding the host means the record vouches for this
+    server only: another server cannot reuse it to claim the domain."""
+    material = f"{DNS_RECORD_VERSION}|{host}|{well_known_proof()}"
+    return f"pf-relay={DNS_RECORD_VERSION}:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _config_host(org_config: dict[str, Any]) -> str | None:
+    try:
+        issuer_url = org_mode.ServerConfig.from_org_config(org_config).issuer_url
+    except (org_mode.ConfigurationError, ValueError):
+        return None
+    host = issuer_host(issuer_url)
+    return None if loopback_host(host) or not public_host(host) else host
 
 
 def missing_dns_records(org_config: dict[str, Any]) -> list[str]:
-    """One line for each sign-in domain the relay has not found proven, saying what to publish."""
+    """One line for each sign-in domain the relay has not found proven, saying what to publish,
+    and one for each it refused as a sign-in domain."""
     domains = signin_domains(org_config)
-    if not domains:
+    host = _config_host(org_config)
+    if not domains or host is None:
         return []
-    # The token first: replacing a lost one also forgets the domains its old records proved.
-    value = dns_record_value()
+    # The secret first: replacing a lost one also forgets the domains its old records proved.
+    value = dns_record_value(host)
     verified = verified_signin_domains()
-    missing = [domain for domain in domains if domain not in verified]
-    return [
-        f"Built-in Google sign-in: add the DNS TXT record {DNS_RECORD_PREFIX}{domain} with the value "
-        f"{value}. Until then nobody from {domain} can sign in."
-        for domain in missing
-    ]
+    with _lock:
+        refused = set(_state.signin_domains_refused)
+    lines = []
+    for domain in domains:
+        if domain in verified:
+            continue
+        if domain in refused:
+            lines.append(
+                f"Built-in Google sign-in: {domain} is a public suffix or a shared mail domain, which the "
+                f"relay never accepts as a sign-in domain. Nobody from {domain} can sign in."
+            )
+        else:
+            lines.append(
+                f"Built-in Google sign-in: add the DNS TXT record {DNS_RECORD_PREFIX}{domain} with the value "
+                f"{value}. Until then nobody from {domain} can sign in."
+            )
+    return lines
 
 
 def log_missing_dns_records(org_config: dict[str, Any]) -> None:
@@ -321,20 +373,31 @@ def log_missing_dns_records(org_config: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- #
 
 def register(issuer_url: str, signin_domains: list[str] | None = None) -> tuple[bool, str]:
-    ok, detail, _verified = _register(issuer_url, signin_domains)
+    ok, detail, _verified, _refused = _register(issuer_url, signin_domains)
     return ok, detail
 
 
-def _register(issuer_url: str, signin_domains: list[str] | None) -> tuple[bool, str, tuple[str, ...]]:
-    """``register``, plus the sign-in domains the relay answered as verified (only ones sent)."""
+def _answered(answer: Any, key: str, sent: set[str]) -> tuple[str, ...]:
+    reported = answer.get(key) if isinstance(answer, dict) else None
+    return tuple(sorted({
+        domain for domain in (reported if isinstance(reported, list) else ())
+        if isinstance(domain, str) and domain in sent
+    }))
+
+
+def _register(
+    issuer_url: str, signin_domains: list[str] | None,
+) -> tuple[bool, str, tuple[str, ...], tuple[str, ...]]:
+    """``register``, plus the sign-in domains the relay answered as verified and as refused (only
+    ones sent)."""
     parts = urlsplit(issuer_url)
     host = parts.netloc.lower()
     plain = parts.path in ("", "/") and not parts.query and not parts.fragment
     if not plain or not (parts.scheme == "https" or (parts.scheme == "http" and loopback_host(host))):
-        return False, _NEEDS_HTTPS, ()
+        return False, _NEEDS_HTTPS, (), ()
     if loopback_host(host) or not public_host(host):
-        return False, _NOT_PUBLIC, ()
-    body: dict[str, Any] = {"host": host, "token": well_known_token()}
+        return False, _NOT_PUBLIC, (), ()
+    body: dict[str, Any] = {"host": host, "secret": relay_secret()}
     if signin_domains is not None:
         body["signin_domains"] = list(signin_domains)
     try:
@@ -345,23 +408,22 @@ def _register(issuer_url: str, signin_domains: list[str] | None) -> tuple[bool, 
             allow_redirects=False,
         )
     except requests.RequestException:
-        return False, _UNREACHABLE, ()
+        return False, _UNREACHABLE, (), ()
     try:
         answer = response.json()
     except ValueError:
         answer = None
     if response.status_code == 200:
-        reported = answer.get("signin_domains_verified") if isinstance(answer, dict) else None
         sent = set(signin_domains or ())
-        verified = tuple(sorted({
-            domain for domain in (reported if isinstance(reported, list) else ())
-            if isinstance(domain, str) and domain in sent
-        }))
-        return True, "", verified
+        return (
+            True, "",
+            _answered(answer, "signin_domains_verified", sent),
+            _answered(answer, "signin_domains_refused", sent),
+        )
     code = answer.get("error") if isinstance(answer, dict) else None
     if isinstance(code, str) and code in _WORKER_CODES:
-        return False, code, ()
-    return False, f"HTTP {response.status_code}", ()
+        return False, code, (), ()
+    return False, f"HTTP {response.status_code}", (), ()
 
 
 def _tick(issuer_url: str, org_config: dict[str, Any], now: float) -> float:
@@ -387,24 +449,25 @@ def _tick(issuer_url: str, org_config: dict[str, Any], now: float) -> float:
             _state.last_ok_at is not None
             and now - _state.last_ok_at < _REREGISTER_AFTER_SECONDS
             and not _state.last_error
-            and set(domains or ()) <= set(_state.signin_domains_verified)
+            and set(domains or ()) - set(_state.signin_domains_refused) <= set(_state.signin_domains_verified)
         )
     if not needed or fresh:
         return _RECHECK_SECONDS
-    ok, detail, verified = _register(issuer_url, domains)
+    ok, detail, verified, refused = _register(issuer_url, domains)
     with _lock:
         if ok:
             _state.last_ok_at = now
             _state.last_error = ""
             _state.failures = 0
             _state.signin_domains_verified = verified
+            _state.signin_domains_refused = refused
             wait = _RECHECK_SECONDS
         else:
             _state.last_error = detail
             _state.failures += 1
             wait = min(_FIRST_BACKOFF_SECONDS * 2 ** (_state.failures - 1), _RECHECK_SECONDS)
     if ok:
-        _persist_last_ok(now, verified)
+        _persist_last_ok(now, verified, refused)
         logger.info("Registered with the PrivacyFence sign-in relay")
         log_missing_dns_records(org_config)
     else:

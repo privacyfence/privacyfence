@@ -97,7 +97,13 @@ so Cloudflare Email Routing cannot be enabled on it.
   means the refresh token was revoked, for example after a password change on `test@`: mint a new
   one. A registration is never refused because its mail failed, and a registration whose mail was
   not sent is listed with `"notified": false`.
-- **The limit.** At most 50 mails a UTC day. The first registration over the limit sends one mail,
+- **What mails.** A new host, and a host whose verified sign-in domains gain one that no earlier
+  mail named (subject `PrivacyFence relay sign-in domains added: <host>`). Removing a domain,
+  putting a named one back or repeating a registration sends nothing, so nobody can use up the
+  limit by flipping a record.
+- **The limit.** At most 3 mails a UTC day about one host, and 50 in all. A change past a host's
+  allowance leaves its row `"notified": false` until a later mail names it. The first registration
+  over the daily limit sends one mail,
   `More new registrations today than the notification limit; see /registrations.`, and the rest of
   the day sends none, so review the `notified: false` rows.
 
@@ -125,7 +131,7 @@ curl -fsS -H "Authorization: Bearer $REVOKE_TOKEN" "$RELAY/registrations"
 
 # /register for a host that cannot prove itself returns 403 proof_failed
 curl -sS -X POST "$RELAY/register" -H "Content-Type: application/json" \
-  -d '{"host":"smoke-test.example.org","token":"'"$NONCE"'"}'
+  -d '{"host":"smoke-test.example.org","secret":"'"$NONCE"'"}'
 
 # a loopback /callback returns a 302 to http://localhost:...
 curl -sSI "$RELAY/callback/slack?state=localhost%3A8765~$NONCE&code=smoke"
@@ -177,9 +183,10 @@ curl -X POST https://oauth.privacyfence.eu/admin/restore \
 
 ## Reading the registrations
 
-`GET /registrations` with the maintainer token lists the non-revoked, verified hosts, sorted, each
-with `host`, `registered_at`, `notified` and the verified `signin_domains`. There is no public list.
-A host that has not registered for 35 days is still listed but is no longer forwarded to.
+`GET /registrations` with the maintainer token lists the non-revoked hosts verified within the last
+35 days, sorted, each with `host`, `registered_at`, `notified` and the verified `signin_domains`.
+There is no public list. A host that has not registered for 35 days is no longer forwarded to and
+drops out of the list; its row stays, and it comes back when it registers again.
 
 ## Rotating the maintainer token
 
@@ -196,10 +203,29 @@ Durable Object and is not touched by a rollback of the code.
 ## The built-in sign-in
 
 A server that uses the built-in Google sign-in also proves the Google Workspace domains it signs
-people in from: one DNS TXT record per domain, at `_privacyfence-relay.<domain>` with the value
-`pf-relay=<hex sha256 of the server's relay token>`. The relay checks them with DNS over HTTPS on
-every successful registration and returns the missing ones with the record to publish. It forwards a
+people in from: one DNS TXT record per domain, at `_privacyfence-relay.<domain>`, with the value
+
+    pf-relay=v1:<hex SHA-256 of "v1|<host>|<proof>">
+
+where `<host>` is the server's registered host (with `:port` if it has one) and `<proof>` is what
+it serves at `/.well-known/privacyfence-relay`. The relay checks them with DNS over HTTPS on every
+successful registration and returns the missing ones with the record to publish. It forwards a
 sign-in code only when Google's `hd` redirect parameter names a verified domain.
+
+Two properties keep one server from taking over another organization's sign-in:
+
+- **The record names the host.** A record published for `pf.acme.com` does not match any other
+  host, so a server that copies acme's public proof cannot claim `acme.com` with acme's record.
+- **Only the secret changes a registration.** The well-known path serves the SHA-256 of a secret
+  the server keeps in `org/relay_token.txt` and sends to the relay alone. A third party who knows
+  the host and its proof cannot register it, refresh it or change its sign-in domains. A verified
+  domain leaves a registration only when DNS says its record is gone or wrong, never because a
+  request left it out.
+
+A domain that can never be a sign-in domain (a public suffix such as `co.uk`, or `gmail.com`) is
+refused on its own and listed in `signin_domains_refused`; the registration, and the server's
+connectors, carry on. The rate limits count an IPv6 client by its /64, and `/register` accepts only
+`Content-Type: application/json`, so a web page cannot make its visitors' browsers post to it.
 
 `hd` is observed behaviour, not a documented contract. If Google ever stops sending it, built-in
 sign-ins fail at the relay. The Worker variable `SIGNIN_REQUIRE_HD` in `wrangler.toml` (default

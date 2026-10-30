@@ -32,10 +32,30 @@ between DNS and a working server.
   with fixed forward paths. Before the server's registration succeeds, `/login` says it is registering
   and does not send the person to Google.
 - **Each sign-in domain is proven in DNS.** The domains of the administrator addresses and the
-  allowed domains are sent with the registration (at most 20; a bare public suffix, and `gmail.com`,
-  are refused). Each needs a TXT record at `_privacyfence-relay.<domain>` with the value
-  `pf-relay=<hex SHA-256 of the server's relay token>`, checked by DNS over HTTPS on every
-  registration. The relay forwards a sign-in code only when Google's `hd` redirect parameter is a
+  allowed domains are sent with the registration (at most 20). A bare public suffix (`co.uk`,
+  `github.io`) and `gmail.com` are refused one by one and reported back
+  (`signin_domains_refused`); the registration, and so the connectors, carry on, because the
+  server cannot tell a public suffix without the Public Suffix List and one bad allowed domain must
+  not stop every built-in app after the 35 days. Each other domain needs a TXT record at
+  `_privacyfence-relay.<domain>` with the value `pf-relay=v1:` followed by the hex SHA-256 of the
+  UTF-8 string `v1|<host>|<proof>`, where `<host>` is the server's registered host (lower-case,
+  with `:port` if it has one) and `<proof>` the hex SHA-256 of its relay secret, which it serves at
+  the well-known path. It is checked by DNS over HTTPS on every registration.
+- **Why the record names the host.** A record holding only a hash of the public well-known value
+  vouches for that value, not for a server: another server could serve a copy of
+  `pf.acme.com`'s value at its own address, list `acme.com`, and the relay would find acme's own
+  record and send acme's sign-ins to it. Hashing the host into the value makes a record valid for
+  one host, and only the holder of that host's secret can register it
+  ([ADR 0259](0259-org-servers-use-built-in-apps-through-a-domain-verified-relay.md)). The `v1`
+  tag, in the value and in the hashed string, fixes this encoding: a later format gets a new tag
+  and `v1` records keep their meaning. Moving a server to a new address means publishing new
+  records, which is the point.
+- **A verified domain leaves only through DNS.** The relay checks again every domain it verified
+  earlier, whether or not the request names it, and drops one only when DNS answers that the record
+  is gone or holds another value (a failed lookup keeps it). The requested domains are checked
+  first, at most 20 in all. The server admits only domains that are both configured and verified,
+  so removing a domain from the allowed domains takes effect at once on the server; deleting its
+  record takes it off the relay. The relay forwards a sign-in code only when Google's `hd` redirect parameter is a
   verified domain of that host (a redirect carrying `error` and no code is forwarded so the server can
   show its own error); a server-side check against the same verified set is repeated on the server. A
   Worker variable can switch the relay-side check off if Google stops sending `hd`.
@@ -44,7 +64,7 @@ between DNS and a working server.
 - **Cross-server safety.** Every server shares one client, so each accepts only a sign-in it started:
   the code flow with PKCE and a nonce stays mandatory, an ID token must come from the server's own
   code exchange, and `state` is single-use.
-- **The relay token anchors the records.** `org/relay_token.txt` must be kept in backups; replacing it
+- **The relay secret anchors the records.** `org/relay_token.txt` must be kept in backups; replacing it
   means publishing new records.
 
 ## Alternatives considered
@@ -70,11 +90,12 @@ between DNS and a working server.
 
 ## Verification
 
-`tests/unit/test_org_mode.py`, `tests/unit/test_org_identity.py`, `tests/unit/test_relay_client.py`,
-`cloudflare/oauth-relay/test/relay.test.ts`. Code: `src/privacyfence/org_mode.py`
+`tests/unit/test_org_mode.py`, `tests/unit/test_org_identity.py`, `tests/unit/test_relay_client.py`
+(`TestDnsRecordValue` shares its test vectors with the Worker), `cloudflare/oauth-relay/test/relay.test.ts`,
+`cloudflare/oauth-relay/test/register-authority.test.ts`. Code: `src/privacyfence/org_mode.py`
 (`BUILTIN_GOOGLE_IDP`), `src/privacyfence/org_identity.py` (`check_authz_policy`),
-`src/privacyfence/relay_client.py` (`signin_domains`, `missing_dns_records`),
-`cloudflare/oauth-relay/src/index.ts`.
+`src/privacyfence/relay_client.py` (`signin_domains`, `dns_record_value`, `missing_dns_records`),
+`cloudflare/oauth-relay/src/index.ts`, `cloudflare/oauth-relay/src/validate.ts` (`dnsRecordValue`).
 
 ## Related
 

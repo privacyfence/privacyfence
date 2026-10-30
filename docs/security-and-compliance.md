@@ -125,12 +125,15 @@ your server ([ADR 0259](adr/0259-org-servers-use-built-in-apps-through-a-domain-
   registration; its redirect goes straight back to your own browser. The
   [privacy statement](https://privacyfence.eu/privacy/#relay) and the
   [relay terms](https://privacyfence.eu/relay-terms/) are the legal text.
-- *Domain verification.* The relay forwards only to a host that proved it controls its name by
-  serving a random token at `/.well-known/privacyfence-relay` (the route answers 404 unless a relayed
-  service is in use), and renews daily. It refuses hosts under private suffixes such as `github.io`
-  and `pages.dev`, where anyone can create a name. The built-in Google sign-in also needs each sign-in
-  domain proven in DNS (a TXT record at `_privacyfence-relay.<domain>` carrying a hash of the
-  server's relay token), and forwards a code only for a verified domain.
+- *Domain verification.* The relay forwards only to a host that proved it controls its name: the
+  server sends the relay a secret and serves its SHA-256 at `/.well-known/privacyfence-relay` (the
+  route answers 404 unless a relayed service is in use), and renews daily. Only the holder of the
+  secret can register a host or change its registration; the public hash alone does nothing. The
+  relay refuses hosts under private suffixes such as `github.io` and `pages.dev`, where anyone can
+  create a name. The built-in Google sign-in also needs each sign-in domain proven in DNS (a TXT
+  record at `_privacyfence-relay.<domain>` whose value is a hash bound to the server's own host
+  name, so it cannot be reused by another server), and forwards a code only for a verified domain.
+  A verified domain is dropped only when its DNS record goes away.
 - *Maintainer controls.* Each new registration emails the maintainers, and a reported host is
   revoked within one working day.
 - *What a compromised relay could do, per provider.* It sees the code in transit and could send it
