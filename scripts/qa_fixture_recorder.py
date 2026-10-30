@@ -2258,10 +2258,10 @@ def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         if not seed_thread_ts:
             # The runner uses the built-in Slack app, which Slack throttles on
             # conversations.history, so the connector reads history through search
-            # (limited mode); do the same here, and fall back to the history call only
-            # where search cannot be scoped to the channel.
+            # (limited mode); do the same here, and fall back to the history call where
+            # search cannot be scoped to the channel or has not indexed the seed yet.
             read = client.search_channel_history(channel_id, limit=100)
-            if read is None:
+            if read is None or not read[0]:
                 read = client.get_channel_history(channel_id, limit=200)
             history, _has_more, _next_cursor = read
             found_message = next((m for m in history if QATEST_TAG in (m.text or "")), None)
