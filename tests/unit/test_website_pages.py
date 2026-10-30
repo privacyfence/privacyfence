@@ -7,7 +7,7 @@ tests/integration/test_website_consent.py (nothing third-party before consent). 
 checks what the HTML itself must carry:
 
 - a canonical link on the apex host, and a GA4 content group (`pf-content-group`);
-- the shared footer: privacy policy, imprint, cookie settings, GitHub, license, contact;
+- the shared footer: privacy policy, imprint, relay terms, cookie settings, GitHub, license, contact;
 - `site.js` (the consent banner) on every page, and no Google script tag anywhere: analytics is
   injected by site.js after consent, never written into a page;
 - OpenGraph/Twitter tags and parseable JSON-LD on the homepage and /download/;
@@ -62,6 +62,7 @@ def test_footer_links(path):
     for needle in (
         'href="/privacy/"',
         'href="/imprint/"',
+        'href="/relay-terms/"',
         '<a href="/privacy/#your-choice" data-cookie-settings>Cookie settings</a>',
         'href="https://github.com/privacyfence/privacyfence"',
         "/blob/main/LICENSE",
@@ -261,3 +262,41 @@ def test_an_unlisted_page_is_built_unchanged_and_is_not_linked_or_indexed(path):
     for page_path, page in PAGES.items():
         assert f'href="{path}"' not in page, f"{page_path} links to the unlisted page {path}"
     assert path not in build_site.PAGES
+
+
+LIMITED_USE_SENTENCE = (
+    "PrivacyFence's use and transfer to any other app of information received from Google APIs "
+    "will adhere to the Google API Services User Data Policy, including the Limited Use requirements."
+)
+
+
+def _text(page: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", page))
+
+
+def test_relay_terms_page_is_wired():
+    assert "/relay-terms/" in build_site.PAGES
+    assert '<link rel="canonical" href="https://privacyfence.eu/relay-terms/">' in PAGES["/relay-terms/"]
+    assert "oauth.privacyfence.eu" in PAGES["/relay-terms/"]
+    assert "[Relay terms]" in (built_site() / "llms.txt").read_text(encoding="utf-8")
+
+
+def test_privacy_page_describes_the_relay_and_google_user_data():
+    page = PAGES["/privacy/"]
+    assert 'id="relay"' in page
+    assert "oauth.privacyfence.eu" in page
+    assert 'id="google-user-data"' in page
+    assert LIMITED_USE_SENTENCE in _text(page)
+    assert "https://developers.google.com/terms/api-services-user-data-policy" in page
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_no_page_claims_there_is_no_privacyfence_server(path):
+    text = _text(PAGES[path])
+    assert "there are none" not in text
+    assert "no PrivacyFence-operated server is involved" not in text
+
+
+@pytest.mark.parametrize("path", ["/download/", "/faq/"])
+def test_desktop_mode_deprecation_notice(path):
+    assert "PrivacyFence 8 removes it" in _text(PAGES[path])

@@ -40,7 +40,7 @@
           <source media="(max-width: 600px)" srcset="/assets/architecture-narrow.svg" width="360" height="1060">
           <img src="/assets/architecture.svg" width="1120" height="540" alt="The request flow: an AI client (Claude Desktop through the PrivacyFence extension, Claude Code over HTTP, or claude.ai through an organization deployment) sends each tool call over MCP to PrivacyFence, which applies policy, runs the local PII check, asks a person for approval where needed and audits the decision, then calls Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence or Telegram with credentials that stay inside PrivacyFence.">
         </picture>
-        <figcaption>PrivacyFence runs on your own computer or on a server your organization controls. There is no PrivacyFence-operated server in the path.</figcaption>
+        <figcaption>PrivacyFence runs on your own computer or on a server your organization controls. No data passes through a PrivacyFence-operated server. When an organization server uses PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead.</figcaption>
       </figure>
 
       <div class="card-grid four grid-auto">
