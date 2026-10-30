@@ -5845,3 +5845,372 @@ class TestEffectiveOrgConfigWiring:
         assert daemon_main.run_peek_release("alice") == 0
         assert clients == [("https://peek.example.com", "peekprov_secret")]
         assert "Released the Peek connection of alice" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------- #
+# Connector configs on an organization server, and the legacy bundle
+# ---------------------------------------------------------------------------- #
+
+from privacyfence import connector_configs, org_bundle_signing  # noqa: E402
+from tests.connector_config_support import SENTINEL, fixture_key, public_bytes, sign  # noqa: E402
+
+LEGACY_ORG_BUNDLE = {
+    "mode": "org",
+    "server": {
+        "bind_host": "0.0.0.0", "port": 9000, "issuer_url": "https://pf.example.com",
+        "trusted_proxies": ["172.30.87.2", "10.0.0.1"], "tls": {"cert_file": "c.pem", "key_file": "k.pem"},
+    },
+    "idp": {
+        "issuer": "https://idp.example.com", "client_id": "pf-client", "client_secret": SENTINEL,
+        "admin_group_claim": "groups", "admin_group_values": ["pf-admins"],
+        "step_up_acr_values": ["mfa"], "admin_emails": ["a@example.com", "b@example.com"],
+        "trust_unverified_email": False,
+    },
+    "slack": {"client_id": "own-slack", "client_secret": SENTINEL},
+    "miro": {"client_id": "own-miro", "client_secret": SENTINEL},
+}
+
+
+@pytest.fixture
+def legacy_org(tmp_path, monkeypatch):
+    """An upgraded organization server: a signed bundle adopted from 6.x, in its own org directory."""
+    org = tmp_path / "org"
+    org.mkdir()
+    monkeypatch.setattr(daemon_main, "org_dir", lambda: org)
+    monkeypatch.setattr(connector_configs, "default_org_dir", lambda: org)
+    return org
+
+
+def install_legacy_bundle(org, bundle=None, *, adopted=True):
+    """Write a signed bundle and, unless ``adopted`` is False, the record adoption leaves."""
+    private_key, _ = org_bundle_signing.generate_keypair()
+    signed = org_bundle_signing.sign_bundle(dict(LEGACY_ORG_BUNDLE if bundle is None else bundle), private_key)
+    raw = json.dumps(signed).encode()
+    (org / "org_bundle.json").write_bytes(raw)
+    if adopted:
+        (org / "org_bundle_adopted.json").write_text(json.dumps({
+            "from": "org_config.json", "sha256": org_bundle_signing.sha256_hex(raw), "at": "x", "pins_adopted": True,
+        }))
+    return signed
+
+
+class TestConnectorConfigStartup:
+    LEGACY_WARNING = (
+        "org/org_bundle.json is read only for its server and identity-provider settings until PrivacyFence 8. "
+        "Move them to privacyfence.env (privacyfence-app --print-env-from-bundle), then run "
+        "privacyfence-app --retire-bundle."
+    )
+
+    def run(self, monkeypatch, bundle):
+        seen = _patch_run_app(monkeypatch, bundle)
+        monkeypatch.setattr(daemon_main.org_mode, "is_single_user", lambda config: False)
+        assert daemon_main.run_app({}, "config.yaml") == 0
+        return seen
+
+    def test_first_start_imports_the_credentials_and_warns(self, legacy_org, monkeypatch, caplog):
+        signed = install_legacy_bundle(legacy_org)
+        with caplog.at_level(logging.INFO):
+            seen = self.run(monkeypatch, signed)
+        assert self.LEGACY_WARNING in [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert seen["org_config"]["slack"] == {"client_id": "own-slack", "client_secret": SENTINEL}
+        assert "relay" not in seen["org_config"]["slack"]
+        assert json.loads((legacy_org / "connector_configs" / "slack.json").read_text())["source"] == "legacy-bundle"
+        assert SENTINEL not in caplog.text
+
+    def test_the_import_is_not_repeated_and_the_bundles_sections_are_ignored_afterwards(
+        self, legacy_org, monkeypatch
+    ):
+        signed = install_legacy_bundle(legacy_org)
+        self.run(monkeypatch, signed)
+        connector_configs.remove(legacy_org, "slack")
+        seen = self.run(monkeypatch, signed)
+        assert "slack" not in seen["org_config"]
+        assert seen["org_config"]["miro"]["client_id"] == "own-miro"
+
+    def test_an_uploaded_config_replaces_the_imported_one(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org)
+        self.run(monkeypatch, signed)
+        (legacy_org / "org_bundle_signing_pubkey.txt").write_text(
+            __import__("base64").b64encode(public_bytes(fixture_key())).decode() + "\n"
+        )
+        connector_configs.accept(legacy_org, sign("slack"), confirmed_fingerprint=connector_configs.fingerprint(public_bytes(fixture_key())))
+        seen = self.run(monkeypatch, signed)
+        assert seen["org_config"]["slack"] == {"client_id": "slack-id", "client_secret": SENTINEL}
+
+    def test_a_bundle_that_differs_from_the_adopted_one_is_refused(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org)
+        (legacy_org / "org_bundle.json").write_bytes((legacy_org / "org_bundle.json").read_bytes() + b"\n")
+        _patch_run_app(monkeypatch, signed)
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            daemon_main.run_app({}, "config.yaml")
+        assert str(excinfo.value) == (
+            "Organization servers no longer take a new org_bundle.json; set privacyfence.env and upload "
+            "connector configs on the Admin page."
+        )
+        assert not (legacy_org / "connector_configs").exists()
+
+    def test_a_bundle_on_a_server_that_adopted_none_is_refused(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org, adopted=False)
+        _patch_run_app(monkeypatch, signed)
+        with pytest.raises(org_mode.ConfigurationError, match="no longer take a new org_bundle.json"):
+            daemon_main.run_app({}, "config.yaml")
+
+    def test_an_unreadable_bundle_is_refused(self, legacy_org, monkeypatch):
+        signed = install_legacy_bundle(legacy_org)
+        (legacy_org / "org_bundle.json").unlink()
+        (legacy_org / "org_bundle.json").mkdir()
+        with pytest.raises(org_mode.ConfigurationError, match="Could not read organization config"):
+            daemon_main.prepare_connector_configs(signed)
+
+    def test_a_stored_config_that_no_longer_verifies_refuses_the_start(self, legacy_org, monkeypatch, caplog):
+        install_legacy_bundle(legacy_org, {"mode": "org"})
+        (legacy_org / "org_bundle_signing_pubkey.txt").write_text(
+            __import__("base64").b64encode(public_bytes(fixture_key())).decode() + "\n"
+        )
+        connector_configs.accept(legacy_org, sign("slack"))
+        path = connector_configs.stored_path(legacy_org, "slack")
+        path.write_bytes(path.read_bytes().replace(b"slack-id", b"slack-ie"))
+        _patch_run_app(monkeypatch, {"mode": "org"})
+        with pytest.raises(org_mode.ConfigurationError, match="stored slack connector config") as excinfo:
+            daemon_main.run_app({}, "config.yaml")
+        assert SENTINEL not in str(excinfo.value) and SENTINEL not in caplog.text
+
+    def test_an_org_server_without_a_bundle_checks_its_configs_and_does_not_warn(
+        self, legacy_org, monkeypatch, caplog
+    ):
+        with caplog.at_level(logging.WARNING):
+            self.run(monkeypatch, {"mode": "org"})
+        assert self.LEGACY_WARNING not in caplog.text
+
+    def test_local_mode_is_untouched(self, legacy_org, monkeypatch, caplog):
+        (legacy_org / "org_bundle.json").write_text("{}")
+        bundle = {"slack": {"client_id": "own", "client_secret": SENTINEL}}
+        seen = _patch_run_app(monkeypatch, bundle)
+        with caplog.at_level(logging.WARNING):
+            assert daemon_main.run_app({}, "config.yaml") == 0
+        assert self.LEGACY_WARNING not in caplog.text
+        assert seen["org_config"]["slack"] == bundle["slack"]
+        assert not (legacy_org / "connector_configs").exists()
+
+    def test_effective_org_config_reads_the_stored_configs_of_this_servers_directory(self, legacy_org):
+        install_legacy_bundle(legacy_org)
+        daemon_main.prepare_connector_configs(LEGACY_ORG_BUNDLE)
+        admin = admin_config.import_from_bundle(LEGACY_ORG_BUNDLE, mode="org", single_user=False)
+        assert daemon_main.effective_org_config(LEGACY_ORG_BUNDLE, admin)["miro"]["client_id"] == "own-miro"
+        assert daemon_main._stored_connector_configs("local") is None
+
+
+class TestPrintEnvFromBundle:
+    def test_prints_every_variable_and_never_the_secret(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_print_env_from_bundle(None) == 0
+        out, err = capsys.readouterr()
+        assert out.splitlines() == [
+            "PRIVACYFENCE_MODE=org",
+            "PRIVACYFENCE_BIND_HOST=0.0.0.0",
+            "PRIVACYFENCE_PORT=9000",
+            "PRIVACYFENCE_ISSUER_URL=https://pf.example.com",
+            "PRIVACYFENCE_TRUSTED_PROXIES=172.30.87.2,10.0.0.1",
+            "# server.tls has no variable: end TLS at the reverse proxy (see the Docker guide).",
+            "PRIVACYFENCE_IDP_ISSUER=https://idp.example.com",
+            "PRIVACYFENCE_IDP_CLIENT_ID=pf-client",
+            "PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM=groups",
+            "PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES=pf-admins",
+            "PRIVACYFENCE_IDP_STEP_UP_ACR_VALUES=mfa",
+            "PRIVACYFENCE_ADMIN_EMAILS=a@example.com,b@example.com",
+            "PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL=false",
+            "PRIVACYFENCE_IDP_CLIENT_SECRET=<the identity provider's client secret>",
+        ]
+        assert SENTINEL not in out + err
+
+    def test_the_secret_goes_to_a_new_file_with_mode_0600(self, legacy_org, tmp_path, capsys):
+        install_legacy_bundle(legacy_org)
+        target = tmp_path / "idp-secret"
+        assert daemon_main.run_print_env_from_bundle(str(target)) == 0
+        out, err = capsys.readouterr()
+        assert f"PRIVACYFENCE_IDP_CLIENT_SECRET_FILE={target}" in out.splitlines()
+        assert "PRIVACYFENCE_IDP_CLIENT_SECRET=" not in out
+        assert target.read_text() == SENTINEL + "\n"
+        assert oct(target.stat().st_mode & 0o777) == "0o600"
+        assert SENTINEL not in out + err
+
+    def test_it_refuses_to_overwrite_the_file_and_prints_nothing(self, legacy_org, tmp_path, capsys):
+        install_legacy_bundle(legacy_org)
+        target = tmp_path / "idp-secret"
+        target.write_text("keep me")
+        assert daemon_main.run_print_env_from_bundle(str(target)) == 0 + 1
+        out, err = capsys.readouterr()
+        assert out == "" and "already exists" in err and SENTINEL not in err
+        assert target.read_text() == "keep me"
+
+    def test_a_secret_file_that_cannot_be_written(self, legacy_org, tmp_path, capsys):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_print_env_from_bundle(str(tmp_path / "missing" / "secret")) == 1
+        out, err = capsys.readouterr()
+        assert "Could not write" in err and SENTINEL not in out + err
+
+    def test_a_public_client_has_no_secret_line_and_no_file(self, legacy_org, tmp_path, capsys):
+        bundle = {"mode": "org", "idp": {"issuer": "https://idp.example.com", "client_id": "pf-client"}}
+        install_legacy_bundle(legacy_org, bundle)
+        target = tmp_path / "idp-secret"
+        assert daemon_main.run_print_env_from_bundle(str(target)) == 0
+        assert "SECRET" not in capsys.readouterr().out
+        assert not target.exists()
+
+    def test_trust_unverified_email_true_and_a_bundle_without_server_or_idp(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org, {"mode": "org", "idp": {"trust_unverified_email": True}})
+        assert daemon_main.run_print_env_from_bundle(None) == 0
+        assert capsys.readouterr().out.splitlines() == [
+            "PRIVACYFENCE_MODE=org", "PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL=true",
+        ]
+
+    def test_a_bundle_with_only_a_mode(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org, {"mode": "org"})
+        assert daemon_main.run_print_env_from_bundle(None) == 0
+        assert capsys.readouterr().out.splitlines() == ["PRIVACYFENCE_MODE=org"]
+
+    def test_no_bundle(self, legacy_org, capsys):
+        assert daemon_main.run_print_env_from_bundle(None) == 1
+        assert "no org/org_bundle.json" in capsys.readouterr().err
+
+    def test_a_desktop_bundle(self, legacy_org, capsys):
+        install_legacy_bundle(legacy_org, {"slack": {"client_id": "x"}})
+        assert daemon_main.run_print_env_from_bundle(None) == 1
+        assert "not an organization bundle" in capsys.readouterr().err
+
+    def test_an_unverifiable_bundle(self, legacy_org, capsys):
+        (legacy_org / "org_bundle.json").write_text("{not json")
+        assert daemon_main.run_print_env_from_bundle(None) == 1
+        assert "not valid JSON" in capsys.readouterr().err
+
+    def test_main_dispatches_before_reading_settings(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_print_env_from_bundle", lambda path: calls.append(path) or 0)
+        assert daemon_main.main(["--print-env-from-bundle", "--idp-secret-file", "x"]) == 0
+        assert calls == ["x"]
+
+    def test_the_secret_file_option_needs_the_command(self, capsys):
+        with pytest.raises(SystemExit):
+            daemon_main.main(["--idp-secret-file", "x"])
+        assert "--idp-secret-file goes with --print-env-from-bundle" in capsys.readouterr().err
+
+
+class TestRetireBundle:
+    @pytest.fixture
+    def matching_environment(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        monkeypatch.setenv("PRIVACYFENCE_ISSUER_URL", "https://pf.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_ISSUER", "https://idp.example.com")
+        monkeypatch.setenv("PRIVACYFENCE_IDP_CLIENT_ID", "pf-client")
+
+    def test_retires_once_the_environment_says_the_same(self, legacy_org, matching_environment, capsys):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_retire_bundle() == 0
+        out, err = capsys.readouterr()
+        assert not (legacy_org / "org_bundle.json").exists()
+        assert org_bundle_signing.load_adopted_record(legacy_org)["retired"] is True
+        assert "retired" in out and SENTINEL not in out + err
+
+    def test_the_credentials_are_imported_before_the_bundle_goes(self, legacy_org, matching_environment):
+        install_legacy_bundle(legacy_org)
+        assert daemon_main.run_retire_bundle() == 0
+        loaded = connector_configs.load_all(legacy_org)
+        assert sorted(loaded) == ["miro", "slack"]
+        assert loaded["slack"].section()["client_secret"] == SENTINEL
+
+    def test_a_restart_does_not_adopt_the_untouched_org_config_again(self, legacy_org, matching_environment):
+        signed = install_legacy_bundle(legacy_org)
+        legacy = legacy_org / "org_config.json"
+        legacy.write_text(json.dumps(signed))
+        record = org_bundle_signing.load_adopted_record(legacy_org)
+        record["sha256"] = org_bundle_signing.sha256_hex(legacy.read_bytes())
+        (legacy_org / "org_bundle_adopted.json").write_text(json.dumps(record))
+        (legacy_org / "org_bundle.json").write_bytes(legacy.read_bytes())
+        before = legacy.read_bytes()
+
+        assert daemon_main.run_retire_bundle() == 0
+        assert daemon_main.load_org_config() == {}
+        assert daemon_main.load_org_config() == {}
+        assert not (legacy_org / "org_bundle.json").exists()
+        assert legacy.read_bytes() == before
+
+    @pytest.mark.parametrize("variable, value, named", [
+        ("PRIVACYFENCE_ISSUER_URL", "https://other.example.com", "PRIVACYFENCE_ISSUER_URL"),
+        ("PRIVACYFENCE_IDP_ISSUER", "https://other-idp.example.com", "PRIVACYFENCE_IDP_ISSUER"),
+        ("PRIVACYFENCE_IDP_CLIENT_ID", "other-client", "PRIVACYFENCE_IDP_CLIENT_ID"),
+    ])
+    def test_refuses_while_the_environment_differs_and_changes_nothing(
+        self, legacy_org, matching_environment, monkeypatch, capsys, variable, value, named
+    ):
+        install_legacy_bundle(legacy_org)
+        before = (legacy_org / "org_bundle_adopted.json").read_text()
+        monkeypatch.setenv(variable, value)
+        assert daemon_main.run_retire_bundle() == 1
+        err = capsys.readouterr().err
+        assert named in err and "Not retiring" in err and SENTINEL not in err
+        assert (legacy_org / "org_bundle.json").exists()
+        assert (legacy_org / "org_bundle_adopted.json").read_text() == before
+        assert not (legacy_org / "connector_configs").exists()
+
+    @pytest.mark.parametrize("variable", [
+        "PRIVACYFENCE_MODE", "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_IDP_ISSUER", "PRIVACYFENCE_IDP_CLIENT_ID",
+    ])
+    def test_refuses_while_the_environment_lacks_a_value(self, legacy_org, matching_environment, monkeypatch, capsys, variable):
+        install_legacy_bundle(legacy_org)
+        monkeypatch.delenv(variable)
+        if variable == "PRIVACYFENCE_IDP_ISSUER":
+            monkeypatch.delenv("PRIVACYFENCE_IDP_CLIENT_ID")
+        assert daemon_main.run_retire_bundle() == 1
+        err = capsys.readouterr().err
+        assert variable in err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_a_mode_that_conflicts_with_the_bundle_is_refused_by_name(
+        self, legacy_org, matching_environment, monkeypatch, capsys
+    ):
+        install_legacy_bundle(legacy_org)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "local")
+        assert daemon_main.run_retire_bundle() == 1
+        assert "PRIVACYFENCE_MODE" in capsys.readouterr().err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_an_unusable_environment_is_reported(self, legacy_org, matching_environment, monkeypatch, capsys):
+        install_legacy_bundle(legacy_org)
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "nonsense")
+        assert daemon_main.run_retire_bundle() == 1
+        assert "PRIVACYFENCE_MODE" in capsys.readouterr().err
+
+    def test_a_bundle_with_no_idp_and_no_address_retires_when_the_environment_has_none(
+        self, legacy_org, monkeypatch
+    ):
+        install_legacy_bundle(legacy_org, {"mode": "org", "slack": {"client_id": "i", "client_secret": "s"}})
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
+        assert daemon_main.run_retire_bundle() == 0
+
+    def test_a_bundle_that_is_not_the_adopted_one_is_not_retired(self, legacy_org, matching_environment, capsys):
+        install_legacy_bundle(legacy_org)
+        (legacy_org / "org_bundle.json").write_bytes((legacy_org / "org_bundle.json").read_bytes() + b"\n")
+        assert daemon_main.run_retire_bundle() == 1
+        assert "no longer take a new org_bundle.json" in capsys.readouterr().err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_a_failed_write_keeps_the_bundle(self, legacy_org, matching_environment, monkeypatch, capsys):
+        install_legacy_bundle(legacy_org)
+
+        def fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(daemon_main, "atomic_write_json", fail)
+        assert daemon_main.run_retire_bundle() == 1
+        assert "Could not retire" in capsys.readouterr().err
+        assert (legacy_org / "org_bundle.json").exists()
+
+    def test_no_bundle(self, legacy_org, capsys):
+        assert daemon_main.run_retire_bundle() == 1
+        assert "no org/org_bundle.json" in capsys.readouterr().err
+
+    def test_main_dispatches_it(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_retire_bundle", lambda: 7)
+        assert daemon_main.main(["--retire-bundle"]) == 7

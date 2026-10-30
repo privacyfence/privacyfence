@@ -6,7 +6,7 @@ import threading
 
 import pytest
 
-from privacyfence import admin_config, app_credentials, oauth_apps
+from privacyfence import admin_config, app_credentials, connector_configs, oauth_apps
 from privacyfence.org_mode import ConfigurationError, GristProvisioningConfig, PeekProvisioningConfig
 
 BUILTIN = {"client_id": "builtin-id", "client_secret": "builtin-secret"}
@@ -43,8 +43,17 @@ def make_admin(*offered, **services):
     return admin
 
 
-def compose(bundle, admin, *, mode="org", single_user=False):
-    return oauth_apps.effective_org_config(bundle, admin, mode=mode, single_user=single_user)
+def compose(bundle, admin, *, mode="org", single_user=False, connectors=None):
+    return oauth_apps.effective_org_config(
+        bundle, admin, mode=mode, single_user=single_user, connectors={} if connectors is None else connectors
+    )
+
+
+def connector(provider, **fields):
+    """A stored connector config for ``provider`` as ``load_all`` returns it."""
+    if not fields:
+        fields = bundle_section(provider)
+    return {provider: connector_configs.LoadedConfig(provider, "connector-config", 1, "", "", dict(fields))}
 
 
 def compose_core(bundle, admin, **kwargs):
@@ -65,18 +74,18 @@ class TestLegacyKeys:
             "atlassian": {"client_id": "a", "client_secret": "s", "assets": True, "assets_workspace_id": "w"},
             "grist": {"server_url": "https://grist.example"},
         }
-        result = compose(bundle, make_admin("atlassian"))
+        result = compose(bundle, make_admin("atlassian"), mode="local")
         assert result["atlassian"] == {"client_id": "a", "client_secret": "s", "assets": False}
         assert "grist" not in result
 
     def test_oauth_grist_keeps_its_own_server_url_and_loses_auto_provision(self):
         grist = {"client_id": "g", "client_secret": "s", "server_url": "https://g.example", "auto_provision": {"enabled": True}}
-        result = compose({"grist": grist}, make_admin("grist"))
+        result = compose({"grist": grist}, make_admin("grist"), mode="local")
         assert result["grist"] == {"client_id": "g", "client_secret": "s", "server_url": "https://g.example"}
 
     def test_bundle_relay_marker_is_stripped(self):
         bundle = {"slack": {"client_id": "i", "client_secret": "s", "relay": True}, "mode": "org"}
-        result = compose(bundle, make_admin("slack"))
+        result = compose(bundle, make_admin("slack"), mode="local")
         assert result["slack"] == {"client_id": "i", "client_secret": "s"}
         assert not oauth_apps.uses_relay(result["slack"])
 
@@ -129,11 +138,11 @@ class TestCredentialServices:
         bundle = {service: bundle_section(service)} if case == "bundle" else {}
         admin = make_admin(service)
         result = compose(bundle, admin, mode=mode)
-        source = oauth_apps.credentials_source(bundle, service, mode=mode)
-        if case == "bundle":
+        source = oauth_apps.credentials_source(bundle, service, mode=mode, connectors={})
+        if case == "bundle" and mode == "local":
             assert result[service] == bundle_section(service)
             assert source == "bundle"
-        elif case == "builtin" and mode == "org":
+        elif case in ("builtin", "bundle") and mode == "org":
             assert result[service] == expected_builtin(service)
             assert oauth_apps.uses_relay(result[service])
             assert source == "builtin"
@@ -149,9 +158,9 @@ def test_absent_builtin_gives_no_section(builtins):
 
 class TestAtlassian:
     def test_credentials_with_admin_assets(self):
-        bundle = {"atlassian": {"client_id": "a", "client_secret": "s"}}
+        connectors = connector("atlassian", client_id="a", client_secret="s")
         admin = make_admin("atlassian", atlassian={"assets": True, "assets_workspace_id": "ws-1"})
-        assert compose(bundle, admin)["atlassian"] == {
+        assert compose({}, admin, connectors=connectors)["atlassian"] == {
             "client_id": "a",
             "client_secret": "s",
             "assets": True,
@@ -189,7 +198,8 @@ class TestGrist:
     def test_bundle_oauth_app_beats_admin_address(self):
         grist = {"client_id": "g", "client_secret": "s", "auth_server_url": "https://a", "server_url": "https://own"}
         admin = make_admin("grist", grist={"server_url": "https://admin.example"})
-        assert compose({"grist": grist}, admin)["grist"] == grist
+        assert compose({"grist": grist}, admin, mode="local")["grist"] == grist
+        assert compose({}, admin, connectors=connector("grist", **grist))["grist"] == grist
 
     def test_admin_address_alone(self):
         admin = make_admin("grist", grist={"server_url": "https://admin.example"})
@@ -352,8 +362,8 @@ class TestGristAutoProvision:
     def test_oauth_app_means_no_auto_provision(self, monkeypatch):
         self.environment(monkeypatch)
         admin = enable_provisioning(make_admin("grist"), "grist")
-        bundle = {"grist": {"client_id": "g", "client_secret": "s", "auth_server_url": "https://a"}}
-        assert "auto_provision" not in compose(bundle, admin)["grist"]
+        own = {"client_id": "g", "client_secret": "s", "auth_server_url": "https://a", "server_url": "https://g"}
+        assert "auto_provision" not in compose({}, admin, connectors=connector("grist", **own))["grist"]
 
     def test_missing_provisioner(self, monkeypatch):
         monkeypatch.setenv(GRIST_VAR, "https://grist.example")
@@ -427,7 +437,7 @@ def test_neither_input_is_mutated(builtins, monkeypatch):
         make_admin("google", "slack", "atlassian", "grist", "peek"), "peek"
     )
     bundle_before, admin_before = copy.deepcopy(bundle), copy.deepcopy(admin)
-    result = compose(bundle, admin)
+    result = compose(bundle, admin, mode="local")
     result["slack"]["client_id"] = "changed"
     result["atlassian"]["client_id"] = "changed"
     result["grist"]["client_id"] = "changed"
@@ -438,12 +448,20 @@ def test_neither_input_is_mutated(builtins, monkeypatch):
 class TestCredentialsSource:
     def test_salesforce_bundle_needs_consumer_key(self, builtins):
         builtins()
-        assert oauth_apps.credentials_source({"salesforce": {"client_id": "x"}}, "salesforce", mode="org") == "none"
-        assert oauth_apps.credentials_source({"salesforce": {"consumer_key": "k"}}, "salesforce", mode="org") == "bundle"
+        source = oauth_apps.credentials_source
+        assert source({"salesforce": {"client_id": "x"}}, "salesforce", mode="local") == "none"
+        assert source({"salesforce": {"consumer_key": "k"}}, "salesforce", mode="local") == "bundle"
 
-    def test_bundle_beats_builtin(self, builtins):
+    def test_local_mode_bundle_beats_builtin(self, builtins):
         builtins("slack")
-        assert oauth_apps.credentials_source({"slack": {"client_id": "i"}}, "slack", mode="org") == "bundle"
+        assert oauth_apps.credentials_source({"slack": {"client_id": "i"}}, "slack", mode="local") == "bundle"
+
+    def test_organization_mode_never_reads_the_bundle(self, builtins):
+        builtins()
+        bundle = {"slack": {"client_id": "i", "client_secret": "s"}}
+        assert oauth_apps.credentials_source(bundle, "slack", mode="org", connectors={}) == "none"
+        builtins("slack")
+        assert oauth_apps.credentials_source(bundle, "slack", mode="org", connectors={}) == "builtin"
 
     def test_local_mode_never_builtin(self, builtins):
         builtins("slack")
@@ -451,7 +469,16 @@ class TestCredentialsSource:
 
     def test_malformed_section(self, builtins):
         builtins("slack")
-        assert oauth_apps.credentials_source({"slack": "x"}, "slack", mode="org") == "builtin"
+        assert oauth_apps.credentials_source({"slack": "x"}, "slack", mode="org", connectors={}) == "builtin"
+        assert oauth_apps.credentials_source({"slack": "x"}, "slack", mode="local") == "none"
+
+    def test_connector_beats_builtin_in_organization_mode(self, builtins):
+        builtins("slack")
+        assert oauth_apps.credentials_source({}, "slack", mode="org", connectors=connector("slack")) == "connector"
+
+    def test_local_mode_ignores_connector_configs(self, builtins):
+        builtins("slack")
+        assert oauth_apps.credentials_source({}, "slack", mode="local", connectors=connector("slack")) == "none"
 
 
 class TestRelayHelpers:
@@ -492,3 +519,78 @@ class TestSharedConfig:
             assert thread.is_alive()
         thread.join(5)
         assert taken == [{"a": 1}]
+
+
+class TestConnectorConfigs:
+    """In organization mode a provider's app is its connector config, else the built-in app, else none."""
+
+    @pytest.mark.parametrize("service", ["google", "slack", "salesforce", "miro", "atlassian"])
+    def test_connector_beats_builtin_and_is_not_relayed(self, builtins, service):
+        builtins(oauth_apps.BUILTIN_KEY[service])
+        section = compose({}, make_admin(service), connectors=connector(service))[service]
+        assert not oauth_apps.uses_relay(section)
+        assert {k: v for k, v in section.items() if k not in ("auth_uri", "token_uri", "assets")} == bundle_section(service)
+
+    @pytest.mark.parametrize("service", ["google", "slack", "salesforce", "miro"])
+    def test_builtin_beats_nothing_and_the_bundle_is_ignored(self, builtins, service):
+        builtins(oauth_apps.BUILTIN_KEY[service])
+        bundle = {service: bundle_section(service)}
+        assert compose(bundle, make_admin(service))[service] == expected_builtin(service)
+        builtins()
+        assert service not in compose(bundle, make_admin(service))
+
+    def test_google_gets_its_endpoints(self):
+        section = compose({}, make_admin("google"), connectors=connector("google"))["google"]
+        assert section["auth_uri"] == oauth_apps.GOOGLE_AUTH_URI
+        assert section["token_uri"] == oauth_apps.GOOGLE_TOKEN_URI
+
+    def test_an_imported_google_config_keeps_its_endpoints(self):
+        fields = {**bundle_section("google"), "auth_uri": "https://auth.example", "token_uri": "https://token.example"}
+        section = compose({}, make_admin("google"), connectors=connector("google", **fields))["google"]
+        assert section == fields
+
+    def test_a_withdrawn_service_loses_its_connector_config(self):
+        assert "slack" not in compose({}, make_admin(), connectors=connector("slack"))
+
+    def test_grist_connector_beats_the_admin_address(self):
+        own = {"client_id": "g", "client_secret": "s", "auth_server_url": "https://a", "server_url": "https://own"}
+        admin = make_admin("grist", grist={"server_url": "https://admin.example"})
+        assert compose({}, admin, connectors=connector("grist", **own))["grist"] == own
+
+    def test_the_bundles_credential_sections_are_dropped_even_for_unoffered_services(self):
+        bundle = {"mode": "org", **{p: {"client_id": "x", "client_secret": "y"} for p in connector_configs.PROVIDERS}}
+        assert compose_core(bundle, make_admin()) == {"mode": "org"}
+
+    def test_the_bundle_is_still_read_for_mode_server_and_idp(self):
+        bundle = {"mode": "org", "server": {"issuer_url": "https://pf.example"}, "idp": {"issuer": "https://i"}}
+        assert compose_core(bundle, make_admin()) == bundle
+
+    def test_local_mode_is_unchanged_and_ignores_connectors(self):
+        bundle = {"slack": bundle_section("slack")}
+        result = compose(bundle, make_admin("slack"), mode="local", connectors=connector("slack", client_id="c", client_secret="d"))
+        assert result["slack"] == bundle_section("slack")
+
+    def test_stored_configs_are_read_from_disk_when_none_are_given(self, tmp_path):
+        # The autouse fixture points the default directory at tmp_path.
+        from tests.connector_config_support import SENTINEL, fixture_key, public_bytes, sign
+
+        org = connector_configs.default_org_dir()
+        connector_configs.accept(
+            org, sign("slack"), confirmed_fingerprint=connector_configs.fingerprint(public_bytes(fixture_key()))
+        )
+        admin = make_admin("slack")
+        result = oauth_apps.effective_org_config({}, admin, mode="org")
+        assert result["slack"] == {"client_id": "slack-id", "client_secret": SENTINEL}
+        assert "slack" not in oauth_apps.effective_org_config({}, admin, mode="local")
+
+    def test_a_stored_config_that_no_longer_verifies_refuses(self, tmp_path):
+        from tests.connector_config_support import fixture_key, public_bytes, sign
+
+        org = connector_configs.default_org_dir()
+        connector_configs.accept(
+            org, sign("slack"), confirmed_fingerprint=connector_configs.fingerprint(public_bytes(fixture_key()))
+        )
+        path = connector_configs.stored_path(org, "slack")
+        path.write_bytes(path.read_bytes().replace(b"slack-id", b"evil-id"))
+        with pytest.raises(ConfigurationError, match="slack"):
+            oauth_apps.effective_org_config({}, make_admin("slack"), mode="org")

@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from privacyfence import admin_config, paths
+from privacyfence import admin_config, connector_configs, paths
 
 ALL_SERVICES = list(admin_config.SERVICES)
 
@@ -1074,6 +1074,12 @@ class TestServiceRows:
         monkeypatch.setattr(admin_config.app_credentials, "builtin_app", lambda key: apps.get(key))
         monkeypatch.setattr(admin_config.app_credentials, "telegram_app_credentials", lambda: (1, "hash-VALUE"))
 
+    @pytest.fixture(autouse=True)
+    def _no_connector_configs(self, monkeypatch, tmp_path):
+        # This module is exempt from the shared path isolation, and an organization-mode row
+        # reads the stored connector configs.
+        monkeypatch.setattr(connector_configs, "default_org_dir", lambda: tmp_path)
+
     def _rows(self, bundle=None, admin=None, *, mode="org", single_user=False):
         rows = admin_config.service_rows(
             bundle or {}, admin or _import({}, mode=mode), mode=mode, single_user=single_user
@@ -1100,7 +1106,7 @@ class TestServiceRows:
 
     def test_bundle_apps_win_and_are_not_relayed(self):
         bundle = {"slack": {"client_id": "own-slack", "client_secret": "x"}, "salesforce": {"consumer_key": "own-sf"}}
-        rows = self._rows(bundle)
+        rows = self._rows(bundle, mode="local")
         assert (rows["slack"]["app_source"], rows["slack"]["client_id"], rows["slack"]["relay"]) == ("bundle", "own-slack", False)
         assert (rows["salesforce"]["app_source"], rows["salesforce"]["client_id"]) == ("bundle", "own-sf")
 

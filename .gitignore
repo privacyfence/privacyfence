@@ -4,6 +4,8 @@ credentials/*
 org/*
 .env
 *.pem
+# A throwaway test key; the connector-config tests read it.
+!tests/fixtures/connector_config/key.pem
 *.key
 *.p12
 src/privacyfence/_telegram_credentials.py

@@ -1,0 +1,56 @@
+{
+  "slack": {
+    "serial": 3,
+    "signed_at": "2026-11-02T10:00:00Z",
+    "fields": [
+      [
+        "client_id",
+        "1234.5678"
+      ],
+      [
+        "client_secret",
+        "fixture-slack-secret-0001"
+      ]
+    ]
+  },
+  "salesforce": {
+    "serial": 2026110201,
+    "signed_at": "2026-11-02T10:05:00Z",
+    "fields": [
+      [
+        "consumer_key",
+        "3MVG9fixtureConsumerKey"
+      ],
+      [
+        "consumer_secret",
+        "fixture-salesforce-secret-0002"
+      ],
+      [
+        "login_url",
+        "https://acme.my.salesforce.com"
+      ]
+    ]
+  },
+  "grist": {
+    "serial": 7,
+    "signed_at": "2026-11-02T10:10:00Z",
+    "fields": [
+      [
+        "client_id",
+        "grist-fixture-client"
+      ],
+      [
+        "client_secret",
+        "fixture-grist-secret-0003"
+      ],
+      [
+        "auth_server_url",
+        "https://auth.grist.example"
+      ],
+      [
+        "server_url",
+        "https://grist.example"
+      ]
+    ]
+  }
+}

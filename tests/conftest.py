@@ -31,6 +31,7 @@ from privacyfence import (
     approval_ui,
     auto_accept,
     audit_log,
+    connector_configs,
     daemon_main,
     data_format,
     download_staging,
@@ -181,6 +182,7 @@ def _clear_server_environment(monkeypatch):
     for name in (
         "PRIVACYFENCE_MODE", "PRIVACYFENCE_BIND_HOST", "PRIVACYFENCE_PORT",
         "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES", "PRIVACYFENCE_ADMIN_EMAILS",
+        "PRIVACYFENCE_IDP", "PRIVACYFENCE_ALLOWED_DOMAINS",
         *(name for name in os.environ if name.startswith("PRIVACYFENCE_IDP_")),
     ):
         monkeypatch.delenv(name, raising=False)
@@ -200,7 +202,9 @@ def _isolate_whats_new_state(monkeypatch, request):
 
 # Modules that test the real functions below patch paths.data_dir to tmp_path themselves, so the
 # real path functions run and count toward their coverage.
-_ADMIN_CONFIG_FIXTURE_EXEMPT = ("test_app_credentials", "test_admin_config", "test_relay_client", "test_data_format")
+_ADMIN_CONFIG_FIXTURE_EXEMPT = (
+    "test_app_credentials", "test_admin_config", "test_relay_client", "test_data_format", "test_connector_configs",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -222,6 +226,7 @@ def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
     )
     # An org server started by a test must not leave a registration thread behind that outlives
     # the test's patched paths and could reach the real relay.
+    monkeypatch.setattr(connector_configs, "default_org_dir", lambda: request.getfixturevalue("tmp_path"))
     monkeypatch.setattr(relay_client, "start_registration_loop", lambda issuer_url, org_config, stop: None)
 
 

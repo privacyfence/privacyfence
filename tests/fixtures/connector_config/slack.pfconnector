@@ -1,0 +1,8 @@
+privacyfence-connector-config v1
+provider: slack
+serial: 3
+client_id: 1234.5678
+client_secret: fixture-slack-secret-0001
+signed_at: 2026-11-02T10:00:00Z
+key: xJbYgy4CzYPNVXpvpQeLvxtmTlJuuqlmmryfpLD9Cfc=
+signature: ksv4KRJaMTYpT31RAgnDYo3CvaVIBYaxf9kU5sW+SP6ycwrO0HUQT0NC7JDU3rlebL1EU9OXZpHlK9UOLumlDg==
