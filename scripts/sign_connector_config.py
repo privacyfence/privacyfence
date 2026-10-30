@@ -34,6 +34,7 @@ import base64
 import getpass
 import hashlib
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -163,6 +164,9 @@ def build_signed_text(
             continue
         lines.append(f"{name}: {_check_value(name, value)}")
     try:
+        # strptime alone accepts "2026-1-2T1:0:0Z", which the server then rejects.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", signed_at):
+            raise ValueError(signed_at)
         datetime.strptime(signed_at, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         _fail("signed_at must look like 2026-11-02T10:00:00Z.")

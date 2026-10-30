@@ -361,7 +361,7 @@ def slack_manifest(issuer_url: str) -> dict[str, Any]:
         "settings": {
             "org_deploy_enabled": False,
             "socket_mode_enabled": False,
-            "token_rotation_enabled": False,
+            "token_rotation_enabled": False,  # nosec B105  # a Slack manifest flag, not a password
         },
     }
 

@@ -479,11 +479,19 @@ class TestLoadAll:
         with pytest.raises(ConfigurationError, match="stored google connector config no longer verifies"):
             load_all(org)
 
-    def test_a_file_signed_with_another_key_refuses(self, org):
+    def test_a_file_signed_with_another_key_is_not_used(self, org):
         confirmed(org)
         other = Ed25519PrivateKey.generate()
         connector_configs.stored_path(org, "slack").write_bytes(sign("slack", 9, key=other))
-        with pytest.raises(ConnectorConfigError, match="stored slack connector config no longer verifies"):
+        assert connector_configs.load_with_stale(org) == ({}, {"slack"})
+
+    def test_a_forged_signature_under_the_pinned_key_refuses(self, org):
+        confirmed(org)
+        path = connector_configs.stored_path(org, "slack")
+        raw = sign("slack", 9)
+        path.write_bytes(raw.replace(b"slack-id", b"slack-xx"))
+        assert parse(raw).key == connector_configs.load_pin(org)
+        with pytest.raises(ConnectorConfigError, match="no longer verifies"):
             load_all(org)
 
     def test_another_providers_file_under_this_name_refuses(self, org):
@@ -515,11 +523,28 @@ class TestLoadAll:
         with pytest.raises(ConnectorConfigError, match="stored slack connector config cannot be read"):
             load_all(org)
 
-    def test_a_stored_file_with_no_pin_refuses(self, org):
+    def test_a_stored_file_with_no_pin_is_not_used_and_does_not_stop_the_start(self, org, caplog):
         confirmed(org)
         connector_configs.pinned_key_path(org).unlink()
-        with pytest.raises(ConnectorConfigError, match="no trusted signing key"):
-            load_all(org)
+        assert connector_configs.load_with_stale(org) == ({}, {"slack"})
+        assert "signed under a key this server does not trust" in caplog.text
+
+    def test_rotating_the_key_then_uploading_recovers_each_service(self, org):
+        adopt(org, public_bytes(fixture_key()))
+        accept(org, sign("slack"))
+        accept(org, sign("google", 2))
+        connector_configs.pinned_key_path(org).unlink()
+        # The restart after deleting the pin: nothing is pinned, nothing is trusted, the start goes on.
+        assert connector_configs.load_with_stale(org) == ({}, {"slack", "google"})
+        other = Ed25519PrivateKey.generate()
+        fp = fingerprint(public_bytes(other))
+        accept(org, sign("google", 3, key=other), confirmed_fingerprint=fp)
+        # Slack's old file is still under the old key: google recovers, slack waits for its own upload.
+        found, stale = connector_configs.load_with_stale(org)
+        assert set(found) == {"google"} and stale == {"slack"}
+        accept(org, sign("slack", 4, key=other))
+        found, stale = connector_configs.load_with_stale(org)
+        assert set(found) == {"slack", "google"} and stale == set()
 
     def test_an_unreadable_pin_refuses(self, org):
         confirmed(org)

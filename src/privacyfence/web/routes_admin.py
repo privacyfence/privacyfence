@@ -55,8 +55,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from starlette.exceptions import HTTPException
-from starlette.formparsers import MultiPartException
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
@@ -80,6 +78,7 @@ from .routes_settings import (
     _record_settings_audit,
     _settings_bridge_shim,
     handle_org_config_upload,
+    read_bounded_form,
 )
 from .session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE
 from .session_auth import LocalSessionStore
@@ -457,18 +456,19 @@ def _connector_config_confirmation(fingerprint: str) -> JSONResponse:
 
 
 async def _read_connector_config_form(request: Request) -> Any:  # noqa: ANN401 -- starlette's FormData
-    """The upload's multipart form, read only when its declared size is plausible and with a cap on
-    the parts, or a ``Response`` that refuses it. A body that does not declare its size is refused
-    because there is no way to bound it before it is spooled to disk."""
-    declared = request.headers.get("content-length", "")
-    if not declared.isdigit():
-        return _error("The upload must declare its size.", 411)
-    if int(declared) > MAX_CONNECTOR_CONFIG_BYTES + _CONNECTOR_CONFIG_REQUEST_SLACK:
-        return _error("The file is larger than 8 KB.", 413)
-    try:
-        return await request.form(max_files=1, max_fields=8, max_part_size=MAX_CONNECTOR_CONFIG_BYTES)
-    except (MultiPartException, HTTPException):
-        return _error("Upload exactly one file.")
+    """The connector config upload's form, or a ``Response`` that refuses it (see ``read_bounded_form``)."""
+    return await read_bounded_form(
+        request, max_bytes=MAX_CONNECTOR_CONFIG_BYTES, slack=_CONNECTOR_CONFIG_REQUEST_SLACK,
+        too_large="The file is larger than 8 KB.", refuse=_error,
+    )
+
+
+async def _read_rooms_form(request: Request) -> Any:  # noqa: ANN401 -- starlette's FormData
+    """The room directory upload's form, or a ``Response`` that refuses it."""
+    return await read_bounded_form(
+        request, max_bytes=MAX_ROOMS_UPLOAD_BYTES, slack=_CONNECTOR_CONFIG_REQUEST_SLACK,
+        too_large="The file is larger than 2 MB.", refuse=_error,
+    )
 
 
 async def _accept_connector_config_upload(
@@ -641,7 +641,9 @@ def build_org_routes(
         principal = _admin_principal(request)
         if isinstance(principal, Response):
             return principal
-        form = await request.form()
+        form = await _read_rooms_form(request)
+        if isinstance(form, Response):
+            return form
         csrf = form.get("csrf")
         if not isinstance(csrf, str) or not org_session.check_csrf(request, csrf):
             return _error("unauthorized", 401)
@@ -796,7 +798,9 @@ def build_routes(
     async def rooms_upload(request: Request) -> Response:
         if not _session_authenticated(request, sessions):
             return _unauthorized_response(request)
-        form = await request.form()
+        form = await _read_rooms_form(request)
+        if isinstance(form, Response):
+            return form
         csrf = form.get("csrf")
         if not isinstance(csrf, str) or not _local_csrf_matches(request, csrf):
             return _error("unauthorized", 401)

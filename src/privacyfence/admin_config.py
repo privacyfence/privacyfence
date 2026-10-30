@@ -150,16 +150,19 @@ def _default_config() -> dict[str, Any]:
     }
 
 
-def _fill(default: dict[str, Any], given: dict[str, Any]) -> dict[str, Any]:
+def _fill(default: dict[str, Any], given: dict[str, Any], path: str = "", where: str = "") -> dict[str, Any]:
     """``given`` with every key of ``default`` it lacks filled in, recursively. A value that
-    should be an object but is not is replaced by the default."""
+    should be an object but is not raises ``AdminConfigError`` naming the file and the key: a
+    hand-edited section silently reset to its default would drop the restrictions it held."""
     result = copy.deepcopy(given)
     for key, default_value in default.items():
         if key not in result:
             result[key] = copy.deepcopy(default_value)
         elif isinstance(default_value, dict):
             current = result[key]
-            result[key] = _fill(default_value, current) if isinstance(current, dict) else copy.deepcopy(default_value)
+            if not isinstance(current, dict):
+                raise AdminConfigError(f"{where} must hold an object at {path + key!r}; fix or remove it.")
+            result[key] = _fill(default_value, current, f"{path}{key}.", where)
     return result
 
 
@@ -181,7 +184,7 @@ def load() -> dict[str, Any] | None:
     version = raw.get("version")
     if isinstance(version, bool) or version != VERSION:
         raise AdminConfigError(f"{path} has an unsupported version; this PrivacyFence reads version {VERSION}.")
-    config = _fill(_default_config(), raw)
+    config = _fill(_default_config(), raw, where=str(path))
     config["org_server"] = raw.get("org_server") is True
     return config
 
@@ -984,6 +987,7 @@ def _connector_options(loaded: connector_configs.LoadedConfig) -> dict[str, Any]
 def _service_row(
     bundle: dict[str, Any], admin: dict[str, Any], name: str, env: dict[str, str], *, mode: Mode, single_user: bool,
     connectors: dict[str, connector_configs.LoadedConfig] | None = None, issuer_url: str = "",
+    reupload_needed: bool = False,
 ) -> dict[str, Any]:
     from . import oauth_apps
 
@@ -1019,6 +1023,9 @@ def _service_row(
             loaded = (connectors or {})[name]
             client_id = loaded.client_id
             connector_options = _connector_options(loaded)
+
+    if reupload_needed:
+        connector_options["reupload_needed"] = True
 
     options: dict[str, Any] = {}
     if name == "atlassian":
@@ -1085,9 +1092,14 @@ def service_rows(
     from . import oauth_apps
 
     env = _env_addresses()
-    connectors = connector_configs.load_all(connector_configs.default_org_dir()) if mode == "org" else {}
+    connectors, stale = (
+        connector_configs.load_with_stale(connector_configs.default_org_dir()) if mode == "org" else ({}, set())
+    )
     return [
-        _service_row(bundle, admin, name, env, mode=mode, single_user=single_user, connectors=connectors, issuer_url=issuer_url)
+        _service_row(
+            bundle, admin, name, env, mode=mode, single_user=single_user, connectors=connectors,
+            issuer_url=issuer_url, reupload_needed=name in stale,
+        )
         for name in SERVICES
         if not oauth_apps.preview_hidden(name)
     ]

@@ -2123,6 +2123,10 @@ _JS = r"""
     if (row.relay && (row.key === 'slack' || row.key === 'miro')) {
       lines.push('Sign-in codes for this service pass through oauth.privacyfence.eu without PKCE. Use your own app to avoid this.');
     }
+    if (opts.reupload_needed) {
+      lines.push("A stored connector config for this service was signed under a key this server no longer trusts, " +
+        "so it is not used. Upload a new one signed with the current key.");
+    }
     if (opts.slack_limited) {
       lines.push("Slack limits channel history and thread reads for apps outside the Slack Marketplace. " +
         "Your workspace\u2019s own app reads at full speed.");

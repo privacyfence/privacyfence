@@ -138,6 +138,8 @@ from typing import Any, Callable
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
+from starlette.exceptions import HTTPException
+from starlette.formparsers import MultiPartException
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import (
@@ -804,6 +806,25 @@ def _apply_step_up_gate(
     )
 
 
+async def read_bounded_form(
+    request: Request, *, max_bytes: int, slack: int = 32 * 1024, too_large: str = "The file is too large.",
+    refuse: Callable[[str, int], Response],
+) -> Any:  # noqa: ANN401 -- starlette's FormData
+    """An upload's multipart form, read only when its declared size is plausible and with a cap on
+    the parts, or the ``Response`` ``refuse`` builds. A body that does not declare its size is
+    refused, because there is no way to bound it before it is spooled to disk. ``max_bytes`` bounds
+    the one file; ``slack`` covers the multipart framing and the form's other fields."""
+    declared = request.headers.get("content-length", "")
+    if not declared.isdigit():
+        return refuse("The upload must declare its size.", 411)
+    if int(declared) > max_bytes + slack:
+        return refuse(too_large, 413)
+    try:
+        return await request.form(max_files=1, max_fields=8, max_part_size=max_bytes)
+    except (MultiPartException, HTTPException):
+        return refuse("Upload exactly one file.", 400)
+
+
 async def handle_org_config_upload(
     request: Request, *,
     controller: SettingsController,
@@ -824,7 +845,12 @@ async def handle_org_config_upload(
     passkey is asked for whatever the step-up configuration says."""
     if not _session_authenticated(request, sessions):
         return _unauthorized_response(request)
-    form = await request.form()
+    form = await read_bounded_form(
+        request, max_bytes=MAX_ORG_CONFIG_BYTES,
+        refuse=lambda message, status: JSONResponse({"error": message}, status_code=status),
+    )
+    if isinstance(form, Response):
+        return form
     csrf = form.get("csrf")
     if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
         return JSONResponse({"error": "unauthorized"}, status_code=401)

@@ -38,7 +38,8 @@ would refuse its own older bundle after the downgrade.
   the configuration `org_config.json` holds.
 - **Re-upgrading.** `org_bundle.json` and `admin_config.json` still exist, so 7.x uses them as they
   were. To start from 6.x's current files, delete `org_bundle.json`, `org_bundle_adopted.json`, the two
-  new pin files and `admin_config.json` before starting 7.x. Deleting only `org_bundle.json` re-adopts
+  new pin files, `admin_config.json` and the `connector_configs/` directory (with the connector pin
+  and serials) before starting 7.x. Deleting only `org_bundle.json` re-adopts
   the old file, and a newer serial pin refuses it.
 - Either pin name counts as "this directory belonged to an organization server"
   ([ADR 0260](0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md)).
