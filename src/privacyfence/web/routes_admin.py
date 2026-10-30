@@ -261,13 +261,16 @@ def _single_user(bundle: dict[str, Any]) -> bool:
 
 def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[str, Any]:
     """``admin_config.signin_state`` plus, with the built-in Google sign-in, each sign-in domain and
-    whether the relay last found it proven in DNS. The page says where to read what to publish; the
-    record's text is not in the state."""
+    what the relay last said about it: ``verified`` (proven in DNS), ``refused`` (a public suffix or
+    shared mail domain, which DNS cannot fix) or ``missing`` (no proof found yet). The page says
+    where to read what to publish; the record's text is not in the state."""
     signin = admin_config.signin_state(bundle)
     if signin["builtin"]:
-        verified = relay_client.verified_signin_domains()
+        relay = relay_client.status()
+        verified = set(relay["signin_domains_verified"])
+        refused = set(relay["signin_domains_refused"])
         signin["domains"] = [
-            {"domain": domain, "state": "verified" if domain in verified else "missing"}
+            {"domain": domain, "state": "refused" if domain in refused else "verified" if domain in verified else "missing"}
             for domain in relay_client.signin_domains(org_config) or []
         ]
     return signin

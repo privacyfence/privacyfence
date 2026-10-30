@@ -371,13 +371,19 @@ class TestState:
     def test_state_lists_each_sign_in_domain_with_its_dns_proof_state(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
         monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
-        monkeypatch.setattr(relay_client, "signin_domains", lambda org_config: ["acme.com", "beta.example"])
-        monkeypatch.setattr(relay_client, "verified_signin_domains", lambda: frozenset({"acme.com"}))
+        monkeypatch.setattr(
+            relay_client, "signin_domains", lambda org_config: ["acme.com", "beta.example", "co.uk"],
+        )
+        monkeypatch.setattr(relay_client, "status", lambda: {
+            "last_ok_at": 1.0, "last_error": "", "needed": True,
+            "signin_domains_verified": ["acme.com"], "signin_domains_refused": ["co.uk"],
+        })
         world = World()
         world.sign_in(ADMIN)
         signin = world.client.get("/api/admin/state").json()["signin"]
         assert signin["domains"] == [
             {"domain": "acme.com", "state": "verified"}, {"domain": "beta.example", "state": "missing"},
+            {"domain": "co.uk", "state": "refused"},
         ]
         assert "pf-relay=" not in json.dumps(signin) and "_privacyfence-relay" not in json.dumps(signin)
 

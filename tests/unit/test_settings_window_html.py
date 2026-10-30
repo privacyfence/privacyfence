@@ -1866,6 +1866,14 @@ class TestBuiltinSignin:
         assert "https://privacyfence.eu/docs/org-mode-setup-guide/#built-in-google-sign-in" in page
         assert "_privacyfence-relay" not in page and "pf-relay=" not in page
 
+    def test_a_refused_domain_says_why_and_dns_is_not_the_fix(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": [], "domains": [
+            {"domain": "co.uk", "state": "refused"},
+        ]})
+        page = _render_org("access", state)
+        assert "<div>co.uk: refused</div>" in page
+        assert "public suffix or a shared mail domain" in page and "What to publish" not in page
+
     def test_no_guide_link_when_every_domain_is_verified(self):
         state = _org_state(signin={"builtin": True, "admin_emails": [], "domains": [
             {"domain": "acme.com", "state": "verified"},

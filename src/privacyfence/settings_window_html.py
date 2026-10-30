@@ -2443,10 +2443,12 @@ _JS = r"""
   // setup guide, which the line links to.
   function signinDomainsHtml(signin) {
     var domains = signin.domains || [];
-    var missing = domains.some(function (d) { return d.state !== 'verified'; });
+    var missing = domains.some(function (d) { return d.state === 'missing'; });
+    var refused = domains.some(function (d) { return d.state === 'refused'; });
     var lines = domains.length
       ? domains.map(function (d) {
-          return '<div>' + esc(d.domain) + ': ' + (d.state === 'verified' ? 'verified' : 'missing') + '</div>';
+          var label = d.state === 'verified' ? 'verified' : d.state === 'refused' ? 'refused' : 'missing';
+          return '<div>' + esc(d.domain) + ': ' + label + '</div>';
         }).join('')
       : '<div>' + esc('No sign-in domain yet. Add an allowed domain or an admin address.') + '</div>';
     var guide = missing
@@ -2454,7 +2456,11 @@ _JS = r"""
         '<a href="' + CONNECTOR_DOCS_URL + '#built-in-google-sign-in" target="_blank" rel="noopener">' +
         'What to publish</a></div>'
       : '';
-    return rowHtml('Sign-in domains', lines + guide);
+    var why = refused
+      ? '<div>' + esc('A domain marked refused is a public suffix or a shared mail domain such as gmail.com. DNS cannot fix it: ' +
+          'take it out of the allowed domains and the admin addresses.') + '</div>'
+      : '';
+    return rowHtml('Sign-in domains', lines + guide + why);
   }
 
   function builtinSigninHtml(signin) {
