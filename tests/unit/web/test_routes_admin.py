@@ -39,6 +39,7 @@ AUDIT_FORWARDING = {
 ACTION_BODIES = {
     "offer_service": {"service": "google"},
     "set_atlassian_assets": {"enabled": True, "workspace_id": "w1"},
+    "set_salesforce_login_url": {"value": "https://test.salesforce.com"},
     "set_server_address": {"service": "peek", "value": "https://peek.example.com"},
     "set_auto_provisioning": {"service": "peek", "enabled": False, "trust_unverified_email": True},
     "set_unattended_sessions": {"enabled": True},
@@ -148,7 +149,7 @@ class TestAccess:
     def test_an_unknown_action_is_404(self):
         world = World()
         csrf = world.sign_in(ADMIN)
-        assert world.post("set_salesforce_login_url", {"value": "x"}, csrf).status_code == 404
+        assert world.post("set_nonexistent_setting", {"value": "x"}, csrf).status_code == 404
         assert world.post("not_an_action", {}, csrf).status_code == 404
 
     def test_bad_csrf_origin_and_json(self):

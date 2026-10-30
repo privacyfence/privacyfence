@@ -258,6 +258,12 @@ def effective_org_config(
                 result.pop(name, None)
             else:
                 result[name] = section
+    if offered["salesforce"] and "salesforce" in result:
+        # A connector config's or bundle's own login_url wins; the stored one is checked again
+        # because it decides which host receives the sign-in.
+        login_url = admin_config.salesforce_login_url(str(service_config("salesforce").get("login_url") or ""))
+        if login_url and not result["salesforce"].get("login_url"):
+            result["salesforce"]["login_url"] = login_url
     if offered["atlassian"]:
         section = _credentials_section(cleaned, "atlassian", mode=mode, connectors=connectors)
         if section is None:

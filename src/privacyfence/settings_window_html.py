@@ -2181,6 +2181,30 @@ _JS = r"""
     return rowHtml('Own Slack app', desc, controls, 'pf-row-sub');
   }
 
+  // The built-in Salesforce app is a package each org installs once: the install link to send its
+  // Salesforce admin, with a copy button. Only the built-in app carries one.
+  function salesforceInstallRowHtml(row) {
+    var opts = row.options || {};
+    var url = opts.install_url || '';
+    if (row.app_source !== 'builtin' || url.indexOf('https://login.salesforce.com/') !== 0) { return ''; }
+    var controls = '<div class="pf-row-controls"><div class="button secondary" role="button" tabindex="0" ' +
+      'aria-label="Copy the Salesforce install link" data-copy-text="' + esc(url) + '">Copy link</div></div>';
+    var desc = '<div>' + esc('Each Salesforce org installs PrivacyFence once: send its Salesforce admin this link.') + '</div>' +
+      '<div><a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(url) + '</a></div>';
+    return rowHtml('Install link', desc, controls, 'pf-row-sub');
+  }
+
+  // An org that blocks login.salesforce.com signs in at its My Domain URL; empty means the default.
+  function salesforceLoginUrlRowHtml(row) {
+    var opts = row.options || {};
+    return '<div class="pf-row pf-row-sub"><div class="pf-row-text"><div class="pf-row-title">Login URL</div>' +
+      '<div class="pf-row-desc">' + esc('Leave empty for https://login.salesforce.com. An org that blocks that host uses its My Domain URL.') +
+      '</div></div><div class="pf-row-controls"><input class="field" type="url" autocomplete="off" spellcheck="false" ' +
+      'placeholder="https://login.salesforce.com" aria-label="Salesforce login URL" value="' + esc(opts.login_url || '') +
+      '" data-admin-sflogin="1"><div class="button secondary" role="button" tabindex="0" ' +
+      'aria-label="Save the Salesforce login URL" data-admin-sflogin-save="1">Save</div></div></div>';
+  }
+
   function serverAddressRowHtml(row) {
     var opts = row.options || {};
     if (opts.locked) { return ''; }
@@ -2248,6 +2272,10 @@ _JS = r"""
       }
       if (CAPS.mode === 'org' && CONNECTOR_PROVIDERS.indexOf(row.key) !== -1) {
         html += connectorConfigRowHtml(row);
+      }
+      if (row.offered && row.key === 'salesforce') {
+        html += salesforceInstallRowHtml(row);
+        if (!notApplicable('set_salesforce_login_url')) { html += salesforceLoginUrlRowHtml(row); }
       }
       if (row.offered && (row.key === 'peek' || row.key === 'grist')) {
         html += serverAddressRowHtml(row) + autoProvisionRowHtml(row);
@@ -2903,6 +2931,16 @@ _JS = r"""
 
     if (e.target.closest('[data-admin-assets-save]')) { saveAssets(); return; }
 
+    var copyTextEl = e.target.closest('[data-copy-text]');
+    if (copyTextEl) {
+      copyToClipboard(copyTextEl.getAttribute('data-copy-text'));
+      var box = copyTextEl.getBoundingClientRect();
+      showCopyToast(box.left, box.top, 'Copied');
+      return;
+    }
+
+    if (e.target.closest('[data-admin-sflogin-save]')) { saveSalesforceLoginUrl(); return; }
+
     var formSaveEl = e.target.closest('[data-admin-form-save]');
     if (formSaveEl) { saveAdminForm(formSaveEl.getAttribute('data-admin-form-save')); return; }
 
@@ -3032,6 +3070,11 @@ _JS = r"""
     var on = document.querySelector('[data-admin-assets-enabled]');
     var workspace = document.querySelector('[data-admin-assets-workspace]');
     post('set_atlassian_assets', { enabled: !!(on && on.checked), workspace_id: workspace ? workspace.value : '' });
+  }
+
+  function saveSalesforceLoginUrl() {
+    var input = document.querySelector('[data-admin-sflogin]');
+    post('set_salesforce_login_url', { value: input ? input.value : '' });
   }
 
   function saveServerAddress(service) {
@@ -3206,6 +3249,7 @@ _JS = r"""
     // div-based switch it replaced did.
     if (el.getAttribute('role') === 'switch') { e.preventDefault(); el.click(); return; }
     if (el.hasAttribute('data-admin-assets-workspace')) { saveAssets(); return; }
+    if (el.hasAttribute('data-admin-sflogin')) { saveSalesforceLoginUrl(); return; }
     var formEl = el.closest ? el.closest('[data-admin-form]') : null;
     if (formEl && el.hasAttribute('data-f') && el.type !== 'checkbox') { saveAdminForm(formEl.getAttribute('data-admin-form')); return; }
     if (el.hasAttribute('data-admin-address')) { saveServerAddress(el.getAttribute('data-admin-address')); return; }

@@ -115,6 +115,8 @@ def _default_service(name: str) -> dict[str, Any]:
     service: dict[str, Any] = {"offered": False}
     if name == "atlassian":
         service.update({"assets": False, "assets_workspace_id": ""})
+    elif name == "salesforce":
+        service["login_url"] = ""
     elif name in _ADDRESS_FIELD:
         auto_provision: dict[str, Any] = {
             "enabled": False,
@@ -445,6 +447,7 @@ _ACTION_MODES: dict[str, frozenset[str]] = {
     "withdraw_service": _LOCAL_AND_ORG,
     "set_atlassian_assets": _LOCAL_AND_ORG,
     "set_server_address": _LOCAL_AND_ORG,
+    "set_salesforce_login_url": _LOCAL_AND_ORG,
     "set_unattended_sessions": _LOCAL_AND_ORG,
     "clear_rooms": _LOCAL_AND_ORG,
     "set_auto_provisioning": _ORG_ONLY,
@@ -654,6 +657,45 @@ def _apply_atlassian_assets(config: dict[str, Any], params: dict[str, Any]) -> t
     return f"Set Jira Assets to {'on' if enabled else 'off'}", ["services"]
 
 
+_SF_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_SF_LOGIN_URL_RE = re.compile(
+    rf"https://(?:login\.salesforce\.com|test\.salesforce\.com|{_SF_LABEL}\.my\.salesforce\.com"
+    rf"|{_SF_LABEL}--{_SF_LABEL}\.sandbox\.my\.salesforce\.com)"
+)
+_SF_LOGIN_URL_REFUSAL = "Use login.salesforce.com, test.salesforce.com or your My Domain URL (…my.salesforce.com)."
+
+
+def salesforce_login_url(value: str) -> str | None:
+    """``value`` as a Salesforce login origin, or ``None`` when it is not one.
+
+    Only Salesforce's own names are accepted -- ``login.salesforce.com``, ``test.salesforce.com``,
+    ``<name>.my.salesforce.com`` and ``<name>--<sandbox>.sandbox.my.salesforce.com`` -- over
+    https, with no userinfo, port, path, query or fragment, because this host receives the
+    sign-in. Surrounding whitespace, case and one trailing slash are normalised away. The empty
+    string is accepted and means the default."""
+    text = value.strip()
+    if text.endswith("/"):
+        text = text[:-1]
+    # The ASCII check comes first: str.lower maps the Kelvin sign to "k".
+    if not text.isascii():
+        return None
+    text = text.lower()
+    if text and not _SF_LOGIN_URL_RE.fullmatch(text):
+        return None
+    return text
+
+
+def _apply_salesforce_login_url(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    login_url = salesforce_login_url(_text(params, "value"))
+    if login_url is None:
+        raise AdminConfigError(_SF_LOGIN_URL_REFUSAL)
+    service = config["services"]["salesforce"]
+    if service["login_url"] == login_url:
+        return "", []
+    service["login_url"] = login_url
+    return (f"Set the Salesforce login URL to {login_url}" if login_url else "Cleared the Salesforce login URL"), ["services"]
+
+
 def _apply_server_address(
     config: dict[str, Any], params: dict[str, Any], bundle: dict[str, Any], *, mode: Mode
 ) -> tuple[str, list[str]]:
@@ -841,6 +883,8 @@ def apply_change(
             result = _apply_service_toggle(config, action, params)
         elif action == "set_atlassian_assets":
             result = _apply_atlassian_assets(config, params)
+        elif action == "set_salesforce_login_url":
+            result = _apply_salesforce_login_url(config, params)
         elif action == "set_server_address":
             result = _apply_server_address(config, params, bundle, mode=mode)
         elif action == "set_auto_provisioning":
@@ -982,6 +1026,12 @@ def _service_row(
             "assets": bool(stored.get("assets", False)),
             "assets_workspace_id": str(stored.get("assets_workspace_id", "") or ""),
         }
+    elif name == "salesforce":
+        options = {"login_url": str(stored.get("login_url", "") or "")}
+        if app_source == "builtin":
+            app = app_credentials.builtin_app(oauth_apps.BUILTIN_KEY[name])
+            if app and app.get("install_url"):
+                options["install_url"] = str(app["install_url"])
     elif name in _ADDRESS_FIELD:
         source = "connector" if app_source == "connector" else _address_source(bundle, name, stored, env)
         if source == "connector":

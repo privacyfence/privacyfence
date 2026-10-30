@@ -559,7 +559,10 @@ def build_routes(
             logger.info("OAuth callback for %s ignored: not finished by the principal that started it", service)
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
         if provider_error or not code:
-            return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
+            location = f"/connect?error={service}"
+            if service == "salesforce" and provider_error in _SALESFORCE_NOT_INSTALLED_ERRORS:
+                location += f"&reason={_NOT_INSTALLED_REASON}"
+            return RedirectResponse(location, status_code=302, headers={"Cache-Control": "no-store"})
 
         if _section_client_id(org_config, service) != pending.client_id:
             logger.warning("OAuth app for %s changed during the sign-in; the attempt was dropped", service)
@@ -588,6 +591,7 @@ def build_routes(
             peek_state=peek_states.get(principal.id),
             flash_connected=request.query_params.get("connected", ""),
             flash_error=request.query_params.get("error", ""),
+            flash_reason=request.query_params.get("reason", ""),
             grist_error=grist_errors.get(principal.id, ""),
             csrf=session_id, nonce=_csp_nonce_for(request), whats_new_version=whats_new_version,
         )
@@ -872,7 +876,18 @@ li.assets{--stack-gap:var(--space-xs)}
 """
 
 
-def _flash_html(flash_connected: str, flash_error: str) -> str:
+# The OAuth errors Salesforce returns when the sign-in names an app the org has not installed.
+_SALESFORCE_NOT_INSTALLED_ERRORS = frozenset({"OAUTH_APP_ACCESS_DENIED", "invalid_client_id"})
+_NOT_INSTALLED_REASON = "not_installed"
+
+
+def _not_installed_line(service: str, reason: str) -> str:
+    if service == "salesforce" and reason == _NOT_INSTALLED_REASON:
+        return " Your Salesforce administrator has to install PrivacyFence in your org first."
+    return ""
+
+
+def _flash_html(flash_connected: str, flash_error: str, flash_reason: str = "") -> str:
     parts = []
     if flash_connected and flash_connected in SERVICE_LABELS:
         parts.append(
@@ -881,7 +896,8 @@ def _flash_html(flash_connected: str, flash_error: str) -> str:
     if flash_error and flash_error in SERVICE_LABELS:
         parts.append(
             f'<div class="card card-danger" role="alert">Could not connect {_esc(SERVICE_LABELS[flash_error])} -- '
-            "either sign-in was declined, or your organization hasn't configured it yet.</div>"
+            "either sign-in was declined, or your organization hasn't configured it yet."
+            f"{_not_installed_line(flash_error, flash_reason)}</div>"
         )
     return "".join(parts)
 
@@ -1090,7 +1106,7 @@ def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str 
 def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
     flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
-    peek_state: _PeekState | None = None, whats_new_version: str = "",
+    peek_state: _PeekState | None = None, whats_new_version: str = "", flash_reason: str = "",
 ) -> str:
     def offered(service: str) -> bool:  # ADR 0196: a service the org config doesn't enable is not listed
         return org_mode.connector_enabled_by_org(org_config, service)
@@ -1115,7 +1131,7 @@ def _render_connect_page(
         "<h1>Connect your accounts</h1>"
         f'<p class="lead">Signed in as {_esc(who)}. Connecting a service lets PrivacyFence act on it for you, still gated by '
         "the same approval rules as everything else.</p>"
-        f"{_flash_html(flash_connected, flash_error)}"
+        f"{_flash_html(flash_connected, flash_error, flash_reason)}"
         f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}{peek_row}{grist_row}</ul>'
         '<form class="cluster" method="post" action="/logout">'
         '<button type="submit" class="button secondary">Sign out</button></form>'
