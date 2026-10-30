@@ -315,8 +315,9 @@ jobs:
       # docstring. This runs for stable *and* pre-release tags alike: R2 is the one archive that
       # has everything, regardless of what's also public elsewhere.
       #
-      # Alongside the DMG, also upload the two org config build scripts (scripts/
-      # build_org_bundle.py and scripts/sync_room_directory.py). They're stdlib-only / a checked-
+      # Alongside the DMG, also upload the org config build scripts (scripts/
+      # build_org_bundle.py and scripts/sync_room_directory.py) and the connector config signing
+      # tools (scripts/sign_connector_config.py and the browser page). They're stdlib-only / a checked-
       # out copy is not what IT admins are expected to go find -- unlike the rest of scripts/,
       # these two are themselves a release output, run by org admins (not contributors) to
       # produce/update the org_config.json bundle distributed to end users -- see their own
@@ -337,10 +338,15 @@ jobs:
           R2_BUCKET: privacyfence-releases
         run: |
           python3 -m pip install --quiet --user --require-hashes -r requirements/release.lock.txt
+          # The browser tool for signing connector configs, named as a release asset: the archive
+          # keeps the file under its basename, and the offline copy is pinned to this release.
+          cp website/tools/connector-config/index.html dist/privacyfence-connector-config-tool.html
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*.dmg \
             scripts/build_org_bundle.py \
-            scripts/sync_room_directory.py
+            scripts/sync_room_directory.py \
+            scripts/sign_connector_config.py \
+            dist/privacyfence-connector-config-tool.html
 
   # The Windows analogue of the `build` job above. Runs in
   # parallel with it (and with `build-deb`/`sbom`) rather than depending on
@@ -1096,6 +1102,14 @@ jobs:
           python3 scripts/build_sync_plugin.py --version "${{ steps.release.outputs.version }}" \
             --out release-assets/privacyfence-sync-plugin.zip
 
+      # The browser page that signs connector configs, attached next to its command-line twin
+      # (scripts/sign_connector_config.py). Stable only, like the attach step below. The page is
+      # copied unchanged: its Content-Security-Policy hashes cover its inline script and style.
+      - name: Stage the connector config signing page (stable only)
+        if: steps.release.outputs.channel == 'stable'
+        run: |
+          cp website/tools/connector-config/index.html release-assets/privacyfence-connector-config-tool.html
+
       # Only a stable tag also gets a public GitHub Release with attached binaries -- alpha/beta/rc
       # stop at the private R2 upload each build job already did (see scripts/r2_release.py's
       # module docstring for why). One call, the complete file set -- see this job's own top
@@ -1109,6 +1123,8 @@ jobs:
             release-assets/PrivacyFence.mcpb
             scripts/build_org_bundle.py
             scripts/sync_room_directory.py
+            scripts/sign_connector_config.py
+            release-assets/privacyfence-connector-config-tool.html
             release-assets/PrivacyFence-*-setup.exe
             release-assets/privacyfence_*.deb
             release-assets/sbom-python.cdx.json

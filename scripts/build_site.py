@@ -125,6 +125,13 @@ PAGES: dict[str, str] = {
     "/imprint/": "imprint/index.html",
 }
 
+# Pages that are published but not part of the site: no navigation or footer link, no sitemap or
+# llms.txt entry, and no shared partials, because the page carries its own Content-Security-Policy
+# whose hashes cover its inline script and style byte for byte. Copied unchanged.
+UNLISTED_PAGES: dict[str, str] = {
+    "/tools/connector-config/": "tools/connector-config/index.html",
+}
+
 # Output path -> source path relative to the repository root, copied byte for byte.
 STATIC: dict[str, str] = {
     # The design system shared with the app (ADR 0078): one source, under the package.
@@ -1298,7 +1305,7 @@ class BuildReport:
 
 def check_manifest() -> None:
     """Refuses a manifest that would publish a file it also says stays private."""
-    published = set(PAGES.values()) | {s.removeprefix("website/") for s in STATIC.values() if s.startswith("website/")}
+    published = set(PAGES.values()) | set(UNLISTED_PAGES.values()) | {s.removeprefix("website/") for s in STATIC.values() if s.startswith("website/")}
     leaked = sorted(published & (REPOSITORY_ONLY | BUILD_INPUTS))
     if leaked:
         raise BuildError(f"the build manifest publishes files it lists as repository-only or build inputs: {leaked}")
@@ -1333,6 +1340,11 @@ def build(
     version = str(manifest["version"]) if manifest else None
     if releases is None and fetch_manifest:
         releases = fetch_all_releases()
+
+    for source in UNLISTED_PAGES.values():
+        target = out / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(WEBSITE / source, target)
 
     for url_path, source in PAGES.items():
         page = set_clients(assemble_page((WEBSITE / source).read_text(encoding="utf-8")))

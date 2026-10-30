@@ -167,7 +167,8 @@ def test_sitemap_lists_every_page():
     for index in built_site().rglob("index.html"):
         rel = index.parent.relative_to(built_site()).as_posix()
         pages.add("/" if rel == "." else f"/{rel}/")
-    assert locs == {f"{APEX}{path}" for path in pages}
+    # Unlisted pages are published but deliberately kept out of the sitemap.
+    assert locs == {f"{APEX}{path}" for path in pages - set(build_site.UNLISTED_PAGES)}
 
 
 def test_robots_and_sitemap_are_generated_not_hand_written():
@@ -243,3 +244,20 @@ def test_content_links_into_the_weakly_linked_pages():
     for target in [*CONNECTOR_PAGES, "/faq/"]:
         linking = [p for p, page in PAGES.items() if p != target and target in _main_links(page)]
         assert len(linking) >= 3, f"{target} is linked from the content of only {linking}"
+
+
+# ---- Unlisted pages -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", build_site.UNLISTED_PAGES)
+def test_an_unlisted_page_is_built_unchanged_and_is_not_linked_or_indexed(path):
+    source = build_site.UNLISTED_PAGES[path]
+    # Byte for byte: the page's CSP hashes cover its inline script and style, so nothing may be
+    # injected into it.
+    assert read_page(path).encode("utf-8") == (WEBSITE / source).read_bytes()
+    assert _meta(read_page(path), "name", "robots") == "noindex, nofollow"
+    assert path not in (built_site() / "sitemap.xml").read_text(encoding="utf-8")
+    assert path not in (built_site() / "llms.txt").read_text(encoding="utf-8")
+    for page_path, page in PAGES.items():
+        assert f'href="{path}"' not in page, f"{page_path} links to the unlisted page {path}"
+    assert path not in build_site.PAGES
