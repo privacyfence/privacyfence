@@ -12,7 +12,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from privacyfence import admin_config, daemon_main, data_format, oauth_apps, paths, privacy_filter, relay_client
+from privacyfence import admin_config, connector_configs, daemon_main, data_format, oauth_apps, paths, privacy_filter, relay_client
 from privacyfence import webauthn_stepup as wa
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal, principal_scope
@@ -76,6 +76,10 @@ class World:
         self.settings = settings if settings is not None else {}
         self.bundle = json.loads(json.dumps(BUNDLE))
         self.admin = admin_config.ensure(self.bundle, mode="org", single_user=False)[0]
+        # An organization server's own app is a stored connector config, not a bundle section.
+        stored = connector_configs.legacy_path(connector_configs.default_org_dir(), "slack")
+        stored.parent.mkdir(parents=True, exist_ok=True)
+        stored.write_text(json.dumps({"source": "legacy-bundle", "fields": BUNDLE["slack"]}), encoding="utf-8")
         self.org_config = oauth_apps.effective_org_config(self.bundle, self.admin, mode="org")
         self.sessions = org_session.OrgSessionStore()
         self.registry = registry if registry is not None else Registry()
