@@ -259,6 +259,20 @@ def _single_user(bundle: dict[str, Any]) -> bool:
     return org_mode.is_single_user(bundle)
 
 
+def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[str, Any]:
+    """``admin_config.signin_state`` plus, with the built-in Google sign-in, each sign-in domain and
+    whether the relay last found it proven in DNS. The page says where to read what to publish; the
+    record's text is not in the state."""
+    signin = admin_config.signin_state(bundle)
+    if signin["builtin"]:
+        verified = relay_client.verified_signin_domains()
+        signin["domains"] = [
+            {"domain": domain, "state": "verified" if domain in verified else "missing"}
+            for domain in relay_client.signin_domains(org_config) or []
+        ]
+    return signin
+
+
 def _admin_state(
     *, mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
@@ -284,7 +298,7 @@ def _admin_state(
         state["relay_status"] = relay_client.status()
         if paths.org_bundle_path().exists():
             state["legacy_bundle_warning"] = connector_configs.LEGACY_BUNDLE_WARNING
-        state["signin"] = admin_config.signin_state(bundle)
+        state["signin"] = _signin_state(bundle, org_config)
         if install_wide_settings is not None:
             state["privacy"] = _privacy_rows(install_wide_settings)
         state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))

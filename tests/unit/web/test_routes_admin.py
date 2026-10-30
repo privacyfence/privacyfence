@@ -365,8 +365,27 @@ class TestState:
         monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
         monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
         assert world.client.get("/api/admin/state").json()["signin"] == {
-            "builtin": True, "admin_emails": ["alice@acme.com"],
+            "builtin": True, "admin_emails": ["alice@acme.com"], "domains": [],
         }
+
+    def test_state_lists_each_sign_in_domain_with_its_dns_proof_state(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
+        monkeypatch.setenv("PRIVACYFENCE_ADMIN_EMAILS", "alice@acme.com")
+        monkeypatch.setattr(relay_client, "signin_domains", lambda org_config: ["acme.com", "beta.example"])
+        monkeypatch.setattr(relay_client, "verified_signin_domains", lambda: frozenset({"acme.com"}))
+        world = World()
+        world.sign_in(ADMIN)
+        signin = world.client.get("/api/admin/state").json()["signin"]
+        assert signin["domains"] == [
+            {"domain": "acme.com", "state": "verified"}, {"domain": "beta.example", "state": "missing"},
+        ]
+        assert "pf-relay=" not in json.dumps(signin) and "_privacyfence-relay" not in json.dumps(signin)
+
+    def test_state_has_no_sign_in_domains_without_the_builtin_sign_in(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_IDP", raising=False)
+        world = World()
+        world.sign_in(ADMIN)
+        assert "domains" not in world.client.get("/api/admin/state").json()["signin"]
 
     def test_state_carries_the_upgrade_readiness(self, monkeypatch):
         monkeypatch.setitem(data_format._status, "ready", False)

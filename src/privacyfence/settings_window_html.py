@@ -2439,13 +2439,32 @@ _JS = r"""
 
   // With the built-in Google sign-in the server admits nobody it was not told to: the admins the
   // server's operator named, read-only here, and the allowed domains.
+  // Each sign-in domain with the DNS proof state the relay last reported. What to publish is in the
+  // setup guide, which the line links to.
+  function signinDomainsHtml(signin) {
+    var domains = signin.domains || [];
+    var missing = domains.some(function (d) { return d.state !== 'verified'; });
+    var lines = domains.length
+      ? domains.map(function (d) {
+          return '<div>' + esc(d.domain) + ': ' + (d.state === 'verified' ? 'verified' : 'missing') + '</div>';
+        }).join('')
+      : '<div>' + esc('No sign-in domain yet. Add an allowed domain or an admin address.') + '</div>';
+    var guide = missing
+      ? '<div>' + esc('Nobody from a domain marked missing can sign in until its DNS record is published. ') +
+        '<a href="' + CONNECTOR_DOCS_URL + '#built-in-google-sign-in" target="_blank" rel="noopener">' +
+        'What to publish</a></div>'
+      : '';
+    return rowHtml('Sign-in domains', lines + guide);
+  }
+
   function builtinSigninHtml(signin) {
     var admins = (signin.admin_emails || []).map(function (e) { return '<div>' + esc(e) + '</div>'; }).join('');
     return '<div class="card pf-card pf-signin-builtin">' +
       '<div class="pf-row"><div class="pf-row-text"><div class="pf-row-desc">' +
       esc("Sign-in: PrivacyFence's built-in Google sign-in, through oauth.privacyfence.eu. Only the admins below and " +
         'people in the allowed domains can sign in.') + '</div></div></div>' +
-      rowHtml('Admins', admins + '<div>' + esc('Set by PRIVACYFENCE_ADMIN_EMAILS on the server.') + '</div>') + '</div>';
+      rowHtml('Admins', admins + '<div>' + esc('Set by PRIVACYFENCE_ADMIN_EMAILS on the server.') + '</div>') +
+      signinDomainsHtml(signin) + '</div>';
   }
 
   function renderAccess(state) {

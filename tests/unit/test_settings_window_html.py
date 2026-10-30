@@ -1856,6 +1856,27 @@ class TestBuiltinSignin:
         assert "Empty allows every domain the identity provider vouches for." not in page
         assert 'data-admin-form-save="access"' in page
 
+    def test_each_sign_in_domain_shows_its_state_and_links_the_guide_when_one_is_missing(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": ["a@acme.com"], "domains": [
+            {"domain": "acme.com", "state": "verified"}, {"domain": "<b>.example", "state": "missing"},
+        ]})
+        page = _render_org("access", state)
+        assert "Sign-in domains" in page
+        assert "<div>acme.com: verified</div>" in page and "<div>&lt;b&gt;.example: missing</div>" in page
+        assert "https://privacyfence.eu/docs/org-mode-setup-guide/#built-in-google-sign-in" in page
+        assert "_privacyfence-relay" not in page and "pf-relay=" not in page
+
+    def test_no_guide_link_when_every_domain_is_verified(self):
+        state = _org_state(signin={"builtin": True, "admin_emails": [], "domains": [
+            {"domain": "acme.com", "state": "verified"},
+        ]})
+        page = _render_org("access", state)
+        assert "<div>acme.com: verified</div>" in page and "What to publish" not in page
+
+    def test_an_empty_domain_list_says_so(self):
+        page = _render_org("access", _org_state(signin={"builtin": True, "admin_emails": [], "domains": []}))
+        assert "No sign-in domain yet." in page
+
     @pytest.mark.parametrize("signin", [None, {"builtin": False, "admin_emails": ["alice@acme.com"]}])
     def test_no_sign_in_line_without_the_builtin_sign_in(self, signin):
         state = _org_state() if signin is None else _org_state(signin=signin)
