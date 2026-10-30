@@ -43,6 +43,9 @@ facts they use are in `.claude/toolkit.yaml`;
   a `Plan-Phase:` trailer, has one Opus session review the whole branch against the plan, and
   opens a single PR to `main` at the end, with `manual_after` as unchecked items. Phase branches
   are never PR'd on their own.
+- **New connectors.** A new connector is two PRs, connect then tools, and `/make-plan` plans them that
+  way with the browser connection on the QA server between them as a manual step. The procedure is in
+  [`docs/coding-and-testing-guidelines.md`](docs/coding-and-testing-guidelines.md#3-adding-a-connector), "Adding a connector".
 - `/dod` runs the §2.7 definition-of-done gate from `verify` in `.claude/toolkit.yaml`;
   `/qa-record` records a connector's live QA fixture on the self-hosted runner.
 

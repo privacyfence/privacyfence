@@ -46,9 +46,17 @@ SLACK_MARKETPLACE_LISTED: bool = False
 
 AppSource = Literal["bundle", "connector", "builtin", "none"]
 
+# Services whose connect flow is merged but whose tools are not, so a release never shows a
+# half-built service. Empty means every service is shown. A service listed here is hidden
+# unless PRIVACYFENCE_PREVIEW_SERVICES names it (comma-separated, or "*" for all); the QA
+# server sets "*". A new connector is added here in its connect change and removed in its
+# tools change.
+PREVIEW_SERVICES: frozenset[str] = frozenset()
+
 _ENV_PEEK_BASE_URL = "PRIVACYFENCE_PEEK_BASE_URL"
 _ENV_GRIST_SERVER_URL = "PRIVACYFENCE_GRIST_SERVER_URL"
 _ENV_GRIST_PROVISIONER_URL = "PRIVACYFENCE_GRIST_PROVISIONER_URL"
+_ENV_PREVIEW_SERVICES = "PRIVACYFENCE_PREVIEW_SERVICES"
 
 _refresh_lock = threading.Lock()
 
@@ -88,6 +96,14 @@ def credentials_source(
     section = _section(bundle, service)
     field = "consumer_key" if service == "salesforce" else "client_id"
     return "bundle" if section.get(field) else "none"
+
+
+def preview_hidden(service: str) -> bool:
+    """Whether ``service`` is a preview service this server does not show."""
+    if service not in PREVIEW_SERVICES:
+        return False
+    named = {part.strip() for part in os.environ.get(_ENV_PREVIEW_SERVICES, "").split(",")}
+    return "*" not in named and service not in named
 
 
 def environment_addresses() -> dict[str, str]:
@@ -245,7 +261,10 @@ def effective_org_config(
         value = services.get(name, {})
         return value if isinstance(value, dict) else {}
 
-    offered = {name: bool(service_config(name).get("offered", False)) for name in admin_config.SERVICES}
+    offered = {
+        name: bool(service_config(name).get("offered", False)) and not preview_hidden(name)
+        for name in admin_config.SERVICES
+    }
     for name in admin_config.SERVICES:
         if not offered[name]:
             result.pop(name, None)

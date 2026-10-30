@@ -461,7 +461,42 @@ removed.
 The committed fixtures are replayed through each client's parsers by the `TestLiveFixtureParsing`
 classes (see [`tests/fixtures/live/README.md`](../tests/fixtures/live/README.md)).
 
+## The QA server
+
+`https://runner.privacyfence.eu` runs the organization server built from the latest `main`. It
+exists so the maintainer can connect the QA accounts in a browser, which organization mode makes
+possible for every service, and so the built-in apps can be tested against a public server. The
+live checks copy the QA principal's tokens from its data directory.
+
+- **Deploy.** `.github/workflows/deploy-qa-server.yml` builds the organization image on a push to
+  `main` that touches the server, its container files or the workflow, and on a manual dispatch. The
+  `deploy` job runs on the live runner and runs exactly `sudo -n /usr/local/sbin/pf-qa-deploy`, a
+  root-owned script that takes no arguments; the `verify` job then checks the public address from the
+  internet. It shares the runner with the live checks, so a deploy never overlaps one. The host files
+  are in [`deploy/qa-runner/`](../deploy/qa-runner/README.md).
+- **`/mcp` is blocked.** The proxy answers 404 for `/mcp` and every MCP OAuth endpoint, and a
+  Cloudflare WAF rule blocks the same paths. No AI client can reach a public server that holds live QA
+  tokens, and nothing on the server builds the QA principal's connectors, so nothing there uses or
+  refreshes the tokens. The runner is their only user, which matters for Atlassian's rotating refresh
+  tokens and for Telegram, whose session must not be used from two places at once.
+- **Connecting accounts.** Sign in as `test@privacyfence.eu`, the server's only administrator, offer
+  every service on Admin → Services, then connect on `/connect`: Google (all six), Slack, Salesforce,
+  Atlassian and Miro through the relay with the built-in apps; Telegram with the phone number and code;
+  Grist with its API key; Peek with the device sign-in at `peek-qa.privacyfence.eu`. Reconnecting on
+  `/connect` re-mints a token. The server sets `PRIVACYFENCE_PREVIEW_SERVICES=*`, so a service whose
+  tools have not shipped is connectable here.
+- **How the runner gets the tokens.** `scripts/qa_runner_tokens.py pull` copies the QA principal's
+  `credentials/` from `/home/pfrunner/qa-org-data/users/<id>/` into the checkout before the recorder;
+  `push` writes back only the files the run changed, and skips one that was reconnected during the run.
+  Set the repository variable `PF_QA_PRINCIPAL_ID` to the principal's folder name when more than one
+  folder holds tokens; without it the script uses the single folder that does, and otherwise fails
+  and names the candidates.
+- **A new connector** is connected here first. See
+  [Adding a connector](coding-and-testing-guidelines.md#3-adding-a-connector).
+
 ## Self-hosted runner
+
+The runner also hosts [the QA server](#the-qa-server), where the QA accounts are connected.
 
 ### Runner requirements
 
