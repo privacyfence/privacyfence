@@ -395,6 +395,15 @@ class TestRequest:
         assert state_of()["status"] == "pending"
         assert p.process_next(0) is True
 
+    def test_single_user_principal_is_provisioned(self, data, client, changes):
+        p = make_provisioner(client, changes)
+        single_user = Principal(id="single-user", email="admin@localhost", display_name="Administrator", is_admin=True)
+        p.request(single_user, email_verified=True)
+        assert state_of("single-user")["status"] == "pending"
+        assert p.process_next(0) is True
+        assert state_of("single-user")["status"] == "provisioned"
+        assert token_path("single-user").is_file()
+
     def test_request_no_email_is_not_queued(self, data, client, changes):
         p = make_provisioner(client, changes)
         p.request(Principal(id="alice", email=""), email_verified=True)

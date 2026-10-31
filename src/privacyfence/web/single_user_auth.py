@@ -31,6 +31,7 @@ Safari does not keep a ``Secure`` cookie on ``http://localhost``.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -48,7 +49,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import web_shell, webauthn_stepup
+from .. import grist_provisioning, peek_provisioning, web_shell, webauthn_stepup
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal, principal_scope
 from ..step_up_config import StepUpConfig
@@ -392,6 +393,9 @@ def build_routes(
             f"/security?next={quote(next_path, safe='/')}", status_code=303, headers={"Cache-Control": "no-store"},
         )
         start_session(request, response)
+        # Keeps the provisioners' "signed in within 90 days" sweep honest (ADR 0272).
+        peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
+        await asyncio.to_thread(grist_provisioning.notify_sign_in, SINGLE_USER_PRINCIPAL, email_verified=True)
         _audit("single_user_setup_signin", "Signed in with the setup code; the code is now used.")
         return response
 
@@ -453,6 +457,9 @@ def build_routes(
             return JSONResponse({"error": "The passkey could not be verified."}, status_code=401)
         response = JSONResponse({"redirect": pending.next_path}, headers={"Cache-Control": "no-store"})
         start_session(request, response)
+        # Keeps the provisioners' "signed in within 90 days" sweep honest (ADR 0272).
+        peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
+        await asyncio.to_thread(grist_provisioning.notify_sign_in, SINGLE_USER_PRINCIPAL, email_verified=True)
         _audit("single_user_passkey_signin", "Signed in with a passkey.")
         return response
 
