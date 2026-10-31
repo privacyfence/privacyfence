@@ -254,6 +254,12 @@ class TestSetupSignIn:
         assert r.headers["cache-control"] == "no-store"
         assert _session_principal(world, r) == ADMIN
 
+    def test_the_session_is_email_verified(self, caplog):
+        world = World(caplog)
+        r = world.setup(world.code, next_path="/connect")
+        session_id = r.cookies.get(org_session.SESSION_COOKIE)
+        assert world.sessions.get_session(session_id).email_verified is True
+
     def test_next_is_carried_through_to_security(self, caplog):
         world = World(caplog)
         r = world.setup(world.code, next_path="/oauth/single-user/continue?state=abc")

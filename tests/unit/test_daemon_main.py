@@ -2364,6 +2364,58 @@ class TestMaybeStartWebServerOrgMode:
             )
         assert "IdP single-user," in caplog.text
 
+    @staticmethod
+    def _oidc_env(monkeypatch, tmp_path):
+        secret = tmp_path / "peek_secret"
+        secret.write_text("s" * 40)
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENTS", "peek")
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_REDIRECT_URIS", "https://peek.example.com/cb")
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_SECRET_FILE", str(secret))
+
+    def test_the_oidc_provider_is_built_when_clients_are_named(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._oidc_env(monkeypatch, tmp_path)
+        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+            result = daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert result.org.oidc.issuer == "http://localhost:8765/oidc"
+        assert result.org.oidc.client("peek") is not None
+        assert (tmp_path / "oidc_signing_key.pem").exists()
+        assert "OIDC provider for 1 app(s) at http://localhost:8765/oidc" in caplog.text
+
+    def test_no_oidc_provider_without_clients(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert result.org.oidc is None
+        assert not (tmp_path / "oidc_signing_key.pem").exists()
+
+    def test_oidc_clients_in_local_mode_refuse_the_start(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        self._oidc_env(monkeypatch, tmp_path)
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match="PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server.",
+        ):
+            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
+
+    def test_oidc_clients_with_the_web_server_off_log_a_warning(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        self._oidc_env(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING, logger=daemon_main.logger.name):
+            result = daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert result is None
+        assert "PRIVACYFENCE_OIDC_CLIENTS is ignored: the web server is off." in caplog.text
+
     def test_single_user_mode_defaults_the_issuer_to_localhost_from_the_environment(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)

@@ -102,6 +102,7 @@ from . import (
     data_format,
     grist_provisioning,
     oauth_apps,
+    oidc_provider,
     org_bundle_signing,
     org_mode,
     peek_provisioning,
@@ -970,6 +971,10 @@ def _maybe_start_web_server(
     notifications_config = web_config.get("notifications", {}) or {}
     org_config = org_config or {}
     mode = org_mode.resolve_mode(org_config)
+    if mode != "org" and oidc_provider.clients_from_env():
+        raise org_mode.ConfigurationError(
+            "PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server."
+        )
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
     # ADR 0007: settings.yaml's own file_bridge: section, read once here --
@@ -987,6 +992,8 @@ def _maybe_start_web_server(
 
     if mode == "org":
         if not mcp_enabled:
+            if oidc_provider.clients_from_env():
+                logger.warning("PRIVACYFENCE_OIDC_CLIENTS is ignored: the web server is off.")
             return None
         return _start_org_web_server(
             web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
@@ -1477,6 +1484,16 @@ def _start_org_web_server(
 
     _flush_deferred_warnings()
 
+    oidc_clients = oidc_provider.clients_from_env()
+    oidc = None
+    if oidc_clients:
+        oidc = oidc_provider.OidcProvider(
+            issuer=server_config.issuer_url.rstrip("/") + "/oidc",
+            clients=oidc_clients,
+            key=oidc_provider.load_or_create_signing_key(org_dir() / "oidc_signing_key.pem"),
+        )
+        logger.info("OIDC provider for %d app(s) at %s", len(oidc_clients), oidc.issuer)
+
     server = WebServer(
         web_ui,
         host=server_config.bind_host, port=server_config.port,
@@ -1487,7 +1504,7 @@ def _start_org_web_server(
             install_wide_settings=install_wide_config,
             install_wide_settings_path=install_wide_config_path,
             push_notifier=push_notifier, push_store=push_store,
-            bundle=bundle or {}, startup_admin=startup_admin or {},
+            bundle=bundle or {}, startup_admin=startup_admin or {}, oidc=oidc,
         ),
         ssl_certfile=server_config.cert_file or None,
         ssl_keyfile=server_config.key_file or None,

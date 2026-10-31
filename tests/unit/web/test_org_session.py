@@ -24,6 +24,24 @@ class TestOrgSessionStore:
         session_id = store.create(alice)
         assert store.get(session_id) == alice
 
+    def test_email_verified_defaults_to_false(self):
+        store = os_.OrgSessionStore()
+        assert store.get_session(store.create(Principal(id="alice"))).email_verified is False
+
+    def test_email_verified_true_is_kept(self):
+        store = os_.OrgSessionStore()
+        assert store.get_session(store.create(Principal(id="alice"), email_verified=True)).email_verified is True
+
+    def test_get_session_expires_like_get(self, monkeypatch):
+        store = os_.OrgSessionStore(idle_timeout_seconds=60)
+        fake_now = [1000.0]
+        monkeypatch.setattr(os_.time, "time", lambda: fake_now[0])
+        session_id = store.create(Principal(id="alice"))
+        fake_now[0] += 61
+        assert store.get_session(session_id) is None
+        assert store.get(session_id) is None
+        assert store.session_count == 0
+
     def test_unknown_session_id_returns_none(self):
         store = os_.OrgSessionStore()
         assert store.get("does-not-exist") is None
