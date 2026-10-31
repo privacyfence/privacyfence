@@ -159,6 +159,12 @@ to). A server address without an OAuth app is set on **Admin → Features** or w
 ([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). See
 [connecting-a-service.md](connecting-a-service.md) for the shared connect flow.
 
+## Sign in to Grist with PrivacyFence
+
+On an organization server or a single-user install, people can sign in to Grist with **Sign in with SSO**,
+which goes through PrivacyFence and uses the identity PrivacyFence already has. See
+[Sign in to other apps with PrivacyFence](oidc-provider.md).
+
 ## What the assistant can do
 
 Every Grist tool has a gate fixed in code. The [tools reference](tools-reference.md#grist) lists
