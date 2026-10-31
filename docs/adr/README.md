@@ -364,3 +364,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0270](0270-the-built-in-slack-app-reads-through-search-while-slack-throttles-it.md) | The built-in Slack app reads through search while Slack throttles it | Accepted; relates to 0255, 0269 |
 | [0271](0271-automatic-accounts-can-be-switched-on-from-the-environment.md) | Automatic accounts can be switched on from the environment | Accepted; relates to 0196, 0256, 0264 |
 | [0272](0272-a-single-user-install-provisions-its-one-person-as-verified.md) | A single-user install provisions its one person as verified | Accepted; relates to 0243, 0260, 0271 |
+| [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272 |
+| [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |

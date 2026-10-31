@@ -299,7 +299,8 @@ def build_routes(
             logger.warning("Could not update this browser's push subscriptions: %s", type(exc).__name__)
 
     def start_session(request: Request, response: Response) -> None:
-        session_id = sessions.create(SINGLE_USER_PRINCIPAL)
+        # Fixed address, one person: nothing to verify.
+        session_id = sessions.create(SINGLE_USER_PRINCIPAL, email_verified=True)
         end_browser_push(request.cookies.get(org_session.SESSION_COOKIE, ""), new_session_id=session_id)
         org_session.set_session_cookie(response, session_id, secure=secure)
         response.delete_cookie(SETUP_BINDING_COOKIE, path=_BINDING_COOKIE_PATH)

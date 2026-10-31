@@ -6,12 +6,15 @@ which don't), TLS/trusted-proxies plumbing, and base_url/allowed_hosts.
 """
 from __future__ import annotations
 
+import base64
 import dataclasses
 import hashlib
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from starlette.testclient import TestClient
 
+from privacyfence import oidc_provider
 from privacyfence import org_identity as oi
 from privacyfence import relay_client
 from privacyfence.connector_registry import ConnectorRegistry
@@ -414,6 +417,90 @@ class TestDownloadsSurfaceOrgMode:
         app = build_app(WebApprovalUI(), allowed_hosts=frozenset({"testserver"}))
         client = TestClient(app, base_url="http://testserver")
         assert client.get("/downloads/abc").status_code == 404
+
+
+_OIDC_SECRET = "s" * 40
+_OIDC_CB = "https://peek.example.com/cb"
+_OIDC_VERIFIER = "v" * 50
+_MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
+
+
+def _oidc_server(tmp_path, monkeypatch):
+    """The whole org app, as WebServer builds it (with its real Host allowlist), with an OIDC
+    provider for one client, an MCP dispatcher, and one signed-in browser session."""
+    key = oidc_provider.load_or_create_signing_key(tmp_path / "oidc_signing_key.pem")
+    oidc = oidc_provider.OidcProvider(
+        issuer=f"{ISSUER}/oidc", key=key,
+        clients={"peek": oidc_provider.OidcClient("peek", (_OIDC_CB,), _OIDC_SECRET)},
+    )
+    org = dataclasses.replace(_org_auth(tmp_path, monkeypatch), oidc=oidc)
+    server = WebServer(
+        WebApprovalUI(), host="0.0.0.0", port=443, org=org, mcp_dispatcher=McpDispatcher(lambda: {}),
+    )
+    session_id = org.sessions.create(Principal(id="u1", email="ann@example.com"), email_verified=True)
+    return org, server._server.config.app, session_id
+
+
+def _oidc_code(client: TestClient, session_id: str) -> str:
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(_OIDC_VERIFIER.encode()).digest()).rstrip(b"=").decode()
+    client.cookies.set(SESSION_COOKIE, session_id)
+    response = client.get("/oidc/authorize", params={
+        "client_id": "peek", "redirect_uri": _OIDC_CB, "response_type": "code", "scope": "openid email",
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    })
+    assert response.status_code == 302, response.text
+    return parse_qs(urlsplit(response.headers["location"]).query)["code"][0]
+
+
+def _oidc_token(client: TestClient, code: str):
+    return client.post(
+        "/oidc/token", auth=("peek", _OIDC_SECRET),
+        data={"grant_type": "authorization_code", "code": code, "redirect_uri": _OIDC_CB,
+              "code_verifier": _OIDC_VERIFIER},
+    )
+
+
+class TestOidcProviderInTheOrgApp:
+    def test_oidc_token_with_issuer_host_and_no_origin_reaches_route(self, tmp_path, monkeypatch):
+        # Peek and Grist call /oidc/token server-side through the proxy: the issuer's Host and no
+        # Origin header. Neither the Host allowlist nor any Origin check may stop that.
+        _, app, session_id = _oidc_server(tmp_path, monkeypatch)
+        browser = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        code = _oidc_code(browser, session_id)
+        # The app's own server makes these calls: no browser session cookie, no Origin.
+        client = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        response = _oidc_token(client, code)
+        assert not client.cookies
+        assert "cookie" not in {k.lower() for k in response.request.headers}
+        assert "origin" not in {k.lower() for k in response.request.headers}
+        assert response.request.headers["host"] == "pf.example.com"
+        assert response.status_code == 200, response.text
+        access_token = response.json()["access_token"]
+        info = client.get("/oidc/userinfo", headers={"Authorization": f"Bearer {access_token}"})
+        assert info.status_code == 200
+        assert info.json()["sub"] == "u1"
+
+    def test_oidc_access_token_refused_at_mcp(self, tmp_path, monkeypatch):
+        _, app, session_id = _oidc_server(tmp_path, monkeypatch)
+        with TestClient(app, base_url=ISSUER, follow_redirects=False) as client:
+            access_token = _oidc_token(client, _oidc_code(client, session_id)).json()["access_token"]
+            response = client.post(
+                "/mcp", json={}, headers={**_MCP_HEADERS, "Authorization": f"Bearer {access_token}"},
+            )
+        assert response.status_code == 401
+
+    def test_mcp_token_refused_at_oidc_userinfo(self, tmp_path, monkeypatch):
+        org, app, _ = _oidc_server(tmp_path, monkeypatch)
+        mcp_token = org.provider._mint_tokens(
+            client_id="claude", scopes=[], resource=None, principal=Principal(id="u1", email="ann@example.com"),
+        ).access_token
+        with TestClient(app, base_url=ISSUER, follow_redirects=False) as client:
+            # The MCP token is live: /mcp lets it past authentication.
+            mcp = client.post("/mcp", json={}, headers={**_MCP_HEADERS, "Authorization": f"Bearer {mcp_token}"})
+            assert mcp.status_code != 401
+            response = client.get("/oidc/userinfo", headers={"Authorization": f"Bearer {mcp_token}"})
+        assert response.status_code == 401
+        assert response.json() == {"error": "invalid_token"}
 
 
 class TestWebServerOrgMode:
