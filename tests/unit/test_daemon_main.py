@@ -2721,6 +2721,41 @@ class TestOrgModeConnectorRegistry:
                 unattended_sessions_enabled=False, org_config=org_config,
             )
 
+    def test_startup_refuses_auto_provision_without_key(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
+        monkeypatch.delenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", raising=False)
+        monkeypatch.delenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE", raising=False)
+        message = (
+            "PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs PRIVACYFENCE_PEEK_PROVISIONING_KEY "
+            "or PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE."
+        )
+
+        with pytest.raises(daemon_main.org_mode.ConfigurationError) as raised:
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._org_config(),
+            )
+        assert str(raised.value) == message
+
+    def test_local_mode_warns_auto_provision(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_AUTO_PROVISION", "true")
+
+        with caplog.at_level(logging.WARNING, logger="privacyfence.daemon"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config={"mode": "local"},
+            )
+
+        warnings = [r.getMessage() for r in caplog.records if "ignored outside organization mode" in r.getMessage()]
+        assert warnings == [
+            "PRIVACYFENCE_GRIST_AUTO_PROVISION, PRIVACYFENCE_PEEK_AUTO_PROVISION "
+            "is ignored outside organization mode."
+        ]
+
     def test_org_server_starts_the_relay_registration_loop_on_the_shared_config(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         events: list = []
