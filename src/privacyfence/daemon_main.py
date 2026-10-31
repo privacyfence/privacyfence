@@ -976,12 +976,9 @@ def _maybe_start_web_server(
             raise org_mode.ConfigurationError(
                 "PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server."
             )
-        ignored = oauth_apps.environment_auto_provision()
+        ignored = oauth_apps.set_auto_provision_variables()
         if ignored:
-            logger.warning(
-                "%s is ignored outside organization mode.",
-                ", ".join(oauth_apps._ENV_AUTO_PROVISION[name] for name in sorted(ignored)),
-            )
+            logger.warning("%s is ignored outside organization mode.", ", ".join(ignored))
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
     # ADR 0007: settings.yaml's own file_bridge: section, read once here --

@@ -57,7 +57,7 @@ _ENV_PEEK_BASE_URL = "PRIVACYFENCE_PEEK_BASE_URL"
 _ENV_GRIST_SERVER_URL = "PRIVACYFENCE_GRIST_SERVER_URL"
 _ENV_GRIST_PROVISIONER_URL = "PRIVACYFENCE_GRIST_PROVISIONER_URL"
 _ENV_PREVIEW_SERVICES = "PRIVACYFENCE_PREVIEW_SERVICES"
-_ENV_AUTO_PROVISION = {
+ENV_AUTO_PROVISION = {
     "peek": "PRIVACYFENCE_PEEK_AUTO_PROVISION",
     "grist": "PRIVACYFENCE_GRIST_AUTO_PROVISION",
 }
@@ -139,7 +139,7 @@ def environment_auto_provision() -> frozenset[str]:
     A value other than unset, empty or ``true`` raises ``ConfigurationError``. Read on every call.
     """
     found: set[str] = set()
-    for service, variable in _ENV_AUTO_PROVISION.items():
+    for service, variable in ENV_AUTO_PROVISION.items():
         value = os.environ.get(variable, "").strip().lower()
         if not value:
             continue
@@ -147,6 +147,18 @@ def environment_auto_provision() -> frozenset[str]:
             raise ConfigurationError(f"{variable} must be true, or unset.")
         found.add(service)
     return frozenset(found)
+
+
+def set_auto_provision_variables() -> list[str]:
+    """The ``*_AUTO_PROVISION`` variables that are set to anything, valid or not (for the
+    "ignored outside organization mode" warning, which must not fail on a bad value)."""
+    return sorted(variable for variable in ENV_AUTO_PROVISION.values() if os.environ.get(variable, "").strip())
+
+
+def _environment_auto_provision_for(mode: Mode) -> frozenset[str]:
+    """The environment's services in organization mode; elsewhere the variables are ignored,
+    including a value that would not parse."""
+    return environment_auto_provision() if mode == "org" else frozenset()
 
 
 def _loopback(url: str) -> bool:
@@ -159,6 +171,8 @@ def check_environment_auto_provision(*, single_user: bool, grist_oauth: bool) ->
     if not services:
         return
     addresses = environment_addresses()
+    # An empty bundle is enough: key_env lives in the stored admin config, which ensure() has
+    # written before the web server starts.
     stored = admin_config.config_for({}, mode="org", single_user=single_user)["services"]
 
     def require_key(service: str, variable: str, default_key_env: str) -> None:
@@ -167,7 +181,7 @@ def check_environment_auto_provision(*, single_user: bool, grist_oauth: bool) ->
             raise ConfigurationError(f"{variable}=true needs {key_env} or {key_env}_FILE.")
 
     if "peek" in services:
-        variable = _ENV_AUTO_PROVISION["peek"]
+        variable = ENV_AUTO_PROVISION["peek"]
         if "peek" not in addresses:
             raise ConfigurationError(f"{variable}=true needs {_ENV_PEEK_BASE_URL}.")
         require_key("peek", variable, "PRIVACYFENCE_PEEK_PROVISIONING_KEY")
@@ -176,7 +190,7 @@ def check_environment_auto_provision(*, single_user: bool, grist_oauth: bool) ->
                 f"On a single-user install, {variable}=true needs a localhost address in {_ENV_PEEK_BASE_URL}."
             )
     if "grist" in services:
-        variable = _ENV_AUTO_PROVISION["grist"]
+        variable = ENV_AUTO_PROVISION["grist"]
         if "grist" not in addresses or "grist_provisioner" not in addresses:
             raise ConfigurationError(
                 f"{variable}=true needs {_ENV_GRIST_SERVER_URL} and {_ENV_GRIST_PROVISIONER_URL}."
@@ -246,7 +260,7 @@ def _peek_section(
     section: dict[str, Any] = {"base_url": base_url}
     trusted = "peek" in env or bool(admin_service.get("address_locked"))
     if trusted and _auto_provision_enabled(
-        admin_service, mode=mode, single_user=single_user, from_environment="peek" in environment_auto_provision()
+        admin_service, mode=mode, single_user=single_user, from_environment="peek" in _environment_auto_provision_for(mode)
     ):
         stored = admin_service["auto_provision"]
         section["auto_provision"] = {
@@ -279,7 +293,7 @@ def _grist_section(
         ("grist" in env or locked)
         and provisioner_url
         and _auto_provision_enabled(
-            admin_service, mode=mode, single_user=single_user, from_environment="grist" in environment_auto_provision()
+            admin_service, mode=mode, single_user=single_user, from_environment="grist" in _environment_auto_provision_for(mode)
         )
     ):
         section["auto_provision"] = {
@@ -334,7 +348,7 @@ def effective_org_config(
         value = services.get(name, {})
         return value if isinstance(value, dict) else {}
 
-    from_environment = environment_auto_provision()
+    from_environment = _environment_auto_provision_for(mode)
     offered = {
         name: (bool(service_config(name).get("offered", False)) or name in from_environment)
         and not preview_hidden(name)
