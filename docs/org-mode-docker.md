@@ -383,8 +383,9 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_IDP_ISSUER`, `PRIVACYFENCE_IDP_CLIENT_ID` | none | Your identity provider. Both or neither. |
 | `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE` | none | A Docker secret file (`/run/secrets/idp_client_secret`). `PRIVACYFENCE_IDP_CLIENT_SECRET` is the plain form; never both. |
 | `PRIVACYFENCE_ADMIN_EMAILS` | none | Admins by verified email. Microsoft Entra ID uses `PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM` and `PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES` instead ([guide](org-mode-setup-guide.md#who-is-an-admin)). |
-| `PRIVACYFENCE_IDP`, `PRIVACYFENCE_ALLOWED_DOMAINS` | none | `builtin-google` for the [built-in Google sign-in](org-mode-setup-guide.md#built-in-google-sign-in), and its allowed domains (first start only). |
-| `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work. |
+| `PRIVACYFENCE_IDP` | none | `builtin-google` for the [built-in Google sign-in](org-mode-setup-guide.md#built-in-google-sign-in). |
+| `PRIVACYFENCE_ALLOWED_DOMAINS` | none | The allowed sign-in domains, with either sign-in method; first start only, then Admin → Sign-in. |
+| `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work; it trusts only addresses in `PRIVACYFENCE_ALLOWED_DOMAINS`. |
 | `PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL` | none | The Peek and Grist addresses. |
 | `PRIVACYFENCE_PEEK_AUTO_PROVISION`, `PRIVACYFENCE_GRIST_AUTO_PROVISION` | none | Unset or empty: the Admin page decides. `true`: the service is offered and Automatic accounts are on, locked on Admin → Services. Needs the address and key; ignored without the web server. |
 | `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE` | none | The provisioning keys as Docker secret files. The plain `…_PROVISIONING_KEY` forms also work; never both. |

@@ -256,7 +256,7 @@ rotated or revoked on its own.
 By default, everyone your identity provider authenticates may use PrivacyFence. To narrow that, use
 the **Sign-in** section of the Admin page (a change is saved and applies at the next restart):
 
-- **Allowed email domains**, for example `acme.example.com`: only email addresses at these domains.
+- **Allowed email domains**, for example `acme.example.com`: only email addresses at these domains. On a new server, `PRIVACYFENCE_ALLOWED_DOMAINS` in the environment file fills this list on the first start.
 - **Groups claim** and **Required groups**, for example `groups` and `privacyfence-users`: only
   people whose claim contains one of the values. This is independent of the admin claim, but it is
   matched the same way: the claim must be in the ID token, as set up in the table under
