@@ -34,7 +34,7 @@ again. Peek appears there only when the Peek server's address is set: on the Adm
 The token Peek issues is saved in `credentials/peek_token.json` with the server it belongs to, and
 is used only with that server (ADR [0152](adr/0152-which-peek-server-is-used-and-a-token-stays-with-it.md)).
 
-## Automatic accounts (organization mode)
+## Automatic accounts
 
 With Peek auto-provisioning, each person who signs in to PrivacyFence gets a Peek account on your
 organization's Peek server, or keeps their existing one, and PrivacyFence connects it for them: no
@@ -54,10 +54,26 @@ can stay in separate network zones.
    unit's `EnvironmentFile`; with Docker, to `privacyfence.env`
    ([organization setup guide](org-mode-setup-guide.md), [Docker guide](org-mode-docker.md)).
 3. Open **Admin → Services**, find the Peek row and turn **Automatic accounts** on. The row says
-   when the key is missing and names the variable the server reads.
+   when the key is missing and names the variable the server reads. Or set
+   `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` in the server's environment, which does the same: it
+   offers Peek and turns automatic accounts on. The row then says it is set by the server, and the
+   **Automatic accounts** switch and **Offer** are locked. Removing the variable hands both back to
+   the Admin page, which kept its own settings. The variable needs `PRIVACYFENCE_PEEK_BASE_URL` and
+   the key, or the server refuses to start, and it does nothing unless the web server runs
+   (`web.mcp.enabled`). Outside organization mode it is ignored, with a log warning.
 
 A server upgraded from 6.11 keeps its automatic accounts: the addresses it had are kept and the
 Admin page shows them as fixed (see below), and a key variable name it chose keeps working.
+
+**On a single-user install.** With `PRIVACYFENCE_PEEK_AUTO_PROVISION=true`, a single-user install
+(no identity provider) connects Peek for its one person, `admin@localhost`, treated as verified
+because the install has exactly one person, reachable only with the setup code or a passkey. It
+works only when Peek runs on the same computer: `PRIVACYFENCE_PEEK_BASE_URL` must be a `localhost`
+address (`localhost`, `127.0.0.1` or `::1`). Peek is connected at each start and at each sign-in.
+The Peek install admin needs another address than `admin@localhost`, because Peek refuses to adopt
+an admin. Every start counts as a sign-in, so the 90-day rule below never ends the connection. When
+you move to an identity provider, run `privacyfence-app --peek-release single-user`.
+([ADR 0272](adr/0272-a-single-user-install-provisions-its-one-person-as-verified.md))
 
 **What happens.** When a person signs in, in the browser or through an AI client, PrivacyFence queues
 them and a single background worker creates or looks up their Peek account, by their PrivacyFence id
@@ -292,6 +308,23 @@ the environment. Fix the variable and restart.
 the daemon's environment lacks the key. Set the variable named in the message (see the setup above)
 and restart.
 
+**`PRIVACYFENCE_PEEK_AUTO_PROVISION must be true, or unset.`** — the value is anything but `true`.
+Remove the variable to hand the switch back to the Admin page.
+
+**`PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs PRIVACYFENCE_PEEK_BASE_URL.`** and
+**`PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs PRIVACYFENCE_PEEK_PROVISIONING_KEY or
+PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE.`** — the daemon refuses to start without the address or the
+key (with a custom key variable, the message names it and its `_FILE` form). Set it and restart.
+
+**`On a single-user install, PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs a localhost address in
+PRIVACYFENCE_PEEK_BASE_URL.`** — a single-user install connects only a Peek on the same computer.
+
+**`PRIVACYFENCE_PEEK_AUTO_PROVISION is ignored outside organization mode.`** — a log warning: the
+server is in local mode, where the variable does nothing.
+
+**`Peek is set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server.`** — an Admin change tried to
+offer or withdraw Peek while the variable is set. Remove the variable first.
+
 **`Peek provisioning ready at <host> (N accounts managed)`** — the startup check passed.
 **`Peek provisioning check failed: …`** — the message after the colon says why, and is one of the
 errors below. Provisioning is retried by the six-hourly sweep.
@@ -329,5 +362,5 @@ repeats, check that Peek is reachable from the daemon.
 
 **`No such account.`**, **`Peek auto-provisioning is not enabled in the organization config.`**,
 **`Set <name> to the Peek provisioning key first.`** — messages of `--peek-release`. Check the
-account id (a directory under `users/`), that **Automatic accounts** is on for Peek on the Admin page, and that the
+account id (a directory under `users/`), that **Automatic accounts** is on for Peek (the Admin switch or `PRIVACYFENCE_PEEK_AUTO_PROVISION`), and that the
 key variable is set in the shell that runs the command. A Peek error is printed as it is; see above.

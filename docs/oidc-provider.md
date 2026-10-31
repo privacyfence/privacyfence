@@ -84,7 +84,7 @@ PrivacyFence reports `email_verified` as true when:
 - the install is single-user, where the address is fixed and there is exactly one person.
 
 Peek and Grist refuse a sign-in whose email is not verified, the same bar as automatic accounts
-([Peek](peek-setup.md#automatic-accounts-organization-mode), [Grist](grist-setup.md)).
+([Peek](peek-setup.md#automatic-accounts), [Grist](grist-setup.md)).
 
 ## The signing key
 
@@ -105,9 +105,12 @@ namespace, so this holds. A deployment with separate containers in separate netw
 cannot use single-user sign-in; use an organization server instead.
 
 **Cookies on localhost.** Browsers do not separate cookies by port, so the `pf_org_session` cookie is
-also sent to Peek and Grist on other `localhost` ports. It is HttpOnly, and PrivacyFence's own
-state-changing routes check `Origin`, but those apps can see that a PrivacyFence session exists. This
-matters only for single-user installs on one machine you alone use
+also sent to Peek, Grist and every other program listening on a `localhost` port. Those programs
+receive the cookie's actual value and can replay it from their own server code as the signed-in
+person. HttpOnly does not stop that, and neither does the `Origin` check, because a server can leave
+`Origin` out or set it to anything. So on a single-user install, every program that listens on
+`localhost` on that machine is trusted with the PrivacyFence session. Use it only on a machine you
+alone use, and use an organization server otherwise
 ([ADR 0273](adr/0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md)).
 
 ## Troubleshooting

@@ -239,6 +239,12 @@ class TestStepUp:
 
 
 class TestApplying:
+    def test_locked_offer_post_refused(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+        world, csrf = _signed_in_admin()
+        r = _passkey_post(world, "offer_service", {"service": "peek"}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "Peek is set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server."})
+
     def test_withdraw_service_refreshes_the_shared_config_and_connectors(self, relay_checks):
         world = World()
         csrf = world.sign_in(ADMIN)
@@ -783,6 +789,17 @@ def _installed(world, csrf, raw=None, **fields):
 
 
 class TestOrgConnectorConfigUpload:
+    def test_grist_connector_upload_refused_while_env_set(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_AUTO_PROVISION", "true")
+        world, csrf = _signed_in_admin()
+        r = _connector_upload(world.client, csrf, sign("grist", 1), confirm_fingerprint=KEY_FINGERPRINT)
+        assert r.status_code == 400
+        assert "PRIVACYFENCE_GRIST_AUTO_PROVISION" in r.json()["error"]
+        org = connector_configs.default_org_dir()
+        assert not connector_configs.stored_path(org, "grist").exists()
+        assert not connector_configs.pinned_key_path(org).exists()
+        assert not connector_configs.serials_path(org).exists()
+
     def test_connector_config_upload_is_classified_as_bespoke_sensitive(self):
         assert routes_admin.ROUTE_CLASSIFICATION[CONNECTOR_URL] == "bespoke-sensitive"
         assert routes_admin.ROUTE_CLASSIFICATION["/api/admin/rooms/upload"] == "bespoke-sensitive"

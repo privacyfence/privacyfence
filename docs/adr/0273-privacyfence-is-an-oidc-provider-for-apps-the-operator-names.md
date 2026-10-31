@@ -26,7 +26,7 @@ setup the suite is meant to remove.
 - **`email_verified` follows `org_identity.session_email_verified`:** true when the identity provider
   said so, or when the operator trusts unverified email and the address is in an allowed domain. A
   single-user session is verified, because the address is fixed in code and the install has one
-  person. Peek and Grist link accounts by email, so an unverified session is refused by them.
+  person ([ADR 0272](0272-a-single-user-install-provisions-its-one-person-as-verified.md)). Peek and Grist link accounts by email, so an unverified session is refused by them.
 - **MCP tokens and `/oidc` tokens are separate stores,** so neither works where the other is expected.
 
 ## Alternatives considered
@@ -51,8 +51,11 @@ setup the suite is meant to remove.
   request a code and see whether it came back as a code or as a redirect to `/login`. Only the
   registered address receives a code.
 - **Cookies on single-user `localhost`.** Browsers do not separate cookies by port, so `pf_org_session`
-  is also sent to Peek and Grist on other `localhost` ports. It is HttpOnly and PrivacyFence's own POST
-  routes check `Origin`. The exposure is accepted for single-user installs on one machine.
+  is also sent to Peek, Grist and every other program listening on a `localhost` port. They receive its
+  actual value and can replay it from server code as the signed-in person; HttpOnly does not stop
+  that, and neither does the `Origin` check, since a server can omit `Origin` or set it to anything.
+  So every program listening on `localhost` is trusted with the session. The exposure is accepted for
+  single-user installs on a machine one person uses.
 - **Single-user needs one network namespace.** The issuer is `http://localhost:<port>/oidc` and the
   apps require it exactly, so they must reach PrivacyFence at that address.
 - No `end_session_endpoint`: the apps sign out locally.
@@ -65,4 +68,4 @@ authentication and the token separation. Operator documentation: `docs/oidc-prov
 
 ## Related
 
-ADR 0011, 0013, 0061, 0177, 0224, 0256, 0264, 0274.
+ADR 0011, 0013, 0061, 0177, 0224, 0256, 0264, 0272, 0274.

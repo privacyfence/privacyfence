@@ -299,15 +299,17 @@ class TestSetupSignIn:
         assert r.status_code == 302
         assert r.headers["location"] == "/oauth/single-user/continue?state=s"
 
-    def test_a_single_user_sign_in_notifies_no_provisioner(self, caplog, monkeypatch):
+    def test_setup_code_sign_in_notifies_provisioners(self, caplog, monkeypatch):
         calls = []
-        monkeypatch.setattr(peek_provisioning, "notify_sign_in", lambda *a, **kw: calls.append("peek"))
-        monkeypatch.setattr(grist_provisioning, "notify_sign_in", lambda *a, **kw: calls.append("grist"))
+        monkeypatch.setattr(
+            peek_provisioning, "notify_sign_in", lambda p, *, email_verified: calls.append(("peek", p, email_verified)),
+        )
+        monkeypatch.setattr(
+            grist_provisioning, "notify_sign_in", lambda p, *, email_verified: calls.append(("grist", p, email_verified)),
+        )
         world = World(caplog)
         assert world.setup(world.code).status_code == 303
-        _enrol()
-        _passkey_sign_in(world)
-        assert calls == []
+        assert calls == [("peek", sua.SINGLE_USER_PRINCIPAL, True), ("grist", sua.SINGLE_USER_PRINCIPAL, True)]
 
 
 class TestBinding:
@@ -384,6 +386,19 @@ def _passkey_sign_in(world: World, *, next_path="/approvals"):
 
 
 class TestPasskeySignIn:
+    def test_passkey_sign_in_notifies_provisioners(self, caplog, monkeypatch):
+        _enrol()
+        world = World(caplog)
+        calls = []
+        monkeypatch.setattr(
+            peek_provisioning, "notify_sign_in", lambda p, *, email_verified: calls.append(("peek", p, email_verified)),
+        )
+        monkeypatch.setattr(
+            grist_provisioning, "notify_sign_in", lambda p, *, email_verified: calls.append(("grist", p, email_verified)),
+        )
+        assert _passkey_sign_in(world).status_code == 200
+        assert calls == [("peek", sua.SINGLE_USER_PRINCIPAL, True), ("grist", sua.SINGLE_USER_PRINCIPAL, True)]
+
     def test_options_carry_the_enrolled_relying_party(self, caplog):
         _enrol()
         world = World(caplog)

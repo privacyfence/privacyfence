@@ -17,7 +17,7 @@ PROVISIONER_VAR = "PRIVACYFENCE_GRIST_PROVISIONER_URL"
 
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch):
-    for variable in (PEEK_VAR, GRIST_VAR, PROVISIONER_VAR):
+    for variable in (PEEK_VAR, GRIST_VAR, PROVISIONER_VAR, "PRIVACYFENCE_PEEK_PROVISIONING_KEY", "PRIVACYFENCE_GRIST_PROVISIONING_KEY"):
         monkeypatch.delenv(variable, raising=False)
 
 
@@ -463,6 +463,174 @@ class TestEnvironmentAddresses:
         monkeypatch.setenv(variable, "ftp://nope")
         with pytest.raises(ConfigurationError, match=variable):
             oauth_apps.environment_addresses()
+
+
+PEEK_AUTO = "PRIVACYFENCE_PEEK_AUTO_PROVISION"
+GRIST_AUTO = "PRIVACYFENCE_GRIST_AUTO_PROVISION"
+PEEK_KEY = "PRIVACYFENCE_PEEK_PROVISIONING_KEY"
+GRIST_KEY = "PRIVACYFENCE_GRIST_PROVISIONING_KEY"
+
+
+class TestEnvironmentAutoProvision:
+    def test_empty(self):
+        assert oauth_apps.environment_auto_provision() == frozenset()
+
+    @pytest.mark.parametrize("variable", [PEEK_AUTO, GRIST_AUTO])
+    def test_env_auto_provision_bad_value(self, monkeypatch, variable):
+        monkeypatch.setenv(variable, "yes")
+        with pytest.raises(ConfigurationError, match=f"{variable} must be true, or unset."):
+            oauth_apps.environment_auto_provision()
+
+    def test_env_auto_provision_case_and_space(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "  TrUe ")
+        monkeypatch.setenv(GRIST_AUTO, "   ")
+        assert oauth_apps.environment_auto_provision() == frozenset({"peek"})
+
+    def test_peek_section_from_env_ignores_stored_off(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "https://peek.example")
+        admin = make_admin("peek")
+        admin["services"]["peek"]["auto_provision"]["enabled"] = False
+        admin["services"]["peek"]["auto_provision"]["trust_unverified_email"] = True
+        peek = compose({}, admin)["peek"]
+        assert peek["auto_provision"] == {
+            "enabled": True,
+            "key_env": "PRIVACYFENCE_PEEK_PROVISIONING_KEY",
+            "trust_unverified_email": True,
+        }
+        assert admin["services"]["peek"]["auto_provision"]["enabled"] is False
+
+    def test_grist_section_from_env(self, monkeypatch):
+        monkeypatch.setenv(GRIST_AUTO, "true")
+        monkeypatch.setenv(GRIST_VAR, "https://grist.example")
+        monkeypatch.setenv(PROVISIONER_VAR, "https://provisioner.example")
+        grist = compose({}, make_admin("grist"))["grist"]
+        assert grist["auto_provision"] == {
+            "enabled": True,
+            "key_env": "PRIVACYFENCE_GRIST_PROVISIONING_KEY",
+            "trust_unverified_email": False,
+            "provisioner_url": "https://provisioner.example",
+        }
+
+    def test_env_offers_service(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "https://peek.example")
+        admin = make_admin()
+        assert admin["services"]["peek"]["offered"] is False
+        assert "peek" in compose({}, admin)
+        assert admin["services"]["peek"]["offered"] is False
+
+    def test_single_user_section_with_env(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "http://localhost:7700")
+        peek = compose({}, make_admin(), single_user=True)["peek"]
+        assert peek["auto_provision"]["enabled"] is True
+
+    def test_single_user_section_without_env(self, monkeypatch):
+        monkeypatch.setenv(PEEK_VAR, "http://localhost:7700")
+        admin = enable_provisioning(make_admin("peek"), "peek")
+        assert "auto_provision" not in compose({}, admin, single_user=True)["peek"]
+
+
+class TestCheckEnvironmentAutoProvision:
+    @staticmethod
+    def check(*, single_user=False, grist_oauth=False):
+        oauth_apps.check_environment_auto_provision(single_user=single_user, grist_oauth=grist_oauth)
+
+    def test_nothing_set_passes(self):
+        self.check()
+
+    def test_peek_missing_address(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_KEY, "k")
+        with pytest.raises(ConfigurationError) as raised:
+            self.check()
+        assert str(raised.value) == f"{PEEK_AUTO}=true needs {PEEK_VAR}."
+
+    def test_grist_missing_address(self, monkeypatch):
+        monkeypatch.setenv(GRIST_AUTO, "true")
+        monkeypatch.setenv(GRIST_VAR, "https://grist.example")
+        monkeypatch.setenv(GRIST_KEY, "k")
+        with pytest.raises(ConfigurationError) as raised:
+            self.check()
+        assert str(raised.value) == f"{GRIST_AUTO}=true needs {GRIST_VAR} and {PROVISIONER_VAR}."
+
+    def test_peek_missing_key(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "https://peek.example")
+        monkeypatch.delenv(PEEK_KEY, raising=False)
+        monkeypatch.delenv(f"{PEEK_KEY}_FILE", raising=False)
+        with pytest.raises(ConfigurationError) as raised:
+            self.check()
+        assert str(raised.value) == f"{PEEK_AUTO}=true needs {PEEK_KEY} or {PEEK_KEY}_FILE."
+
+    def test_grist_missing_key(self, monkeypatch):
+        monkeypatch.setenv(GRIST_AUTO, "true")
+        monkeypatch.setenv(GRIST_VAR, "https://grist.example")
+        monkeypatch.setenv(PROVISIONER_VAR, "https://provisioner.example")
+        monkeypatch.delenv(GRIST_KEY, raising=False)
+        monkeypatch.delenv(f"{GRIST_KEY}_FILE", raising=False)
+        with pytest.raises(ConfigurationError) as raised:
+            self.check()
+        assert str(raised.value) == f"{GRIST_AUTO}=true needs {GRIST_KEY} or {GRIST_KEY}_FILE."
+
+    def test_custom_key_env_is_named(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "https://peek.example")
+        monkeypatch.setenv(PEEK_KEY, "default-key-is-not-the-one")
+        stored = make_admin("peek")
+        stored["services"]["peek"]["auto_provision"]["key_env"] = "MY_PEEK_KEY"
+        monkeypatch.delenv("MY_PEEK_KEY", raising=False)
+        monkeypatch.delenv("MY_PEEK_KEY_FILE", raising=False)
+        monkeypatch.setattr(admin_config, "config_for", lambda *a, **kw: stored)
+        with pytest.raises(ConfigurationError) as raised:
+            self.check()
+        assert str(raised.value) == f"{PEEK_AUTO}=true needs MY_PEEK_KEY or MY_PEEK_KEY_FILE."
+
+    def test_grist_oauth_app(self, monkeypatch):
+        monkeypatch.setenv(GRIST_AUTO, "true")
+        monkeypatch.setenv(GRIST_VAR, "https://grist.example")
+        monkeypatch.setenv(PROVISIONER_VAR, "https://provisioner.example")
+        monkeypatch.setenv(GRIST_KEY, "k")
+        with pytest.raises(ConfigurationError) as raised:
+            self.check(grist_oauth=True)
+        assert str(raised.value) == f"{GRIST_AUTO}=true cannot be used with a Grist OAuth app."
+
+    def test_single_user_non_loopback_peek(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "https://peek.example")
+        monkeypatch.setenv(PEEK_KEY, "k")
+        with pytest.raises(ConfigurationError) as raised:
+            self.check(single_user=True)
+        assert str(raised.value) == (
+            f"On a single-user install, {PEEK_AUTO}=true needs a localhost address in {PEEK_VAR}."
+        )
+
+    def test_single_user_non_loopback_grist(self, monkeypatch):
+        monkeypatch.setenv(GRIST_AUTO, "true")
+        monkeypatch.setenv(GRIST_VAR, "http://localhost:8484")
+        monkeypatch.setenv(PROVISIONER_VAR, "https://provisioner.example")
+        monkeypatch.setenv(GRIST_KEY, "k")
+        with pytest.raises(ConfigurationError) as raised:
+            self.check(single_user=True)
+        assert str(raised.value) == (
+            f"On a single-user install, {GRIST_AUTO}=true needs localhost addresses in {GRIST_VAR} and {PROVISIONER_VAR}."
+        )
+
+    def test_org_server_with_both_services_passes(self, monkeypatch):
+        for variable, value in (
+            (PEEK_AUTO, "true"), (GRIST_AUTO, "true"), (PEEK_VAR, "https://peek.example"),
+            (GRIST_VAR, "https://grist.example"), (PROVISIONER_VAR, "https://provisioner.example"),
+            (PEEK_KEY, "k"), (GRIST_KEY, "k"),
+        ):
+            monkeypatch.setenv(variable, value)
+        self.check()
+
+    def test_single_user_loopback_passes(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "http://[::1]:7700")
+        monkeypatch.setenv(PEEK_KEY, "k")
+        self.check(single_user=True)
 
 
 class TestOperationalSections:

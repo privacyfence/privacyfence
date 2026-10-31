@@ -366,9 +366,9 @@ multi-user server nothing is offered until you do. A service that uses a built-i
 | Slack | `https://pf.acme.example.com/oauth/callback/slack` | `slack` | [Slack setup](slack-setup.md) |
 | Salesforce | `https://pf.acme.example.com/oauth/callback/salesforce` | `salesforce` (consumer key and secret, optional `login_url`) | [Salesforce setup](salesforce-setup.md) |
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `atlassian` | [Atlassian setup](atlassian-setup.md) |
-| Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `grist` (plus `server_url` and optional `auth_server_url`) | [Grist setup](grist-setup.md); automatic API keys: [Grist setup](grist-setup.md#automatic-api-keys-organization-mode) |
+| Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `grist` (plus `server_url` and optional `auth_server_url`) | [Grist setup](grist-setup.md); automatic API keys: [Grist setup](grist-setup.md#automatic-api-keys) |
 | Miro | `https://pf.acme.example.com/oauth/callback/miro` | `miro` | [Miro setup](miro-setup.md) |
-| Peek | none (device sign-in, or automatic accounts) | none | [Peek setup](peek-setup.md), [automatic accounts](peek-setup.md#automatic-accounts-organization-mode) |
+| Peek | none (device sign-in, or automatic accounts) | none | [Peek setup](peek-setup.md), [automatic accounts](peek-setup.md#automatic-accounts) |
 | Telegram | none | none | [Telegram setup](telegram-setup.md) |
 
 Notes for your own apps:
@@ -384,7 +384,7 @@ Notes for your own apps:
 - **Jira and Confluence** share one Atlassian app and one redirect URI, because an Atlassian OAuth
   app accepts only one callback URL.
 - **Peek** has no OAuth app and no callback URL: each person approves a code in Peek itself on
-  `/connect`, or accounts are created automatically ([Peek setup](peek-setup.md#automatic-accounts-organization-mode)).
+  `/connect`, or accounts are created automatically ([Peek setup](peek-setup.md#automatic-accounts)).
   The Peek server's address is `PRIVACYFENCE_PEEK_BASE_URL` or the field under **Admin → Features**;
   Peek is offered only with it.
 - **Telegram** needs no registration. Offer it under **Admin → Services**, and each person signs in

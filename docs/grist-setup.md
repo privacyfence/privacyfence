@@ -30,7 +30,7 @@ The key acts as you: it has your access to every document you can open, and Gris
 scopes for it. PrivacyFence sends it only to the server it was entered for, stores it in a file
 only your account can read, and never logs it.
 
-## Automatic API keys (organization mode)
+## Automatic API keys
 
 An organization that runs its own Grist (grist-core, which has no OAuth apps) can have
 PrivacyFence connect each person's Grist account at sign-in, with no clicks. When a person signs in
@@ -56,10 +56,28 @@ Restart the server.
 
 **Turn it on** under **Admin → Services**: the Grist row has an **Automatic accounts** switch. It
 works only without a Grist OAuth app, and the row says when it is unavailable, or when the key is
-not set (naming the variable the server reads). A server upgraded from 6.11 keeps its automatic
+not set (naming the variable the server reads). Or set `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` in
+the server's environment, which does the same: it offers Grist and turns automatic accounts on. The
+row then says it is set by the server, and the **Automatic accounts** switch and **Offer** are
+locked. Removing the variable hands both back to the Admin page, which kept its own settings. The
+variable needs both addresses and the key, or the server refuses to start, and it does nothing unless
+the web server runs (`web.mcp.enabled`). Outside organization mode it is ignored, with a log warning.
+While it is set, the server refuses an uploaded Grist connector config, because automatic accounts
+work only without a Grist OAuth app. A server upgraded from 6.11 keeps its automatic
 accounts: its old addresses stay and the Admin page shows them as fixed, and a key variable name
 it chose keeps working. The 6.11 bundle flags `--grist-auto-provision`, `--grist-provisioner-url`
 and the others are refused by `build_org_bundle.py`.
+
+**On a single-user install.** With `PRIVACYFENCE_GRIST_AUTO_PROVISION=true`, a single-user install
+(no identity provider) connects Grist for its one person, `admin@localhost`, treated as verified
+because the install has exactly one person, reachable only with the setup code or a passkey. It
+works only when Grist and the provisioner run on the same computer: both
+`PRIVACYFENCE_GRIST_SERVER_URL` and `PRIVACYFENCE_GRIST_PROVISIONER_URL` must be `localhost`
+addresses (`localhost`, `127.0.0.1` or `::1`). Grist is connected at each start and at each sign-in.
+The Grist install admin needs another address than `admin@localhost`, because the provisioner
+refuses to adopt an admin. Every start counts as a sign-in, so the renewal rule below never ends the
+connection. When you move to an identity provider, run `privacyfence-app --grist-release
+single-user`. ([ADR 0272](adr/0272-a-single-user-install-provisions-its-one-person-as-verified.md))
 
 **Verified email.** Only a person whose ID token says `email_verified` is `true` is provisioned.
 Google always sends it. The **Trust email addresses the identity provider does not mark verified**
@@ -361,9 +379,33 @@ signed in at once; the sweep picks the rest up.
 **`Grist provisioning for <id> failed: <error>`** — one person failed; the text after the colon is
 one of the messages above. The sweep retries.
 
+**`PRIVACYFENCE_GRIST_AUTO_PROVISION must be true, or unset.`** — the value is anything but `true`.
+Remove the variable to hand the switch back to the Admin page.
+
+**`PRIVACYFENCE_GRIST_AUTO_PROVISION=true needs PRIVACYFENCE_GRIST_SERVER_URL and
+PRIVACYFENCE_GRIST_PROVISIONER_URL.`** and **`PRIVACYFENCE_GRIST_AUTO_PROVISION=true needs
+PRIVACYFENCE_GRIST_PROVISIONING_KEY or PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE.`** — the daemon
+refuses to start without the addresses or the key (with a custom key variable, the message names it
+and its `_FILE` form). Set them and restart.
+
+**`PRIVACYFENCE_GRIST_AUTO_PROVISION=true cannot be used with a Grist OAuth app.`** — automatic
+accounts work only with API keys. Remove the variable or the Grist connector config.
+
+**`On a single-user install, PRIVACYFENCE_GRIST_AUTO_PROVISION=true needs localhost addresses in
+PRIVACYFENCE_GRIST_SERVER_URL and PRIVACYFENCE_GRIST_PROVISIONER_URL.`** — a single-user install
+connects only a Grist on the same computer.
+
+**`PRIVACYFENCE_GRIST_AUTO_PROVISION is ignored outside organization mode.`** — a log warning: the
+server is in local mode, where the variable does nothing.
+
+**`Grist's automatic accounts are set by PRIVACYFENCE_GRIST_AUTO_PROVISION on the server, which works
+only without a Grist OAuth app. Remove the variable first.`** — a Grist connector config upload was
+refused. **`Grist is set by PRIVACYFENCE_GRIST_AUTO_PROVISION on the server.`** — an Admin change tried
+to offer or withdraw Grist while the variable is set.
+
 **`No such account.`**, **`Grist auto-provisioning is not enabled in the organization config.`**,
 **`Set <NAME> to the Grist provisioning key first.`** — `--grist-release` messages: check the id,
-the Admin page's **Automatic accounts** switch and the environment.
+the Admin page's **Automatic accounts** switch (or `PRIVACYFENCE_GRIST_AUTO_PROVISION`) and the environment.
 
 **`… PrivacyFence has already forgotten the key; run --grist-release again to delete it in
 Grist.`** — the provisioner could not be reached for the release. Run the command again.

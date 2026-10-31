@@ -465,8 +465,13 @@ class TestOidcProviderInTheOrgApp:
         # Peek and Grist call /oidc/token server-side through the proxy: the issuer's Host and no
         # Origin header. Neither the Host allowlist nor any Origin check may stop that.
         _, app, session_id = _oidc_server(tmp_path, monkeypatch)
+        browser = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        code = _oidc_code(browser, session_id)
+        # The app's own server makes these calls: no browser session cookie, no Origin.
         client = TestClient(app, base_url=ISSUER, follow_redirects=False)
-        response = _oidc_token(client, _oidc_code(client, session_id))
+        response = _oidc_token(client, code)
+        assert not client.cookies
+        assert "cookie" not in {k.lower() for k in response.request.headers}
         assert "origin" not in {k.lower() for k in response.request.headers}
         assert response.request.headers["host"] == "pf.example.com"
         assert response.status_code == 200, response.text

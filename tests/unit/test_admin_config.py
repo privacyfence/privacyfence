@@ -1231,7 +1231,7 @@ class TestServiceRows:
     def test_one_row_per_service_with_exact_fields(self):
         rows = admin_config.service_rows({}, _import({}), mode="org")
         assert [row["key"] for row in rows] == list(admin_config.SERVICES)
-        assert all(set(row) == {"key", "label", "offered", "app_source", "client_id", "relay", "options"} for row in rows)
+        assert all(set(row) == {"key", "label", "offered", "offered_locked_by", "app_source", "client_id", "relay", "options"} for row in rows)
         assert rows[0]["label"] == "Google" and rows[0]["offered"] is False
 
     def test_a_preview_service_row_is_dropped_until_named(self, monkeypatch):
@@ -1363,6 +1363,26 @@ class TestServiceRows:
         assert local["available"] is False and "organization server" in local["reason"]
         single = self._rows(single_user=True)["peek"]["options"]["auto_provision"]
         assert single["available"] is False and "identity provider" in single["reason"]
+
+    def test_locked_row_fields(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://p.example.com")
+        rows = self._rows()
+        peek = rows["peek"]
+        assert peek["offered"] is True and peek["offered_locked_by"] == "PRIVACYFENCE_PEEK_AUTO_PROVISION"
+        auto = peek["options"]["auto_provision"]
+        assert (auto["enabled"], auto["available"], auto["reason"]) == (True, True, "")
+        assert auto["locked_by"] == "PRIVACYFENCE_PEEK_AUTO_PROVISION" and peek["options"]["single_user"] is False
+        assert rows["grist"]["offered_locked_by"] == "" and rows["grist"]["options"]["auto_provision"]["locked_by"] == ""
+        assert self._rows(single_user=True)["peek"]["options"]["single_user"] is True
+        assert self._rows(single_user=True)["peek"]["options"]["auto_provision"]["available"] is True
+
+    def test_locked_wins_over_connector_source(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PRIVACYFENCE_GRIST_AUTO_PROVISION", "true")
+        bundle = {"grist": {"client_id": "grist-id", "client_secret": "s", "server_url": "https://g.example.com"}}
+        row = self._rows(bundle)["grist"]
+        auto = row["options"]["auto_provision"]
+        assert row["offered"] is True and (auto["enabled"], auto["available"], auto["reason"]) == (True, True, "")
 
     def test_key_set_reports_presence_never_the_key(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", SENTINEL)
@@ -1663,3 +1683,41 @@ class TestSigninState:
     def test_a_bundle_idp_is_not_builtin(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_IDP", "builtin-google")
         assert admin_config.signin_state({"idp": {"issuer": "https://i", "client_id": "c"}})["builtin"] is False
+
+
+class TestLockedByEnvironment:
+    @pytest.fixture(autouse=True)
+    def _locked(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+
+    def test_locked_refuses_offer_and_withdraw(self):
+        for action in ("offer_service", "withdraw_service"):
+            with pytest.raises(admin_config.AdminConfigError) as exc:
+                _change(action, {"service": "peek"})
+            assert str(exc.value) == "Peek is set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server."
+        assert _change("offer_service", {"service": "grist"})[1] == ["services"]
+
+    def test_locked_trust_change_writes_only_trust(self):
+        summary, sections = _change(
+            "set_auto_provisioning", {"service": "peek", "enabled": False, "trust_unverified_email": True}
+        )
+        assert (summary, sections) == ("Changed automatic Peek accounts", ["auto_provision"])
+        stored = _stored()["services"]["peek"]
+        assert stored["auto_provision"]["trust_unverified_email"] is True
+        assert stored["auto_provision"]["enabled"] is False
+        assert _change(
+            "set_auto_provisioning", {"service": "peek", "enabled": True, "trust_unverified_email": True}
+        ) == ("", [])
+
+    def test_locked_trust_change_in_single_user_allowed(self):
+        summary, sections = _change(
+            "set_auto_provisioning", {"service": "peek", "enabled": True, "trust_unverified_email": True},
+            single_user=True,
+        )
+        assert sections == ["auto_provision"]
+        assert _stored()["services"]["peek"]["auto_provision"]["enabled"] is False
+
+    def test_an_invalid_variable_value_locks_nothing_on_the_page(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "maybe")
+        assert admin_config._env_auto_provision() == frozenset()
+        assert admin_config._locked_variable("peek", mode="org") == ""
