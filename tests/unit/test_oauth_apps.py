@@ -531,6 +531,22 @@ class TestEnvironmentAutoProvision:
         admin = enable_provisioning(make_admin("peek"), "peek")
         assert "auto_provision" not in compose({}, admin, single_user=True)["peek"]
 
+    def test_local_mode_ignores_env(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "true")
+        monkeypatch.setenv(PEEK_VAR, "https://peek.example")
+        admin = make_admin()
+        assert admin["services"]["peek"]["offered"] is False
+        assert "peek" not in compose({}, admin, mode="local")
+
+    def test_local_mode_ignores_a_bad_value(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "maybe")
+        assert "peek" not in compose({}, make_admin(), mode="local")
+
+    def test_set_auto_provision_variables_lists_any_value(self, monkeypatch):
+        monkeypatch.setenv(PEEK_AUTO, "maybe")
+        monkeypatch.setenv(GRIST_AUTO, "  ")
+        assert oauth_apps.set_auto_provision_variables() == [PEEK_AUTO]
+
 
 class TestCheckEnvironmentAutoProvision:
     @staticmethod

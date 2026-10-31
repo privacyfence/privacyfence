@@ -2782,6 +2782,19 @@ class TestOrgModeConnectorRegistry:
             )
         assert str(raised.value) == message
 
+    def test_local_mode_with_bad_auto_provision_value_still_starts(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "maybe")
+
+        with caplog.at_level(logging.WARNING, logger="privacyfence.daemon"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config={"mode": "local"},
+            )
+
+        assert any("PRIVACYFENCE_PEEK_AUTO_PROVISION is ignored outside organization mode." in r.getMessage()
+                   for r in caplog.records)
+
     def test_local_mode_warns_auto_provision(self, monkeypatch, tmp_path, caplog):
         self._no_bind(monkeypatch, tmp_path)
         monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
