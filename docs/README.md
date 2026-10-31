@@ -39,6 +39,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   organization, including claude.ai as a client.
 - [`org-mode-docker.md`](org-mode-docker.md) — run the organization deployment as containers: the
   published image, a tested Compose file with Caddy, upgrades, backups and verifying the image.
+- [`oidc-provider.md`](oidc-provider.md) — let Peek and Grist (or other apps you name) sign people in
+  through PrivacyFence, with the identity PrivacyFence already has.
 - [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up
   authentication, privilege separation, audit integrity, and what PrivacyFence does not claim.
 

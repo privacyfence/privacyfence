@@ -362,3 +362,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0268](0268-pre-releases-publish-the-organization-image-under-their-exact-version.md) | Pre-releases publish the organization image under their exact version | Accepted; amends 0208 |
 | [0269](0269-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md) | Organization servers use signed connector configs instead of a bundle | Accepted; amends 0016, 0200; relates to 0256, 0263, 0264 |
 | [0270](0270-the-built-in-slack-app-reads-through-search-while-slack-throttles-it.md) | The built-in Slack app reads through search while Slack throttles it | Accepted; relates to 0255, 0269 |
+| [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224 |
+| [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |
