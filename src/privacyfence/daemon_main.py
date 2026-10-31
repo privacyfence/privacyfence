@@ -1454,6 +1454,12 @@ def _start_org_web_server(
     # token for a person drops their cached connectors so the next request sees it.
     peek_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
     grist_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
+    if idp is None and oauth_apps.environment_auto_provision():
+        # Single-user install: its one person is provisioned as verified (ADR 0272).
+        from .web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+        peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
+        grist_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
 
     # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't
