@@ -541,7 +541,7 @@ def _locked_variable(name: str, *, mode: Mode) -> str:
     from . import oauth_apps
 
     if mode == "org" and name in _env_auto_provision():
-        return oauth_apps._ENV_AUTO_PROVISION[name]
+        return oauth_apps.ENV_AUTO_PROVISION[name]
     return ""
 
 
