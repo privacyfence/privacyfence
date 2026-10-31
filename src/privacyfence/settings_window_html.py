@@ -2222,6 +2222,15 @@ _JS = r"""
       ' server address" data-admin-address-save="' + esc(row.key) + '">Save</div></div></div>';
   }
 
+  function trustCheckboxHtml(row, auto) {
+    var trustPayload = { service: row.key, enabled: !!auto.enabled, trust_unverified_email: !auto.trust_unverified_email };
+    return '<label class="pf-row pf-row-sub pf-admin-check"><input type="checkbox"' +
+      (auto.trust_unverified_email ? ' checked' : '') + ' ' + dataAttr('set_auto_provisioning', trustPayload) +
+      ' aria-label="Trust unverified email addresses for ' + esc(row.label) + '"> ' +
+      '<span class="pf-row-desc">Trust email addresses the identity provider does not mark verified (only for providers such as ' +
+      'Microsoft Entra ID that issue only verified, organization-owned addresses).</span></label>';
+  }
+
   // Automatic accounts (Peek and Grist, organization mode): the switch and the trust checkbox
   // when the server's operator has made them available, the reason otherwise.
   function autoProvisionRowHtml(row) {
@@ -2229,6 +2238,13 @@ _JS = r"""
     if (!auto || notApplicable('set_auto_provisioning')) { return ''; }
     if (!auto.available) {
       return rowHtml('Automatic accounts', esc(auto.reason), '', 'pf-row-sub');
+    }
+    var singleUser = !!(row.options || {}).single_user;
+    if (auto.locked_by) {
+      var lockedHtml = rowHtml('Automatic accounts',
+        '<div>' + esc('Automatic accounts: on, set by ' + auto.locked_by + ' on the server.') + '</div>', '', 'pf-row-sub');
+      if (!singleUser) { lockedHtml += trustCheckboxHtml(row, auto); }
+      return lockedHtml;
     }
     var lines = [];
     if (auto.enabled) {
@@ -2241,12 +2257,7 @@ _JS = r"""
     var payload = { service: row.key, enabled: !auto.enabled, trust_unverified_email: !!auto.trust_unverified_email };
     var html = rowHtml('Automatic accounts', lines.map(function (l) { return '<div>' + esc(l) + '</div>'; }).join(''),
       toggleHtml(auto.enabled, 'set_auto_provisioning', payload, false, 'Automatic accounts for ' + row.label), 'pf-row-sub');
-    var trustPayload = { service: row.key, enabled: !!auto.enabled, trust_unverified_email: !auto.trust_unverified_email };
-    html += '<label class="pf-row pf-row-sub pf-admin-check"><input type="checkbox"' +
-      (auto.trust_unverified_email ? ' checked' : '') + ' ' + dataAttr('set_auto_provisioning', trustPayload) +
-      ' aria-label="Trust unverified email addresses for ' + esc(row.label) + '"> ' +
-      '<span class="pf-row-desc">Trust email addresses the identity provider does not mark verified (only for providers such as ' +
-      'Microsoft Entra ID that issue only verified, organization-owned addresses).</span></label>';
+    if (!singleUser) { html += trustCheckboxHtml(row, auto); }
     return html;
   }
 
@@ -2271,7 +2282,10 @@ _JS = r"""
       }
       var action = row.offered ? 'withdraw_service' : 'offer_service';
       html += '<div class="card pf-card pf-service" data-service="' + esc(row.key) + '">';
-      html += rowHtml(row.label, lines.join(''), toggleHtml(row.offered, action, { service: row.key }, false, 'Offer ' + row.label));
+      var offerControl = row.offered_locked_by
+        ? '<span class="pf-row-desc">' + esc('Offered: set by ' + row.offered_locked_by + ' on the server.') + '</span>'
+        : toggleHtml(row.offered, action, { service: row.key }, false, 'Offer ' + row.label);
+      html += rowHtml(row.label, lines.join(''), offerControl);
       if (CAPS.mode === 'org' && row.key === 'slack') {
         html += slackOwnAppRowHtml(row);
       }
