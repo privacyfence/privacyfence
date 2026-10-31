@@ -113,6 +113,12 @@ provisioning is delayed, and it is retried by a sweep every six hours and at the
 and the tokens already issued keep working while PrivacyFence is down. Peek keeps its own users and
 sign-in, including people who do not use PrivacyFence.
 
+## Sign in to Peek with PrivacyFence
+
+On an organization server or a single-user install, people can sign in to Peek with **Sign in with SSO**,
+which goes through PrivacyFence and uses the identity PrivacyFence already has. See
+[Sign in to other apps with PrivacyFence](oidc-provider.md).
+
 ## Values
 
 | Value | Where it comes from |

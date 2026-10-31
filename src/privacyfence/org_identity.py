@@ -487,6 +487,19 @@ def check_authz_policy(principal: Principal, claims: dict[str, Any], policy: Aut
             )
 
 
+def session_email_verified(claims: dict[str, Any], principal: Principal, policy: AuthzPolicyConfig) -> bool:
+    """Whether the browser session may carry ``email_verified``: the IdP said so (the claim is
+    ``True`` or ``"true"``), or the operator trusts unverified addresses of an allowed domain
+    (``policy.enabled`` and ``trust_unverified_email``). Peek and Grist link accounts by email."""
+    claim = claims.get("email_verified")
+    if claim is True or claim == "true":
+        return True
+    if not policy.enabled or getattr(policy, "trust_unverified_email", False) is not True:
+        return False
+    domain = _email_domain(_normalized_email(principal.email))
+    return bool(domain) and domain in policy.allowed_domains
+
+
 def _issued_to_builtin_signin(claims: dict[str, Any]) -> bool:
     """Whether the ID token was issued to PrivacyFence's built-in Google sign-in client. A caller
     that passes a policy not bound to the IdP still gets the built-in client's default deny."""
