@@ -137,6 +137,16 @@ class TestLoginCallback:
         session_id = cb.cookies[org_session.SESSION_COOKIE]
         assert sessions.get(session_id).id == "alice"
 
+    def test_the_session_remembers_whether_the_email_was_verified(self, monkeypatch):
+        app, sessions = _app()
+        flags = {}
+        for sub, extra in (("alice", {"email_verified": True}), ("bob", {})):
+            cb = self._drive_login(
+                _client(app), monkeypatch, claims={"sub": sub, "email": f"{sub}@example.com", **extra},
+            )
+            flags[sub] = sessions.get_session(cb.cookies[org_session.SESSION_COOKIE]).email_verified
+        assert flags == {"alice": True, "bob": False}
+
     def test_login_callback_calls_notify_sign_in_with_email_verified(self, monkeypatch):
         calls = []
         monkeypatch.setattr(

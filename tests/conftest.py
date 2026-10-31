@@ -183,7 +183,8 @@ def _clear_server_environment(monkeypatch):
         "PRIVACYFENCE_MODE", "PRIVACYFENCE_BIND_HOST", "PRIVACYFENCE_PORT",
         "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES", "PRIVACYFENCE_ADMIN_EMAILS",
         "PRIVACYFENCE_IDP", "PRIVACYFENCE_ALLOWED_DOMAINS", "PRIVACYFENCE_PREVIEW_SERVICES",
-        *(name for name in os.environ if name.startswith("PRIVACYFENCE_IDP_")),
+        "PRIVACYFENCE_PEEK_AUTO_PROVISION", "PRIVACYFENCE_GRIST_AUTO_PROVISION",
+        *(name for name in os.environ if name.startswith(("PRIVACYFENCE_IDP_", "PRIVACYFENCE_OIDC_"))),
     ):
         monkeypatch.delenv(name, raising=False)
 

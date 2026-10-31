@@ -102,6 +102,7 @@ from . import (
     data_format,
     grist_provisioning,
     oauth_apps,
+    oidc_provider,
     org_bundle_signing,
     org_mode,
     peek_provisioning,
@@ -970,6 +971,17 @@ def _maybe_start_web_server(
     notifications_config = web_config.get("notifications", {}) or {}
     org_config = org_config or {}
     mode = org_mode.resolve_mode(org_config)
+    if mode != "org":
+        if os.environ.get(oidc_provider.CLIENTS_ENV, "").strip():
+            raise org_mode.ConfigurationError(
+                "PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server."
+            )
+        ignored = oauth_apps.environment_auto_provision()
+        if ignored:
+            logger.warning(
+                "%s is ignored outside organization mode.",
+                ", ".join(oauth_apps._ENV_AUTO_PROVISION[name] for name in sorted(ignored)),
+            )
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
     # ADR 0007: settings.yaml's own file_bridge: section, read once here --
@@ -987,6 +999,8 @@ def _maybe_start_web_server(
 
     if mode == "org":
         if not mcp_enabled:
+            if os.environ.get(oidc_provider.CLIENTS_ENV, "").strip():
+                logger.warning("PRIVACYFENCE_OIDC_CLIENTS is ignored: the web server is off.")
             return None
         return _start_org_web_server(
             web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
@@ -1378,6 +1392,9 @@ def _start_org_web_server(
     # Validated here so a broken "grist"."auto_provision" refuses startup; the provisioner
     # itself re-reads it in grist_provisioning.start below.
     org_mode.GristProvisioningConfig.from_org_config(org_config)
+    oauth_apps.check_environment_auto_provision(
+        single_user=idp is None, grist_oauth=bool((org_config.get("grist") or {}).get("client_id"))
+    )
     if idp is None:
         if bundle:
             # A signed organization bundle always meant a real server, and 6.x never wrote an
@@ -1444,6 +1461,12 @@ def _start_org_web_server(
     # token for a person drops their cached connectors so the next request sees it.
     peek_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
     grist_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
+    if idp is None and oauth_apps.environment_auto_provision():
+        # Single-user install: its one person is provisioned as verified (ADR 0272).
+        from .web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+        peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
+        grist_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
 
     # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't
@@ -1477,6 +1500,16 @@ def _start_org_web_server(
 
     _flush_deferred_warnings()
 
+    oidc_clients = oidc_provider.clients_from_env()
+    oidc = None
+    if oidc_clients:
+        oidc = oidc_provider.OidcProvider(
+            issuer=server_config.issuer_url.rstrip("/") + "/oidc",
+            clients=oidc_clients,
+            key=oidc_provider.load_or_create_signing_key(org_dir() / "oidc_signing_key.pem"),
+        )
+        logger.info("OIDC provider for %d app(s) at %s", len(oidc_clients), oidc.issuer)
+
     server = WebServer(
         web_ui,
         host=server_config.bind_host, port=server_config.port,
@@ -1487,7 +1520,7 @@ def _start_org_web_server(
             install_wide_settings=install_wide_config,
             install_wide_settings_path=install_wide_config_path,
             push_notifier=push_notifier, push_store=push_store,
-            bundle=bundle or {}, startup_admin=startup_admin or {},
+            bundle=bundle or {}, startup_admin=startup_admin or {}, oidc=oidc,
         ),
         ssl_certfile=server_config.cert_file or None,
         ssl_keyfile=server_config.key_file or None,

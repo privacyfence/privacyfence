@@ -600,6 +600,35 @@ class TestCheckAuthzPolicy:
         )
 
 
+class TestSessionEmailVerified:
+    @staticmethod
+    def _principal(email: str = "alice@acme.com") -> Principal:
+        return Principal(id="p", email=email, display_name="P")
+
+    @staticmethod
+    def _policy(*, trust: bool, domains: tuple[str, ...] = ("acme.com",)):
+        return oi.IdpAuthzPolicy(allowed_domains=domains, trust_unverified_email=trust)
+
+    def test_claim_true(self):
+        assert oi.session_email_verified({"email_verified": True}, self._principal(), AuthzPolicyConfig()) is True
+
+    def test_claim_string_true(self):
+        assert oi.session_email_verified({"email_verified": "true"}, self._principal(), AuthzPolicyConfig()) is True
+
+    def test_claim_missing_and_trust_off(self):
+        assert oi.session_email_verified({}, self._principal(), self._policy(trust=False)) is False
+
+    def test_trust_on_with_the_domain_allowed(self):
+        assert oi.session_email_verified({}, self._principal("a@ACME.com"), self._policy(trust=True)) is True
+
+    def test_trust_on_with_the_domain_not_allowed(self):
+        assert oi.session_email_verified({}, self._principal("a@evil.com"), self._policy(trust=True)) is False
+
+    def test_policy_disabled(self):
+        policy = self._policy(trust=True, domains=())
+        assert oi.session_email_verified({}, self._principal(), policy) is False
+
+
 class TestAllowedDomainsNeedAVerifiedAddress:
     POLICY = AuthzPolicyConfig(allowed_domains=("acme.com",))
 

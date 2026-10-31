@@ -31,6 +31,7 @@ Safari does not keep a ``Secure`` cookie on ``http://localhost``.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -48,7 +49,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import web_shell, webauthn_stepup
+from .. import grist_provisioning, peek_provisioning, web_shell, webauthn_stepup
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal, principal_scope
 from ..step_up_config import StepUpConfig
@@ -298,7 +299,8 @@ def build_routes(
             logger.warning("Could not update this browser's push subscriptions: %s", type(exc).__name__)
 
     def start_session(request: Request, response: Response) -> None:
-        session_id = sessions.create(SINGLE_USER_PRINCIPAL)
+        # Fixed address, one person: nothing to verify.
+        session_id = sessions.create(SINGLE_USER_PRINCIPAL, email_verified=True)
         end_browser_push(request.cookies.get(org_session.SESSION_COOKIE, ""), new_session_id=session_id)
         org_session.set_session_cookie(response, session_id, secure=secure)
         response.delete_cookie(SETUP_BINDING_COOKIE, path=_BINDING_COOKIE_PATH)
@@ -392,6 +394,9 @@ def build_routes(
             f"/security?next={quote(next_path, safe='/')}", status_code=303, headers={"Cache-Control": "no-store"},
         )
         start_session(request, response)
+        # Keeps the provisioners' "signed in within 90 days" sweep honest (ADR 0272).
+        peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
+        await asyncio.to_thread(grist_provisioning.notify_sign_in, SINGLE_USER_PRINCIPAL, email_verified=True)
         _audit("single_user_setup_signin", "Signed in with the setup code; the code is now used.")
         return response
 
@@ -453,6 +458,9 @@ def build_routes(
             return JSONResponse({"error": "The passkey could not be verified."}, status_code=401)
         response = JSONResponse({"redirect": pending.next_path}, headers={"Cache-Control": "no-store"})
         start_session(request, response)
+        # Keeps the provisioners' "signed in within 90 days" sweep honest (ADR 0272).
+        peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
+        await asyncio.to_thread(grist_provisioning.notify_sign_in, SINGLE_USER_PRINCIPAL, email_verified=True)
         _audit("single_user_passkey_signin", "Signed in with a passkey.")
         return response
 

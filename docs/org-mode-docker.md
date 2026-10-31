@@ -223,8 +223,10 @@ A multi-user server with the environment alone, no bundle to build:
     put each provisioning key in its own secret file the same way as step 5
     (`PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE=/run/secrets/peek_provisioning_key`, likewise
     `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE`), uncomment those `secrets:` lines, restart, and turn
-    automatic accounts on under Admin → Services ([Peek setup](peek-setup.md#automatic-accounts-organization-mode),
-    [Grist setup](grist-setup.md#automatic-api-keys-organization-mode)).
+    automatic accounts on under Admin → Services, or set `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and
+    `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` in `privacyfence.env` to offer them and turn them on from
+    the server ([Peek setup](peek-setup.md#automatic-accounts),
+    [Grist setup](grist-setup.md#automatic-api-keys)).
 
 Everything else (file delivery, step-up, sign-in restrictions, scoped tokens, audit forwarding) is on
 the [Admin page](org-mode-setup-guide.md#the-admin-page). Outbound HTTPS from the container must reach your identity
@@ -384,7 +386,9 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_IDP`, `PRIVACYFENCE_ALLOWED_DOMAINS` | none | `builtin-google` for the [built-in Google sign-in](org-mode-setup-guide.md#built-in-google-sign-in), and its allowed domains (first start only). |
 | `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work. |
 | `PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL` | none | The Peek and Grist addresses. |
+| `PRIVACYFENCE_PEEK_AUTO_PROVISION`, `PRIVACYFENCE_GRIST_AUTO_PROVISION` | none | Unset or empty: the Admin page decides. `true`: the service is offered and Automatic accounts are on, locked on Admin → Services. Needs the address and key; ignored without the web server. |
 | `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE` | none | The provisioning keys as Docker secret files. The plain `…_PROVISIONING_KEY` forms also work; never both. |
+| `PRIVACYFENCE_OIDC_CLIENTS` | none | Web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<server>/oidc`). Each app also needs `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` and `…_SECRET_FILE` (or `…_SECRET`). See [Sign in to other apps with PrivacyFence](oidc-provider.md). |
 
 The [configuration reference](configuration-reference.md#environment-variables) has the full list.
 For audit forwarding to an HTTPS endpoint with a bearer token, put `NAME=token` in `privacyfence.env`
