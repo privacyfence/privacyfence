@@ -3,53 +3,69 @@
 ## Goal
 
 An organization server, or a single-user install on `localhost`, can start with Peek and Grist
-already connected for every person, with no clicks on the Admin page. This is what the
-`privacyfence-suite` Docker stack needs: it starts PrivacyFence, Peek, Grist and the Grist
-provisioner together, generates the provisioning keys itself, and passes them to every container. Two
-new variables, `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and `PRIVACYFENCE_GRIST_AUTO_PROVISION=true`,
-offer the service and turn **Automatic accounts** on, locked like an address set by the environment.
-In single-user mode, where automatic accounts are refused today, the same variables connect Peek
-and Grist for the one person (`admin@localhost`).
+already connected for every person, with no clicks on the Admin page. The `privacyfence-suite`
+Docker stack needs this: it starts PrivacyFence, Peek, Grist and the Grist provisioner together,
+generates the provisioning keys itself, and hands them to every container.
+
+Two new variables, `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and
+`PRIVACYFENCE_GRIST_AUTO_PROVISION=true`, offer the service and turn **Automatic accounts** on. Like
+an address set by the environment, they are then locked on the Admin page. In single-user mode, where
+automatic accounts are refused today, the same variables connect Peek and Grist for the one person
+(`admin@localhost`), as long as both run on the same computer (`localhost` addresses only).
 
 ## Current state
 
-- **The Admin page is the only writer.** `offered` and `auto_provision.enabled` live in
-  `org/admin_config.json` (`_default_service`, `src/privacyfence/admin_config.py:116-131`). Only
-  bundle import (`import_from_bundle`, `admin_config.py:290-337`) and the Admin actions
-  `offer_service` / `set_auto_provisioning` (`_apply_service_toggle` at `admin_config.py:645-653`,
-  `_apply_auto_provisioning` via `apply_action`, `admin_config.py:883-915`) write them. The only
-  environment seeding is `PRIVACYFENCE_ALLOWED_DOMAINS` (`admin_config.py:247-287`).
-- **The effective config gates on Admin state.** `_auto_provision_enabled`
-  (`src/privacyfence/oauth_apps.py:166-167`) requires `enabled` AND org mode AND not single-user.
+- **Where the settings live.** `offered` and `auto_provision.enabled` live in
+  `org/admin_config.json` (`_default_service`, `src/privacyfence/admin_config.py:116-131`). They are
+  written only by:
+  - bundle import (`import_from_bundle`, `admin_config.py:290-337`);
+  - the Admin changes `offer_service` and `set_auto_provisioning` (`_apply_service_toggle` at
+    `admin_config.py:645-653`, `_apply_auto_provisioning` at `admin_config.py:724-747`), dispatched by
+    `apply_change` (`admin_config.py:875-916`, dispatch block `:897-911`).
+
+  The only seeding from the environment is `PRIVACYFENCE_ALLOWED_DOMAINS` (`admin_config.py:247-287`).
+- **The effective config.** `effective_org_config` builds the `offered` dict at `oauth_apps.py:264-270`.
+  `_auto_provision_enabled` (`oauth_apps.py:166-167`) requires `enabled`, org mode and not single-user.
   `_peek_section` and `_grist_section` (`oauth_apps.py:170-218`) add `auto_provision` only when the
-  address is trusted: from the environment, or locked by an import. Peek and Grist appear at all only
-  when `offered` and an address exists (`oauth_apps.py:299-312`).
-- **The Admin page explains why the switch is unavailable.** `_auto_provision_state`
-  (`admin_config.py:555-580`) gives the reason; single-user is refused with "Automatic accounts need
-  people to sign in through an identity provider." The service row's `options.auto_provision` is
-  built at `admin_config.py:1052-1076` and rendered by `autoProvisionRowHtml` in
-  `src/privacyfence/settings_window_html.py:2225-2250`. The Offer switch is at
-  `settings_window_html.py:2272`.
-- **The provisioners start once.** `peek_provisioning.start` and `grist_provisioning.start` run once
-  in `daemon_main.py:1445-1446`. They do nothing unless the section is enabled, and they warn and skip
-  when the key is unset (`peek_provisioning.py:301-320`, `grist_provisioning.py:346-373`).
-  `notify_sign_in(principal, email_verified=...)` (`peek_provisioning.py:323`,
-  `grist_provisioning.py:376`) queues one person; the six-hourly sweep renews from
-  `users/<id>/credentials/{peek,grist}_provisioning.json`.
-- **Single-user mode never calls `notify_sign_in`.** Its principal is fixed:
+  address is trusted, that is from the environment or locked by an import. In org mode a Grist OAuth
+  app can only come from a connector config: the bundle's Grist section is dropped at
+  `oauth_apps.py:255-256`, and the connector is read at `:300`.
+- **Who calls `effective_org_config`.** It runs at startup (`daemon_main.py:2373`), in the release
+  commands (`daemon_main.py:693-705`), in local-mode settings refreshes
+  (`settings_controller.py:1222-1270`), and after "live" Admin changes and connector-config uploads
+  (`web/routes_admin.py:379`, `:456`, `:545`, through `refresh_live` at `:586-596`). It does not run
+  on Admin page renders: those use `admin_config.service_rows`.
+- **The Admin page.** The service row is built by `_service_row` (`admin_config.py:998`; Peek and
+  Grist options at `:1052-1076`; `"offered"` at `:1080`). `_auto_provision_state`
+  (`admin_config.py:555-580`) gives the reason the switch is unavailable. `admin_config` reads the
+  environment addresses through the lazy `_env_addresses()` (`admin_config.py:521-526`), which
+  swallows `ConfigurationError`. The JS is `autoProvisionRowHtml` (`settings_window_html.py:2227`;
+  the trust checkbox payload at `:2244`) and the Offer switch (`:2274`).
+- **The provisioners.** They start once, inside `_start_org_web_server`, at `daemon_main.py:1445-1446`.
+  The sections are validated earlier, at `:1368` (Peek) and `:1380` (Grist). In single-user mode
+  `idp is None` there (`:1381`). With `web.mcp.enabled` false, there is no web server and no
+  provisioning (`daemon_main.py:988-990`).
+- **Queueing a person.** `notify_sign_in(principal, email_verified=...)` queues one person
+  (`peek_provisioning.py:323`; `grist_provisioning.py:376`, which must run off the event loop:
+  existing callers use `asyncio.to_thread`, `routes_org_identity.py:275-277`). The six-hourly sweep
+  renews from `users/<id>/credentials/{peek,grist}_provisioning.json`.
+- **Single-user sign-in.** It never calls `notify_sign_in`. Its principal is fixed:
   `SINGLE_USER_PRINCIPAL = Principal(id="single-user", email="admin@localhost", display_name="Administrator", is_admin=True)`
-  (`src/privacyfence/web/single_user_auth.py:63-65`). Sessions start in `start_session`
-  (`single_user_auth.py:300-304`), called from the setup-code and passkey sign-ins
-  (`single_user_auth.py:394`, `:455`).
-- **http is allowed only for localhost addresses.** Peek and Grist addresses must be `https://`, or
-  `http://` only for `localhost`, `127.0.0.1` and `::1` (`peek_client.py:64-84`,
-  `grist_auth.py:72-97`). That is enough for the suite: behind a proxy it uses the public `https://`
-  names, and in the localhost stack the containers share one network namespace, so
-  `http://localhost:<port>` reaches the other containers. No address rule changes.
-- ADRs that constrain this: 0196 (offered only with a section), 0241/0244 (PrivacyFence only calls the
-  provisioners), 0243/0247 (provisioning needs a verified email), 0256/0257 (startup settings come
-  from the environment, operational settings live in the admin config), 0260 (single-user on
-  localhost), 0264 (a server can start from environment variables).
+  (`web/single_user_auth.py:63-65`). Sessions start in the synchronous `start_session` (`:300-304`),
+  called from the async setup-code and passkey handlers (`:394`, `:455`).
+- **Address rules.** `http://` is allowed only for `localhost`, `127.0.0.1` and `::1`
+  (`peek_client.py:63-84`, `grist_auth.py:72-97`). The suite needs nothing more: behind a proxy it uses
+  public `https://` names, and on localhost all containers share one network namespace.
+- **Tests.** `tests/conftest.py:177-189` (`_clear_server_environment`) clears a fixed list of server
+  variables plus the `PRIVACYFENCE_IDP_` prefix.
+- **ADRs that constrain this:**
+  - 0196: a service is offered only with a section.
+  - 0241/0244: PrivacyFence only calls the provisioners.
+  - 0243/0247: provisioning needs a verified email.
+  - 0256/0257: startup settings come from the environment; operational settings live in the admin
+    config.
+  - 0260: single-user runs on localhost.
+  - 0264: a server can start from environment variables.
 
 ## Design
 
@@ -60,84 +76,138 @@ and Grist for the one person (`admin@localhost`).
 | `PRIVACYFENCE_PEEK_AUTO_PROVISION` | unset or empty: the Admin page decides; `true`: on | Peek is offered and Automatic accounts are on |
 | `PRIVACYFENCE_GRIST_AUTO_PROVISION` | the same | Grist is offered and Automatic accounts are on |
 
-The value is compared after `strip().lower()`. Any other value refuses the start with
-`ConfigurationError("PRIVACYFENCE_PEEK_AUTO_PROVISION must be true, or unset.")` (Grist: same text
-with its name). There is no `false`: leaving the variable out hands the switch back to the Admin
-page. The stored `auto_provision.enabled` and `offered` are never written by these variables, so
-removing a variable restores whatever the Admin page had.
+- **Parsing.** The value is compared after `strip().lower()`. There is no `false`: removing the
+  variable hands the switch back to the Admin page.
+- **Stored values are untouched.** These variables never write the stored `offered`,
+  `auto_provision.enabled` or `trust_unverified_email`. Removing a variable restores what the Admin
+  page had.
+- **When they apply.** They take effect only when the web server runs (`web.mcp.enabled`), like the
+  provisioners themselves. The docs say they do nothing otherwise.
 
-### New module-level helper (`src/privacyfence/oauth_apps.py`)
+### Helpers
+
+In `src/privacyfence/oauth_apps.py`, next to `environment_addresses` (`:109`):
 
 ```python
 _ENV_AUTO_PROVISION = {"peek": "PRIVACYFENCE_PEEK_AUTO_PROVISION", "grist": "PRIVACYFENCE_GRIST_AUTO_PROVISION"}
 
 def environment_auto_provision() -> frozenset[str]:
     """The services whose automatic accounts the environment turns on ("peek", "grist")."""
+
+def check_environment_auto_provision(*, single_user: bool, grist_oauth: bool) -> None:
+    """The startup checks below; raises ConfigurationError."""
 ```
 
-It raises `ConfigurationError` for a bad value, as above. It reads `os.environ` on every call (no
-module-level cache, so no `tests/conftest.py` reset is needed).
+- **`environment_auto_provision`.** A value other than unset, empty or `true` raises
+  `ConfigurationError("PRIVACYFENCE_PEEK_AUTO_PROVISION must be true, or unset.")`, or the same text
+  with the Grist name. It reads `os.environ` on every call, so there is no module state.
+- **`_env_auto_provision`.** In `admin_config.py`, a twin of `_env_addresses()`:
+  `_env_auto_provision() -> frozenset[str]` imports `oauth_apps` lazily and returns `frozenset()` on
+  `ConfigurationError`.
 
-### Startup checks (`effective_org_config`, `oauth_apps.py`)
+### Startup checks (`check_environment_auto_provision`, called from `daemon_main`)
+
+`_start_org_web_server` calls it right after `GristProvisioningConfig.from_org_config(org_config)`
+(`daemon_main.py:1380`), with `single_user=idp is None` and
+`grist_oauth=bool((org_config.get("grist") or {}).get("client_id"))`. It never runs inside
+`effective_org_config`, so a runtime refresh cannot raise these errors.
 
 When `"peek"` is in `environment_auto_provision()`:
 
-- `PRIVACYFENCE_PEEK_BASE_URL` must be set (`"peek" in environment_addresses()`), else
+- `PRIVACYFENCE_PEEK_BASE_URL` must be set, else
   `ConfigurationError("PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs PRIVACYFENCE_PEEK_BASE_URL.")`.
-- `org_mode.provisioning_key(<the stored key_env>)` must return a key, else
+- `org_mode.provisioning_key(<stored key_env>)` must return a key, else
   `ConfigurationError("PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs PRIVACYFENCE_PEEK_PROVISIONING_KEY or PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE.")`.
-  When the stored `key_env` is not the default, the message names `<key_env>` and `<key_env>_FILE`
-  instead.
+  The stored `key_env` is read with `admin_config.config_for(...)["services"]["peek"]["auto_provision"]["key_env"]`.
+  When it is not the default, the message names `<key_env>` and `<key_env>_FILE` instead.
+- In single-user mode, the Peek address's host must be `localhost`, `127.0.0.1` or `::1`, else
+  `ConfigurationError("On a single-user install, PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs a localhost address in PRIVACYFENCE_PEEK_BASE_URL.")`.
 
 When `"grist"` is in it:
 
-- `PRIVACYFENCE_GRIST_SERVER_URL` and `PRIVACYFENCE_GRIST_PROVISIONER_URL` must both be set, else
+- Both addresses must be set, else
   `ConfigurationError("PRIVACYFENCE_GRIST_AUTO_PROVISION=true needs PRIVACYFENCE_GRIST_SERVER_URL and PRIVACYFENCE_GRIST_PROVISIONER_URL.")`.
 - The key check is the same as Peek's, with the Grist names.
-- If the Grist section comes from a bundle or connector-config OAuth app (`bundled.get("client_id")`
-  in `_grist_section`, or a Grist connector config), the start is refused with
+- `grist_oauth` must be false, else
   `ConfigurationError("PRIVACYFENCE_GRIST_AUTO_PROVISION=true cannot be used with a Grist OAuth app.")`.
+- In single-user mode, both hosts must be loopback, else
+  `ConfigurationError("On a single-user install, PRIVACYFENCE_GRIST_AUTO_PROVISION=true needs localhost addresses in PRIVACYFENCE_GRIST_SERVER_URL and PRIVACYFENCE_GRIST_PROVISIONER_URL.")`.
 
-These run in org mode only. In local (desktop) mode a set variable is ignored with one
-`logger.warning("%s is ignored outside organization mode.", <name>)`.
+**Local mode.** In `daemon_main`, right after `mode = org_mode.resolve_mode(org_config)`
+(`daemon_main.py:972`): if the mode is not `"org"` and `environment_auto_provision()` is non-empty,
+log `logger.warning("%s is ignored outside organization mode.", <names joined by ", ">)` once.
+
+**At runtime.** The Admin connector-config upload refuses a Grist config while
+`PRIVACYFENCE_GRIST_AUTO_PROVISION` is set. The check runs in `_accept_connector_config_upload`
+(`web/routes_admin.py:492`), before `connector_configs.accept`, with the error
+`Grist's automatic accounts are set by PRIVACYFENCE_GRIST_AUTO_PROVISION on the server, which works only without a Grist OAuth app. Remove the variable first.`
+The upload's provider is known after parsing. Use the same refusal path as the parser's own errors in
+that function.
 
 ### Effective config
 
-- `offered`: for a service in `environment_auto_provision()`, the effective config treats the service
-  as offered whatever `services.<name>.offered` says.
-- `_auto_provision_enabled(admin_service, *, mode, single_user, from_environment: bool)`: true when
-  `mode == "org"` and either `from_environment`, or `enabled and not single_user`. So the environment
-  turns provisioning on in single-user mode too, and the Admin switch still cannot.
-- `_peek_section` / `_grist_section` pass `from_environment=name in environment_auto_provision()`.
-  The rest of the section (`key_env`, `trust_unverified_email` from the stored values, and
-  `provisioner_url` from the environment) is unchanged.
+- **Offered.** In the `offered` dict (`oauth_apps.py:264-270`), a service is offered when the stored
+  `offered` is true **or** `name in environment_auto_provision()`, still `and not preview_hidden(name)`.
+- **`_auto_provision_enabled`.** It becomes
+  `_auto_provision_enabled(admin_service, *, mode, single_user, from_environment: bool)`, which
+  returns `mode == "org" and (from_environment or (enabled and not single_user))`.
+- **Sections.** `_peek_section` and `_grist_section` pass
+  `from_environment=name in environment_auto_provision()`. `key_env` and `trust_unverified_email`
+  still come from the stored values, and `provisioner_url` from the environment.
 
 ### Admin page
 
-`options.auto_provision` gains `"locked_by": "<variable name>"` (empty string when not locked), and
-the service row gains `"offered_locked_by"` with the same value. When `locked_by` is set:
+**Row fields.** In `_service_row`, use `_env_auto_provision()` to work out whether a service is
+locked. `options.auto_provision` gains `"locked_by": "<variable name>"` (empty when not locked), and
+the row gains `"offered_locked_by"` with the same value. When `locked_by` is set:
 
-- `available` is true, `enabled` is true, `reason` is `""`.
-- `autoProvisionRowHtml` shows the line
-  `Automatic accounts: on, set by <variable> on the server.` and no toggle. The trust checkbox stays
-  (it is still an Admin-page setting).
-- The Offer switch for that row is replaced by the text `Offered: set by <variable> on the server.`.
-- `apply_action` refuses `offer_service`, `withdraw_service` and `set_auto_provisioning` for that
-  service with `AdminConfigError("<Label> is set by <variable> on the server.")`, for example
-  `Peek is set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server.` A `set_auto_provisioning` call that
-  only changes `trust_unverified_email` (with `enabled: true`) is still allowed.
+- the row reports `offered: True`, and `auto_provision` reports `enabled: True`, `available: True`,
+  `reason: ""`;
+- this wins over every other source and reason, including a connector-config Grist app (which the
+  startup check refuses anyway).
+
+**JS.**
+
+- `autoProvisionRowHtml` shows `Automatic accounts: on, set by <variable> on the server.` and no
+  toggle.
+- The trust checkbox stays, except in single-user mode (`(row.options || {}).single_user`, a new
+  boolean on the row), where it has no effect and is hidden.
+- The Offer switch is replaced by the text `Offered: set by <variable> on the server.`.
+
+**`apply_change`, for a locked service.**
+
+- `offer_service` and `withdraw_service` are refused with
+  `AdminConfigError("<Label> is set by <variable> on the server.")`, where `<Label>` is
+  `SERVICE_LABELS[name]`, for example `Peek is set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server.`
+- `set_auto_provisioning` ignores its `enabled` parameter and skips `_auto_provision_state`. It writes
+  only `trust_unverified_email`, and returns `("Changed automatic <Label> accounts", ["auto_provision"])`,
+  or `("", [])` if nothing changed. It never writes the stored `enabled`.
 
 ### Single-user mode
 
-- After `peek_provisioning.start(...)` and `grist_provisioning.start(...)` in `daemon_main.py`, when
-  `org_mode.is_single_user(...)` is true, the daemon calls
+- **At start.** In `_start_org_web_server`, right after `grist_provisioning.start(...)`
+  (`daemon_main.py:1446`), the daemon checks
+  `if idp is None and oauth_apps.environment_auto_provision():`. It then calls
   `peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)` and the same for
-  `grist_provisioning`. Both are no-ops when that provisioner did not start.
-- `start_session` in `single_user_auth.py` calls the same two functions after it creates the session,
-  so the sweep's "signed in within 90 days" counts passkey sign-ins.
-- `email_verified=True` is deliberate. The address `admin@localhost` is fixed in code, not asserted by
-  an identity provider, and the install has exactly one person. The suite gives the Peek and Grist
-  install admins different addresses, so this account is not refused as an admin (ADR below).
+  `grist_provisioning`. Both are no-ops when that provisioner did not start. `SINGLE_USER_PRINCIPAL`
+  is imported locally, like the other `.web.*` imports there (`daemon_main.py:1355-1365`).
+- **At each sign-in.** In the two async handlers that call `start_session`
+  (`single_user_auth.py:394`, `:455`), right after the call:
+  `peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)`, then
+  `await asyncio.to_thread(grist_provisioning.notify_sign_in, SINGLE_USER_PRINCIPAL, email_verified=True)`.
+  This keeps the sweep's "signed in within 90 days" honest.
+- **Why `email_verified=True`.** The address `admin@localhost` is fixed in code, not asserted by an
+  identity provider. The install has exactly one person, reachable only after the setup code or a
+  passkey. Peek and Grist must be on the same computer (startup check above), so no shared server
+  ever sees two installs' `admin@localhost`. The suite gives the Peek and Grist install admins other
+  addresses, so this account is never refused as an admin. ADR 0272 is the one place this decision
+  lives; the sibling OIDC plan references it.
+- **Known consequences,** recorded in ADR 0272:
+  - Every daemon start counts as a sign-in, so the 90-day inactivity rule does not apply in
+    single-user mode.
+  - If the install later moves to an identity provider, `users/single-user/` keeps being renewed by
+    the sweep for up to 90 days after the last start. The docs say to run `--peek-release single-user`
+    and `--grist-release single-user` when moving.
 - `--peek-release single-user` and `--grist-release single-user` keep working unchanged.
 
 ### Rejected
@@ -146,17 +216,19 @@ the service row gains `"offered_locked_by"` with the same value. When `locked_by
   re-run with the same environment. A one-time seed would silently diverge from it after the first
   Admin-page click, and a fresh volume would behave differently from an old one. A live, locked value
   matches how `PRIVACYFENCE_PEEK_BASE_URL` already behaves.
-- **A `false` value that forces it off.** Removing the variable is enough. A third state would need
-  its own Admin-page wording for no use case.
-- **A configurable single-user email.** `admin@localhost` works with Peek and Grist; the suite gives
-  their admins other addresses instead.
+- **Checks inside `effective_org_config`.** It runs after runtime changes (uploads, live Admin
+  changes), where a startup error would crash a request and leave a state that refuses the next start.
+- **A `false` value that forces it off.** Removing the variable is enough.
+- **Single-user provisioning against a shared Peek or Grist.** The fixed `single-user` id and
+  `admin@localhost` would collide across installs and could adopt someone else's account.
 
 ## ADRs
 
 - **0271**: Automatic Peek and Grist accounts can be switched on from the environment, and are then
-  locked on the Admin page.
-- **0272**: A single-user install provisions its one person, `admin@localhost`, as verified, when the
-  environment turns automatic accounts on.
+  locked on the Admin page. The stored values are never written. The checks run at startup only.
+- **0272**: A single-user install provisions its one person, `admin@localhost`, as verified, only
+  against Peek and Grist on `localhost`, when the environment turns automatic accounts on. This ADR is
+  also the reference for treating that principal as verified elsewhere, such as the OIDC provider.
 
 ## Manual steps
 
@@ -164,17 +236,19 @@ None. The suite plan's `manual_after` checks a real stack end to end.
 
 ## Risks and open questions
 
-- **`effective_org_config` is called from more places than startup.** It runs on Admin-page renders
-  too. The phase must raise the new `ConfigurationError`s only where `environment_addresses()` already
-  raises today (same call path), so a running server never starts raising on a page render. If
-  `environment_addresses()` turns out not to be called at startup on every path, stop with
+- **Merge conflicts with `plan/oidc-provider`.** That plan also edits:
+  - `tests/conftest.py` `_clear_server_environment` (it adds a `PRIVACYFENCE_OIDC_` prefix);
+  - `tests/unit/test_daemon_main.py`;
+  - `single_user_auth.py` (line 301, `email_verified=True`);
+  - `CHANGELOG.md`.
+
+  If it merged first, rebase and keep both changes. If a conflict is not mechanical, stop with
   `status=blocked`.
-- **Single-user state and its data-directory guards.** `daemon_main.py:1287-1313` refuses a data
-  directory that has an `org_server` mark. Provisioning state files under `users/single-user/` must
-  not trip any of those guards. If a test shows they do, stop with `status=blocked`.
-- **The Admin JS has its own tests.** `tests/unit/test_settings_window_html.py` checks rendered
-  snippets. If the row markup is built in a way the brief's steps do not match, stop with
-  `status=blocked` rather than restructure the page.
+- **The upload refusal path.** If `_accept_connector_config_upload` has no point after parsing where
+  the provider is known and before `connector_configs.accept` stores the file, stop with
+  `status=blocked` and report its structure.
+- **The Admin JS has its own tests** (`tests/unit/test_settings_window_html.py`). If the row markup
+  cannot be changed as described without restructuring the page, stop with `status=blocked`.
 
 ## Implementation manifest
 
@@ -190,79 +264,99 @@ final_checks:
   - CHANGELOG.md has entries for both variables under "## [Unreleased]" and no new version heading
 phases:
   - id: p1-env-switch
-    title: PRIVACYFENCE_PEEK_AUTO_PROVISION and PRIVACYFENCE_GRIST_AUTO_PROVISION turn automatic accounts on, locked on the Admin page
+    title: The two variables, their startup checks and the effective config
     depends_on: []
     complexity: M
     touches:
       - src/privacyfence/oauth_apps.py
+      - src/privacyfence/daemon_main.py
+      - tests/conftest.py
+      - tests/unit/test_oauth_apps.py
+      - tests/unit/test_daemon_main.py
+      - CHANGELOG.md
+    brief: |
+      Read docs/env-automatic-accounts-plan.md: "Variables", "Helpers" (only the oauth_apps part),
+      "Startup checks" (except "At runtime") and "Effective config". Every string is quoted from there.
+      1. src/privacyfence/oauth_apps.py: _ENV_AUTO_PROVISION, environment_auto_provision() and
+         check_environment_auto_provision(*, single_user, grist_oauth), next to environment_addresses
+         (oauth_apps.py:109). For the loopback check, compare urllib.parse.urlsplit(url).hostname with
+         {"localhost", "127.0.0.1", "::1"}.
+      2. oauth_apps.py: the offered dict at oauth_apps.py:264-270, the new from_environment parameter of
+         _auto_provision_enabled (oauth_apps.py:166), and both section builders.
+      3. daemon_main.py: call check_environment_auto_provision right after
+         org_mode.GristProvisioningConfig.from_org_config(org_config) (daemon_main.py:1380), and the
+         local-mode warning right after resolve_mode (daemon_main.py:972).
+      4. tests/conftest.py, _clear_server_environment (line 177): also clear
+         PRIVACYFENCE_PEEK_AUTO_PROVISION and PRIVACYFENCE_GRIST_AUTO_PROVISION (add both names to the
+         tuple).
+      5. Tests (monkeypatch.setenv; follow the environment_addresses tests in test_oauth_apps.py):
+         - tests/unit/test_oauth_apps.py:
+           test_env_auto_provision_bad_value, test_env_auto_provision_case_and_space,
+           test_peek_section_from_env_ignores_stored_off, test_grist_section_from_env,
+           test_env_offers_service, test_single_user_section_with_env, test_single_user_section_without_env,
+           and one test per message of check_environment_auto_provision (missing address, missing
+           key, custom key_env, Grist OAuth app, single-user non-loopback Peek, single-user
+           non-loopback Grist).
+         - tests/unit/test_daemon_main.py: test_startup_refuses_auto_provision_without_key (org mode,
+           variable set, no key: the start raises the message), and test_local_mode_warns_auto_provision
+           (caplog).
+      6. CHANGELOG.md, under "## [Unreleased]", "### Added" (create it if missing):
+         "- **Automatic accounts from the environment.** `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` offer Peek or Grist and turn their automatic accounts on, shown as set by the server on Admin → Services."
+      7. Run `ruff check .`, `python3 -m pytest tests/unit -q`, `python3 -m mypy src/privacyfence` and
+         `python3 scripts/mypy_strict_modules.py`. Stop condition: see Risks (merge conflicts).
+    acceptance:
+      - python3 -m pytest tests/unit/test_oauth_apps.py tests/unit/test_daemon_main.py -q passes, including every named test
+      - grep -n "def check_environment_auto_provision" src/privacyfence/oauth_apps.py finds it
+      - grep -n "PRIVACYFENCE_PEEK_AUTO_PROVISION" tests/conftest.py finds it
+      - ruff check . and python3 -m mypy src/privacyfence pass
+
+  - id: p2-admin-page
+    title: The Admin page shows the variables as set by the server and locks the switches
+    depends_on: [p1-env-switch]
+    complexity: M
+    touches:
       - src/privacyfence/admin_config.py
       - src/privacyfence/settings_window_html.py
-      - tests/unit/test_oauth_apps.py
+      - src/privacyfence/web/routes_admin.py
       - tests/unit/test_admin_config.py
       - tests/unit/test_settings_window_html.py
       - tests/unit/web/test_routes_admin.py
-      - CHANGELOG.md
     brief: |
-      Read docs/env-automatic-accounts-plan.md, sections "Variables", "New module-level helper",
-      "Startup checks", "Effective config" and "Admin page". Every string below is quoted from there.
-      Do not implement the "Single-user mode" section (phase p2), except that _auto_provision_enabled
-      gets its new parameter here.
-      1. In src/privacyfence/oauth_apps.py add _ENV_AUTO_PROVISION and environment_auto_provision()
-         next to environment_addresses() (oauth_apps.py:109). Raise ConfigurationError with the
-         exact message for a value other than unset, empty or "true" (case- and space-insensitive).
-      2. Change _auto_provision_enabled (oauth_apps.py:166) to take a keyword
-         from_environment: bool and return
-         mode == "org" and (from_environment or (enabled and not single_user)). Pass
-         from_environment=name in environment_auto_provision() from _peek_section and _grist_section.
-         Where the effective config decides whether a service is offered (oauth_apps.py:299-312),
-         treat a service in environment_auto_provision() as offered.
-      3. In effective_org_config, next to the existing environment_addresses() call, add the
-         startup checks: the missing-address messages, the missing-key messages (use
-         org_mode.provisioning_key(stored key_env)), the Grist OAuth app refusal, and the
-         local-mode warning. Use the exact texts from the Design.
-         Stop condition: if environment_addresses() is not on the same call path as startup (see
-         Risks), stop with status=blocked.
-      4. In src/privacyfence/admin_config.py, in the service-row builder (admin_config.py:1052-1076),
-         add "locked_by" to options["auto_provision"] and "offered_locked_by" to the row. When it is
-         set, force available=True, enabled=True and reason="", and report offered=True.
-         _auto_provision_state stays as it is for the unlocked case.
-      5. In apply_action (admin_config.py:883-915), before dispatching offer_service,
-         withdraw_service and set_auto_provisioning, refuse a locked service with
-         AdminConfigError("<Label> is set by <variable> on the server."), where <Label> is
-         SERVICE_LABELS[name]. Still allow set_auto_provisioning with enabled=True that changes only
-         trust_unverified_email.
-      6. In src/privacyfence/settings_window_html.py, autoProvisionRowHtml (line 2225): when
-         auto.locked_by is set, render the line
-         "Automatic accounts: on, set by " + auto.locked_by + " on the server." with no toggle, and
-         keep the trust checkbox. Where the Offer switch is built (line 2272), render
-         "Offered: set by " + row.offered_locked_by + " on the server." instead of the switch when
-         row.offered_locked_by is set. Escape with esc() as the surrounding code does.
-      7. Tests (monkeypatch.setenv; follow the existing environment_addresses tests in
-         tests/unit/test_oauth_apps.py):
-         - test_oauth_apps.py: bad value refused; "TRUE " accepted; Peek section has auto_provision
-           with the variable set and the stored enabled=False, offered=False; each missing-address and
-           missing-key message; the Grist OAuth app refusal; the local-mode warning (caplog);
-           single_user=True with the variable gives auto_provision, without it does not.
-         - test_admin_config.py: the row's locked_by/offered_locked_by; apply_action refuses
-           offer_service, withdraw_service and set_auto_provisioning(enabled=False) for a locked
-           service and allows the trust-only change.
-         - test_settings_window_html.py: the locked line and the locked Offer text are rendered.
-         - tests/unit/web/test_routes_admin.py: a POST of set_auto_provisioning for a locked service
-           answers with the refusal message.
-      8. CHANGELOG.md, under "## [Unreleased]" ("### Added", create it if missing):
-         "- **Automatic accounts from the environment.** `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` offer Peek or Grist and turn their automatic accounts on, shown as set by the server on Admin → Services."
-      9. Run `ruff check .`, `python3 -m pytest tests/unit -q`, `python3 -m mypy src/privacyfence`
-         and `python3 scripts/mypy_strict_modules.py`.
+      Read docs/env-automatic-accounts-plan.md: "Helpers" (the admin_config part), "Admin page" and
+      "Startup checks" → "At runtime".
+      1. admin_config.py: _env_auto_provision(), next to _env_addresses() (admin_config.py:521). In
+         _service_row (admin_config.py:998; options at 1052-1076, "offered" at 1080): locked_by,
+         offered_locked_by, single_user, and the forced values. Locked wins over every other source.
+      2. admin_config.py, apply_change (admin_config.py:875-916, dispatch at 897-911): refuse
+         offer_service and withdraw_service for a locked service with the message. For
+         set_auto_provisioning on a locked service, call a new
+         _apply_locked_trust(config, params) -> tuple[str, list[str]] that writes only
+         trust_unverified_email, instead of _apply_auto_provisioning.
+      3. settings_window_html.py: autoProvisionRowHtml (line 2227) shows the locked line with no toggle,
+         and hides the trust checkbox when row.options.single_user is true. The Offer switch
+         (line 2274) is replaced by the locked text when row.offered_locked_by is set. Escape with
+         esc() as the surrounding code does.
+      4. web/routes_admin.py, _accept_connector_config_upload (line 492): refuse a Grist upload while
+         PRIVACYFENCE_GRIST_AUTO_PROVISION is set, with the message, before connector_configs.accept.
+         Stop condition: see Risks (the upload refusal path).
+      5. Tests:
+         - test_admin_config.py: test_locked_row_fields, test_locked_wins_over_connector_source,
+           test_locked_refuses_offer_and_withdraw, test_locked_trust_change_writes_only_trust (the
+           stored enabled is unchanged), test_locked_trust_change_in_single_user_allowed.
+         - test_settings_window_html.py: test_locked_auto_provision_line,
+           test_locked_offer_text, test_single_user_hides_trust_checkbox.
+         - tests/unit/web/test_routes_admin.py: test_locked_offer_post_refused,
+           test_grist_connector_upload_refused_while_env_set (nothing is stored).
+      6. Run `ruff check .`, `python3 -m pytest tests/unit -q`, `python3 -m mypy src/privacyfence` and
+         `python3 scripts/mypy_strict_modules.py`.
     acceptance:
-      - python3 -m pytest tests/unit/test_oauth_apps.py tests/unit/test_admin_config.py tests/unit/test_settings_window_html.py tests/unit/web/test_routes_admin.py -q passes
-      - grep -n "def environment_auto_provision" src/privacyfence/oauth_apps.py finds one line
-      - grep -n "must be true, or unset." src/privacyfence/oauth_apps.py finds the message
-      - grep -n "is set by" src/privacyfence/admin_config.py finds the refusal
-      - ruff check . and python3 -m mypy src/privacyfence pass
+      - python3 -m pytest tests/unit/test_admin_config.py tests/unit/test_settings_window_html.py tests/unit/web/test_routes_admin.py -q passes, including every named test
+      - grep -n "def _env_auto_provision" src/privacyfence/admin_config.py finds it
+      - grep -n "PRIVACYFENCE_GRIST_AUTO_PROVISION" src/privacyfence/web/routes_admin.py finds the upload refusal
 
-  - id: p2-single-user
+  - id: p3-single-user
     title: A single-user install provisions its one person when the environment turns automatic accounts on
-    depends_on: [p1-env-switch]
+    depends_on: [p2-admin-page]
     complexity: S
     touches:
       - src/privacyfence/daemon_main.py
@@ -274,41 +368,37 @@ phases:
       - CHANGELOG.md
     brief: |
       Read docs/env-automatic-accounts-plan.md, section "Single-user mode".
-      1. In src/privacyfence/daemon_main.py, right after peek_provisioning.start(...) and
-         grist_provisioning.start(...) (daemon_main.py:1445-1446), when org_mode.is_single_user(...)
-         is true (use the same arguments as the existing single-user check in daemon_main.py), call
-         peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True) and
-         grist_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True). Import
-         SINGLE_USER_PRINCIPAL from privacyfence.web.single_user_auth. Add a one-line comment that
-         the address is fixed in code, not asserted by an identity provider (ADR 0272).
-      2. In src/privacyfence/web/single_user_auth.py, at the end of start_session
-         (single_user_auth.py:300-304), call the same two functions. Import the modules at the top of
-         the file. Stop condition: if that import creates an import cycle (ImportError at test
-         collection), import them inside start_session instead, with a comment saying why.
+      1. daemon_main.py, _start_org_web_server: right after grist_provisioning.start(...)
+         (daemon_main.py:1446), add the `if idp is None and oauth_apps.environment_auto_provision():`
+         block with the two notify_sign_in calls. Import SINGLE_USER_PRINCIPAL locally, as the other
+         .web.* imports in that function are (daemon_main.py:1355-1365). Add a one-line comment naming
+         ADR 0272.
+      2. web/single_user_auth.py: in the two async handlers, right after start_session(...)
+         (single_user_auth.py:394 and :455), add the Peek call and the awaited asyncio.to_thread Grist
+         call exactly as designed. Import peek_provisioning and grist_provisioning at the top. Stop
+         condition: if that creates an import cycle (ImportError at test collection), import them
+         inside the handlers instead, with a comment saying why.
       3. Tests:
-         - tests/unit/web/test_single_user_auth.py: after a setup-code sign-in and after a passkey
-           sign-in, both notify_sign_in functions are called once with the single-user principal and
-           email_verified=True (monkeypatch both).
-         - tests/unit/test_daemon_main.py: in single-user mode with
-           PRIVACYFENCE_PEEK_AUTO_PROVISION=true, PRIVACYFENCE_PEEK_BASE_URL=http://localhost:7700 and
-           PRIVACYFENCE_PEEK_PROVISIONING_KEY set, startup calls peek_provisioning.notify_sign_in with
-           the single-user principal; without the variables it is not called with an active
-           provisioner. Follow the existing provisioning-start tests in that file.
-         - tests/unit/test_peek_provisioning.py and tests/unit/test_grist_provisioning.py: a request for
-           Principal(id="single-user", email="admin@localhost", ...) with email_verified=True is queued,
-           and provisioning writes users/single-user/credentials/peek_token.json
-           (grist: grist_token.json) with the fake client.
-      4. CHANGELOG.md, under "## [Unreleased]" "### Added":
-         "- **Peek and Grist on a single-user install.** With the same variables, a single-user install on `localhost` connects Peek and Grist for its one person, `admin@localhost`, at start and at each sign-in."
+         - tests/unit/web/test_single_user_auth.py: test_setup_code_sign_in_notifies_provisioners and
+           test_passkey_sign_in_notifies_provisioners (both calls, single-user principal,
+           email_verified=True; monkeypatch both).
+         - tests/unit/test_daemon_main.py: test_single_user_start_notifies_with_env (variable set,
+           PRIVACYFENCE_PEEK_BASE_URL=http://localhost:7700, key set: called once with the principal)
+           and test_single_user_start_does_not_notify_without_env (not called).
+         - tests/unit/test_peek_provisioning.py and tests/unit/test_grist_provisioning.py:
+           test_single_user_principal_is_provisioned (queued with email_verified=True; the fake client
+           writes users/single-user/credentials/peek_token.json, and for Grist grist_token.json).
+      4. CHANGELOG.md, "## [Unreleased]", "### Added":
+         "- **Peek and Grist on a single-user install.** With the same variables and Peek and Grist on `localhost`, a single-user install connects them for its one person, `admin@localhost`, at start and at each sign-in."
       5. Run `ruff check .` and `python3 -m pytest tests/unit -q`.
     acceptance:
-      - python3 -m pytest tests/unit/test_daemon_main.py tests/unit/web/test_single_user_auth.py tests/unit/test_peek_provisioning.py tests/unit/test_grist_provisioning.py -q passes
-      - grep -n "notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)" src/privacyfence/daemon_main.py finds two lines
-      - grep -c "notify_sign_in" src/privacyfence/web/single_user_auth.py prints 2 or more
+      - python3 -m pytest tests/unit/test_daemon_main.py tests/unit/web/test_single_user_auth.py tests/unit/test_peek_provisioning.py tests/unit/test_grist_provisioning.py -q passes, including every named test
+      - grep -n "notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)" src/privacyfence/daemon_main.py finds the line
+      - grep -c "asyncio.to_thread(grist_provisioning.notify_sign_in" src/privacyfence/web/single_user_auth.py prints 2
 
-  - id: p3-retire
+  - id: p4-retire
     title: Reference docs, ADRs 0271 and 0272, delete the plan
-    depends_on: [p2-single-user]
+    depends_on: [p3-single-user]
     complexity: S
     touches:
       - docs/peek-setup.md
@@ -321,28 +411,35 @@ phases:
       - docs/adr/README.md
       - docs/env-automatic-accounts-plan.md
     brief: |
-      1. docs/peek-setup.md, "Automatic accounts (organization mode)", step 3: add that
-         `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` does the same from the server's environment. The
-         Admin row then shows it as set by the server, and the switch and Offer are locked. Rename the
-         section to "Automatic accounts" and add a paragraph "On a single-user install" that describes
-         p2 (admin@localhost, connected at start and at each sign-in, the Peek and Grist install
-         admins need other addresses). docs/grist-setup.md, "Automatic API keys (organization mode)":
-         the same two changes, with the Grist names.
-      2. docs/configuration-reference.md, environment variables table: add both variables with the
-         Design's values table wording. docs/org-mode-docker.md, "Environment variables" table and
-         Quick start step 9: add both variables. deploy/docker/privacyfence.env.example, in the
-         "Peek and Grist (optional)" block: add commented
-         `# PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and `# PRIVACYFENCE_GRIST_AUTO_PROVISION=true`
-         lines with a one-line comment each.
-      3. Write docs/adr/0271-automatic-accounts-can-be-switched-on-from-the-environment.md and
-         docs/adr/0272-a-single-user-install-provisions-its-one-person-as-verified.md from the plan's
-         Design and "Rejected" sections, in the template in docs/adr/README.md, Status Accepted.
-         Link source files and the PR, never this plan. Add both to the index in docs/adr/README.md.
-      4. Delete docs/env-automatic-accounts-plan.md. `grep -rn "env-automatic-accounts-plan" .` must
-         find nothing.
+      1. docs/peek-setup.md, "Automatic accounts (organization mode)":
+         - In step 3, add that `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` does the same from the server's
+           environment. The Admin row then shows it as set by the server, and the switch and Offer are
+           locked.
+         - Rename the section "Automatic accounts".
+         - Add a paragraph "On a single-user install": admin@localhost; localhost addresses only;
+           connected at start and at each sign-in; the Peek install admin needs another address; every
+           start counts as a sign-in; release single-user when moving to an identity provider.
+         - Say that the variables do nothing without the web server.
+         - In "Troubleshooting → Automatic accounts" (around lines 280 and 326), mention the variable
+           next to the Admin switch, and add each new start-up message.
+
+         Make the same changes in docs/grist-setup.md ("Automatic API keys", and troubleshooting around
+         line 360), with the Grist names and the connector-upload refusal.
+      2. docs/configuration-reference.md (environment variables table), docs/org-mode-docker.md
+         ("Environment variables" table and Quick start step 9): add both variables with the Design's
+         values-table wording. deploy/docker/privacyfence.env.example, in the "Peek and Grist
+         (optional)" block: add commented `# PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and
+         `# PRIVACYFENCE_GRIST_AUTO_PROVISION=true`, with a one-line comment each.
+      3. Write the two ADRs from the Design and "Rejected" sections, in the template in
+         docs/adr/README.md, Status Accepted, and add both to the index. Link source files and the PR,
+         never this plan. If 0271 or 0272 is taken by then, use the next free numbers and say so in the
+         PR.
+      4. Delete docs/env-automatic-accounts-plan.md; `grep -rn "env-automatic-accounts-plan" .` must find
+         nothing.
+      5. Run `python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_no_history.py -q`.
     acceptance:
       - test ! -e docs/env-automatic-accounts-plan.md
       - grep -rn "env-automatic-accounts-plan" docs src finds nothing
-      - grep -n "0271\|0272" docs/adr/README.md finds both
       - grep -n "PRIVACYFENCE_PEEK_AUTO_PROVISION" docs/configuration-reference.md docs/org-mode-docker.md docs/peek-setup.md deploy/docker/privacyfence.env.example finds each file
+      - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_no_history.py -q passes
 ```
