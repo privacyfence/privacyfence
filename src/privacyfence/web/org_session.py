@@ -51,6 +51,7 @@ class OrgSession:
     principal: Principal
     created_at: float
     last_seen_at: float
+    email_verified: bool = False
 
 
 class OrgSessionStore:
@@ -72,15 +73,22 @@ class OrgSessionStore:
         self._lock = threading.Lock()
         self._sessions: dict[str, OrgSession] = {}
 
-    def create(self, principal: Principal) -> str:
+    def create(self, principal: Principal, *, email_verified: bool = False) -> str:
         session_id = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
-            self._sessions[session_id] = OrgSession(principal=principal, created_at=now, last_seen_at=now)
+            self._sessions[session_id] = OrgSession(
+                principal=principal, created_at=now, last_seen_at=now, email_verified=email_verified,
+            )
         return session_id
 
     def get(self, session_id: str) -> Principal | None:
-        """The session's ``Principal`` if ``session_id`` is live and
+        """The session's ``Principal``; see ``get_session``."""
+        session = self.get_session(session_id)
+        return session.principal if session is not None else None
+
+    def get_session(self, session_id: str) -> OrgSession | None:
+        """The ``OrgSession`` if ``session_id`` is live and
         neither idle- nor absolute-expired -- touches
         ``last_seen_at`` as a side effect (the sliding idle timeout) only
         when it's still live. ``None`` for an unknown or
@@ -98,7 +106,7 @@ class OrgSessionStore:
                 del self._sessions[session_id]
                 return None
             session.last_seen_at = now
-            return session.principal
+            return session
 
     def destroy(self, session_id: str) -> None:
         with self._lock:
