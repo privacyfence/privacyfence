@@ -970,6 +970,13 @@ def _maybe_start_web_server(
     notifications_config = web_config.get("notifications", {}) or {}
     org_config = org_config or {}
     mode = org_mode.resolve_mode(org_config)
+    if mode != "org":
+        ignored = oauth_apps.environment_auto_provision()
+        if ignored:
+            logger.warning(
+                "%s is ignored outside organization mode.",
+                ", ".join(oauth_apps._ENV_AUTO_PROVISION[name] for name in sorted(ignored)),
+            )
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
     # ADR 0007: settings.yaml's own file_bridge: section, read once here --
@@ -1378,6 +1385,9 @@ def _start_org_web_server(
     # Validated here so a broken "grist"."auto_provision" refuses startup; the provisioner
     # itself re-reads it in grist_provisioning.start below.
     org_mode.GristProvisioningConfig.from_org_config(org_config)
+    oauth_apps.check_environment_auto_provision(
+        single_user=idp is None, grist_oauth=bool((org_config.get("grist") or {}).get("client_id"))
+    )
     if idp is None:
         if bundle:
             # A signed organization bundle always meant a real server, and 6.x never wrote an
@@ -1444,6 +1454,12 @@ def _start_org_web_server(
     # token for a person drops their cached connectors so the next request sees it.
     peek_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
     grist_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
+    if idp is None and oauth_apps.environment_auto_provision():
+        # Single-user install: its one person is provisioned as verified (ADR 0272).
+        from .web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+        peek_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
+        grist_provisioning.notify_sign_in(SINGLE_USER_PRINCIPAL, email_verified=True)
 
     # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't

@@ -527,6 +527,24 @@ def _env_addresses() -> dict[str, str]:
         return {}
 
 
+def _env_auto_provision() -> frozenset[str]:
+    from . import oauth_apps
+
+    try:
+        return oauth_apps.environment_auto_provision()
+    except ConfigurationError:
+        return frozenset()
+
+
+def _locked_variable(name: str, *, mode: Mode) -> str:
+    """The environment variable that locks ``name``'s offer and automatic accounts, or ""."""
+    from . import oauth_apps
+
+    if mode == "org" and name in _env_auto_provision():
+        return oauth_apps._ENV_AUTO_PROVISION[name]
+    return ""
+
+
 def _address_source(
     bundle: dict[str, Any], name: str, admin_service: dict[str, Any], env: dict[str, str], *, mode: Mode,
 ) -> str:
@@ -642,8 +660,13 @@ def _port(params: dict[str, Any]) -> int:
     return port
 
 
-def _apply_service_toggle(config: dict[str, Any], action: str, params: dict[str, Any]) -> tuple[str, list[str]]:
+def _apply_service_toggle(
+    config: dict[str, Any], action: str, params: dict[str, Any], *, mode: Mode
+) -> tuple[str, list[str]]:
     name = _service_name(params)
+    variable = _locked_variable(name, mode=mode)
+    if variable:
+        raise AdminConfigError(f"{SERVICE_LABELS[name]} is set by {variable} on the server.")
     offered = action == "offer_service"
     service = config["services"][name]
     if service["offered"] == offered:
@@ -719,6 +742,18 @@ def _apply_server_address(
     service[field] = address
     label = SERVICE_LABELS[name]
     return (f"Set the {label} server to {address}" if address else f"Cleared the {label} server"), ["services"]
+
+
+def _apply_locked_trust(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    """The automatic-accounts change for a service the environment turns on: the switch is fixed,
+    so only the trust setting is written and the stored ``enabled`` is never touched."""
+    name = _service_name(params, tuple(_ADDRESS_FIELD))
+    trust = _param(params, "trust_unverified_email", bool)
+    stored = config["services"][name]["auto_provision"]
+    if stored["trust_unverified_email"] == trust:
+        return "", []
+    stored["trust_unverified_email"] = trust
+    return f"Changed automatic {SERVICE_LABELS[name]} accounts", ["auto_provision"]
 
 
 def _apply_auto_provisioning(
@@ -889,13 +924,15 @@ def apply_change(
         config = config_for(bundle, mode=mode, single_user=single_user)
         before = copy.deepcopy(config)
         if action in ("offer_service", "withdraw_service"):
-            result = _apply_service_toggle(config, action, params)
+            result = _apply_service_toggle(config, action, params, mode=mode)
         elif action == "set_atlassian_assets":
             result = _apply_atlassian_assets(config, params)
         elif action == "set_salesforce_login_url":
             result = _apply_salesforce_login_url(config, params)
         elif action == "set_server_address":
             result = _apply_server_address(config, params, bundle, mode=mode)
+        elif action == "set_auto_provisioning" and _locked_variable(_service_name(params, tuple(_ADDRESS_FIELD)), mode=mode):
+            result = _apply_locked_trust(config, params)
         elif action == "set_auto_provisioning":
             result = _apply_auto_provisioning(config, params, bundle, mode=mode, single_user=single_user)
         elif action == "set_unattended_sessions":
@@ -1039,6 +1076,7 @@ def _service_row(
         connector_options["reupload_needed"] = True
 
     options: dict[str, Any] = {}
+    locked_by = _locked_variable(name, mode=mode)
     if name == "atlassian":
         options = {
             "assets": bool(stored.get("assets", False)),
@@ -1061,13 +1099,17 @@ def _service_row(
         available, reason = _auto_provision_state(bundle, name, stored, env, mode=mode, single_user=single_user)
         auto = stored.get("auto_provision", {})
         key_env = str(auto.get("key_env", "") or _DEFAULT_KEY_ENV[name])
+        if locked_by:
+            available, reason = True, ""
         options = {
             _ADDRESS_FIELD[name]: address,
+            "single_user": single_user,
             "address_source": source,
             "key_env": key_env,
             "locked": source != "admin",
             "auto_provision": {
-                "enabled": bool(auto.get("enabled", False)),
+                "enabled": True if locked_by else bool(auto.get("enabled", False)),
+                "locked_by": locked_by,
                 "trust_unverified_email": bool(auto.get("trust_unverified_email", False)),
                 "available": available,
                 "reason": reason,
@@ -1077,7 +1119,8 @@ def _service_row(
     return {
         "key": name,
         "label": SERVICE_LABELS[name],
-        "offered": bool(stored.get("offered", False)),
+        "offered": True if locked_by else bool(stored.get("offered", False)),
+        "offered_locked_by": locked_by,
         "app_source": app_source,
         "client_id": client_id,
         "relay": mode == "org" and app_source == "builtin" and name != "telegram",

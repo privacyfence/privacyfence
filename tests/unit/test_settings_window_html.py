@@ -1530,6 +1530,36 @@ class TestServerAndAutomaticAccounts:
         grist = self._org(_server_row("grist", source="environment", address="https://g.example.com", auto=auto))
         assert "gets a Grist key connected for them." in grist
 
+    def test_locked_auto_provision_line(self):
+        auto = {
+            "enabled": True, "trust_unverified_email": False, "available": True, "reason": "", "key_set": True,
+            "locked_by": "PRIVACYFENCE_PEEK_AUTO_PROVISION",
+        }
+        page = self._org(_server_row("peek", source="environment", address="https://p.example.com", auto=auto))
+        assert "Automatic accounts: on, set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server." in page
+        assert 'aria-label="Automatic accounts for Peek"' not in page
+        assert "Trust email addresses the identity provider does not mark verified" in page
+
+    def test_locked_offer_text(self):
+        row = _server_row("peek", source="environment", address="https://p.example.com")
+        row["offered_locked_by"] = "PRIVACYFENCE_PEEK_AUTO_PROVISION"
+        page = self._org(row)
+        assert "Offered: set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server." in page
+        assert 'data-action="withdraw_service"' not in page and 'data-action="offer_service"' not in page
+
+    def test_single_user_hides_trust_checkbox(self):
+        locked = {
+            "enabled": True, "trust_unverified_email": False, "available": True, "reason": "", "key_set": True,
+            "locked_by": "PRIVACYFENCE_PEEK_AUTO_PROVISION",
+        }
+        row = _server_row("peek", source="environment", address="https://p.example.com", auto=locked)
+        row["options"]["single_user"] = True
+        page = self._org(row)
+        assert "set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server." in page
+        assert "Trust email addresses" not in page
+        row["options"]["single_user"] = False
+        assert "Trust email addresses" in self._org(row)
+
     def test_the_switch_and_the_checkbox_post_the_whole_section(self):
         auto = {"enabled": True, "trust_unverified_email": False, "available": True, "reason": "", "key_set": True}
         page = self._org(_server_row("peek", source="environment", address="https://p.example.com", auto=auto))

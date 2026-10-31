@@ -512,6 +512,11 @@ async def _accept_connector_config_upload(
     confirmed = confirmed if isinstance(confirmed, str) and confirmed else None
     try:
         parsed = connector_configs.parse(raw)
+        if parsed.provider == "grist" and "grist" in admin_config._env_auto_provision():
+            raise connector_configs.ConnectorConfigError(
+                "Grist's automatic accounts are set by PRIVACYFENCE_GRIST_AUTO_PROVISION on the server, "
+                "which works only without a Grist OAuth app. Remove the variable first."
+            )
         if connector_configs.load_pin(org) is None and confirmed != connector_configs.fingerprint(parsed.key):
             # Asked before the passkey so that a first upload costs one prompt, not two.
             return _connector_config_confirmation(connector_configs.fingerprint(parsed.key))
