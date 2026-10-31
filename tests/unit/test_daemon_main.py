@@ -2333,6 +2333,49 @@ class TestMaybeStartWebServerOrgMode:
         assert result.org.provider.single_user is True
         assert result.base_url == "http://localhost:8765"
 
+    def _single_user_env(self, monkeypatch, tmp_path, *, auto: bool):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.delenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE", raising=False)
+        monkeypatch.delenv("PRIVACYFENCE_GRIST_AUTO_PROVISION", raising=False)
+        if auto:
+            monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+            monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "http://localhost:7700")
+            monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "k" * 40)
+        else:
+            monkeypatch.delenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", raising=False)
+        calls = []
+        monkeypatch.setattr(
+            daemon_main.peek_provisioning, "start", lambda *a, **kw: None,
+        )
+        monkeypatch.setattr(daemon_main.grist_provisioning, "start", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            daemon_main.peek_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: calls.append(("peek", principal, email_verified)),
+        )
+        monkeypatch.setattr(
+            daemon_main.grist_provisioning, "notify_sign_in",
+            lambda principal, *, email_verified: calls.append(("grist", principal, email_verified)),
+        )
+        return calls
+
+    def test_single_user_start_notifies_with_env(self, monkeypatch, tmp_path):
+        from privacyfence.web.single_user_auth import SINGLE_USER_PRINCIPAL
+        calls = self._single_user_env(monkeypatch, tmp_path, auto=True)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert calls == [("peek", SINGLE_USER_PRINCIPAL, True), ("grist", SINGLE_USER_PRINCIPAL, True)]
+
+    def test_single_user_start_does_not_notify_without_env(self, monkeypatch, tmp_path):
+        calls = self._single_user_env(monkeypatch, tmp_path, auto=False)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert calls == []
+
     def test_single_user_mode_serves_its_own_sign_in_and_no_identity_provider_routes(
         self, monkeypatch, tmp_path, caplog,
     ):
