@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import stat
 
+import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from privacyfence import oidc_provider
 from privacyfence.org_mode import ConfigurationError
+from privacyfence.principal import Principal
 
 SECRET = "x" * 40
 
@@ -180,3 +183,118 @@ class TestProvider:
         assert provider.client("nope") is None
         assert provider.jwks() == oidc_provider.jwks(key)
         assert provider.discovery()["issuer"] == "https://pf.example.com/oidc"
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 5_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+VERIFIER = "v" * 43
+CHALLENGE = base64.urlsafe_b64encode(hashlib.sha256(VERIFIER.encode()).digest()).rstrip(b"=").decode()
+ANN = Principal(id="u1", email="ann@example.com", display_name="Ann")
+
+
+def _provider(tmp_path, clock):
+    key = oidc_provider.load_or_create_signing_key(tmp_path / "key.pem")
+    client = oidc_provider.OidcClient("peek", ("https://p/cb",), SECRET)
+    return oidc_provider.OidcProvider(issuer="https://pf/oidc", clients={"peek": client}, key=key, clock=clock)
+
+
+def _code(provider):
+    return provider.issue_code(
+        client_id="peek", redirect_uri="https://p/cb", principal=ANN, email_verified=True, nonce=None,
+        code_challenge=CHALLENGE, scope="openid", auth_time=1,
+    )
+
+
+def _redeem(provider, code):
+    return provider.redeem_code(code, client_id="peek", redirect_uri="https://p/cb", code_verifier=VERIFIER)
+
+
+class TestProviderState:
+    def test_authenticate_compares_bytes(self, tmp_path):
+        provider = _provider(tmp_path, _Clock())
+        assert provider.authenticate("peek", SECRET).client_id == "peek"
+        assert provider.authenticate("peek", "x" * 39) is None
+        assert provider.authenticate("peek", "ü" * 40) is None
+        assert provider.authenticate("nobody", SECRET) is None
+
+    def test_redeem_returns_the_grant_once(self, tmp_path):
+        provider = _provider(tmp_path, _Clock())
+        code = _code(provider)
+        grant = _redeem(provider, code)
+        assert grant.principal == ANN
+        assert grant.expires_at == 5_000.0 + 60
+        assert _redeem(provider, code) is None
+
+    def test_code_expiry_with_an_injected_clock(self, tmp_path):
+        clock = _Clock()
+        provider = _provider(tmp_path, clock)
+        live, expired = _code(provider), _code(provider)
+        clock.now += 59
+        assert _redeem(provider, live) is not None
+        clock.now += 1
+        assert _redeem(provider, expired) is None
+
+    def test_token_expiry_with_an_injected_clock(self, tmp_path):
+        clock = _Clock()
+        provider = _provider(tmp_path, clock)
+        token = provider.issue_tokens(_redeem(provider, _code(provider)))["access_token"]
+        clock.now += 299
+        assert provider.userinfo(token) == {"sub": "u1", "email": "ann@example.com", "email_verified": True, "name": "Ann"}
+        clock.now += 1
+        assert provider.userinfo(token) is None
+        assert provider.userinfo(token) is None
+
+    def test_expired_entries_are_pruned_on_insert(self, tmp_path):
+        clock = _Clock()
+        provider = _provider(tmp_path, clock)
+        _code(provider)
+        provider.issue_tokens(_redeem(provider, _code(provider)))
+        assert (len(provider._codes), len(provider._tokens)) == (1, 1)
+        clock.now += 301
+        _code(provider)
+        assert (len(provider._codes), len(provider._tokens)) == (1, 0)
+        clock.now += 61
+        provider.issue_tokens(_redeem(provider, _code(provider)))
+        assert (len(provider._codes), len(provider._tokens)) == (0, 1)
+
+    def test_code_cap_refuses_new_codes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(oidc_provider, "MAX_LIVE_ENTRIES", 3)
+        clock = _Clock()
+        provider = _provider(tmp_path, clock)
+        codes = [_code(provider) for _ in range(3)]
+        assert None not in codes
+        assert _code(provider) is None
+        clock.now += 60
+        assert _code(provider) is not None
+
+    def test_access_token_cap_drops_the_oldest(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(oidc_provider, "MAX_LIVE_ENTRIES", 2)
+        clock = _Clock()
+        provider = _provider(tmp_path, clock)
+        tokens = []
+        for _ in range(3):
+            tokens.append(provider.issue_tokens(_redeem(provider, _code(provider)))["access_token"])
+            clock.now += 1
+        assert provider.userinfo(tokens[0]) is None
+        assert provider.userinfo(tokens[1]) is not None
+        assert provider.userinfo(tokens[2]) is not None
+
+    def test_token_response_and_id_token(self, tmp_path):
+        provider = _provider(tmp_path, _Clock())
+        grant = _redeem(provider, provider.issue_code(
+            client_id="peek", redirect_uri="https://p/cb", principal=ANN, email_verified=False, nonce="n",
+            code_challenge=CHALLENGE, scope="openid email", auth_time=4_000,
+        ))
+        body = provider.issue_tokens(grant)
+        assert set(body) == {"access_token", "token_type", "expires_in", "scope", "id_token"}
+        assert (body["token_type"], body["expires_in"], body["scope"]) == ("Bearer", 300, "openid email")
+        claims = jwt.decode(body["id_token"], options={"verify_signature": False})
+        assert claims["iat"] == 5_000 and claims["exp"] == 5_300 and claims["auth_time"] == 4_000
+        assert claims["nonce"] == "n" and claims["email_verified"] is False
+        assert jwt.get_unverified_header(body["id_token"])["kid"] == provider._key.kid

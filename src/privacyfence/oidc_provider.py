@@ -3,8 +3,13 @@
 The operator lists each app (its ``client_id``, redirect addresses and secret) in the server's
 environment; nothing is registered dynamically. This module holds the parts that need no HTTP:
 the client list read from the environment, the RS256 signing key kept in the organization
-directory, and the provider object the routes in ``web/routes_oidc.py`` serve discovery and the
-key set from.
+directory, and the provider object behind the routes in ``web/routes_oidc.py``: discovery, the key
+set, single-use authorization codes bound to a PKCE S256 challenge, ID tokens and short-lived access
+tokens for userinfo.
+
+Codes and access tokens live only in this process's memory and are capped, so a restart signs
+nobody out of the apps (they keep their own sessions) and a flood of requests cannot grow memory
+without bound.
 
 Deleting the key file rotates the key at the next start. A key file that exists but cannot be used
 refuses the start rather than being replaced, so a damaged file is never silently swapped for a
@@ -15,18 +20,23 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import hmac
 import os
 import re
+import secrets
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from .org_mode import ConfigurationError
+from .principal import Principal
 
 CLIENTS_ENV = "PRIVACYFENCE_OIDC_CLIENTS"
 _CLIENT_STEM = "PRIVACYFENCE_OIDC_CLIENT_"
@@ -34,6 +44,12 @@ _NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 _MIN_SECRET_LENGTH = 32
 _MIN_KEY_BITS = 2048
 _LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+CODE_LIFETIME_SECONDS = 60
+TOKEN_LIFETIME_SECONDS = 300
+# The most live codes, and live access tokens, held at once. Past it a new code is refused and the
+# oldest access token is dropped.
+MAX_LIVE_ENTRIES = 10_000
 
 
 @dataclass(frozen=True)
@@ -201,8 +217,33 @@ def jwks(key: SigningKey) -> dict[str, object]:
 # ----- #
 
 
+@dataclass(frozen=True)
+class CodeGrant:
+    """What an authorization code stands for, from the authorization request to its redemption."""
+
+    client_id: str
+    redirect_uri: str
+    principal: Principal
+    email_verified: bool
+    nonce: str | None
+    code_challenge: str
+    scope: str  # the requested scopes, space-separated, "openid" always included
+    auth_time: int
+    expires_at: float
+
+
+@dataclass(frozen=True)
+class _IssuedToken:
+    claims: dict[str, object]
+    expires_at: float
+
+
+def _s256(verifier: str) -> str:
+    return _b64url(hashlib.sha256(verifier.encode()).digest())
+
+
 class OidcProvider:
-    """The OpenID Connect provider's configuration: issuer, clients and signing key."""
+    """The OpenID Connect provider: issuer, clients, signing key, and the live codes and tokens."""
 
     def __init__(
         self,
@@ -216,6 +257,10 @@ class OidcProvider:
         self._clients = clients
         self._key = key
         self._clock = clock
+        self._lock = threading.Lock()
+        self._codes: dict[str, CodeGrant] = {}
+        # Insertion-ordered, so the first entry is always the oldest token.
+        self._tokens: dict[str, _IssuedToken] = {}
 
     def discovery(self) -> dict[str, object]:
         iss = self.issuer
@@ -240,3 +285,115 @@ class OidcProvider:
 
     def client(self, client_id: str) -> OidcClient | None:
         return self._clients.get(client_id)
+
+    def authenticate(self, client_id: str, secret: str) -> OidcClient | None:
+        """The client when ``secret`` is its secret. Compared as bytes, so non-ASCII input is just
+        a mismatch, never an exception."""
+        client = self._clients.get(client_id)
+        if client is None:
+            return None
+        if not hmac.compare_digest(secret.encode(), client.secret.encode()):
+            return None
+        return client
+
+    def _prune_locked(self, now: float) -> None:
+        for code in [c for c, grant in self._codes.items() if grant.expires_at <= now]:
+            del self._codes[code]
+        for token in [t for t, issued in self._tokens.items() if issued.expires_at <= now]:
+            del self._tokens[token]
+
+    def issue_code(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        principal: Principal,
+        email_verified: bool,
+        nonce: str | None,
+        code_challenge: str,
+        scope: str,
+        auth_time: int,
+    ) -> str | None:
+        """A new single-use code, valid for 60 seconds, or None when too many codes are live."""
+        code = secrets.token_urlsafe(32)
+        with self._lock:
+            now = self._clock()
+            self._prune_locked(now)
+            if len(self._codes) >= MAX_LIVE_ENTRIES:
+                return None
+            self._codes[code] = CodeGrant(
+                client_id=client_id, redirect_uri=redirect_uri, principal=principal,
+                email_verified=email_verified, nonce=nonce, code_challenge=code_challenge, scope=scope,
+                auth_time=auth_time, expires_at=now + CODE_LIFETIME_SECONDS,
+            )
+        return code
+
+    def redeem_code(self, code: str, *, client_id: str, redirect_uri: str, code_verifier: str) -> CodeGrant | None:
+        """The code's grant, consuming the code whatever the outcome. None unless the code is live,
+        was issued to ``client_id`` for ``redirect_uri``, and ``code_verifier`` matches its S256
+        challenge. An empty verifier never matches."""
+        with self._lock:
+            grant = self._codes.pop(code, None)
+            now = self._clock()
+        if grant is None or grant.expires_at <= now:
+            return None
+        if grant.client_id != client_id or grant.redirect_uri != redirect_uri:
+            return None
+        if not code_verifier:
+            return None
+        if not hmac.compare_digest(_s256(code_verifier).encode(), grant.code_challenge.encode()):
+            return None
+        return grant
+
+    def issue_tokens(self, grant: CodeGrant) -> dict[str, object]:
+        """The token response for a redeemed grant: an access token for userinfo and a signed ID
+        token, both valid for five minutes."""
+        access_token = secrets.token_urlsafe(32)
+        principal = grant.principal
+        user_claims: dict[str, object] = {
+            "sub": principal.id,
+            "email": principal.email,
+            "email_verified": grant.email_verified,
+            "name": principal.display_name,
+        }
+        with self._lock:
+            now = self._clock()
+            self._prune_locked(now)
+            while len(self._tokens) >= MAX_LIVE_ENTRIES:
+                del self._tokens[next(iter(self._tokens))]
+            self._tokens[access_token] = _IssuedToken(claims=user_claims, expires_at=now + TOKEN_LIFETIME_SECONDS)
+        iat = int(now)
+        claims: dict[str, object] = {
+            "iss": self.issuer,
+            "sub": principal.id,
+            "aud": grant.client_id,
+            "iat": iat,
+            "exp": iat + TOKEN_LIFETIME_SECONDS,
+            "auth_time": grant.auth_time,
+            "at_hash": _b64url(hashlib.sha256(access_token.encode("ascii")).digest()[:16]),
+            "email": principal.email,
+            "email_verified": grant.email_verified,
+            "name": principal.display_name,
+        }
+        if grant.nonce is not None:
+            claims["nonce"] = grant.nonce
+        id_token = jwt.encode(claims, self._key.private_key, algorithm="RS256", headers={"kid": self._key.kid})
+        return {
+            "access_token": access_token,
+            "token_type": "Bearer",  # nosec B105  # the OAuth token_type, not a credential
+            "expires_in": TOKEN_LIFETIME_SECONDS,
+            "scope": grant.scope,
+            "id_token": id_token,
+        }
+
+    def userinfo(self, access_token: str) -> dict[str, object] | None:
+        """The claims for a live access token, else None."""
+        with self._lock:
+            issued = self._tokens.get(access_token)
+            now = self._clock()
+            if issued is None:
+                return None
+            if issued.expires_at <= now:
+                del self._tokens[access_token]
+                return None
+            return dict(issued.claims)
