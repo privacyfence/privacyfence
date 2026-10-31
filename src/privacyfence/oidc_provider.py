@@ -165,8 +165,8 @@ def _write_new_key(path: Path, private_key: rsa.RSAPrivateKey) -> None:
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "wb") as handle:
-            os.fchmod(handle.fileno(), 0o600)
             handle.write(pem)
+        os.chmod(tmp_name, 0o600)
         os.replace(tmp_name, path)
     except BaseException:
         with contextlib.suppress(OSError):

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import os
 import stat
+import sys
 
 import jwt
 import pytest
@@ -111,10 +112,17 @@ class TestClientsFromEnv:
 
 
 class TestSigningKey:
-    def test_created_once_with_mode_0600_and_reused(self, tmp_path):
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="POSIX file modes: Windows has no permission bits to assert on",
+    )
+    def test_created_with_mode_0600(self, tmp_path):
+        path = tmp_path / "sub" / "key.pem"
+        oidc_provider.load_or_create_signing_key(path)
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+    def test_created_once_and_reused(self, tmp_path):
         path = tmp_path / "sub" / "key.pem"
         first = oidc_provider.load_or_create_signing_key(path)
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
         assert first.private_key.key_size == 2048
         content = path.read_bytes()
         second = oidc_provider.load_or_create_signing_key(path)
