@@ -83,7 +83,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -120,6 +120,7 @@ from . import org_session
 from . import routes_connect
 from . import routes_downloads
 from .routes_file_bridge import mount_capability_routes, mount_file_bridge
+from . import routes_oidc
 from . import routes_org_identity
 from . import state_stream as _state_stream
 from .control_channel import (
@@ -157,6 +158,9 @@ from .session_auth import is_human_session as _is_human_session
 from .session_auth import set_session_cookie as _set_session_cookie
 from .session_auth import unauthorized_html as _unauthorized_response
 from .state_stream import StateStream
+
+if TYPE_CHECKING:
+    from ..oidc_provider import OidcProvider
 
 logger = logging.getLogger(__name__)
 
@@ -749,6 +753,9 @@ class OrgAuth:
     # composed from both; the Admin page recomputes it after a change and needs the inputs.
     bundle: dict[str, Any] = field(default_factory=dict)
     startup_admin: dict[str, Any] = field(default_factory=dict)
+    # The OpenID Connect provider for the web apps the operator named in the environment (ADR 0273).
+    # None when none were named: the /oidc routes are then not mounted.
+    oidc: "OidcProvider | None" = None
 
 
 def _local_principal_resolver(sessions: LocalSessionStore) -> Callable[[Request], Principal]:
@@ -1372,6 +1379,8 @@ def _build_org_app(
         extra_routes.extend(mount_capability_routes())
 
     extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url, sessions=org.sessions))
+    if org.oidc is not None:
+        extra_routes.extend(routes_oidc.build_routes(org.oidc, sessions=org.sessions))
     # Mounted unconditionally here (every _build_org_app call is already
     # org mode) -- needs nothing from org.connector_registry, only
     # org.sessions, same reasoning /approvals'/security's own unconditional
