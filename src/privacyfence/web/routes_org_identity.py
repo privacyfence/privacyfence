@@ -270,7 +270,9 @@ def build_routes(
         except Exception as exc:  # noqa: BLE001 -- an IdP failure or sign-in policy denial: sign-in didn't complete
             logger.warning("Org sign-in failed: %s", exc)
             return PlainTextResponse("Sign-in failed. Please try again.", status_code=400)
-        session_id = sessions.create(principal)
+        session_id = sessions.create(
+            principal, email_verified=org_identity.session_email_verified(claims, principal, policy),
+        )
         peek_provisioning.notify_sign_in(principal, email_verified=peek_provisioning.email_verified_claim(claims))
         await asyncio.to_thread(
             grist_provisioning.notify_sign_in, principal,
