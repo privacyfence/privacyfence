@@ -111,7 +111,7 @@ git commit -m "Add the suite plan" &amp;&amp; git push -u origin plan/privacyfen
       <header><h3>3. Run the localhost stack on your own computer</h3><span class="time">about 15 min</span></header>
       <span class="id">ma1-localhost</span>
       <ol>
-        <li><input type="checkbox" id="ma1-1"><label for="ma1-1">Clone the repository at the feature branch, <code>cd configs/localhost</code>, <code>cp .env.example .env</code>, then <code>docker compose up -d --wait</code>. Every service should report Healthy, and <code>init</code> should report Exited (0).</label></li>
+        <li><input type="checkbox" id="ma1-1"><label for="ma1-1">Clone the repository at the feature branch, <code>cd configs/localhost</code>, <code>cp .env.example .env</code>, then <code>docker compose up -d --wait privacyfence peek grist grist-provisioner</code>. Every service should report Healthy, and <code>init</code> should report Exited (0).</label></li>
         <li><input type="checkbox" id="ma1-2"><label for="ma1-2">Run <code>docker compose logs privacyfence | grep "Setup code"</code>, open <a href="http://localhost:8765/login">http://localhost:8765/login</a>, enter the code and add a passkey.</label></li>
         <li><input type="checkbox" id="ma1-3"><label for="ma1-3">Open <a href="http://localhost:8765/connect">/connect</a>. Peek and Grist should both say your organization connected them automatically.</label></li>
         <li><input type="checkbox" id="ma1-4"><label for="ma1-4">Open <a href="http://localhost:7700/login">http://localhost:7700/login</a> and choose <b>Sign in with SSO</b>. You should pass through PrivacyFence without typing anything and land on Peek as <code>admin@localhost</code>, with no <code>/setup</code> page.</label></li>
@@ -126,11 +126,11 @@ git commit -m "Add the suite plan" &amp;&amp; git push -u origin plan/privacyfen
       <span class="id">ma2-caddy-google</span>
       <ol>
         <li><input type="checkbox" id="ma2-1"><label for="ma2-1">Point three DNS names (PrivacyFence, Peek, Grist) at a server with ports 80 and 443 open (TCP and UDP).</label></li>
-        <li><input type="checkbox" id="ma2-5"><label for="ma2-5">In <code>configs/caddy-google</code>, run <code>cp .env.example .env</code> and fill in the three host names, <code>ADMIN_EMAILS</code>, <code>ALLOWED_DOMAIN</code> and <code>GRIST_ADMIN_EMAIL</code>. Nothing is registered with Google. Then run <code>docker compose up -d --wait</code>.</label></li>
+        <li><input type="checkbox" id="ma2-5"><label for="ma2-5">In <code>configs/caddy-google</code>, run <code>cp .env.example .env</code> and fill in the three host names, <code>ADMIN_EMAILS</code>, <code>ALLOWED_DOMAIN</code> (one domain) and <code>GRIST_ADMIN_EMAIL</code> (a dedicated admin address that can sign in to PrivacyFence). Optionally set <code>PEEK_ADMIN_EMAILS</code>. Nothing is registered with Google. Then run <code>docker compose up -d --wait privacyfence peek grist grist-provisioner</code>.</label></li>
         <li><input type="checkbox" id="ma2-6"><label for="ma2-6">Publish the DNS records that <code>docker compose exec privacyfence privacyfence-app --relay-dns-records</code> prints, as <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md#built-in-google-sign-in">the built-in Google sign-in guide</a> describes.</label></li>
         <li><input type="checkbox" id="ma2-7"><label for="ma2-7">Sign in to PrivacyFence as a non-admin colleague in the allowed domain. On <code>/connect</code>, Peek and Grist should be connected automatically within a minute.</label></li>
         <li><input type="checkbox" id="ma2-8"><label for="ma2-8">As that colleague, open Peek and choose <b>Sign in with SSO</b>. You should pass through PrivacyFence and get straight in, with no invite. Open Grist: it should send you through PrivacyFence into the team site. In Peek, a page published through PrivacyFence should belong to you.</label></li>
-        <li><input type="checkbox" id="ma2-9"><label for="ma2-9">Sign in to Peek as an address from <code>ADMIN_EMAILS</code>. The Admin page should open, and Settings should show SSO sign-in as set by the server.</label></li>
+        <li><input type="checkbox" id="ma2-9"><label for="ma2-9">If you set <code>PEEK_ADMIN_EMAILS</code>, sign in to Peek as that address. The Admin page should open, and Settings should show SSO sign-in as set by the server.</label></li>
         <li><input type="checkbox" id="ma2-10"><label for="ma2-10">Sign out of Grist, then open it again. It should sign you back in through PrivacyFence without asking anything, which shows the PrivacyFence session is kept.</label></li>
       </ol>
       <p class="done-when"><b>Report</b> <code>ma2-caddy-google: pass</code>, or <code>fail at step N: &lt;what you saw&gt;</code>.</p>
@@ -142,7 +142,7 @@ git commit -m "Add the suite plan" &amp;&amp; git push -u origin plan/privacyfen
       <ol>
         <li><input type="checkbox" id="ma3-1"><label for="ma3-1">In your identity provider, register one confidential OIDC web client for PrivacyFence only, with the three redirect URIs listed in <code>configs/caddy-idp/.env.example</code>. Put its issuer and client ID in <code>.env</code>. Peek and Grist need no registration.</label></li>
         <li><input type="checkbox" id="ma3-2"><label for="ma3-2">Run <code>install -m 0600 /dev/null secrets/idp_client_secret</code> and put the client secret in that file on the server.</label></li>
-        <li><input type="checkbox" id="ma3-3"><label for="ma3-3">Run <code>docker compose up -d --wait</code>, then repeat steps 7 to 10 of the previous check. The identity Peek and Grist see should be the one from your identity provider.</label></li>
+        <li><input type="checkbox" id="ma3-3"><label for="ma3-3">Run <code>docker compose up -d --wait privacyfence peek grist grist-provisioner</code>, then repeat steps 3 to 6 of the previous check. The identity Peek and Grist see should be the one from your identity provider.</label></li>
       </ol>
       <p class="done-when"><b>Report</b> <code>ma3-caddy-idp: pass</code>, <code>skipped (no IdP)</code>, or <code>fail at step N: &lt;what you saw&gt;</code>.</p>
     </article>
@@ -151,7 +151,7 @@ git commit -m "Add the suite plan" &amp;&amp; git push -u origin plan/privacyfen
       <header><h3>6. Start nginx-google with a real certificate</h3><span class="time">about 20 min</span></header>
       <span class="id">ma4-nginx-google</span>
       <ol>
-        <li><input type="checkbox" id="ma4-1"><label for="ma4-1">Put a certificate covering the three names in <code>configs/nginx-google/certs/fullchain.pem</code> and <code>privkey.pem</code>. Copy <code>.env</code> from the caddy-google check, then run <code>docker compose down</code> in caddy-google and <code>docker compose up -d --wait</code> in nginx-google.</label></li>
+        <li><input type="checkbox" id="ma4-1"><label for="ma4-1">Put a certificate covering the three names in <code>configs/nginx-google/certs/fullchain.pem</code> and <code>privkey.pem</code>. Copy <code>.env</code> from the caddy-google check, then run <code>docker compose down</code> in caddy-google and <code>docker compose up -d --wait privacyfence peek grist grist-provisioner</code> in nginx-google.</label></li>
         <li><input type="checkbox" id="ma4-2"><label for="ma4-2">Open a Grist document and edit a cell. It should save at once, which shows websockets work. Open a Peek page, upload a new version through PrivacyFence, and watch the open page reload by itself, which shows server-sent events work.</label></li>
         <li><input type="checkbox" id="ma4-3"><label for="ma4-3">From an AI client connected to <code>https://&lt;pf host&gt;/mcp</code>, run a Grist and a Peek tool. Both should answer.</label></li>
         <li><input type="checkbox" id="ma4-4"><label for="ma4-4">From outside the server, run <code>curl -s -o /dev/null -w "%{http_code}" https://&lt;grist host&gt;/api/provisioning/self</code>. It should print <code>404</code>.</label></li>
