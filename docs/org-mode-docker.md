@@ -103,8 +103,8 @@ lost. That is also why the volume belongs to you alone.
 ### From one computer to a server
 
 Single-user mode never turns into a server by itself. To serve other people, give the same volume an
-identity provider and a public address: the `PRIVACYFENCE_IDP_*` variables and a public
-`PRIVACYFENCE_ISSUER_URL` in `privacyfence.env` ([Quick start](#quick-start)), or the `idp` section of
+identity provider and a public address: the `PRIVACYFENCE_IDP_*` variables in `privacyfence.env` and
+a public `PF_HOSTNAME` in `.env` ([Quick start](#quick-start)), or the `idp` section of
 a signed 6.x bundle. Before that, note what carries over: your single-user connections and settings
 stay in `users/single-user/`, which no identity-provider account can reach (the start logs that), and
 passkeys are bound to `localhost`. A new data volume is the cleaner start.
@@ -113,18 +113,75 @@ passkeys are bound to `localhost`. A new data volume is the cleaner start.
 
 A multi-user server with the environment alone, no bundle to build:
 
-1. **DNS.** Point a public hostname at the Docker host. Ports 80 and 443 (TCP and UDP) must be
-   reachable; Caddy gets the certificate itself.
+1. **DNS and ports.** Point a public hostname at the Docker host and open TCP 443; Caddy gets the
+   certificate itself. Also open TCP 80 if you can: it gives certificate renewal a second route and
+   redirects `http://` to `https://`. UDP 443 is optional: it enables HTTP/3, and without it clients
+   use TCP. With the built-in Google sign-in or built-in apps, TCP 443 must be reachable from the
+   whole internet, not only from given addresses: the PrivacyFence relay checks the server from
+   outside ([Built-in apps through the relay](org-mode-setup-guide.md#built-in-apps-through-the-relay)).
+   If the DNS is on Cloudflare, set the record to **DNS only**: Caddy cannot get its certificate
+   through Cloudflare's proxy (the browser then shows Cloudflare's "SSL handshake failed" error), and
+   the proxy also cuts long MCP connections after 100 seconds.
 2. **Register one OIDC app** with your identity provider, with the three redirect URIs for your
    hostname ([the organization guide, section 4](org-mode-setup-guide.md#4-identity-provider)). Or, for
    a small Google Workspace team, use the [built-in Google sign-in](org-mode-setup-guide.md#built-in-google-sign-in)
    and register nothing: set `PRIVACYFENCE_IDP=builtin-google`, the admin emails and the allowed
-   domains instead of step 4's identity provider lines.
-3. **Fetch the deploy files** for the release you run (replace `vX.Y.Z`; see [Files](#files)).
-4. **Fill `privacyfence.env`** from `privacyfence.env.example`: the server address, the proxy address
-   (`172.30.87.2`), the identity provider and who is an admin. Keep the identity provider's client
-   secret out of `docker inspect`: put it in a file owned by the image's user and let Compose mount it as
-   a Docker secret.
+   domains instead of step 5's identity provider lines.
+3. **Create the deploy folder.** Keep everything for this server in one folder owned by root. Compose
+   names the project after the folder and reads `.env` from it, and backups and upgrades are simpler
+   with all of it in one place:
+
+   ```bash
+   sudo install -d -o root -g root -m 0750 /opt/privacyfence-org
+   cd /opt/privacyfence-org
+   ```
+
+   Run every `docker compose` command in this folder with `sudo`. Anyone who can run Docker controls
+   the install anyway, so a separate service user adds nothing unless you run rootless Docker; do not
+   add people to the `docker` group for this. The files end up like this:
+
+   | File | Owner | Mode | Why |
+   |---|---|---|---|
+   | `compose.yaml`, `Caddyfile` | root | 0644 | No secrets. |
+   | `.env` | root | 0600 | Host name and image tag, read by Compose as root. |
+   | `privacyfence.env` | root | 0600 | May hold plain secrets. |
+   | `idp_client_secret`, `peek_provisioning_key`, `grist_provisioning_key` | `10001:10001` | 0400 | Read inside the container by the image's user, through Docker secrets. |
+
+   PrivacyFence's own data does not go in this folder: it stays in the named volume `pf-data` (for a
+   host directory instead, see [A bind-mounted data directory](#a-bind-mounted-data-directory)). Back
+   the folder up along with the volume: `privacyfence.env`, `.env` and the secret files are not in it
+   ([Backup and restore](#backup-and-restore)).
+4. **Fetch the deploy files** for the release you run. Replace `vX.Y.Z` with that release, the same
+   version you will put in `PRIVACYFENCE_IMAGE_TAG`, so the files match the image:
+
+   ```bash
+   sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/compose.yaml
+   sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/Caddyfile
+   sudo curl -fsSL -o privacyfence.env https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/privacyfence.env.example
+   sudo curl -fsSL -o .env https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/env.example
+   sudo chmod 600 privacyfence.env .env
+   ```
+
+   Releases from before `env.example` existed answer the last download with a 404. For those, create
+   `.env` yourself instead of the fourth `curl` line (step 6 says what goes in it):
+
+   ```bash
+   sudo install -m 0600 /dev/null .env
+   sudo tee .env >/dev/null <<'EOF'
+   PF_HOSTNAME=
+   PRIVACYFENCE_IMAGE_TAG=
+   EOF
+   ```
+
+   [Files](#files) explains each of them.
+5. **Fill in `privacyfence.env`** (`sudo nano privacyfence.env`, or your editor): the identity
+   provider and who is an admin. The file's comments say what each line does. The server address and
+   the proxy address are not in it: `compose.yaml` sets them from `PF_HOSTNAME` in `.env` (step 6), so
+   the domain is typed once.
+
+   Keep the identity provider's client secret out of `docker inspect`: put it in a file owned by the
+   image's user and let Compose mount it as a Docker secret. Create the empty file with the right owner
+   and mode first, then write the secret into it, in this order:
 
    ```bash
    sudo install -m 0400 -o 10001 -g 10001 /dev/null idp_client_secret
@@ -132,25 +189,44 @@ A multi-user server with the environment alone, no bundle to build:
    ```
 
    In `privacyfence.env` set `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret`, and
-   in `compose.yaml` uncomment the `secrets:` lines (under the service and at the bottom).
-5. **Set `PF_HOSTNAME`** in `.env` next to `compose.yaml` ([.env](#env)).
-6. **Start it:** `docker compose up -d`, then `docker compose logs -f privacyfence` until the
+   in `compose.yaml` uncomment the `secrets:` lines (under the service and at the bottom). With the
+   built-in Google sign-in there is no client secret: skip this part.
+6. **Fill in `.env`:** set `PF_HOSTNAME` to the server's public host name, with no `https://` and no
+   path, such as `pf.acme.example.com`, and `PRIVACYFENCE_IMAGE_TAG` to the release from step 4, such
+   as `7.4` ([.env](#env)). This is the only place the domain is set: Caddy serves and gets the
+   certificate for it, and `compose.yaml` gives PrivacyFence `PRIVACYFENCE_ISSUER_URL=https://<PF_HOSTNAME>`.
+   Compose refuses to start without it. For a pre-release, such as `7.0.0a1`, set its exact version: a
+   pre-release gets no `X.Y`, `X` or `latest` tag. Do not leave `PRIVACYFENCE_IMAGE_TAG` empty either:
+   `compose.yaml` then falls back to `latest`, the newest stable release, not the one whose files you
+   fetched.
+7. **Start it:** `sudo docker compose up -d`, then `sudo docker compose logs -f privacyfence` until the
    `Org mode active -- MCP-over-HTTP at https://...` line.
-7. **Sign in** as a listed admin (an email in `PRIVACYFENCE_ADMIN_EMAILS`, or a person in the admin
-   group), and open `/security` to add a passkey. With the built-in Google sign-in, first publish the DNS
-   records the log lists (`docker compose exec privacyfence privacyfence-app --relay-dns-records`).
-8. **Admin → Services → offer** the services you want. Services that use a built-in app work at
+8. **Sign in** as a listed admin (an email in `PRIVACYFENCE_ADMIN_EMAILS`, or a person in the admin
+   group), and open `/security` to add a passkey. With the built-in Google sign-in, first publish the
+   DNS records the log lists (`sudo docker compose exec privacyfence privacyfence-app --relay-dns-records`).
+   Until the server has registered with the relay, `/login` says `Sign-in is starting up`; until a
+   domain's record is checked, it says `Sign-in is waiting for DNS`. In the log
+   (`sudo docker compose logs privacyfence | grep -i relay`):
+   - `Registration with the PrivacyFence sign-in relay failed: proof_failed`: the relay could not fetch
+     `https://<PF_HOSTNAME>/.well-known/privacyfence-relay` from outside. Usually Caddy has no
+     certificate yet, or a proxy or firewall is in front (step 1). The server retries by itself.
+   - `… failed: too_soon`: the relay limits how often a server registers. Wait; the server retries by
+     itself.
+   - After publishing a DNS record, restart once (`sudo docker compose restart privacyfence`) to have
+     the domain checked sooner than the hourly check. Do not restart repeatedly: each restart counts
+     against the relay's limit.
+9. **Admin → Services → offer** the services you want. Services that use a built-in app work at
    once (the server registers with the relay by itself; Admin → Services shows the status); to use your
    own app for a provider, [sign and upload a connector config](org-mode-setup-guide.md#signed-connector-configs).
-9. **Optional, Peek and Grist:** give the server their addresses in `privacyfence.env`
-   (`PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL`),
-   put each provisioning key in its own secret file the same way as step 4
-   (`PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE=/run/secrets/peek_provisioning_key`, likewise
-   `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE`), uncomment those `secrets:` lines, restart, and turn
-   automatic accounts on under Admin → Services, or set `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and
-   `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` in `privacyfence.env` to offer them and turn them on from
-   the server ([Peek setup](peek-setup.md#automatic-accounts),
-   [Grist setup](grist-setup.md#automatic-api-keys)).
+10. **Optional, Peek and Grist:** give the server their addresses in `privacyfence.env`
+    (`PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL`),
+    put each provisioning key in its own secret file the same way as step 5
+    (`PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE=/run/secrets/peek_provisioning_key`, likewise
+    `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE`), uncomment those `secrets:` lines, restart, and turn
+    automatic accounts on under Admin → Services, or set `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` and
+    `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` in `privacyfence.env` to offer them and turn them on from
+    the server ([Peek setup](peek-setup.md#automatic-accounts),
+    [Grist setup](grist-setup.md#automatic-api-keys)).
 
 Everything else (file delivery, step-up, sign-in restrictions, scoped tokens, audit forwarding) is on
 the [Admin page](org-mode-setup-guide.md#the-admin-page). Outbound HTTPS from the container must reach your identity
@@ -160,27 +236,24 @@ Google sign-in.
 ## Prerequisites
 
 - Docker Engine 24 or newer with the Compose plugin 2.24 or newer.
-- A public hostname with DNS pointing at the server, and ports 80 and 443 (TCP and UDP) reachable.
-  Caddy obtains the certificate itself.
+- A public hostname with DNS pointing at the server (not proxied by Cloudflare), and TCP 443
+  reachable; TCP 80 is recommended and UDP 443 optional ([Quick start](#quick-start), step 1). Caddy
+  obtains the certificate itself.
 - Everything else in the guide's [Prerequisites](org-mode-setup-guide.md#2-prerequisites) except Python.
 
 ## Files
 
-Work in `/opt/privacyfence-org`. Fetch the deploy files for the release you run (replace `vX.Y.Z`):
-
-```bash
-sudo install -d /opt/privacyfence-org && cd /opt/privacyfence-org
-sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/compose.yaml
-sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/Caddyfile
-sudo curl -fsSL -o privacyfence.env https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/privacyfence.env.example
-sudo chmod 600 privacyfence.env
-```
+The deploy folder (`/opt/privacyfence-org`) holds four files from `deploy/docker/` of the release you
+run: `compose.yaml`, `Caddyfile`, `privacyfence.env` (from `privacyfence.env.example`) and `.env`
+(from `env.example`). [Quick start](#quick-start), steps 3 and 4, creates the folder and fetches them.
 
 ### Compose file
 
 `compose.yaml` runs the daemon read-only, with no capabilities and no published port. Only Caddy is
 reachable from outside. Both containers sit on a private network with fixed addresses, so
-`PRIVACYFENCE_TRUSTED_PROXIES` can name Caddy as the one trusted proxy.
+`PRIVACYFENCE_TRUSTED_PROXIES` can name Caddy as the one trusted proxy. The file sets that and
+`PRIVACYFENCE_ISSUER_URL` (from `PF_HOSTNAME` in `.env`) itself; they win over the same names in
+`privacyfence.env`.
 
 ```yaml
 # PrivacyFence organization mode with Caddy in front. docs/org-mode-docker.md explains every line.
@@ -198,6 +271,11 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s
+    # Set here from .env, so the domain is typed once. These win over the same names in
+    # privacyfence.env.
+    environment:
+      PRIVACYFENCE_ISSUER_URL: https://${PF_HOSTNAME:?set PF_HOSTNAME in .env}
+      PRIVACYFENCE_TRUSTED_PROXIES: 172.30.87.2
     env_file:
       - path: privacyfence.env
         required: false
@@ -265,15 +343,17 @@ volumes:
 
 ### .env
 
-Next to `compose.yaml`, in `.env`:
+Next to `compose.yaml`, in `.env` (from `env.example`):
 
 ```ini
 PF_HOSTNAME=pf.acme.example.com
 PRIVACYFENCE_IMAGE_TAG=X.Y
 ```
 
-`PF_HOSTNAME` is the public hostname of `PRIVACYFENCE_ISSUER_URL` in `privacyfence.env`. Compose
-refuses to start without it.
+`PF_HOSTNAME` is the server's public host name, the only place the domain is set: Caddy gets its
+certificate for it, and `compose.yaml` sets `PRIVACYFENCE_ISSUER_URL` to `https://<PF_HOSTNAME>`.
+Compose refuses to start without it. `PRIVACYFENCE_IMAGE_TAG` is the release you fetched the files
+from; a pre-release needs its exact version.
 
 ## Start
 
@@ -298,8 +378,8 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_MODE` | `org` (set by the image) | Leave it. |
 | `PRIVACYFENCE_BIND_HOST` | `0.0.0.0` (set by the image) | The address inside the container. Only Caddy reaches it. |
 | `PRIVACYFENCE_PORT` | `8765` | The port inside the container. Change it only together with the Caddyfile (`reverse_proxy privacyfence:<port>`). |
-| `PRIVACYFENCE_ISSUER_URL` | `http://localhost:<port>` (single-user) | The public origin, such as `https://pf.acme.example.com`, which is also the `PF_HOSTNAME` in `.env`. |
-| `PRIVACYFENCE_TRUSTED_PROXIES` | none | `172.30.87.2`, the Caddy container's fixed address in `compose.yaml`. Without it the daemon ignores `X-Forwarded-For` and `X-Forwarded-Proto`. |
+| `PRIVACYFENCE_ISSUER_URL` | `https://<PF_HOSTNAME>` (set by `compose.yaml`) | The public origin, such as `https://pf.acme.example.com`. `compose.yaml` builds it from `PF_HOSTNAME` in `.env`; a value in `privacyfence.env` is ignored. Without Compose (single-user `docker run`) it defaults to `http://localhost:<port>`. |
+| `PRIVACYFENCE_TRUSTED_PROXIES` | `172.30.87.2` (set by `compose.yaml`) | The Caddy container's fixed address in `compose.yaml`. Without it the daemon ignores `X-Forwarded-For` and `X-Forwarded-Proto`; a value in `privacyfence.env` is ignored. |
 | `PRIVACYFENCE_IDP_ISSUER`, `PRIVACYFENCE_IDP_CLIENT_ID` | none | Your identity provider. Both or neither. |
 | `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE` | none | A Docker secret file (`/run/secrets/idp_client_secret`). `PRIVACYFENCE_IDP_CLIENT_SECRET` is the plain form; never both. |
 | `PRIVACYFENCE_ADMIN_EMAILS` | none | Admins by verified email. Microsoft Entra ID uses `PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM` and `PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES` instead ([guide](org-mode-setup-guide.md#who-is-an-admin)). |

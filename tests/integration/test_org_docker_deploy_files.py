@@ -83,9 +83,25 @@ def test_caddy_is_the_documented_trusted_proxy() -> None:
     subnet = compose["networks"]["pf"]["ipam"]["config"][0]["subnet"]
     assert address == CADDY_ADDRESS
     assert ipaddress.ip_address(address) in ipaddress.ip_network(subnet)
-    assert f"`PRIVACYFENCE_TRUSTED_PROXIES` | none | `{CADDY_ADDRESS}`" in DOC.read_text(encoding="utf-8")
+    assert _daemon()["environment"]["PRIVACYFENCE_TRUSTED_PROXIES"] == CADDY_ADDRESS
+    assert f"`PRIVACYFENCE_TRUSTED_PROXIES` | `{CADDY_ADDRESS}` (set by `compose.yaml`)" in DOC.read_text(encoding="utf-8")
+
+
+def test_the_domain_is_set_once_in_dot_env() -> None:
+    # compose.yaml derives the issuer from PF_HOSTNAME, so privacyfence.env must not set it again:
+    # environment: wins over env_file:, and a second copy could only drift.
+    assert _daemon()["environment"]["PRIVACYFENCE_ISSUER_URL"] == "https://${PF_HOSTNAME:?set PF_HOSTNAME in .env}"
     env_example = (DEPLOY / "privacyfence.env.example").read_text(encoding="utf-8")
-    assert re.search(rf"^PRIVACYFENCE_TRUSTED_PROXIES={re.escape(CADDY_ADDRESS)}$", env_example, flags=re.MULTILINE)
+    for name in ("PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES"):
+        assert not re.search(rf"^\s*{name}=", env_example, flags=re.MULTILINE), name
+
+
+def test_env_example_names_the_compose_variables() -> None:
+    dot_env = (DEPLOY / "env.example").read_text(encoding="utf-8")
+    assert re.findall(r"^([A-Z_]+)=$", dot_env, flags=re.MULTILINE) == ["PF_HOSTNAME", "PRIVACYFENCE_IMAGE_TAG"]
+    compose_text = COMPOSE.read_text(encoding="utf-8")
+    for name in ("PF_HOSTNAME", "PRIVACYFENCE_IMAGE_TAG"):
+        assert "${" + name in compose_text, name
 
 
 def test_caddy_proxies_to_the_daemon_port() -> None:
