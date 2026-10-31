@@ -970,6 +970,13 @@ def _maybe_start_web_server(
     notifications_config = web_config.get("notifications", {}) or {}
     org_config = org_config or {}
     mode = org_mode.resolve_mode(org_config)
+    if mode != "org":
+        ignored = oauth_apps.environment_auto_provision()
+        if ignored:
+            logger.warning(
+                "%s is ignored outside organization mode.",
+                ", ".join(oauth_apps._ENV_AUTO_PROVISION[name] for name in sorted(ignored)),
+            )
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
     # ADR 0007: settings.yaml's own file_bridge: section, read once here --
@@ -1378,6 +1385,9 @@ def _start_org_web_server(
     # Validated here so a broken "grist"."auto_provision" refuses startup; the provisioner
     # itself re-reads it in grist_provisioning.start below.
     org_mode.GristProvisioningConfig.from_org_config(org_config)
+    oauth_apps.check_environment_auto_provision(
+        single_user=idp is None, grist_oauth=bool((org_config.get("grist") or {}).get("client_id"))
+    )
     if idp is None:
         if bundle:
             # A signed organization bundle always meant a real server, and 6.x never wrote an

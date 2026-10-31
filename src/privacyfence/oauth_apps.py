@@ -18,11 +18,11 @@ import os
 import threading
 from collections.abc import Mapping
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from . import admin_config, app_credentials, connector_configs
 from .grist_auth import GristClientError, normalize_server_url
-from .org_mode import ConfigurationError, Mode
+from .org_mode import ConfigurationError, Mode, provisioning_key
 from .peek_client import PeekClientError, normalize_base_url
 
 RELAY_BASE_URL = "https://oauth.privacyfence.eu"
@@ -57,6 +57,11 @@ _ENV_PEEK_BASE_URL = "PRIVACYFENCE_PEEK_BASE_URL"
 _ENV_GRIST_SERVER_URL = "PRIVACYFENCE_GRIST_SERVER_URL"
 _ENV_GRIST_PROVISIONER_URL = "PRIVACYFENCE_GRIST_PROVISIONER_URL"
 _ENV_PREVIEW_SERVICES = "PRIVACYFENCE_PREVIEW_SERVICES"
+_ENV_AUTO_PROVISION = {
+    "peek": "PRIVACYFENCE_PEEK_AUTO_PROVISION",
+    "grist": "PRIVACYFENCE_GRIST_AUTO_PROVISION",
+}
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 _refresh_lock = threading.Lock()
 
@@ -128,6 +133,64 @@ def environment_addresses() -> dict[str, str]:
     return found
 
 
+def environment_auto_provision() -> frozenset[str]:
+    """The services whose automatic accounts the environment turns on ("peek", "grist").
+
+    A value other than unset, empty or ``true`` raises ``ConfigurationError``. Read on every call.
+    """
+    found: set[str] = set()
+    for service, variable in _ENV_AUTO_PROVISION.items():
+        value = os.environ.get(variable, "").strip().lower()
+        if not value:
+            continue
+        if value != "true":
+            raise ConfigurationError(f"{variable} must be true, or unset.")
+        found.add(service)
+    return frozenset(found)
+
+
+def _loopback(url: str) -> bool:
+    return urlsplit(url).hostname in _LOOPBACK_HOSTS
+
+
+def check_environment_auto_provision(*, single_user: bool, grist_oauth: bool) -> None:
+    """The startup checks for the ``*_AUTO_PROVISION`` variables; raises ``ConfigurationError``."""
+    services = environment_auto_provision()
+    if not services:
+        return
+    addresses = environment_addresses()
+    stored = admin_config.config_for({}, mode="org", single_user=single_user)["services"]
+
+    def require_key(service: str, variable: str, default_key_env: str) -> None:
+        key_env = str(stored.get(service, {}).get("auto_provision", {}).get("key_env") or default_key_env)
+        if provisioning_key(key_env) is None:
+            raise ConfigurationError(f"{variable}=true needs {key_env} or {key_env}_FILE.")
+
+    if "peek" in services:
+        variable = _ENV_AUTO_PROVISION["peek"]
+        if "peek" not in addresses:
+            raise ConfigurationError(f"{variable}=true needs {_ENV_PEEK_BASE_URL}.")
+        require_key("peek", variable, "PRIVACYFENCE_PEEK_PROVISIONING_KEY")
+        if single_user and not _loopback(addresses["peek"]):
+            raise ConfigurationError(
+                f"On a single-user install, {variable}=true needs a localhost address in {_ENV_PEEK_BASE_URL}."
+            )
+    if "grist" in services:
+        variable = _ENV_AUTO_PROVISION["grist"]
+        if "grist" not in addresses or "grist_provisioner" not in addresses:
+            raise ConfigurationError(
+                f"{variable}=true needs {_ENV_GRIST_SERVER_URL} and {_ENV_GRIST_PROVISIONER_URL}."
+            )
+        require_key("grist", variable, "PRIVACYFENCE_GRIST_PROVISIONING_KEY")
+        if grist_oauth:
+            raise ConfigurationError(f"{variable}=true cannot be used with a Grist OAuth app.")
+        if single_user and not (_loopback(addresses["grist"]) and _loopback(addresses["grist_provisioner"])):
+            raise ConfigurationError(
+                f"On a single-user install, {variable}=true needs localhost addresses in "
+                f"{_ENV_GRIST_SERVER_URL} and {_ENV_GRIST_PROVISIONER_URL}."
+            )
+
+
 def _builtin_section(service: str, app: dict[str, str]) -> dict[str, Any]:
     if service == "salesforce":
         section: dict[str, Any] = {
@@ -163,8 +226,14 @@ def _credentials_section(
     return _builtin_section(service, app) if app is not None else None
 
 
-def _auto_provision_enabled(admin_service: dict[str, Any], *, mode: Mode, single_user: bool) -> bool:
-    return bool(admin_service.get("auto_provision", {}).get("enabled")) and mode == "org" and not single_user
+def _auto_provision_enabled(
+    admin_service: dict[str, Any], *, mode: Mode, single_user: bool, from_environment: bool
+) -> bool:
+    if mode != "org":
+        return False
+    if from_environment:
+        return True
+    return bool(admin_service.get("auto_provision", {}).get("enabled")) and not single_user
 
 
 def _peek_section(
@@ -176,7 +245,9 @@ def _peek_section(
         return {"enabled": True} if mode == "local" else None
     section: dict[str, Any] = {"base_url": base_url}
     trusted = "peek" in env or bool(admin_service.get("address_locked"))
-    if trusted and _auto_provision_enabled(admin_service, mode=mode, single_user=single_user):
+    if trusted and _auto_provision_enabled(
+        admin_service, mode=mode, single_user=single_user, from_environment="peek" in environment_auto_provision()
+    ):
         stored = admin_service["auto_provision"]
         section["auto_provision"] = {
             "enabled": True,
@@ -207,7 +278,9 @@ def _grist_section(
     if (
         ("grist" in env or locked)
         and provisioner_url
-        and _auto_provision_enabled(admin_service, mode=mode, single_user=single_user)
+        and _auto_provision_enabled(
+            admin_service, mode=mode, single_user=single_user, from_environment="grist" in environment_auto_provision()
+        )
     ):
         section["auto_provision"] = {
             "enabled": True,
@@ -261,8 +334,10 @@ def effective_org_config(
         value = services.get(name, {})
         return value if isinstance(value, dict) else {}
 
+    from_environment = environment_auto_provision()
     offered = {
-        name: bool(service_config(name).get("offered", False)) and not preview_hidden(name)
+        name: (bool(service_config(name).get("offered", False)) or name in from_environment)
+        and not preview_hidden(name)
         for name in admin_config.SERVICES
     }
     for name in admin_config.SERVICES:
