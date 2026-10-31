@@ -149,7 +149,7 @@ class TestWithoutAnIdentityProvider:
             await provider.handle_idp_callback(state="s", code="c")
 
 
-SINGLE_USER = Principal(id="single-user", email="admin@localhost", display_name="Administrator", is_admin=True)
+SINGLE_USER = Principal(id="single-user", email="admin@privacyfence.localhost", display_name="Administrator", is_admin=True)
 
 
 def _single_user_provider(tmp_path, monkeypatch) -> op.OrgOAuthProvider:
@@ -217,7 +217,7 @@ class TestSingleUser:
         consent_id = location.rsplit("/", 1)[1]
         view = provider.consent_view(consent_id)
         assert view.client_name == "Claude"
-        assert view.principal_label == "admin@localhost"
+        assert view.principal_label == "admin@privacyfence.localhost"
         redirect = provider.decide_consent(consent_id, csrf=view.csrf, allow=True)
         assert "code=" in redirect
         assert provider._consents.has(SINGLE_USER, "claude", "https://claude.example.com/callback")

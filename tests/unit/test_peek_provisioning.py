@@ -258,7 +258,7 @@ class TestRequest:
 
     def test_single_user_principal_is_provisioned(self, client):
         p = _provisioner(client)
-        single_user = Principal(id="single-user", email="admin@localhost", display_name="Administrator", is_admin=True)
+        single_user = Principal(id="single-user", email="admin@privacyfence.localhost", display_name="Administrator", is_admin=True)
         p.request(single_user, email_verified=True)
         assert p.process_next(0) is True
         assert _state("single-user")["status"] == "provisioned"

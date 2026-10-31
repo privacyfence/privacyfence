@@ -69,13 +69,14 @@ it chose keeps working. The 6.11 bundle flags `--grist-auto-provision`, `--grist
 and the others are refused by `build_org_bundle.py`.
 
 **On a single-user install.** With `PRIVACYFENCE_GRIST_AUTO_PROVISION=true`, a single-user install
-(no identity provider) connects Grist for its one person, `admin@localhost`, treated as verified
+(no identity provider) connects Grist for its one person, `admin@privacyfence.localhost`, treated as verified
 because the install has exactly one person, reachable only with the setup code or a passkey. It
 works only when Grist and the provisioner run on the same computer: both
 `PRIVACYFENCE_GRIST_SERVER_URL` and `PRIVACYFENCE_GRIST_PROVISIONER_URL` must be `localhost`
 addresses (`localhost`, `127.0.0.1` or `::1`). Grist is connected at each start and at each sign-in.
-The Grist install admin needs another address than `admin@localhost`, because the provisioner
-refuses to adopt an admin. Every start counts as a sign-in, so the renewal rule below never ends the
+The Grist install admin needs another address than `admin@privacyfence.localhost`, because the provisioner
+refuses to adopt an admin. Grist refuses an address whose domain has no dot ([ADR 0275](adr/0275-the-single-user-person-is-admin-at-privacyfence-localhost.md)),
+and a local stack's provisioner needs `PROVISIONER_ALLOWED_DOMAINS=privacyfence.localhost`. Every start counts as a sign-in, so the renewal rule below never ends the
 connection. When you move to an identity provider, run `privacyfence-app --grist-release
 single-user`. ([ADR 0272](adr/0272-a-single-user-install-provisions-its-one-person-as-verified.md))
 

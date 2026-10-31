@@ -688,7 +688,7 @@ class TestSingleUserMode:
         session_id = _sign_in_with_the_setup_code(client, code)
         page = client.get("/security", params={"next": "/approvals"})
         assert page.status_code == 200
-        assert "admin@localhost" in page.text
+        assert "admin@privacyfence.localhost" in page.text
         options = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
         assert options.status_code == 200
         assert options.json()["options"]["rp"]["id"] == "localhost"

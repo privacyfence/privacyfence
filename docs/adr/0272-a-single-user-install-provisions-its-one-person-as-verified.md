@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-31. Implemented: `src/privacyfence/daemon_main.py` (`_start_org_web_server`), `src/privacyfence/web/single_user_auth.py`, `src/privacyfence/oauth_apps.py`.
 Relates to [ADR 0243](0243-peek-provisioning-needs-a-verified-email-and-stops-renewing-after-90-days.md), [ADR 0260](0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md), [ADR 0271](0271-automatic-accounts-can-be-switched-on-from-the-environment.md).
+Amended by [ADR 0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md): the address is now admin@privacyfence.localhost.
 
 ## Context
 
