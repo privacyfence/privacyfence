@@ -267,7 +267,9 @@ There is no consent page, and `prompt` and `max_age` are ignored (ADR below).
   `email_verified=org_identity.session_email_verified(claims, principal, policy)`. This includes the
   built-in Google sign-in, whose admission already requires the claim.
 - **Single-user sign-in** (`single_user_auth.py:301`) passes `email_verified=True`. The address is
-  fixed in code, and the install has exactly one person.
+  fixed in code, and the install has exactly one person. ADR 0272 (from
+  `plan/env-automatic-accounts`) owns that decision. If it has not landed when p4 runs, ADR 0273
+  records the reason itself.
 - **Unverified sessions.** Peek and Grist refuse a sign-in whose `email_verified` is false. That is
   intended, and is the same bar as automatic accounts (ADRs 0243, 0247).
 
