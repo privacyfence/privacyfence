@@ -18,6 +18,16 @@ from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, single_user_auth as sua
 
 ISSUER = "http://localhost:8765"
+
+# Copy of gristlabs/grist-core app/common/gutil.ts EMAIL_RE (JS \w is ASCII-only, hence re.ASCII).
+GRIST_EMAIL_RE = re.compile(r"^\w[\w%+/='-]*(\.[\w%+/='-]+)*@([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,24}$", re.ASCII)
+
+
+class TestTheAddress:
+    def test_single_user_email_passes_grist_email_check(self):
+        assert sua.SINGLE_USER_PRINCIPAL.email == "admin@privacyfence.localhost"
+        assert GRIST_EMAIL_RE.match(sua.SINGLE_USER_PRINCIPAL.email)
+        assert not GRIST_EMAIL_RE.match("admin@localhost")
 HTTPS_ISSUER = "https://pf.example.com"
 ADMIN = sua.SINGLE_USER_PRINCIPAL
 CODE_LINE = re.compile(r"Setup code: ([0-9A-F]{4}-[0-9A-F]{4})\. Open (\S+)/login to set up your passkey\.")

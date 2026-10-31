@@ -62,7 +62,7 @@ from .routes_security import PF_WEBAUTHN_JS, safe_next_path
 logger = logging.getLogger(__name__)
 
 SINGLE_USER_PRINCIPAL = Principal(
-    id="single-user", email="admin@localhost", display_name="Administrator", is_admin=True,
+    id="single-user", email="admin@privacyfence.localhost", display_name="Administrator", is_admin=True,
 )
 
 SETUP_BINDING_COOKIE = "pf_setup_binding"

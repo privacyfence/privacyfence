@@ -1410,7 +1410,7 @@ class TestSingleUserAuthorize:
             consent = cont.headers["location"]
             assert consent.startswith("/oauth/consent/")
             page = await client.get(consent)
-            assert page.status_code == 200 and "Claude" in page.text and "admin@localhost" in page.text
+            assert page.status_code == 200 and "Claude" in page.text and "admin@privacyfence.localhost" in page.text
             csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
             decided = await client.post(
                 consent, data={"csrf": csrf, "decision": "allow"}, headers={"Origin": SINGLE_USER_ISSUER},
@@ -1434,7 +1434,7 @@ class TestSingleUserAuthorize:
 
             async with mcp_session(app, access_token=tokens["access_token"]) as session:
                 result = await session.call_tool("whoami", {"reason": "test"})
-        assert result.structured_content == {"id": "single-user", "email": "admin@localhost", "is_admin": True}
+        assert result.structured_content == {"id": "single-user", "email": "admin@privacyfence.localhost", "is_admin": True}
 
     async def test_a_foreign_origin_consent_post_is_refused(self, tmp_path, monkeypatch):
         import re

@@ -66,11 +66,11 @@ A server upgraded from 6.11 keeps its automatic accounts: the addresses it had a
 Admin page shows them as fixed (see below), and a key variable name it chose keeps working.
 
 **On a single-user install.** With `PRIVACYFENCE_PEEK_AUTO_PROVISION=true`, a single-user install
-(no identity provider) connects Peek for its one person, `admin@localhost`, treated as verified
+(no identity provider) connects Peek for its one person, `admin@privacyfence.localhost`, treated as verified
 because the install has exactly one person, reachable only with the setup code or a passkey. It
 works only when Peek runs on the same computer: `PRIVACYFENCE_PEEK_BASE_URL` must be a `localhost`
 address (`localhost`, `127.0.0.1` or `::1`). Peek is connected at each start and at each sign-in.
-The Peek install admin needs another address than `admin@localhost`, because Peek refuses to adopt
+The Peek install admin needs another address than `admin@privacyfence.localhost`, because Peek refuses to adopt
 an admin. Every start counts as a sign-in, so the 90-day rule below never ends the connection. When
 you move to an identity provider, run `privacyfence-app --peek-release single-user`.
 ([ADR 0272](adr/0272-a-single-user-install-provisions-its-one-person-as-verified.md))

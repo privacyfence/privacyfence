@@ -366,3 +366,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0272](0272-a-single-user-install-provisions-its-one-person-as-verified.md) | A single-user install provisions its one person as verified | Accepted; relates to 0243, 0260, 0271 |
 | [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272 |
 | [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |
+| [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
