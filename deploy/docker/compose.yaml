@@ -13,6 +13,11 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s
+    # Set here from .env, so the domain is typed once. These win over the same names in
+    # privacyfence.env.
+    environment:
+      PRIVACYFENCE_ISSUER_URL: https://${PF_HOSTNAME:?set PF_HOSTNAME in .env}
+      PRIVACYFENCE_TRUSTED_PROXIES: 172.30.87.2
     env_file:
       - path: privacyfence.env
         required: false
