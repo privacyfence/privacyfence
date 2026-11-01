@@ -13,8 +13,10 @@ checkout has its git history, the test also checks that each such citation resol
 A plan document (`docs/*-plan.md`) may also name an ADR it is about to create: a reference from
 one to a missing `docs/adr/` file is ignored, and only that.
 
-A path inside an http(s):// URL names a file elsewhere (a link to another repository's docs/), so it
-is not a reference to this checkout; a bare path on the same line is still checked.
+A path inside an http(s):// URL to another repository (privacyfence-suite, say) names a file
+elsewhere, so it is not a reference to this checkout. A URL into this repository
+(`https://github.com/privacyfence/privacyfence/...`) is still checked, as is a bare path on the same
+line.
 
 Two places are exempt. `CHANGELOG.md` records what each release shipped, including the docs it
 had then. `docs/adr/` records are frozen once accepted; their Markdown links are still checked by
@@ -38,8 +40,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # A path under docs/ ending in .md, optionally prefixed by a git revision (`be78e7ee^:`).
 _REF = re.compile(r"(?:\b([0-9a-f]{7,40}\^?):)?(?<![\w-])(docs/[A-Za-z0-9_./-]+?\.md)\b")
 
-# A `docs/...md` path inside an http(s):// URL names a file in some other repository, not this one.
+# A `docs/...md` path inside an http(s):// URL names a file in some other repository, not this one,
+# unless the URL points into this repository.
 _URL = re.compile(r"https?://[^\s\"'<>)]+")
+_THIS_REPO_URL = "https://github.com/privacyfence/privacyfence/"
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "htmlcov", "_site"}
 _EXEMPT = ("CHANGELOG.md", "docs/adr/", "tests/unit/test_docs_references_exist.py")
@@ -81,8 +85,8 @@ def _references() -> list[tuple[str, int, str | None, str]]:
 
 
 def _line_references(line: str) -> list[tuple[str | None, str]]:
-    """The `docs/...md` references on one line, leaving out those that sit inside a URL."""
-    urls = [m.span() for m in _URL.finditer(line)]
+    """The `docs/...md` references on one line, leaving out those inside a URL to another repository."""
+    urls = [m.span() for m in _URL.finditer(line) if not m.group(0).startswith(_THIS_REPO_URL)]
     return [
         (match.group(1), match.group(2))
         for match in _REF.finditer(line)
@@ -162,3 +166,15 @@ def test_a_docs_path_inside_a_url_is_ignored_but_a_bare_one_is_not():
     assert _line_references(url) == []
     assert _line_references("see docs/x.md") == [(None, "docs/x.md")]
     assert _line_references(url + " and docs/y.md") == [(None, "docs/y.md")]
+
+
+def test_a_url_into_this_repository_is_still_checked():
+    this = "https://github.com/privacyfence/privacyfence/blob/main/docs/no-such-doc.md"
+    assert _line_references(f"see {this}") == [(None, "docs/no-such-doc.md")]
+    assert _is_dangling("README.md", "docs/no-such-doc.md")
+
+
+def test_a_url_into_another_repository_is_ignored():
+    suite = "https://github.com/privacyfence/privacyfence-suite/blob/main/docs/configurations.md"
+    assert _line_references(f"see {suite}") == []
+    assert _line_references(f"see {suite} and docs/real.md") == [(None, "docs/real.md")]

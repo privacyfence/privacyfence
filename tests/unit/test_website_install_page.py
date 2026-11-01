@@ -2,8 +2,7 @@
 
 The picker's behaviour is in tests/integration/test_install_page.py. What the page's own HTML must
 carry is checked here: it is deployed and listed, it has the five radio groups and the eight
-results the script switches between, and, inside <main>, it never mentions the deprecated desktop
-installers (the header still carries the Download CTA until the header is switched to Install).
+results the script switches between, and it never mentions the deprecated desktop installers.
 """
 
 from __future__ import annotations
@@ -36,27 +35,26 @@ RESULT_KEYS = [
 ]
 
 
-class _MainText(HTMLParser):
-    """Collects the text and the link targets inside <main>, nothing else."""
+class _PageText(HTMLParser):
+    """Collects the visible text and the link targets of the whole page, scripts and styles aside."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.depth = 0
+        self.hidden = 0
         self.parts: list[str] = []
         self.hrefs: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        if tag == "main":
-            self.depth += 1
-        elif self.depth:
-            self.hrefs.extend(v for k, v in attrs if k == "href" and v)
+        if tag in ("script", "style"):
+            self.hidden += 1
+        self.hrefs.extend(v for k, v in attrs if k == "href" and v)
 
     def handle_endtag(self, tag):
-        if tag == "main" and self.depth:
-            self.depth -= 1
+        if tag in ("script", "style") and self.hidden:
+            self.hidden -= 1
 
     def handle_data(self, data):
-        if self.depth:
+        if not self.hidden:
             self.parts.append(data)
 
 
@@ -84,8 +82,8 @@ def test_there_is_one_result_per_combination():
     assert re.findall(r'<section class="install-result[^"]*" data-result="([^"]+)"', page) == RESULT_KEYS
 
 
-def test_main_never_mentions_the_desktop_installers():
-    parser = _MainText()
+def test_the_page_never_mentions_the_desktop_installers():
+    parser = _PageText()
     parser.feed(read_page("/install/"))
     # The suite's own install URL ends in .../releases/latest/download/install.sh; that is GitHub's
     # path, not a link to this site's /download/ page, so it is taken out before the text check.
