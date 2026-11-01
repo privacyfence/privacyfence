@@ -25,6 +25,13 @@ release 0.1.0) and from `docs/org-mode-docker.md`. The deprecated desktop mode i
 person, keeps the desktop installers with the deprecation notice, and leaves the header.
 `docs/oauth-relay.md` is published on `/docs/`, and relay-terms and the privacy statement link to it.
 
+The user docs the website now points at are brought along in the same PR (D8):
+- the organization guide sends a single person to single-user Docker instead of the desktop install;
+- How it works describes single-user mode and `PRIVACYFENCE_MODE`;
+- the Claude Code and Claude Desktop guides get a "Single-user Docker" section.
+
+Because `/docs/` is rendered from the newest stable tag, these pages go live with the next release.
+
 Everything lands as one PR from `chore/website-7x` to `main`.
 
 Decisions taken with the user while planning:
@@ -750,6 +757,65 @@ descriptions (the text after the link and colon); every other line stays:
 - Download: "the Docker image recommended for one person, and the deprecated desktop installers for
   macOS, Windows and Linux, each with its SHA-256 checksum"
 
+### D8. User docs
+
+Edit only what is listed; keep every existing heading (its anchor is linked).
+
+- **`docs/org-mode-setup-guide.md:8-9`**: replace the paragraph with "For a single person on their own
+  computer, run the Docker image in single-user mode instead
+  ([Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer)). The desktop
+  install is deprecated in PrivacyFence 7 and removed in 8
+  ([Moving to organization mode](moving-to-organization-mode.md))."
+- **`docs/how-it-works.md`, "## Local mode and organization mode" (`:52-63`)**:
+  - The **Local mode** bullet starts "**Local mode** (desktop mode) is what the macOS, Windows and Linux
+    installers set up; it is deprecated in PrivacyFence 7 and removed in 8
+    ([Moving to organization mode](moving-to-organization-mode.md))." The rest of the bullet ("One daemon
+    on your own computer…") stays; drop "is the default".
+  - Append to the **Organization mode** bullet: "It runs from the `ghcr.io/privacyfence/privacyfence-org`
+    Docker image configured by environment variables
+    ([Organization deployment with Docker](org-mode-docker.md)), or from PyPI under systemd."
+  - Add a third bullet: "- **Single-user mode** is organization mode with no identity provider: one
+    administrator, served only on `localhost`, who signs in with a passkey after a one-time setup code.
+    It is how the Docker image starts on your own computer
+    ([Run it on this computer](org-mode-docker.md#run-it-on-this-computer)). It is no protection against
+    an agent that can run `docker` on that computer
+    ([Single-user mode](security-and-compliance.md#single-user-mode))."
+  - `:62-63` becomes "Which mode a daemon runs in is set by `PRIVACYFENCE_MODE` (`local` by default,
+    `org` in the Docker image), or by a legacy organization config bundle's `mode` key. See
+    [Configuration reference](configuration-reference.md#environment-variables)."
+    [configuration-reference.md:361]
+- **`docs/connect-claude-code.md`**:
+  - In the opening list, the **Local mode** bullet's label becomes "**Local mode** (desktop mode,
+    deprecated)". Add a bullet between the two: "- **Single-user Docker**: PrivacyFence's Docker image on
+    the same computer. Claude Code connects to `http://localhost:8765/mcp` and you sign in with your
+    passkey."
+  - Add a section `## Single-user Docker` directly before `## Organization mode` (`:96`):
+    > Start the Docker image on your computer and set up your passkey
+    > ([Run it on this computer](org-mode-docker.md#run-it-on-this-computer)). Then:
+    >
+    > ```bash
+    > claude mcp add --transport http --scope user privacyfence http://localhost:8765/mcp
+    > ```
+    >
+    > Run `/mcp` inside Claude Code and choose **privacyfence** to sign in. PrivacyFence opens its
+    > sign-in page for your passkey, then a consent page; after that Claude Code holds its own tokens, as
+    > with an organization server. Use `localhost`, not `127.0.0.1`: the passkey belongs to
+    > `localhost`.
+
+    (Written as plain Markdown, not as a quote.)
+- **`docs/connect-claude-desktop.md`**:
+  - The same change to the opening list's **Local mode** bullet. The added bullet reads
+    "- **Single-user Docker**: PrivacyFence's Docker image on the same computer. Claude Desktop connects
+    to `http://localhost:8765/mcp` as a custom connector and you sign in with your passkey."
+  - Add `## Single-user Docker` directly before `## Organization mode` (`:39`): "Start the Docker image
+    on your computer and set up your passkey
+    ([Run it on this computer](org-mode-docker.md#run-it-on-this-computer)). In Claude Desktop's
+    connector settings, add a custom connector with the URL `http://localhost:8765/mcp`, click
+    **Connect** and sign in with your passkey. Leave the optional OAuth client ID and secret empty:
+    Claude Desktop registers itself. Do not install the extension (`PrivacyFence.mcpb`) as well: it is
+    for desktop mode only."
+- **`docs/org-mode-docker.md:196`**: "such as `7.4`" becomes "such as `7.0`" (7.4 is not a release).
+
 ## ADRs
 
 - **0276** — "Links to a docs page the next release publishes fall back to GitHub until it does".
@@ -766,10 +832,15 @@ descriptions (the text after the link and colon); every other line stays:
 
 ## Manual steps
 
-There are no `manual_before` steps. `manual_after` has one: proofread the built pages, the `/install/`
-picker above all, from the PR's `website-build` artifact at phone and desktop widths, because the
-browser tests check structure, not wording. The step-by-step page is the artifact linked from the
-manifest (`manual_steps_artifact`).
+There are no `manual_before` steps. `manual_after` has two, both after the last phase merges and
+before the PR merges. The step-by-step page is the artifact linked from the manifest
+(`manual_steps_artifact`).
+
+- **ma1:** proofread the built pages, the `/install/` picker above all, from the PR's `website-build`
+  artifact at phone and desktop widths. The browser tests check structure, not wording.
+- **ma2:** on a computer with Docker, start single-user Docker, connect Claude Code and Claude Desktop
+  to `http://localhost:8765/mcp`, and approve one request. The website and the D8 docs now promise
+  this; no automated test can.
 
 ## Risks and open questions
 
@@ -790,9 +861,12 @@ manifest (`manual_steps_artifact`).
   still names "macOS, Windows, or Linux". It stays unchanged in this plan; changing it needs README in
   the same PR (`test_website_canonical_description.py`). This is a follow-up for the maintainer, not a
   phase.
-- **`docs/org-mode-setup-guide.md:8-9`** still says "For a single person on their own computer, use the
-  desktop install instead". This is out of scope (docs, not website). Name it in the PR description as
-  a follow-up.
+- **Single-user Docker with Claude Desktop.** That Claude Desktop reaches `http://localhost:8765/mcp` as a
+  custom connector rests on `docs/org-mode-docker.md:86-90`; no automated test covers it.
+  `manual_after` ma2 checks it with the real clients before the PR merges. If it fails, the D8 Claude
+  Desktop section and the matching website copy (p5) are corrected in the same PR.
+- **D8 must not rename a docs heading.** The website links its anchors (D2) and the connect docs link
+  `how-it-works.md#local-mode-and-organization-mode`. A renamed heading fails the link check.
 
 ## Implementation manifest
 
@@ -807,6 +881,9 @@ manual_after:
   - id: ma1-proofread-built-site
     title: Proofread /install/ (all picker combinations), /download/, /enterprise/, /faq/ and two connector pages in the PR's website-build artifact
     why: The browser tests check structure and layout, not whether the copy reads right and claims only what 7.0.0 does
+  - id: ma2-single-user-clients
+    title: Connect Claude Code and Claude Desktop to single-user Docker at http://localhost:8765/mcp and approve one request
+    why: The website (p5) and the connect docs (p7) now say both clients work with single-user Docker; only a real computer with Docker and the real clients can show it
 verify_after_merge:
   - 'python3 -m pytest tests/unit -q -k "website or build_site"'
   - 'python3 scripts/build_site.py --docs-ref worktree --offline --out /tmp/pf-site-check'
@@ -817,6 +894,7 @@ final_checks:
   - 'CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading'
   - 'grep -rn "never publicly distributed" website/ finds nothing'
   - 'grep -n ''cta_href": "/install/"'' scripts/build_site.py matches'
+  - 'grep -c "use the desktop install instead" docs/org-mode-setup-guide.md prints 0'
   - 'python3 -m pytest tests/unit -q -k website passes and ruff check . passes'
 phases:
   - id: p1-install-page
@@ -984,7 +1062,7 @@ phases:
 
   - id: p6-retire
     title: ADRs 0276 and 0277, changelog, delete the plan
-    depends_on: [p3-core-pages, p4-connector-pages, p5-agents-compare-download]
+    depends_on: [p3-core-pages, p4-connector-pages, p5-agents-compare-download, p7-user-docs]
     complexity: S
     touches:
       - 'docs/adr/0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md'
@@ -1002,6 +1080,7 @@ phases:
       4. Add under CHANGELOG.md's "## [Unreleased]" (create "### Changed" / "### Added" subheadings under it if absent; never a version heading):
          - Added: "**An Install page on privacyfence.eu.** [privacyfence.eu/install](https://privacyfence.eu/install/) asks who uses PrivacyFence, whether it comes with the built-in presentation tool (Peek) and data lake (Grist), how people sign in, which apps connect the services and what sits in front, and gives the commands for that setup. **Install** replaces Download in the site's header ([ADR 0277](docs/adr/0277-the-websites-primary-call-to-action-is-install.md))."
          - Changed: "**privacyfence.eu describes PrivacyFence 7.** The homepage, Enterprise, How it works, FAQ, Security, GDPR, comparison, AI agent and connector pages describe the built-in sign-in apps (and an organization's own), the Admin page, the organization server started from environment variables in Docker, single-user Docker and its limits, and desktop mode's deprecation. The [download page](https://privacyfence.eu/download/) recommends single-user Docker for one person and keeps the desktop installers as deprecated."
+         - Changed: "**Docs for single-user Docker.** The organization guide sends a single person to the Docker image instead of the deprecated desktop install, How it works describes single-user mode and `PRIVACYFENCE_MODE`, and [Connect Claude Code](https://privacyfence.eu/docs/connect-claude-code/) and [Connect Claude Desktop](https://privacyfence.eu/docs/connect-claude-desktop/) have a Single-user Docker section."
          - Changed: "**The OAuth relay documentation is on privacyfence.eu.** `docs/oauth-relay.md` is published at [privacyfence.eu/docs/oauth-relay](https://privacyfence.eu/docs/oauth-relay/) from the next release, and the relay terms and privacy statement link it; until then the link opens the file on GitHub ([ADR 0276](docs/adr/0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md))."
       5. git rm docs/website-7x-plan.md docs/website-7x-plan-manual-steps.html; grep -rn "website-7x-plan" . --exclude-dir=.git must find nothing.
       6. Run python3 -m pytest tests/unit -q and ruff check .
@@ -1011,5 +1090,34 @@ phases:
       - 'test ! -e docs/website-7x-plan.md && test ! -e docs/website-7x-plan-manual-steps.html'
       - 'grep -rn "website-7x-plan" . --exclude-dir=.git finds nothing'
       - 'python3 -m pytest tests/unit -q passes'
+      - 'ruff check . passes'
+
+  - id: p7-user-docs
+    title: User docs point a single person at single-user Docker
+    depends_on: []
+    complexity: S
+    touches:
+      - 'docs/org-mode-setup-guide.md'
+      - 'docs/how-it-works.md'
+      - 'docs/connect-claude-code.md'
+      - 'docs/connect-claude-desktop.md'
+      - 'docs/org-mode-docker.md'
+    brief: |
+      Read docs/website-7x-plan.md section D8 and make exactly those edits, with the wording given there. Rename no heading: the website and other docs link their anchors.
+      1. docs/org-mode-setup-guide.md:8-9: the replacement paragraph.
+      2. docs/how-it-works.md "## Local mode and organization mode": the three bullets and the closing paragraph.
+      3. docs/connect-claude-code.md: the opening-list changes and the new "## Single-user Docker" section before "## Organization mode".
+      4. docs/connect-claude-desktop.md: the same, with D8's Claude Desktop text.
+      5. docs/org-mode-docker.md:196: 7.4 becomes 7.0.
+      6. Install the docs generator (python3 -m pip install -q --require-hashes -r requirements/docs.lock.txt), then run python3 scripts/build_site.py --docs-ref worktree --offline --out /tmp/pf-site (Zensical strict mode plus the link check), python3 -m pytest tests/unit -q -k "website or docs", and ruff check .
+      Stop condition: if the docs build reports a broken link or anchor caused by these edits that is not fixed by correcting a typo in them, stop with status=blocked.
+    acceptance:
+      - 'grep -c "use the desktop install instead" docs/org-mode-setup-guide.md prints 0'
+      - 'grep -c "^## Single-user Docker" docs/connect-claude-code.md docs/connect-claude-desktop.md prints 1 for each file'
+      - 'grep -c "^## Local mode and organization mode" docs/how-it-works.md prints 1'
+      - 'grep -c "PRIVACYFENCE_MODE" docs/how-it-works.md prints at least 1'
+      - 'grep -c "such as `7.4`" docs/org-mode-docker.md prints 0'
+      - 'python3 scripts/build_site.py --docs-ref worktree --offline --out /tmp/pf-site succeeds'
+      - 'python3 -m pytest tests/unit -q -k "website or docs" passes'
       - 'ruff check . passes'
 ```
