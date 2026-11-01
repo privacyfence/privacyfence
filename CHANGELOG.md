@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.0.1] — 2026-11-01
+
 ### Added
 
 - **An Install page on privacyfence.eu.** [privacyfence.eu/install](https://privacyfence.eu/install/) asks who uses PrivacyFence, whether it comes with the built-in presentation tool (Peek) and data lake (Grist), how people sign in, which apps connect the services and what sits in front, and gives the commands for that setup. **Install** replaces Download in the site's header ([ADR 0277](docs/adr/0277-the-websites-primary-call-to-action-is-install.md)).
@@ -3595,7 +3597,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...HEAD
+[7.0.1]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
 [6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
 [6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0
