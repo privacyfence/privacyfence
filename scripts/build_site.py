@@ -193,10 +193,14 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "connector-qa.md",
         "ai-client-qa.md",
         "downloads-and-release-kpi.md",
-        "oauth-relay.md",
         "releasing.md",
     }
 )
+
+# Published docs that the newest stable tag may not carry yet. A hand-written page's link to one of
+# them points at GitHub `main` until a release renders it on /docs/ (ADR 0276); any other missing
+# docs page still fails the link check, as ADR 0099 requires.
+DOCS_PENDING_RELEASE: frozenset[str] = frozenset({"oauth-relay"})
 
 # Published docs the browser layout test (guardrail 12) loads in addition to every hand-written
 # page: the entry point, the widest tables, and the longest code blocks.
@@ -314,7 +318,7 @@ class DocsSource:
 
 INCLUDE_RE = re.compile(r"^(?P<indent>[ \t]*)<!-- include: (?P<name>[a-z-]+)(?P<args>[^>]*?) -->\n", re.M)
 PARTIAL_DEFAULTS = {
-    "header": {"skip_target": "#top", "cta_href": "/download/", "cta_label": "Download"},
+    "header": {"skip_target": "#top", "cta_href": "/install/", "cta_label": "Install"},
     "footer": {},
     "other-connectors": {"current": ""},
 }
@@ -1135,7 +1139,7 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         "",
         f"- [How it works]({SITE_URL}/how-it-works/): the request flow from AI client to connected service, with one read and one write approved",
         f"- [Security]({SITE_URL}/security/): the security model in brief, and what PrivacyFence does not claim",
-        f"- [Enterprise]({SITE_URL}/enterprise/): local mode and organization deployment side by side, with prerequisites",
+        f"- [Enterprise]({SITE_URL}/enterprise/): an organization server or single-user Docker, side by side with the deprecated desktop mode, with prerequisites",
         f"- [Connectors]({SITE_URL}/connectors/): per connector, what an AI client can read, what is reviewed and which writes need approval",
         f"- [Google Workspace connector]({SITE_URL}/connectors/google-workspace/): Gmail, Drive, Docs, Sheets, Calendar, Contacts, Tasks and Apps Script: what is reviewed, what needs approval, and what the PII check scans",
         f"- [Slack connector]({SITE_URL}/connectors/slack/): Slack as your own user: history and search reviewed, every message approved before it is sent",
@@ -1143,8 +1147,8 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         f"- [Jira and Confluence connector]({SITE_URL}/connectors/jira-confluence/): Jira and Confluence Cloud through one Atlassian sign-in; changes approved, nothing can be deleted",
         f"- [Telegram connector]({SITE_URL}/connectors/telegram/): your own Telegram account: chats reviewed before release, messages approved before they are sent",
         f"- [AI agents]({SITE_URL}/ai-agents/): the AI clients PrivacyFence is tested with, and connecting any other MCP client over Streamable HTTP with OAuth",
-        f"- [Claude Desktop]({SITE_URL}/ai-agents/claude-desktop/): Claude Desktop through PrivacyFence's extension on your own computer, or as a custom connector to an organization deployment",
-        f"- [Claude Code]({SITE_URL}/ai-agents/claude-code/): Claude Code over HTTP with your own token on your own computer, or with OAuth sign-in to an organization deployment",
+        f"- [Claude Desktop]({SITE_URL}/ai-agents/claude-desktop/): Claude Desktop with the Docker image and your passkey on your own computer, or as a custom connector to an organization deployment",
+        f"- [Claude Code]({SITE_URL}/ai-agents/claude-code/): Claude Code with the Docker image and your passkey on your own computer, or with OAuth sign-in to an organization deployment",
         f"- [claude.ai]({SITE_URL}/ai-agents/claude-ai/): claude.ai as a custom connector to an organization deployment, with OAuth sign-in",
         f"- [ChatGPT]({SITE_URL}/ai-agents/chatgpt/): ChatGPT desktop with your own token on your own computer, or ChatGPT in Developer Mode with OAuth sign-in to an organization deployment",
         f"- [Gemini Enterprise]({SITE_URL}/ai-agents/gemini-enterprise/): Gemini Enterprise as a custom MCP server data store on an organization deployment, with OAuth sign-in",
@@ -1154,7 +1158,7 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         f"- [PrivacyFence vs MCP gateways]({SITE_URL}/compare/mcp-gateways/): routing tool traffic for platform teams, or a person deciding on each sensitive request",
         f"- [FAQ]({SITE_URL}/faq/): whether it is an MCP gateway, where your data goes, which AI clients work, what the AI sees before approval, certification, cost and verifying a download",
         f"- [Install]({SITE_URL}/install/): choose single-user Docker or an organization server, with or without the built-in presentation tool and data lake, and get the commands",
-        f"- [Download]({SITE_URL}/download/): installers for macOS, Windows and Linux, each with its SHA-256 checksum",
+        f"- [Download]({SITE_URL}/download/): the Docker image recommended for one person, and the deprecated desktop installers for macOS, Windows and Linux, each with its SHA-256 checksum",
         f"- [Releases]({SITE_URL}/releases/): the newest release on every channel, stable and pre-release, with its installers and release notes",
         f"- [Privacy policy]({SITE_URL}/privacy/): what this website and the download service do with visitor data",
         f"- [Imprint]({SITE_URL}/imprint/): who publishes privacyfence.eu",
@@ -1277,13 +1281,17 @@ def fingerprint_assets(site: Path) -> None:
             page.write_text(updated, encoding="utf-8")
 
 
-def point_docs_links_at_github(site: Path, ref: str) -> None:
+def point_docs_links_at_github(site: Path, ref: str, only: frozenset[str] | None = None) -> None:
     """When /docs/ is not built (stale tag, --no-docs), links to it from the marketing pages go to
     the docs on GitHub at `ref` instead, so the site has no dead link and the link walker passes.
-    The caller passes `main`, as llms.txt does: a stale tag may not have the page linked at all."""
+    The caller passes `main`, as llms.txt does: a stale tag may not have the page linked at all.
+    With `only`, a link is rewritten only when its stem is in `only` and the built site has no such
+    docs page; `/docs/` itself is never rewritten then."""
 
     def github(match: re.Match[str]) -> str:
         stem, frag = match["stem"], match["frag"] or ""
+        if only is not None and (not stem or stem not in only or (site / "docs" / stem / "index.html").exists()):
+            return match.group(0)
         target = f"{GITHUB_URL}/blob/{ref}/docs/{stem}.md{frag}" if stem else f"{GITHUB_URL}/tree/{ref}/docs"
         return f'{match["attr"]}{target}"'
 
@@ -1409,6 +1417,8 @@ def build(
     docs_pages = ["/docs/", *(f"/docs/{stem}/" for stem in export.stems)] if export and render else []
     if not docs_pages:
         point_docs_links_at_github(out, "main")
+    else:
+        point_docs_links_at_github(out, "main", only=DOCS_PENDING_RELEASE)
     fingerprint_assets(out)
     pages = list(PAGES)
     lastmods = sitemap_lastmods(docs_pages, source)
