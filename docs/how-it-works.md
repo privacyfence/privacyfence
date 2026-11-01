@@ -51,16 +51,27 @@ anything. The link is used up by its first visit.
 
 ## Local mode and organization mode
 
-- **Local mode** is the default. One daemon on your own computer serves you. The web pages and
+- **Local mode** (desktop mode) is what the macOS, Windows and Linux installers set up; it is
+  deprecated in PrivacyFence 7 and removed in 8
+  ([Moving to organization mode](moving-to-organization-mode.md)). One daemon on your own computer serves you. The web pages and
   `/mcp` listen on `localhost` only, so an AI system on another machine, including claude.ai,
   cannot reach it.
 - **Organization mode** is one Linux server that serves many people. People sign in through the
   organization's identity provider, AI systems authorize through PrivacyFence's own OAuth 2.1
   server, and each person's connectors, rules and approvals are kept separate. claude.ai can reach
-  PrivacyFence only this way. See [Organization deployment](org-mode-setup-guide.md).
+  PrivacyFence only this way. See [Organization deployment](org-mode-setup-guide.md). It runs from
+  the `ghcr.io/privacyfence/privacyfence-org` Docker image configured by environment variables
+  ([Organization deployment with Docker](org-mode-docker.md)), or from PyPI under systemd.
+- **Single-user mode** is organization mode with no identity provider: one administrator, served only
+  on `localhost`, who signs in with a passkey after a one-time setup code. It is how the Docker image
+  starts on your own computer
+  ([Run it on this computer](org-mode-docker.md#run-it-on-this-computer)). It is no protection against
+  an agent that can run `docker` on that computer
+  ([Single-user mode](security-and-compliance.md#single-user-mode)).
 
-Which mode a daemon runs in is set by the organization config bundle's `mode` key; with no bundle,
-or no `mode`, it runs in local mode. See [Configuration reference](configuration-reference.md).
+Which mode a daemon runs in is set by `PRIVACYFENCE_MODE` (`local` by default, `org` in the Docker
+image), or by a legacy organization config bundle's `mode` key. See
+[Configuration reference](configuration-reference.md#environment-variables).
 
 ## How an AI system connects
 
