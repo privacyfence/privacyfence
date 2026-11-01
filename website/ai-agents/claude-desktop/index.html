@@ -27,7 +27,7 @@
     <section class="page-intro shell">
       <p class="kicker">AI agent · Claude Desktop</p>
       <h1>Claude Desktop, with every gated call waiting for you.</h1>
-      <p class="lede">Claude Desktop reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: PrivacyFence on your own computer (<strong>local mode</strong>) and PrivacyFence run by your organization (<strong>organization mode</strong>). Claude Desktop runs on macOS and Windows; on Linux, use <a href="/ai-agents/claude-code/">Claude Code</a>.</p>
+      <p class="lede">Claude Desktop reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: PrivacyFence on your own computer (the Docker image in <strong>single-user mode</strong>, or the deprecated desktop mode) and PrivacyFence run by your organization (<strong>organization mode</strong>). Claude Desktop runs on macOS and Windows; on Linux, use <a href="/ai-agents/claude-code/">Claude Code</a>.</p>
     </section>
 
     <section class="page-section shell" aria-labelledby="connects-heading">
@@ -37,7 +37,11 @@
       </div>
       <div class="card-grid grid-auto">
         <article class="card stack">
-          <h3>Local mode: the extension</h3>
+          <h3>Single-user Docker: passkey sign-in</h3>
+          <p>Use <code>http://localhost:8765/mcp</code> as the connector address. PrivacyFence sends you to its sign-in page for your passkey, then to a consent page; there is no token to copy.</p>
+        </article>
+        <article class="card stack">
+          <h3>Desktop mode (deprecated): the extension</h3>
           <p>PrivacyFence ships its own Claude Desktop extension, <code>PrivacyFence.mcpb</code>. It waits for PrivacyFence to answer, asks it for your token over its local control channel, and relays Claude Desktop's requests to PrivacyFence's <code>/mcp</code> endpoint. Nothing is edited in Claude Desktop's configuration, and no token is stored in a file you can read.</p>
         </article>
         <article class="card stack">
@@ -54,7 +58,15 @@
       </div>
       <div class="card-grid grid-auto">
         <article class="card stack">
-          <h3>Local mode</h3>
+          <h3>Single-user Docker</h3>
+          <ol class="steps">
+            <li>Start PrivacyFence's Docker image as on the <a href="/install/">Install page</a> and set up your passkey.</li>
+            <li>Add <code>http://localhost:8765/mcp</code> as a connector.</li>
+            <li>Sign in with your passkey when the client opens the browser.</li>
+          </ol>
+        </article>
+        <article class="card stack">
+          <h3>Desktop mode (deprecated)</h3>
           <ol class="steps">
             <li>Install PrivacyFence from the <a href="/download/">download page</a>.</li>
             <li>Open the extension that came with it: double-click <code>PrivacyFence.mcpb</code> on the macOS DMG, or accept it on the Windows installer's last page.</li>
@@ -99,7 +111,7 @@
         <h2 id="files-heading">Local paths through the extension, one-time links otherwise.</h2>
       </div>
       <div class="page-copy stack">
-        <p><strong>Local mode.</strong> Tools that read or save a file work with paths on your computer. The extension reads or writes the file as you and passes it to or from PrivacyFence. On macOS, the first time a tool uses a folder outside Claude's own, macOS may ask whether Claude may access it; allow it once per folder.</p>
+        <p><strong>Desktop mode.</strong> Tools that read or save a file work with paths on your computer. The extension reads or writes the file as you and passes it to or from PrivacyFence. On macOS, the first time a tool uses a folder outside Claude's own, macOS may ask whether Claude may access it; allow it once per folder.</p>
         <p><strong>Organization mode.</strong> A local path means nothing to the server, so files travel through one-time links: Claude uploads to a single-use address, and a download comes back in the tool result or as a one-time link. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
       </div>
     </section>
@@ -110,7 +122,7 @@
         <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
       </div>
       <div class="page-copy stack">
-        <p><strong>Local mode.</strong> Every AI client on your computer uses the same credential, so PrivacyFence cannot tell them apart, and the approval card names the requester <strong>Undetected</strong>. The audit log still records the name Claude Desktop sent.</p>
+        <p><strong>Desktop mode.</strong> Every AI client on your computer uses the same credential, so PrivacyFence cannot tell them apart, and the approval card names the requester <strong>Undetected</strong>. The audit log still records the name Claude Desktop sent.</p>
         <p><strong>Organization mode.</strong> The card shows the name Claude Desktop registers with as a claim (<strong>Says it is</strong>, then the name), marked <strong>Not verified</strong>, because any program can send the same name. Its custom connector most likely registers as <code>Claude</code>, as claude.ai does; that has not been verified. An administrator can pin the registration on <strong>Settings → AI systems</strong>, and the cards for it are then verified.</p>
         <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
       </div>
