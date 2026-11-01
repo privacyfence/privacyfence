@@ -114,6 +114,7 @@ jobs:
             tests/integration/test_website_consent.py \
             tests/integration/test_website_csp.py \
             tests/integration/test_download_page.py \
+            tests/integration/test_install_page.py \
             tests/integration/test_releases_page.py
 
       - name: Upload the built sites
