@@ -280,6 +280,18 @@ class TestSecurityPage:
             assert f'class="pf-shell-nav-item" href="{href}"' in r.text
         assert "Back to connections" not in r.text
 
+    def test_admin_sees_the_admin_nav_item_and_a_member_does_not(self):
+        # The page is mounted once with ORG_NAV_ITEMS, so the admin item has to be added per
+        # principal; single-user mode lands here after the first sign-in.
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        assert 'href="/admin"' not in client.get("/security").text
+        admin = Principal(id="root", email="root@example.com", display_name="Root", is_admin=True)
+        client = _client(app)
+        _signed_in(client, sessions, admin)
+        assert 'class="pf-shell-nav-item" href="/admin"' in client.get("/security").text
+
     def test_org_mode_signed_in_principal_is_shown_in_the_shell_header(self):
         app, sessions = _app()
         client = _client(app)

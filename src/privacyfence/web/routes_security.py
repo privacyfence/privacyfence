@@ -1130,6 +1130,10 @@ def _render_security_page(
         "</div>"
     )
     if nav_items is not None:
+        # The caller mounts the page once for everyone, so it passes the plain org set; an
+        # administrator's own nav also carries Admin, as on every other org page.
+        if nav_items == web_shell.ORG_NAV_ITEMS:
+            nav_items = web_shell.org_nav_items(principal.is_admin)
         return web_shell.wrap(
             f'<style nonce="{nonce}">{_STYLE}</style>{content}',
             title="PrivacyFence — Passkeys", active="passkeys", nonce=nonce,
