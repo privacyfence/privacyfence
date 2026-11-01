@@ -94,8 +94,8 @@ docker compose logs privacyfence | grep "Setup code"</code></pre>
           <h2>The suite with Caddy and your identity provider</h2>
           <pre class="verify-commands"><code>curl -fsSL https://github.com/privacyfence/privacyfence-suite/releases/latest/download/install.sh | sh -s -- caddy-idp</code></pre>
           <ol>
-            <li>Register one client with your identity provider, with the three redirect URIs for PrivacyFence, Peek and Grist that the suite's README lists.</li>
-            <li>Fill in the host names, the identity provider and the admins in <code>.env</code>.</li>
+            <li>Register one confidential OIDC client with your identity provider, for PrivacyFence only, with the redirect URIs <code>https://&lt;PF_HOSTNAME&gt;/oauth/idp/callback</code>, <code>/oauth/idp/login-callback</code> and <code>/oauth/stepup/callback</code>.</li>
+            <li>Fill in the host names, the identity provider and the admins in <code>.env</code>. If your identity provider sends no <code>email_verified</code> claim (Microsoft Entra ID, for example), also set <code>IDP_TRUST_UNVERIFIED_EMAIL=true</code>; without it, those users cannot sign in at Peek and Grist.</li>
             <li>Put the client secret in the secret file the README names.</li>
             <li>Start it with <code>docker compose up -d</code>.</li>
             <li>Sign in as an admin and add a passkey.</li>
@@ -130,7 +130,7 @@ docker compose logs privacyfence | grep "Setup code"</code></pre>
         <section class="install-result card stack" data-result="suite-no-config">
           <h2>No ready-made suite configuration for this combination</h2>
           <p>The suite ships Caddy with your identity provider, and Caddy or nginx with the built-in Google sign-in. With your identity provider behind nginx or another proxy, either use the Caddy configuration, or install PrivacyFence alone behind your proxy and connect Peek and Grist to it.</p>
-          <p>See <a href="https://github.com/privacyfence/privacyfence-suite/blob/main/docs/configurations.md">the suite's configurations</a>, <a href="/docs/org-mode-setup-guide/#7-reverse-proxy-and-tls">reverse proxy and TLS</a> in the organization guide, and <a href="/docs/oidc-provider/">the identity provider guide</a>.</p>
+          <p>See <a href="https://github.com/privacyfence/privacyfence-suite/blob/main/docs/configurations.md">the suite's configurations</a>, <a href="/docs/org-mode-setup-guide/#7-reverse-proxy-and-tls">reverse proxy and TLS</a> in the organization guide, and <a href="/docs/oidc-provider/">signing Peek and Grist in through PrivacyFence</a>.</p>
         </section>
 
         <section class="install-result card stack" data-result="standalone-caddy">

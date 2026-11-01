@@ -72,10 +72,6 @@
       <div class="release-meta cluster" id="release-meta" aria-live="polite"></div>
     </section>
 
-    <!-- Populated entirely from the release manifest: filenames, sizes and checksums are never
-         hardcoded here, so a new build needs no website change. scripts/build_site.py replaces
-         the loading row with the cards of the release current at deploy time, so the page works
-         without JavaScript; download.js then renders the live manifest over them. -->
     <section class="page-section" aria-labelledby="docker-heading">
       <h2 id="docker-heading">Recommended: the Docker image on your computer</h2>
       <p>For one person, the Docker image runs on your own computer in single-user mode: published only on localhost, and set up with a one-time code from the container's log, then a passkey.</p>
@@ -87,6 +83,10 @@
       <p><a class="text-link" href="/install/">Other ways to install, including the suite with Peek and Grist</a></p>
     </section>
 
+    <!-- Populated entirely from the release manifest: filenames, sizes and checksums are never
+         hardcoded here, so a new build needs no website change. scripts/build_site.py replaces
+         the loading row with the cards of the release current at deploy time, so the page works
+         without JavaScript; download.js then renders the live manifest over them. -->
     <section aria-labelledby="stable-heading">
       <h2 id="stable-heading">Desktop installers (deprecated)</h2>
       <div class="download-grid grid-auto" id="download-grid">

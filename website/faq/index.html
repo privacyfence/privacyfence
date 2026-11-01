@@ -94,7 +94,7 @@
           <p><strong>PrivacyFence 7 deprecates desktop mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x, without the built-in apps. Move to the Docker image on your computer or to an organization server (<a href="/docs/moving-to-organization-mode/">moving to organization mode</a>).</p>
           <p><strong>Single-user mode</strong> runs PrivacyFence's Docker image on one person's computer. It is published only on localhost, and set up with a one-time code from the container's log, then a passkey. Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server. <a href="/install/">How to install it</a>.</p>
           <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, from environment variables in Docker or under systemd, behind HTTPS. People sign in through your organization's OpenID Connect identity provider, or, for a small Google Workspace team, through PrivacyFence's built-in Google sign-in, which needs nothing registered at Google and admits only verified Workspace accounts. Administrators set the privacy filter and PII check for everyone on the Admin page, and web clients can connect too.</p>
-          <p><a href="/enterprise/">Single-user, organization and desktop mode side by side</a></p>
+          <p><a href="/enterprise/">Desktop and organization mode side by side</a></p>
         </article>
 
         <article class="faq-item page-copy stack" id="built-in-apps">
