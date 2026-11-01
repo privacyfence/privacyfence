@@ -111,11 +111,12 @@
     <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
       <div class="section-heading">
         <p class="kicker">Set it up</p>
-        <h2 id="setup-heading">One Atlassian app, then each person approves it.</h2>
+        <h2 id="setup-heading">PrivacyFence's Atlassian app, or your own, then each person approves it.</h2>
       </div>
       <ol class="steps page-copy">
-        <li>An administrator creates one Atlassian OAuth 2.0 (3LO) app in the developer console and packages its client ID and secret into an organization config bundle. Desktop installs and an organization server each need their own app, because an Atlassian app has a single callback URL.</li>
-        <li>Each person installs the bundle, connects from PrivacyFence's Settings page, and approves the app in the browser. One sign-in covers both Jira and Confluence.</li>
+        <li>On an organization server or the Docker image, Jira and Confluence work at once with PrivacyFence's built-in Atlassian app; the sign-in redirect goes through the PrivacyFence relay.</li>
+        <li>An organization may create its own Atlassian OAuth 2.0 (3LO) app instead and upload it on the Admin page. A desktop install has no built-in apps and takes its own app in an organization config bundle; it cannot share the server's app, because an Atlassian app has a single callback URL.</li>
+        <li>Each person connects on PrivacyFence's Connect page and approves the app in the browser. One sign-in covers both Jira and Confluence.</li>
         <li>The tools appear to the assistant. The sign-in stays with PrivacyFence and is never given to the AI client.</li>
       </ol>
       <p class="page-copy">Atlassian Cloud sites (<code>*.atlassian.net</code>) only; Jira and Confluence Data Center or Server are not supported.</p>
