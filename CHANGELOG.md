@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.0.0] — 2026-11-01
+
 **Breaking changes; this release is 7.0.0.** The entries marked *Breaking* below are the ones that need action before or after the upgrade: allowed domains trust only verified email addresses; organization servers read no bundle for their apps and settings; the 6.x `org_config.json` is read as `org_bundle.json`; and `build_org_bundle.py` refuses the options that moved. Every start of 7.x upgrades all stored data, so upgrade to 8 only from 7.x.
 
 ### Added
@@ -97,6 +99,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Pre-releases publish the organization Docker image too.** An alpha, beta or release candidate now gets `ghcr.io/privacyfence/privacyfence-org:<exact version>` with the same build-provenance attestation. It gets no other tag, so `X.Y`, `X` and `latest`, and with them unattended upgrades, still only follow stable releases.
 - **The live connector checks moved to a new runner and run in organization mode.** For contributors: `connector-live-check.yml` and `qa-record-fixture.yml` now run on `runner.privacyfence.eu` (label `privacyfence-live`) as the principal `qa-live` with the built-in apps, take their tokens from the QA organization server, and the weekly check also reports whether the OAuth relay's health endpoint answers.
 
+### Fixed
+
+- **Admin shows in the menu on the Passkeys page.** An administrator, including the single-user install's one person right after the first sign-in, saw no Admin item while on Passkeys; it was there on every other page.
+
 ## [6.13.0] — 2026-10-29
 
 ### Changed
@@ -111,7 +117,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Admin shows in the menu on the Passkeys page.** An administrator, including the single-user install's one person right after the first sign-in, saw no Admin item while on Passkeys; it was there on every other page.
 - **A stalled Google connection no longer breaks every later call.** When a Gmail, Drive, Calendar, Contacts, Tasks or Apps Script request timed out because the network had silently dropped an idle connection, every following request reused that dead connection and timed out too until PrivacyFence was restarted. The timed-out request still fails, but the next one now opens a fresh connection.
 - **The Audit Log names a scoped token's calls.** Rows made with a scoped token showed "Unrecognised AI system" (Unknown); they now show the token's name, as the attested requester.
 - **The scoped tokens list is readable at desktop width.** The Duplicate, Rename and Revoke buttons and the personal-data badges no longer squeeze a token's name, expiry and last-used dates into a narrow column; the badges now sit under the token's name.
@@ -3580,7 +3585,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...HEAD
+[7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
 [6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
 [6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0
 [6.11.0]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...v6.11.0
