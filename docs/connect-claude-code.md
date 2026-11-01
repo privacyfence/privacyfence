@@ -2,8 +2,10 @@
 
 Claude Code works with both deployments:
 
-- **Local mode**: PrivacyFence installed on the same computer. Claude Code connects to the daemon's
-  `/mcp` endpoint on `localhost` with your own bearer token.
+- **Local mode** (desktop mode, deprecated): PrivacyFence installed on the same computer. Claude Code
+  connects to the daemon's `/mcp` endpoint on `localhost` with your own bearer token.
+- **Single-user Docker**: PrivacyFence's Docker image on the same computer. Claude Code connects to
+  `http://localhost:8765/mcp` and you sign in with your passkey.
 - **Organization mode**: PrivacyFence run centrally by your organization. Claude Code registers
   itself with PrivacyFence's OAuth server and you sign in with your organization account.
 
@@ -92,6 +94,20 @@ Instead of building the token by hand, ask Claude to propose one for the routine
 - If Claude asked for personal data to be allowed, those boxes start unticked; only you can tick them.
 - Continue, then type the token's name to confirm that you are delegating access.
 - The companion copies the token to your clipboard once. Claude never receives the token, and is not told whether you created it. A proposal lasts one hour and can be used once; Decline discards it. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md).
+
+## Single-user Docker
+
+Start the Docker image on your computer and set up your passkey
+([Run it on this computer](org-mode-docker.md#run-it-on-this-computer)). Then:
+
+```bash
+claude mcp add --transport http --scope user privacyfence http://localhost:8765/mcp
+```
+
+Run `/mcp` inside Claude Code and choose **privacyfence** to sign in. PrivacyFence opens its
+sign-in page for your passkey, then a consent page; after that Claude Code holds its own tokens, as
+with an organization server. Use `localhost`, not `127.0.0.1`: the passkey belongs to
+`localhost`.
 
 ## Organization mode
 
