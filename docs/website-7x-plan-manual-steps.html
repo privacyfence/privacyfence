@@ -1,0 +1,110 @@
+<title>Website 7.x proofread</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono&display=swap">
+<style>
+/* Layout: one reading column; each manual item is a numbered panel with a checklist of steps. */
+:root {
+  --bg: #f6f7f5; --panel: #ffffff; --fg: #1d2421; --muted: #5b6661; --line: #d9dfdb; --accent: #2f6b55; --code: #eef2ef;
+  --display: "Source Serif 4", Georgia, serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141917; --panel: #1c2320; --fg: #e3e9e5; --muted: #9aa7a0; --line: #2e3833; --accent: #7cc4a6; --code: #232c28; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #141917; --panel: #1c2320; --fg: #e3e9e5; --muted: #9aa7a0; --line: #2e3833; --accent: #7cc4a6; --code: #232c28; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--body); }
+.wrap { max-width: 46rem; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 28px; }
+h1, h2 { font-family: var(--display); font-weight: 600; text-wrap: balance; margin: 0; }
+h1 { font-size: 2rem; line-height: 1.15; }
+h2 { font-size: 1.35rem; }
+.part { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 -16px; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+.item { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 14px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: .9rem; }
+.meta strong { color: var(--fg); }
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; counter-reset: s; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; counter-increment: s; }
+ol.steps li > div { min-width: 0; display: grid; gap: 6px; }
+ol.steps label { font-weight: 600; cursor: pointer; }
+ol.steps label::before { content: counter(s) ". "; color: var(--accent); }
+input[type=checkbox] { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.see { color: var(--muted); font-size: .92rem; }
+pre { background: var(--code); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 0; font: 13.5px/1.5 var(--mono); }
+code { font-family: var(--mono); font-size: .92em; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.report { border-left: 3px solid var(--accent); padding-left: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+.tbl { overflow-x: auto; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+</style>
+
+<div class="wrap">
+  <header style="display:grid;gap:10px">
+    <h1>Website 7.x proofread</h1>
+    <p class="lede">Plan <code>website-7x</code> for privacyfence.eu. Nothing has to be done before implementation. After the last phase merges into <code>chore/website-7x</code>, and before the pull request merges, one person reads the built pages.</p>
+  </header>
+
+  <p class="part">Before implementation</p>
+  <section class="item"><p>Nothing to do. <code>/implement</code> can start right away.</p></section>
+
+  <p class="part">After implementation</p>
+  <section class="item" aria-labelledby="ma1">
+    <h2 id="ma1">1. Proofread the built site</h2>
+    <div class="meta"><span><strong>ID</strong> ma1-proofread-built-site</span><span><strong>Time</strong> about 30 minutes</span></div>
+    <p>The browser tests check structure and layout. They cannot tell whether the copy reads well or claims more than PrivacyFence 7.0.0 does.</p>
+    <ol class="steps">
+      <li><input type="checkbox" id="s1"><div><label for="s1">Open the pull request's website-build run</label>
+        <p>Open the <a href="https://github.com/privacyfence/privacyfence/actions/workflows/website-build.yml?query=branch%3Achore%2Fwebsite-7x">website-build runs for chore/website-7x</a> and click the newest green run.</p>
+        <p class="see">You see the run summary, with an Artifacts section at the bottom.</p></div></li>
+      <li><input type="checkbox" id="s2"><div><label for="s2">Download the built site</label>
+        <p>Under Artifacts, download <strong>website-build</strong> and unzip it.</p>
+        <p class="see">You get <code>_site/</code> (documentation from the newest release tag) and <code>_site-next/</code> (documentation from this branch).</p></div></li>
+      <li><input type="checkbox" id="s3"><div><label for="s3">Serve it on your computer</label>
+        <pre>cd _site
+python3 -m http.server 8000</pre>
+        <p class="see">Open <a href="http://localhost:8000/install/">http://localhost:8000/install/</a>. The header's dark button now says <strong>Install</strong>.</p></div></li>
+      <li><input type="checkbox" id="s4"><div><label for="s4">Try every combination in the Install picker</label>
+        <p>Pick each answer in turn and check which result appears:</p>
+        <div class="tbl"><table>
+          <tr><th>Choices</th><th>Result heading</th></tr>
+          <tr><td>Just me · with Peek and Grist</td><td>The suite, for one person on this computer</td></tr>
+          <tr><td>Just me · PrivacyFence only</td><td>PrivacyFence alone, for one person on this computer</td></tr>
+          <tr><td>Organization · suite · own identity provider · Caddy</td><td>The suite with Caddy and your identity provider</td></tr>
+          <tr><td>Organization · suite · built-in Google · Caddy</td><td>The suite with Caddy and the built-in Google sign-in</td></tr>
+          <tr><td>Organization · suite · built-in Google · nginx</td><td>The suite behind your nginx, with the built-in Google sign-in</td></tr>
+          <tr><td>Organization · suite · own identity provider with nginx or other, or built-in Google with other</td><td>No ready-made suite configuration for this combination</td></tr>
+          <tr><td>Organization · PrivacyFence only · Caddy</td><td>PrivacyFence alone, with Caddy</td></tr>
+          <tr><td>Organization · PrivacyFence only · nginx or other</td><td>PrivacyFence alone, behind nginx or another proxy</td></tr>
+        </table></div>
+        <p class="see">Exactly one result shows at a time. Under "Organization", the notes on built-in or own apps and on built-in Google sign-in follow your answers. Under "Just me", the warning about agents that can run <code>docker</code> shows.</p></div></li>
+      <li><input type="checkbox" id="s5"><div><label for="s5">Check it at phone width</label>
+        <p>In your browser's developer tools, switch to a 390 px wide device and go through the picker once more.</p>
+        <p class="see">Nothing scrolls sideways except the code blocks, and every option label is readable.</p></div></li>
+      <li><input type="checkbox" id="s6"><div><label for="s6">Read the other changed pages</label>
+        <p>Read <a href="http://localhost:8000/download/">/download/</a>, <a href="http://localhost:8000/enterprise/">/enterprise/</a>, <a href="http://localhost:8000/faq/">/faq/</a>, <a href="http://localhost:8000/connectors/slack/">/connectors/slack/</a> and <a href="http://localhost:8000/connectors/google-workspace/">/connectors/google-workspace/</a>.</p>
+        <p class="see">Every claim matches 7.0.0. No data passes through a PrivacyFence-operated server, and only the sign-in redirects of the built-in apps go through <code>oauth.privacyfence.eu</code>. Desktop mode is called deprecated, and "PrivacyFence 8 removes it" appears on /download/ and /faq/.</p></div></li>
+      <li><input type="checkbox" id="s7"><div><label for="s7">Check the relay link</label>
+        <p>On <a href="http://localhost:8000/relay-terms/">/relay-terms/</a>, the "relay documentation" link opens <code>docs/oauth-relay.md</code> on GitHub. That is expected until the next stable release. In <code>_site-next/</code> the same link goes to <code>/docs/oauth-relay/</code>.</p></div></li>
+    </ol>
+    <p class="report"><strong>Report back:</strong> tick the ma1 item in the pull request and add a comment such as <code>ma1: pass</code> or <code>ma1: fail – /faq/ #modes says …</code>, naming each page and sentence to change.</p>
+  </section>
+</div>
+
+<script>
+(function () {
+  var KEY = 'website-7x-manual-steps';
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+  document.querySelectorAll('input[type=checkbox]').forEach(function (box) {
+    box.checked = !!saved[box.id];
+    box.addEventListener('change', function () {
+      saved[box.id] = box.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+    });
+  });
+})();
+</script>
