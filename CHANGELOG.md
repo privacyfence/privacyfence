@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.0.0] — 2026-11-01
+
 **Breaking changes; this release is 7.0.0.** The entries marked *Breaking* below are the ones that need action before or after the upgrade: allowed domains trust only verified email addresses; organization servers read no bundle for their apps and settings; the 6.x `org_config.json` is read as `org_bundle.json`; and `build_org_bundle.py` refuses the options that moved. Every start of 7.x upgrades all stored data, so upgrade to 8 only from 7.x.
 
 ### Added
@@ -3579,7 +3581,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...HEAD
+[7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
 [6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
 [6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0
 [6.11.0]: https://github.com/privacyfence/privacyfence/compare/v6.10.0...v6.11.0
