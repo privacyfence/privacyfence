@@ -208,7 +208,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0096](0096-gmail-get-message-returns-html-only-when-asked.md) | `gmail_get_message` returns the HTML body only when asked, under the same `body` policy | Accepted |
 | [0097](0097-a-download-link-needs-a-client-that-can-reach-the-server.md) | A download link needs a client that can reach the server; `drive_get_file_content` returns a document's text | Accepted |
 | [0098](0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md) | Each AI agent has its own setup doc and its own website page, counted as the `ai-agent` content group | Accepted (retroactive) |
-| [0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md) | An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc | Accepted (retroactive) |
+| [0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md) | An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc | Accepted (retroactive); amended by 0276 |
 | [0100](0100-unverified-client-setup-instructions-never-merge-to-main.md) | Unverified AI-client setup instructions never merge to `main` | Accepted (retroactive) |
 | [0101](0101-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |
 | [0102](0102-an-upload-slot-is-consumed-after-the-gate-not-before.md) | An upload slot is consumed after the gate, not before it | Accepted |
@@ -367,3 +367,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272 |
 | [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |
 | [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
+| [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
+| [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted |
