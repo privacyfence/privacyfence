@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install PrivacyFence with Docker — PrivacyFence</title>
+  <meta name="description" content="Choose how to install PrivacyFence: for one person on this computer or as an organization server, alone or with a built-in presentation tool and data lake, with your own sign-in, apps and proxy.">
+  <meta name="pf-content-group" content="download">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/install/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/install/">
+  <meta property="og:title" content="Install PrivacyFence">
+  <meta property="og:description" content="For one person on this computer or as an organization server, with or without a built-in presentation tool and data lake: pick your setup and get the commands.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+  <script src="/site.js" defer></script>
+  <script src="/install/install.js" defer></script>
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Install</p>
+      <h1>Install PrivacyFence.</h1>
+      <p class="lede">PrivacyFence runs as Docker containers. Answer a few questions to get the commands for your setup: who uses it, whether it comes with a presentation tool and a data lake, how people sign in, which apps connect the services, and what sits in front of it.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="picker-heading">
+      <div class="section-heading">
+        <p class="kicker">Your setup</p>
+        <h2 id="picker-heading">Pick your setup.</h2>
+      </div>
+      <form id="install-picker" class="install-picker grid-auto" hidden>
+        <fieldset class="card stack">
+          <legend>Who will use it?</legend>
+          <label class="install-option"><input type="radio" name="who" value="single" checked><span class="install-label">Just me, on this computer</span><span class="install-desc">Single-user mode: published only on localhost, protected by your passkey.</span></label>
+          <label class="install-option"><input type="radio" name="who" value="org"><span class="install-label">My organization, on a server</span><span class="install-desc">Everyone signs in; each person's connections, approvals and audit log are kept apart.</span></label>
+        </fieldset>
+        <fieldset class="card stack">
+          <legend>What should it include?</legend>
+          <label class="install-option"><input type="radio" name="bundle" value="suite" checked><span class="install-label">PrivacyFence with a presentation tool and a data lake</span><span class="install-desc">The PrivacyFence suite: Peek for sharing HTML pages, Grist for spreadsheet-style databases, already connected.</span></label>
+          <label class="install-option"><input type="radio" name="bundle" value="standalone"><span class="install-label">PrivacyFence only</span><span class="install-desc">Connect your own Peek or Grist later, or none.</span></label>
+        </fieldset>
+        <fieldset class="card stack" data-when="org">
+          <legend>How do people sign in?</legend>
+          <label class="install-option"><input type="radio" name="signin" value="own" checked><span class="install-label">Your own identity provider</span><span class="install-desc">Any OpenID Connect provider, such as Microsoft Entra ID, Okta, Keycloak or Google Cloud. You register one client.</span></label>
+          <label class="install-option"><input type="radio" name="signin" value="builtin"><span class="install-label">Built-in Google sign-in</span><span class="install-desc">For a small Google Workspace team. Nothing to register at Google; only verified Workspace accounts sign in.</span></label>
+        </fieldset>
+        <fieldset class="card stack" data-when="org">
+          <legend>Which apps connect the services?</legend>
+          <label class="install-option"><input type="radio" name="apps" value="builtin" checked><span class="install-label">PrivacyFence's built-in apps</span><span class="install-desc">Google, Slack, Salesforce, Atlassian and Miro connect with nothing to register.</span></label>
+          <label class="install-option"><input type="radio" name="apps" value="own"><span class="install-label">Your organization's own apps</span><span class="install-desc">Register an app with each provider and upload it on the Admin page. The relay is not used for them.</span></label>
+        </fieldset>
+        <fieldset class="card stack" data-when="org">
+          <legend>What sits in front of it?</legend>
+          <label class="install-option"><input type="radio" name="proxy" value="caddy" checked><span class="install-label">Caddy, included</span><span class="install-desc">A Caddy container serves HTTPS and gets the certificate itself.</span></label>
+          <label class="install-option"><input type="radio" name="proxy" value="nginx"><span class="install-label">nginx already on the server</span></label>
+          <label class="install-option"><input type="radio" name="proxy" value="other"><span class="install-label">Another reverse proxy</span></label>
+        </fieldset>
+      </form>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="results-heading">
+      <div class="section-heading">
+        <p class="kicker">Your commands</p>
+        <h2 id="results-heading">What to run.</h2>
+      </div>
+      <div id="install-results" class="stack" aria-live="polite">
+        <section class="install-result card stack" data-result="suite-single">
+          <h2>The suite, for one person on this computer</h2>
+          <pre class="verify-commands"><code>curl -fsSL https://github.com/privacyfence/privacyfence-suite/releases/latest/download/install.sh | sh -s -- localhost --start
+cd privacyfence-localhost
+docker compose logs privacyfence | grep "Setup code"</code></pre>
+          <p>Then open <a href="http://localhost:8765">http://localhost:8765</a>, enter the code and set up your passkey. Peek is at <a href="http://localhost:7700">http://localhost:7700</a> and Grist at <a href="http://localhost:8484">http://localhost:8484</a>. Needs Docker Engine 24 or later with Compose 2.24 or later.</p>
+        </section>
+
+        <section class="install-result card stack" data-result="standalone-single">
+          <h2>PrivacyFence alone, for one person on this computer</h2>
+          <pre class="verify-commands"><code>docker run --rm -p 127.0.0.1:8765:8765 \
+  -v pf-data:/var/lib/privacyfence-org/.privacyfence \
+  ghcr.io/privacyfence/privacyfence-org:latest</code></pre>
+          <p>The log prints <code>Setup code: XXXX-XXXX. Open http://localhost:8765/login to set up your passkey.</code> Open <code>http://localhost:8765</code>, not <code>http://127.0.0.1:8765</code>: the passkey belongs to <code>localhost</code>.</p>
+          <p><a href="/docs/org-mode-docker/#run-it-on-this-computer">Running it on this computer</a>, in the Docker guide.</p>
+        </section>
+
+        <section class="install-result card stack" data-result="suite-caddy-idp">
+          <h2>The suite with Caddy and your identity provider</h2>
+          <pre class="verify-commands"><code>curl -fsSL https://github.com/privacyfence/privacyfence-suite/releases/latest/download/install.sh | sh -s -- caddy-idp</code></pre>
+          <ol>
+            <li>Register one client with your identity provider, with the three redirect URIs for PrivacyFence, Peek and Grist that the suite's README lists.</li>
+            <li>Fill in the host names, the identity provider and the admins in <code>.env</code>.</li>
+            <li>Put the client secret in the secret file the README names.</li>
+            <li>Start it with <code>docker compose up -d</code>.</li>
+            <li>Sign in as an admin and add a passkey.</li>
+          </ol>
+          <p>Needs three DNS names pointing at the server (PrivacyFence, Peek and Grist), ports 80 and 443 reachable from the internet, and Docker Engine 24 or later with Compose 2.24 or later. <a href="https://github.com/privacyfence/privacyfence-suite#readme">The suite's README</a> has the details.</p>
+        </section>
+
+        <section class="install-result card stack" data-result="suite-caddy-google">
+          <h2>The suite with Caddy and the built-in Google sign-in</h2>
+          <pre class="verify-commands"><code>curl -fsSL https://github.com/privacyfence/privacyfence-suite/releases/latest/download/install.sh | sh -s -- caddy-google</code></pre>
+          <ol>
+            <li>Edit <code>.env</code>: the three host names, <code>ADMIN_EMAILS</code>, <code>ALLOWED_DOMAIN</code> and <code>GRIST_ADMIN_EMAIL</code>.</li>
+            <li>Start it with <code>docker compose up -d</code>.</li>
+            <li>Publish the <code>_privacyfence-relay</code> DNS TXT records printed by <code>docker compose exec privacyfence privacyfence-app --relay-dns-records</code>.</li>
+            <li>Sign in with a Google Workspace account.</li>
+          </ol>
+          <p>Needs three DNS names pointing at the server (PrivacyFence, Peek and Grist), ports 80 and 443 reachable from the internet, and Docker Engine 24 or later with Compose 2.24 or later. <a href="https://github.com/privacyfence/privacyfence-suite#readme">The suite's README</a> has the details.</p>
+        </section>
+
+        <section class="install-result card stack" data-result="suite-nginx-google">
+          <h2>The suite behind your nginx, with the built-in Google sign-in</h2>
+          <pre class="verify-commands"><code>curl -fsSL https://github.com/privacyfence/privacyfence-suite/releases/latest/download/install.sh | sh -s -- nginx-google</code></pre>
+          <ol>
+            <li>Edit <code>.env</code>: the three host names, <code>ADMIN_EMAILS</code>, <code>ALLOWED_DOMAIN</code> and <code>GRIST_ADMIN_EMAIL</code>.</li>
+            <li>Set up the host's nginx from <a href="https://github.com/privacyfence/privacyfence-suite/blob/main/configs/nginx-google/nginx/README.md">the suite's nginx README</a>.</li>
+            <li>Start it with <code>docker compose up -d</code>.</li>
+            <li>Publish the <code>_privacyfence-relay</code> DNS TXT records printed by <code>docker compose exec privacyfence privacyfence-app --relay-dns-records</code>.</li>
+          </ol>
+          <p>Needs Linux with rootful Docker, nginx 1.25.1 or later, and a certificate for the three names. Docker Desktop and rootless Docker do not work; use Caddy there.</p>
+        </section>
+
+        <section class="install-result card stack" data-result="suite-no-config">
+          <h2>No ready-made suite configuration for this combination</h2>
+          <p>The suite ships Caddy with your identity provider, and Caddy or nginx with the built-in Google sign-in. With your identity provider behind nginx or another proxy, either use the Caddy configuration, or install PrivacyFence alone behind your proxy and connect Peek and Grist to it.</p>
+          <p>See <a href="https://github.com/privacyfence/privacyfence-suite/blob/main/docs/configurations.md">the suite's configurations</a>, <a href="/docs/org-mode-setup-guide/#7-reverse-proxy-and-tls">reverse proxy and TLS</a> in the organization guide, and <a href="/docs/oidc-provider/">the identity provider guide</a>.</p>
+        </section>
+
+        <section class="install-result card stack" data-result="standalone-caddy">
+          <h2>PrivacyFence alone, with Caddy</h2>
+          <p>Point a public host name at the Docker host and open TCP 443 (and 80 if you can). With the built-in Google sign-in or built-in apps, TCP 443 must be reachable from the whole internet. If the DNS is on Cloudflare, set the record to DNS only.</p>
+          <div data-when="signin-own">
+            <p>Register one OIDC client with your identity provider, with the redirect URIs <code>https://&lt;host&gt;/oauth/idp/callback</code>, <code>/oauth/idp/login-callback</code> and <code>/oauth/stepup/callback</code>.</p>
+          </div>
+          <p>Make the deploy folder:</p>
+          <pre class="verify-commands"><code>sudo install -d -o root -g root -m 0750 /opt/privacyfence-org
+cd /opt/privacyfence-org</code></pre>
+          <p>Fetch the deploy files. Replace <code>vX.Y.Z</code> with the release you run.</p>
+          <pre class="verify-commands"><code>sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/compose.yaml
+sudo curl -fsSLO https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/Caddyfile
+sudo curl -fsSL -o privacyfence.env https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/privacyfence.env.example
+sudo curl -fsSL -o .env https://raw.githubusercontent.com/privacyfence/privacyfence/vX.Y.Z/deploy/docker/env.example</code></pre>
+          <p>Then fill in <code>privacyfence.env</code>:</p>
+          <div data-when="signin-own">
+            <pre class="verify-commands"><code>PRIVACYFENCE_IDP_ISSUER=https://login.example.com
+PRIVACYFENCE_IDP_CLIENT_ID=
+PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret
+PRIVACYFENCE_ADMIN_EMAILS=alice@example.com,bob@example.com</code></pre>
+            <pre class="verify-commands"><code>sudo install -m 0400 -o 10001 -g 10001 /dev/null idp_client_secret
+sudo sh -c 'cat > idp_client_secret'   # paste the secret, then press Ctrl-D</code></pre>
+            <p>Then uncomment the <code>secrets:</code> lines in <code>compose.yaml</code>, under the service and at the bottom.</p>
+          </div>
+          <div data-when="signin-builtin">
+            <p>Comment out the <code>PRIVACYFENCE_IDP_ISSUER</code> and <code>PRIVACYFENCE_IDP_CLIENT_ID</code> lines at the top of <code>privacyfence.env</code>: the built-in Google sign-in refuses to start next to any <code>PRIVACYFENCE_IDP_*</code> setting. Then set:</p>
+            <pre class="verify-commands"><code>PRIVACYFENCE_IDP=builtin-google
+PRIVACYFENCE_ADMIN_EMAILS=alice@example.com,bob@example.com
+PRIVACYFENCE_ALLOWED_DOMAINS=example.com</code></pre>
+          </div>
+          <p>Set <code>PF_HOSTNAME</code> and <code>PRIVACYFENCE_IMAGE_TAG</code> in <code>.env</code>, then start it:</p>
+          <pre class="verify-commands"><code>sudo docker compose up -d</code></pre>
+          <p>Sign in as an admin and add a passkey. <a href="/docs/org-mode-docker/#quick-start">Quick start</a>, in the Docker guide.</p>
+        </section>
+
+        <section class="install-result card stack" data-result="standalone-proxy">
+          <h2>PrivacyFence alone, behind nginx or another proxy</h2>
+          <p>PrivacyFence's Docker files bring Caddy. Behind nginx or another reverse proxy, install PrivacyFence from PyPI and run it with systemd as the organization deployment guide describes; its reverse proxy section has a Caddy and an nginx example.</p>
+          <p>See <a href="/docs/org-mode-setup-guide/">the organization deployment guide</a> and its <a href="/docs/org-mode-setup-guide/#7-reverse-proxy-and-tls">reverse proxy and TLS</a> section.</p>
+        </section>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="notes-heading">
+      <div class="section-heading">
+        <p class="kicker">Good to know</p>
+        <h2 id="notes-heading">Before you start.</h2>
+      </div>
+      <div class="stack">
+        <div class="install-note card stack" data-when="single">
+          <p>Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server.</p>
+          <p><a href="/docs/security-and-compliance/#single-user-mode">Single-user mode</a>, in Security and compliance.</p>
+        </div>
+        <div class="install-note card stack" data-when="org apps-builtin">
+          <p>PrivacyFence ships its own apps for Google, Slack, Salesforce, Atlassian and Miro, so an organization server connects them with nothing to register. An organization may register its own app with any of them instead and upload it on the Admin page; its own apps never touch the relay.</p>
+          <p>The relay at oauth.privacyfence.eu forwards the browser's sign-in redirect (a one-time authorization code and the state) to your server. It never sees a token, keeps no logs and stores no code: your server exchanges the code with the provider itself.</p>
+          <p>Until Google verifies PrivacyFence's Google app, people see Google's unverified-app screen, and the app is limited to 100 users across all installs; an organization that needs neither registers its own Google app.</p>
+          <p>Slack and Miro send no PKCE, so with the built-in app their one-time sign-in code passes through the relay without it; an organization's own app avoids this.</p>
+          <p>The server needs a public <code>https://</code> address reachable on TCP 443 from the whole internet, and outbound HTTPS to <code>oauth.privacyfence.eu</code>.</p>
+          <p><a href="/docs/org-mode-setup-guide/#built-in-apps-through-the-relay">Built-in apps through the relay</a>, in the organization guide, and the <a href="/relay-terms/">relay terms</a>.</p>
+        </div>
+        <div class="install-note card stack" data-when="org apps-own">
+          <p>Register an app with each provider, sign its client ID and secret as a connector config, and upload it on Admin → Services. Your own apps use your server's own redirect addresses and never touch the relay.</p>
+          <p><a href="/docs/org-mode-setup-guide/#signed-connector-configs">Signed connector configs</a>, in the organization guide.</p>
+        </div>
+        <div class="install-note card stack" data-when="org signin-builtin">
+          <p>The built-in Google sign-in admits only verified Google Workspace accounts in your allowed domains. Nobody from a domain signs in until you publish the DNS TXT record <code>_privacyfence-relay.&lt;domain&gt;</code> that the server prints. Every sign-in goes through <code>oauth.privacyfence.eu</code>.</p>
+          <p><a href="/docs/org-mode-setup-guide/#built-in-google-sign-in">Built-in Google sign-in</a>, in the organization guide.</p>
+        </div>
+        <div class="install-note card stack" data-when="org">
+          <p>Administrators run the server from the Admin page: which services are offered and which app each uses, who may sign in, step-up, scoped tokens, audit forwarding and the install-wide privacy filter. Every change that alters what the server does asks for a passkey and is recorded in the audit log. The server address, the identity provider and the admins are set in the environment, not on the page.</p>
+          <p><a href="/docs/org-mode-setup-guide/#the-admin-page">The Admin page</a>, in the organization guide.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="images-heading">
+      <div class="section-heading">
+        <p class="kicker">What gets installed</p>
+        <h2 id="images-heading">The images.</h2>
+      </div>
+      <ul class="page-copy">
+        <li><code>ghcr.io/privacyfence/privacyfence-org</code></li>
+        <li>With the suite, <code>ghcr.io/privacyfence/peek</code>, <code>ghcr.io/privacyfence/grist-core</code> (PrivacyFence's grist-core fork) and <code>ghcr.io/privacyfence/grist-provisioner</code></li>
+        <li>In the Caddy configurations (suite and standalone), <code>caddy</code></li>
+        <li>With the suite, <code>alpine</code>, for the one-shot setup container that generates the secrets</li>
+      </ul>
+      <p class="page-copy">The suite pins every image except PrivacyFence, which follows <code>latest</code>; its <code>.env</code> holds the tags.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="verify-heading">
+      <div class="section-heading">
+        <p class="kicker">Verify</p>
+        <h2 id="verify-heading">Check what you download.</h2>
+      </div>
+      <p class="page-copy">The suite's verified path:</p>
+      <pre class="verify-commands"><code>base=https://github.com/privacyfence/privacyfence-suite/releases/latest/download
+curl -fsSLO $base/install.sh &amp;&amp; curl -fsSLO $base/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS      # prints "install.sh: OK"
+gh attestation verify install.sh --repo privacyfence/privacyfence-suite
+sh install.sh caddy-google</code></pre>
+      <p class="page-copy">Then check the image: <code>gh attestation verify oci://ghcr.io/privacyfence/privacyfence-org:X.Y.Z --owner privacyfence</code></p>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+</body>
+</html>

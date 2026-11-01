@@ -13,6 +13,9 @@ checkout has its git history, the test also checks that each such citation resol
 A plan document (`docs/*-plan.md`) may also name an ADR it is about to create: a reference from
 one to a missing `docs/adr/` file is ignored, and only that.
 
+A path inside an http(s):// URL names a file elsewhere (a link to another repository's docs/), so it
+is not a reference to this checkout; a bare path on the same line is still checked.
+
 Two places are exempt. `CHANGELOG.md` records what each release shipped, including the docs it
 had then. `docs/adr/` records are frozen once accepted; their Markdown links are still checked by
 `test_docs_links.py`, and fixing one is a permitted edit. This file is skipped too: its
@@ -34,6 +37,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # A path under docs/ ending in .md, optionally prefixed by a git revision (`be78e7ee^:`).
 _REF = re.compile(r"(?:\b([0-9a-f]{7,40}\^?):)?(?<![\w-])(docs/[A-Za-z0-9_./-]+?\.md)\b")
+
+# A `docs/...md` path inside an http(s):// URL names a file in some other repository, not this one.
+_URL = re.compile(r"https?://[^\s\"'<>)]+")
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "htmlcov", "_site"}
 _EXEMPT = ("CHANGELOG.md", "docs/adr/", "tests/unit/test_docs_references_exist.py")
@@ -70,9 +76,18 @@ def _references() -> list[tuple[str, int, str | None, str]]:
         except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            for match in _REF.finditer(line):
-                refs.append((rel, lineno, match.group(1), match.group(2)))
+            refs.extend((rel, lineno, rev, path) for rev, path in _line_references(line))
     return refs
+
+
+def _line_references(line: str) -> list[tuple[str | None, str]]:
+    """The `docs/...md` references on one line, leaving out those that sit inside a URL."""
+    urls = [m.span() for m in _URL.finditer(line)]
+    return [
+        (match.group(1), match.group(2))
+        for match in _REF.finditer(line)
+        if not any(start <= match.start(2) < end for start, end in urls)
+    ]
 
 
 def _is_plan_doc(rel: str) -> bool:
@@ -140,3 +155,10 @@ def test_the_plan_exemption_is_narrow(tmp_path):
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "other.md").write_text("x")
     assert not _is_dangling("docs/guide.md", "docs/other.md", tmp_path)
+
+
+def test_a_docs_path_inside_a_url_is_ignored_but_a_bare_one_is_not():
+    url = "see https://github.com/other/repo/blob/main/docs/x.md for details"
+    assert _line_references(url) == []
+    assert _line_references("see docs/x.md") == [(None, "docs/x.md")]
+    assert _line_references(url + " and docs/y.md") == [(None, "docs/y.md")]
