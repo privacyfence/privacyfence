@@ -39,7 +39,8 @@
           <li><a href="#before-approval">What does the AI see before I approve?</a></li>
           <li><a href="#routine">Can routine requests run without approval?</a></li>
           <li><a href="#certification">Is PrivacyFence certified?</a></li>
-          <li><a href="#modes">Local or organization mode?</a></li>
+          <li><a href="#modes">Single-user, organization or desktop mode?</a></li>
+          <li><a href="#built-in-apps">Do I have to register an app with Google, Slack and the others?</a></li>
           <li><a href="#cost">Is it free?</a></li>
           <li><a href="#verify">How do I verify a download?</a></li>
         </ul>
@@ -55,7 +56,7 @@
 
         <article class="faq-item page-copy stack" id="data-path">
           <h2>Does my data go through PrivacyFence's servers?</h2>
-          <p><strong>No. There are none.</strong> PrivacyFence runs on your own computer, or on a server your organization controls. Every tool call goes from there straight to the provider: Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. No hosted service sits in the data path, and your connector sign-ins stay with PrivacyFence, never with the AI client.</p>
+          <p><strong>No.</strong> PrivacyFence runs on your own computer, or on a server your organization controls. Every tool call goes from there straight to the provider: Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. No hosted service sits in the data path, and your connector sign-ins stay with PrivacyFence, never with the AI client. With PrivacyFence's built-in apps, only the sign-in redirect passes through the PrivacyFence relay; an organization's own apps never touch it.</p>
           <p>The AI client itself is a different matter: whatever you approve is sent to the AI, under that AI provider's terms. PrivacyFence decides what reaches it. <a href="/gdpr/">How this fits the GDPR</a>.</p>
           <p>This website is separate from the product. It uses Google Analytics, only if you accept it in the cookie banner; the <a href="/privacy/">privacy policy</a> says what it collects.</p>
         </article>
@@ -89,11 +90,18 @@
         </article>
 
         <article class="faq-item page-copy stack" id="modes">
-          <h2>Local or organization mode?</h2>
-          <p><strong>PrivacyFence 7 deprecates desktop (local) mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x. Plan new deployments on <a href="/enterprise/">organization mode</a>.</p>
-          <p><strong>Local mode</strong> is the default: the installer for macOS, Windows or Linux runs PrivacyFence on one person's computer, under its own service account, for Claude Desktop, Claude Code or ChatGPT desktop (macOS) on that computer. No server and no sign-in are needed.</p>
-          <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, behind your HTTPS reverse proxy. People sign in through your identity provider, administrators set the privacy filter and PII check for everyone, and web clients can connect too.</p>
-          <p><a href="/enterprise/">Local and organization mode side by side</a></p>
+          <h2>Single-user, organization or desktop mode?</h2>
+          <p><strong>PrivacyFence 7 deprecates desktop mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x, without the built-in apps. Move to the Docker image on your computer or to an organization server (<a href="/docs/moving-to-organization-mode/">moving to organization mode</a>).</p>
+          <p><strong>Single-user mode</strong> runs PrivacyFence's Docker image on one person's computer. It is published only on localhost, and set up with a one-time code from the container's log, then a passkey. Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server. <a href="/install/">How to install it</a>.</p>
+          <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, from environment variables in Docker or under systemd, behind HTTPS. People sign in through your organization's OpenID Connect identity provider, or, for a small Google Workspace team, through PrivacyFence's built-in Google sign-in, which needs nothing registered at Google and admits only verified Workspace accounts. Administrators set the privacy filter and PII check for everyone on the Admin page, and web clients can connect too.</p>
+          <p><a href="/enterprise/">Single-user, organization and desktop mode side by side</a></p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="built-in-apps">
+          <h2>Do I have to register an app with Google, Slack and the others?</h2>
+          <p>PrivacyFence ships its own apps for Google, Slack, Salesforce, Atlassian and Miro, so an organization server, or the Docker image on your own computer, connects them with nothing to register. An organization may register its own app with any of them instead and upload it on the Admin page; its own apps never touch the relay.</p>
+          <p>The relay at oauth.privacyfence.eu forwards the browser's sign-in redirect (a one-time authorization code and the state) to your server. It never sees a token, keeps no logs and stores no code: your server exchanges the code with the provider itself.</p>
+          <p>Until Google verifies PrivacyFence's Google app, people see Google's unverified-app screen, and the app is limited to 100 users across all installs; an organization that needs neither registers its own Google app. <a href="/docs/org-mode-setup-guide/#built-in-apps-through-the-relay">Built-in apps through the relay</a></p>
         </article>
 
         <article class="faq-item page-copy stack" id="cost">
