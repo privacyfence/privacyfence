@@ -113,6 +113,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Admin shows in the menu on the Passkeys page.** An administrator, including the single-user install's one person right after the first sign-in, saw no Admin item while on Passkeys; it was there on every other page.
 - **A stalled Google connection no longer breaks every later call.** When a Gmail, Drive, Calendar, Contacts, Tasks or Apps Script request timed out because the network had silently dropped an idle connection, every following request reused that dead connection and timed out too until PrivacyFence was restarted. The timed-out request still fails, but the next one now opens a fresh connection.
 - **The Audit Log names a scoped token's calls.** Rows made with a scoped token showed "Unrecognised AI system" (Unknown); they now show the token's name, as the attested requester.
 - **The scoped tokens list is readable at desktop width.** The Duplicate, Rename and Revoke buttons and the personal-data badges no longer squeeze a token's name, expiry and last-used dates into a narrow column; the badges now sit under the token's name.
