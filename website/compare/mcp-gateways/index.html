@@ -61,11 +61,11 @@
           <tbody>
             <tr><th scope="row">Which tools</th><td>Any MCP server you register</td><td>Its own fifteen connectors and their tools, each with a fixed gate</td></tr>
             <tr><th scope="row">Built for</th><td>Platform and security teams running many agents and servers</td><td>The person whose mailbox or drive it is, with admins setting policy in an organization deployment</td></tr>
-            <tr><th scope="row">Sign-in</th><td>OAuth, SSO and role-based access</td><td>A local token and companion-app sign-in on a personal install; your OpenID Connect identity provider and OAuth 2.1 in an organization deployment</td></tr>
+            <tr><th scope="row">Sign-in</th><td>OAuth, SSO and role-based access</td><td>your OpenID Connect identity provider or the built-in Google sign-in, and OAuth 2.1, on an organization server</td></tr>
             <tr><th scope="row">Human approval of a single call</th><td>Rare. Where offered, an approver role reviews the tool name and its arguments</td><td>Every gated call no always-allow rule covers, decided by the user on a card that shows the content or change in business terms</td></tr>
             <tr><th scope="row">Reads reviewed before release</th><td>Not typical: a result passes through, possibly scanned</td><td>Yes: the result is held, previewed, and released only on approval</td></tr>
             <tr><th scope="row">Personal data</th><td>Several redact or mask it automatically, for example with Microsoft Presidio or pattern plugins</td><td>A local pattern check that forces a review and a second confirmation, plus per-category redaction and blocking</td></tr>
-            <tr><th scope="row">Where it runs</th><td>Containers or Kubernetes you run, or a hosted service</td><td>An installer on each computer, or one Linux server</td></tr>
+            <tr><th scope="row">Where it runs</th><td>Containers or Kubernetes you run, or a hosted service</td><td>Docker on your own computer, or one organization server, from environment variables</td></tr>
             <tr><th scope="row">Audit</th><td>Central logs and traces, often exported to a SIEM</td><td>A chained per-person log of every decision; organization mode forwards it to syslog or an HTTP endpoint</td></tr>
           </tbody>
         </table>

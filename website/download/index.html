@@ -65,7 +65,9 @@
       <h1>Download PrivacyFence for macOS, Windows and Linux</h1>
       <p class="lede">
         Free and open source, under Apache 2.0. PrivacyFence runs on your own machine. Your connector
-        sign-ins, rules and audit log stay on it, and only what you approve reaches your AI assistant.
+        sign-ins, rules and audit log stay on it, and only what you approve reaches your AI assistant. For one person, the recommended way is now
+        <a href="#docker-heading">PrivacyFence's Docker image</a>; the installers below set up the deprecated
+        desktop mode.
       </p>
       <div class="release-meta cluster" id="release-meta" aria-live="polite"></div>
     </section>
@@ -74,8 +76,19 @@
          hardcoded here, so a new build needs no website change. scripts/build_site.py replaces
          the loading row with the cards of the release current at deploy time, so the page works
          without JavaScript; download.js then renders the live manifest over them. -->
+    <section class="page-section" aria-labelledby="docker-heading">
+      <h2 id="docker-heading">Recommended: the Docker image on your computer</h2>
+      <p>For one person, the Docker image runs on your own computer in single-user mode: published only on localhost, and set up with a one-time code from the container's log, then a passkey.</p>
+      <pre class="verify-commands"><code>docker run --rm -p 127.0.0.1:8765:8765 \
+  -v pf-data:/var/lib/privacyfence-org/.privacyfence \
+  ghcr.io/privacyfence/privacyfence-org:latest</code></pre>
+      <p>The log prints <code>Setup code: XXXX-XXXX. Open http://localhost:8765/login to set up your passkey.</code> Open <code>http://localhost:8765</code>, not <code>http://127.0.0.1:8765</code>: the passkey belongs to <code>localhost</code>. <a class="text-link" href="/docs/org-mode-docker/#run-it-on-this-computer">The Docker guide</a> has the details.</p>
+      <p>Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server.</p>
+      <p><a class="text-link" href="/install/">Other ways to install, including the suite with Peek and Grist</a></p>
+    </section>
+
     <section aria-labelledby="stable-heading">
-      <h2 id="stable-heading" class="visually-hidden">Stable downloads</h2>
+      <h2 id="stable-heading">Desktop installers (deprecated)</h2>
       <div class="download-grid grid-auto" id="download-grid">
         <p class="download-loading" id="download-loading">Loading the latest release…</p>
       </div>
@@ -101,7 +114,7 @@ sha256sum &lt;file&gt;                <span class="verify-os">Linux</span>
 Get-FileHash &lt;file&gt; -Algorithm SHA256   <span class="verify-os">Windows</span></code></pre>
     </section>
 
-    <p class="page-copy"><strong>PrivacyFence 7 deprecates desktop (local) mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x. Plan new deployments on <a href="/enterprise/">organization mode</a>.</p>
+    <p class="page-copy"><strong>PrivacyFence 7 deprecates desktop mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x, without the built-in apps. Move to the Docker image on your computer or to an organization server: see <a href="/docs/moving-to-organization-mode/">moving to organization mode</a>, and <a href="/install/">how to install</a>.</p>
 
     <section class="page-section" aria-labelledby="requirements-heading">
       <div class="section-heading compact">
