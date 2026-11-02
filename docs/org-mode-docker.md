@@ -193,7 +193,7 @@ A multi-user server with the environment alone, no bundle to build:
    built-in Google sign-in there is no client secret: skip this part.
 6. **Fill in `.env`:** set `PF_HOSTNAME` to the server's public host name, with no `https://` and no
    path, such as `pf.acme.example.com`, and `PRIVACYFENCE_IMAGE_TAG` to the release from step 4, such
-   as `7.4` ([.env](#env)). This is the only place the domain is set: Caddy serves and gets the
+   as `7.0` ([.env](#env)). This is the only place the domain is set: Caddy serves and gets the
    certificate for it, and `compose.yaml` gives PrivacyFence `PRIVACYFENCE_ISSUER_URL=https://<PF_HOSTNAME>`.
    Compose refuses to start without it. For a pre-release, such as `7.0.0a1`, set its exact version: a
    pre-release gets no `X.Y`, `X` or `latest` tag. Do not leave `PRIVACYFENCE_IMAGE_TAG` empty either:

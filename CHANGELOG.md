@@ -43,6 +43,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.0.1] — 2026-11-01
+
+### Added
+
+- **An Install page on privacyfence.eu.** [privacyfence.eu/install](https://privacyfence.eu/install/) asks who uses PrivacyFence, whether it comes with the built-in presentation tool (Peek) and data lake (Grist), how people sign in, which apps connect the services and what sits in front, and gives the commands for that setup. **Install** replaces Download in the site's header ([ADR 0277](docs/adr/0277-the-websites-primary-call-to-action-is-install.md)).
+
+### Changed
+
+- **privacyfence.eu describes PrivacyFence 7.** The homepage, Enterprise, How it works, FAQ, Security, GDPR, comparison, AI agent and connector pages describe the built-in sign-in apps (and an organization's own), the Admin page, the organization server started from environment variables in Docker, single-user Docker and its limits, and desktop mode's deprecation. The [download page](https://privacyfence.eu/download/) recommends single-user Docker for one person and keeps the desktop installers as deprecated.
+- **Docs for single-user Docker.** The organization guide sends a single person to the Docker image instead of the deprecated desktop install, How it works describes single-user mode and `PRIVACYFENCE_MODE`, and [Connect Claude Code](https://privacyfence.eu/docs/connect-claude-code/) and [Connect Claude Desktop](https://privacyfence.eu/docs/connect-claude-desktop/) have a Single-user Docker section.
+- **The OAuth relay documentation is on privacyfence.eu.** `docs/oauth-relay.md` is published at [privacyfence.eu/docs/oauth-relay](https://privacyfence.eu/docs/oauth-relay/) from the next release, and the relay terms and privacy statement link it; until then the link opens the file on GitHub ([ADR 0276](docs/adr/0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md)).
+
 ## [7.0.0] — 2026-11-01
 
 **Breaking changes; this release is 7.0.0.** The entries marked *Breaking* below are the ones that need action before or after the upgrade: allowed domains trust only verified email addresses; organization servers read no bundle for their apps and settings; the 6.x `org_config.json` is read as `org_bundle.json`; and `build_org_bundle.py` refuses the options that moved. Every start of 7.x upgrades all stored data, so upgrade to 8 only from 7.x.
@@ -3585,7 +3597,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...HEAD
+[7.0.1]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
 [6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
 [6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0

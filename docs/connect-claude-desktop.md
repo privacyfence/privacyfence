@@ -2,8 +2,11 @@
 
 Claude Desktop works with both deployments:
 
-- **Local mode**: PrivacyFence installed on the same computer. Claude Desktop connects through
-  PrivacyFence's extension, `PrivacyFence.mcpb`, which finds the running daemon by itself.
+- **Local mode** (desktop mode, deprecated): PrivacyFence installed on the same computer. Claude
+  Desktop connects through PrivacyFence's extension, `PrivacyFence.mcpb`, which finds the running
+  daemon by itself.
+- **Single-user Docker**: PrivacyFence's Docker image on the same computer. Claude Desktop connects
+  to `http://localhost:8765/mcp` as a custom connector and you sign in with your passkey.
 - **Organization mode**: PrivacyFence run centrally by your organization. Claude Desktop connects
   to it as a custom connector and you sign in with your organization account.
 
@@ -35,6 +38,15 @@ Nothing is edited in Claude Desktop's configuration, and no token is stored in a
 On a packaged install the extension never starts the daemon: the daemon belongs to the system and
 its own account. If the daemon is stopped, the extension waits for it and logs that you should
 choose **Start PrivacyFence…** from the companion's menu.
+
+## Single-user Docker
+
+Start the Docker image on your computer and set up your passkey
+([Run it on this computer](org-mode-docker.md#run-it-on-this-computer)). In Claude Desktop's
+connector settings, add a custom connector with the URL `http://localhost:8765/mcp`, click
+**Connect** and sign in with your passkey. Leave the optional OAuth client ID and secret empty:
+Claude Desktop registers itself. Do not install the extension (`PrivacyFence.mcpb`) as well: it is
+for desktop mode only.
 
 ## Organization mode
 

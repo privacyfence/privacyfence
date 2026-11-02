@@ -38,7 +38,7 @@
       <div class="card-grid grid-auto">
         <article class="card stack" id="deployment-modes">
           <h3>Where it runs</h3>
-          <p>On one person's own computer (local mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). No data passes through a PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. When an organization server uses PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead. Slack’s built-in app sends no PKCE, so its sign-in code passes through the relay without it; an organization’s own Slack app avoids this.</p>
+          <p>On one person's own computer (single-user Docker, or the deprecated desktop mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). No data passes through a PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. When an organization server uses PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead. Slack and Miro send no PKCE, so with the built-in app their one-time sign-in code passes through the relay without it; an organization's own app avoids this.</p>
           <a class="text-link" href="/docs/security-and-compliance/#deployment-modes">Deployment modes →</a>
         </article>
         <article class="card stack" id="trust-boundary">
@@ -53,7 +53,7 @@
         </article>
         <article class="card stack" id="step-up">
           <h3>Passkey step-up</h3>
-          <p>On a packaged install, approving a write or a read flagged as personal data takes a fresh passkey assertion: Touch ID, Windows Hello or a security key. Wherever passkeys are required, the default on a packaged install, so do sensitive settings changes such as adding an always-allow rule. An organization deployment turns step-up on in its config bundle.</p>
+          <p>On a packaged install, approving a write or a read flagged as personal data takes a fresh passkey assertion: Touch ID, Windows Hello or a security key. Wherever passkeys are required, the default on a packaged install, so do sensitive settings changes such as adding an always-allow rule. On an organization server, administrators turn step-up on and make it stricter on the Admin page; in single-user mode it is on from the start.</p>
           <a class="text-link" href="/docs/security-and-compliance/#passkey-step-up">Passkey step-up →</a>
         </article>
         <article class="card stack" id="recovery">
@@ -99,6 +99,7 @@
         <ul>
           <li><strong>No certification, business-continuity plan or SLA.</strong> PrivacyFence is independent open-source software. The only infrastructure the maintainer operates is the download service and the sign-in relay, and neither sees your tokens, mail or files, so no outage of either affects them: installed copies keep running without the maintainer. New sign-ins with the built-in apps on a server depend on the PrivacyFence relay; existing connections and your own apps do not. Reports are handled on a best-effort basis. Treat adopting it as a risk acceptance: approve it through your exception process, pin a reviewed release, and give an internal owner the job of tracking releases.</li>
           <li><strong>No protection against root or a local Administrator</strong>, or against local code on an install that is not packaged (a source checkout or a <code>pip</code> install).</li>
+          <li><strong>Single-user mode does not protect against a local agent.</strong> Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server.</li>
           <li><strong>No confidentiality of the local review screen</strong> against a process running as you. It can read what is pending; it cannot approve it.</li>
           <li><strong>No verified AI-system identity in local mode.</strong> Every AI client of one OS account holds the same token.</li>
           <li><strong>No hard stop from the unattended-session flag.</strong> It is advisory: it changes what happens when nothing authorizes a call, never what is authorized.</li>
@@ -113,7 +114,7 @@
         <div>
           <p class="kicker">Evaluating PrivacyFence</p>
           <h2>Read the source, then run it.</h2>
-          <p>Every control above is in the open-source code under Apache 2.0. For an organization-wide rollout, compare local mode with a central deployment.</p>
+          <p>Every control above is in the open-source code under Apache 2.0. For an organization-wide rollout, compare single-user Docker with an organization server.</p>
         </div>
         <div class="actions vertical cluster">
           <a class="button primary" href="/enterprise/">Organization deployment</a>

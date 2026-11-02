@@ -33,7 +33,7 @@ every module in layer 6, `test_org_ubuntu_release_smoke.py` included; `browser` 
 drives Chromium (`test_browser_smoke.py`, `test_settings_grist_modal_browser.py`,
 `test_settings_edit_verbs_browser.py`, `test_settings_scoped_token_form_browser.py`,
 `test_settings_scoped_token_proposal_browser.py`,
-`test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_releases_page.py`,
+`test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_install_page.py`, `test_releases_page.py`,
 `test_website_layout.py`, `test_website_consent.py`, `test_website_csp.py`); `live` on nothing, since layer 5 is a
 script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
 `tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit
@@ -118,6 +118,7 @@ Key modules in the suite:
   "Always allow", live SSE refresh, idempotency), PDF preview, CSP (including every native form post), org-mode WebAuthn, PII banners,
   three viewports, light/dark structure. `test_download_page.py` covers `website/download/` and
   `test_releases_page.py` covers `website/releases/`, both with the Worker's API stubbed.
+  `test_install_page.py` covers `website/install/`: the picker and its eight results, with and without JavaScript.
 - Each connector's `TestLiveFixtureParsing` replays a committed fixture from
   `tests/fixtures/live/<connector>/` through the real parser; it skips if no fixture is recorded.
 
@@ -171,7 +172,7 @@ variable removed: these tests need no vendor account or credential, and must kee
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
   `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
-  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py`, `test_install_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
   sites and the layout screenshots.
 
 ### The shared design system

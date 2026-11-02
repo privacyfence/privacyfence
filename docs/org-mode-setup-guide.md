@@ -5,8 +5,10 @@ use. Everyone signs in with the organization's identity provider, connects their
 approves their own AI requests in the browser. It is written for the IT administrator who runs the
 server.
 
-For a single person on their own computer, use the desktop install instead
-([getting started](getting-started.md)).
+For a single person on their own computer, run the Docker image in single-user mode instead
+([Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer)). The desktop
+install is deprecated in PrivacyFence 7 and removed in 8
+([Moving to organization mode](moving-to-organization-mode.md)).
 
 ## Contents
 

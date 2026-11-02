@@ -43,6 +43,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   through PrivacyFence, with the identity PrivacyFence already has.
 - [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up
   authentication, privilege separation, audit integrity, and what PrivacyFence does not claim.
+- [`oauth-relay.md`](oauth-relay.md) — the OAuth redirect relay at `oauth.privacyfence.eu`: what it
+  forwards and stores, and how the maintainers run, check and revoke it.
 
 ### Connector setup
 
@@ -108,8 +110,6 @@ privacyfence.eu.
   organization deployment, the per-client script, the evidence to record, and the results table.
 - [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
-- [`oauth-relay.md`](oauth-relay.md) — the maintainer runbook for the OAuth redirect relay at
-  `oauth.privacyfence.eu`: provisioning, smoke tests, revoking a host and rolling back.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they

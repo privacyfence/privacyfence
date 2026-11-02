@@ -1,10 +1,10 @@
-"""Guards that the homepage's primary CTAs point at the download page, and that
+"""Guards that the homepage's primary Install CTAs point at the install page, and that
 page exists (docs/downloads-and-release-kpi.md).
 
 Deliberately a static test rather than a browser one. tests/integration/test_download_page.py
 covers what the page *does*, but it needs Chromium and skips without it -- and the failure this
 module exists to catch is the one where the CTAs survive a revert of the page (or vice versa),
-leaving every "Download" button on the homepage pointing at nothing. That is worth an assertion
+leaving every "Install" button on the homepage pointing at nothing. That is worth an assertion
 that runs on every machine, in every suite, with no browser.
 
 It also holds guardrail 7: every file under website/ is either published by the build manifest in
@@ -22,7 +22,7 @@ from tests.website_site import REPO, WEBSITE, build_site, built_site, read_page
 pytestmark = pytest.mark.unit
 
 # The three primary CTAs: header nav, hero, and the closing call to action.
-CTA_PATTERN = re.compile(r'<a class="(?:nav-cta|button primary)" href="([^"]+)">([^<]*Download[^<]*)</a>')
+CTA_PATTERN = re.compile(r'<a class="(?:nav-cta|button primary)" href="([^"]+)">([^<]*Install[^<]*)</a>')
 
 
 def _ctas() -> list[tuple[str, str]]:
@@ -30,19 +30,19 @@ def _ctas() -> list[tuple[str, str]]:
     return CTA_PATTERN.findall(read_page("/"))
 
 
-def test_the_download_page_the_ctas_point_at_exists():
-    assert (WEBSITE / "download" / "index.html").is_file()
-    assert (WEBSITE / "download" / "download.js").is_file()
+def test_the_install_page_the_ctas_point_at_exists():
+    assert (WEBSITE / "install" / "index.html").is_file()
+    assert (WEBSITE / "install" / "install.js").is_file()
 
 
-def test_all_three_primary_ctas_point_at_the_download_page():
+def test_homepage_install_ctas_point_at_the_install_page():
     ctas = _ctas()
-    assert len(ctas) == 3, f"expected 3 primary download CTAs, found {len(ctas)}: {ctas}"
+    assert len(ctas) == 3, f"expected 3 Install CTAs, found {len(ctas)}: {ctas}"
     for href, label in ctas:
-        assert href == "/download/", f"{label.strip()!r} points at {href!r}, not the download page"
+        assert href == "/install/", f"{label.strip()!r} points at {href!r}, not the install page"
 
 
-def test_no_primary_cta_still_points_at_github_releases():
+def test_homepage_install_ctas_do_not_point_at_github():
     # The specific regression: a CTA left on GitHub Releases although the download page
     # is the primary path. GitHub stays linked for source and docs -- just not as the
     # download button.
