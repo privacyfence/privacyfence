@@ -1,7 +1,6 @@
 {
   "emailAddresses": [
     {
-      "formattedType": "Work",
       "metadata": {
         "primary": true,
         "source": {
@@ -9,28 +8,27 @@
           "type": "CONTACT"
         }
       },
-      "type": "work",
       "value": "qatest.contact@example.com"
     }
   ],
-  "etag": "%EgwBAgMFCQsMLjc9Pj8aBAECBQciDDZLdjh4aThlYlcwPQ==",
+  "etag": "%EgwBAgMFCQsMLjc9Pj8aBAECBQciDGd6elkyRnZ3TlRjPQ==",
   "metadata": {
     "objectType": "PERSON",
     "sources": [
       {
-        "etag": "#6Kv8xi8ebW0=",
+        "etag": "#gzzY2FvwNTc=",
         "id": "qa-placeholder-id-2",
         "type": "CONTACT",
-        "updateTime": "2026-07-16T10:08:00.992818Z"
+        "updateTime": "2026-09-11T11:44:26.824580Z"
       }
     ]
   },
   "names": [
     {
       "displayName": "PrivacyFence QA Test Contact [QATEST]",
-      "displayNameLastFirst": "QA Test Contact [QATEST], PrivacyFence",
-      "familyName": "QA Test Contact [QATEST]",
-      "givenName": "PrivacyFence",
+      "displayNameLastFirst": "Test Contact [QATEST], PrivacyFence QA",
+      "familyName": "Test Contact [QATEST]",
+      "givenName": "PrivacyFence QA",
       "metadata": {
         "primary": true,
         "source": {
@@ -44,7 +42,6 @@
   ],
   "phoneNumbers": [
     {
-      "formattedType": "Work",
       "metadata": {
         "primary": true,
         "source": {
@@ -52,7 +49,6 @@
           "type": "CONTACT"
         }
       },
-      "type": "work",
       "value": "555-0142"
     }
   ],
