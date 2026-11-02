@@ -1,0 +1,42 @@
+# Agent-platform settings (self-hosted OpenHands agents). Read from the default branch only, and agents
+# cannot modify .agents/, so a human merges every change here. Allowed keys: default_team, toolchain,
+# provision_command, verify_command, teams.*, security_review.*, dependencies.*.
+toolchain = "base"
+
+# Runs once with network (package registries only) and fills /deps/pip-cache. Later steps mount /deps
+# read-only and have PIP_FIND_LINKS=/deps/pip-cache. The lock is hash-pinned and universal, so
+# `pip download` takes the wheels for this interpreter and platform; it carries the build backend
+# (setuptools, wheel, setuptools-scm) too, which is why nothing is downloaded at verify time.
+provision_command = """
+set -eu
+mkdir -p /deps/pip-cache
+python -m pip download --require-hashes --no-deps -r requirements/dev.lock.txt -d /deps/pip-cache
+"""
+
+# Fast offline gate, the same as `verify.fast` in .claude/toolkit.yaml (ruff check, tests/unit). The venv
+# is built in a temp dir (the repo and /deps are read-only or throwaway) from the pip cache with no index.
+# The package is installed editable as CI does (no deps, no build isolation: the build backend comes from
+# the lock), because a test spawns `python -m privacyfence.catalog_server` with a scrubbed environment.
+# Without git history setuptools_scm uses pyproject's fallback_version.
+verify_command = """
+set -eu
+venv="$(mktemp -d)/venv"
+python -m venv "$venv"
+PIP_NO_INDEX=1 "$venv/bin/python" -m pip install -q --no-deps --require-hashes \
+  --find-links "${PIP_FIND_LINKS:-/deps/pip-cache}" -r requirements/dev.lock.txt
+PIP_NO_INDEX=1 "$venv/bin/python" -m pip install -q --no-deps --no-build-isolation -e .
+export PYTHONDONTWRITEBYTECODE=1
+"$venv/bin/python" -m ruff check .
+"$venv/bin/python" -m pytest tests/unit -q -p no:cacheprovider
+"""
+
+[dependencies]
+# Re-enable after the pilot: the org config turns CodeQL on, and with a verify_command present it would
+# start CodeQL fix tasks straight away.
+codeql = false
+
+[teams.connector]
+coder = "coder"
+reviewer = "reviewer"
+researcher = "researcher"
+plan_first = true
