@@ -1,6 +1,6 @@
 # devflow pack for Archon
 
-Five workflows built on the devflow toolkit ([andras-tkcs/claude-toolkit](https://github.com/andras-tkcs/claude-toolkit)),
+Seven workflows built on the devflow toolkit ([andras-tkcs/claude-toolkit](https://github.com/andras-tkcs/claude-toolkit)),
 the only workflows this repo exposes (`.archon/config.yaml` turns the bundled `archon-*` ones off).
 
 | Workflow | Use it for | Pauses for a person when |
@@ -9,7 +9,9 @@ the only workflows this repo exposes (`.archon/config.yaml` turns the bundled `a
 | `devflow-quick` | A small edit with no plan (a typo, a one-file fix); refuses anything bigger | Never; it cancels with the reason if the edit is not small |
 | `devflow-docs` | Review the docs and the website, fix what is wrong | Never; undecidable items are listed in the PR |
 | `devflow-audit` | Security audit, then verify the findings, plan and fix them | The verifier leaves a decision to the maintainer |
-| `devflow-release` | Changelog PR, pre-flight, dry run, real tag | Confirming the facts, merging the changelog PR, approving the real cut |
+| `devflow-release` | Changelog PR, `build.yml` pre-flight, tag dry run, real tag | Confirming the facts, merging the changelog PR, approving the real cut |
+| `devflow-config` | Review a repo's rulesets, Actions, access and security settings and workflow files; apply what you approve | Choosing which settings changes to apply (needs an admin token) |
+| `devflow-deps` | Repair and push Dependabot PRs; fix vulnerability alerts no PR covers | Never; PRs it cannot fix are handed to a person with the evidence |
 
 `devflow-tail` is the shared building block (review, fixes, definition of done, PR, watch) that the
 first three include (`devflow-audit` reaches it through `devflow-ship`); it is not run on its own. No
@@ -51,7 +53,7 @@ From chat, ask the orchestrator to run `devflow-ship` with the issue or the desc
 
 `preflight` checks these before any model is called: the devflow plugin installed for the user
 running Archon, a valid `.claude/toolkit.yaml`, `gh` authenticated, and `uv` on `PATH`. Script nodes
-need `bun`. `setup-env` builds `.venv` with uv the way `.claude/hooks/session-start.sh` does for a
+need `bun`; `devflow-deps` also needs `node` and `npm`. `setup-env` builds `.venv` with uv the way `.claude/hooks/session-start.sh` does for a
 cloud session. Commands the host cannot run (no `npm` here) are reported as `UNAVAILABLE` in the
 definition of done and in the PR body, never ticked; CI runs them.
 
@@ -90,11 +92,30 @@ Fixtures named for a red path (`review-never-clears`, `dod-stays-red`, `not-smal
   run's artifacts: no issue, and the PR names the class of fix, not how to attack it.
 - **devflow-release** reads facts at `origin/main`'s tip, opens a changelog PR when a stable version has
   no section (and waits for you to merge it), asks you to confirm the facts, dispatches `build.yml`
-  against that exact commit and requires every release job green, dispatches `release.yml` with
-  `dry_run=true`, and only after your approval dispatches it with `dry_run=false`. It then reports the
-  tag and the `build.yml` and `publish-pypi.yml` runs, and fails loudly if the tag was pushed but no
-  build started. `--input version=7.1.0` is required and never inferred. If the pre-flight fails, fix
-  `main` and start a new run: a resumed run would reuse the old commit.
+  against that exact commit and requires every release job green, runs `scripts/tag_release.py` in a
+  fresh clone of `main` as a dry run (all its checks, no push), and only after your approval runs it
+  again with `--push` for the same commit. It does not dispatch `release.yml`. It then reports the tag
+  and the `build.yml` and `publish-pypi.yml` runs, and fails loudly if the tag was pushed but no build
+  started. `--input version=7.1.0` is required and never inferred. The `release tags` ruleset refuses
+  `v*` tags to anyone without a bypass, so the credential Archon runs with must be able to push them;
+  the confirmation shows whether the token holds admin. If the pre-flight fails, fix `main` and start a
+  new run: a resumed run would reuse the old commit.
+- **devflow-config** snapshots a repo's configuration through the GitHub API (read-only; each endpoint
+  records whether this token could read it, and a 404 for a non-admin token counts as unknown, not
+  off), then an Opus reviewer compares it with the repo's documented intent, its workflow files and,
+  if `--input reference=owner/name` is given, a repository whose setup you want to copy
+  (`privacyfence/privacyfence` is the model). Settings changes go through an allow-list that refuses
+  visibility, name, archiving, secrets, webhooks, deploy keys and removing an admin, then you choose
+  which to apply; each call records the before and after in `config-changes.md`. Without admin the run
+  ends with the review as a report. File changes (workflow files, `dependabot.yml`, `CODEOWNERS`) go
+  through a PR and the shared tail. It reviews the repository of the project it runs in.
+- **devflow-deps** reads the open Dependabot PRs and alerts, has Opus review each PR as a supply-chain
+  change (version jump, new transitive packages, install scripts, release notes), then repairs the
+  chosen PRs one at a time on their own branches: checks run, locks regenerated with the repo's tool,
+  fixes pushed to the Dependabot branch, CI read back, at most two attempts each. Alerts no PR covers
+  are fixed on a new branch through the shared tail. It never merges and never dismisses an alert.
+  Needs `node`/`npm` and `uv` on the host.
 
 Run any of them with `archon workflow run <name> "<the work>" --detach`
-(`--input version=...` for the release, `--input scope=...` for docs and audit).
+(`--input version=...` for the release, `--input scope=...` for docs and audit,
+`--input reference=...` for config).

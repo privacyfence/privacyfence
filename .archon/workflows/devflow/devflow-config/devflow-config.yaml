@@ -1,0 +1,262 @@
+name: devflow-config
+description: |
+  Review a repository's GitHub configuration and bring it in line: rulesets and branch protection,
+  Actions settings and workflow files, access (collaborators, teams, deploy keys, webhooks),
+  security features (Dependabot, code and secret scanning, private vulnerability reporting),
+  merge settings and community files. Built so the same run works on any repository; point
+  `reference` at one whose setup you want to copy (privacyfence/privacyfence is the model).
+
+  1. snapshot: read-only; every endpoint records whether it was readable.
+  2. An Opus reviewer compares the snapshot with the repo's own documented intent (its docs and
+     ADRs), the workflow files, and the reference repository if given, and proposes changes with
+     the evidence for each. Drift from the reference is a candidate, not a verdict.
+  3. Settings changes are filtered through an allow-list (never visibility, name, archive, secrets,
+     webhooks, deploy keys, or removing an admin), then you pick which to apply. Each is applied
+     through the API with the before and after recorded so it can be undone. This needs a token
+     with admin on the repository; without one the run ends with the review as a report.
+  4. Changes to files (workflow files, dependabot.yml, CODEOWNERS, SECURITY.md) go through a pull
+     request with the shared review, definition of done and watch. Never merges.
+
+  Use when: setting up or auditing a repo's rulesets, access, Actions and security settings.
+  NOT for: code security (devflow-audit), dependency updates (devflow-deps), releases (devflow-release).
+model: large
+worktree:
+  enabled: true
+inputs:
+  reference:
+    default: ""
+    description: Optional owner/name of a repository whose configuration is the model to compare against (for example privacyfence/privacyfence). Empty reviews the repository on its own.
+returns: review-config
+outcome_field: clean
+
+nodes:
+  - id: snapshot
+    script: snapshot
+    runtime: bun
+    with:
+      reference: "$INPUTS.reference"
+    output_format:
+      type: object
+      properties:
+        repo: { type: string }
+        default_branch: { type: string }
+        visibility: { type: string }
+        can_admin: { type: boolean }
+        role: { type: string }
+        reference: { type: string }
+        reference_ok: { type: boolean }
+        unreadable: { type: array, items: { type: string } }
+      required: [repo, default_branch, visibility, can_admin, role, reference, reference_ok, unreadable]
+
+  - id: review-config
+    depends_on: [snapshot]
+    command: review-config
+    model: large
+    output_format:
+      type: object
+      properties:
+        clean: { type: boolean }
+        summary: { type: string }
+        file_count: { type: integer }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+        proposals:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              area: { type: string, enum: [ruleset, branch-protection, actions, access, security-features, repo-settings, community-files, workflow-file, other] }
+              title: { type: string }
+              why: { type: string }
+              evidence: { type: string }
+              risk: { type: string, enum: [low, medium, high] }
+              reversible: { type: boolean }
+              kind: { type: string, enum: [api, file] }
+              ops:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    method: { type: string }
+                    endpoint: { type: string }
+                    body: { type: string }
+                  required: [method, endpoint, body]
+            required: [id, area, title, why, evidence, risk, reversible, kind, ops]
+      required: [clean, summary, file_count, slug, branch, title, proposals]
+
+  # ---- settings changes: allow-list, one question, apply with before/after ---------------------
+  - id: ops
+    depends_on: [review-config]
+    script: validate-ops
+    runtime: bun
+    with:
+      repo: "$snapshot.output.repo"
+      proposals: "$review-config.output.proposals"
+    output_format:
+      type: object
+      properties:
+        count: { type: integer }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+            required: [id, label]
+        ask: { type: string }
+        rejected:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              reason: { type: string }
+            required: [id, reason]
+      required: [count, options, ask, rejected]
+
+  - id: no-admin
+    depends_on: [ops]
+    when: "$ops.output.count > 0 && $snapshot.output.can_admin == false"
+    bash: |
+      c=$ops.output.count
+      r=$snapshot.output.role
+      echo "devflow-config: $c settings change(s) are proposed in config-review.md, but this token has role '$r' on the repository, not admin, so none can be applied. Run again with an admin token, or make them in the GitHub settings." >&2
+      printf '{"applied":false}'
+
+  - id: choose
+    depends_on: [ops]
+    when: "$ops.output.count > 0 && $snapshot.output.can_admin == true"
+    wait:
+      attention: "$ops.output.ask"
+      form: multi_select
+      options: "$ops.output.options"
+      labels:
+        workflow: devflow-config
+        stage: settings
+
+  - id: apply
+    depends_on: [choose]
+    script: apply-changes
+    runtime: bun
+    with:
+      approved: "$choose.output.decisions"
+    output_format:
+      type: object
+      properties:
+        applied: { type: array, items: { type: string } }
+        failed:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              error: { type: string }
+            required: [id, error]
+        failed_count: { type: integer }
+        skipped: { type: array, items: { type: string } }
+        log: { type: string }
+      required: [applied, failed, failed_count, skipped, log]
+
+  - id: apply-gate
+    depends_on: [apply]
+    when: "$apply.output.failed_count > 0"
+    bash: 'echo "devflow-config: some approved changes failed; see config-changes.md in the run artifacts (each failed proposal stopped at its first failing call)" >&2; exit 1'
+
+  # ---- file changes: a branch, the edits, and the shared tail ----------------------------------
+  # After the settings branch has finished or been skipped, so only one pause owns the run at a time.
+  - id: preflight
+    depends_on: [review-config, apply, no-admin]
+    trigger_rule: none_failed_min_one_success
+    when: "$review-config.output.file_count > 0"
+    script: preflight
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        devflow_root: { type: string }
+        main_branch: { type: string }
+        branch_regex: { type: string }
+      required: [devflow_root, main_branch, branch_regex]
+
+  - id: setup
+    depends_on: [preflight]
+    script: setup-env
+    runtime: bun
+    timeout: 1800000
+
+  - id: prepare-branch
+    depends_on: [setup]
+    script: prepare-branch
+    runtime: bun
+    with:
+      plan: "$review-config.output"
+      branch_regex: "$preflight.output.branch_regex"
+      main_branch: "$preflight.output.main_branch"
+      devflow_root: "$preflight.output.devflow_root"
+    output_format:
+      type: object
+      properties:
+        proceed: { type: boolean }
+        reason: { type: string }
+        scope: { type: string }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+      required: [proceed, reason, scope, slug, branch, title]
+
+  - id: stop-at-branch
+    depends_on: [prepare-branch]
+    when: "$prepare-branch.output.proceed == false"
+    cancel: "Stopped before any edit: $prepare-branch.output.reason"
+
+  - id: build
+    depends_on: [prepare-branch]
+    when: "$prepare-branch.output.proceed == true"
+    loop_group:
+      nodes:
+        - id: implement
+          command: edit-config
+          model: medium
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              status: { type: string, enum: [continue, complete, blocked] }
+              phase: { type: string }
+              summary: { type: string }
+            required: [status, phase, summary]
+        - id: check
+          depends_on: [implement]
+          script: verify
+          runtime: bun
+          timeout: 1800000
+          with:
+            mode: fast
+          output_format:
+            type: object
+            properties:
+              green: { type: boolean }
+              failed: { type: array, items: { type: string } }
+              unavailable: { type: array, items: { type: string } }
+              report: { type: string }
+            required: [green, failed, unavailable, report]
+      until_bash: 's=$implement.output.status; g=$check.output.green; [ "$s" = blocked ] || { [ "$s" = complete ] && [ "$g" = true ]; }'
+      max_iterations: 6
+
+  - id: gate-build
+    depends_on: [build]
+    script: gate-build
+    runtime: bun
+    with:
+      branch: "$prepare-branch.output.branch"
+      main_branch: "$preflight.output.main_branch"
+      slug: "$prepare-branch.output.slug"
+      green: "$build.output.green"
+      phases: none
+
+  - id: tail
+    include: devflow-tail
+    depends_on: [gate-build]

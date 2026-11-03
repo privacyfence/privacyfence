@@ -1,0 +1,99 @@
+# PRs are repaired and pushed, then the alerts no PR covers get a branch, a fix and the shared tail.
+fixture:
+  expect: completed
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+facts:
+  repo: privacyfence/privacyfence
+  prs: 6
+  alerts: 8
+  code_scanning: 0
+  total: 14
+triage-deps:
+  summary: 2 PRs, 8 alerts
+  work_count: 2
+  alert_fix_needed: true
+  slug: node-forge-1-4-1
+  branch: fix/node-forge-1-4-1
+  title: Bump node-forge to 1.4.1
+  items:
+  - number: 1063
+    action: work
+    reason: patch bump
+  - number: 1058
+    action: skip
+    reason: docker digest, person decides
+queue-init: '{"queued":1}'
+next:
+  has_item: true
+  number: 1063
+  branch: dependabot/npm_and_yarn/mcpb/shim/node-forge-1.4.2
+  attempts: 1
+  remaining: 1
+handle:
+  outcome: pushed
+  summary: regenerated locks
+  head: abc
+ci:
+  state: green
+  head: abc
+  failed: []
+  log: ''
+mark:
+  number: 1063
+  status: done
+  remaining: 0
+report:
+  complete: true
+  done:
+  - 1063
+  needs_person: []
+  skipped:
+  - 1058
+  report: /stub/deps-report.md
+prepare-branch:
+  proceed: true
+  reason: stub
+  scope: small
+  slug: node-forge-1-4-1
+  branch: fix/node-forge-1-4-1
+  title: Bump node-forge to 1.4.1
+implement:
+  status: complete
+  phase: alerts
+  summary: stub
+check:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub
+gate-build: '{"commits":1,"phases":0,"head":"abc"}'
+review:
+  verdict: approve
+  blocking: 0
+  non_blocking: 0
+  head: abc
+fix-blocking: fixed
+tail__fix-nonblocking: done
+dod:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub
+dod-fix: fixed
+tail__open-pr:
+  number: 1100
+  url: https://github.com/privacyfence/privacyfence/pull/1100
+pr-state:
+  finished: true
+  state: MERGED
+  act: false
+  reasons: nothing new
+steward: done
+tail__finish:
+  merged: true
+  state: MERGED
+  url: https://github.com/privacyfence/privacyfence/pull/1100

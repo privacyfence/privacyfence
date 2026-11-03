@@ -1,0 +1,14 @@
+# RED: no PRs and no alerts; the run ends before any model is called.
+fixture:
+  expect: cancelled
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+facts:
+  repo: privacyfence/privacyfence
+  prs: 0
+  alerts: 0
+  code_scanning: 0
+  total: 0

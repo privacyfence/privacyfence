@@ -9,11 +9,14 @@ description: |
      version's section; the run waits for a person to merge it.
   3. You confirm the facts (commit, channel, notes).
   4. build.yml is dispatched against that exact commit and must be green on every job.
-  5. release.yml is dispatched with dry_run=true.
-  6. You approve the real cut. Only then is release.yml dispatched with dry_run=false, and the
-     run reports the tag, the build.yml run and the publish-pypi.yml run.
+  5. A dry run of scripts/tag_release.py in a fresh clone of main: every check it makes (main is
+     clean and at origin/main, no second tag on the commit, PEP 440, sequential), no push.
+  6. You approve the real cut. Only then is the tag pushed, from that clone, with the same script
+     and the same commit, and the run reports the tag, the build.yml run and the publish-pypi.yml run.
 
-  The tag is pushed only by release.yml. The run never tags, pushes a tag or merges anything itself.
+  This run tags directly instead of dispatching release.yml, so the credential Archon runs with
+  must be allowed to push v* tags (the "release tags" ruleset refuses everyone else); the
+  confirmation shows whether the token holds admin on the repository. Merging is never done here.
 
   Use when: a version should be released, "release 7.1.0".
   NOT for: choosing the version (the version input is required and is never inferred from the
@@ -53,7 +56,8 @@ nodes:
         changelog_error: { type: string }
         notes: { type: string }
         relay_status: { type: string }
-      required: [version, channel, main_sha, main_subject, tags_on_commit, recent_tags, changelog_ok, changelog_error, notes, relay_status]
+        token_admin: { type: boolean }
+      required: [version, channel, main_sha, main_subject, tags_on_commit, recent_tags, changelog_ok, changelog_error, notes, relay_status, token_admin]
 
   # ---- 1. changelog edit: only a stable version whose section is missing ----------------------
   - id: changelog
@@ -112,7 +116,8 @@ nodes:
         changelog_error: { type: string }
         notes: { type: string }
         relay_status: { type: string }
-      required: [version, channel, main_sha, main_subject, tags_on_commit, recent_tags, changelog_ok, changelog_error, notes, relay_status]
+        token_admin: { type: boolean }
+      required: [version, channel, main_sha, main_subject, tags_on_commit, recent_tags, changelog_ok, changelog_error, notes, relay_status, token_admin]
 
   - id: require-changelog
     depends_on: [facts-final]
@@ -130,6 +135,8 @@ nodes:
 
         Tags already on that commit (must be empty): "$facts-final.output.tags_on_commit"
         Recent tags: $facts-final.output.recent_tags
+        Token holds admin on the repository: $facts-final.output.token_admin (the "release tags" ruleset
+        refuses tag creation to anyone without a bypass; if false, the real cut will most likely be refused).
         OAuth relay health: $facts-final.output.relay_status (a relay that is down does not block a
         release, but organization servers using the built-in apps cannot sign in until it is back).
 
@@ -170,28 +177,24 @@ nodes:
         excerpt: { type: string }
       required: [run_id, url, conclusion, jobs, excerpt]
 
-  # ---- 4. dry run of release.yml -------------------------------------------------------------
+  # ---- 4. dry run of the tag: scripts/tag_release.py without --push -------------------------
   - id: dry-run
     depends_on: [preflight-build]
-    script: dispatch-wait
+    script: tag
     runtime: bun
-    timeout: 1800000
+    timeout: 600000
     with:
-      workflow: release.yml
-      ref: main
-      expected_sha: "$facts-final.output.main_sha"
-      fields: '{"version":"$INPUTS.version","dry_run":"true"}'
-      log_excerpt: "true"
-      timeout_min: "20"
+      mode: dry
+      version: "$INPUTS.version"
+      main_sha: "$facts-final.output.main_sha"
     output_format:
       type: object
       properties:
-        run_id: { type: integer }
-        url: { type: string }
-        conclusion: { type: string }
-        jobs: { type: array, items: { type: object, properties: { name: { type: string }, conclusion: { type: string } } } }
-        excerpt: { type: string }
-      required: [run_id, url, conclusion, jobs, excerpt]
+        ok: { type: boolean }
+        tag: { type: string }
+        sha: { type: string }
+        pushed: { type: boolean }
+      required: [ok, tag, sha, pushed]
 
   # ---- 5. the real cut: the one irreversible step ---------------------------------------------
   - id: approve-cut
@@ -201,13 +204,10 @@ nodes:
         Cut v$facts-final.output.version for real?
 
         Pre-flight build.yml: green on every required job. $preflight-build.output.url
-        Dry run of release.yml: $dry-run.output.conclusion. $dry-run.output.url
+        Dry run of the tag ($dry-run.output.tag at $dry-run.output.sha): every check of scripts/tag_release.py passed.
 
-        Dry run log (last lines):
-        $dry-run.output.excerpt
-
-        Approving dispatches release.yml with dry_run=false, which pushes the tag v$facts-final.output.version
-        on $facts-final.output.main_sha and starts build.yml and publish-pypi.yml. That cannot be taken back.
+        Approving pushes the tag v$facts-final.output.version on $facts-final.output.main_sha and starts build.yml and
+        publish-pypi.yml. That cannot be taken back.
       form: approval
       labels:
         workflow: devflow-release
@@ -221,24 +221,21 @@ nodes:
   - id: cut
     depends_on: [approve-cut]
     when: "$approve-cut.output.decision == 'approve'"
-    script: dispatch-wait
+    script: tag
     runtime: bun
-    timeout: 1800000
+    timeout: 600000
     with:
-      workflow: release.yml
-      ref: main
-      expected_sha: "$facts-final.output.main_sha"
-      fields: '{"version":"$INPUTS.version","dry_run":"false"}'
-      timeout_min: "20"
+      mode: cut
+      version: "$INPUTS.version"
+      main_sha: "$facts-final.output.main_sha"
     output_format:
       type: object
       properties:
-        run_id: { type: integer }
-        url: { type: string }
-        conclusion: { type: string }
-        jobs: { type: array, items: { type: object, properties: { name: { type: string }, conclusion: { type: string } } } }
-        excerpt: { type: string }
-      required: [run_id, url, conclusion, jobs, excerpt]
+        ok: { type: boolean }
+        tag: { type: string }
+        sha: { type: string }
+        pushed: { type: boolean }
+      required: [ok, tag, sha, pushed]
 
   - id: report
     depends_on: [cut]

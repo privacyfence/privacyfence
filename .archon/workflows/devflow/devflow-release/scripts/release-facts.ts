@@ -30,6 +30,9 @@ if (stable) {
   changelogError = changelogOk ? "" : cl.err.trim().split("\n")[0];
 }
 
+const repo = must(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]);
+const tokenAdmin = must(["gh", "api", `repos/${repo}`, "-q", ".permissions.admin"]) === "true";
+
 let relay = "unreachable";
 try {
   const r = await fetch("https://oauth.privacyfence.eu/health", { method: "HEAD", signal: AbortSignal.timeout(15000) });
@@ -50,5 +53,6 @@ console.log(
     changelog_error: changelogError,
     notes,
     relay_status: relay,
+    token_admin: tokenAdmin,
   }),
 );

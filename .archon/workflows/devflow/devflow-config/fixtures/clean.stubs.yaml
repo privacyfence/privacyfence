@@ -1,0 +1,26 @@
+# Nothing to propose: the run ends after the review with no question and no branch.
+fixture:
+  expect: completed
+snapshot:
+  repo: privacyfence/privacyfence
+  default_branch: main
+  visibility: public
+  can_admin: true
+  role: admin
+  reference: ''
+  reference_ok: false
+  unreadable:
+  - actions_permissions (403)
+review-config:
+  clean: true
+  summary: 0 proposals
+  file_count: 0
+  slug: ''
+  branch: ''
+  title: ''
+  proposals: []
+ops:
+  count: 0
+  options: []
+  ask: Settings changes proposed
+  rejected: []

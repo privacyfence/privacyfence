@@ -1,0 +1,54 @@
+# RED: an approved change is refused by GitHub; the run fails at the gate instead of reporting success.
+fixture:
+  expect: failed
+  fail-node: apply-gate
+exec-code: true
+snapshot:
+  repo: privacyfence/privacyfence
+  default_branch: main
+  visibility: public
+  can_admin: true
+  role: admin
+  reference: ''
+  reference_ok: false
+  unreadable:
+  - actions_permissions (403)
+review-config:
+  clean: false
+  summary: 1 proposals
+  file_count: 0
+  slug: ''
+  branch: ''
+  title: ''
+  proposals:
+  - id: c1
+    area: repo-settings
+    title: Delete branches on merge
+    why: CONTRIBUTING says merged branches are deleted
+    evidence: snapshot.repo.data.delete_branch_on_merge=false
+    risk: low
+    reversible: true
+    kind: api
+    ops:
+    - method: PATCH
+      endpoint: repos/privacyfence/privacyfence
+      body: '{"delete_branch_on_merge":true}'
+ops:
+  count: 1
+  options:
+  - id: c1
+    label: c1 [low] Delete branches on merge
+  ask: Settings changes proposed
+  rejected: []
+choose:
+  decisions:
+  - c1
+  text: ''
+apply:
+  applied: []
+  failed:
+  - id: c1
+    error: 'PATCH: 403'
+  failed_count: 1
+  skipped: []
+  log: /stub/config-changes.md

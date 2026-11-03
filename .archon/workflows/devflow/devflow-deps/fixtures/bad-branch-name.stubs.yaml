@@ -1,0 +1,63 @@
+# RED: the alert-fix branch name breaks git.branch_pattern; nothing is edited.
+fixture:
+  expect: cancelled
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+facts:
+  repo: privacyfence/privacyfence
+  prs: 6
+  alerts: 8
+  code_scanning: 0
+  total: 14
+triage-deps:
+  summary: 2 PRs, 8 alerts
+  work_count: 2
+  alert_fix_needed: true
+  slug: node-forge-1-4-1
+  branch: fix/node-forge-1-4-1
+  title: Bump node-forge to 1.4.1
+  items:
+  - number: 1063
+    action: work
+    reason: patch bump
+  - number: 1058
+    action: skip
+    reason: docker digest, person decides
+queue-init: '{"queued":1}'
+next:
+  has_item: true
+  number: 1063
+  branch: dependabot/npm_and_yarn/mcpb/shim/node-forge-1.4.2
+  attempts: 1
+  remaining: 1
+handle:
+  outcome: pushed
+  summary: regenerated locks
+  head: abc
+ci:
+  state: green
+  head: abc
+  failed: []
+  log: ''
+mark:
+  number: 1063
+  status: done
+  remaining: 0
+report:
+  complete: true
+  done:
+  - 1063
+  needs_person: []
+  skipped:
+  - 1058
+  report: /stub/deps-report.md
+prepare-branch:
+  proceed: false
+  reason: stub
+  scope: small
+  slug: node-forge-1-4-1
+  branch: feat/x
+  title: Bump node-forge to 1.4.1
