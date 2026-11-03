@@ -1,0 +1,255 @@
+name: devflow-deps
+description: |
+  Keep dependencies current and safe. Two jobs in one run:
+
+  1. Dependabot pull requests. Each open one is reviewed as a supply-chain change (version jump,
+     new transitive packages, install scripts, release notes), then worked on its own branch: the
+     project's checks are run, red ones are repaired, lockfiles are regenerated with the repo's
+     own tool (never by hand), and the fix is pushed to the Dependabot branch. The CI result is
+     read back; an item gets at most two attempts and is then handed to a person with the evidence.
+  2. GitHub vulnerability findings (Dependabot alerts and open code scanning alerts) that no pull
+     request covers are fixed on a new branch and taken through the shared review, definition of
+     done and PR (devflow-tail) like any other change.
+
+  Merging is never done here, and alerts are never dismissed: both stay with a person. The steward
+  policy says not to follow Dependabot PRs unless the maintainer asks; running this workflow is that ask.
+
+  Use when: "review the Dependabot PRs", "fix the vulnerability alerts", a weekly dependency pass.
+  NOT for: a single targeted upgrade you have already decided (devflow-quick), or a repo audit
+  (devflow-audit, devflow-config).
+model: large
+worktree:
+  enabled: true
+returns: report
+outcome_field: complete
+
+nodes:
+  - id: preflight
+    script: preflight
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        devflow_root: { type: string }
+        main_branch: { type: string }
+        branch_regex: { type: string }
+      required: [devflow_root, main_branch, branch_regex]
+
+  - id: setup
+    depends_on: [preflight]
+    script: setup-env
+    runtime: bun
+    timeout: 1800000
+
+  - id: facts
+    depends_on: [setup]
+    script: deps-facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        repo: { type: string }
+        prs: { type: integer }
+        alerts: { type: integer }
+        code_scanning: { type: integer }
+        total: { type: integer }
+      required: [repo, prs, alerts, code_scanning, total]
+
+  - id: nothing-to-do
+    depends_on: [facts]
+    when: "$facts.output.total == 0"
+    cancel: "No open Dependabot pull requests and no open vulnerability alerts for $facts.output.repo."
+
+  - id: triage-deps
+    depends_on: [facts]
+    when: "$facts.output.total > 0"
+    command: triage-deps
+    model: large
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+        work_count: { type: integer }
+        alert_fix_needed: { type: boolean }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              action: { type: string, enum: [work, skip] }
+              reason: { type: string }
+            required: [number, action, reason]
+      required: [summary, work_count, alert_fix_needed, slug, branch, title, items]
+
+  # ---- 1. Dependabot pull requests, one at a time on their own branches ---------------------------
+  - id: queue-init
+    depends_on: [triage-deps]
+    when: "$triage-deps.output.work_count > 0"
+    script: queue
+    runtime: bun
+    with:
+      mode: init
+      items: "$triage-deps.output.items"
+
+  - id: work
+    depends_on: [queue-init]
+    loop_group:
+      nodes:
+        - id: next
+          script: queue
+          runtime: bun
+          with:
+            mode: next
+          output_format:
+            type: object
+            properties:
+              has_item: { type: boolean }
+              number: { type: integer }
+              branch: { type: string }
+              attempts: { type: integer }
+              remaining: { type: integer }
+            required: [has_item, number, branch, attempts, remaining]
+        - id: handle
+          depends_on: [next]
+          when: "$next.output.has_item == true"
+          command: work-pr
+          model: medium
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              outcome: { type: string, enum: [pushed, nothing-to-push, needs-person] }
+              summary: { type: string }
+              head: { type: string }
+            required: [outcome, summary, head]
+        - id: ci
+          depends_on: [handle]
+          when: "$next.output.has_item == true"
+          script: ci-wait
+          runtime: bun
+          timeout: 3300000
+          with:
+            number: "$next.output.number"
+          output_format:
+            type: object
+            properties:
+              state: { type: string }
+              head: { type: string }
+              failed: { type: array, items: { type: string } }
+              log: { type: string }
+            required: [state, head, failed, log]
+        - id: mark
+          depends_on: [ci]
+          when: "$next.output.has_item == true"
+          script: queue
+          runtime: bun
+          with:
+            mode: mark
+            number: "$next.output.number"
+            outcome: "$handle.output.outcome"
+            ci: "$ci.output.state"
+          output_format:
+            type: object
+            properties:
+              number: { type: integer }
+              status: { type: string }
+              remaining: { type: integer }
+            required: [number, status, remaining]
+      until_bash: 'h=$next.output.has_item; [ "$h" = false ]'
+      max_iterations: 40
+
+  # ---- 2. vulnerability findings no pull request covers: a branch and the shared tail --------------
+  - id: prepare-branch
+    depends_on: [triage-deps, work]
+    trigger_rule: none_failed_min_one_success
+    when: "$triage-deps.output.alert_fix_needed == true"
+    script: prepare-branch
+    runtime: bun
+    with:
+      plan: "$triage-deps.output"
+      branch_regex: "$preflight.output.branch_regex"
+      main_branch: "$preflight.output.main_branch"
+      devflow_root: "$preflight.output.devflow_root"
+    output_format:
+      type: object
+      properties:
+        proceed: { type: boolean }
+        reason: { type: string }
+        scope: { type: string }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+      required: [proceed, reason, scope, slug, branch, title]
+
+  - id: stop-at-branch
+    depends_on: [prepare-branch]
+    when: "$prepare-branch.output.proceed == false"
+    cancel: "Stopped before fixing the alerts: $prepare-branch.output.reason"
+
+  - id: build
+    depends_on: [prepare-branch]
+    when: "$prepare-branch.output.proceed == true"
+    loop_group:
+      nodes:
+        - id: implement
+          command: fix-alerts
+          model: medium
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              status: { type: string, enum: [continue, complete, blocked] }
+              phase: { type: string }
+              summary: { type: string }
+            required: [status, phase, summary]
+        - id: check
+          depends_on: [implement]
+          script: verify
+          runtime: bun
+          timeout: 1800000
+          with:
+            mode: fast
+          output_format:
+            type: object
+            properties:
+              green: { type: boolean }
+              failed: { type: array, items: { type: string } }
+              unavailable: { type: array, items: { type: string } }
+              report: { type: string }
+            required: [green, failed, unavailable, report]
+      until_bash: 's=$implement.output.status; g=$check.output.green; [ "$s" = blocked ] || { [ "$s" = complete ] && [ "$g" = true ]; }'
+      max_iterations: 6
+
+  - id: gate-build
+    depends_on: [build]
+    script: gate-build
+    runtime: bun
+    with:
+      branch: "$prepare-branch.output.branch"
+      main_branch: "$preflight.output.main_branch"
+      slug: "$prepare-branch.output.slug"
+      green: "$build.output.green"
+      phases: none
+
+  - id: tail
+    include: devflow-tail
+    depends_on: [gate-build]
+
+  - id: report
+    depends_on: [triage-deps, work, tail]
+    trigger_rule: all_done
+    script: deps-report
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        complete: { type: boolean }
+        done: { type: array, items: { type: integer } }
+        needs_person: { type: array, items: { type: integer } }
+        skipped: { type: array, items: { type: integer } }
+        report: { type: string }
+      required: [complete, done, needs_person, skipped, report]

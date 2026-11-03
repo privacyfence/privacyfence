@@ -1,0 +1,254 @@
+name: devflow-release
+description: |
+  Cut a PrivacyFence release the way docs/releasing.md and /cut-release require, with a person
+  deciding at the two points that matter: changelog edit, pre-flight, dry run, real tag.
+
+  1. Facts at origin/main's tip: the channel, recent tags, the rendered release notes, the OAuth
+     relay's health.
+  2. A stable version with no changelog section gets a PR that turns [Unreleased] into the
+     version's section; the run waits for a person to merge it.
+  3. You confirm the facts (commit, channel, notes).
+  4. build.yml is dispatched against that exact commit and must be green on every job.
+  5. A dry run of scripts/tag_release.py in a fresh clone of main: every check it makes (main is
+     clean and at origin/main, no second tag on the commit, PEP 440, sequential), no push.
+  6. You approve the real cut. Only then is the tag pushed, from that clone, with the same script
+     and the same commit, and the run reports the tag, the build.yml run and the publish-pypi.yml run.
+
+  This run tags directly instead of dispatching release.yml, so the credential Archon runs with
+  must be allowed to push v* tags (the "release tags" ruleset refuses everyone else); the
+  confirmation shows whether the token holds admin on the repository. Merging is never done here.
+
+  Use when: a version should be released, "release 7.1.0".
+  NOT for: choosing the version (the version input is required and is never inferred from the
+  changelog), or fixing a red build.yml (fix main, then start a new run).
+model: medium
+worktree:
+  enabled: true
+inputs:
+  version:
+    default: ""
+    description: The version to release in PEP 440 short form, for example 7.1.0 or 7.1.0rc1. Required.
+returns: report
+
+nodes:
+  - id: require-version
+    script: require-version
+    runtime: bun
+    with:
+      version: "$INPUTS.version"
+
+  - id: facts
+    depends_on: [require-version]
+    script: release-facts
+    runtime: bun
+    with:
+      version: "$INPUTS.version"
+    output_format:
+      type: object
+      properties:
+        version: { type: string }
+        channel: { type: string }
+        main_sha: { type: string }
+        main_subject: { type: string }
+        tags_on_commit: { type: string }
+        recent_tags: { type: array, items: { type: string } }
+        changelog_ok: { type: boolean }
+        changelog_error: { type: string }
+        notes: { type: string }
+        relay_status: { type: string }
+        token_admin: { type: boolean }
+      required: [version, channel, main_sha, main_subject, tags_on_commit, recent_tags, changelog_ok, changelog_error, notes, relay_status, token_admin]
+
+  # ---- 1. changelog edit: only a stable version whose section is missing ----------------------
+  - id: changelog
+    depends_on: [facts]
+    when: "$facts.output.changelog_ok == false"
+    command: changelog
+    model: medium
+    output_format:
+      type: object
+      properties:
+        number: { type: integer }
+        url: { type: string }
+      required: [number, url]
+
+  - id: merge-changelog
+    depends_on: [changelog]
+    loop_group:
+      nodes:
+        - id: merged
+          script: wait-merged
+          runtime: bun
+          with:
+            number: "$changelog.output.number"
+          output_format:
+            type: object
+            properties:
+              finished: { type: boolean }
+              state: { type: string }
+            required: [finished, state]
+        - id: pause
+          depends_on: [merged]
+          when: "$merged.output.finished == false"
+          wait:
+            duration_ms: 300000
+      until_bash: 'f=$merged.output.finished; [ "$f" = true ]'
+      max_iterations: 2000
+
+  # Facts again, now at the commit that carries the changelog (or unchanged when it was already there).
+  - id: facts-final
+    depends_on: [facts, merge-changelog]
+    trigger_rule: none_failed_min_one_success
+    script: release-facts
+    runtime: bun
+    with:
+      version: "$INPUTS.version"
+    output_format:
+      type: object
+      properties:
+        version: { type: string }
+        channel: { type: string }
+        main_sha: { type: string }
+        main_subject: { type: string }
+        tags_on_commit: { type: string }
+        recent_tags: { type: array, items: { type: string } }
+        changelog_ok: { type: boolean }
+        changelog_error: { type: string }
+        notes: { type: string }
+        relay_status: { type: string }
+        token_admin: { type: boolean }
+      required: [version, channel, main_sha, main_subject, tags_on_commit, recent_tags, changelog_ok, changelog_error, notes, relay_status, token_admin]
+
+  - id: require-changelog
+    depends_on: [facts-final]
+    when: "$facts-final.output.changelog_ok == false"
+    cancel: "The changelog still has no section for $INPUTS.version on main ($facts-final.output.changelog_error). Merge the changelog change, then start a new run."
+
+  # ---- 2. confirm the facts before spending CI ----------------------------------------------
+  - id: confirm-facts
+    depends_on: [facts-final, require-changelog]
+    trigger_rule: none_failed_min_one_success
+    wait:
+      attention: |
+        Release $facts-final.output.version ($facts-final.output.channel channel) from origin/main at
+        $facts-final.output.main_sha: "$facts-final.output.main_subject".
+
+        Tags already on that commit (must be empty): "$facts-final.output.tags_on_commit"
+        Recent tags: $facts-final.output.recent_tags
+        Token holds admin on the repository: $facts-final.output.token_admin (the "release tags" ruleset
+        refuses tag creation to anyone without a bypass; if false, the real cut will most likely be refused).
+        OAuth relay health: $facts-final.output.relay_status (a relay that is down does not block a
+        release, but organization servers using the built-in apps cannot sign in until it is back).
+
+        Release notes that would ship (stable only):
+        $facts-final.output.notes
+
+        Approve to dispatch the build.yml pre-flight against this exact commit. Nothing is published by it.
+      form: approval
+      labels:
+        workflow: devflow-release
+        stage: confirm-facts
+
+  - id: stop-facts
+    depends_on: [confirm-facts]
+    when: "$confirm-facts.output.decision == 'reject'"
+    cancel: "Release stopped before the pre-flight: $confirm-facts.output.text"
+
+  # ---- 3. pre-flight build.yml on the exact commit --------------------------------------------
+  - id: preflight-build
+    depends_on: [confirm-facts]
+    when: "$confirm-facts.output.decision == 'approve'"
+    script: dispatch-wait
+    runtime: bun
+    timeout: 7200000
+    with:
+      workflow: build.yml
+      ref: main
+      expected_sha: "$facts-final.output.main_sha"
+      required_jobs: '["build","build-windows","build-deb","build-org-image (amd64)","build-org-image (arm64)","sbom"]'
+      timeout_min: "110"
+    output_format:
+      type: object
+      properties:
+        run_id: { type: integer }
+        url: { type: string }
+        conclusion: { type: string }
+        jobs: { type: array, items: { type: object, properties: { name: { type: string }, conclusion: { type: string } } } }
+        excerpt: { type: string }
+      required: [run_id, url, conclusion, jobs, excerpt]
+
+  # ---- 4. dry run of the tag: scripts/tag_release.py without --push -------------------------
+  - id: dry-run
+    depends_on: [preflight-build]
+    script: tag
+    runtime: bun
+    timeout: 600000
+    with:
+      mode: dry
+      version: "$INPUTS.version"
+      main_sha: "$facts-final.output.main_sha"
+    output_format:
+      type: object
+      properties:
+        ok: { type: boolean }
+        tag: { type: string }
+        sha: { type: string }
+        pushed: { type: boolean }
+      required: [ok, tag, sha, pushed]
+
+  # ---- 5. the real cut: the one irreversible step ---------------------------------------------
+  - id: approve-cut
+    depends_on: [dry-run]
+    wait:
+      attention: |
+        Cut v$facts-final.output.version for real?
+
+        Pre-flight build.yml: green on every required job. $preflight-build.output.url
+        Dry run of the tag ($dry-run.output.tag at $dry-run.output.sha): every check of scripts/tag_release.py passed.
+
+        Approving pushes the tag v$facts-final.output.version on $facts-final.output.main_sha and starts build.yml and
+        publish-pypi.yml. That cannot be taken back.
+      form: approval
+      labels:
+        workflow: devflow-release
+        stage: approve-cut
+
+  - id: stop-cut
+    depends_on: [approve-cut]
+    when: "$approve-cut.output.decision == 'reject'"
+    cancel: "Real cut not approved: $approve-cut.output.text"
+
+  - id: cut
+    depends_on: [approve-cut]
+    when: "$approve-cut.output.decision == 'approve'"
+    script: tag
+    runtime: bun
+    timeout: 600000
+    with:
+      mode: cut
+      version: "$INPUTS.version"
+      main_sha: "$facts-final.output.main_sha"
+    output_format:
+      type: object
+      properties:
+        ok: { type: boolean }
+        tag: { type: string }
+        sha: { type: string }
+        pushed: { type: boolean }
+      required: [ok, tag, sha, pushed]
+
+  - id: report
+    depends_on: [cut]
+    script: release-report
+    runtime: bun
+    timeout: 900000
+    with:
+      version: "$INPUTS.version"
+      main_sha: "$facts-final.output.main_sha"
+    output_format:
+      type: object
+      properties:
+        tag: { type: string }
+        build_url: { type: string }
+        publish_pypi_url: { type: string }
+      required: [tag, build_url, publish_pypi_url]

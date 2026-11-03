@@ -1,0 +1,132 @@
+name: devflow-docs
+description: |
+  Review the documentation and the website, then fix what the review found, through to a merged
+  pull request. An Opus reviewer applies the toolkit's docs-review checklist (accuracy against
+  the code, validity of commands and links, completeness, consistency, clarity, staleness, and the
+  website's build and basics) and writes the fixes down; a Sonnet session makes them with
+  verify.fast and a website build; then the shared delivery tail (Opus review with fix rounds,
+  the definition of done, one PR, a watch until a person merges). Anything that is a product or
+  wording decision for a person is listed in the PR, not guessed. Never merges.
+
+  Use when: "review and fix the docs", a release is near, a feature changed behaviour the docs describe.
+  NOT for: code review (devflow-ship's tail reviews its own diff), a security audit (devflow-audit).
+model: large
+worktree:
+  enabled: true
+inputs:
+  scope:
+    default: ""
+    description: Paths, a directory or an area to focus on (for example docs/ or website/). Empty means all documentation and the website.
+returns: tail
+outcome_field: merged
+
+nodes:
+  - id: preflight
+    script: preflight
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        devflow_root: { type: string }
+        main_branch: { type: string }
+        branch_regex: { type: string }
+      required: [devflow_root, main_branch, branch_regex]
+
+  - id: setup
+    depends_on: [preflight]
+    script: setup-env
+    runtime: bun
+    timeout: 1800000
+
+  - id: review-docs
+    depends_on: [setup]
+    command: review-docs
+    model: large
+    output_format:
+      type: object
+      properties:
+        fix_count: { type: integer }
+        summary: { type: string }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+      required: [fix_count, summary, slug, branch, title]
+
+  - id: nothing-to-fix
+    depends_on: [review-docs]
+    when: "$review-docs.output.fix_count == 0"
+    cancel: "The docs review found nothing to fix: $review-docs.output.summary"
+
+  - id: prepare-branch
+    depends_on: [review-docs]
+    when: "$review-docs.output.fix_count > 0"
+    script: prepare-branch
+    runtime: bun
+    with:
+      plan: "$review-docs.output"
+      branch_regex: "$preflight.output.branch_regex"
+      main_branch: "$preflight.output.main_branch"
+      devflow_root: "$preflight.output.devflow_root"
+    output_format:
+      type: object
+      properties:
+        proceed: { type: boolean }
+        reason: { type: string }
+        scope: { type: string }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+      required: [proceed, reason, scope, slug, branch, title]
+
+  - id: stop-at-branch
+    depends_on: [prepare-branch]
+    when: "$prepare-branch.output.proceed == false"
+    cancel: "Stopped before any edit: $prepare-branch.output.reason"
+
+  - id: build
+    depends_on: [prepare-branch]
+    loop_group:
+      nodes:
+        - id: implement
+          command: edit-docs
+          model: medium
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              status: { type: string, enum: [continue, complete, blocked] }
+              phase: { type: string }
+              summary: { type: string }
+            required: [status, phase, summary]
+        - id: check
+          depends_on: [implement]
+          script: verify
+          runtime: bun
+          timeout: 1800000
+          with:
+            mode: fast
+          output_format:
+            type: object
+            properties:
+              green: { type: boolean }
+              failed: { type: array, items: { type: string } }
+              unavailable: { type: array, items: { type: string } }
+              report: { type: string }
+            required: [green, failed, unavailable, report]
+      until_bash: 's=$implement.output.status; g=$check.output.green; [ "$s" = blocked ] || { [ "$s" = complete ] && [ "$g" = true ]; }'
+      max_iterations: 6
+
+  - id: gate-build
+    depends_on: [build]
+    script: gate-build
+    runtime: bun
+    with:
+      branch: "$prepare-branch.output.branch"
+      main_branch: "$preflight.output.main_branch"
+      slug: "$prepare-branch.output.slug"
+      green: "$build.output.green"
+      phases: none
+
+  - id: tail
+    include: devflow-tail
+    depends_on: [gate-build]

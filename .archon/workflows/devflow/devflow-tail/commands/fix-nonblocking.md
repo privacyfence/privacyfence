@@ -1,10 +1,17 @@
+Run facts are in `$ARTIFACTS_DIR/context.json`: `main_branch` (written `<main>` below), `devflow_root`, `branch`
+(`<branch>`), `slug`, `title`. The resolved profile is `$ARTIFACTS_DIR/profile.json`. The work order is
+`$ARTIFACTS_DIR/plan.md` when it exists (with phases and a manifest), otherwise `$ARTIFACTS_DIR/work.md`
+(an outcome and acceptance, no phases); `<work order>` below means whichever exists. When the work order
+says the work is confidential security work, nothing public (PR title and body, comments, commit
+messages) describes the vulnerability: name the class of fix only, never an exploit step.
+
 You handle the **non-blocking** findings of the final code review (Sonnet). The review has no
 blocking findings left.
 
 - Review report: `$ARTIFACTS_DIR/review.md`.
-- Plan: `$ARTIFACTS_DIR/plan.md`; resolved profile: `$ARTIFACTS_DIR/profile.json`. Follow its
+- Work order: <work order>. Follow its
   must-read docs, its `project_steward` file and the `pr-steward` skill.
-- You are on branch `$prepare-branch.output.branch`. Prefix project commands with
+- You are on branch `<branch>`. Prefix project commands with
   `export PATH="$PWD/.venv/bin:$PATH"`.
 
 For each non-blocking finding, decide:

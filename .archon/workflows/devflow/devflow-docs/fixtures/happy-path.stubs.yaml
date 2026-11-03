@@ -1,0 +1,58 @@
+# Docs review finds fixes, they are made, reviewed, and the PR merges.
+fixture:
+  expect: completed
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+review-docs:
+  fix_count: 3
+  summary: 3 fixes
+  slug: docs-accuracy
+  branch: chore/docs-accuracy
+  title: Correct docs against the code
+prepare-branch:
+  proceed: true
+  reason: stub
+  scope: small
+  slug: docs-accuracy
+  branch: chore/docs-accuracy
+  title: Correct docs against the code
+implement:
+  status: complete
+  phase: docs
+  summary: stub
+check:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub/verify-fast.md
+gate-build: '{"commits":2,"phases":0,"head":"abc"}'
+review:
+  verdict: approve
+  blocking: 0
+  non_blocking: 1
+  head: abc
+fix-blocking: fixed
+tail__fix-nonblocking: done
+dod:
+  green: true
+  failed: []
+  unavailable:
+  - (cd mcpb/shim && npm test)
+  report: /stub/verify-dod.md
+dod-fix: fixed
+tail__open-pr:
+  number: 1100
+  url: https://github.com/privacyfence/privacyfence/pull/1100
+pr-state:
+  finished: true
+  state: MERGED
+  act: false
+  reasons: nothing new
+steward: done
+tail__finish:
+  merged: true
+  state: MERGED
+  url: https://github.com/privacyfence/privacyfence/pull/1100

@@ -1,11 +1,18 @@
-Open the one pull request for this change (Sonnet). Branch `$prepare-branch.output.branch`, base
-`$preflight.output.main_branch`, title from the plan: "$prepare-branch.output.title".
+Run facts are in `$ARTIFACTS_DIR/context.json`: `main_branch` (written `<main>` below), `devflow_root`, `branch`
+(`<branch>`), `slug`, `title`. The resolved profile is `$ARTIFACTS_DIR/profile.json`. The work order is
+`$ARTIFACTS_DIR/plan.md` when it exists (with phases and a manifest), otherwise `$ARTIFACTS_DIR/work.md`
+(an outcome and acceptance, no phases); `<work order>` below means whichever exists. When the work order
+says the work is confidential security work, nothing public (PR title and body, comments, commit
+messages) describes the vulnerability: name the class of fix only, never an exploit step.
 
-1. `git status --porcelain` must be empty. Push with `git push -u origin $prepare-branch.output.branch`.
+Open the one pull request for this change (Sonnet). Branch `<branch>`, base
+`<main>`, title from the plan: "<title>".
+
+1. `git status --porcelain` must be empty. Push with `git push -u origin <branch>`.
    Never force-push. If the push is refused, stop and say why.
-2. If `gh pr list --head $prepare-branch.output.branch --state open` already finds a PR (a resumed
+2. If `gh pr list --head <branch> --state open` already finds a PR (a resumed
    run), update its body with `gh pr edit` instead of opening another.
-3. Otherwise `gh pr create --base $preflight.output.main_branch --head $prepare-branch.output.branch`,
+3. Otherwise `gh pr create --base <main> --head <branch>`,
    ready for review (not a draft), with the body below. Prefix the title with its type when the
    repo's convention asks for it.
 
@@ -14,7 +21,7 @@ tick what was run and passed, and strike through a row that does not apply with 
 Build it from the run's files, never from memory:
 
 - **What this changes**: the plan's Goal, and the issue it closes (`Closes #<n>`) if the work
-  named one. Read `$ARTIFACTS_DIR/plan.md`.
+  named one. Read <work order>.
 - **Phases**: each phase with its commit (`git log --grep "Plan-Phase:"`), and the combined
   acceptance checklist.
 - **Definition of done**: from `$ARTIFACTS_DIR/verify-dod.md`. A row marked `UNAVAILABLE` was not
@@ -25,9 +32,11 @@ Build it from the run's files, never from memory:
 - **Non-blocking findings**: the table from `$ARTIFACTS_DIR/non-blocking.md`.
 - **Decisions**: the ADRs added, or, if the plan's Design made no ADR-worthy decision, a line
   saying so.
+- **Needs a person**: if `$ARTIFACTS_DIR/docs-review.md` exists, quote its `## Needs a person`
+  section (a docs review leaves product and wording decisions to people).
 - **Manual verification**: each `manual_after` item from the plan's manifest as an unchecked box,
   with its steps from the plan's "Manual steps" section. Omit the section if there are none.
 
 Read the PR back with `gh pr view <number> --json number,url,headRefOid,baseRefName` and check that
-its head is your pushed `HEAD` and its base is `$preflight.output.main_branch`. Return `number`
+its head is your pushed `HEAD` and its base is `<main>`. Return `number`
 and `url`.

@@ -2,7 +2,7 @@
 exec-code: true
 fixture:
   expect: failed
-  fail-node: dod-gate
+  fail-node: tail__dod-gate
 preflight:
   devflow_root: /stub/devflow
   main_branch: main
@@ -38,14 +38,14 @@ review:
   non_blocking: 1
   head: abc
 fix-blocking: fixed
-fix-nonblocking: done
+tail__fix-nonblocking: done
 dod:
   green: false
   failed: []
   unavailable: ["(cd mcpb/shim && npm test)"]
   report: /stub/verify-dod.md
 dod-fix: fixed
-open-pr:
+tail__open-pr:
   number: 1100
   url: https://github.com/privacyfence/privacyfence/pull/1100
 pr-state:
@@ -54,7 +54,7 @@ pr-state:
   act: false
   reasons: nothing new
 steward: done
-finish:
+tail__finish:
   merged: true
   state: MERGED
   url: https://github.com/privacyfence/privacyfence/pull/1100

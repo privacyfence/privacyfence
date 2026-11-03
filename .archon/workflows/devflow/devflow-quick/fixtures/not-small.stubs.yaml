@@ -1,0 +1,14 @@
+# RED: the scoping agent says it is not a small edit; the run is cancelled before any branch or edit.
+fixture:
+  expect: cancelled
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+scope:
+  fits: false
+  reason: needs a design decision
+  slug: ''
+  branch: ''
+  title: ''

@@ -1,0 +1,37 @@
+# RED: after the changelog PR the section is still missing on main; the run is cancelled before any CI is spent.
+fixture:
+  expect: cancelled
+  inputs:
+    version: "7.1.0"
+require-version:
+  ok: true
+facts:
+  version: "7.1.0"
+  channel: stable
+  main_sha: "4bda3bc1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  main_subject: "Merge a pull request"
+  tags_on_commit: ""
+  recent_tags: ["v7.0.1", "v7.0.0"]
+  changelog_ok: false
+  changelog_error: "CHANGELOG.md has no section for 7.1.0"
+  notes: "### Added\n- stub"
+  relay_status: "200"
+  token_admin: true
+facts-final:
+  version: "7.1.0"
+  channel: stable
+  main_sha: "4bda3bc1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  main_subject: "Merge a pull request"
+  tags_on_commit: ""
+  recent_tags: ["v7.0.1", "v7.0.0"]
+  changelog_ok: false
+  changelog_error: "CHANGELOG.md has no section for 7.1.0"
+  notes: "### Added\n- stub"
+  relay_status: "200"
+  token_admin: true
+changelog:
+  number: 1101
+  url: https://github.com/privacyfence/privacyfence/pull/1101
+merged:
+  finished: true
+  state: MERGED

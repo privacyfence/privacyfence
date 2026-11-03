@@ -1,0 +1,34 @@
+# RED: the facts are not confirmed; nothing is dispatched.
+fixture:
+  expect: cancelled
+  inputs:
+    version: "7.1.0"
+require-version:
+  ok: true
+facts:
+  version: "7.1.0"
+  channel: stable
+  main_sha: "4bda3bc1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  main_subject: "Merge a pull request"
+  tags_on_commit: ""
+  recent_tags: ["v7.0.1", "v7.0.0"]
+  changelog_ok: true
+  changelog_error: ""
+  notes: "### Added\n- stub"
+  relay_status: "200"
+  token_admin: true
+facts-final:
+  version: "7.1.0"
+  channel: stable
+  main_sha: "4bda3bc1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  main_subject: "Merge a pull request"
+  tags_on_commit: ""
+  recent_tags: ["v7.0.1", "v7.0.0"]
+  changelog_ok: true
+  changelog_error: ""
+  notes: "### Added\n- stub"
+  relay_status: "200"
+  token_admin: true
+confirm-facts:
+  decision: reject
+  text: "wrong commit"

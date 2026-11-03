@@ -1,0 +1,41 @@
+# The token is not admin: the changes are reported, nothing is asked or applied.
+fixture:
+  expect: completed
+snapshot:
+  repo: privacyfence/privacyfence
+  default_branch: main
+  visibility: public
+  can_admin: false
+  role: write
+  reference: ''
+  reference_ok: false
+  unreadable:
+  - actions_permissions (403)
+review-config:
+  clean: false
+  summary: 1 proposals
+  file_count: 0
+  slug: ''
+  branch: ''
+  title: ''
+  proposals:
+  - id: c1
+    area: repo-settings
+    title: Delete branches on merge
+    why: CONTRIBUTING says merged branches are deleted
+    evidence: snapshot.repo.data.delete_branch_on_merge=false
+    risk: low
+    reversible: true
+    kind: api
+    ops:
+    - method: PATCH
+      endpoint: repos/privacyfence/privacyfence
+      body: '{"delete_branch_on_merge":true}'
+ops:
+  count: 1
+  options:
+  - id: c1
+    label: c1 [low] Delete branches on merge
+  ask: Settings changes proposed
+  rejected: []
+no-admin: '{"applied":false}'

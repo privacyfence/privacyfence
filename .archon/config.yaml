@@ -1,0 +1,3 @@
+defaults:
+  loadDefaultWorkflows: false   # hide the bundled archon-* workflows
+  loadDefaultCommands: false

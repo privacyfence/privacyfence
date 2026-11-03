@@ -1,0 +1,83 @@
+# A workflow-file change: no settings question, a branch is cut and the shared tail runs to a merged PR.
+fixture:
+  expect: completed
+snapshot:
+  repo: privacyfence/privacyfence
+  default_branch: main
+  visibility: public
+  can_admin: false
+  role: write
+  reference: ''
+  reference_ok: false
+  unreadable:
+  - actions_permissions (403)
+review-config:
+  clean: false
+  summary: 1 proposals
+  file_count: 1
+  slug: repo-config-pins
+  branch: chore/repo-config-pins
+  title: Pin workflow actions
+  proposals:
+  - id: c2
+    area: workflow-file
+    title: Delete branches on merge
+    why: CONTRIBUTING says merged branches are deleted
+    evidence: snapshot.repo.data.delete_branch_on_merge=false
+    risk: low
+    reversible: true
+    kind: file
+    ops: []
+ops:
+  count: 0
+  options: []
+  ask: Settings changes proposed
+  rejected: []
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+prepare-branch:
+  proceed: true
+  reason: stub
+  scope: small
+  slug: repo-config-pins
+  branch: chore/repo-config-pins
+  title: Pin workflow actions
+implement:
+  status: complete
+  phase: config
+  summary: stub
+check:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub
+gate-build: '{"commits":1,"phases":0,"head":"abc"}'
+review:
+  verdict: approve
+  blocking: 0
+  non_blocking: 0
+  head: abc
+fix-blocking: fixed
+tail__fix-nonblocking: done
+dod:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub
+dod-fix: fixed
+tail__open-pr:
+  number: 1100
+  url: https://github.com/privacyfence/privacyfence/pull/1100
+pr-state:
+  finished: true
+  state: MERGED
+  act: false
+  reasons: nothing new
+steward: done
+tail__finish:
+  merged: true
+  state: MERGED
+  url: https://github.com/privacyfence/privacyfence/pull/1100

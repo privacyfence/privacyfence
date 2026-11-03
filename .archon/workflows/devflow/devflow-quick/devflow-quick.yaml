@@ -1,0 +1,133 @@
+name: devflow-quick
+description: |
+  A small edit without a plan, from an ask to a merged pull request: one agent judges whether the
+  request really is small and writes a short work order, a Sonnet session makes the edit with
+  verify.fast, then the same delivery tail as devflow-ship (Opus review with fix rounds, the
+  non-blocking findings, the definition of done, one PR, a watch until a person merges).
+
+  It refuses what is not small (a design decision, more than a handful of files, an ADR-worthy
+  or trust-boundary change, a new connector, a dependency bump) and says to use devflow-ship.
+  Never merges.
+
+  Use when: a typo, a wording change, a one-file bug fix, a config tweak, a test for existing code.
+  NOT for: anything that needs a plan (devflow-ship), docs and website review (devflow-docs).
+model: large
+worktree:
+  enabled: true
+inputs:
+  work:
+    default: ""
+    description: The edit to make (an issue number or URL, or a description). Empty means the run's message is the work.
+returns: tail
+outcome_field: merged
+
+nodes:
+  - id: preflight
+    script: preflight
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        devflow_root: { type: string }
+        main_branch: { type: string }
+        branch_regex: { type: string }
+      required: [devflow_root, main_branch, branch_regex]
+
+  - id: setup
+    depends_on: [preflight]
+    script: setup-env
+    runtime: bun
+    timeout: 1800000
+
+  - id: scope
+    depends_on: [setup]
+    command: scope
+    model: large
+    output_format:
+      type: object
+      properties:
+        fits: { type: boolean }
+        reason: { type: string }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+      required: [fits, reason, slug, branch, title]
+
+  - id: refuse
+    depends_on: [scope]
+    when: "$scope.output.fits == false"
+    cancel: "Not a small edit, so no edit was made: $scope.output.reason. Use devflow-ship for this."
+
+  - id: prepare-branch
+    depends_on: [scope]
+    when: "$scope.output.fits == true"
+    script: prepare-branch
+    runtime: bun
+    with:
+      plan: "$scope.output"
+      branch_regex: "$preflight.output.branch_regex"
+      main_branch: "$preflight.output.main_branch"
+      devflow_root: "$preflight.output.devflow_root"
+    output_format:
+      type: object
+      properties:
+        proceed: { type: boolean }
+        reason: { type: string }
+        scope: { type: string }
+        slug: { type: string }
+        branch: { type: string }
+        title: { type: string }
+      required: [proceed, reason, scope, slug, branch, title]
+
+  - id: stop-at-branch
+    depends_on: [prepare-branch]
+    when: "$prepare-branch.output.proceed == false"
+    cancel: "Stopped before any edit: $prepare-branch.output.reason"
+
+  - id: build
+    depends_on: [prepare-branch]
+    loop_group:
+      nodes:
+        - id: implement
+          command: edit
+          model: medium
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              status: { type: string, enum: [continue, complete, blocked] }
+              phase: { type: string }
+              summary: { type: string }
+            required: [status, phase, summary]
+        - id: check
+          depends_on: [implement]
+          script: verify
+          runtime: bun
+          timeout: 1800000
+          with:
+            mode: fast
+          output_format:
+            type: object
+            properties:
+              green: { type: boolean }
+              failed: { type: array, items: { type: string } }
+              unavailable: { type: array, items: { type: string } }
+              report: { type: string }
+            required: [green, failed, unavailable, report]
+      until_bash: 's=$implement.output.status; g=$check.output.green; [ "$s" = blocked ] || { [ "$s" = complete ] && [ "$g" = true ]; }'
+      max_iterations: 6
+
+  - id: gate-build
+    depends_on: [build]
+    script: gate-build
+    runtime: bun
+    with:
+      branch: "$prepare-branch.output.branch"
+      main_branch: "$preflight.output.main_branch"
+      slug: "$prepare-branch.output.slug"
+      green: "$build.output.green"
+      phases: none
+
+  - id: tail
+    include: devflow-tail
+    depends_on: [gate-build]

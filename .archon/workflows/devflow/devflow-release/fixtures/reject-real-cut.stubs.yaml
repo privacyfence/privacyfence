@@ -1,0 +1,48 @@
+# RED: the dry run is fine but the person rejects the real cut; the run is cancelled and cut never runs.
+fixture:
+  expect: cancelled
+  inputs:
+    version: "7.1.0"
+require-version:
+  ok: true
+facts:
+  version: "7.1.0"
+  channel: stable
+  main_sha: "4bda3bc1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  main_subject: "Merge a pull request"
+  tags_on_commit: ""
+  recent_tags: ["v7.0.1", "v7.0.0"]
+  changelog_ok: true
+  changelog_error: ""
+  notes: "### Added\n- stub"
+  relay_status: "200"
+  token_admin: true
+facts-final:
+  version: "7.1.0"
+  channel: stable
+  main_sha: "4bda3bc1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  main_subject: "Merge a pull request"
+  tags_on_commit: ""
+  recent_tags: ["v7.0.1", "v7.0.0"]
+  changelog_ok: true
+  changelog_error: ""
+  notes: "### Added\n- stub"
+  relay_status: "200"
+  token_admin: true
+confirm-facts:
+  decision: approve
+  text: ""
+preflight-build:
+  run_id: 1
+  url: https://github.com/privacyfence/privacyfence/actions/runs/1
+  conclusion: success
+  jobs: []
+  excerpt: "would push tag v7.1.0"
+dry-run:
+  ok: true
+  tag: v7.1.0
+  sha: 4bda3bc1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  pushed: false
+approve-cut:
+  decision: reject
+  text: "wait for the docs fix"

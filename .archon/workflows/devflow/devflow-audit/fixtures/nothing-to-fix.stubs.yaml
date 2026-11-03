@@ -1,0 +1,16 @@
+# RED: triage disproves everything; the run ends before any plan and nothing is filed.
+fixture:
+  expect: cancelled
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+audit:
+  findings: 2
+  measured: x
+triage:
+  fix_count: 0
+  needs_user: false
+  ask: ''
+  summary: 0 to fix, 2 not doing
