@@ -1,0 +1,58 @@
+# RED: the branch name does not follow git.branch_pattern; the run stops before any edit.
+fixture:
+  expect: cancelled
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{"venv":".venv","notes":[]}'
+scope:
+  fits: true
+  reason: one file
+  slug: fix-typo
+  branch: fix/fix-typo
+  title: Fix a typo
+prepare-branch:
+  proceed: false
+  reason: stub
+  scope: small
+  slug: x
+  branch: feat/x
+  title: t
+implement:
+  status: complete
+  phase: edit
+  summary: stub
+check:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub/verify-fast.md
+gate-build: '{"commits":1,"phases":0,"head":"abc"}'
+review:
+  verdict: approve
+  blocking: 0
+  non_blocking: 1
+  head: abc
+fix-blocking: fixed
+tail__fix-nonblocking: done
+dod:
+  green: true
+  failed: []
+  unavailable:
+  - (cd mcpb/shim && npm test)
+  report: /stub/verify-dod.md
+dod-fix: fixed
+tail__open-pr:
+  number: 1100
+  url: https://github.com/privacyfence/privacyfence/pull/1100
+pr-state:
+  finished: true
+  state: MERGED
+  act: false
+  reasons: nothing new
+steward: done
+tail__finish:
+  merged: true
+  state: MERGED
+  url: https://github.com/privacyfence/privacyfence/pull/1100

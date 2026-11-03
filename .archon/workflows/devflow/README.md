@@ -1,5 +1,22 @@
 # devflow pack for Archon
 
+Five workflows built on the devflow toolkit ([andras-tkcs/claude-toolkit](https://github.com/andras-tkcs/claude-toolkit)),
+the only workflows this repo exposes (`.archon/config.yaml` turns the bundled `archon-*` ones off).
+
+| Workflow | Use it for | Pauses for a person when |
+|---|---|---|
+| `devflow-ship` | An issue or change that needs a plan, through to a merged PR | The planner has a decision only you can make, or `manual_before` steps to confirm |
+| `devflow-quick` | A small edit with no plan (a typo, a one-file fix); refuses anything bigger | Never; it cancels with the reason if the edit is not small |
+| `devflow-docs` | Review the docs and the website, fix what is wrong | Never; undecidable items are listed in the PR |
+| `devflow-audit` | Security audit, then verify the findings, plan and fix them | The verifier leaves a decision to the maintainer |
+| `devflow-release` | Changelog PR, pre-flight, dry run, real tag | Confirming the facts, merging the changelog PR, approving the real cut |
+
+`devflow-tail` is the shared building block (review, fixes, definition of done, PR, watch) that the
+first three include (`devflow-audit` reaches it through `devflow-ship`); it is not run on its own. No
+workflow merges.
+
+## devflow-ship, step by step
+
 `devflow-ship` runs the devflow toolkit's flow ([andras-tkcs/claude-toolkit](https://github.com/andras-tkcs/claude-toolkit))
 as one Archon run, from an ask to a merged pull request:
 
@@ -55,5 +72,29 @@ archon validate workflows devflow-ship
 archon workflow test devflow-ship
 ```
 
-The `review-never-clears` and `dod-stays-red` fixtures execute the gates (`exec-code: true`) and
-must stay red.
+Fixtures named for a red path (`review-never-clears`, `dod-stays-red`, `not-small`, `nothing-to-fix`,
+`reject-real-cut`, ...) must stay red; the ones that execute a gate set `exec-code: true`.
+
+## The other workflows
+
+- **devflow-quick** writes a short `work.md` instead of a plan, makes the edit in one Sonnet session
+  with `verify.fast`, then runs the tail. Its scoping agent refuses a change that needs a design
+  decision, touches the gate, auth or the audit log, meets the ADR bar, adds a connector or bumps a
+  dependency, and says to use `devflow-ship`.
+- **devflow-docs** has an Opus reviewer apply the `docs-review` checklist and measure (website build,
+  documented commands, links, changelog coverage). The fixes become `work.md`; what is a product or
+  wording decision goes to the PR's "Needs a person" section instead of into edits.
+- **devflow-audit** runs an auditor, then a fresh verifier that tries to disprove every finding and
+  decides fix, not doing or needs a decision, then includes `devflow-ship` with the surviving findings
+  as the work. `SECURITY.md` forbids public issues for vulnerabilities, so the findings never leave the
+  run's artifacts: no issue, and the PR names the class of fix, not how to attack it.
+- **devflow-release** reads facts at `origin/main`'s tip, opens a changelog PR when a stable version has
+  no section (and waits for you to merge it), asks you to confirm the facts, dispatches `build.yml`
+  against that exact commit and requires every release job green, dispatches `release.yml` with
+  `dry_run=true`, and only after your approval dispatches it with `dry_run=false`. It then reports the
+  tag and the `build.yml` and `publish-pypi.yml` runs, and fails loudly if the tag was pushed but no
+  build started. `--input version=7.1.0` is required and never inferred. If the pre-flight fails, fix
+  `main` and start a new run: a resumed run would reuse the old commit.
+
+Run any of them with `archon workflow run <name> "<the work>" --detach`
+(`--input version=...` for the release, `--input scope=...` for docs and audit).

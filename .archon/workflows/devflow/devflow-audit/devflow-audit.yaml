@@ -1,0 +1,115 @@
+name: devflow-audit
+description: |
+  A cybersecurity audit taken through to fixes: audit, review the findings, make a plan,
+  implement (then the shared review, definition of done, PR and watch of devflow-ship).
+
+  1. An Opus auditor applies the toolkit's secure-code-review checklist to the repository (or the
+     scope you name): trust boundaries, secrets in the tree and in history, injection, authorization,
+     CI permissions and action pins, supply chain, and the repo's own bandit and dependency audits.
+  2. A fresh Opus reviewer tries to disprove every finding against the code, the ADRs and
+     SECURITY.md's scope, drops what does not hold, and decides: fix, not doing (with the reason),
+     or a decision only the maintainer can make. Only that last group pauses the run, as one
+     question.
+  3. The fixes go through devflow-ship: make-plan, implement, review, fix, definition of done, PR.
+
+  Confidential by construction: SECURITY.md forbids public issues for vulnerabilities, so the
+  findings live in the run's artifacts only. No issue is filed, and the PR names the class of fix,
+  never an exploit step or an unfixed finding. Never merges.
+
+  Use when: "audit the repo", before a release, after a dependency or architecture change.
+  NOT for: a single known vulnerability report (devflow-ship with the report as work), or docs review.
+model: large
+worktree:
+  enabled: true
+inputs:
+  scope:
+    default: ""
+    description: Paths, a directory or an area to audit (for example src/privacyfence/web/ or .github/). Empty means the whole repository.
+returns: ship
+outcome_field: merged
+
+nodes:
+  - id: preflight
+    script: preflight
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        devflow_root: { type: string }
+        main_branch: { type: string }
+        branch_regex: { type: string }
+      required: [devflow_root, main_branch, branch_regex]
+
+  - id: setup
+    depends_on: [preflight]
+    script: setup-env
+    runtime: bun
+    timeout: 1800000
+
+  - id: audit
+    depends_on: [setup]
+    command: audit
+    model: large
+    output_format:
+      type: object
+      properties:
+        findings: { type: integer }
+        measured: { type: string }
+      required: [findings, measured]
+
+  - id: triage
+    depends_on: [audit]
+    command: triage
+    model: large
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        fix_count: { type: integer }
+        needs_user: { type: boolean }
+        ask: { type: string }
+        summary: { type: string }
+      required: [fix_count, needs_user, ask, summary]
+
+  - id: nothing-to-fix
+    depends_on: [triage]
+    when: "$triage.output.fix_count == 0 && $triage.output.needs_user == false"
+    cancel: "The audit left nothing to fix: $triage.output.summary (the full record is audit.md in the run artifacts)."
+
+  - id: decide
+    depends_on: [triage]
+    when: "$triage.output.needs_user == true"
+    wait:
+      attention: "$triage.output.ask"
+      form: message
+      labels:
+        workflow: devflow-audit
+        stage: findings
+
+  - id: save-decisions
+    depends_on: [decide]
+    script: save-decisions
+    runtime: bun
+    with:
+      answer: "$decide.output.text"
+
+  # ---- plan and implement the fixes through devflow-ship --------------------------------------
+  - id: ship
+    include: devflow-ship
+    depends_on: [triage, save-decisions]
+    trigger_rule: none_failed_min_one_success
+    when: "$triage.output.fix_count > 0 || $triage.output.needs_user == true"
+    with:
+      work: |
+        CONFIDENTIAL SECURITY WORK. Plan and fix the findings of the security audit in
+        $ARTIFACTS_DIR/audit.md: exactly the entries under its "Findings to fix" heading, plus any
+        entry under "Needs a decision" that $ARTIFACTS_DIR/audit-decisions.md (if it exists) says to
+        fix, in the way it says. Nothing else: "Not doing" entries are decided and out of scope.
+        audit.md is a review document in the /review format (status ready-for-plan); every finding
+        id appears in the acceptance of the phase that fixes it.
+
+        State in the plan's Goal that this is confidential security work. The plan, the audit and
+        the findings stay in the run's artifacts: never commit them, never file an issue, and
+        never quote a finding's exploit steps or an unfixed finding in a commit message, a PR
+        title or body, or a comment. Describe each fix by the class of weakness it closes
+        ("validate X before Y"), not by how to attack it.

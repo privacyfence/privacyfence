@@ -1,0 +1,149 @@
+name: devflow-tail
+description: |
+  Building block, not a workflow to run alone. The delivery tail every devflow workflow shares:
+  Opus review with fix rounds until no blocking finding is left, the non-blocking findings fixed
+  or declined, the definition of done (verify.dod), one ready PR, then a watch that hands
+  conflicts, red checks and review threads to a steward until a person merges or closes it.
+  Never merges.
+
+  Reads its facts from $ARTIFACTS_DIR (context.json, profile.json, and plan.md or work.md), which
+  the including workflow writes before it starts; the branch is committed and the tree clean.
+model: large
+returns: finish
+
+nodes:
+  # ---- 3 + 4. review (Opus, fresh) and fix the blocking findings, until none are left ------
+  # Each round fixes what the previous review found, then reviews again, so the loop's output
+  # is always the latest review's verdict; review-gate reads it after the loop.
+  - id: review-loop
+    loop_group:
+      nodes:
+        - id: fix-blocking
+          when: "$LOOP_PREV.review.output.blocking > 0"
+          command: fix-blocking
+          model: medium
+          context: fresh
+        - id: review
+          depends_on: [fix-blocking]
+          trigger_rule: all_done
+          command: review
+          model: large
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              verdict: { type: string, enum: [approve, changes] }
+              blocking: { type: integer }
+              non_blocking: { type: integer }
+              head: { type: string }
+            required: [verdict, blocking, non_blocking, head]
+      until_bash: 'b=$review.output.blocking; [ "$b" -eq 0 ]'
+      max_iterations: 3
+
+  - id: review-gate
+    depends_on: [review-loop]
+    when: "$review-loop.output.blocking > 0"
+    bash: 'echo "devflow: the review still has blocking findings after its last round; a person decides next (see review.md in the run artifacts)" >&2; exit 1'
+
+  # ---- 5. fix the non-blocking findings (or decline each with a reason) -------------------
+  - id: fix-nonblocking
+    depends_on: [review-loop, review-gate]
+    trigger_rule: none_failed_min_one_success
+    command: fix-nonblocking
+    model: medium
+    context: fresh
+
+  # ---- Definition of done: verify.dod must be green before the PR opens ------------------
+  - id: dod-loop
+    depends_on: [fix-nonblocking]
+    loop_group:
+      nodes:
+        - id: dod-fix
+          when: "$LOOP_PREV.dod.output.green == false"
+          command: dod-fix
+          model: medium
+          context: fresh
+        - id: dod
+          depends_on: [dod-fix]
+          trigger_rule: all_done
+          script: verify
+          runtime: bun
+          timeout: 3600000
+          with:
+            mode: dod
+          output_format:
+            type: object
+            properties:
+              green: { type: boolean }
+              failed: { type: array, items: { type: string } }
+              unavailable: { type: array, items: { type: string } }
+              report: { type: string }
+            required: [green, failed, unavailable, report]
+      until_bash: 'g=$dod.output.green; [ "$g" = true ]'
+      max_iterations: 3
+
+  - id: dod-gate
+    depends_on: [dod-loop]
+    when: "$dod-loop.output.green == false"
+    bash: 'echo "devflow: the definition of done is still red after its last fix; no PR was opened (see verify-dod.md in the run artifacts)" >&2; exit 1'
+
+  # ---- Open the one PR ---------------------------------------------------------------------
+  - id: open-pr
+    depends_on: [dod-loop, dod-gate]
+    trigger_rule: none_failed_min_one_success
+    command: open-pr
+    model: medium
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        number: { type: integer }
+        url: { type: string }
+      required: [number, url]
+
+  # ---- 6. watch the PR until it merges: conflicts, red CI, review threads ------------------
+  - id: watch
+    depends_on: [open-pr]
+    loop_group:
+      nodes:
+        - id: pr-state
+          script: pr-state
+          runtime: bun
+          with:
+            number: "$open-pr.output.number"
+          output_format:
+            type: object
+            properties:
+              finished: { type: boolean }
+              state: { type: string }
+              act: { type: boolean }
+              reasons: { type: string }
+            required: [finished, state, act, reasons]
+        - id: steward
+          depends_on: [pr-state]
+          when: "$pr-state.output.act == true"
+          command: steward
+          model: medium
+          context: fresh
+        - id: pause
+          depends_on: [pr-state, steward]
+          trigger_rule: all_done
+          when: "$pr-state.output.finished == false"
+          wait:
+            duration_ms: 600000
+      until_bash: 'f=$pr-state.output.finished; [ "$f" = true ]'
+      max_iterations: 600
+
+  - id: finish
+    depends_on: [watch]
+    script: finish
+    runtime: bun
+    with:
+      number: "$open-pr.output.number"
+    output_format:
+      type: object
+      properties:
+        merged: { type: boolean }
+        state: { type: string }
+        url: { type: string }
+      required: [merged, state, url]

@@ -1,0 +1,14 @@
+# RED: the review finds nothing to fix; the run ends before any branch.
+fixture:
+  expect: cancelled
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+review-docs:
+  fix_count: 0
+  summary: docs are accurate
+  slug: ''
+  branch: ''
+  title: ''

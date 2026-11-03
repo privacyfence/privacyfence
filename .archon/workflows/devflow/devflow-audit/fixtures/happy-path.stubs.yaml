@@ -1,0 +1,69 @@
+# Audit, triage keeps 3 findings, no question, ship plans/implements/reviews and the PR merges.
+fixture:
+  expect: completed
+preflight: &id001
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: ^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$
+setup: '{}'
+audit:
+  findings: 5
+  measured: bandit ran; pip-audit unavailable
+triage:
+  fix_count: 3
+  needs_user: false
+  ask: ''
+  summary: 3 to fix, 2 not doing
+ship__preflight: *id001
+ship__setup: '{}'
+ship__plan:
+  scope: small
+  slug: harden-x
+  branch: fix/harden-x
+  title: Harden input validation
+  needs_user: false
+  ask: ''
+ship__prepare-branch:
+  proceed: true
+  reason: stub
+  scope: small
+  slug: harden-x
+  branch: fix/harden-x
+  title: Harden input validation
+implement:
+  status: complete
+  phase: p1-harden
+  summary: stub
+check:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub/verify-fast.md
+ship__gate-build: '{"commits":2,"phases":1,"head":"abc"}'
+review:
+  verdict: approve
+  blocking: 0
+  non_blocking: 1
+  head: abc
+fix-blocking: fixed
+ship__tail__fix-nonblocking: done
+dod:
+  green: true
+  failed: []
+  unavailable:
+  - (cd mcpb/shim && npm test)
+  report: /stub/verify-dod.md
+dod-fix: fixed
+ship__tail__open-pr:
+  number: 1100
+  url: https://github.com/privacyfence/privacyfence/pull/1100
+pr-state:
+  finished: true
+  state: MERGED
+  act: false
+  reasons: nothing new
+steward: done
+ship__tail__finish:
+  merged: true
+  state: MERGED
+  url: https://github.com/privacyfence/privacyfence/pull/1100
