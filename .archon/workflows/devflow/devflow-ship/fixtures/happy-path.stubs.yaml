@@ -1,0 +1,58 @@
+# Green path: plan needs no answer, one implement step, clean review, green DoD, PR merges.
+fixture:
+  expect: completed
+preflight:
+  devflow_root: /stub/devflow
+  main_branch: main
+  branch_regex: "^(feature|fix|chore|tests)/[a-z0-9]+(-[a-z0-9]+)*$"
+setup: '{"venv":".venv","notes":[]}'
+plan:
+  scope: small
+  slug: tasks-ssl
+  branch: fix/tasks-ssl
+  title: Fix SSL errors in the tasks connector
+  needs_user: false
+  ask: ""
+prepare-branch:
+  proceed: true
+  reason: stub
+  scope: small
+  slug: tasks-ssl
+  branch: fix/tasks-ssl
+  title: Fix SSL errors in the tasks connector
+implement:
+  status: complete
+  phase: p1-fix
+  summary: stub
+check:
+  green: true
+  failed: []
+  unavailable: []
+  report: /stub/verify-fast.md
+gate-build: '{"commits":2,"phases":1,"head":"abc"}'
+review:
+  verdict: approve
+  blocking: 0
+  non_blocking: 1
+  head: abc
+fix-blocking: fixed
+fix-nonblocking: done
+dod:
+  green: true
+  failed: []
+  unavailable: ["(cd mcpb/shim && npm test)"]
+  report: /stub/verify-dod.md
+dod-fix: fixed
+open-pr:
+  number: 1100
+  url: https://github.com/privacyfence/privacyfence/pull/1100
+pr-state:
+  finished: true
+  state: MERGED
+  act: false
+  reasons: nothing new
+steward: done
+finish:
+  merged: true
+  state: MERGED
+  url: https://github.com/privacyfence/privacyfence/pull/1100
