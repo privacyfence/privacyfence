@@ -125,8 +125,14 @@ needs, so the table below is background, no longer the way to work them out.
 
 Notes:
 
-- **Personal data.** PrivacyFence scans what a read returns for personal data (names, email
-  addresses, phone numbers and similar). When it finds some, it asks a person, and an unattended
+- **Personal data.** PrivacyFence scans what a read returns for likely personal data: IBANs,
+  card numbers, ID and tax numbers, salary information and similar (the full list is in
+  [PII detection keywords](https://github.com/privacyfence/privacyfence/blob/main/docs/pii-detection-keywords.md);
+  email addresses, phone numbers and names are not detected). The two that most often catch a
+  recipe out are on by default: **Financial figures** (a currency amount such as `€120` or
+  `5000 HUF`) and **IP address** (an IPv4 address). If your data holds them and they are not
+  personal data for you, an administrator can turn either off under **Settings → General → PII
+  Detection Gate**. When it finds some, it asks a person, and an unattended
   run is denied, even when a rule matches. For the tools whose data goes to a file or a page
   rather than to an AI model, the recipe's scoped token can say otherwise. When you create the
   token, tick **Let exports, downloads and page uploads carry personal data**. It covers:
@@ -144,7 +150,8 @@ Notes:
   A second box, **Let reads return personal data**, covers reads whose result goes to an AI
   model, when a rule of the token covers the call:
   - `gmail_get_message` and `gmail_get_thread`;
-  - `slack_get_channel_history`, `slack_get_thread_replies` and `slack_search_messages`.
+  - `slack_get_channel_history`, `slack_get_thread_replies` and `slack_search_messages`;
+  - `drive_get_file_content`.
 
   The scan still runs for these, and the audit log records what it found; the box only stops
   the run from being denied. `salesforce_run_report`, `grist_get_records` and the other reads

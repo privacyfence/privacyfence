@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **privacyfence-sync docs agree with the code.** The recipe guide no longer says that names, email addresses and phone numbers trip the PII check (currency amounts and IPv4 addresses do, and both can be turned off), no longer says that a scoped-token run needs the Unattended sessions switch, and lists `drive_get_file_content` among the reads that **Let reads return personal data** covers ([#1073](https://github.com/privacyfence/privacyfence/issues/1073)).
+
 ## [7.0.1] — 2026-11-01
 
 ### Added
