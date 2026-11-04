@@ -36,6 +36,10 @@ person connects it with their own sign-in. Access tokens last one hour and are r
 after 30 days you sign in again. Setting up the deployment itself is
 [Organization deployment](org-mode-setup-guide.md).
 
+The connector always signs in as you, so it cannot use a scoped token. A scheduled Claude Code
+cloud routine that should run under a scoped token's rules uses its own cloud environment instead;
+see [A cloud routine with a scoped token](connect-claude-code.md#a-cloud-routine-with-a-scoped-token).
+
 ## Files
 
 A local path means nothing to the server, and claude.ai does not run PrivacyFence's Claude Desktop
