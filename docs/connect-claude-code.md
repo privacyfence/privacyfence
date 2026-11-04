@@ -146,6 +146,50 @@ Instead of building the token by hand, ask Claude to propose one for the routine
 - Continue, then type the token's name to confirm that you are delegating access (and use your passkey, if your installation asks for one).
 - The token is shown once, in a dialog, for you to copy. Claude never receives the token, and is not told whether you created it. A proposal lasts one hour and can be used once; Decline discards it. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md).
 
+### A cloud routine with a scoped token
+
+A scheduled Claude Code routine that runs in the cloud (claude.ai/code) uses the claude.ai
+connector by default. That connector signs in as you, so the routine runs under your Auto-accept
+rules. It cannot use a scoped token's rules, its tool list or its personal-data checkboxes. To run
+the routine under a scoped token instead, give it a cloud environment of its own that sends the
+token to PrivacyFence:
+
+1. **Create the token** for the routine in **Settings → Scoped tokens**, with only the rules and
+   tools the job needs. If the routine reads mail or pages that may hold personal data, tick
+   **Let reads return personal data**. Use one token per routine
+   ([ADR 0220](adr/0220-a-routines-rule-profile-is-a-scoped-token.md)).
+2. **Create a personal cloud environment** used only by this routine and save the token in it.
+   This is done in the browser, with no command: in claude.ai/code, open the cloud environment
+   menu (in a session's title bar), add a new environment or choose **Edit** on an existing one,
+   and under **Network secrets** add the token for the deployment's host, for example
+   `pf.example.com`, as a bearer token. The environment's network proxy then adds
+   `Authorization: Bearer pfst_…` to every request this environment's sessions send to that host.
+3. **Add PrivacyFence as an MCP server** in that environment, because the network secret only adds
+   the header and gives the routine no tools. Put it in the routine repository's `.mcp.json`, or
+   add it from the environment's setup script:
+
+   ```bash
+   claude mcp add --transport http privacyfence https://pf.example.com/mcp --header "Authorization: Bearer placeholder"
+   ```
+
+   The placeholder makes Claude Code send a header for the proxy to replace, instead of starting
+   an OAuth sign-in. Never put the real token in the repository, the setup script or an
+   environment variable: those are stored in plain text.
+4. **Turn off the claude.ai PrivacyFence connector** for the routine, so its calls do not also
+   go out under your own sign-in.
+5. **Point the routine at the new environment.**
+
+Calls from the routine are then decided by the token alone. They are
+[deny-only](security-and-compliance.md#scoped-tokens), never raise an approval card, and are
+recorded in the audit log under the token's name. Things to keep in mind:
+
+- **Keep the environment for this routine only.** The secret goes to every session in the
+  environment. On your Default environment, or an environment shared with your organization, other
+  sessions would run under the routine's token too.
+- **Replace the token before it expires.** At expiry the routine's calls are denied. Settings flags
+  a token close to expiry; **Duplicate** it, save the new token in the environment's network
+  secrets, then revoke the old one.
+
 ## Files
 
 Claude Code does not run PrivacyFence's Claude Desktop extension, so PrivacyFence never opens a
