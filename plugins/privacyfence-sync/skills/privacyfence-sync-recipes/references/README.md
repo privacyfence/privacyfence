@@ -133,7 +133,7 @@ Notes:
   `5000 HUF`) and **IP address** (an IPv4 address). If your data holds them and they are not
   personal data for you, they can be turned off: on a desktop install under **Settings → General →
   PII Detection Gate**, on an organization server by an administrator under **Admin → Privacy
-  Filter**. When it finds some, it asks a person, and an unattended
+  Filter**. When the scan finds any of these, it asks a person, and an unattended
   run is denied, even when a rule matches. For the tools whose data goes to a file or a page
   rather than to an AI model, the recipe's scoped token can say otherwise. When you create the
   token, tick **Let exports, downloads and page uploads carry personal data**. It covers:
