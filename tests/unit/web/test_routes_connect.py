@@ -734,6 +734,165 @@ class TestTelegramFlow:
         assert called == []
 
 
+class TestTelegramSteps:
+    """Every branch of the phone, code, two-step password and cancel handlers."""
+
+    @staticmethod
+    def _setup(monkeypatch, *, creds=(123, "apihash"), send_code=None, sign_in=None, sign_in_2fa=None):
+        app, sessions, registry = _app()
+        session_id, principal = _signed_in(sessions)
+        monkeypatch.setattr(rc, "telegram_app_credentials", lambda: creds)
+
+        async def default_send_code(*a, **kw):
+            return "hash-abc"
+
+        async def default_sign_in(*a, **kw):
+            return None
+
+        async def default_sign_in_2fa(*a, **kw):
+            return None
+
+        monkeypatch.setattr(rc.telegram_auth, "send_code", send_code or default_send_code)
+        monkeypatch.setattr(rc.telegram_auth, "sign_in", sign_in or default_sign_in)
+        monkeypatch.setattr(rc.telegram_auth, "sign_in_2fa", sign_in_2fa or default_sign_in_2fa)
+        client = _client(app)
+        cookies = {org_session.SESSION_COOKIE: session_id}
+
+        def post(step, **data):
+            r = client.post(f"/connect/telegram/{step}", data={"csrf": session_id, **data}, cookies=cookies)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/connect"
+            return client.get("/connect", cookies=cookies).text
+
+        return post, registry
+
+    def test_start_when_the_org_has_not_enabled_telegram(self, monkeypatch):
+        sessions = org_session.OrgSessionStore()
+        app, sessions, _registry = _app(sessions=sessions, org_config={"telegram": {"enabled": False}})
+        session_id, _principal = _signed_in(sessions)
+        client = _client(app)
+        r = client.post(
+            "/connect/telegram/start", data={"csrf": session_id, "phone": "+1"},
+            cookies={org_session.SESSION_COOKIE: session_id},
+        )
+        assert r.status_code == 303
+
+    def test_start_without_a_phone_number(self, monkeypatch):
+        post, _registry = self._setup(monkeypatch)
+        assert "Enter a phone number." in post("start", phone="  ")
+
+    def test_start_without_app_credentials(self, monkeypatch):
+        sent: list[str] = []
+
+        async def send_code(*a, **kw):
+            sent.append("send_code")
+
+        post, _registry = self._setup(monkeypatch, creds=None, send_code=send_code)
+        post("start", phone="+1")
+        assert sent == []
+
+    def test_start_shows_a_provider_failure(self, monkeypatch):
+        async def boom(*a, **kw):
+            raise RuntimeError("flood wait 30s")
+
+        post, _registry = self._setup(monkeypatch, send_code=boom)
+        assert "flood wait 30s" in post("start", phone="+1")
+
+    def test_code_step_is_ignored_before_start(self, monkeypatch):
+        post, _registry = self._setup(monkeypatch)
+        post("code", code="12345")
+
+    def test_code_step_needs_a_code(self, monkeypatch):
+        post, _registry = self._setup(monkeypatch)
+        post("start", phone="+1")
+        assert "Enter the verification code." in post("code", code="")
+
+    def test_code_step_without_app_credentials(self, monkeypatch):
+        signed: list[str] = []
+
+        async def sign_in(*a, **kw):
+            signed.append("sign_in")
+
+        post, _registry = self._setup(monkeypatch, sign_in=sign_in)
+        post("start", phone="+1")
+        monkeypatch.setattr(rc, "telegram_app_credentials", lambda: None)
+        post("code", code="123")
+        assert signed == []
+
+    def test_code_step_shows_a_provider_failure_and_stays_on_the_code_step(self, monkeypatch):
+        async def boom(*a, **kw):
+            raise RuntimeError("bad code")
+
+        post, _registry = self._setup(monkeypatch, sign_in=boom)
+        post("start", phone="+1")
+        assert "bad code" in post("code", code="123")
+
+    def test_code_step_that_needs_two_step_verification_moves_to_the_password(self, monkeypatch):
+        async def needs_2fa(*a, **kw):
+            return rc.telegram_auth.NEEDS_2FA
+
+        post, _registry = self._setup(monkeypatch, sign_in=needs_2fa)
+        post("start", phone="+1")
+        page = post("code", code="123")
+        assert 'name="password"' in page
+
+    def test_code_step_success_evicts_the_connectors(self, monkeypatch):
+        post, registry = self._setup(monkeypatch)
+        evicted: list[str] = []
+        monkeypatch.setattr(registry, "evict", evicted.append)
+        post("start", phone="+1")
+        post("code", code="123")
+        assert evicted == ["alice"]
+
+    def _to_password_step(self, monkeypatch, **kw):
+        async def needs_2fa(*a, **k):
+            return rc.telegram_auth.NEEDS_2FA
+
+        post, registry = self._setup(monkeypatch, sign_in=needs_2fa, **kw)
+        post("start", phone="+1")
+        post("code", code="123")
+        return post, registry
+
+    def test_2fa_step_is_ignored_outside_the_password_step(self, monkeypatch):
+        post, _registry = self._setup(monkeypatch)
+        post("2fa", password="pw")
+
+    def test_2fa_step_needs_a_password(self, monkeypatch):
+        post, _registry = self._to_password_step(monkeypatch)
+        assert "Enter your two-step verification password." in post("2fa", password="")
+
+    def test_2fa_step_without_app_credentials(self, monkeypatch):
+        post, _registry = self._to_password_step(monkeypatch)
+        monkeypatch.setattr(rc, "telegram_app_credentials", lambda: None)
+        calls: list[str] = []
+
+        async def sign_in_2fa(*a, **kw):
+            calls.append("sign_in_2fa")
+
+        monkeypatch.setattr(rc.telegram_auth, "sign_in_2fa", sign_in_2fa)
+        post("2fa", password="pw")
+        assert calls == []
+
+    def test_2fa_step_shows_a_provider_failure(self, monkeypatch):
+        async def boom(*a, **kw):
+            raise RuntimeError("wrong password")
+
+        post, _registry = self._to_password_step(monkeypatch, sign_in_2fa=boom)
+        assert "wrong password" in post("2fa", password="pw")
+
+    def test_2fa_step_success_evicts_the_connectors(self, monkeypatch):
+        post, registry = self._to_password_step(monkeypatch)
+        evicted: list[str] = []
+        monkeypatch.setattr(registry, "evict", evicted.append)
+        post("2fa", password="pw")
+        assert evicted == ["alice"]
+
+    def test_cancel_clears_the_flow(self, monkeypatch):
+        post, _registry = self._setup(monkeypatch)
+        post("start", phone="+1")
+        assert 'name="code"' not in post("cancel")
+
+
 # ---------------------------------------------------------------------------- #
 # Peek
 # ---------------------------------------------------------------------------- #
