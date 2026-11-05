@@ -47,10 +47,13 @@ the process that runs `privacyfence-sync`. A token is never accepted as a comman
 Runs use the stored sign-in as long as `PRIVACYFENCE_TOKEN` is not set. A sign-in lasts 30 days;
 after that a run exits with code 4 and you sign in again.
 
-**Unattended sessions must be allowed.** Both modes need the **Unattended sessions** switch under
+**Unattended sessions must be allowed.** A run signed in with the stored `login`, or with your
+own AI client token (`PRIVACYFENCE_TOKEN`), needs the **Unattended sessions** switch under
 **Admin → Features** turned on (an administrator on an organization server, the install owner on a
-desktop install; see [Connecting a service](connecting-a-service.md#the-admin-page)). Without it a
-run stops before its first step.
+desktop install; see [Connecting a service](connecting-a-service.md#the-admin-page)). Without it the
+run stops before its first step. A run with a scoped token does not need the switch: it needs scoped
+tokens turned on under **Admin → Scoped tokens** instead (see
+[ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).
 
 ## The rules a recipe needs
 
