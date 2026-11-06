@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.0.2] — 2026-11-06
+
 ### Fixed
 
 - **One person's unattended session no longer makes everyone else's calls unattended.** On an organization server, a client that sends no MCP session id (claude.ai does not) shared one fallback session with every other such client, so a scheduled run that called `privacyfence_begin_unattended_session` made every other person's gated calls fail with "this connection is in an unattended session" until someone's Claude called `privacyfence_end_unattended_session`. The unattended flag now belongs to one person's one session, and a connection without a session id is refused with a clear error instead of being marked unattended (its gated calls ask for approval as usual). The start, end and denial lines in the daemon log now name the person and a short session reference, and the audit log's start and end entries carry the same reference.
@@ -3607,7 +3609,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.2...HEAD
+[7.0.2]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...v7.0.2
 [7.0.1]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
 [6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
