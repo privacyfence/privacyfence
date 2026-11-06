@@ -209,17 +209,16 @@ PROPOSE_POLICY_CHANGE_TOOL = types.Tool(
 BEGIN_UNATTENDED_SESSION_TOOL = types.Tool(
     name="privacyfence_begin_unattended_session",
     description=(
-        "Tell PrivacyFence this conversation is an unattended/scheduled Cowork run (e.g. a "
-        "Routine firing on a schedule) with no human necessarily watching, for the rest of "
-        "this connection. From then on, any gated tool call that isn't already covered by a "
-        "configured auto-accept rule is denied immediately with a clear error, instead of "
+        "Tell PrivacyFence this conversation is an unattended/scheduled run (e.g. a Routine) "
+        "with no human watching, for the rest of this connection. From then on, any gated tool call that isn't already covered by a "
+        "configured auto-accept rule is denied immediately with an error, instead of "
         "PrivacyFence opening a native approval dialog that nobody will answer. Call this once "
         "at the start of a scheduled run, and pair it with privacyfence_check_policy to plan "
         "which steps are safe to attempt. Never changes what auto-accepts, only what happens "
         "when nothing does. Errors if an administrator hasn't enabled unattended sessions for "
-        "this install. Do not call this during a normal interactive conversation -- it makes "
-        "denials immediate instead of prompting. reason: one sentence on why this session is "
-        "unattended (e.g. the Routine/schedule that triggered it) -- logged in the audit "
+        "this install, or if this connection has no MCP session id (calls then prompt as usual). "
+        "Do not call this during a normal interactive conversation -- it makes denials immediate "
+        "instead of prompting. reason: one sentence on why this session is unattended (e.g. the Routine/schedule that triggered it) -- logged in the audit "
         "entry for this session change, since no popup is shown for it to appear in."
     ),
     input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},

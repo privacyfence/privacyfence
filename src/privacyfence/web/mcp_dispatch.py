@@ -29,7 +29,8 @@ from ..connector import Connector
 from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
 from ..gate import (
-    GateDeniedError, preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, unattended_scope,
+    GateDeniedError, preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, session_ref,
+    unattended_scope,
 )
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe as policy_describe
@@ -37,12 +38,17 @@ from ..policy import propose as policy_propose
 from ..policy import scope_rows
 from ..policy import registry as policy_registry
 from ..policy.suggest import suggested_rules
-from ..principal import LOCAL_PRINCIPAL, current_principal
+from ..principal import LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_token_proposals import REVIEW_PATH, get_registry, new_proposal, review_data
 from ..scoped_token_proposals import record as record_proposal
 from ..scoped_tokens import REVOKED_SCOPE, ScopedTokenPolicy, current_token_scope
 
 logger = logging.getLogger(__name__)
+
+# The session key a request without an MCP session id is filed under (routes_mcp._session_key):
+# every request from a 2026-07-28 (session-less) client, whoever sent it. Nothing
+# per-conversation may hang off it.
+SESSIONLESS_SESSION_KEY = "sessionless"
 
 # Args a connector computes itself (from the service's own answer) before gated_call. An agent
 # asking check_policy could otherwise supply them and be told a call would auto-accept when the
@@ -142,7 +148,11 @@ class McpDispatcher:
         self._inflight: dict[str, tuple[Any, float]] = {}
         self._last_write_at: dict[tuple[str, str], float] = {}
         self._unattended_sessions_enabled = unattended_sessions_enabled
-        self._unattended_sessions: set[Hashable] = set()
+        # (principal id, session key) pairs, not bare session keys: a session key is only unique
+        # per transport session, and every session-less request shares one fallback key
+        # (SESSIONLESS_SESSION_KEY), so a bare key let one person's scheduled run mark every
+        # other person on the server unattended.
+        self._unattended_sessions: set[tuple[str, Hashable]] = set()
         self._unattended_changed_listener: Callable[[], None] | None = None
         # None in a test that never wires one: scoped_token_proposals_enabled() is then False.
         self._scoped_token_policy = scoped_token_policy
@@ -287,7 +297,7 @@ class McpDispatcher:
         self._inflight[key] = (fut, now)
         try:
             with (
-                unattended_scope(session_key in self._unattended_sessions), reason_scope(reason),
+                unattended_scope(self._is_unattended(session_key), session_ref(session_key)), reason_scope(reason),
                 request_args_scope(args), released_request_scope(),
             ):
                 result = await connector.call(tool, args)
@@ -499,7 +509,7 @@ class McpDispatcher:
         # this one would otherwise never have had that side effect run at
         # all (tests/integration/test_org_ubuntu_release_smoke.py covers it).
         _ = self.connectors
-        with unattended_scope(session_key in self._unattended_sessions):
+        with unattended_scope(self._is_unattended(session_key), session_ref(session_key)):
             return await propose_policy_change(
                 operation=params["operation"],
                 reason=params.get("reason", ""),
@@ -525,7 +535,7 @@ class McpDispatcher:
         policy = self._scoped_token_policy
         if policy is None or not self.scoped_token_proposals_enabled():
             raise ValueError(scoped_tokens.PROPOSALS_DISABLED_MESSAGE)
-        if session_key in self._unattended_sessions:
+        if self._is_unattended(session_key):
             self._audit_unattended_proposal(params.get("reason", ""))
             raise GateDeniedError(
                 "Request denied: this connection is in an unattended session, so nobody is there "
@@ -769,41 +779,72 @@ class McpDispatcher:
     # session marked unattended).
     # ------------------------------------------------------------------ #
 
+    def _unattended_key(self, session_key: Hashable) -> tuple[str, Hashable]:
+        return (current_principal().id, session_key)
+
+    def _is_unattended(self, session_key: Hashable) -> bool:
+        return self._unattended_key(session_key) in self._unattended_sessions
+
     def begin_unattended_session(self, session_key: Hashable, claude_reason: str = "") -> dict:
         if not self._unattended_sessions_enabled:
             raise ValueError(
                 "Unattended sessions are disabled. An administrator turns them on on the "
                 "Admin page (Features) before this connection can be marked unattended."
             )
-        self._unattended_sessions.add(session_key)
+        if session_key == SESSIONLESS_SESSION_KEY:
+            # A request without a transport session id has nothing that identifies *this*
+            # conversation: every such request shares this one key, and nothing ever ends it
+            # (no connection lifespan runs). Marking it would deny calls in unrelated
+            # conversations until someone happened to call end_unattended_session.
+            logger.warning(
+                "Refused to start an unattended session for principal %s: the request carries "
+                "no MCP session id", current_principal().id,
+            )
+            raise ValueError(
+                "This connection has no MCP session id (the client uses the session-less MCP "
+                "protocol), so it cannot be marked unattended without affecting other "
+                "conversations. Gated calls will ask for approval as usual. To run a scheduled "
+                "task that never waits for approval, connect it with a scoped token instead."
+            )
+        principal_id = current_principal().id
+        self._unattended_sessions.add(self._unattended_key(session_key))
         logger.warning(
-            "Unattended session started on MCP session %r -- unmatched review/popup calls on "
-            "this session will now be denied immediately instead of prompting",
-            session_key,
+            "Unattended session started on MCP session %r (ref %s) for principal %s -- unmatched "
+            "review/popup calls on this session will now be denied immediately instead of prompting",
+            session_key, session_ref(session_key), principal_id,
         )
-        self._audit_unattended_session_event("unattended_session_started", claude_reason)
+        self._audit_unattended_session_event("unattended_session_started", session_key, claude_reason)
         self._fire_unattended_changed()
         return {"unattended": True}
 
     def end_unattended_session(self, session_key: Hashable, claude_reason: str = "") -> dict:
-        changed = session_key in self._unattended_sessions
-        self._unattended_sessions.discard(session_key)
-        logger.info("Unattended session ended on MCP session %r", session_key)
+        key = self._unattended_key(session_key)
+        changed = key in self._unattended_sessions
+        self._unattended_sessions.discard(key)
+        logger.info(
+            "Unattended session ended on MCP session %r (ref %s) for principal %s",
+            session_key, session_ref(session_key), key[0],
+        )
         if changed:
-            self._audit_unattended_session_event("unattended_session_ended", claude_reason)
+            self._audit_unattended_session_event("unattended_session_ended", session_key, claude_reason)
             self._fire_unattended_changed()
         return {"unattended": False}
 
     def end_session(self, session_key: Hashable) -> None:
         """Called once, when the MCP session this key identifies ends (see
         module docstring) -- whatever unattended-session state it carried
-        dies with it."""
-        had_unattended = session_key in self._unattended_sessions
-        self._unattended_sessions.discard(session_key)
+        dies with it, for whichever principal set it. Runs from the
+        connection's own cleanup, outside any principal scope, so it matches
+        on the session key alone."""
+        ended = [key for key in self._unattended_sessions if key[1] == session_key]
+        for key in ended:
+            self._unattended_sessions.discard(key)
         for key in [k for k in self._session_calls if k[1] == session_key]:
             del self._session_calls[key]
-        if had_unattended:
-            self._audit_unattended_session_event("unattended_session_ended")
+        for principal_id, _ in ended:
+            with principal_scope(Principal(id=principal_id)):
+                self._audit_unattended_session_event("unattended_session_ended", session_key)
+        if ended:
             self._fire_unattended_changed()
 
     def unattended_session_count(self) -> int:
@@ -814,7 +855,7 @@ class McpDispatcher:
             self._unattended_changed_listener()
 
     @staticmethod
-    def _audit_unattended_session_event(decision: str, claude_reason: str = "") -> None:
+    def _audit_unattended_session_event(decision: str, session_key: Hashable, claude_reason: str = "") -> None:
         try:
             get_audit_logger().record(AuditEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -823,7 +864,7 @@ class McpDispatcher:
                 connector="",
                 tool="",
                 tool_name="",
-                summary="This MCP session's unattended-session state changed",
+                summary=f"This MCP session's unattended-session state changed (session ref {session_ref(session_key)})",
                 sender="",
                 decision=decision,
                 auto_accept_rule="",

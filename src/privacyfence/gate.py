@@ -143,6 +143,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import hashlib
 import json
 import logging
 import time
@@ -178,6 +179,7 @@ from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
 from .policy import scope_rows as policy_scope_rows
+from .principal import current_principal
 from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_store, current_token_scope
 from .pii_detector import (
     PIIAuditMatch,
@@ -821,8 +823,21 @@ _unattended_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+# A short, non-reversible reference to the session the unattended flag came from, so a
+# denial in the log can be matched to the start/end lines that set and cleared the flag
+# without writing the session id itself into the audit trail. "" outside a dispatched call.
+_unattended_session_ref_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "privacyfence_unattended_session_ref", default=""
+)
+
+
 def is_unattended() -> bool:
     return _unattended_ctx.get()
+
+
+def session_ref(session_key: object) -> str:
+    """A 12-hex-digit sha256 prefix of ``session_key``: stable for one session, safe to log."""
+    return hashlib.sha256(str(session_key).encode("utf-8")).hexdigest()[:12]
 
 
 class unattended_scope:  # noqa: N801 (context-manager-style name, like `freeze_time`)
@@ -835,15 +850,20 @@ class unattended_scope:  # noqa: N801 (context-manager-style name, like `freeze_
     exists.
     """
 
-    def __init__(self, enabled: bool) -> None:
+    def __init__(self, enabled: bool, session: str = "") -> None:
         self._enabled = enabled
+        self._session = session
         self._token: contextvars.Token | None = None
+        self._session_token: contextvars.Token | None = None
 
     def __enter__(self) -> "unattended_scope":
         self._token = _unattended_ctx.set(self._enabled)
+        self._session_token = _unattended_session_ref_ctx.set(self._session)
         return self
 
     def __exit__(self, *exc_info: object) -> None:
+        if self._session_token is not None:
+            _unattended_session_ref_ctx.reset(self._session_token)
         if self._token is not None:
             _unattended_ctx.reset(self._token)
 
@@ -1669,8 +1689,10 @@ def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[s
     """
     audit(decision="denied_unattended", auto_accept_rule="", pii_detected=bool(pii_categories))
     logger.warning(
-        "Unattended session: denying %s/%s without prompting -- no auto-accept rule matched%s",
-        connector, tool, " (or the PII gate overrode one that did)" if pii_categories else "",
+        "Unattended session: denying %s/%s without prompting for principal %s (session ref %s) "
+        "-- no auto-accept rule matched%s",
+        connector, tool, current_principal().id, _unattended_session_ref_ctx.get() or "-",
+        " (or the PII gate overrode one that did)" if pii_categories else "",
     )
     if pii_categories:
         raise GateDeniedError(_pii_denial_text("this connection is in an unattended session", pii_categories))
