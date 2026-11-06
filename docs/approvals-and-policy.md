@@ -70,7 +70,10 @@ In an unattended session (a scheduled task started with `privacyfence_begin_unat
 nobody is there to answer, so any request that would need a card is refused at once — see
 [How it works](how-it-works.md). The flag covers only the person and the MCP session that set it.
 A connection that sends no MCP session id cannot be marked unattended: the call fails with an error
-and that connection's gated calls ask for approval as usual.
+and that connection's gated calls ask for approval as usual. Clients on the session-less MCP
+protocol (claude.ai is one) never send one, so a scheduled task on such
+a client should use a [scoped token](connect-claude-code.md#a-cloud-routine-with-a-scoped-token),
+which is deny-only without an unattended session.
 
 ---
 

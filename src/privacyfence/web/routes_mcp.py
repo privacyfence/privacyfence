@@ -143,10 +143,12 @@ def _refuse_scoped_call(
 _MCP_SESSION_ID = "mcp-session-id"
 
 # The session key a request that carries no session id at all falls back to.
-# Unreachable on this daemon's own wiring (``mount_mcp`` runs the session
-# manager stateful, so every request after ``initialize`` carries the header
-# the manager itself minted), but a transport without session ids -- stdio, or
-# a stateless manager -- must still land somewhere stable rather than raise.
+# ``mount_mcp`` runs the session manager stateful, but that only covers clients
+# that use the ``initialize`` handshake: a 2026-07-28 client sends every request
+# as a self-contained POST with no ``Mcp-Session-Id``, and the SDK routes it past
+# session tracking (``StreamableHTTPSessionManager._handle_request``). Every such
+# request, from every principal, lands on this one key, so nothing that belongs to
+# one conversation may be stored under it (McpDispatcher.begin_unattended_session).
 _SESSIONLESS_KEY = SESSIONLESS_SESSION_KEY
 
 

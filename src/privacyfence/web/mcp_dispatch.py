@@ -45,8 +45,9 @@ from ..scoped_tokens import REVOKED_SCOPE, ScopedTokenPolicy, current_token_scop
 
 logger = logging.getLogger(__name__)
 
-# The session key a request without an MCP session id is filed under (routes_mcp._session_key).
-# Every such request shares it, whoever sent it, so nothing per-conversation may hang off it.
+# The session key a request without an MCP session id is filed under (routes_mcp._session_key):
+# every request from a 2026-07-28 (session-less) client, whoever sent it. Nothing
+# per-conversation may hang off it.
 SESSIONLESS_SESSION_KEY = "sessionless"
 
 # Args a connector computes itself (from the service's own answer) before gated_call. An agent
@@ -800,8 +801,10 @@ class McpDispatcher:
                 "no MCP session id", current_principal().id,
             )
             raise ValueError(
-                "This connection has no MCP session id, so it cannot be marked unattended "
-                "without affecting other conversations. Gated calls will ask for approval as usual."
+                "This connection has no MCP session id (the client uses the session-less MCP "
+                "protocol), so it cannot be marked unattended without affecting other "
+                "conversations. Gated calls will ask for approval as usual. To run a scheduled "
+                "task that never waits for approval, connect it with a scoped token instead."
             )
         principal_id = current_principal().id
         self._unattended_sessions.add(self._unattended_key(session_key))

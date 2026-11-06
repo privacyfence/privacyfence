@@ -1032,8 +1032,9 @@ class TestUnattendedSessions:
 
     def test_refused_without_an_mcp_session_id(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
-        with pytest.raises(ValueError, match="no MCP session id"):
+        with pytest.raises(ValueError, match="no MCP session id") as refused:
             dispatcher.begin_unattended_session(mcp_dispatch.SESSIONLESS_SESSION_KEY, "scheduled run")
+        assert "scoped token" in str(refused.value)
         assert dispatcher.unattended_session_count() == 0
 
     def test_ending_another_principals_flag_is_not_possible(self):
