@@ -58,7 +58,7 @@ from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
 from .mcp_auth import principal_from_access_token, scope_from_access_token, single_token_verifier
-from .mcp_dispatch import McpDispatcher
+from .mcp_dispatch import SESSIONLESS_SESSION_KEY, McpDispatcher
 from . import org_session
 from .csp import nonce_for
 from .oauth_consent import render_consent_page, render_continue_page
@@ -147,7 +147,7 @@ _MCP_SESSION_ID = "mcp-session-id"
 # manager stateful, so every request after ``initialize`` carries the header
 # the manager itself minted), but a transport without session ids -- stdio, or
 # a stateless manager -- must still land somewhere stable rather than raise.
-_SESSIONLESS_KEY = "sessionless"
+_SESSIONLESS_KEY = SESSIONLESS_SESSION_KEY
 
 
 def _connection_of(ctx: ServerRequestContext) -> Connection | None:

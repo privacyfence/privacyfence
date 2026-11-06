@@ -4118,6 +4118,20 @@ class TestUnattendedMode:
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "denied_unattended"
 
+    async def test_unattended_denial_log_names_the_principal_and_session_ref(self, monkeypatch, audit_dir, caplog):
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+        ref = gate.session_ref("s1")
+
+        with caplog.at_level("WARNING", logger="privacyfence.gate"), gate.unattended_scope(True, ref):
+            with pytest.raises(RuntimeError, match="unattended session"):
+                await gate.gated_call(**base_kwargs(gate="review"))
+
+        line = next(r.getMessage() for r in caplog.records if "Unattended session: denying" in r.getMessage())
+        assert f"session ref {ref}" in line
+        assert f"principal {gate.current_principal().id}" in line
+
     async def test_popup_gate_denies_without_popup_when_unattended(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         called = []

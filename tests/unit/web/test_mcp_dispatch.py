@@ -489,6 +489,19 @@ class TestCall:
         await dispatcher.call("s2", "gmail", "gmail_tool", {})
         assert connector.observed_unattended == [False]
 
+    async def test_another_principals_unattended_flag_on_the_same_session_key_does_not_leak(self):
+        # Two people whose requests land on the same session key (as every session-less
+        # request does): one person's scheduled run must not make the other's calls unattended.
+        connector = UnattendedAwareConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector}, unattended_sessions_enabled=True)
+        with principal_scope(Principal(id="alice")):
+            dispatcher.begin_unattended_session("shared", "scheduled run")
+        with principal_scope(Principal(id="bob")):
+            await dispatcher.call("shared", "gmail", "gmail_tool", {})
+        with principal_scope(Principal(id="alice")):
+            await dispatcher.call("shared", "gmail", "gmail_tool", {"z": 1})
+        assert connector.observed_unattended == [False, True]
+
 
 # --------------------------------------------------------------------------- #
 # check_policy -- ported from TestCheckPolicyDispatch
@@ -1016,6 +1029,39 @@ class TestUnattendedSessions:
         dispatcher = _dispatcher({})
         dispatcher.end_session("s1")  # must not raise
         assert dispatcher.unattended_session_count() == 0
+
+    def test_refused_without_an_mcp_session_id(self):
+        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
+        with pytest.raises(ValueError, match="no MCP session id"):
+            dispatcher.begin_unattended_session(mcp_dispatch.SESSIONLESS_SESSION_KEY, "scheduled run")
+        assert dispatcher.unattended_session_count() == 0
+
+    def test_ending_another_principals_flag_is_not_possible(self):
+        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
+        with principal_scope(Principal(id="alice")):
+            dispatcher.begin_unattended_session("shared", "scheduled run")
+        with principal_scope(Principal(id="bob")):
+            dispatcher.end_unattended_session("shared", "I am here")
+        assert dispatcher.unattended_session_count() == 1
+
+    def test_end_session_clears_every_principals_flag_on_that_session(self):
+        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
+        for who in ("alice", "bob"):
+            with principal_scope(Principal(id=who)):
+                dispatcher.begin_unattended_session("shared", "scheduled run")
+        dispatcher.end_session("shared")
+        assert dispatcher.unattended_session_count() == 0
+
+    def test_start_and_end_audit_entries_name_the_session_by_ref(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
+        dispatcher.begin_unattended_session("s1", "scheduled run")
+        dispatcher.end_unattended_session("s1", "done")
+        lines = (tmp_path / f"{current_week()}.jsonl").read_text().splitlines()
+        entries = [json.loads(line) for line in lines]
+        ref = gate.session_ref("s1")
+        assert [e["decision"] for e in entries] == ["unattended_session_started", "unattended_session_ended"]
+        assert all(ref in e["summary"] and "s1" not in e["summary"].replace(ref, "") for e in entries)
 
     def test_changed_listener_fires_on_begin_and_end(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
