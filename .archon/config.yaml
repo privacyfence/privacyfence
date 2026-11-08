@@ -1,0 +1,3 @@
+extraWorkflowSources:
+  - ref: plans
+    path: plans

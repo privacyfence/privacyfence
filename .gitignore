@@ -123,3 +123,4 @@ logs/
 # IDE
 .idea/
 .vscode/
+.archon/worktrees/
