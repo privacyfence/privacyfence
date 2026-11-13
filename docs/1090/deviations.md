@@ -5,7 +5,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-config-and-api
 
-- pending
+- worker: Worker could not run tld guard allow-plan, the dod playbook or role reviews: the toolkit plugin directory was empty in its sandbox. It ran the acceptance commands itself.
+- review: Orchestrator ran ruff and the full unit suite after the merge (green) and found no scope drift; tld roles required lists no roles for this diff.
 
 ## p2-records-store
 
