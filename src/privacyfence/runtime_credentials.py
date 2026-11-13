@@ -158,7 +158,13 @@ class RuntimeCredentialStore:
         return next((r for r in self.all() if r.principal_id == principal_id and r.token_id == token_id), None)
 
     def for_proposal(self, principal_id: str, proposal_id: str) -> RuntimeCredential | None:
-        return next((r for r in self.all() if r.principal_id == principal_id and r.proposal_id == proposal_id), None)
+        """The newest record for the proposal that is not abandoned, so a retry after an abandoned
+        attempt is found rather than the old failure; ``None`` when every record is abandoned."""
+        live = [
+            r for r in self.all()
+            if r.principal_id == principal_id and r.proposal_id == proposal_id and r.state != ABANDONED
+        ]
+        return live[-1] if live else None
 
     @contextlib.contextmanager
     def in_flight(self, credential_id: str) -> Iterator[None]:
@@ -327,7 +333,7 @@ def status_for(
     principal_id: str, proposal_id: str, *, token_store: ScopedTokenStore, registry: ProposalRegistry,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """The answer of ``privacyfence_runtime_credential_status`` (ADR 0282), looked up only by the
+    """The answer of ``privacyfence_runtime_credential_status`` (ADR 0280), looked up only by the
     caller's own id and the proposal id. Never carries a token id, digest, secret or the runtime's host."""
     now = time.time() if now is None else now
     not_delivered: dict[str, Any] = {"state": "not_delivered"}

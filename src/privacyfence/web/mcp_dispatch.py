@@ -628,7 +628,7 @@ class McpDispatcher:
         return result
 
     def runtime_credential_status(self, params: dict) -> dict:
-        """privacyfence_runtime_credential_status's handler (ADR 0282): whether the caller's own
+        """privacyfence_runtime_credential_status's handler (ADR 0280): whether the caller's own
         proposal was delivered into n8n. Never returns a token."""
         if current_token_scope() is not None:
             raise GateDeniedError("Request denied: a scoped token cannot read token deliveries.")
