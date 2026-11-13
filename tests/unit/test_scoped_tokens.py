@@ -1388,11 +1388,12 @@ class TestTokenState:
         store = _store()
         token, _ = _create(store)
         good = _file(tmp_path).read_text(encoding="utf-8")
-        # Distinct mtimes: two quick in-place writes can share one timestamp on a coarse clock
-        # (Windows), which the reload check would then read as "unchanged".
+        # Distinct mtimes a whole second apart: two quick in-place writes can share one timestamp
+        # on a coarse clock, and Windows keeps 100 ns units, so nanosecond-apart values would
+        # collapse to one; the reload check would then read the repaired file as unchanged.
         _file(tmp_path).write_text("{not json", encoding="utf-8")
-        os.utime(_file(tmp_path), ns=(1, 1))
+        os.utime(_file(tmp_path), ns=(10**9, 10**9))
         assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW) == "unknown"
         _file(tmp_path).write_text(good + " ", encoding="utf-8")
-        os.utime(_file(tmp_path), ns=(2, 2))
+        os.utime(_file(tmp_path), ns=(2 * 10**9, 2 * 10**9))
         assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW) == "live"
