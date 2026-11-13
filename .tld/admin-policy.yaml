@@ -1,4 +1,4 @@
-# Admin policy for tld ops repo-admin (docs/guides/admin.md in tkcs-lab/tkcs-lab-devflow).
+# Admin policy for tld ops repo-admin (the admin guide in the tkcs-lab/tkcs-lab-devflow repository).
 # Run it where an organisation owner's token is available, never from a web session:
 #   tld ops repo-admin validate-policy .tld/admin-policy.yaml
 #   tld ops repo-admin audit --policy .tld/admin-policy.yaml
