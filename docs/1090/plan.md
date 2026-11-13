@@ -6,11 +6,11 @@
 
 **Use it:** An administrator sets `PRIVACYFENCE_N8N_URL` and `PRIVACYFENCE_N8N_API_KEY` on an organization server and turns on **Admin → Agent runtimes**. Claude calls `privacyfence_propose_scoped_token` with `deliver_to: {"runtime": "n8n", "workflow_id": "..."}` and hands the person the review link. The person narrows and confirms the token in Settings. PrivacyFence then writes the token into n8n as an `httpBearerAuth` credential; the browser never sees the secret. Claude calls `privacyfence_runtime_credential_status` to get the credential id, and puts it on the n8n MCP Client node. Revoking the token, or letting it expire, deletes the n8n credential within five minutes.
 
-**Scope:** New modules for the runtime config, the n8n API client, delivery records and a cleanup sweeper. One new meta tool, an optional `deliver_to` argument on the propose tool, an Admin page section, a delivery branch on the organization "create from proposal" route, and Settings rows and review text. Organization mode only, and only through an AI proposal. The scoped token model itself (deny-only, no cards, `scoped-token:<id>` in the audit log) does not change; it already makes an n8n run fail fast on any call that would need an approval.
+**Scope:** New modules for the runtime config, the n8n API client, delivery records and a cleanup sweeper. One new meta tool, an optional `deliver_to` argument on the propose tool, an Admin page section, a delivery branch on the organization "create from proposal" route, and Settings rows and review text. Organization mode only, and only through an AI proposal. The scoped token model itself (deny-only, no cards, `scoped-token:<id>` in the audit log) does not change; it already makes an n8n run fail fast on any call that would need an approval. Also visible: start-up refuses a malformed `PRIVACYFENCE_N8N_URL` or `agent_runtimes` section, the propose tool's description and message change, the local create-from-proposal route refuses a delivery proposal, and `--revoke-scoped-tokens` prints that n8n credentials follow.
 
 **Security:** The secret now leaves PrivacyFence and is stored in n8n. Anyone who can edit workflows there, the proposing AI client included, can use and read it, so narrow scope and expiry are the protection and the review page says so (§3.1). The n8n address and key come only from the server environment, never from a web page (§3.2). The key is never logged, audited or returned. Every delivery, deletion and failure is audited.
 
-**Review focus:** the two-phase write that keeps a live token from ever lacking a record (§3.5); the sweeper's rules for what it may delete and when (§3.7); what the status tool reveals and to whom (§3.6); the ADR 0250 and ADR 0165 amendments (§4).
+**Review focus:** the two-phase write that keeps a live token from ever lacking a record (§3.5); the sweeper's rules for what it may delete and when, including the compare-and-set that keeps it from abandoning a delivery that just finished (§3.7); what the status tool reveals and to whom (§3.6); the ADR 0250 and ADR 0165 amendments (§4).
 
 ## 1. Goal
 
@@ -74,7 +74,7 @@ The facts the client relies on, from research r-20261113-1 (read 2026-11-13):
 The interface:
 
 ```python
-class N8nApiError(Exception):
+class N8nApiClientError(Exception):
     """A fixed text naming the host and at most an HTTP status; never a body, header or request."""
     def __init__(self, message: str, *, status: int | None = None) -> None: ...
 
@@ -87,14 +87,14 @@ class N8nApi:
 
 - `requests.Session`, headers `X-N8N-API-KEY: <key>` and `Accept: application/json`. Every call passes `timeout=REQUEST_TIMEOUT_SECONDS` (30) and `allow_redirects=False`. `__repr__` shows the host only. TLS verification is never turned off; an internal CA is trusted through `REQUESTS_CA_BUNDLE` (documented).
 - `create_bearer_credential` posts `{"id": credential_id, "name": name, "type": "httpBearerAuth", "data": {"token": token}}`, plus `"projectId": project_id` when it is not empty, with the header `Idempotency-Key: <credential_id>`. Success is a 200 or 201 whose JSON has `id == credential_id` and `type == "httpBearerAuth"`. When the JSON names a different id that matches `^[A-Za-z0-9]{1,16}$`, the client deletes that id once (best effort, errors swallowed) and then raises.
-- `delete_credential` refuses an id that does not match `^[0-9a-f]{16}$` with `ValueError`. 200 or 204 returns `True`, 404 returns `False`, and anything else raises.
+- `delete_credential` refuses an id that does not match `^[0-9a-f]{16}$` with `ValueError`, then calls a private `_delete(credential_id)`. `_delete` sends the DELETE with no id check: 200 or 204 returns `True`, 404 returns `False`, and anything else raises. The create path's cleanup of an n8n-chosen id uses `_delete` directly, after checking `^[A-Za-z0-9]{1,16}$`.
 - A response body over 1,000,000 bytes is an error. A 3xx raises an error naming `PRIVACYFENCE_N8N_URL`.
 - The exact error texts (`<host>` is the URL's host):
   - `"n8n at <host> could not be reached."` for a `requests.RequestException`.
   - `"n8n at <host> answered HTTP <status>."` for any other status.
   - `"n8n at <host> redirected the request; set PRIVACYFENCE_N8N_URL to the address it redirects to."` for a 3xx.
   - `"n8n at <host> did not create the credential as asked."` for a wrong id or type, or an unreadable answer.
-- It is named `n8n_api.py`, not `*_client.py`, because n8n is not a connector and the §2.7 connector-QA row must not apply (compare `grist_provisioner_api.py`).
+- It is named `n8n_api.py`, not `*_client.py`, because n8n is not a connector and the §2.7 connector-QA row must not apply. Its error class still follows the `<Name>ClientError` rule, as `GristProvisionerClientError` in `grist_provisioner_api.py` does.
 
 ### 3.4 Runtime config and request types (`src/privacyfence/agent_runtimes.py`)
 
@@ -125,7 +125,12 @@ def parse_deliver_to(raw: object) -> DeliveryTarget: ...    # raises ValueError
 def credential_name(label: str) -> str: ...                 # f"PrivacyFence {label}"
 def mcp_url_for(config: N8nRuntimeConfig, base_url: str) -> str: ...  # config.mcp_url or base_url.rstrip("/") + "/mcp"
 def api_for(config: N8nRuntimeConfig) -> N8nApi | None: ... # None unless base_url and api_key() are set
+
+DELIVERY_UNAVAILABLE: str   # text in §3.6
+DELIVERY_MESSAGE: str       # text in §3.6
 ```
+
+- `api_key()` lets `org_mode.ConfigurationError` through (both the variable and its `_FILE` set, or an unreadable file). The daemon calls it once at start-up, so such a key refuses the start (p7). `delivery_available()`, `api_for()` and the Admin state catch `ConfigurationError`, log one warning and treat the key as unset.
 
 - `from_org_config` reads `org_config.get("agent_runtimes", {}).get("n8n", {})`. A non-object section, a non-bool `enabled`, a bad `project_id` or a bad `mcp_url` raises `org_mode.ConfigurationError`; so does a set but malformed `PRIVACYFENCE_N8N_URL`. `environ` defaults to `os.environ`.
 - `parse_deliver_to` accepts exactly a dict whose keys are a subset of `{"runtime", "workflow_id"}`, with `runtime == "n8n"` and `workflow_id` absent, empty or matching `^[A-Za-z0-9]{1,36}$`. Its error texts:
@@ -195,7 +200,7 @@ def set_store(store: RuntimeCredentialStore | None) -> None: ...
   3. `token_store.create(principal, ..., token_id=token_id)`. A `ScopedTokenError` removes the record and returns status 400 with its text.
   4. `api.create_bearer_credential(credential_id=..., name=credential_name(label), token=secret, project_id=config.project_id)`.
   5. On success, `set_state(credential_id, CREATING, DELIVERED)`. If that returns `False` (the record vanished), revoke the token, delete the credential (best effort) and fail as in 6.
-  6. On `N8nApiError` (or any exception) in 4: revoke the token first. If the revoke succeeds, set the record to `abandoned`, wake the sweeper and return 502 with `DELIVERY_FAILED`. If the revoke raises, leave the record as it is and return 500 with `DELIVERY_FAILED_NOT_REVOKED`.
+  6. On `N8nApiClientError` (or any exception) in 4: revoke the token first. If the revoke succeeds, set the record to `abandoned`, wake the sweeper and return 502 with `DELIVERY_FAILED`. If the revoke raises, leave the record as it is and return 500 with `DELIVERY_FAILED_NOT_REVOKED`.
 
   The texts:
 
@@ -206,15 +211,15 @@ def set_store(store: RuntimeCredentialStore | None) -> None: ...
                                  "the token. Revoke it now in Settings → Scoped tokens.")
   ```
 
-- **`status_for(principal_id, proposal_id, *, token_store, registry, now) -> dict`** builds the status tool's answer (§3.6).
+- **`status_for(principal_id, proposal_id, *, token_store, registry, now) -> dict`** builds the status tool's answer (§3.6). It calls `token_store.token_state(Principal(id=principal_id), record.token_id, now)`. It is added in p5, not p2.
 - **Audit** (connector `policy`, tool `privacyfence_runtime_credential`, written under `principal_scope` of the record's principal; summaries carry ids, the host and names, never a secret or key; text from the AI client has its control characters removed):
   - `runtime_credential_delivered`: `"Delivered scoped token '<label>' (<token id>) to n8n at <host> as credential '<name>' (<credential id>)[, for workflow <id> as reported by the AI client]"`.
-  - `runtime_credential_delivery_failed`: `"Could not deliver scoped token '<label>' (<token id>) to n8n at <host>: <N8nApiError text>"`.
+  - `runtime_credential_delivery_failed`: `"Could not deliver scoped token '<label>' (<token id>) to n8n at <host>: <N8nApiClientError text>"`.
   - `runtime_credential_deleted`: `"Deleted n8n credential '<name>' (<credential id>) at <host>: token <revoked|expired|not delivered>"`.
-  - `runtime_credential_delete_failed`: `"Could not delete n8n credential '<name>' (<credential id>) at <host>: <N8nApiError text>"`.
+  - `runtime_credential_delete_failed`: `"Could not delete n8n credential '<name>' (<credential id>) at <host>: <N8nApiClientError text>"`.
   - `runtime_credential_orphaned`: `"n8n credential '<name>' (<credential id>) is at <old host>, which is no longer this server's n8n; its token was revoked. Delete the credential there by hand."`.
 
-  `audit_log` renders these decisions as plain entries. None counts as an approval.
+  They are written by `record_event(decision: str, record: RuntimeCredential, summary: str) -> None` in `runtime_credentials.py`, which the sweeper uses too. `audit_log.py`'s `AuditEntry.decision` comment lists the five new decisions and `runtime_credential_status_read`; they render as plain entries, and none counts as an approval.
 
 Two additions to `scoped_tokens.py`:
 
@@ -235,6 +240,8 @@ Two additions to `scoped_tokens.py`:
   - The `scoped_token_proposed` audit summary gains `", delivery to n8n"`.
   - The result gains `"delivery": {"runtime": "n8n", "workflow_id": "<id or empty>", "status_tool": "privacyfence_runtime_credential_status"}`, and its `message` becomes `DELIVERY_MESSAGE`.
 
+  Both constants live in `agent_runtimes.py`:
+
   ```python
   DELIVERY_UNAVAILABLE = ("Delivery to n8n is not set up on this PrivacyFence server. "
                           "Your administrator sets it up under Admin → Agent runtimes.")
@@ -248,8 +255,9 @@ Two additions to `scoped_tokens.py`:
 
 **`privacyfence_runtime_credential_status`** is new: `RUNTIME_CREDENTIAL_STATUS_TOOL` in `web/mcp_tools.py`, appended to `META_TOOLS`, with annotations read-only, idempotent and not destructive.
 
-- Input: `{"proposal_id": {"type": "string", "description": "The proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to."}}`, required.
-- Description, starting with this summary sentence: "Report whether a proposed token was delivered to n8n, and the n8n credential to use." The rest of the description follows the `assert_tool_definitions_complete` rules: a Returns sentence, that it is not offered to scoped tokens, and that the related tool is `privacyfence_propose_scoped_token`.
+- Input: `{"reason": {"type": "string"}, "proposal_id": {"type": "string", "description": "The proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to."}}`, with `required: ["proposal_id", "reason"]` like `privacyfence_status`. The reason is recorded as `claude_reason` in `runtime_credential_status_read`.
+- Description, verbatim: "Report whether a proposed token was delivered to n8n, and the n8n credential to use. Call it with the proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to, after the person has confirmed it. Returns state 'delivered' with credential_id, credential_name, credential_type, node_authentication, mcp_url and token_expires_at; 'pending' while the person has not decided; or 'not_delivered' for anything else. Put credential_id on the MCP Client node with authentication bearerAuth and endpoint mcp_url. It never returns the token. A scoped token cannot call it."
+- The propose tool's description sentence "You never receive the token, nor whether it was created." (`web/mcp_tools.py:319-322`) becomes: "Without deliver_to you never receive the token, nor whether it was created. With deliver_to, PrivacyFence puts the token into n8n itself and privacyfence_runtime_credential_status reports the credential's id; anyone who can edit workflows in that n8n can then use the token." 
 - Answers, all looked up only by `(current_principal().id, proposal_id)`:
   - The record is `delivered` and `token_state` is `live`:
 
@@ -285,37 +293,44 @@ def stop() -> None: ...   # for tests and shutdown
 1. **The endpoint moved** (`record.endpoint != endpoint(config.base_url)`). Revoke the token if `token_state` is `live` or `expired`, audit `runtime_credential_orphaned` and remove the record. Never call DELETE on another host.
 2. **No API** (`api is None`). Skip every record and log one warning per sweep.
 3. **`delivered`.** `token_state`: `unknown` means skip, `live` means keep. `absent` or `expired` means `api.delete_credential`; then, whether it returned `True` or `False`, remove the record and audit `runtime_credential_deleted` with the reason `revoked` (absent) or `expired`.
-4. **`creating`.** Skip it while `records.is_in_flight(record.credential_id)`. Otherwise it is from a crash or an earlier process: treat it as `abandoned`.
+4. **`creating`.** Skip it while `records.is_in_flight(record.credential_id)`. Otherwise it is from a crash or an earlier process: call `records.set_state(record.credential_id, CREATING, ABANDONED)` and go on as rule 5 only if that returns `True`; if it returns `False` (the delivery finished meanwhile), skip the record.
 5. **`abandoned`.** If `token_state` is `live` or `expired`, revoke the token (`token_store.revoke(Principal(id=record.principal_id), record.token_id)`); if the revoke raises, keep the record. Then delete the credential, remove the record and audit `runtime_credential_deleted` with the reason `not delivered`.
 
-- An `N8nApiError` keeps the record. `runtime_credential_delete_failed` is audited at most once per `DELETE_FAILURE_AUDIT_SECONDS` per credential id; the times are kept in memory.
-- The thread wakes every `SWEEP_INTERVAL_SECONDS`, on `wake()`, and stops on `stop_event`.
+- An `N8nApiClientError` keeps the record. `runtime_credential_delete_failed` is audited at most once per `DELETE_FAILURE_AUDIT_SECONDS` per credential id; the times are kept in memory.
+- `start()` builds its dependencies from `runtime_credentials.get_store()`, `scoped_tokens.get_store()` and `agent_runtimes.api_for(config)`. The thread's first step is one `api.check()`; an `N8nApiClientError` there logs one warning (never the key) and the thread goes on. It then sweeps once, wakes every `SWEEP_INTERVAL_SECONDS` and on `wake()`, and stops on `stop_event`.
 - It is started whenever `config.base_url` and `api_key()` are set, whether or not `enabled` is true, so turning delivery off still cleans up.
 - Reconciling against the token store covers every revoke path without a hook: the Settings revoke and revoke-all routes, `--revoke-scoped-tokens` (`daemon_main.py:2634`), `OAuthProvider.revoke_all_for_principal` (`web/oauth_provider.py:745`) and expiry. The organization revoke routes call `wake()` so the credential goes at once. The CLI does not touch the records file; the running daemon's sweeper deletes the credentials within `SWEEP_INTERVAL_SECONDS`, and the CLI prints a line saying so.
 - `_INSTANCE` is module-level and reset in `tests/conftest.py`.
 
 ### 3.8 Settings and review page
 
-- **Organization create-from-proposal** (`web/routes_settings.py:2036`). When `proposal.delivery` is set, it calls `runtime_credentials.deliver(...)` instead of `_create_and_deliver`, and answers:
+- **Organization create-from-proposal** (`web/routes_settings.py:2036`). When `proposal.delivery` is set, it does this instead of `_create_and_deliver`:
+  1. When `agent_runtimes.api_for(agent_runtime)` is `None`, answer 503 `{"error": DELIVERY_UNAVAILABLE}`, restore the proposal and mint nothing.
+  2. Enter `principal_scope(principal)` and call `_ensure_principal_settings_loaded()`, answering a `V1PolicyConfigError` with the same 500 as `_create_and_deliver` (`:1976-1981`).
+  3. Call `outcome = await run_in_threadpool(lambda: runtime_credentials.deliver(...))`, so the n8n calls never block the event loop.
+  4. On success, write `_record_settings_audit` with the existing "Created scoped token ..." text and the suffix `" from a proposal, delivered to n8n"`.
+
+  It answers:
   - on success, `{"created": {"id", "label", "expires_at"}, "delivered": {"runtime": "n8n", "credential_name": "<name>"}}` with `Cache-Control: no-store` and never `secret`;
   - otherwise `{"error": outcome.error}` with `outcome.status`.
-  - It restores the proposal on 400 and 502, but not on 500. It records `scoped_token_proposal_accepted` only on success.
+  - It restores the proposal on 400, 502 and 503, but not on 500. It records `scoped_token_proposal_accepted` only on success.
 - **The local create-from-proposal route** (`:1343`) refuses a proposal whose `delivery` is set: 400 `{"error": "This proposal delivers the token to n8n, which needs an organization server."}`.
 - **The organization revoke and revoke-all routes** call `runtime_credential_sweeper.wake()` after a successful revoke.
-- **`scoped_token_proposals.review_data`** gains a keyword `runtime_host: str = ""` and a key `"delivery"`. It is `None` without delivery, otherwise `{"runtime": "n8n", "host": runtime_host, "project_id": "<id or ''>", "workflow_id": "<id or ''>"}`.
+- **`scoped_token_proposals.review_data`** gains a keyword `runtime_host: str = ""` and a key `"delivery"`. The organization review page route (`scoped_token_proposal_page`, `web/routes_settings.py:2214-2227`, inside `build_org_routes`) passes `runtime_host = urlsplit(agent_runtime.base_url).hostname or ""`. It is `None` without delivery, otherwise `{"runtime": "n8n", "host": runtime_host, "project_id": "<id or ''>", "workflow_id": "<id or ''>"}`.
 - **The review panel** (`scopedProposalPanelHtml`, `settings_window_html.py:1644`), when `p.delivery` is set, shows this text (with `<host>`, `<where>` and `<workflow>` filled in and escaped):
 
   "PrivacyFence will put this token into n8n at <host> as a credential, in <where>. Anyone who can edit workflows there, the AI client included, can use the token and read it until it expires or you revoke it. <workflow> Data the workflow reads is kept in n8n's execution history."
 
   - `<where>` is `"project <id>"`, or `"the personal space of the n8n API key's owner"` when no project is set.
   - `<workflow>` is `"The AI client says it is for workflow <id>; n8n does not tie the credential to it."` when an id was given, else empty.
-- **The typed-name dialog** for a delivery proposal: its button reads "Create and deliver to n8n" and its first line reads "You are delegating access to n8n."
+- **The typed-name dialog** for a delivery proposal (`settings_window_html.py:1730`): its button reads "Create and deliver to n8n", and only its first sentence changes, from "You are delegating access." to "You are delegating access to n8n."; the rest stays.
 - **The client JS.** When `res.state.delivered` is present, it shows `"Created '<label>' and delivered it to n8n as '<credential name>'."` with `window.alert` before going to the section (the inline handler at `web/routes_settings.py:637-650`).
-- **Token rows.** `scoped_token_page_data` (`web/server.py:355`) gains `runtime_credential` per token: `{"runtime": "n8n", "credential_name": "...", "workflow_id": "..."}` from `runtime_credentials.get_store().for_token(...)` when the record is `delivered`, else `null`. `scopedTokenRow` (`settings_window_html.py:1345`) shows `"In n8n as '<name>'"`, plus `" · for workflow <id> (as reported by the AI client)"` when there is one.
+- **Token rows.** `scoped_token_page_data` (`web/server.py:355`) gains `runtime_credential` per token: `{"runtime": "n8n", "credential_name": "...", "workflow_id": "..."}` from `runtime_credentials.get_store().for_token(...)` when the record is `delivered`, else `null`. It looks records up only when `delivery == "once"` (organization mode), because `paths.org_dir()` would create an `org` directory on a local install. `scopedTokenRow` (`settings_window_html.py:1345`) shows `"In n8n as '<name>'"`, plus `" · for workflow <id> (as reported by the AI client)"` when there is one.
 
 ### 3.9 Admin page
 
 - `admin_config`:
+  - `"agent_runtimes"` is added to `LEGACY_BUNDLE_KEYS` (`:78`) as well as to `OPERATIONAL_SECTIONS`, because `tests/unit/test_admin_config.py:516` requires the one to be a subset of the other; `test_every_operational_section_is_copied_verbatim` (`:193-205`) gets `"agent_runtimes": {"n8n": {"enabled": True, "project_id": "", "mcp_url": ""}}` in its bundle.
   - `_apply_agent_runtimes(config, params)` builds `{**config["agent_runtimes"], "n8n": {**current, "enabled": ..., "project_id": ..., "mcp_url": ...}}`, validates it with `_validated(N8nRuntimeConfig.from_org_config, "agent_runtimes", candidate)` and replaces the section with the summary `"Changed agent runtimes"`.
   - `"set_agent_runtimes"` is added to `_ACTION_MODES` (`_ORG_ONLY`) and `apply_change`.
 - `routes_admin`:
@@ -329,6 +344,7 @@ def stop() -> None: ...   # for tests and shutdown
     - a text row "n8n project id" (field `project_id`), with the hint "Leave empty to use the API key owner's personal space.";
     - a text row "PrivacyFence MCP address for n8n" (field `mcp_url`), with the hint "Leave empty to use this server's address.";
     - two read-only rows: "n8n address" (the URL or "Not set: set PRIVACYFENCE_N8N_URL") and "n8n API key" ("Set" or "Not set: set PRIVACYFENCE_N8N_API_KEY").
+  - `"runtimes"` is added after `"tokens"` to the organization sections in `_admin_capabilities` (`:3392-3396`), without which `renderAdmin` (`:2607`) never shows it. The tests that pin that tuple and the nav order are updated: `tests/unit/test_settings_window_html.py:1131`, `:1726`, `:1733`, `:1808` and `test_the_admin_nav_keys_and_labels_are_in_order` (`:1168-1176`).
   - `case 'runtimes'` is added to the admin router, and `"agent_runtimes": {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}}` to the defaults dict at `:3357`.
 
 ### 3.10 Rejected alternatives
@@ -350,10 +366,11 @@ These become ADR text.
 
 The next free number in `docs/adr` is 0278.
 
-- **0278** — A scoped token can be delivered into an agent runtime, n8n first, as a credential PrivacyFence writes itself. The token is the runtime's principal, and the workflow id is advisory. Delivery is organization-mode only and starts only from an AI proposal. Amends ADR 0165 (the secret is stored in n8n) and ADR 0250 (the client can use and read a delivered token through the runtime); relates to ADR 0164 and ADR 0220.
+- **0278** — A scoped token can be delivered into an agent runtime, n8n first, as a credential PrivacyFence writes itself; the token is the runtime's principal (consequences: the workflow id is advisory, and fail-fast comes from ADR 0164). Amends ADR 0165 (the secret is stored in n8n) and ADR 0250 (the client can use and read a delivered token through the runtime); relates to ADR 0164 and ADR 0220.
 - **0279** — The n8n address and API key come only from the server environment. The address is https on any host except link-local, metadata and unspecified ones; the Admin page edits only `enabled`, `project_id` and `mcp_url`. It records the departure from ADR 0241's "a scoped key, not an admin key" for non-Enterprise n8n. Relates to ADR 0257 and ADR 0241.
 - **0280** — `privacyfence_runtime_credential_status` reports a delivered proposal's credential to the client that proposed it. Amends ADR 0250's rejection of a status tool, for delivered proposals only.
 - **0281** — A sweeper deletes the runtime credential of a revoked, expired or undelivered token by reconciling records against the token store, and a two-phase write keeps every live delivered token recorded. Relates to ADR 0164 and ADR 0165.
+- **0282** — Runtime delivery is organization-mode only and starts only from an AI proposal, never from the New token form. Relates to ADR 0250 and ADR 0261.
 
 ## 5. Manual steps
 
@@ -387,7 +404,7 @@ Report back one line for the pull request: `ma1: pass` or `ma1: fail at step <n>
 - **A crash between writing the `creating` record and `store.create`** leaves a record whose token never existed. The sweeper finds the token `absent` and deletes nothing that exists. That is harmless.
 - **An unreadable token file** makes `token_state` return `unknown`, and the sweeper skips it. A worker who finds `_reload`'s error path shaped differently from `scoped_tokens.py:556` stops with `status=blocked`.
 - **The plan document** stays at `docs/1090/plan.md` as the playbook requires, although `CONTRIBUTING.md` says plans are deleted when work lands. The final review should confirm that this is acceptable, or add a deletion.
-- **`tests/unit/test_docs_references_exist.py`** checks every `docs/...md` path in the repository, so this plan names ADRs by number only. The plan's final check names the deviations file, which implement creates when it starts.
+- **`tests/unit/test_docs_references_exist.py`** checks every path under `docs/` that ends in `.md` in the repository, so this plan names ADRs by number only and names the deviations file (which implement creates when it starts) without its full path.
 - **Browser tests** are skipped in cloud sessions (no matching Chromium), so the review page and Admin form are proven by `test_settings_window_html.py` string checks and by ma1.
 
 ## Implementation manifest
@@ -402,11 +419,10 @@ manual_after:
   - id: ma1-n8n-end-to-end
     title: Deliver, use and revoke a scoped token against a real n8n
     why: Only a real n8n proves that the credential id is kept, the credential works in an MCP Client node, and revocation deletes it; the unit tests fake n8n.
-verify_after_merge:
-  - python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q
+verify_after_merge: []
 final_checks:
-  - "`tld plan deviations check --file docs/1090/deviations.md --plan docs/1090/plan.md --all` exits 0"
-  - "ADRs 0278, 0279, 0280 and 0281 exist in docs/adr, are Accepted, and are listed in docs/adr/README.md"
+  - "`tld plan deviations check` on the deviations file implement keeps next to this plan, with `--plan docs/1090/plan.md --all`, exits 0"
+  - "ADRs 0278, 0279, 0280, 0281 and 0282 exist in docs/adr, are Accepted, and are listed in docs/adr/README.md"
   - "CHANGELOG.md has the new entries under ## [Unreleased] and no new version heading"
 phases:
   - id: p1-config-and-api
@@ -420,8 +436,9 @@ phases:
       - tests/unit/test_n8n_api.py
     brief: |
       Read first: docs/1090/plan.md sections 3.2, 3.3 and 3.4; docs/coding-and-testing-guidelines.md sections 1.4, 1.8 and 2.11.
-      1. Create src/privacyfence/n8n_api.py exactly as plan section 3.3 specifies: N8nApiError(message, *, status=None),
-         N8nApi(base_url, key) with create_bearer_credential, delete_credential and check, REQUEST_TIMEOUT_SECONDS = 30,
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
+      1. Create src/privacyfence/n8n_api.py exactly as plan section 3.3 specifies: N8nApiClientError(message, *, status=None),
+         N8nApi(base_url, key) with create_bearer_credential, delete_credential, the private _delete, and check, REQUEST_TIMEOUT_SECONDS = 30,
          allow_redirects=False on every call, the header X-N8N-API-KEY, the Idempotency-Key header on create, the four
          error texts verbatim, the 1,000,000-byte response cap, __repr__ showing the host only. Copy the session and
          error-mapping shape of src/privacyfence/grist_provisioner_api.py (GristProvisionerClient._send); never put a
@@ -431,8 +448,9 @@ phases:
          RUNTIMES, N8nRuntimeConfig.from_org_config, DeliveryTarget, normalize_n8n_url, endpoint, api_key,
          delivery_available, parse_deliver_to with its four texts, credential_name, mcp_url_for, api_for). URL rules are in
          plan section 3.2's table; mcp_url rules in the bullet under it. Use org_mode.ConfigurationError for config errors
-         and org_mode.provisioning_key for the key. No module-level mutable state. If the tld secret-scan hook blocks the
-         N8N_API_KEY_ENV line, end it with the comment "# the variable's name, never a key; secret-scan:allow".
+         and org_mode.provisioning_key for the key. No module-level mutable state. End the N8N_API_KEY_ENV line with the
+         comment "# the variable's name, never a key; secret-scan:allow". Put DELIVERY_UNAVAILABLE and DELIVERY_MESSAGE
+         (texts in plan section 3.6) in this module, and follow plan section 3.4's rule for when api_key() may raise.
       3. tests/unit/test_n8n_api.py: fake requests.Session.request with a FakeResponse/Recorder pair copied from
          tests/unit/test_grist_provisioner_api.py:43-70. Classes: TestCreate (body, headers incl. Idempotency-Key, projectId
          only when set, 200 and 201 accepted, wrong id deletes the returned id then raises, wrong type raises),
@@ -463,12 +481,14 @@ phases:
       - src/privacyfence/runtime_credentials.py
       - src/privacyfence/scoped_tokens.py
       - src/privacyfence/scoped_token_proposals.py
+      - src/privacyfence/audit_log.py
       - tests/unit/test_runtime_credentials.py
       - tests/unit/test_scoped_tokens.py
       - tests/unit/test_scoped_token_proposals.py
       - tests/conftest.py
     brief: |
       Read first: docs/1090/plan.md sections 3.5 and 3.6 (the status_for answers); docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md; docs/coding-and-testing-guidelines.md section 2.3.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
       1. scoped_tokens.py: add new_token_id(), the token_id keyword on ScopedTokenStore.create (validation and the exact
          error text in plan section 3.5), self._unreadable recorded by _reload, and token_state(principal, token_id,
          now=None) returning live|expired|absent|unknown. Extend tests/unit/test_scoped_tokens.py with TestChosenTokenId
@@ -480,9 +500,11 @@ phases:
       3. Create src/privacyfence/runtime_credentials.py as plan section 3.5 specifies: the constants, BOOT_ID,
          RuntimeCredential, RuntimeCredentialStoreError, RuntimeCredentialStore (file rules, one lock, in_flight and
          is_in_flight, compare-and-set), get_store/set_store over paths.org_dir() / "agent_runtime_credentials.json",
-         DeliveryOutcome, deliver() with steps 1-6 and the two texts verbatim, status_for() with the three answers of
-         plan section 3.6, and the five audit decisions with their summaries (write them like
-         scoped_token_proposals.record: principal_scope + audit_log.AuditEntry, failures logged and swallowed). Strip
+         DeliveryOutcome, deliver() with steps 1-6 and the two texts verbatim, and record_event() with the five audit
+         decisions and their summaries (write it like scoped_token_proposals.record: principal_scope +
+         audit_log.AuditEntry, failures logged and swallowed). status_for() is not part of this phase.
+         In audit_log.py, extend the AuditEntry.decision comment (about lines 144-157) with the five runtime_credential_*
+         decisions and runtime_credential_status_read. Strip
          control characters from workflow_id and label in summaries. Step 6's "wake the sweeper" is a callable passed
          to deliver as on_abandoned: Callable[[], None] | None = None (the sweeper module comes in p3).
       4. tests/conftest.py _reset(): add runtime_credentials.set_store(None) next to the scoped-token lines (about 158-160).
@@ -492,9 +514,7 @@ phases:
          no secret in the record file, caplog or audit), TestDeliverFailures (n8n error: token revoked, record abandoned,
          on_abandoned called, 502 text; revoke raises: record stays creating, 500 text; ScopedTokenError: record removed,
          400; record vanished before set_state: token revoked, credential delete attempted), TestCrashPoints (stop after
-         each of steps 2-4 by raising from a fake; afterwards no live token lacks a record), TestStatusFor (delivered
-         needs a live token; creating and a registry hit are pending; another principal's record, abandoned, expired
-         token, unknown id are all exactly {"state": "not_delivered"}; no token_id in any answer).
+         each of steps 2-4 by raising from a fake; afterwards no live token lacks a record).
       Stop with status=blocked if ScopedTokenStore.create's signature differs from scoped_tokens.py:595 as described.
     acceptance:
       - python3 -m pytest tests/unit/test_runtime_credentials.py tests/unit/test_scoped_tokens.py tests/unit/test_scoped_token_proposals.py -q passes
@@ -512,17 +532,20 @@ phases:
       - tests/conftest.py
     brief: |
       Read first: docs/1090/plan.md section 3.7; src/privacyfence/peek_provisioning.py (thread start and stop pattern).
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
       1. Create src/privacyfence/runtime_credential_sweeper.py as plan section 3.7 specifies: SWEEP_INTERVAL_SECONDS,
          DELETE_FAILURE_AUDIT_SECONDS, sweep_once with rules 1-5 in that order, start, wake, stop and a module-level
-         _INSTANCE. The thread is a daemon thread that waits on an Event with timeout SWEEP_INTERVAL_SECONDS, sweeps,
-         and exits when stop_event is set. Audit through the helpers runtime_credentials already has. wake() is a no-op
+         _INSTANCE. start() builds its dependencies as plan section 3.7 states; the thread is a daemon thread whose
+         first step is one api.check() (a warning on N8nApiClientError), then it waits on an Event with timeout
+         SWEEP_INTERVAL_SECONDS, sweeps, and exits when stop_event is set. Audit through the helpers runtime_credentials already has. wake() is a no-op
          when no sweeper runs.
       2. tests/conftest.py _reset(): call runtime_credential_sweeper.stop() and set _INSTANCE to None.
       3. tests/unit/test_runtime_credential_sweeper.py with a fake api and a real ScopedTokenStore over tmp_path:
          one test per rule (endpoint moved: token revoked, orphaned audit, no DELETE; api None: nothing removed;
          delivered + live kept; + absent deleted with reason revoked; + expired deleted with reason expired; + unknown
-         skipped; creating in flight skipped; creating from an earlier boot revoked and deleted; abandoned with a
-         revoke that raises kept), TestDeleteFailures (record kept, delete_failed audited once within 24 h, again
+         skipped; creating in flight skipped; creating from an earlier boot revoked and deleted; a record that turns
+         delivered between all() and the in-flight check is left alone (the compare-and-set returns False); abandoned
+         with a revoke that raises kept), TestDeleteFailures (record kept, delete_failed audited once within 24 h, again
          after), TestThread (wake() runs a sweep promptly; stop_event ends the thread; bounded waits, no sleeps over 1 s).
     acceptance:
       - python3 -m pytest tests/unit/test_runtime_credential_sweeper.py -q --cov=privacyfence.runtime_credential_sweeper --cov-branch --cov-report=term-missing reports 100%
@@ -541,25 +564,28 @@ phases:
       - tests/unit/test_settings_window_html.py
     brief: |
       Read first: docs/1090/plan.md sections 3.2 and 3.9; docs/adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
       Pattern to copy: how set_scoped_tokens is wired end to end (admin_config._apply_scoped_tokens at about 853,
       routes_admin ADMIN_ACTIONS/ADMIN_PARAMS, settings_window_html renderTokens at about 2523).
-      1. admin_config.py: add the agent_runtimes section to _default_config() and "agent_runtimes" to
-         OPERATIONAL_SECTIONS; add _apply_agent_runtimes and "set_agent_runtimes" to _ACTION_MODES and apply_change as plan
+      1. admin_config.py: add the agent_runtimes section to _default_config() and "agent_runtimes" to both
+         OPERATIONAL_SECTIONS and LEGACY_BUNDLE_KEYS; add _apply_agent_runtimes and "set_agent_runtimes" to _ACTION_MODES and apply_change as plan
          section 3.9 states.
       2. web/routes_admin.py: the ADMIN_ACTIONS, ADMIN_PARAMS, RESTART_LABELS and _ORG_STATE_KEYS entries, and
          agent_runtimes_status in the organization state (plan section 3.9; read the URL with
          agent_runtimes.normalize_n8n_url on os.environ.get(N8N_URL_ENV, "") and the key with agent_runtimes.api_key();
          never put the key value in the state).
       3. settings_window_html.py: the nav item, ADMIN_FORMS entry, renderRuntimes with the rows and strings verbatim from
-         plan section 3.9, the router case and the defaults entry.
+         plan section 3.9, "runtimes" after "tokens" in _admin_capabilities' organization sections, the router case and
+         the defaults entry.
       4. Tests: tests/unit/test_admin_config.py TestAgentRuntimes (default present; a change saves the three fields; a
          bad project_id or mcp_url is refused with AdminConfigError); tests/unit/web/test_routes_admin.py (the action is
          org-only, sensitive, needs a passkey, a base_url or key-variable field in the request is refused as unknown,
          restart is flagged with "Agent runtimes", the state carries agent_runtimes_status and never the key's value);
          tests/unit/test_settings_window_html.py (the nav item and each string appear; the address and key rows are not
-         inputs). Add one test that oauth_apps.effective_org_config carries the agent_runtimes section through.
-      Stop with status=blocked if OPERATIONAL_SECTIONS changes what a legacy bundle import copies in a way the existing
-      tests/unit/test_admin_config.py import tests reject.
+         inputs; update the tests at lines 1131, 1726, 1733, 1808 and test_the_admin_nav_keys_and_labels_are_in_order
+         at 1168-1176 for the new section). In test_every_operational_section_is_copied_verbatim (about 193-205) add
+         "agent_runtimes": {"n8n": {"enabled": True, "project_id": "", "mcp_url": ""}} to the bundle.
+         tests/unit/test_oauth_apps.py's TestOperationalSections already covers the new key; leave it unchanged.
     acceptance:
       - python3 -m pytest tests/unit/test_admin_config.py tests/unit/web/test_routes_admin.py tests/unit/test_settings_window_html.py -q passes
       - grep -n "set_agent_runtimes" src/privacyfence/web/routes_admin.py src/privacyfence/admin_config.py src/privacyfence/settings_window_html.py matches in all three
@@ -573,19 +599,29 @@ phases:
       - src/privacyfence/web/mcp_tools.py
       - src/privacyfence/web/mcp_dispatch.py
       - src/privacyfence/web/routes_mcp.py
+      - src/privacyfence/runtime_credentials.py
       - scripts/generate_tools_reference.py
       - docs/tools-reference.md
       - tests/unit/web/test_mcp_tools.py
       - tests/unit/web/test_mcp_dispatch.py
       - tests/unit/web/test_routes_mcp.py
+      - tests/unit/web/test_tool_schema_portability.py
+      - tests/unit/test_runtime_credentials.py
+      - tests/integration/test_shim_mcp_contract.py
     brief: |
       Read first: docs/1090/plan.md section 3.6; docs/adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
       Pattern commit: 6b7e23466 (how privacyfence_propose_scoped_token was added).
-      1. web/mcp_tools.py: add the deliver_to property to PROPOSE_SCOPED_TOKEN_TOOL's schema (text verbatim from plan
-         section 3.6) and the new RUNTIME_CREDENTIAL_STATUS_TOOL, appended to META_TOOLS.
+      1. web/mcp_tools.py: add the deliver_to property to PROPOSE_SCOPED_TOKEN_TOOL's schema and replace its description
+         sentence (both verbatim from plan section 3.6), and add the new RUNTIME_CREDENTIAL_STATUS_TOOL with the input
+         schema and description verbatim from plan section 3.6, appended to META_TOOLS.
+      1a. runtime_credentials.py: add status_for() with the three answers of plan section 3.6, and TestStatusFor in
+         tests/unit/test_runtime_credentials.py (delivered needs a live token; creating and a registry hit are pending;
+         another principal's record, abandoned, expired token and unknown id all give exactly {"state": "not_delivered"};
+         no token_id in any answer).
       2. web/mcp_dispatch.py: McpDispatcher.__init__ gains agent_runtime: N8nRuntimeConfig | None = None; add
          runtime_delivery_enabled(); in propose_scoped_token handle deliver_to exactly as plan section 3.6 states
-         (DELIVERY_UNAVAILABLE and DELIVERY_MESSAGE verbatim, local mode refused, mcp_url_for, audit suffix, result key);
+         (DELIVERY_UNAVAILABLE and DELIVERY_MESSAGE imported from agent_runtimes, local mode refused, mcp_url_for, audit suffix, result key);
          add runtime_credential_status(params) calling runtime_credentials.status_for with the call-time refusals of
          plan section 3.6 and the runtime_credential_status_read audit entry.
       3. web/routes_mcp.py: list the status tool only when scope is None and dispatcher.runtime_delivery_enabled();
@@ -600,14 +636,21 @@ phases:
          carries delivery and mcp_url; the message is DELIVERY_MESSAGE) and TestRuntimeCredentialStatus (each answer;
          a scoped token is refused; local mode refused; another principal's proposal is not_delivered);
          test_routes_mcp.py (listed only with delivery on and no scope; a scoped token never sees or can call it,
-         including over the wire; tool definitions pass assert_tool_definitions_complete).
+         including over the wire). test_mcp_tools.py also asserts the status tool's description contains "Returns",
+         "privacyfence_propose_scoped_token" and "A scoped token cannot call it". The tests that expect every META_TOOLS
+         entry from a local dispatcher leave RUNTIME_CREDENTIAL_STATUS_TOOL.name out of their expected sets and gain a
+         positive case with an org dispatcher that has delivery on: test_routes_mcp.py test_meta_tools_keep_their_own_annotations
+         (about 1266-1273), test_tool_schema_portability.py (about 52-59 and 86-91, test_the_live_tool_list_is_exactly_the_set_checked_here)
+         and tests/integration/test_shim_mcp_contract.py (about 368-369).
       6. Run python3 -m pytest tests/integration -v; test_mcp_daemon_contract.py must pass (definition of done row for
          routes_mcp.py and mcp_dispatch.py).
       Stop with status=blocked if handle_list_tools or _dispatch_meta_tool are not shaped as plan section 2 describes.
     acceptance:
       - python3 -m pytest tests/unit/web/test_mcp_tools.py tests/unit/web/test_mcp_dispatch.py tests/unit/web/test_routes_mcp.py tests/unit/web/test_tool_schema_portability.py tests/unit/test_docs_tools_reference.py -q passes
       - python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q passes
-      - grep -n "privacyfence_runtime_credential_status" src/privacyfence/web/routes_mcp.py matches and the SCOPED_META_TOOLS block does not contain it
+      - grep -n "privacyfence_runtime_credential_status" src/privacyfence/web/routes_mcp.py matches
+      - python3 -c "from privacyfence.web.routes_mcp import SCOPED_META_TOOLS as s; assert 'privacyfence_runtime_credential_status' not in s" exits 0
+      - python3 -m pytest tests/unit/test_runtime_credentials.py -q --cov=privacyfence.runtime_credentials --cov-branch --cov-report=term-missing reports 100%
 
   - id: p6-settings-delivery
     title: Delivery on the organization create-from-proposal route and the Settings page
@@ -623,24 +666,29 @@ phases:
       - tests/unit/test_settings_window_html.py
     brief: |
       Read first: docs/1090/plan.md sections 3.1 and 3.8; docs/adr/0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
       1. web/routes_settings.py build_org_routes gains agent_runtime: N8nRuntimeConfig | None = None. In
-         scoped_token_create_from_proposal (about 2036), when proposal.delivery is set, call runtime_credentials.deliver
-         with agent_runtimes.api_for(agent_runtime) and on_abandoned=runtime_credential_sweeper.wake (an api of None is a
-         502 with DELIVERY_FAILED and nothing minted) and answer as plan section 3.8 states; keep the step-up, typed-name
-         and narrowing gates as they are. Never put "secret" in that answer. The org revoke and revoke-all routes call
+         scoped_token_create_from_proposal (about 2036), when proposal.delivery is set, follow steps 1-4 of plan section
+         3.8 (503 with DELIVERY_UNAVAILABLE when api_for gives None; principal_scope and _ensure_principal_settings_loaded;
+         runtime_credentials.deliver(..., on_abandoned=runtime_credential_sweeper.wake) through run_in_threadpool; the
+         settings audit entry with the " from a proposal, delivered to n8n" suffix) and answer as plan section 3.8 states;
+         keep the step-up, typed-name and narrowing gates as they are. scoped_token_proposal_page (about 2214-2227) passes
+         runtime_host as plan section 3.8 states. Never put "secret" in that answer. The org revoke and revoke-all routes call
          runtime_credential_sweeper.wake() after a successful revoke. The local route (about 1343) refuses a delivery
          proposal with the 400 text of plan section 3.8. The inline client JS (about 637-650) shows the delivered alert
          text verbatim before going to the section.
       2. web/server.py: parse agent_runtimes.N8nRuntimeConfig.from_org_config(org.org_config) next to
          scoped_token_policy (about 1456) and pass it to build_org_routes; scoped_token_page_data (about 355) adds
-         runtime_credential per token; the proposal review page passes runtime_host (the config's URL host) to review_data.
-      3. settings_window_html.py: the review panel text, the dialog line and button text, and the token row text,
-         verbatim from plan section 3.8, all escaped with the existing esc helper.
+         runtime_credential per token, looking records up only when delivery == "once".
+      3. settings_window_html.py: the review panel text, the dialog's first sentence and button text (about 1730), and the
+         token row text, verbatim from plan section 3.8, all escaped with the existing esc helper.
       4. Tests: test_routes_org_settings.py TestDeliveryFromProposal (success answer has delivered and no secret; the n8n
          error gives 502 and restores the proposal; revoke failure gives 500 and does not restore; a request body that
          carries deliver_to or a delivery field does not change the target; plain proposals still return the secret
-         once; revoke wakes the sweeper); test_routes_settings.py (local route refuses a delivery proposal);
-         test_server.py (runtime_credential in page data for a delivered token, null otherwise);
+         once; revoke wakes the sweeper; delivery unavailable gives 503 and restores the proposal; the settings audit
+         entry carries the delivered suffix); test_routes_settings.py (local route refuses a delivery proposal);
+         test_server.py (runtime_credential in page data for a delivered token, null otherwise, and no org directory
+         created for a local install);
          test_settings_window_html.py (each string present).
       Stop with status=blocked if _create_and_deliver or scoped_token_create_from_proposal differ from plan section 2.
     acceptance:
@@ -656,16 +704,19 @@ phases:
       - tests/unit/test_daemon_main.py
     brief: |
       Read first: docs/1090/plan.md sections 3.2 and 3.7.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
       1. daemon_main.py: in the organization start-up, next to the Peek and Grist validation (about 1379-1391), build
          agent_runtime = agent_runtimes.N8nRuntimeConfig.from_org_config(org_config) so a malformed section or URL
          refuses start-up; log one warning when enabled is true but the URL or key is missing. Pass agent_runtime to
          McpDispatcher (about 1493). Next to peek_provisioning.start (about 1459) call
          runtime_credential_sweeper.start(config=agent_runtime, stop_event=_shutdown_event) when agent_runtime.base_url
-         and agent_runtimes.api_key() are set, and call agent_runtimes.api_for(agent_runtime).check() once in a try that
-         logs a warning (never the key) on N8nApiError.
+         and agent_runtimes.api_key() are set. Call agent_runtimes.api_key() once at start-up without catching
+         ConfigurationError, so a key set both inline and as _FILE, or an unreadable key file, refuses start-up. The
+         reachability check runs in the sweeper thread, not here.
       2. run_revoke_scoped_tokens (about 2634): after revoking, print "A running PrivacyFence server deletes these
          tokens' n8n credentials within 5 minutes."
-      3. tests/unit/test_daemon_main.py: a malformed agent_runtimes section refuses org start-up; the sweeper starts
+      3. tests/unit/test_daemon_main.py: a malformed agent_runtimes section refuses org start-up; so does a key set both
+         inline and as _FILE; the sweeper starts
          only with URL and key; the dispatcher receives the config; the CLI prints the line.
     acceptance:
       - python3 -m pytest tests/unit/test_daemon_main.py -q passes
@@ -681,16 +732,19 @@ phases:
       - docs/how-it-works.md
       - docs/connect-claude-code.md
       - docs/configuration-reference.md
+      - docs/org-mode-docker.md
       - docs/adr/*.md
       - CHANGELOG.md
     brief: |
       Read first: docs/1090/plan.md sections 3, 4 and 6; docs/adr/README.md (template and rules); CONTRIBUTING.md.
-      1. Write the four ADRs of plan section 4 with the template in docs/adr/README.md, Status "Accepted — <merge date>.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0278-0282 by number.
+      1. Write the five ADRs of plan section 4 (0278-0282) with the template in docs/adr/README.md, Status "Accepted — <merge date>.
          Implemented.", the decision and rejected alternatives taken from plan sections 3.1-3.10, the research facts with
          their URLs and the date 2026-11-13, and Verification lines naming the test classes of phases p1-p7. Add the
          forward Status line to ADR 0165 ("Amended by ADR 0278: a delivered token's secret is stored in n8n.") and to
          ADR 0250 ("Amended by ADR 0278 and ADR 0280: a delivered token can be read through the runtime, and its
-         credential id is reported."), the only edit allowed to an accepted ADR. Add four index rows to docs/adr/README.md.
+         credential id is reported."), the only edit allowed to an accepted ADR. Add five index rows to docs/adr/README.md.
+         ADRs never link docs/1090/plan.md (docs/adr/README.md rule 4): cite issue 1090's URL, the PR and source files.
       2. docs/org-mode-setup-guide.md, section 11 "AI systems": a subsection "### Delivering tokens to n8n" covering the
          two environment variables, the minimum n8n version 2.40.0, creating the API key as the n8n MCP's user (Enterprise:
          only credential:create and credential:delete; other editions: full access), REQUESTS_CA_BUNDLE for an internal
@@ -700,12 +754,15 @@ phases:
          any n8n workflow author, the AI client included), that the key never leaves the environment, what the status tool
          reveals, that workflow data is kept in n8n, and the offboarding note (revoking deletes the n8n credentials).
       4. docs/how-it-works.md "PrivacyFence's own tools" and docs/connect-claude-code.md: the new tool and deliver_to.
-      5. docs/configuration-reference.md: the agent_runtimes admin section and the two environment variables, if that
-         doc lists the other admin sections and variables; otherwise leave it unchanged and say so in the report.
+      5. docs/configuration-reference.md: rows for PRIVACYFENCE_N8N_URL and PRIVACYFENCE_N8N_API_KEY / _FILE under
+         "### Environment variables" (next to the Peek and Grist rows, about 375-379); agent_runtimes.n8n.enabled,
+         project_id and mcp_url under "### Admin config" (next to scoped_tokens, about 421); and
+         org/agent_runtime_credentials.json under "### Files in the org directory" (about 486).
+         docs/org-mode-docker.md: the two variables next to the Peek and Grist ones it lists.
       6. CHANGELOG.md under ## [Unreleased]: one "Added" line for n8n delivery of scoped tokens and the status tool.
       7. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_docs_configuration_reference.py -q.
     acceptance:
       - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_docs_configuration_reference.py -q passes
       - grep -n "0278" docs/adr/README.md matches
-      - grep -n "n8n" CHANGELOG.md matches under ## [Unreleased]
+      - awk '/^## \[Unreleased\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md | grep -n n8n matches
 ```
