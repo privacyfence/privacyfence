@@ -20,6 +20,7 @@ from .agent_identity import AgentIdentity, agent_scope
 from .principal import Principal, principal_scope
 
 if TYPE_CHECKING:
+    from .agent_runtimes import DeliveryTarget
     from .policy.scope_rows import ScopeRow
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ class TokenProposal:
     uncovered_tools: tuple[str, ...]
     created_at: float
     expires_at: float
+    delivery: DeliveryTarget | None = None
+    mcp_url: str = ""
 
 
 class ProposalError(ValueError):
@@ -147,6 +150,7 @@ def set_registry(registry: ProposalRegistry | None) -> None:
 def new_proposal(
     *, principal: Principal, request: dict[str, Any], source: str, agent: AgentIdentity, reason: str,
     uncovered_tools: Sequence[str] = (), now: float | None = None,
+    delivery: DeliveryTarget | None = None, mcp_url: str = "",
 ) -> TokenProposal:
     now = time.time() if now is None else now
     return TokenProposal(
@@ -159,6 +163,8 @@ def new_proposal(
         uncovered_tools=tuple(uncovered_tools),
         created_at=now,
         expires_at=now + PROPOSAL_TTL_SECONDS,
+        delivery=delivery,
+        mcp_url=mcp_url,
     )
 
 
@@ -216,8 +222,11 @@ def bundle_from_calls(
     return rules, sorted(tools), sorted(uncovered)
 
 
-def review_data(proposal: TokenProposal, own_rows: Sequence[ScopeRow]) -> dict[str, Any]:
-    """What the review page renders for ``proposal``."""
+def review_data(
+    proposal: TokenProposal, own_rows: Sequence[ScopeRow], *, runtime_host: str = "", project_id: str = "",
+) -> dict[str, Any]:
+    """What the review page renders for ``proposal``. ``runtime_host`` and ``project_id`` describe the
+    runtime a delivery proposal would write to."""
     from .policy import catalogue, describe, scope_rows  # function-local: import cycle
 
     by_id = {row.id: row for row in own_rows}
@@ -248,6 +257,12 @@ def review_data(proposal: TokenProposal, own_rows: Sequence[ScopeRow]) -> dict[s
         "source": proposal.source,
         "uncovered_tools": list(proposal.uncovered_tools),
         "expires_at": proposal.expires_at,
+        "delivery": None if proposal.delivery is None else {
+            "runtime": proposal.delivery.runtime,
+            "host": runtime_host,
+            "project_id": project_id,
+            "workflow_id": proposal.delivery.workflow_id,
+        },
     }
 
 
