@@ -2421,3 +2421,68 @@ def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypat
     assert (tokens["idle"]["last_used_at"], tokens["idle"]["last_denied_at"], tokens["idle"]["last_denied_tool"]) == (
         None, None, "",
     )
+
+
+def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_token(tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, privilege_separation, runtime_credentials, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    records = runtime_credentials.RuntimeCredentialStore(tmp_path / "records.json")
+    runtime_credentials.set_store(records)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+    sent, _ = store.create(alice, label="sent", days=30, rules=[], tools=["drive_list_files"], policy=policy)
+    plain, _ = store.create(alice, label="plain", days=30, rules=[], tools=["drive_list_files"], policy=policy)
+    pending, _ = store.create(alice, label="pending", days=30, rules=[], tools=["drive_list_files"], policy=policy)
+
+    def record(token, state, credential_id):
+        return runtime_credentials.RuntimeCredential(
+            principal_id="alice", token_id=token.id, proposal_id="stp-1", runtime="n8n",
+            endpoint=("https", "n8n.example.com", 443), project_id="", credential_id=credential_id,
+            credential_name=f"PrivacyFence {token.label}", workflow_id="wf1", mcp_url="", state=state,
+            created_at=1.0, boot_id="b",
+        )
+
+    records.add(record(sent, runtime_credentials.DELIVERED, "0123456789abcdef"))
+    records.add(record(pending, runtime_credentials.CREATING, "fedcba9876543210"))
+
+    with principal_scope(alice):
+        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
+    tokens = {t["label"]: t for t in data["tokens"]}
+    assert tokens["sent"]["runtime_credential"] == {
+        "runtime": "n8n", "credential_name": "PrivacyFence sent", "workflow_id": "wf1",
+    }
+    assert tokens["plain"]["runtime_credential"] is None
+    assert tokens["pending"]["runtime_credential"] is None
+
+
+def test_scoped_token_page_data_does_not_touch_the_org_directory_on_a_local_install(tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, privilege_separation, runtime_credentials, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    runtime_credentials.set_store(None)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+    store.create(alice, label="one", days=30, rules=[], tools=["drive_list_files"], policy=policy)
+
+    with principal_scope(alice):
+        data = scoped_token_page_data(alice, policy=policy, delivery="companion", connector_names={"drive"})
+
+    assert [t["runtime_credential"] for t in data["tokens"]] == [None]
+    assert not (tmp_path / "org").exists()

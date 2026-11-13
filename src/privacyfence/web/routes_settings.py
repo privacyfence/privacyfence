@@ -135,6 +135,7 @@ from datetime import datetime, timezone
 from html import escape as _html_escape
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
@@ -148,7 +149,8 @@ from starlette.responses import (
 from starlette.routing import BaseRoute, Route
 
 from .. import (
-    approval_icons, auto_accept, scoped_token_proposals, settings_window_html, webauthn_stepup, web_shell, whats_new,
+    agent_runtimes, approval_icons, auto_accept, runtime_credential_sweeper, runtime_credentials,
+    scoped_token_proposals, settings_window_html, webauthn_stepup, web_shell, whats_new,
 )
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
@@ -643,7 +645,12 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "    var proposalAction = (action === 'create_proposed_scoped_token' || action === 'decline_scoped_token_proposal');"
         "    var toSection = function(){ window.location.assign('/settings/scoped_tokens'); };"
         "    if (res.ok && proposalAction) {"
-        "      if (res.state && typeof res.state.secret === 'string' && window.__pfShowScopedSecret) {"
+        # A delivered token's secret went to n8n and is not in this answer (ADR 0278).
+        "      if (res.state && res.state.delivered && res.state.created) {"
+        "        window.alert('Created \\'' + res.state.created.label + '\\' and delivered it to n8n as \\''"
+        " + res.state.delivered.credential_name + '\\'.');"
+        "        toSection();"
+        "      } else if (res.state && typeof res.state.secret === 'string' && window.__pfShowScopedSecret) {"
         "        window.__pfShowScopedSecret(res.state.secret, toSection);"
         "      } else { toSection(); }"
         "    } else if (res.ok && scopedAction && res.state && typeof res.state.secret === 'string' && window.__pfShowScopedSecret) {"
@@ -1352,6 +1359,9 @@ def build_routes(
         proposal = registry.take(LOCAL_PRINCIPAL.id, bound["proposal_id"])
         if proposal is None:
             return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
+        if proposal.delivery is not None:
+            registry.restore(proposal)
+            return JSONResponse({"error": _LOCAL_DELIVERY_REFUSED}, status_code=400)
         token, response = await _create_and_deliver(bound, audit_suffix=" from a proposal")
         if token is None:
             registry.restore(proposal)
@@ -1590,6 +1600,7 @@ _RULE_NAME_WAIT_SECONDS = 3.0
 
 # What a person is told when the administrator has not turned scoped tokens on (ADR 0165); the
 # store raises the same text from ``create``.
+_LOCAL_DELIVERY_REFUSED = "This proposal delivers the token to n8n, which needs an organization server."
 _SCOPED_TOKENS_DISABLED = (
     "Scoped tokens are not enabled on this install. "
     "Your administrator turns them on on the Admin page."
@@ -1611,6 +1622,7 @@ def build_org_routes(
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
+    agent_runtime: agent_runtimes.N8nRuntimeConfig | None = None,
 ) -> list[BaseRoute]:
     """Org mode's own settings route list (ADR 0032, ADR 0033) --
     ``GET /settings`` serves the exact same
@@ -2033,6 +2045,56 @@ def build_org_routes(
             return JSONResponse({"error": scoped_token_proposals.WIDENED_MESSAGE}, status_code=400)
         return None
 
+    async def _deliver_proposal(
+        principal: Principal, bound: dict[str, Any], proposal: scoped_token_proposals.TokenProposal,
+    ) -> Response:
+        """Create the token from a delivery proposal and put it into the runtime. The secret goes to
+        the runtime and is never in the answer (ADR 0278). The proposal comes back on a refusal that
+        left nothing behind, not on a 500, where a token may still exist."""
+        registry = scoped_token_proposals.get_registry()
+        api = agent_runtimes.api_for(agent_runtime) if agent_runtime is not None else None
+        if agent_runtime is None or api is None:
+            registry.restore(proposal)
+            return JSONResponse({"error": agent_runtimes.DELIVERY_UNAVAILABLE}, status_code=503)
+        store = scoped_token_store or get_store()
+        with principal_scope(principal):
+            try:
+                _ensure_principal_settings_loaded()
+            except policy_store.V1PolicyConfigError as exc:
+                return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
+            outcome = await run_in_threadpool(
+                lambda: runtime_credentials.deliver(
+                    principal=principal, bound=bound, proposal=proposal, config=agent_runtime, api=api,
+                    token_store=store, policy=token_policy, on_abandoned=runtime_credential_sweeper.wake,
+                ),
+            )
+            token = outcome.token
+            record = outcome.record
+            if token is None or record is None:
+                if outcome.status != 500:
+                    registry.restore(proposal)
+                return JSONResponse({"error": outcome.error}, status_code=outcome.status)
+            _record_settings_audit(
+                principal,
+                f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
+                f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)"
+                + (", personal data allowed" if token.allow_personal_data else "")
+                + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
+                + " from a proposal, delivered to n8n"
+                + f" (principal={principal.id})",
+            )
+        scoped_token_proposals.record(
+            "scoped_token_proposal_accepted", proposal,
+            f"Token proposal '{proposal.request['label']}' accepted as '{token.label}' ({token.id})",
+        )
+        return JSONResponse(
+            {
+                "created": {"id": token.id, "label": token.label, "expires_at": token.expires_at},
+                "delivered": {"runtime": record.runtime, "credential_name": record.credential_name},
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def scoped_token_create_from_proposal(request: Request) -> Response:
         gated = await _org_scoped_token_request(
             request, "create_proposed_scoped_token", _proposal_fingerprint_body, precheck=_proposal_precheck,
@@ -2044,6 +2106,8 @@ def build_org_routes(
         proposal = registry.take(principal.id, bound["proposal_id"])
         if proposal is None:
             return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
+        if proposal.delivery is not None:
+            return await _deliver_proposal(principal, bound, proposal)
         token, response = await _create_and_deliver(principal, bound, audit_suffix=" from a proposal")
         if token is None:
             registry.restore(proposal)
@@ -2087,6 +2151,7 @@ def build_org_routes(
         token = store.get(principal.id, bound["token_id"])
         if token is None or not await run_in_threadpool(store.revoke, principal, bound["token_id"]):
             return JSONResponse({"error": "No such token."}, status_code=404)
+        runtime_credential_sweeper.wake()
         with principal_scope(principal):
             _record_settings_audit(
                 principal, f"Revoked scoped token '{token.label}' ({token.id}) (principal={principal.id})",
@@ -2122,6 +2187,7 @@ def build_org_routes(
         principal, _bound = gated
         store = scoped_token_store or get_store()
         count = await run_in_threadpool(store.revoke_all, principal.id)
+        runtime_credential_sweeper.wake()
         with principal_scope(principal):
             _record_settings_audit(principal, f"Revoked all scoped tokens ({count}) (principal={principal.id})")
         return JSONResponse({"revoked": count})
@@ -2224,7 +2290,11 @@ def build_org_routes(
                 except policy_store.V1PolicyConfigError:
                     pass  # _wrap_org_settings meets the same error and renders it
                 else:
-                    shown = scoped_token_proposals.review_data(proposal, auto_accept.get_policy_rows())
+                    shown = scoped_token_proposals.review_data(
+                        proposal, auto_accept.get_policy_rows(),
+                        runtime_host=(urlsplit(agent_runtime.base_url).hostname or "") if agent_runtime else "",
+                        project_id=agent_runtime.project_id if agent_runtime else "",
+                    )
         return await _wrap_org_settings(
             request, principal, initial_section="scoped_tokens", scoped_proposal=shown,
         )
