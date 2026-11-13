@@ -320,4 +320,5 @@ def principal_from_access_token(token: AccessToken | None) -> Principal:
         email=str(claims.get("email", "") or ""),
         display_name=str(claims.get("display_name", "") or ""),
         is_admin=bool(claims.get("is_admin", False)),
+        email_verified=claims.get("email_verified") is True,
     )
