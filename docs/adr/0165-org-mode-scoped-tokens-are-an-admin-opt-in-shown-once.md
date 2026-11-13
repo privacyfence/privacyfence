@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-11. Implemented.
 Amends [ADR 0072](0072-org-mode-persists-only-sealed-refresh-tokens.md).
+Amended by [ADR 0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md): a delivered token's secret is stored in n8n.
 
 ## Context
 
