@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -59,7 +60,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import admin_config, connector_configs, data_format, oauth_apps, org_mode, paths, relay_client, settings_window_html, web_shell
+from .. import admin_config, agent_runtimes, connector_configs, data_format, oauth_apps, org_mode, paths, relay_client, settings_window_html, web_shell
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
@@ -119,6 +120,7 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "set_authz": AdminAction(_ORG_ONLY, True, "restart"),
     "tighten_step_up": AdminAction(_ORG_ONLY, True, "restart"),
     "set_scoped_tokens": AdminAction(_ORG_ONLY, True, "restart"),
+    "set_agent_runtimes": AdminAction(_ORG_ONLY, True, "restart"),
     "set_audit_forwarding": AdminAction(_ORG_ONLY, True, "restart"),
     "remove_connector_config": AdminAction(_ORG_ONLY, True, "live"),
     "toggle_pii_detection": AdminAction(_ORG_ONLY, True, "self"),
@@ -153,6 +155,7 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     ),
     "tighten_step_up": (("enabled", bool, True), ("require_passkey", bool, True), ("scope", str, True)),
     "set_scoped_tokens": (("enabled", bool, True), ("max_days", int, True), ("allow_ai_proposals", bool, True)),
+    "set_agent_runtimes": (("enabled", bool, True), ("project_id", str, True), ("mcp_url", str, True)),
     "set_audit_forwarding": (
         ("enabled", bool, True), ("kind", str, True), ("syslog_host", str, True), ("syslog_port", int, True),
         ("syslog_protocol", str, True), ("http_url", str, True),
@@ -173,6 +176,7 @@ RESTART_LABELS: dict[str, str] = {
     "authz": "Sign-in restrictions",
     "step_up": "Step-up",
     "scoped_tokens": "Scoped tokens",
+    "agent_runtimes": "Agent runtimes",
     "audit_forwarding": "Audit forwarding",
     "auto_provision": "Automatic accounts",
 }
@@ -200,7 +204,7 @@ MAX_CONNECTOR_CONFIG_BYTES = connector_configs.MAX_FILE_BYTES
 _CONNECTOR_CONFIG_REQUEST_SLACK = 32 * 1024
 
 # The sections only an organization server has.
-_ORG_STATE_KEYS = ("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "audit_forwarding")
+_ORG_STATE_KEYS = ("download_delivery", "web_push", "authz", "step_up", "scoped_tokens", "agent_runtimes", "audit_forwarding")
 
 
 _ADMIN_PAGE_TITLE = "PrivacyFence — Admin"
@@ -259,6 +263,29 @@ def _single_user(bundle: dict[str, Any]) -> bool:
     return org_mode.is_single_user(bundle)
 
 
+def _agent_runtimes_status() -> dict[str, Any]:
+    """Where the n8n address and API key come from, and whether each is set; never the key itself."""
+    url, url_error = "", ""
+    try:
+        url = agent_runtimes.normalize_n8n_url(os.environ.get(agent_runtimes.N8N_URL_ENV, ""))
+    except org_mode.ConfigurationError as exc:
+        url_error = str(exc)
+    raw = os.environ.get(agent_runtimes.N8N_URL_ENV, "").strip()
+    n8n: dict[str, Any] = {
+        "url": url if raw else "",
+        "url_variable": agent_runtimes.N8N_URL_ENV,
+        "key_variable": agent_runtimes.N8N_API_KEY_ENV,
+        "key_set": False,
+    }
+    if raw and url_error:
+        n8n["url_error"] = url_error
+    try:
+        n8n["key_set"] = bool(agent_runtimes.api_key())
+    except org_mode.ConfigurationError:
+        n8n["key_set"] = False
+    return {"n8n": n8n}
+
+
 def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[str, Any]:
     """``admin_config.signin_state`` plus, with the built-in Google sign-in, each sign-in domain and
     what the relay last said about it: ``verified`` (proven in DNS), ``refused`` (a public suffix or
@@ -298,6 +325,7 @@ def _admin_state(
     if mode == "org":
         for key in _ORG_STATE_KEYS:
             state[key] = admin.get(key, {})
+        state["agent_runtimes_status"] = _agent_runtimes_status()
         state["relay_status"] = relay_client.status()
         if paths.org_bundle_path().exists():
             state["legacy_bundle_warning"] = connector_configs.LEGACY_BUNDLE_WARNING
