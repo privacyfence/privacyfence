@@ -18,7 +18,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-sweeper
 
-- pending
+- worker: Where a token state is unknown (unreadable token file), the sweeper skips and keeps the record under rules 1 and 5 as well as rule 3, and keeps it when the revoke in rule 1 raises; the plan did not cover this, and the choice never deletes a credential while a token may be live.
+- worker: Worker could not run the toolkit steps (toolkit absent in its sandbox); it ran ruff, mypy, bandit and the full unit suite itself.
+- review: Orchestrator ran ruff and the full unit suite after the merge (green); no roles required; scope check clean.
 
 ## p4-admin
 
