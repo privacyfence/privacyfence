@@ -2064,7 +2064,7 @@ _JS = r"""
   var ADMIN_NAV_ITEMS = [
     ['services', 'Services'], ['features', 'Features'], ['org_config', 'Organization configuration'],
     ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
-    ['tokens', 'Scoped tokens'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
+    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
   ];
 
   // The provider setup doc for each service on the website: the doc's file name without .md.
@@ -2386,7 +2386,7 @@ _JS = r"""
   // data-f (the action's parameter name), and `saveAdminForm` reads them back by type.
   var ADMIN_FORMS = {
     delivery: 'set_download_delivery', access: 'set_authz', step_up: 'tighten_step_up',
-    tokens: 'set_scoped_tokens', audit: 'set_audit_forwarding',
+    tokens: 'set_scoped_tokens', runtimes: 'set_agent_runtimes', audit: 'set_audit_forwarding',
   };
   var AUDIT_KINDS = [['syslog', 'Syslog'], ['http', 'HTTP endpoint']];
   var SYSLOG_PROTOCOLS = [['udp', 'UDP'], ['tcp', 'TCP']];
@@ -2532,6 +2532,25 @@ _JS = r"""
     return '<div class="pf-page"><h1 class="pf-page-title">Scoped tokens</h1>' + formCardHtml('tokens', rows, 'scoped tokens') + '</div>';
   }
 
+  // The n8n address and API key come from the server's environment (ADR 0278-0282): they are shown
+  // with their variable names, never as inputs, so an admin session cannot point the key elsewhere.
+  function renderRuntimes(state) {
+    var r = (sectionWithDefaults(state, 'agent_runtimes').n8n) || {};
+    var status = ((state.agent_runtimes_status || {}).n8n) || {};
+    var urlVar = status.url_variable || 'PRIVACYFENCE_N8N_URL';
+    var keyVar = status.key_variable || 'PRIVACYFENCE_N8N_API_KEY';
+    var urlText = status.url || ('Not set: set ' + urlVar);
+    if (status.url_error) { urlText = status.url_error; }
+    var rows = [
+      checkRow('Let AI clients ask for a token to be delivered into n8n.', 'enabled', r.enabled, 'Turn on n8n delivery'),
+      textFieldRow('n8n project id', 'Leave empty to use the API key owner\u2019s personal space.', 'project_id', r.project_id || ''),
+      textFieldRow('PrivacyFence MCP address for n8n', 'Leave empty to use this server\u2019s address.', 'mcp_url', r.mcp_url || ''),
+      rowHtml('n8n address', esc(urlText), ''),
+      rowHtml('n8n API key', esc(status.key_set ? 'Set' : 'Not set: set ' + keyVar), ''),
+    ];
+    return '<div class="pf-page"><h1 class="pf-page-title">Agent runtimes</h1>' + formCardHtml('runtimes', rows, 'agent runtimes') + '</div>';
+  }
+
   // The bearer token's variable name is shown, never an input: the server sends that variable's
   // value to the URL above it, so a page that could set both could send any secret anywhere.
   function renderAuditForwarding(state) {
@@ -2582,6 +2601,7 @@ _JS = r"""
       case 'access': return renderAccess(state);
       case 'step_up': return renderStepUp(state);
       case 'tokens': return renderTokens(state);
+      case 'runtimes': return renderRuntimes(state);
       case 'audit': return renderAuditForwarding(state);
       case 'privacy': return renderAdminPrivacy(state);
       case 'stats': return renderStats(state);
@@ -3361,6 +3381,7 @@ def _admin_section_defaults() -> dict[str, dict[str, Any]]:
         "authz": {"allowed_domains": [], "groups_claim": "", "required_groups": []},
         "step_up": {"enabled": False, "require_passkey": False, "scope": DEFAULT_STEP_UP_SCOPE},
         "scoped_tokens": {"enabled": False, "max_days": scoped_tokens.DEFAULT_DAYS, "allow_ai_proposals": False},
+        "agent_runtimes": {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}},
         "audit_forwarding": {
             "enabled": False, "kind": org_mode.DEFAULT_AUDIT_FORWARDING_KIND,
             "syslog": {"host": "", "port": org_mode.DEFAULT_SYSLOG_PORT, "protocol": org_mode.DEFAULT_SYSLOG_PROTOCOL},
@@ -3392,7 +3413,7 @@ def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
         "sections": dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"), is_admin,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"), is_admin,
         ),
         "not_applicable_actions": [],
         "defaults": _admin_section_defaults() if is_admin else {},
