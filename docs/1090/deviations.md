@@ -37,7 +37,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-settings-delivery
 
-- pending
+- worker: The local settings route restores the proposal when it refuses a delivery proposal (the plan does not say either way); two existing settings-window assertions were updated to the new conditional dialog wording.
+- worker: Worker could not run the toolkit steps (toolkit absent in its sandbox) or the Chromium browser test for the proposal dialog; it ran ruff, mypy, bandit and the full unit suite itself.
+- review: Orchestrator ran ruff and the full unit suite after the merge (green); no roles required; scope check clean.
 
 ## p7-daemon-wiring
 
