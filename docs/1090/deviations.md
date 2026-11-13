@@ -56,7 +56,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- final: Blocking: status_for answered not_delivered for an abandoned record with a restored proposal and after a successful retry; fixed by fix-1 (newest non-abandoned record wins, pending while the proposal is in the registry).
+- final: Blocking: the deviations entry for the propose tool description understated the rewording; fixed by the final entry under p5-mcp-tools.
 
 ## Finishing
 
