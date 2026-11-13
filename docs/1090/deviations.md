@@ -18,7 +18,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-admin
 
-- pending
+- worker: Worker could not run the toolkit steps (guard, dod playbook, roles): the toolkit was absent in its sandbox. It ran the acceptance commands, ruff, mypy and bandit itself.
+- retry: Sent back once for a missing phase trailer that was in fact present; the worker added an empty marker commit.
+- review: Orchestrator ran ruff and the full unit suite after the merge (green); no roles required; scope check clean.
 
 ## p5-mcp-tools
 
