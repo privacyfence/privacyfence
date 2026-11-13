@@ -135,4 +135,4 @@ else
   fi
 fi
 
-echo "==> Ready. See ci.dispatchable in .claude/toolkit.yaml and .claude/skills/steward/SKILL.md for what to run off-box."
+echo "==> Ready. See ci.dispatchable in .tld/toolkit.yaml and .claude/skills/steward/SKILL.md for what to run off-box."

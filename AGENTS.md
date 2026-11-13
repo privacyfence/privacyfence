@@ -17,8 +17,8 @@ themselves live in [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 
 ## Verify
 
-The check command is the `verify_command` in `.agents/config.toml`: `ruff check .` then
-`pytest tests/unit -q`, offline. To rerun just your part, use the same interpreter and `pytest <path> -q`.
+The check command is `verify.fast` in `.tld/toolkit.yaml`: `ruff check .` then
+`python3 -m pytest tests/unit -q`, offline. To rerun just your part, use the same interpreter and `pytest <path> -q`.
 
 It does **not** cover: Playwright/browser tests (they skip), `npm test`/`typecheck` in `mcpb/shim` and
 `cloudflare/*`, `sync/` tests, `tests/integration`, bandit, mypy, the 100% coverage floor, live connector
@@ -37,7 +37,7 @@ QA. CI runs those on the PR; do not claim them as passed. Say so in the PR descr
 
 ## Never touch
 
-`.github/workflows/`, `.agents/`, anything about releases (tags, `docs/releasing.md` procedure,
+`.github/workflows/`, anything about releases (tags, `docs/releasing.md` procedure,
 version headings in `CHANGELOG.md`), and `credentials/`. Do not add credentials, tokens or real account
 data anywhere, including tests and fixtures.
 
