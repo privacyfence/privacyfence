@@ -34,7 +34,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - worker: A status call during the creating state answers pending without expires_at, because confirming a proposal removes it from the registry first. McpDispatcher takes agent_runtime but the daemon does not pass it yet (the wiring phase does).
 - worker: Worker could not run the toolkit steps (toolkit absent in its sandbox); it ran ruff, mypy, bandit and unit plus integration tests itself.
 - review: Orchestrator ran ruff, the full unit suite and test_mcp_daemon_contract.py after the merge (green); no roles required; scope check clean.
-- final: The shortening of the propose tool description was wider than the worker entry says: every sentence was reworded (opening sentence, the from_session sentence, the personal-data sentence, the unattended-refusal sentence and the reason sentence) to keep it under 1024 characters; the deliver_to sentence stays verbatim.
+- final: The shortening of the propose tool description was wider than the worker entry says: the opening sentence, the review-and-confirm sentence, the from_session sentence, the personal-data sentence, the unattended-refusal sentence and the reason sentence were all reworded to keep it under 1024 characters; the days sentence is unchanged. The added deliver_to sentence was not compared with the plan's wording word for word by the orchestrator.
 
 ## p6-settings-delivery
 
