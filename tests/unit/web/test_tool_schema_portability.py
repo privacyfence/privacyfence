@@ -89,6 +89,24 @@ async def _connected_session(dispatcher: McpDispatcher):
 async def test_the_live_tool_list_is_exactly_the_set_checked_here():
     async with _connected_session(McpDispatcher(lambda: CONNECTORS, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False))) as session:
         listed = await session.list_tools()
+    assert sorted(tool.name for tool in listed.tools) == sorted(
+        name for name in ADVERTISED if name != mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL.name
+    )
+    for tool in listed.tools:
+        assert tool.input_schema == ADVERTISED[tool.name].input_schema, tool.name
+        assert tool.annotations == ADVERTISED[tool.name].annotations, tool.name
+
+
+async def test_the_status_tool_is_listed_where_delivery_is_on(monkeypatch):
+    from privacyfence import agent_runtimes
+
+    monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+    dispatcher = McpDispatcher(
+        lambda: CONNECTORS, mode="org", scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
+        agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
+    )
+    async with _connected_session(dispatcher) as session:
+        listed = await session.list_tools()
     assert sorted(tool.name for tool in listed.tools) == sorted(ADVERTISED)
     for tool in listed.tools:
         assert tool.input_schema == ADVERTISED[tool.name].input_schema, tool.name

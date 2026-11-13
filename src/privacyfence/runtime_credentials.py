@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterator
 from . import agent_runtimes, audit_log, paths, secure_files
 from .n8n_api import N8nApi, N8nApiClientError
 from .principal import Principal, principal_scope
-from .scoped_token_proposals import TokenProposal
+from .scoped_token_proposals import ProposalRegistry, TokenProposal
 from .scoped_tokens import ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, new_token_id
 
 logger = logging.getLogger(__name__)
@@ -321,3 +321,34 @@ def deliver(
     delivered = replace(record, state=DELIVERED)
     record_event("runtime_credential_delivered", delivered, _delivered_summary(delivered, token))
     return DeliveryOutcome(token, delivered, "", 200)
+
+
+def status_for(
+    principal_id: str, proposal_id: str, *, token_store: ScopedTokenStore, registry: ProposalRegistry,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """The answer of ``privacyfence_runtime_credential_status`` (ADR 0282), looked up only by the
+    caller's own id and the proposal id. Never carries a token id, digest, secret or the runtime's host."""
+    now = time.time() if now is None else now
+    not_delivered: dict[str, Any] = {"state": "not_delivered"}
+    record = get_store().for_proposal(principal_id, proposal_id)
+    if record is not None and record.state == DELIVERED:
+        principal = Principal(id=principal_id)
+        if token_store.token_state(principal, record.token_id, now) != "live":
+            return not_delivered
+        token = next((t for t in token_store.tokens_for(principal) if t.id == record.token_id), None)
+        if token is None:
+            return not_delivered
+        return {
+            "state": "delivered", "runtime": record.runtime, "credential_id": record.credential_id,
+            "credential_name": record.credential_name, "credential_type": "httpBearerAuth",
+            "node_authentication": "bearerAuth", "mcp_url": record.mcp_url,
+            "token_expires_at": datetime.fromtimestamp(token.expires_at, timezone.utc).isoformat(),
+        }
+    proposal = registry.get(principal_id, proposal_id, now)
+    if record is not None and record.state == CREATING or (record is None and proposal is not None):
+        pending: dict[str, Any] = {"state": "pending"}
+        if proposal is not None:
+            pending["expires_at"] = datetime.fromtimestamp(proposal.expires_at, timezone.utc).isoformat()
+        return pending
+    return not_delivered

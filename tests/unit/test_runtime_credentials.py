@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import stat
+from datetime import datetime, timezone
 
 import pytest
 
@@ -385,3 +386,91 @@ class TestCrashPoints:
             _deliver(tokens, FakeApi())
         assert [r.state for r in rc.get_store().all()] == [rc.CREATING]
         self._assert_no_unrecorded_live_token(tokens)
+
+
+class TestStatusFor:
+    NOT_DELIVERED = {"state": "not_delivered"}
+
+    @staticmethod
+    def _status(tokens, proposal_id, *, registry=None, principal_id="alice", now=None):
+        return rc.status_for(
+            principal_id, proposal_id, token_store=tokens, registry=registry or stp.ProposalRegistry(), now=now,
+        )
+
+    def test_a_delivered_record_with_a_live_token_gives_the_credential(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal)
+
+        answer = self._status(tokens, proposal.id)
+
+        assert answer == {
+            "state": "delivered", "runtime": "n8n", "credential_id": outcome.record.credential_id,
+            "credential_name": "PrivacyFence Sales sync", "credential_type": "httpBearerAuth",
+            "node_authentication": "bearerAuth", "mcp_url": "https://pf/mcp",
+            "token_expires_at": datetime.fromtimestamp(outcome.token.expires_at, timezone.utc).isoformat(),
+        }
+        assert outcome.token.id not in json.dumps(answer)
+
+    def test_a_creating_record_is_pending(self, tokens):
+        rc.get_store().add(_record(proposal_id="stp-1"))
+        assert self._status(tokens, "stp-1") == {"state": "pending"}
+
+    def test_a_proposal_still_in_the_registry_is_pending_with_its_expiry(self, tokens):
+        registry = stp.ProposalRegistry()
+        proposal = _proposal()
+        registry.add(proposal)
+
+        answer = self._status(tokens, proposal.id, registry=registry)
+
+        assert answer == {
+            "state": "pending", "expires_at": datetime.fromtimestamp(proposal.expires_at, timezone.utc).isoformat(),
+        }
+
+    def test_a_creating_record_whose_proposal_is_in_the_registry_carries_the_expiry(self, tokens):
+        registry = stp.ProposalRegistry()
+        proposal = _proposal()
+        registry.add(proposal)
+        rc.get_store().add(_record(proposal_id=proposal.id))
+
+        answer = self._status(tokens, proposal.id, registry=registry)
+
+        assert answer["state"] == "pending" and "expires_at" in answer
+
+    def test_another_persons_record_and_proposal_are_not_delivered(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal)
+        registry = stp.ProposalRegistry()
+        registry.add(proposal)
+        assert outcome.status == 200
+
+        assert self._status(tokens, proposal.id, registry=registry, principal_id="bob") == self.NOT_DELIVERED
+
+    def test_an_abandoned_record_is_not_delivered(self, tokens):
+        rc.get_store().add(_record(proposal_id="stp-1", state=rc.ABANDONED))
+        assert self._status(tokens, "stp-1") == self.NOT_DELIVERED
+
+    def test_an_expired_token_is_not_delivered(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal)
+        assert self._status(tokens, proposal.id, now=outcome.token.expires_at + 1) == self.NOT_DELIVERED
+
+    def test_a_revoked_token_is_not_delivered(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal)
+        tokens.revoke(ALICE, outcome.token.id)
+        assert self._status(tokens, proposal.id) == self.NOT_DELIVERED
+
+    def test_an_unknown_id_is_not_delivered(self, tokens):
+        assert self._status(tokens, "stp-nothing") == self.NOT_DELIVERED
+
+    def test_a_token_that_vanishes_between_the_two_reads_is_not_delivered(self):
+        rc.get_store().add(_record(proposal_id="stp-1", state=rc.DELIVERED))
+
+        class Racing:
+            def token_state(self, principal, token_id, now=None):
+                return "live"
+
+            def tokens_for(self, principal):
+                return []
+
+        assert self._status(Racing(), "stp-1") == self.NOT_DELIVERED

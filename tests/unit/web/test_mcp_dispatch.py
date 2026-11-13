@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from privacyfence import local_files, org_mode, scoped_tokens
+from privacyfence import agent_runtimes, local_files, org_mode, scoped_tokens
 from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolSpec
@@ -1522,3 +1522,197 @@ class TestProposeScopedToken:
             await dispatcher.call("s1", "auto", "gmail_list_messages", {"query": "x"})
 
         assert dispatcher._session_calls == {}
+
+
+# --------------------------------------------------------------------------- #
+# deliver_to on privacyfence_propose_scoped_token and privacyfence_runtime_credential_status
+# (ADR 0278, ADR 0282)
+# --------------------------------------------------------------------------- #
+
+_N8N_CONFIG = agent_runtimes.N8nRuntimeConfig(
+    enabled=True, base_url="https://n8n.example.com", project_id="", mcp_url="",
+)
+_ORG_POLICY = scoped_tokens.ScopedTokenPolicy(True, 90, True)
+
+
+class _DeliveryBase:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, paths, runtime_credentials, scoped_token_proposals
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
+        monkeypatch.setattr(mcp_dispatch, "get_policy_rows", lambda: [])
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+        self.store = scoped_tokens.ScopedTokenStore(lambda: [Principal(id="local")])
+        scoped_tokens.set_store(self.store)
+        runtime_credentials.set_store(runtime_credentials.RuntimeCredentialStore(tmp_path / "records.json"))
+        self.registry = scoped_token_proposals.ProposalRegistry()
+        monkeypatch.setattr(scoped_token_proposals, "_registry", self.registry)
+        yield
+        runtime_credentials.set_store(None)
+
+    def _entries(self):
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    @staticmethod
+    def _dispatcher(*, mode="org", policy=_ORG_POLICY, runtime=_N8N_CONFIG):
+        return _dispatcher(
+            {"gmail": FakeConnector("gmail")}, mode=mode, scoped_token_policy=policy, agent_runtime=runtime,
+        )
+
+    @staticmethod
+    def _params(**overrides):
+        params = {
+            "reason": "nightly job", "label": "nightly", "rules": [dict(_RULE)], "tools": ["gmail_get_message"],
+            "deliver_to": {"runtime": "n8n", "workflow_id": "wf1"},
+        }
+        params.update(overrides)
+        return params
+
+    async def _propose(self, dispatcher, params=None):
+        return await dispatcher.propose_scoped_token("s1", params or self._params(), "https://pf.example.com/")
+
+
+class TestProposeWithDelivery(_DeliveryBase):
+    async def test_accepted_in_org_mode_with_delivery_available(self):
+        dispatcher = self._dispatcher()
+        assert dispatcher.runtime_delivery_enabled() is True
+
+        result = await self._propose(dispatcher)
+
+        assert result["delivery"] == {
+            "runtime": "n8n", "workflow_id": "wf1", "status_tool": "privacyfence_runtime_credential_status",
+        }
+        assert result["message"] == agent_runtimes.DELIVERY_MESSAGE
+
+    async def test_the_proposal_carries_the_delivery_and_the_mcp_url(self):
+        result = await self._propose(self._dispatcher())
+
+        proposal = self.registry.get("local", result["proposal_id"])
+        assert proposal.delivery == agent_runtimes.DeliveryTarget("n8n", "wf1")
+        assert proposal.mcp_url == "https://pf.example.com/mcp"
+
+    async def test_a_configured_mcp_url_wins(self):
+        runtime = dataclasses.replace(_N8N_CONFIG, mcp_url="https://public.example.com/mcp")
+        result = await self._propose(self._dispatcher(runtime=runtime))
+        assert self.registry.get("local", result["proposal_id"]).mcp_url == "https://public.example.com/mcp"
+
+    async def test_the_workflow_id_is_optional(self):
+        result = await self._propose(self._dispatcher(), self._params(deliver_to={"runtime": "n8n"}))
+        assert result["delivery"]["workflow_id"] == ""
+
+    async def test_the_audit_summary_says_delivery(self):
+        await self._propose(self._dispatcher())
+        [entry] = [e for e in self._entries() if e["decision"] == "scoped_token_proposed"]
+        assert entry["summary"].endswith(", delivery to n8n")
+
+    async def test_without_deliver_to_nothing_changes(self):
+        params = self._params()
+        del params["deliver_to"]
+        result = await self._propose(self._dispatcher(), params)
+        assert "delivery" not in result and result["message"] != agent_runtimes.DELIVERY_MESSAGE
+        assert self.registry.get("local", result["proposal_id"]).delivery is None
+        [entry] = [e for e in self._entries() if e["decision"] == "scoped_token_proposed"]
+        assert "delivery" not in entry["summary"]
+
+    async def test_refused_in_local_mode(self):
+        with pytest.raises(ValueError, match="Delivery to n8n is not set up"):
+            await self._propose(self._dispatcher(mode="local"))
+        assert self.registry.pending_for("local") == []
+
+    async def test_refused_with_delivery_off(self, monkeypatch):
+        for runtime in (None, dataclasses.replace(_N8N_CONFIG, enabled=False)):
+            with pytest.raises(ValueError, match=agent_runtimes.DELIVERY_UNAVAILABLE):
+                await self._propose(self._dispatcher(runtime=runtime))
+        monkeypatch.delenv("PRIVACYFENCE_N8N_API_KEY")
+        with pytest.raises(ValueError, match=agent_runtimes.DELIVERY_UNAVAILABLE):
+            await self._propose(self._dispatcher())
+        assert self.registry.pending_for("local") == []
+
+    @pytest.mark.parametrize("deliver_to", [
+        {"runtime": "n8n", "key": "x"}, {"runtime": "zapier"}, {"runtime": "n8n", "workflow_id": "bad id!"},
+        "n8n", {"workflow_id": "wf1"},
+    ])
+    async def test_a_bad_deliver_to_is_refused(self, deliver_to):
+        with pytest.raises(ValueError):
+            await self._propose(self._dispatcher(), self._params(deliver_to=deliver_to))
+        assert self.registry.pending_for("local") == []
+
+
+class TestRuntimeCredentialStatus(_DeliveryBase):
+    def _status(self, dispatcher, proposal_id="stp-x", **extra):
+        return dispatcher.runtime_credential_status({"proposal_id": proposal_id, "reason": "checking", **extra})
+
+    async def test_pending_while_the_proposal_waits(self):
+        dispatcher = self._dispatcher()
+        proposed = await self._propose(dispatcher)
+
+        answer = self._status(dispatcher, proposed["proposal_id"])
+
+        assert answer["state"] == "pending" and answer["expires_at"] == proposed["expires_at"]
+
+    async def test_not_delivered_for_an_unknown_id(self):
+        assert self._status(self._dispatcher()) == {"state": "not_delivered"}
+
+    async def test_delivered_with_the_credential(self):
+        from privacyfence import runtime_credentials as rc
+
+        dispatcher = self._dispatcher()
+        proposed = await self._propose(dispatcher)
+        proposal = self.registry.take("local", proposed["proposal_id"])
+
+        class Api:
+            def create_bearer_credential(self, **kwargs):
+                pass
+
+        bound = {
+            "label": "nightly", "days": 30, "rules": proposal.request["rules"], "tools": proposal.request["tools"],
+            "allow_personal_data": False, "allow_personal_data_reads": False,
+        }
+        outcome = rc.deliver(
+            principal=Principal(id="local"), bound=bound, proposal=proposal, config=_N8N_CONFIG, api=Api(),
+            token_store=self.store, policy=_ORG_POLICY,
+        )
+        assert outcome.status == 200, outcome.error
+
+        answer = self._status(dispatcher, proposal.id)
+
+        assert answer["state"] == "delivered"
+        assert answer["credential_id"] == outcome.record.credential_id
+        assert answer["mcp_url"] == "https://pf.example.com/mcp"
+        assert outcome.token.id not in json.dumps(answer)
+
+    async def test_another_persons_proposal_is_not_delivered(self):
+        dispatcher = self._dispatcher()
+        proposed = await self._propose(dispatcher)
+        with principal_scope(Principal(id="bob")):
+            assert self._status(dispatcher, proposed["proposal_id"]) == {"state": "not_delivered"}
+
+    async def test_refused_under_a_scoped_token(self):
+        with scoped_tokens.token_scope(_SCOPE), pytest.raises(GateDeniedError, match="cannot read token deliveries"):
+            self._status(self._dispatcher())
+
+    async def test_refused_in_local_mode_or_with_delivery_off(self):
+        for dispatcher in (self._dispatcher(mode="local"), self._dispatcher(runtime=None)):
+            assert dispatcher.runtime_delivery_enabled() is False
+            with pytest.raises(ValueError, match=agent_runtimes.DELIVERY_UNAVAILABLE):
+                self._status(dispatcher)
+
+    async def test_each_read_is_audited_with_the_reason(self):
+        self._status(self._dispatcher())
+        [entry] = [e for e in self._entries() if e["decision"] == "runtime_credential_status_read"]
+        assert entry["tool"] == "privacyfence_runtime_credential_status"
+        assert entry["claude_reason"] == "checking" and entry["sender"] == "local"
+
+    async def test_an_audit_failure_does_not_fail_the_read(self, monkeypatch):
+        def broken():
+            raise OSError("disk full")
+
+        monkeypatch.setattr(mcp_dispatch, "get_audit_logger", broken)
+        assert self._status(self._dispatcher()) == {"state": "not_delivered"}

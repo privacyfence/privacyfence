@@ -12,7 +12,8 @@ own tool definitions and the gate table in
 A connector's tools appear only after its organization config is installed and you have signed in
 to that service (see [Connecting a service](connecting-a-service.md)). The `privacyfence_*`
 tools that PrivacyFence adds itself (eight always, plus `privacyfence_propose_scoped_token` where token
-proposals are on: always on a local install, by the administrator's choice in organization mode) are not connector tools and have no gate; they are described in
+proposals are on (always on a local install, by the administrator's choice in organization mode) and
+`privacyfence_runtime_credential_status` where n8n delivery is also set up) are not connector tools and have no gate; they are described in
 [How PrivacyFence works](how-it-works.md#privacyfences-own-tools).
 
 ## Gates
