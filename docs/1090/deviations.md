@@ -43,7 +43,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p7-daemon-wiring
 
-- pending
+- worker: The n8n URL is read from the PRIVACYFENCE_N8N_URL environment variable, so the missing-URL warning looks at that variable; two existing revoke-output assertions were updated for the new line.
+- worker: Worker could not run the toolkit steps (toolkit absent in its sandbox); it ran ruff, mypy, bandit and the full unit suite itself.
+- review: Orchestrator ran ruff and the full unit suite after the merge (green); no roles required; scope check clean.
 
 ## p8-docs-adrs
 
