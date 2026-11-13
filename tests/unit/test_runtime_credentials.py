@@ -449,6 +449,31 @@ class TestStatusFor:
         rc.get_store().add(_record(proposal_id="stp-1", state=rc.ABANDONED))
         assert self._status(tokens, "stp-1") == self.NOT_DELIVERED
 
+    def test_an_abandoned_record_with_the_proposal_restored_is_pending(self, tokens):
+        registry = stp.ProposalRegistry()
+        proposal = _proposal()
+        registry.add(proposal)
+        rc.get_store().add(_record(proposal_id=proposal.id, state=rc.ABANDONED))
+
+        answer = self._status(tokens, proposal.id, registry=registry)
+
+        assert answer["state"] == "pending" and "expires_at" in answer
+
+    def test_a_retry_after_an_abandoned_record_answers_from_the_newest_live_record(self, tokens):
+        proposal = _proposal()
+        rc.get_store().add(_record(proposal_id=proposal.id, credential_id="aaaaaaaaaaaaaaaa", state=rc.ABANDONED))
+        outcome = _deliver(tokens, FakeApi(), proposal)
+
+        answer = self._status(tokens, proposal.id)
+
+        assert answer["state"] == "delivered" and answer["credential_id"] == outcome.record.credential_id
+        assert outcome.token.id not in json.dumps(answer)
+
+    def test_an_abandoned_record_after_a_creating_one_does_not_hide_it(self, tokens):
+        rc.get_store().add(_record(credential_id="aaaaaaaaaaaaaaaa"))
+        rc.get_store().add(_record(credential_id="bbbbbbbbbbbbbbbb", state=rc.ABANDONED))
+        assert self._status(tokens, "stp-1") == {"state": "pending"}
+
     def test_an_expired_token_is_not_delivered(self, tokens):
         proposal = _proposal()
         outcome = _deliver(tokens, FakeApi(), proposal)
