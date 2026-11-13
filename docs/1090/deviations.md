@@ -30,7 +30,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-mcp-tools
 
-- pending
+- worker: The propose tool description was over the 1024-character limit the portability test enforces once the deliver_to sentence was added, so the worker shortened the from_session and unattended-refusal sentences; the deliver_to sentence is verbatim.
+- worker: A status call during the creating state answers pending without expires_at, because confirming a proposal removes it from the registry first. McpDispatcher takes agent_runtime but the daemon does not pass it yet (the wiring phase does).
+- worker: Worker could not run the toolkit steps (toolkit absent in its sandbox); it ran ruff, mypy, bandit and unit plus integration tests itself.
+- review: Orchestrator ran ruff, the full unit suite and test_mcp_daemon_contract.py after the merge (green); no roles required; scope check clean.
 
 ## p6-settings-delivery
 
