@@ -149,6 +149,8 @@ def _default_config() -> dict[str, Any]:
         "step_up": {},
         "scoped_tokens": {},
         "audit_forwarding": {},
+        # Domain grants for upstream MCP servers (upstream_mcp_config.GrantStore reads them).
+        "upstream_mcp": {},
     }
 
 
