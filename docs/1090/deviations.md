@@ -61,4 +61,5 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Finishing
 
-- pending
+- final: Scope disposition: no phase went outside its touches list; the scope check ran before the merge of every phase except p1 and recorded no out-of-scope path; the p1 check ran after its merge and was skipped.
+- final: Definition of done run on the branch: full pytest with coverage (21607 passed, 707 skipped for the Chromium-dependent browser tests), coverage ratchet, ruff, bandit, mypy, strict mypy and the shim tests and typecheck all pass; the new modules are at 100%. No roles were required at any point.
