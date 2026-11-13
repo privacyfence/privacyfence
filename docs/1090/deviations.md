@@ -10,7 +10,11 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-records-store
 
-- pending
+- worker: review_data also takes a project_id keyword (the delivery dict carries project_id but only runtime_host was named); a later phase must pass the configured project id.
+- worker: New RECORD_FAILED text ("PrivacyFence could not write its delivery record, so it created nothing. Ask your administrator to check the server's log.") returned with status 500 when the step-2 record write fails; the plan did not say what happens then.
+- worker: deliver() raises ValueError for a proposal without delivery; a set_state failure after n8n accepted the credential is handled like step 6, with the credential delete tried first; a malformed chosen token_id raises the same already-in-use text as a duplicate.
+- worker: Worker could not run the toolkit steps (toolkit absent in its sandbox); it ran ruff, mypy, bandit and the full unit suite itself.
+- review: Orchestrator ran ruff and the full unit suite after the merge (green); no roles required; scope check clean.
 
 ## p3-sweeper
 
