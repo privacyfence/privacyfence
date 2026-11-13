@@ -1,0 +1,56 @@
+# Deviations: upstream-mcp-connector
+
+Written by the implement orchestrator after each phase merge; workers never edit this file.
+Every deviation from the plan is listed under its phase. "None." means the phase followed the plan.
+
+## p1-tool-input-schema
+
+- pending
+
+## p2-upstream-config
+
+- pending
+
+## p3-verified-email
+
+- pending
+
+## p4-upstream-claims
+
+- pending
+
+## p5-tool-registration
+
+- pending
+
+## p6-reference-upstream
+
+- pending
+
+## p7-client-catalog
+
+- pending
+
+## p8-connector
+
+- pending
+
+## p9-org-wiring
+
+- pending
+
+## p10-scoped-token-domains
+
+- pending
+
+## p11-docs-and-adrs
+
+- pending
+
+## Final review
+
+- pending
+
+## Finishing
+
+- pending
