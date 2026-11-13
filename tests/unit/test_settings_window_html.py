@@ -929,7 +929,8 @@ class TestScopedTokenProposal:
             "This token proposal has expired, was declined or was already used.",
             "No rule covers these tools, so the token\\'s calls to them will be denied: ",
             "Delegate access to this token?",
-            "You are delegating access. Anything that holds this token can act as you within these rules, for ",
+            "'You are delegating access to n8n.' : 'You are delegating access.'",
+            " Anything that holds this token can act as you within these rules, for ",
             "Revoke it in Settings → Scoped tokens if it leaks or the job is retired.",
             "This token may also return or upload personal data.",
             "Type the token name to confirm",
@@ -938,9 +939,26 @@ class TestScopedTokenProposal:
         ):
             assert text in html
 
+    def test_delivery_strings_present(self):
+        html = build_html(_make_state(), scoped_tokens=TestScopedTokensSection.DATA, scoped_proposal=self.PROPOSAL)
+        for text in (
+            "PrivacyFence will put this token into n8n at ",
+            " as a credential, in ",
+            "the personal space of the n8n API key\\'s owner",
+            ". Anyone who can edit workflows there, the AI client included, can use the token and read it until it expires or you revoke it.",
+            "The AI client says it is for workflow ",
+            "; n8n does not tie the credential to it.",
+            " Data the workflow reads is kept in n8n\\'s execution history.",
+            "You are delegating access to n8n.",
+            "Create and deliver to n8n",
+            "In n8n as \\'",
+            " (as reported by the AI client)",
+        ):
+            assert text in html, text
+
     def test_delegate_button_text(self):
         html = build_html(_make_state(), scoped_tokens=TestScopedTokensSection.DATA, scoped_proposal=self.PROPOSAL)
-        assert "btn(' primary', 'Delegate access')" in html
+        assert "btn(' primary', req.delivery ? 'Create and deliver to n8n' : 'Delegate access')" in html
         assert "btn('', 'Cancel')" in html
 
     def test_waiting_list_renders_when_proposals_exist(self):

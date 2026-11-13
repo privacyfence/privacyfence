@@ -1361,6 +1361,13 @@ _JS = r"""
       activity += ' \u00b7 Last denied ' + stamp(t.last_denied_at) + ' (' + t.last_denied_tool + ')';
     }
     var activityHtml = '<div class="pf-hint pf-st-activity">' + esc(activity) + '</div>';
+    if (t.runtime_credential) {
+      var inRuntime = 'In n8n as \'' + t.runtime_credential.credential_name + '\'';
+      if (t.runtime_credential.workflow_id) {
+        inRuntime += ' \u00b7 for workflow ' + t.runtime_credential.workflow_id + ' (as reported by the AI client)';
+      }
+      activityHtml += '<div class="pf-hint pf-st-runtime" data-st-runtime="1">' + esc(inRuntime) + '</div>';
+    }
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
@@ -1650,6 +1657,14 @@ _JS = r"""
     html += '<div class="pf-hint">An AI client proposed this token. Untick anything the job does not need. You can only narrow it here; to add more, use New token.</div>';
     html += '<div class="pf-hint" data-sp-agent="1">Proposed by: ' + esc(p.agent_label) + '. The AI client reports this name itself; PrivacyFence does not verify it.</div>';
     html += '<div class="pf-hint" data-sp-reason="1">Reason given: ' + esc(p.reason) + '</div>';
+    if (p.delivery) {
+      var where = p.delivery.project_id ? 'project ' + p.delivery.project_id : 'the personal space of the n8n API key\'s owner';
+      var which = p.delivery.workflow_id ? ' The AI client says it is for workflow ' + p.delivery.workflow_id + '; n8n does not tie the credential to it.' : '';
+      html += '<div class="pf-st-notice" role="status" data-sp-delivery="1">' + esc(
+        'PrivacyFence will put this token into n8n at ' + p.delivery.host + ' as a credential, in ' + where +
+        '. Anyone who can edit workflows there, the AI client included, can use the token and read it until it expires or you revoke it.' +
+        which + ' Data the workflow reads is kept in n8n\'s execution history.') + '</div>';
+    }
     html += '<label><span class="field-label">Name</span><input type="text" class="field" aria-label="Token name" data-sp-label="1" maxlength="60" value="' + esc(ui.spLabel) + '"/></label>';
     html += '<label><span class="field-label">Days valid</span><input type="number" class="field" aria-label="Days valid" data-sp-days="1" min="1" max="' +
       esc(p.days) + '" value="' + esc(ui.spDays) + '"/></label>';
@@ -1705,7 +1720,7 @@ _JS = r"""
       rules: rules, tools: tools,
       allow_personal_data: !!(p.allow_personal_data && ui.spPersonalData),
       allow_personal_data_reads: !!(p.allow_personal_data_reads && ui.spPersonalDataReads),
-      sentences: sentences
+      sentences: sentences, delivery: !!p.delivery
     };
   }
 
@@ -1727,7 +1742,7 @@ _JS = r"""
       return d;
     }
     box.appendChild(div('pf-modal-title', 'Delegate access to this token?'));
-    box.appendChild(div('pf-modal-desc', 'You are delegating access. Anything that holds this token can act as you within these rules, for ' +
+    box.appendChild(div('pf-modal-desc', (req.delivery ? 'You are delegating access to n8n.' : 'You are delegating access.') + ' Anything that holds this token can act as you within these rules, for ' +
       req.days + ' days, with no approval card and no prompt. PrivacyFence cannot tell who is using it. ' +
       'Revoke it in Settings → Scoped tokens if it leaks or the job is retired.'));
     if (req.allow_personal_data || req.allow_personal_data_reads) {
@@ -1761,7 +1776,7 @@ _JS = r"""
       return b;
     }
     var cancel = btn('', 'Cancel');
-    var go = btn(' primary', 'Delegate access');
+    var go = btn(' primary', req.delivery ? 'Create and deliver to n8n' : 'Delegate access');
     function close() { overlay.remove(); document.removeEventListener('keydown', onEsc, true); }
     function onEsc(ev) { if (ev.key === 'Escape') { ev.preventDefault(); close(); } }
     function sync() {
