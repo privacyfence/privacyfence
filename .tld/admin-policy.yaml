@@ -29,8 +29,13 @@ actions:
 
 rulesets:
   default_branch:                  # ruleset tld-main
-    required_status_checks: []     # TODO: fill from the audit (tests.yml job names) before apply
-    admin_bypass: false
+    required_status_checks:       # exact GitHub check names; every job runs on every PR (tests.yml has no path filters)
+      - test
+      - static-analysis
+      - "Test (Python 3.11, core suite)"
+      - "Test (Python 3.12, core suite)"
+      - "Test (Python 3.14, core suite)"
+    admin_bypass: true             # single human owner: they merge their own PRs through a pull request; skips the required checks for that merge
   tags: true                       # ruleset tld-tags: only the owner creates tags; releases go through tld-release
 
 agent:
@@ -43,7 +48,7 @@ release:
 
 config_dirs:
   forbid: [".archon", ".agents"]
-  known: []
+  known: [.claude-plugin]   # the plugin marketplace manifest
 
 workflow_lint:
   pin_actions: third_party
