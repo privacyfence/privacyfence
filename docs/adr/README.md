@@ -256,7 +256,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
 | [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236; related: 0250 |
-| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072 |
+| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072; amended by 0278 |
 | [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148; amended by 0174, 0236 |
 | [0167](0167-a-card-number-must-have-a-length-its-first-digit-allows.md) | A card number must have a length its first digit allows | Accepted |
 | [0168](0168-earlier-drive-file-versions-are-read-under-the-file-read-rule.md) | Earlier Drive file versions are read under the file-read rule | Accepted |
@@ -341,7 +341,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0247](0247-grist-provisioning-needs-a-verified-email.md) | Grist provisioning needs a verified email | Accepted; relates to 0142, 0143 |
 | [0248](0248-a-managed-grist-key-expires-90-days-after-it-was-issued.md) | A managed Grist key expires 90 days after it was issued | Accepted; relates to 0142, 0143 |
 | [0249](0249-a-timed-out-google-request-discards-its-pooled-connection.md) | A timed-out Google request discards its pooled connection | Accepted; amends 0105 |
-| [0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) | An AI client can propose a scoped token; only a person creates it, after a narrowing-only review and a typed-name confirmation | Accepted; relates to 0013, 0034, 0104, 0164, 0165, 0195, 0220, 0236 |
+| [0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) | An AI client can propose a scoped token; only a person creates it, after a narrowing-only review and a typed-name confirmation | Accepted; relates to 0013, 0034, 0104, 0164, 0165, 0195, 0220, 0236; amended by 0278, 0280 |
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
 | [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165 |
@@ -369,3 +369,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
 | [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
 | [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted |
+| [0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md) | A scoped token can be delivered into an agent runtime, n8n first, as a credential PrivacyFence writes itself | Accepted; amends 0165, 0250; relates to 0164, 0220 |
+| [0279](0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md) | The n8n address and API key come only from the server environment | Accepted; relates to 0241, 0257 |
+| [0280](0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md) | `privacyfence_runtime_credential_status` reports a delivered proposal's credential to the client that proposed it | Accepted; amends 0250 |
+| [0281](0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md) | A sweeper deletes the runtime credential of a revoked, expired or undelivered token | Accepted; relates to 0164, 0165 |
+| [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261 |
