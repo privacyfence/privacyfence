@@ -29,6 +29,8 @@ git:
   branch_pattern: "<type>/<kebab-case>"
   branch_types: [feature, fix, chore, tests]
   merge_style: merge-commit
+  bot_login: andras-tkcs-agent
+  codeowners: [andras-tkcs]
 
 verify:
   fast:
@@ -129,3 +131,12 @@ models:
   reviewer: strong
 
 project_steward: .claude/skills/steward/SKILL.md
+
+hooks:
+  plan_gate:
+    enabled: true
+  board_gate:
+    enabled: true
+
+admin:
+  policy: .tld/admin-policy.yaml

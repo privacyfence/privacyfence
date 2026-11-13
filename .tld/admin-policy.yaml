@@ -1,0 +1,56 @@
+# Admin policy for tld ops repo-admin (docs/guides/admin.md in tkcs-lab/tkcs-lab-devflow).
+# Run it where an organisation owner's token is available, never from a web session:
+#   tld ops repo-admin validate-policy .tld/admin-policy.yaml
+#   tld ops repo-admin audit --policy .tld/admin-policy.yaml
+# Everything irreversible is off; apply is a dry run until --yes, and deletes need --allow-delete.
+
+org: privacyfence
+
+repos:
+  include: ["privacyfence"]        # this repository only; widen when the policy fits the other repositories
+  skip_archived: true
+  skip_forks: true
+
+repo_settings:
+  allow_auto_merge: true
+  delete_branch_on_merge: true
+  allow_update_branch: true
+
+security:
+  vulnerability_alerts: true
+  automated_security_fixes: true
+  secret_scanning: true
+  secret_push_protection: true
+  private_vulnerability_reporting: true
+
+actions:
+  default_workflow_permissions: read
+  can_approve_pull_request_reviews: false
+
+rulesets:
+  default_branch:                  # ruleset tld-main
+    required_status_checks: []     # TODO: fill from the audit (tests.yml job names) before apply
+    admin_bypass: false
+  tags: true                       # ruleset tld-tags: only the owner creates tags; releases go through tld-release
+
+agent:
+  agent_login: andras-tkcs-agent
+  branch_policy: default_branch
+
+release:
+  reviewer_login: andras-tkcs
+  environment: tld-release
+
+config_dirs:
+  forbid: [".archon", ".agents"]
+  known: []
+
+workflow_lint:
+  pin_actions: third_party
+  require_permissions: true
+  forbid_pull_request_target: true
+
+workflows:
+  - template: release
+    params: { tag_prefix: "v", version_style: pep440, create_release: "false" }
+  - template: land

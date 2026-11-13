@@ -1,0 +1,221 @@
+name: tld-release
+
+# Cuts a release: an annotated tag on the head of main and a GitHub release with generated notes.
+# Run it by hand (Actions, tld-release, Run workflow). It starts as a dry run.
+# The tag is made with TLD_RELEASE_TOKEN, an owner token that is a secret of the environment
+# tld-release: only main may use it and the owner approves every run. The workflow's own
+# GITHUB_TOKEN only reads; the tag ruleset tld-tags lets no workflow token create a tag.
+# Parameters (repo-admin `params`): tag_prefix, release_environment, version_style (semver or pep440),
+# check_script (a repository script run with the version before the tag; empty: none) and create_release
+# (false: only the tag; the repository's own tag-triggered workflow makes the GitHub release).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the tag prefix, for example 1.4.0 or 1.4.0-rc.1. Empty: bump the newest tag."
+        required: false
+        default: ""
+        type: string
+      bump:
+        description: "Which part to raise when version is empty"
+        required: false
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+      prerelease:
+        description: "Mark the release as a pre-release"
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: "Only show the tag and the release notes; untick to publish"
+        required: false
+        default: true
+        type: boolean
+      skip_checks:
+        description: "Release even though a check on the commit is not green"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: tld-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  checks: read
+  statuses: read
+
+jobs:
+  release:
+    name: tld-release
+    runs-on: ubuntu-latest
+    environment: tld-release
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Decide the tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PREFIX: "v"
+          VERSION_STYLE: "pep440"
+          CREATE_RELEASE: "false"
+          VERSION: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          case "$CREATE_RELEASE" in
+            true|false) ;;
+            *) echo "::error::create_release must be true or false (got: $CREATE_RELEASE)"; exit 1 ;;
+          esac
+          num='(0|[1-9][0-9]*)'
+          case "$VERSION_STYLE" in
+            semver) pattern="^$num\.$num\.$num(-[0-9A-Za-z.]+)?$"; example="1.2.3 or 1.2.3-rc.1" ;;
+            pep440) pattern="^$num\.$num\.$num((a|b|rc)$num)?$"; example="1.2.3 or 1.2.3rc1" ;;
+            *) echo "::error::version_style must be semver or pep440 (got: $VERSION_STYLE)"; exit 1 ;;
+          esac
+          if [ -n "$VERSION" ]; then
+            if ! [[ "$VERSION" =~ $pattern ]]; then
+              echo "::error::version must look like $example (got: $VERSION)"
+              exit 1
+            fi
+            next="$VERSION"
+          else
+            latest=$(gh api --paginate "repos/$REPO/git/matching-refs/tags/$PREFIX" --jq '.[].ref' \
+              | sed 's#^refs/tags/##' \
+              | awk -v p="$PREFIX" 'substr($0, 1, length(p)) == p { v = substr($0, length(p) + 1); if (v ~ /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/) print v }' \
+              | sort -V | tail -n 1)
+            if [ -z "$latest" ]; then
+              echo "::error::no tag with prefix '$PREFIX' and a plain x.y.z version yet: run again with an explicit version"
+              exit 1
+            fi
+            IFS=. read -r major minor patch <<< "$latest"
+            case "$BUMP" in
+              major) next="$((major + 1)).0.0" ;;
+              minor) next="$major.$((minor + 1)).0" ;;
+              patch) next="$major.$minor.$((patch + 1))" ;;
+              *) echo "::error::bump must be patch, minor or major"; exit 1 ;;
+            esac
+          fi
+          tag="$PREFIX$next"
+          if gh api "repos/$REPO/git/ref/tags/$tag" > /dev/null 2>&1; then
+            echo "::error::tag $tag already exists"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check that the commit is green
+        if: inputs.skip_checks == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          SELF: tld-release
+        run: |
+          set -euo pipefail
+          bad=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs" --jq '.check_runs[]
+            | select(.name != env.SELF)
+            | select(.status != "completed" or (.conclusion | IN("success", "skipped", "neutral") | not))
+            | "\(.name): \(.status) \(.conclusion // "")"')
+          if [ -n "$bad" ]; then
+            echo "::error::checks on $SHA are not all green:"
+            echo "$bad"
+            exit 1
+          fi
+          read -r state total < <(gh api "repos/$REPO/commits/$SHA/status" --jq '[.state, .total_count] | @tsv')
+          # "pending" with no status at all is what a commit without legacy statuses reports: only a real pending one blocks
+          if [ "$state" = "failure" ] || [ "$state" = "error" ] || { [ "$state" = "pending" ] && [ "$total" != "0" ]; }; then
+            echo "::error::commit status of $SHA is $state"
+            exit 1
+          fi
+          echo "checks on $SHA are green"
+
+      - name: Run the project's release check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          MAIN: "main"
+          CHECK_SCRIPT: ""
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CHECK_SCRIPT" ]; then
+            echo "no check_script: nothing to run"
+            exit 0
+          fi
+          case "$CHECK_SCRIPT" in
+            /*|-*|*..*) echo "::error::check_script must be a path inside the repository (got: $CHECK_SCRIPT)"; exit 1 ;;
+          esac
+          # A full clone with every tag, the main branch checked out at the commit to be tagged. The read-only
+          # workflow token is used for the fetch only and is not left in the clone or passed to the script.
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git init -q checkout
+          cd checkout
+          git remote add origin "$SERVER/$REPO"
+          git -c http.extraheader="$auth" fetch -q --tags origin "+refs/heads/$MAIN:refs/remotes/origin/$MAIN"
+          git checkout -q -B "$MAIN" "$SHA"
+          git branch -q --set-upstream-to="origin/$MAIN" "$MAIN"
+          unset GH_TOKEN auth
+          if [ ! -f "$CHECK_SCRIPT" ]; then
+            echo "::error::check_script $CHECK_SCRIPT does not exist at $SHA"
+            exit 1
+          fi
+          case "$CHECK_SCRIPT" in
+            *.py) python3 "$CHECK_SCRIPT" "$VERSION" ;;
+            *.sh) bash "$CHECK_SCRIPT" "$VERSION" ;;
+            *) "./$CHECK_SCRIPT" "$VERSION" ;;
+          esac
+          echo "check_script $CHECK_SCRIPT passed for $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show the release notes
+        env:
+          GH_TOKEN: ${{ secrets.TLD_RELEASE_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::secret TLD_RELEASE_TOKEN is not set in the release environment"
+            exit 1
+          fi
+          {
+            echo "## Notes for $TAG"
+            gh api -X POST "repos/$REPO/releases/generate-notes" -f tag_name="$TAG" -f target_commitish="$SHA" --jq .body
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the tag and the release
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ secrets.TLD_RELEASE_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          CREATE_RELEASE: "false"
+        run: |
+          set -euo pipefail
+          object=$(gh api -X POST "repos/$REPO/git/tags" -f tag="$TAG" -f message="Release $TAG" -f object="$SHA" -f type=commit --jq .sha)
+          gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$object" > /dev/null
+          if [ "$CREATE_RELEASE" = "false" ]; then
+            echo "Tagged $TAG; the repository's tag workflows make the release" >> "$GITHUB_STEP_SUMMARY"
+            echo "tagged $TAG"
+            exit 0
+          fi
+          flags=(--verify-tag --generate-notes --title "$TAG")
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          if ! url=$(gh release create "$TAG" "${flags[@]}" --repo "$REPO"); then
+            echo "::error::tag $TAG was created but the release was not; run: gh release create $TAG --verify-tag --generate-notes --repo $REPO"
+            exit 1
+          fi
+          echo "Released $TAG: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "$url"
