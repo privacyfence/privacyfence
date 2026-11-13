@@ -49,7 +49,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p8-docs-adrs
 
-- pending
+- worker: The docs and ADRs describe what the code does where it differs from the plan: the shortened propose description, the pending answer without expires_at during creating, the RECORD_FAILED text, and the sweeper keeping unknown-state records. The ADR index rows for 0165 and 0250 also say amended by.
+- worker: Worker could not run the toolkit steps (toolkit absent in its sandbox); it ran ruff, the docs tests and the full unit suite itself.
+- review: Orchestrator ran ruff and the docs tests after the merge (green); no roles required; scope check clean.
 
 ## Final review
 
