@@ -2,6 +2,9 @@
 # verify.* mirrors docs/coding-and-testing-guidelines.md §2.7: change both together.
 # No toolkit.ref: the toolkit comes from the Claude Project's plugins, not from a SessionStart hook.
 
+tld:
+  version: ">=1.0,<2"
+
 project:
   name: PrivacyFence
 
@@ -26,6 +29,8 @@ git:
   branch_pattern: "<type>/<kebab-case>"
   branch_types: [feature, fix, chore, tests]
   merge_style: merge-commit
+  bot_login: andras-tkcs-agent
+  codeowners: [andras-tkcs]
 
 verify:
   fast:
@@ -122,9 +127,16 @@ ci:
 stacks: [python]
 
 models:
-  planner: opus
-  orchestrator: sonnet
-  worker: sonnet
-  reviewer: opus
+  worker: standard
+  reviewer: strong
 
 project_steward: .claude/skills/steward/SKILL.md
+
+hooks:
+  plan_gate:
+    enabled: true
+  board_gate:
+    enabled: true
+
+admin:
+  policy: .tld/admin-policy.yaml

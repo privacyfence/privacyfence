@@ -17,12 +17,12 @@ with Claude Code.
 
 `/make-plan`, `/implement` and `/dod` come from the devflow toolkit (`andras-tkcs/claude-toolkit`,
 enabled as plugins in the Claude Project); the behaviour described here is unchanged. The project
-facts they use are in `.claude/toolkit.yaml`;
+facts they use are in `.tld/toolkit.yaml`;
 [ADR 0132](docs/adr/0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) says why.
 
 - `.claude/skills/steward/SKILL.md` — PrivacyFence-specific steward policy, on top of the toolkit's
   `pr-steward` skill. The workflows a session dispatches instead of running locally are
-  `ci.dispatchable` in `.claude/toolkit.yaml`.
+  `ci.dispatchable` in `.tld/toolkit.yaml`.
 - `/cut-release` (`.claude/commands/cut-release.md`) runs the `build.yml` pre-flight that
   [`docs/releasing.md`](docs/releasing.md#cutting-a-release) requires, then dispatches
   `release.yml`.
@@ -46,7 +46,7 @@ facts they use are in `.claude/toolkit.yaml`;
 - **New connectors.** A new connector is two PRs, connect then tools, and `/make-plan` plans them that
   way with the browser connection on the QA server between them as a manual step. The procedure is in
   [`docs/coding-and-testing-guidelines.md`](docs/coding-and-testing-guidelines.md#3-adding-a-connector), "Adding a connector".
-- `/dod` runs the §2.7 definition-of-done gate from `verify` in `.claude/toolkit.yaml`;
+- `/dod` runs the §2.7 definition-of-done gate from `verify` in `.tld/toolkit.yaml`;
   `/qa-record` records a connector's live QA fixture on the self-hosted runner.
 
 ## Parallel sessions & worktrees

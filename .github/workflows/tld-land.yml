@@ -1,0 +1,66 @@
+name: tld-land
+
+# After each merge into main, update the next open pull request that has auto-merge enabled.
+# TLD_AGENT_TOKEN is a secret of the environment tld-agent, which only main may use: the workflow
+# runs on pushes to main (a merge is one) so the copy that runs is the reviewed one on that branch.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tld-land
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update-next:
+    runs-on: ubuntu-latest
+    environment: tld-agent
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Update the next pull request with auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.TLD_AGENT_TOKEN }}
+          REPO: ${{ github.repository }}
+          BASE: main
+          RETRIES: "6"
+          SLEEP: "10"
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::secret TLD_AGENT_TOKEN is not set in the environment tld-agent"
+            exit 1
+          fi
+          numbers=$(gh api "repos/$REPO/pulls?state=open&base=$BASE&per_page=100" --jq '.[].number' | sort -n)
+          for n in $numbers; do
+            pr=$(gh api "repos/$REPO/pulls/$n")
+            tries=0
+            while [ "$(echo "$pr" | jq -r '.mergeable_state')" = "unknown" ] && [ "$tries" -lt "$RETRIES" ]; do
+              tries=$((tries + 1))
+              sleep "$SLEEP"
+              pr=$(gh api "repos/$REPO/pulls/$n")
+            done
+            if [ "$(echo "$pr" | jq -r '.auto_merge == null')" = "true" ]; then
+              continue
+            fi
+            state=$(echo "$pr" | jq -r '.mergeable_state')
+            sha=$(echo "$pr" | jq -r '.head.sha')
+            case "$state" in
+              behind)
+                gh api -X PUT "repos/$REPO/pulls/$n/update-branch" -f expected_head_sha="$sha"
+                echo "updated #$n"
+                ;;
+              dirty)
+                echo "::warning::#$n has a merge conflict"
+                ;;
+              *)
+                echo "#$n is $state; nothing to update"
+                ;;
+            esac
+            exit 0
+          done
+          echo "no pull request with auto-merge enabled"
