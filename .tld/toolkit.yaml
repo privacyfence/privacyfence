@@ -2,6 +2,9 @@
 # verify.* mirrors docs/coding-and-testing-guidelines.md §2.7: change both together.
 # No toolkit.ref: the toolkit comes from the Claude Project's plugins, not from a SessionStart hook.
 
+tld:
+  version: ">=1.0,<2"
+
 project:
   name: PrivacyFence
 
@@ -122,9 +125,7 @@ ci:
 stacks: [python]
 
 models:
-  planner: opus
-  orchestrator: sonnet
-  worker: sonnet
-  reviewer: opus
+  worker: standard
+  reviewer: strong
 
 project_steward: .claude/skills/steward/SKILL.md

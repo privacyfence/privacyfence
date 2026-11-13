@@ -1,6 +1,6 @@
 ---
 name: steward
-description: PrivacyFence-specific policy for an agent session — container facts that matter here, which pull requests not to follow, and the repo conventions that are easy to get wrong. The generic policy (dispatching to CI instead of skipping, how to treat a red check) is the devflow `pr-steward` skill; the table of dispatchable workflows is `ci.dispatchable` in `.claude/toolkit.yaml`. Read before acting on a CI failure or a review comment.
+description: PrivacyFence-specific policy for an agent session — container facts that matter here, which pull requests not to follow, and the repo conventions that are easy to get wrong. The generic policy (dispatching to CI instead of skipping, how to treat a red check) is the devflow `pr-steward` skill; the table of dispatchable workflows is `ci.dispatchable` in `.tld/toolkit.yaml`. Read before acting on a CI failure or a review comment.
 ---
 
 # Stewarding a PrivacyFence pull request
