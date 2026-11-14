@@ -1746,3 +1746,39 @@ class TestLockedByEnvironment:
         monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "maybe")
         assert admin_config._env_auto_provision() == frozenset()
         assert admin_config._locked_variable("peek", mode="org") == ""
+
+
+class TestSeedUpstreamGrants:
+    ENTRY = {"grants": [{"match": "*", "domains": ["general"]}]}
+
+    def _stored(self, tmp_path):
+        return json.loads((tmp_path / "org" / "admin_config.json").read_text(encoding="utf-8"))
+
+    def test_seeding_into_a_missing_file_creates_it(self, tmp_path):
+        assert admin_config.seed_upstream_grants({"kh": self.ENTRY}) == ["kh"]
+        assert self._stored(tmp_path)["upstream_mcp"] == {"kh": self.ENTRY}
+
+    def test_only_absent_ids_are_added(self, tmp_path):
+        admin_config.seed_upstream_grants({"kh": self.ENTRY})
+        other = {"grants": [{"match": "a@b.c", "domains": ["x"]}]}
+        changed = {"grants": [{"match": "*", "domains": ["other"]}]}
+        assert admin_config.seed_upstream_grants({"kh": changed, "wiki": other}) == ["wiki"]
+        assert self._stored(tmp_path)["upstream_mcp"] == {"kh": self.ENTRY, "wiki": other}
+
+    def test_an_existing_id_with_empty_grants_is_not_changed(self, tmp_path):
+        admin_config.seed_upstream_grants({"kh": {"grants": []}})
+        assert admin_config.seed_upstream_grants({"kh": self.ENTRY}) == []
+        assert self._stored(tmp_path)["upstream_mcp"] == {"kh": {"grants": []}}
+
+    def test_nothing_seeded_leaves_the_file_untouched(self, tmp_path):
+        admin_config.seed_upstream_grants({"kh": self.ENTRY})
+        path = tmp_path / "org" / "admin_config.json"
+        before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+        assert admin_config.seed_upstream_grants({"kh": self.ENTRY}) == []
+        assert admin_config.seed_upstream_grants({}) == []
+        assert (path.read_bytes(), path.stat().st_mtime_ns) == (before, mtime)
+
+    def test_a_malformed_file_raises(self, tmp_path):
+        _write(tmp_path, "{not json")
+        with pytest.raises(admin_config.AdminConfigError):
+            admin_config.seed_upstream_grants({"kh": self.ENTRY})

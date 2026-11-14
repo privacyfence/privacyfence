@@ -1033,7 +1033,7 @@ reasoning is in [ADR 0257](adr/0257-operational-settings-live-in-a-daemon-writte
 ### Upstream MCP servers
 
 An organization can put its own MCP server, such as a knowledge hub, behind PrivacyFence: you declare its
-tools and how each is gated in a JSON file (`PRIVACYFENCE_UPSTREAM_MCP_FILE`), grant people data domains in
+tools and how each is gated in a YAML or JSON file (or inline) (`PRIVACYFENCE_UPSTREAM_MCP_FILE`), grant people data domains in
 `admin_config.json`, and PrivacyFence signs a 60-second claim naming the person and their domains onto every
 call so the server filters its own data. See [Upstream MCP servers](upstream-mcp.md).
 

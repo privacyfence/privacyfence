@@ -21,12 +21,16 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 import re
 import threading
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
+
+import yaml
 
 from .org_mode import CONNECTOR_ORG_SECTION, ConfigurationError
 from .policy.registry import Verb
@@ -34,6 +38,7 @@ from .policy.registry import Verb
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "PRIVACYFENCE_UPSTREAM_MCP_FILE"
+ENV_VAR_INLINE = "PRIVACYFENCE_UPSTREAM_MCP"
 READ_VERBS = frozenset({"read", "download", "search"})
 BUILTIN_NAMES = frozenset(CONNECTOR_ORG_SECTION) | {"privacyfence", "upstream_mcp"}
 
@@ -41,13 +46,14 @@ _VERSION = 1
 _MAX_UPSTREAMS = 8
 _MAX_TOOLS = 50
 _MAX_GRANTS = 200
+_MAX_BYTES = 256 * 1024
 _ID_RE = re.compile(r"[a-z][a-z0-9]{1,15}")
 _TOOL_RE = re.compile(r"[A-Za-z0-9_-]{1,48}")
 _DOMAIN_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}")
 _SINGLE_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 _GATES = ("auto", "review", "popup")
 _VERBS = frozenset(verb.value for verb in Verb)
-_UPSTREAM_KEYS = frozenset({"id", "label", "url", "audience", "tools"})
+_UPSTREAM_KEYS = frozenset({"id", "label", "url", "audience", "tools", "grants"})
 _TOOL_KEYS = frozenset({"gate", "verb", "effect"})
 _GRANT_FILE = "admin_config.json"
 _GRANT_SECTION = "upstream_mcp"
@@ -64,12 +70,19 @@ class DeclaredTool:
 
 
 @dataclass(frozen=True)
+class Grant:
+    match: str  # "*", "@domain" or an email, lower-case
+    domains: tuple[str, ...]  # sorted
+
+
+@dataclass(frozen=True)
 class UpstreamServer:
     id: str
     label: str
     url: str
     audience: str
     tools: tuple[DeclaredTool, ...]  # in file order
+    grants: tuple[Grant, ...] = ()  # seeded into admin_config.json once (ADR 0288)
 
 
 # ----- #
@@ -106,18 +119,93 @@ def _url_ok(url: str) -> bool:
     return parts.scheme == "http" and _http_host_ok(host)
 
 
-def load_upstreams(path: Path) -> tuple[UpstreamServer, ...]:
-    """Read and validate the operator file. Every problem raises ``ConfigurationError``."""
+class _RepeatedKey(yaml.constructor.ConstructorError):
+    """A YAML mapping repeats a key."""
+
+
+class _RepeatedJsonKey(ValueError):
+    """A JSON object repeats a key."""
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """``SafeLoader`` that refuses a repeated mapping key (a repeated tool name would keep the last gate)."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, _value_node in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    hash(key)
+                except TypeError:
+                    continue  # super() refuses an unhashable key
+                if key in seen:
+                    raise _RepeatedKey(None, None, "repeated key", key_node.start_mark)
+                seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def _json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise _RepeatedJsonKey("repeated key")
+    return dict(pairs)
+
+
+def _parse_text(text: str, *, as_yaml: bool, source: str, noun: str, invalid: str) -> object:
+    """Parse ``text`` as YAML or JSON. No message quotes any part of the text."""
+    if len(text.encode("utf-8")) > _MAX_BYTES:
+        raise ConfigurationError(f"{source}: the {noun} is larger than 256 KiB.")
     try:
-        text = path.read_text(encoding="utf-8")
+        if as_yaml:
+            loader = _UniqueKeyLoader(text)
+            try:
+                return loader.get_single_data()
+            finally:
+                loader.dispose()
+        return json.loads(text, object_pairs_hook=_json_pairs)
+    except (_RepeatedKey, _RepeatedJsonKey):
+        raise ConfigurationError(f"{source}: the {noun} repeats a key.") from None
+    except (yaml.YAMLError, ValueError, RecursionError):
+        raise ConfigurationError(f"{source}: the {noun} is not valid {invalid}.") from None
+
+
+def load_upstreams(path: Path) -> tuple[UpstreamServer, ...]:
+    """Read and validate the operator file (YAML for ``.yaml``/``.yml``, JSON otherwise).
+    Every problem raises ``ConfigurationError``."""
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(_MAX_BYTES + 1)
+        if len(raw) > _MAX_BYTES:
+            raise ConfigurationError(f"{ENV_VAR}: the file is larger than 256 KiB.")
+        text = raw.decode("utf-8")
     except (OSError, UnicodeDecodeError):
         # The reason is dropped on purpose: a decode error quotes the bytes it choked on.
         raise ConfigurationError(f"{ENV_VAR}: the file could not be read.") from None
-    try:
-        data = json.loads(text)
-    except ValueError:
-        raise ConfigurationError(f"{ENV_VAR}: the file is not valid JSON.") from None
+    as_yaml = path.name.lower().endswith((".yaml", ".yml"))
+    data = _parse_text(text, as_yaml=as_yaml, source=ENV_VAR, noun="file", invalid="YAML" if as_yaml else "JSON")
     return parse_upstreams(data, source=ENV_VAR)
+
+
+def parse_inline(text: str) -> tuple[UpstreamServer, ...]:
+    """Read and validate the declaration held in ``PRIVACYFENCE_UPSTREAM_MCP`` (YAML or JSON text)."""
+    data = _parse_text(text, as_yaml=True, source=ENV_VAR_INLINE, noun="text", invalid="YAML or JSON")
+    return parse_upstreams(data, source=ENV_VAR_INLINE)
+
+
+def load_declared() -> tuple[UpstreamServer, ...] | None:
+    """The upstreams declared by the file variable or the inline variable; ``None`` when neither is set."""
+    path = os.environ.get(ENV_VAR, "").strip()
+    inline = os.environ.get(ENV_VAR_INLINE, "").strip()
+    if path and inline:
+        raise ConfigurationError(f"Set {ENV_VAR} or {ENV_VAR_INLINE}, not both.")
+    if path:
+        return load_upstreams(Path(path))
+    if inline:
+        return parse_inline(os.environ[ENV_VAR_INLINE])
+    return None
 
 
 def parse_upstreams(data: object, *, source: str) -> tuple[UpstreamServer, ...]:
@@ -143,13 +231,13 @@ def parse_upstreams(data: object, *, source: str) -> tuple[UpstreamServer, ...]:
     seen: set[str] = set()
     for index, raw in enumerate(upstreams):
         base = f"upstreams[{index}]"
-        server = _parse_one(raw, base, seen, fail)
+        server = _parse_one(raw, base, seen, fail, source)
         seen.add(server.id)
         result.append(server)
     return tuple(result)
 
 
-def _parse_one(raw: object, base: str, seen: set[str], fail) -> UpstreamServer:
+def _parse_one(raw: object, base: str, seen: set[str], fail, source: str) -> UpstreamServer:
     if not isinstance(raw, dict):
         raise fail(base, "must be an object")
     for key in raw:
@@ -181,7 +269,25 @@ def _parse_one(raw: object, base: str, seen: set[str], fail) -> UpstreamServer:
     ):
         raise fail(f"{base}.audience", "must be 1-200 characters with no whitespace")
     tools = _parse_tools(raw.get("tools"), upstream_id, f"{base}.tools", fail)
-    return UpstreamServer(id=upstream_id, label=label, url=url, audience=audience, tools=tools)
+    grants = _parse_declared_grants(raw.get("grants", []), base, source, fail)
+    return UpstreamServer(id=upstream_id, label=label, url=url, audience=audience, tools=tools, grants=grants)
+
+
+def _parse_declared_grants(raw: object, base: str, source: str, fail) -> tuple[Grant, ...]:
+    if not isinstance(raw, list):
+        raise fail(f"{base}.grants", "must be a list")
+    if len(raw) > _MAX_GRANTS:
+        raise fail(f"{base}.grants", f"may list at most {_MAX_GRANTS} grants")
+    return tuple(_parse_grant(item, f"{source}: {base}.grants[{n}]") for n, item in enumerate(raw))
+
+
+def seed_payload(upstreams: tuple[UpstreamServer, ...]) -> dict[str, dict[str, Any]]:
+    """The ``upstream_mcp`` section entries to seed into admin_config.json; upstreams without grants are left out."""
+    return {
+        upstream.id: {"grants": [{"match": g.match, "domains": list(g.domains)} for g in upstream.grants]}
+        for upstream in upstreams
+        if upstream.grants
+    }
 
 
 def _parse_tools(raw: object, upstream_id: str, base: str, fail) -> tuple[DeclaredTool, ...]:
@@ -192,7 +298,7 @@ def _parse_tools(raw: object, upstream_id: str, base: str, fail) -> tuple[Declar
     tools: list[DeclaredTool] = []
     for name, spec in raw.items():
         path = f"{base}.{name}"
-        if not _TOOL_RE.fullmatch(name):
+        if not isinstance(name, str) or not _TOOL_RE.fullmatch(name):
             raise fail(path, "tool name must be 1-48 letters, digits, underscores or hyphens")
         exposed = f"{upstream_id}_{name}"
         if len(exposed) > 64:
@@ -237,12 +343,6 @@ def _parse_tools(raw: object, upstream_id: str, base: str, fail) -> tuple[Declar
 # ----- #
 # ----- Domain grants
 # ----- #
-
-
-@dataclass(frozen=True)
-class Grant:
-    match: str  # "*", "@domain" or an email, lower-case
-    domains: tuple[str, ...]  # sorted
 
 
 def _grant_match_ok(match: str) -> bool:
