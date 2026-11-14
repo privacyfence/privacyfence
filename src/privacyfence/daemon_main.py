@@ -2747,7 +2747,10 @@ def run_rotate_upstream_claim_key() -> int:
     runtime identity check; a running server re-reads the file on its next call.
     """
 
-    keys = _upstream_claim_keyset()
+    try:
+        keys = _upstream_claim_keyset()
+    except org_mode.ConfigurationError as exc:
+        return _refuse_to_start(f"Configuration error: {exc}")
     keys.ensure()
     new = keys.rotate()
     starts = datetime.fromtimestamp(new.signs_from, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2762,7 +2765,10 @@ def run_revoke_upstream_claim_key(kid: str) -> int:
     """Remove one key from the upstream identity-claim key set and its JWKS at once."""
     from . import upstream_claim_keys
 
-    keys = _upstream_claim_keyset()
+    try:
+        keys = _upstream_claim_keyset()
+    except org_mode.ConfigurationError as exc:
+        return _refuse_to_start(f"Configuration error: {exc}")
     keys.ensure()
     try:
         removed = keys.revoke(kid)
