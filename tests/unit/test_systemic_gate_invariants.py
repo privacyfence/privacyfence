@@ -268,7 +268,7 @@ class TestUpstreamConnectorInvariants:
         ])
         client = MagicMock()
         client.call_tool = AsyncMock(return_value=CallResult(text="ok", structured=None, dropped_blocks=0))
-        return UpstreamMcpConnector(upstream, catalog, client, lambda: MagicMock())
+        return UpstreamMcpConnector(upstream, catalog, client, MagicMock)
 
     def test_every_upstream_tool_declares_a_required_reason_param(self):
         specs = self._connector().tool_specs()
