@@ -27,7 +27,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-admin-setting
 
-- pending
+- review: worker had no toolkit so ran no dod or roles; none are required for these paths; orchestrator re-ran ruff, mypy and the unit suite after the merge
 
 ## p6-contract-test
 
