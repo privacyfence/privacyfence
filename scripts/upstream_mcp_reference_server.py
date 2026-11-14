@@ -1,4 +1,4 @@
-"""A reference upstream MCP server for PrivacyFence (ADR 0279).
+"""A reference upstream MCP server for PrivacyFence (ADR 0284).
 
 This is a reference for upstream implementers and for tests, not a production server. It shows what
 an upstream has to do with the signed caller claim PrivacyFence sends on every HTTP request:

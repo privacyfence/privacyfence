@@ -1412,7 +1412,7 @@ def _build_org_app(
         extra_routes.extend(routes_oidc.build_routes(org.oidc, sessions=org.sessions))
     claim_signer = upstream_mcp_runtime.signer()
     if upstream_mcp_runtime.configured() and claim_signer is not None:
-        # ADR 0279: the key set an upstream verifies claims against; the lifespan fetches each
+        # ADR 0284: the key set an upstream verifies claims against; the lifespan fetches each
         # upstream's tool list once the server runs.
         extra_routes.extend(routes_upstream_mcp.build_routes(claim_signer))
         if mcp_dispatcher is not None:

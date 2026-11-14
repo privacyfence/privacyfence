@@ -1,6 +1,6 @@
 """Upstream MCP connector: the declared tools of one operator-configured upstream MCP server.
 
-One ``UpstreamMcpConnector`` fronts one ``UpstreamServer`` (ADR 0278). Its tools are the declared
+One ``UpstreamMcpConnector`` fronts one ``UpstreamServer`` (ADR 0283). Its tools are the declared
 tools the upstream listed at startup (``UpstreamToolCatalog``); each is handled by the gate the
 operator declared for it:
 
@@ -11,7 +11,7 @@ operator declared for it:
 * ``popup``: ``gated_call`` asks the person first, with the arguments they would send; only an
   approval reaches the upstream. A denial raises before the client is touched.
 
-Connector code never reads the caller (ADR 0036, amended by ADR 0279). Who is calling, and which
+Connector code never reads the caller (ADR 0036, amended by ADR 0284). Who is calling, and which
 data domains they hold, is resolved beside the transport: the ``caller`` callable this connector is
 given (supplied by ``upstream_mcp_runtime``) returns the ``CallerClaim`` that ``UpstreamMcpClient``
 signs onto the request. This module imports no caller context.

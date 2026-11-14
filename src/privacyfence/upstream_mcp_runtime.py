@@ -1,4 +1,4 @@
-"""Startup wiring for upstream MCP servers (organization mode, ADR 0278, 0279, 0280).
+"""Startup wiring for upstream MCP servers (organization mode, ADR 0283, 0284, 0285).
 
 ``daemon_main`` loads the operator file, registers the declared tools and builds the claim signer,
 then calls ``configure``. From there this module is the one place that knows the live upstream
