@@ -41,6 +41,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - retry: first merge was undone before pushing: four definition-of-done drift tests failed because the n8n item was missing from the pull request template; sent back and fixed on the same branch
 - review: worker had no toolkit so ran no dod or roles, none are required for these paths; orchestrator re-ran profile validate, ruff and the unit suite after the merge
+- scope: out of scope: .github/pull_request_template.md, added at the orchestrator instruction so the definition-of-done drift test passes
 
 ## p9-docs
 
