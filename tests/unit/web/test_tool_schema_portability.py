@@ -29,7 +29,10 @@ import httpx2
 import pytest
 from mcp import ClientSession, types
 
-from privacyfence import scoped_tokens
+from privacyfence import scoped_tokens, upstream_mcp_registry
+from privacyfence.connectors.upstream_mcp import UpstreamMcpConnector
+from privacyfence.upstream_mcp_client import UpstreamToolCatalog
+from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer
 from mcp.client.streamable_http import streamable_http_client
 
 from privacyfence.web import mcp_tools
@@ -89,6 +92,24 @@ async def _connected_session(dispatcher: McpDispatcher):
 async def test_the_live_tool_list_is_exactly_the_set_checked_here():
     async with _connected_session(McpDispatcher(lambda: CONNECTORS, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False))) as session:
         listed = await session.list_tools()
+    assert sorted(tool.name for tool in listed.tools) == sorted(
+        name for name in ADVERTISED if name != mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL.name
+    )
+    for tool in listed.tools:
+        assert tool.input_schema == ADVERTISED[tool.name].input_schema, tool.name
+        assert tool.annotations == ADVERTISED[tool.name].annotations, tool.name
+
+
+async def test_the_status_tool_is_listed_where_delivery_is_on(monkeypatch):
+    from privacyfence import agent_runtimes
+
+    monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+    dispatcher = McpDispatcher(
+        lambda: CONNECTORS, mode="org", scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
+        agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
+    )
+    async with _connected_session(dispatcher) as session:
+        listed = await session.list_tools()
     assert sorted(tool.name for tool in listed.tools) == sorted(ADVERTISED)
     for tool in listed.tools:
         assert tool.input_schema == ADVERTISED[tool.name].input_schema, tool.name
@@ -145,3 +166,52 @@ def test_all_three_annotation_hints_are_present(tool: types.Tool):
     assert annotations.read_only_hint is not None
     assert annotations.destructive_hint is not None
     assert annotations.idempotent_hint is not None
+
+
+def _upstream_connector() -> UpstreamMcpConnector:
+    def tool(name: str, gate: str, verb: str, effect: str = "") -> DeclaredTool:
+        return DeclaredTool(
+            name=name, exposed_name=f"kh_{name}", operation=f"kh.{name}", gate=gate, verb=verb, effect=effect,
+        )
+
+    upstream = UpstreamServer(
+        id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
+        tools=(
+            tool("search", "auto", "search"),
+            tool("get_doc", "review", "read"),
+            tool("propose_change", "popup", "add", "Adds a change proposal to the knowledge hub."),
+        ),
+    )
+    upstream_mcp_registry.register([upstream])
+    catalog = UpstreamToolCatalog(upstream)
+    catalog.update([
+        types.Tool(
+            name=declared.name, description=f"The {declared.name} tool.",
+            input_schema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        )
+        for declared in upstream.tools
+    ])
+    return UpstreamMcpConnector(upstream, catalog)
+
+
+def test_an_upstream_connectors_tools_pass_the_same_checks():
+    """Upstream tools carry the operator's schema, not one built from ToolParams, so the checks run on
+    the specs of a fake upstream's catalog as well."""
+    connector = _upstream_connector()
+    specs = connector.tool_specs()
+    assert len(specs) == 3
+    assert_tool_definitions_complete(connector, {})
+    for spec in specs:
+        tool = mcp_tools.to_mcp_tool(spec)
+        assert tool.input_schema.get("type") == "object"
+        assert tool.input_schema["required"][-1] == "reason"
+        assert "reason" in tool.input_schema["properties"]
+        assert not [key for _, node in _walk(tool.input_schema) for key in FORBIDDEN_SCHEMA_KEYS & node.keys()]
+        assert not [path for path, node in _walk(tool.input_schema) if isinstance(node.get("items"), list)]
+        assert NAME_RE.fullmatch(tool.name)
+        assert 0 < len((tool.description or "").strip()) <= MAX_DESCRIPTION_CHARS
+        annotations = tool.annotations
+        assert annotations is not None
+        assert annotations.read_only_hint is not None
+        assert annotations.destructive_hint is not None
+        assert annotations.idempotent_hint is not None

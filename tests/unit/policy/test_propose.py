@@ -571,3 +571,19 @@ class TestGmailLabelMove:
         # Not only the verb filter: the proposer itself must decline.
         entry = next(e for e in self._label_scopes() if e.id == "label_match")
         assert entry.value_of(ctx) is propose.NO_VALUE
+
+
+def test_refresh_all_operations_picks_up_a_new_operation(monkeypatch):
+    original = propose.ALL_OPERATIONS
+    monkeypatch.setitem(
+        TOOL_REGISTRY, "zz_probe",
+        registry.ToolRegistryEntry(
+            tool="zz_probe", gate="review", operation="zz.probe", verb=Verb.READ, scope_subject=None,
+        ),
+    )
+    assert "zz.probe" not in propose.ALL_OPERATIONS
+    propose.refresh_all_operations()
+    assert "zz.probe" in propose.ALL_OPERATIONS
+    monkeypatch.undo()
+    propose.refresh_all_operations()
+    assert propose.ALL_OPERATIONS == original

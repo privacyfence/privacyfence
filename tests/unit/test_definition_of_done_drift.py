@@ -1,7 +1,7 @@
 """Drift guard between the definition of done and the two files that repeat it.
 
 docs/coding-and-testing-guidelines.md §2.7 is the authoritative definition of done. The PR template
-repeats it as a checklist and `.claude/toolkit.yaml`'s `verify` section feeds /dod, and both used to fall behind when §2.7
+repeats it as a checklist and `.tld/toolkit.yaml`'s `verify` section feeds /dod, and both used to fall behind when §2.7
 gained a row. This checks that every command §2.7 names also appears in each copy, so adding one to
 §2.7 without the other two fails here.
 """
@@ -63,9 +63,9 @@ def test_every_section_2_7_command_appears_in_each_copy(command, copy):
 
 @pytest.mark.parametrize("command", _commands(_section_2_7()))
 def test_every_section_2_7_command_appears_in_the_toolkit_profile(command):
-    profile = REPO_ROOT / ".claude" / "toolkit.yaml"
+    profile = REPO_ROOT / ".tld" / "toolkit.yaml"
     assert command in _normalize(profile.read_text(encoding="utf-8")), (
-        f"§2.7 of {GUIDELINES.name} names `{command}`, but .claude/toolkit.yaml does not"
+        f"§2.7 of {GUIDELINES.name} names `{command}`, but .tld/toolkit.yaml does not"
     )
 
 

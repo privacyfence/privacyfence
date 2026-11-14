@@ -5,8 +5,10 @@ use. Everyone signs in with the organization's identity provider, connects their
 approves their own AI requests in the browser. It is written for the IT administrator who runs the
 server.
 
-For a single person on their own computer, use the desktop install instead
-([getting started](getting-started.md)).
+For a single person on their own computer, run the Docker image in single-user mode instead
+([Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer)). The desktop
+install is deprecated in PrivacyFence 7 and removed in 8
+([Moving to organization mode](moving-to-organization-mode.md)).
 
 ## Contents
 
@@ -1028,6 +1030,13 @@ config once ([section 6](#a-6x-bundle-on-an-upgraded-server)). If you still pass
 reasoning is in [ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md) and
 [ADR 0258](adr/0258-administration-is-a-separate-admin-page.md).
 
+### Upstream MCP servers
+
+An organization can put its own MCP server, such as a knowledge hub, behind PrivacyFence: you declare its
+tools and how each is gated in a YAML or JSON file (or inline) (`PRIVACYFENCE_UPSTREAM_MCP_FILE`), grant people data domains in
+`admin_config.json`, and PrivacyFence signs a 60-second claim naming the person and their domains onto every
+call so the server filters its own data. See [Upstream MCP servers](upstream-mcp.md).
+
 ### Install-wide and per-user policy
 
 Policy is split in two:
@@ -1126,6 +1135,40 @@ The reasoning is in [ADR 0224](adr/0224-an-org-registration-is-attested-by-its-r
 [ADR 0225](adr/0225-the-admin-ai-system-pin-is-removed.md),
 [ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md) and
 [ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md).
+
+### Delivering tokens to n8n
+
+An AI client that builds n8n workflows can ask PrivacyFence to put a scoped token into n8n as a credential,
+instead of giving the token to a person to copy. The person still reviews, narrows and confirms the token in
+Settings. Organization mode only; it needs scoped tokens and AI token proposals turned on under **Admin →
+Scoped tokens**, and n8n **2.40.0 or later** (the first version whose credentials API takes a project).
+The version is not checked.
+
+1. In n8n, open **Settings → n8n API** and create an API key **as the user the n8n MCP server connects as**, so
+   that user's workflows can use the credential. On n8n Enterprise give the key only the scopes
+   `credential:create` and `credential:delete`; other editions cannot limit a key, which has full access.
+2. Give the server two environment variables (never the Admin page; the address and key are never editable
+   there): `PRIVACYFENCE_N8N_URL` (an `https://` address) and `PRIVACYFENCE_N8N_API_KEY`, or
+   `PRIVACYFENCE_N8N_API_KEY_FILE` for a Docker secret. If n8n uses an internal CA, also set
+   `REQUESTS_CA_BUNDLE` to the CA file. Restart.
+3. Where your n8n edition has projects, create a dedicated project for the credentials and enter its id.
+4. Open **Admin → Agent runtimes**, check that the address and key show as set, tick **Turn on n8n delivery**,
+   optionally set the **n8n project id** (empty means the key owner's personal space) and **PrivacyFence MCP
+   address for n8n** (empty means this server's address), and save. Restart when asked.
+5. Choose **Credential type in n8n**. **MCP Client node** (the default) delivers n8n's built-in bearer
+   credential, which goes on an MCP Client node. **PrivacyFence node** delivers a PrivacyFence API credential
+   that holds the token and the PrivacyFence MCP address, for the community node `n8n-nodes-privacyfence`
+   ([the node](n8n-node.md)). That choice needs the node installed in n8n and the **PrivacyFence MCP address
+   for n8n** set; if n8n does not know the credential type, delivery says so and mints no token. The setting
+   is server-wide: with it, an AI Agent in n8n uses one PrivacyFence node per call instead of the MCP Client
+   Tool. For the PrivacyFence node, PrivacyFence also asks n8n for the credential type's schema before it
+   creates anything; if your n8n Enterprise API key cannot read that, delivery fails with the generic
+   failure text and no token is minted.
+
+Claude then calls `privacyfence_propose_scoped_token` with `deliver_to`, and `privacyfence_runtime_credential_status`
+for the credential's id. Revoking the token deletes the n8n credential within 5 minutes. An expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it.
+Anyone who can edit workflows in that n8n, the AI client included, can use and read the token
+([Security and compliance](security-and-compliance.md#tokens-delivered-to-n8n), [ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)).
 
 ## 12. Approvals and step-up
 

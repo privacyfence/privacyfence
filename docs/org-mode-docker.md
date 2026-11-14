@@ -145,6 +145,7 @@ A multi-user server with the environment alone, no bundle to build:
    | `compose.yaml`, `Caddyfile` | root | 0644 | No secrets. |
    | `.env` | root | 0600 | Host name and image tag, read by Compose as root. |
    | `privacyfence.env` | root | 0600 | May hold plain secrets. |
+   | `upstream_mcp.yaml` (optional) | root | 0644 | Addresses and audiences, no secrets. |
    | `idp_client_secret`, `peek_provisioning_key`, `grist_provisioning_key` | `10001:10001` | 0400 | Read inside the container by the image's user, through Docker secrets. |
 
    PrivacyFence's own data does not go in this folder: it stays in the named volume `pf-data` (for a
@@ -193,7 +194,7 @@ A multi-user server with the environment alone, no bundle to build:
    built-in Google sign-in there is no client secret: skip this part.
 6. **Fill in `.env`:** set `PF_HOSTNAME` to the server's public host name, with no `https://` and no
    path, such as `pf.acme.example.com`, and `PRIVACYFENCE_IMAGE_TAG` to the release from step 4, such
-   as `7.4` ([.env](#env)). This is the only place the domain is set: Caddy serves and gets the
+   as `7.0` ([.env](#env)). This is the only place the domain is set: Caddy serves and gets the
    certificate for it, and `compose.yaml` gives PrivacyFence `PRIVACYFENCE_ISSUER_URL=https://<PF_HOSTNAME>`.
    Compose refuses to start without it. For a pre-release, such as `7.0.0a1`, set its exact version: a
    pre-release gets no `X.Y`, `X` or `latest` tag. Do not leave `PRIVACYFENCE_IMAGE_TAG` empty either:
@@ -227,6 +228,9 @@ A multi-user server with the environment alone, no bundle to build:
     `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` in `privacyfence.env` to offer them and turn them on from
     the server ([Peek setup](peek-setup.md#automatic-accounts),
     [Grist setup](grist-setup.md#automatic-api-keys)).
+11. **Optional, upstream MCP servers:** declare other MCP servers that PrivacyFence puts its approvals
+    and audit in front of, and who may see which data domain. Write the declaration in a YAML file or
+    inline ([Upstream MCP file](#upstream-mcp-file)).
 
 Everything else (file delivery, step-up, sign-in restrictions, scoped tokens, audit forwarding) is on
 the [Admin page](org-mode-setup-guide.md#the-admin-page). Outbound HTTPS from the container must reach your identity
@@ -245,7 +249,7 @@ Google sign-in.
 
 The deploy folder (`/opt/privacyfence-org`) holds four files from `deploy/docker/` of the release you
 run: `compose.yaml`, `Caddyfile`, `privacyfence.env` (from `privacyfence.env.example`) and `.env`
-(from `env.example`). [Quick start](#quick-start), steps 3 and 4, creates the folder and fetches them.
+(from `env.example`), and an optional fifth, `upstream_mcp.yaml`, that you write yourself. [Quick start](#quick-start), steps 3 and 4, creates the folder and fetches them.
 
 ### Compose file
 
@@ -276,6 +280,10 @@ services:
     environment:
       PRIVACYFENCE_ISSUER_URL: https://${PF_HOSTNAME:?set PF_HOSTNAME in .env}
       PRIVACYFENCE_TRUSTED_PROXIES: 172.30.87.2
+      # Or declare them right here, with no file (write $ as $$; set one of the two, not both):
+      # PRIVACYFENCE_UPSTREAM_MCP: |
+      #   version: 1
+      #   upstreams: []
     env_file:
       - path: privacyfence.env
         required: false
@@ -290,6 +298,9 @@ services:
     #   - grist_provisioning_key
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
+      # Upstream MCP servers (docs/upstream-mcp.md): create upstream_mcp.yaml first, mount it read-only and name
+      # it in privacyfence.env with PRIVACYFENCE_UPSTREAM_MCP_FILE=/etc/privacyfence/upstream_mcp.yaml.
+      # - ./upstream_mcp.yaml:/etc/privacyfence/upstream_mcp.yaml:ro
     networks:
       pf:
         ipv4_address: 172.30.87.10
@@ -355,6 +366,44 @@ certificate for it, and `compose.yaml` sets `PRIVACYFENCE_ISSUER_URL` to `https:
 Compose refuses to start without it. `PRIVACYFENCE_IMAGE_TAG` is the release you fetched the files
 from; a pre-release needs its exact version.
 
+### Upstream MCP file
+
+`upstream_mcp.yaml` declares the upstream MCP servers that PrivacyFence puts its approvals and audit in front of ([Upstream MCP servers](upstream-mcp.md)). Create it next to `compose.yaml`; it holds addresses and audiences, no secrets, and the container's user must be able to read it:
+
+```bash
+sudo install -m 0644 -o root -g root /dev/null upstream_mcp.yaml
+sudo nano upstream_mcp.yaml
+```
+
+```yaml
+version: 1
+upstreams:
+  - id: kh
+    label: Knowledge hub
+    url: http://knowledge-hub:8080/mcp
+    audience: https://kh.example.internal
+    tools:
+      search:
+        gate: auto
+        verb: search
+      propose_change:
+        gate: popup
+        verb: add
+        effect: Adds a change proposal to the knowledge hub.
+    grants:
+      - match: "*"
+        domains: [general]
+```
+
+Then uncomment the mount in `compose.yaml` and the `PRIVACYFENCE_UPSTREAM_MCP_FILE` line in `privacyfence.env`, run `sudo docker compose up -d`, and check `sudo docker compose logs privacyfence | grep -i upstream`.
+
+- Create the file before the first `up`: if the host file is missing, Docker creates a directory of that name.
+- JSON works in the same file. A name ending in `.yaml` or `.yml` is read as YAML, any other name as JSON.
+- YAML reads an unquoted `no` or `on` as a boolean: quote an id or tool name like that (`"no"`, `"on"`).
+- To declare the servers inline instead, put the same text under `environment:` in `compose.yaml` as `PRIVACYFENCE_UPSTREAM_MCP: |` (write every `$` as `$$`). Set one of the two variables, never both.
+- `grants` seed `admin_config.json` once per upstream id. After that the file belongs to `admin_config.json`, which you edit as a file; the declaration never overwrites it.
+- A change to the declaration needs a restart.
+
 ## Start
 
 ```bash
@@ -387,8 +436,11 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_ALLOWED_DOMAINS` | none | The allowed sign-in domains, with either sign-in method; first start only, then Admin → Sign-in. |
 | `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work; it trusts only addresses in `PRIVACYFENCE_ALLOWED_DOMAINS`. |
 | `PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL` | none | The Peek and Grist addresses. |
+| `PRIVACYFENCE_N8N_URL`, `PRIVACYFENCE_N8N_API_KEY_FILE` | none | The n8n address and the API key as a Docker secret file (the plain `PRIVACYFENCE_N8N_API_KEY` also works; never both), for delivering AI-proposed tokens to n8n ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)). |
 | `PRIVACYFENCE_PEEK_AUTO_PROVISION`, `PRIVACYFENCE_GRIST_AUTO_PROVISION` | none | Unset or empty: the Admin page decides. `true`: the service is offered and Automatic accounts are on, locked on Admin → Services. Needs the address and key; ignored without the web server. |
 | `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE` | none | The provisioning keys as Docker secret files. The plain `…_PROVISIONING_KEY` forms also work; never both. |
+| `PRIVACYFENCE_UPSTREAM_MCP_FILE` | none | The path inside the container of the YAML or JSON file that declares the upstream MCP servers ([Upstream MCP file](#upstream-mcp-file)). |
+| `PRIVACYFENCE_UPSTREAM_MCP` | none | The same declaration as inline text, set in `compose.yaml`; never together with the file variable ([Upstream MCP file](#upstream-mcp-file)). |
 | `PRIVACYFENCE_OIDC_CLIENTS` | none | Web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<server>/oidc`). Each app also needs `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` and `…_SECRET_FILE` (or `…_SECRET`). See [Sign in to other apps with PrivacyFence](oidc-provider.md). |
 
 The [configuration reference](configuration-reference.md#environment-variables) has the full list.

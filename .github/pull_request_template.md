@@ -56,6 +56,8 @@ reason rather than leaving it blank.
 - [ ] **`sync/**`** — `pip install -e "./sync[test]"`, then `pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100`,
       `mypy sync/src` and `bandit -r sync/src` pass; if `sync/README.md` changed, it is copied to
       `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
+- [ ] **`n8n/**`** — in `n8n/`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test` pass,
+      then `pytest tests/integration/test_n8n_node_contract.py -v` passes.
 - [ ] **`cloudflare/downloads/`** — `npm test`, `npm run typecheck` and `npm run dry-run` pass
       there.
 
@@ -67,7 +69,7 @@ run, here if the row above applies; delete this section otherwise.
 
 No live QA credentials to hand (a Claude Code on the web session never has them)? Don't skip the
 row — dispatch `qa-record-fixture.yml` on `main` with `branch=` and link the run instead of
-pasting. See `ci.dispatchable` in .claude/toolkit.yaml, and .claude/skills/steward/SKILL.md,
+pasting. See `ci.dispatchable` in .tld/toolkit.yaml, and .claude/skills/steward/SKILL.md,
 "Why live connector checks leave this machine".
 -->
 

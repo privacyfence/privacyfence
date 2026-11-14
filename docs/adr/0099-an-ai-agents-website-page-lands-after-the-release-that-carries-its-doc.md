@@ -7,6 +7,7 @@ Accepted (recorded retroactively on 2026-09-28; decided by the maintainer on 202
 clients: docs in [PR 766](https://github.com/privacyfence/privacyfence/pull/766), release 5.0.0
 ([PR 782](https://github.com/privacyfence/privacyfence/pull/782)), website in
 [PR 785](https://github.com/privacyfence/privacyfence/pull/785).
+Amended by [ADR 0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) for docs listed in `build_site.DOCS_PENDING_RELEASE`.
 
 ## Context
 

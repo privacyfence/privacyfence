@@ -39,10 +39,16 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   organization, including claude.ai as a client.
 - [`org-mode-docker.md`](org-mode-docker.md) — run the organization deployment as containers: the
   published image, a tested Compose file with Caddy, upgrades, backups and verifying the image.
+- [`upstream-mcp.md`](upstream-mcp.md) — put your own MCP server behind PrivacyFence: declare its tools
+  and gates, grant people data domains, and what the upstream must verify in the signed caller claim.
+- [`n8n-node.md`](n8n-node.md) — the PrivacyFence node for n8n: install the community node, the
+  credential, calling a tool from a workflow or an AI Agent, and the delivery switch.
 - [`oidc-provider.md`](oidc-provider.md) — let Peek and Grist (or other apps you name) sign people in
   through PrivacyFence, with the identity PrivacyFence already has.
 - [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up
   authentication, privilege separation, audit integrity, and what PrivacyFence does not claim.
+- [`oauth-relay.md`](oauth-relay.md) — the OAuth redirect relay at `oauth.privacyfence.eu`: what it
+  forwards and stores, and how the maintainers run, check and revoke it.
 
 ### Connector setup
 
@@ -108,8 +114,6 @@ privacyfence.eu.
   organization deployment, the per-client script, the evidence to record, and the results table.
 - [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
-- [`oauth-relay.md`](oauth-relay.md) — the maintainer runbook for the OAuth redirect relay at
-  `oauth.privacyfence.eu`: provisioning, smoke tests, revoking a host and rolling back.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they

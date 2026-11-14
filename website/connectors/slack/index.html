@@ -89,11 +89,11 @@
     <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
       <div class="section-heading">
         <p class="kicker">Set it up</p>
-        <h2 id="setup-heading">One Slack app per workspace, then each person approves it.</h2>
+        <h2 id="setup-heading">PrivacyFence's Slack app, or your own, then each person approves it.</h2>
       </div>
       <ol class="steps page-copy">
-        <li>On an organization server, Slack works at once with PrivacyFence's built-in Slack app, with nothing to register; the sign-in redirect goes through the PrivacyFence relay. Slack limits apps that are not listed in its Marketplace, so the built-in app runs in limited mode: channel history is read through Slack search, and thread replies stop at 15.</li>
-        <li>For full speed, or on a desktop install, an administrator creates a Slack app once per workspace, with user token scopes only, and installs its client ID and secret as an organization config. That app is never publicly distributed.</li>
+        <li>On an organization server, Slack works at once with PrivacyFence's built-in Slack app, with nothing to register; the sign-in redirect goes through the PrivacyFence relay. Slack limits apps that are not listed in its Marketplace, so the built-in app runs in limited mode: channel history is read through Slack search, and thread replies stop at 15. Slack sends no PKCE, so with the built-in app its one-time sign-in code passes through the relay without it.</li>
+        <li>For full speed, an organization creates its workspace's own Slack app, with user token scopes only, and uploads its client ID and secret on the Admin page as a signed connector config; its sign-in does not touch the relay. A desktop install, which has no built-in apps, takes that app in its organization config bundle instead.</li>
         <li>Each person connects Slack from PrivacyFence and approves the app in the browser.</li>
         <li>The Slack tools appear to the assistant. The token stays with PrivacyFence and is never given to the AI client.</li>
       </ol>

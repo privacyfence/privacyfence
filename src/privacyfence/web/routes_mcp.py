@@ -58,7 +58,7 @@ from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
 from .mcp_auth import principal_from_access_token, scope_from_access_token, single_token_verifier
-from .mcp_dispatch import McpDispatcher
+from .mcp_dispatch import SESSIONLESS_SESSION_KEY, McpDispatcher
 from . import org_session
 from .csp import nonce_for
 from .oauth_consent import render_consent_page, render_continue_page
@@ -110,6 +110,12 @@ SCOPED_META_TOOLS = frozenset({
 })
 
 
+# Meta-tools attributed to the resolved AI client like a connector tool, not left unattributed.
+_ATTRIBUTED_META_TOOLS = frozenset({
+    "privacyfence_propose_scoped_token", "privacyfence_runtime_credential_status",
+})
+
+
 def _scoped_agent(scope: scoped_tokens.ScopedToken) -> AgentIdentity:
     """The attested agent for every call made with a scoped token, meta-tools included: a
     credential the person created, so ``override`` (ADR 0006, ADR 0037, ADR 0164). It replaces
@@ -143,11 +149,13 @@ def _refuse_scoped_call(
 _MCP_SESSION_ID = "mcp-session-id"
 
 # The session key a request that carries no session id at all falls back to.
-# Unreachable on this daemon's own wiring (``mount_mcp`` runs the session
-# manager stateful, so every request after ``initialize`` carries the header
-# the manager itself minted), but a transport without session ids -- stdio, or
-# a stateless manager -- must still land somewhere stable rather than raise.
-_SESSIONLESS_KEY = "sessionless"
+# ``mount_mcp`` runs the session manager stateful, but that only covers clients
+# that use the ``initialize`` handshake: a 2026-07-28 client sends every request
+# as a self-contained POST with no ``Mcp-Session-Id``, and the SDK routes it past
+# session tracking (``StreamableHTTPSessionManager._handle_request``). Every such
+# request, from every principal, lands on this one key, so nothing that belongs to
+# one conversation may be stored under it (McpDispatcher.begin_unattended_session).
+_SESSIONLESS_KEY = SESSIONLESS_SESSION_KEY
 
 
 def _connection_of(ctx: ServerRequestContext) -> Connection | None:
@@ -455,6 +463,10 @@ def build_mcp_server(
             tool for tool in mcp_tools.META_TOOLS
             if (scope is None or tool.name in SCOPED_META_TOOLS)
             and (proposals_enabled or tool.name != mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.name)
+            and (
+                (scope is None and dispatcher.runtime_delivery_enabled())
+                or tool.name != mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL.name
+            )
         )
         return types.ListToolsResult(tools=tools)
 
@@ -492,7 +504,7 @@ def build_mcp_server(
         if scope is not None:
             agent = _scoped_agent(scope)
         else:
-            agent = UNKNOWN_AGENT if is_meta_tool and name != mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.name else _resolve_agent(
+            agent = UNKNOWN_AGENT if is_meta_tool and name not in _ATTRIBUTED_META_TOOLS else _resolve_agent(
                 ctx, access_token, client_names, attested_agents=attested_agents, overrides=overrides,
             )
         bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
@@ -598,6 +610,8 @@ async def _dispatch_meta_tool(
         return await dispatcher.propose_policy_change(session_key, arguments)
     if name == mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.name:
         return await dispatcher.propose_scoped_token(session_key, arguments, base_url)
+    if name == mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL.name:
+        return dispatcher.runtime_credential_status(arguments)
     if name == mcp_tools.BEGIN_UNATTENDED_SESSION_TOOL.name:
         return dispatcher.begin_unattended_session(session_key, reason)
     if name == mcp_tools.END_UNATTENDED_SESSION_TOOL.name:
@@ -654,7 +668,7 @@ def _dispatch_scoped_meta_tool(
             "tools": len(scope.tools),
         }
         if expiring_soon:
-            result["message"] += f" This token expires in {days_left} day(s); ask its owner for a new one."
+            result["message"] += f" This token expires in {days_left} day(s); ask its owner to extend it in PrivacyFence Settings, Scoped tokens."
         return result
     return None
 

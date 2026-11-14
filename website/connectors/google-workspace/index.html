@@ -149,11 +149,12 @@
     <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
       <div class="section-heading">
         <p class="kicker">Set it up</p>
-        <h2 id="setup-heading">One Google Cloud app, then each person signs in.</h2>
+        <h2 id="setup-heading">PrivacyFence's Google app, or your own, then each person signs in.</h2>
       </div>
       <ol class="steps page-copy">
-        <li>An administrator creates an OAuth client in a Google Cloud project once, enables the APIs of the connectors you want to offer, and packages the client into an organization config bundle. With a Workspace account, an <strong>Internal</strong> app needs no Google verification.</li>
-        <li>Each person installs the bundle, then connects each Google connector from PrivacyFence's Settings page and signs in to Google in the browser.</li>
+        <li>On an organization server or the Docker image, Google works at once with PrivacyFence's built-in Google app; the sign-in redirect goes through the PrivacyFence relay. Until Google verifies PrivacyFence's Google app, people see Google's unverified-app screen, and the app is limited to 100 users across all installs; an organization that needs neither registers its own Google app.</li>
+        <li>An organization may register its own OAuth client in a Google Cloud project instead and upload it on the Admin page. With a Workspace account, an <strong>Internal</strong> app needs no Google verification and has no user limit.</li>
+        <li>Each person connects each Google connector on PrivacyFence's Connect page and signs in to Google in the browser.</li>
         <li>The connector's tools appear to the assistant. The Google sign-in stays with PrivacyFence and is never given to the AI client.</li>
       </ol>
       <p class="actions cluster">
@@ -172,7 +173,7 @@
           <p>Install PrivacyFence on macOS, Windows or Linux and approve your first Gmail read.</p>
         </div>
         <div class="actions vertical cluster">
-          <a class="button primary" href="/download/">Download PrivacyFence</a>
+          <a class="button primary" href="/install/">Install PrivacyFence</a>
           <a class="button secondary" href="/connectors/">All connectors</a>
         </div>
       </div>

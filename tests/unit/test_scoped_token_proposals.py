@@ -276,6 +276,23 @@ class TestReviewData:
         p = _proposal(request=_request(rules=[{"kind": "copy", "rule_id": "gone"}]))
         assert stp.review_data(p, [])["rules"][0]["sentence"] == "A rule that no longer exists"
 
+    def test_delivery_is_none_for_a_plain_proposal(self):
+        p = _proposal()
+        assert p.delivery is None and p.mcp_url == ""
+        assert stp.review_data(p, [])["delivery"] is None
+
+    def test_delivery_names_the_runtime_host_and_workflow(self):
+        from privacyfence.agent_runtimes import DeliveryTarget
+        p = _proposal(delivery=DeliveryTarget("n8n", "wf1"), mcp_url="https://pf.example.com/mcp")
+        assert p.mcp_url == "https://pf.example.com/mcp"
+        data = stp.review_data(p, [], runtime_host="n8n.example.com", project_id="proj1")
+        assert data["delivery"] == {
+            "runtime": "n8n", "host": "n8n.example.com", "project_id": "proj1", "workflow_id": "wf1",
+        }
+        assert stp.review_data(p, [])["delivery"] == {
+            "runtime": "n8n", "host": "", "project_id": "", "workflow_id": "wf1",
+        }
+
     def test_agent_label_is_the_label_text(self):
         from privacyfence import agent_label
         assert stp.review_data(_proposal(), [])["agent_label"] == agent_label.label_for(AGENT).text
@@ -320,3 +337,23 @@ class TestRecord:
         monkeypatch.setattr(audit_log, "get_audit_logger", boom)
         stp.record("scoped_token_proposed", _proposal(), "x")
         assert "Audit log write failed" in caplog.text
+
+
+class TestUpstreamTools:
+    @pytest.fixture(autouse=True)
+    def _runtime(self, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        monkeypatch.setattr(upstream_mcp_runtime, "upstream_ids", lambda: frozenset({"kh"}))
+
+    def test_a_proposal_naming_an_upstream_tool_is_refused(self):
+        with pytest.raises(stp.ProposalError, match="Upstream tools cannot be proposed; create the token in Settings."):
+            _proposal(request=_request(tools=["gmail_list_messages", "kh_search"]))
+
+    def test_a_proposal_of_built_in_tools_is_unaffected(self):
+        assert _proposal().request["tools"] == ["drive_download_file", "gmail_list_messages"]
+
+    def test_the_review_cannot_add_a_domain(self):
+        proposed = _request()
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {}}) is None
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE

@@ -86,11 +86,12 @@
     <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
       <div class="section-heading">
         <p class="kicker">Set it up</p>
-        <h2 id="setup-heading">One Salesforce app per org, then each person signs in.</h2>
+        <h2 id="setup-heading">PrivacyFence's Salesforce app, or your own, then each person signs in.</h2>
       </div>
       <ol class="steps page-copy">
-        <li>A Salesforce administrator registers an External Client App or a Connected App once per org and packages its consumer key and secret into an organization config bundle.</li>
-        <li>Each person installs the bundle, connects Salesforce from PrivacyFence's Settings page, and signs in on Salesforce's own page. Nobody types a Salesforce password, security token or API key into PrivacyFence.</li>
+        <li>On an organization server or the Docker image, PrivacyFence's built-in Salesforce app needs nothing registered; each Salesforce org's administrator installs the PrivacyFence package once, from the link on the Admin page.</li>
+        <li>An organization may register its own External Client App or Connected App instead and upload it on the Admin page.</li>
+        <li>Each person connects Salesforce on PrivacyFence's Connect page and signs in on Salesforce's own page. Nobody types a Salesforce password, security token or API key into PrivacyFence.</li>
         <li>The Salesforce tools appear to the assistant. The sign-in stays with PrivacyFence and is never given to the AI client.</li>
       </ol>
       <p class="actions cluster">

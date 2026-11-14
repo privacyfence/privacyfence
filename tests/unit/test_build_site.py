@@ -121,7 +121,7 @@ def test_fragment_guard_catches_a_title_only_index_line():
 def test_header_partial_defaults_and_overrides():
     default = build_site.render_partial("header")
     assert '<a class="skip-link" href="#top">Skip to content</a>' in default
-    assert '<a class="nav-cta" href="/download/">Download</a>' in default
+    assert '<a class="nav-cta" href="/install/">Install</a>' in default
     custom = build_site.render_partial("header", "  ", cta_href="/x/?a=1&b=2", cta_label="All <releases>")
     assert '<a class="nav-cta" href="/x/?a=1&amp;b=2">All &lt;releases&gt;</a>' in custom
     assert all(line.startswith("  ") for line in custom.splitlines() if line.strip())
@@ -183,7 +183,7 @@ def test_every_page_gets_the_same_header_and_footer():
         page = read_page(path)
         header = page[page.index('<a class="skip-link"') : page.index("</header>")]
         footer = page[page.index('<footer class="site-footer') : page.index("</footer>")]
-        return header.replace('href="/releases/">All releases', 'href="/download/">Download'), footer
+        return header.replace('href="/releases/">All releases', 'href="/install/">Install'), footer
 
     assert len({chrome(path) for path in build_site.PAGES}) == 1
     header, footer = chrome("/")
@@ -708,6 +708,37 @@ def test_docs_links_fall_back_to_github_when_docs_are_not_built(tmp_path):
     assert f'href="{base}/blob/main/docs/getting-started.md#first"' in home
     assert 'href="/download/"' in home
     assert (site / "docs" / "index.html").read_text(encoding="utf-8") == '<a href="/docs/">self</a>'
+
+
+def test_pending_docs_links_fall_back_when_the_tag_lacks_them(tmp_path):
+    site = tmp_path / "_site"
+    (site / "docs" / "getting-started").mkdir(parents=True)
+    (site / "docs" / "index.html").write_text("d", encoding="utf-8")
+    (site / "docs" / "getting-started" / "index.html").write_text("g", encoding="utf-8")
+    (site / "index.html").write_text(
+        '<a href="/docs/">d</a><a href="/docs/getting-started/">g</a><a href="/docs/oauth-relay/#x">r</a>',
+        encoding="utf-8",
+    )
+    build_site.point_docs_links_at_github(site, "main", only=frozenset({"oauth-relay"}))
+    home = (site / "index.html").read_text(encoding="utf-8")
+    base = "https://github.com/privacyfence/privacyfence"
+    assert f'href="{base}/blob/main/docs/oauth-relay.md#x"' in home
+    assert 'href="/docs/"' in home and 'href="/docs/getting-started/"' in home
+
+
+def test_pending_docs_links_stay_when_the_tag_has_them(tmp_path):
+    site = tmp_path / "_site"
+    (site / "docs" / "oauth-relay").mkdir(parents=True)
+    (site / "docs" / "oauth-relay" / "index.html").write_text("r", encoding="utf-8")
+    page = '<a href="/docs/">d</a><a href="/docs/oauth-relay/#x">r</a>'
+    (site / "index.html").write_text(page, encoding="utf-8")
+    build_site.point_docs_links_at_github(site, "main", only=frozenset({"oauth-relay"}))
+    assert (site / "index.html").read_text(encoding="utf-8") == page
+
+
+def test_oauth_relay_is_pending_and_published():
+    assert "oauth-relay" in build_site.DOCS_PENDING_RELEASE
+    assert "oauth-relay.md" not in build_site.CONTRIBUTOR_DOCS
 
 
 def test_the_header_links_the_docs():

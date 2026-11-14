@@ -43,6 +43,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Upstream MCP servers behind PrivacyFence.** An operator of an organization server can name another MCP server in a JSON file (`PRIVACYFENCE_UPSTREAM_MCP_FILE`), declare which of its tools exist and how each is gated (reads run at once or are reviewed; every write asks for approval), and grant people data domains in `admin_config.json`. AI clients see the tools as `<id>_<tool>`, and every call carries a 60-second signed claim, verifiable at `/upstream-mcp/jwks`, that names the person, their domains and what is calling, so the server filters its own queries. A reference upstream, `scripts/upstream_mcp_reference_server.py`, shows what an upstream must verify. See [Upstream MCP servers](docs/upstream-mcp.md) ([ADR 0285](docs/adr/0285-upstream-mcp-servers-are-declared-connectors.md), [ADR 0286](docs/adr/0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md)).
+- **Declare upstream MCP servers from a YAML file or inline in a Docker install.** The upstream declaration may be a YAML or JSON file, or the text of `PRIVACYFENCE_UPSTREAM_MCP` set in `compose.yaml`, and `grants` in it seed the data-domain grants in `admin_config.json` once per upstream, so the first start already knows who sees what. A repeated key and a file over 256 KiB are refused. See [Upstream MCP file](docs/org-mode-docker.md#upstream-mcp-file) and [ADR 0288](docs/adr/0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md).
+- **Data domains on scoped tokens.** When creating a scoped token for an upstream's tools, tick the data domains it may see: never more than you hold yourself ([ADR 0287](docs/adr/0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md)).
+- **An AI client can have a scoped token delivered into n8n.** On an organization server, an administrator sets `PRIVACYFENCE_N8N_URL` and `PRIVACYFENCE_N8N_API_KEY` and turns on Admin → Agent runtimes. `privacyfence_propose_scoped_token` then takes `deliver_to: {"runtime": "n8n"}`; once the person confirms, PrivacyFence creates the token as an n8n credential, and the new `privacyfence_runtime_credential_status` tool reports its id. Revoking or expiry deletes the credential within 5 minutes. Anyone who can edit workflows in that n8n can use and read the token ([ADR 0278](docs/adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)).
+- **An n8n node for PrivacyFence.** `n8n-nodes-privacyfence` is a community node with a **List tools** and a **Call a tool** operation: pick one of the tools a PrivacyFence token allows, give a reason, and get the result as workflow data, without setting up an MCP Client node by hand. It is published to npm with provenance on stable releases and is MIT-licensed; see [docs/n8n-node.md](docs/n8n-node.md).
+
+### Changed
+
+- **A token delivered to n8n keeps its credential when it expires, and a person can extend the token.** Settings → Scoped tokens has an **Extend** button on every token: it sets the token to expire the chosen number of days from today, behind the same confirmation and passkey step-up as creating a token. An expired token's n8n credential is no longer deleted; it is deleted when the token is revoked, and works again when the token is extended. `privacyfence_runtime_credential_status` answers `expired` for such a token ([ADR 0283](docs/adr/0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md), [ADR 0284](docs/adr/0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md)).
+- **Admin → Agent runtimes has a credential type for n8n.** The default is unchanged: delivery still creates an n8n bearer credential for the MCP Client node. Choosing **PrivacyFence node** makes delivery create a `privacyFenceApi` credential that holds the token and this server's address, for the PrivacyFence node; delivery then refuses, before a token is created, when the community node is not installed in that n8n. Tokens already delivered keep their type. See [docs/n8n-node.md](docs/n8n-node.md).
+
+## [7.0.2] — 2026-11-06
+
+### Fixed
+
+- **One person's unattended session no longer makes everyone else's calls unattended.** On an organization server, a client that sends no MCP session id (claude.ai does not) shared one fallback session with every other such client, so a scheduled run that called `privacyfence_begin_unattended_session` made every other person's gated calls fail with "this connection is in an unattended session" until someone's Claude called `privacyfence_end_unattended_session`. The unattended flag now belongs to one person's one session, and a connection without a session id (a client on the session-less MCP protocol, such as claude.ai) is refused with an error that points to scoped tokens instead of being marked unattended (its gated calls ask for approval as usual). The start, end and denial lines in the daemon log now name the person and a short session reference, and the audit log's start and end entries carry the same reference.
+
+### Changed
+
+- **privacyfence-sync docs agree with the code.** The recipe guide no longer says that names, email addresses and phone numbers trip the PII check (currency amounts and IPv4 addresses do, and both can be turned off), no longer says that a scoped-token run needs the Unattended sessions switch, and lists `drive_get_file_content` among the reads that **Let reads return personal data** covers ([#1073](https://github.com/privacyfence/privacyfence/issues/1073)).
+
+- **Docs: a Claude Code cloud routine with a scoped token.** [Connect Claude Code](https://privacyfence.eu/docs/connect-claude-code/#a-cloud-routine-with-a-scoped-token) explains how to run a scheduled cloud routine under a scoped token's rules and personal-data settings instead of your own sign-in. The routine gets a cloud environment of its own, with the token saved as a network secret for the deployment's host and PrivacyFence added as an HTTP MCP server.
+
+## [7.0.1] — 2026-11-01
+
+### Added
+
+- **An Install page on privacyfence.eu.** [privacyfence.eu/install](https://privacyfence.eu/install/) asks who uses PrivacyFence, whether it comes with the built-in presentation tool (Peek) and data lake (Grist), how people sign in, which apps connect the services and what sits in front, and gives the commands for that setup. **Install** replaces Download in the site's header ([ADR 0277](docs/adr/0277-the-websites-primary-call-to-action-is-install.md)).
+
+### Changed
+
+- **privacyfence.eu describes PrivacyFence 7.** The homepage, Enterprise, How it works, FAQ, Security, GDPR, comparison, AI agent and connector pages describe the built-in sign-in apps (and an organization's own), the Admin page, the organization server started from environment variables in Docker, single-user Docker and its limits, and desktop mode's deprecation. The [download page](https://privacyfence.eu/download/) recommends single-user Docker for one person and keeps the desktop installers as deprecated.
+- **Docs for single-user Docker.** The organization guide sends a single person to the Docker image instead of the deprecated desktop install, How it works describes single-user mode and `PRIVACYFENCE_MODE`, and [Connect Claude Code](https://privacyfence.eu/docs/connect-claude-code/) and [Connect Claude Desktop](https://privacyfence.eu/docs/connect-claude-desktop/) have a Single-user Docker section.
+- **The OAuth relay documentation is on privacyfence.eu.** `docs/oauth-relay.md` is published at [privacyfence.eu/docs/oauth-relay](https://privacyfence.eu/docs/oauth-relay/) from the next release, and the relay terms and privacy statement link it; until then the link opens the file on GitHub ([ADR 0276](docs/adr/0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md)).
+
 ## [7.0.0] — 2026-11-01
 
 **Breaking changes; this release is 7.0.0.** The entries marked *Breaking* below are the ones that need action before or after the upgrade: allowed domains trust only verified email addresses; organization servers read no bundle for their apps and settings; the 6.x `org_config.json` is read as `org_bundle.json`; and `build_org_bundle.py` refuses the options that moved. Every start of 7.x upgrades all stored data, so upgrade to 8 only from 7.x.
@@ -3585,7 +3622,9 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.2...HEAD
+[7.0.2]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...v7.0.2
+[7.0.1]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
 [6.13.0]: https://github.com/privacyfence/privacyfence/compare/v6.12.0...v6.13.0
 [6.12.0]: https://github.com/privacyfence/privacyfence/compare/v6.11.0...v6.12.0

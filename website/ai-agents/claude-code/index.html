@@ -27,7 +27,7 @@
     <section class="page-intro shell">
       <p class="kicker">AI agent · Claude Code</p>
       <h1>Claude Code, with every gated call waiting for you.</h1>
-      <p class="lede">Claude Code reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: PrivacyFence on your own computer (<strong>local mode</strong>) on macOS, Windows and Linux, and PrivacyFence run by your organization (<strong>organization mode</strong>).</p>
+      <p class="lede">Claude Code reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: PrivacyFence on your own computer (the Docker image in <strong>single-user mode</strong>, or the deprecated desktop mode), and PrivacyFence run by your organization (<strong>organization mode</strong>).</p>
     </section>
 
     <section class="page-section shell" aria-labelledby="connects-heading">
@@ -37,7 +37,11 @@
       </div>
       <div class="card-grid grid-auto">
         <article class="card stack">
-          <h3>Local mode: your own token</h3>
+          <h3>Single-user Docker: passkey sign-in</h3>
+          <p>Use <code>http://localhost:8765/mcp</code> as the connector address. PrivacyFence sends you to its sign-in page for your passkey, then to a consent page; there is no token to copy.</p>
+        </article>
+        <article class="card stack">
+          <h3>Desktop mode (deprecated): your own token</h3>
           <p>Claude Code connects to PrivacyFence's <code>/mcp</code> endpoint on <code>localhost</code> with a bearer token. PrivacyFence mints one token per account on your computer, each with its own connectors, rules and approvals.</p>
         </article>
         <article class="card stack">
@@ -54,7 +58,15 @@
       </div>
       <div class="card-grid grid-auto">
         <article class="card stack">
-          <h3>Local mode</h3>
+          <h3>Single-user Docker</h3>
+          <ol class="steps">
+            <li>Start PrivacyFence's Docker image as on the <a href="/install/">Install page</a> and set up your passkey.</li>
+            <li>Add <code>http://localhost:8765/mcp</code> as a connector. Run <code>claude mcp add --transport http --scope user privacyfence http://localhost:8765/mcp</code>.</li>
+            <li>Sign in with your passkey when the client opens the browser.</li>
+          </ol>
+        </article>
+        <article class="card stack">
+          <h3>Desktop mode (deprecated)</h3>
           <ol class="steps">
             <li>Install PrivacyFence from the <a href="/download/">download page</a>, then log out and back in once.</li>
             <li>From your own account, read the <code>/mcp</code> URL from PrivacyFence's <code>mcp_url</code> file and print your token with <code>--print-mcp-token</code>. The docs have the paths for each platform.</li>
@@ -86,7 +98,7 @@
       <div class="page-copy stack">
         <p>PrivacyFence tells Claude Code truthfully what each tool does: reads are read-only, writes are writes, and the tools that delete something (<code>calendar_delete_event</code>, <code>drive_sheets_delete_dimensions</code> and <code>peek_delete_page</code>) are marked destructive. Whether Claude Code asks before it calls a tool from an MCP server depends on its permission mode and rules, not on those annotations.</p>
         <p>If it asks, you can choose not to be asked again for that tool, or allow <code>mcp__privacyfence</code> under <code>/permissions</code> for all of PrivacyFence's tools at once. That only stops Claude Code asking: a gated call still waits for PrivacyFence's approval card, whatever Claude Code was told or allowed. There is no mode that advertises writes as read-only.</p>
-        <p>What we observed in local mode: with no permission rules configured, Claude Code did not ask before calling any PrivacyFence tool in the run, creating a calendar event included, and PrivacyFence's approval card was the only confirmation.</p>
+        <p>What we observed in desktop mode: with no permission rules configured, Claude Code did not ask before calling any PrivacyFence tool in the run, creating a calendar event included, and PrivacyFence's approval card was the only confirmation.</p>
       </div>
     </section>
 
@@ -106,7 +118,7 @@
         <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
       </div>
       <div class="page-copy stack">
-        <p><strong>Local mode.</strong> Every AI client on your computer uses the same credential, so PrivacyFence cannot tell them apart, and the approval card names the requester <strong>Undetected</strong>. The audit log still records the name Claude Code sent.</p>
+        <p><strong>Desktop mode.</strong> Every AI client on your computer uses the same credential, so PrivacyFence cannot tell them apart, and the approval card names the requester <strong>Undetected</strong>. The audit log still records the name Claude Code sent.</p>
         <p><strong>Organization mode.</strong> Claude Code registers as <code>Claude Code (&lt;name&gt;)</code>, where <code>&lt;name&gt;</code> is the server name you gave <code>claude mcp add</code>, and PrivacyFence recognises it as Claude Code. That name is a claim: the card says <strong>Says it is Claude Code</strong>, marked <strong>Not verified</strong>, because any program can send the same name. An administrator can pin the registration on <strong>Settings → AI systems</strong>, and the cards for it are then verified.</p>
         <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
       </div>

@@ -27,7 +27,7 @@
     <section class="page-intro shell">
       <p class="kicker">AI agent · ChatGPT</p>
       <h1>ChatGPT, with every gated call waiting for you.</h1>
-      <p class="lede">ChatGPT reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: ChatGPT desktop with PrivacyFence on your own computer (<strong>local mode</strong>), and ChatGPT on the web with PrivacyFence run by your organization (<strong>organization mode</strong>). Both were checked with a personal ChatGPT plan; Business, Enterprise and Edu workspaces are not verified.</p>
+      <p class="lede">ChatGPT reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: ChatGPT desktop with PrivacyFence on your own computer (<strong>desktop mode</strong>, deprecated), and ChatGPT on the web with PrivacyFence run by your organization (<strong>organization mode</strong>). Both were checked with a personal ChatGPT plan; Business, Enterprise and Edu workspaces are not verified.</p>
     </section>
 
     <section class="page-section shell" aria-labelledby="connects-heading">
@@ -37,7 +37,7 @@
       </div>
       <div class="card-grid grid-auto">
         <article class="card stack">
-          <h3>Local mode: ChatGPT desktop</h3>
+          <h3>Desktop mode (deprecated): ChatGPT desktop</h3>
           <p>ChatGPT desktop connects to PrivacyFence's <code>/mcp</code> endpoint on <code>localhost</code> as a Streamable HTTP server, with your own token in an <code>Authorization: Bearer</code> header. The token stays the same across restarts, upgrades and reboots. Checked on macOS; the Windows app is not verified, and there is no ChatGPT desktop app for Linux: use <a href="/ai-agents/claude-code/">Claude Code</a> there.</p>
         </article>
         <article class="card stack">
@@ -54,7 +54,7 @@
       </div>
       <div class="card-grid grid-auto">
         <article class="card stack">
-          <h3>Local mode</h3>
+          <h3>Desktop mode (deprecated)</h3>
           <ol class="steps">
             <li>Install PrivacyFence from the <a href="/download/">download page</a>.</li>
             <li>In PrivacyFence, open <strong>Settings → AI clients</strong>. Note the <strong>MCP URL</strong>, normally <code>http://localhost:8765/mcp</code>, and click <strong>Copy token</strong>.</li>
@@ -100,7 +100,7 @@
         <h2 id="files-heading">One-time links, with no allowlist to set up.</h2>
       </div>
       <div class="page-copy stack">
-        <p><strong>Local mode.</strong> A large file comes back as a one-time link on <code>127.0.0.1</code>, which ChatGPT desktop fetches itself; ChatGPT asks its own permission before saving to a folder such as <code>~/Downloads</code>. PrivacyFence runs under its own system account and cannot read your home folder, so a file path for an upload is refused, and ChatGPT sends the file through an upload link instead.</p>
+        <p><strong>Desktop mode.</strong> A large file comes back as a one-time link on <code>127.0.0.1</code>, which ChatGPT desktop fetches itself; ChatGPT asks its own permission before saving to a folder such as <code>~/Downloads</code>. PrivacyFence runs under its own system account and cannot read your home folder, so a file path for an upload is refused, and ChatGPT sends the file through an upload link instead.</p>
         <p><strong>Organization mode.</strong> A download of up to about 75 KB comes back in the tool result; a larger one becomes a short-lived, one-time link. ChatGPT's code sandbox fetches that link and sends uploads itself, over public HTTPS, so unlike claude.ai there is no domain list to fill in. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
         <p>To read a document, no download is needed: PrivacyFence returns a PDF, Word, PowerPoint or Excel file from Drive as text.</p>
       </div>
@@ -112,7 +112,7 @@
         <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
       </div>
       <div class="page-copy stack">
-        <p><strong>Local mode.</strong> Every AI client on your computer uses the same credential, so the approval card names the requester <strong>Undetected</strong>. The audit log records the name ChatGPT desktop gives, <code>codex-mcp-client</code>, which OpenAI's Codex command-line tool gives too, so the two cannot be told apart.</p>
+        <p><strong>Desktop mode.</strong> Every AI client on your computer uses the same credential, so the approval card names the requester <strong>Undetected</strong>. The audit log records the name ChatGPT desktop gives, <code>codex-mcp-client</code>, which OpenAI's Codex command-line tool gives too, so the two cannot be told apart.</p>
         <p><strong>Organization mode.</strong> ChatGPT registers with PrivacyFence as <code>ChatGPT</code>, so the approval card says <strong>Says it is ChatGPT</strong>, marked <strong>Not verified</strong>, because any program that can reach the deployment can register under the same name. An administrator can pin ChatGPT's registration on <strong>Settings → AI systems</strong>, for example by matching its last-used time to their own sign-in from ChatGPT, and the cards for it are then verified.</p>
         <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
       </div>

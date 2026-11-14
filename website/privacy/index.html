@@ -129,7 +129,8 @@
         own host name; a single-user install on its own computer, which uses a local address, needs no
         registration. It is used only by organization servers and single-user installs that use
         the built-in apps. An organization's own apps never touch it, and desktop (local) installs
-        do not use it.
+        do not use it. How the maintainers run the relay is described in the
+        <a href="/docs/oauth-relay/">relay documentation</a>.
       </p>
       <ul>
         <li>The redirect it forwards carries a one-time authorization code and the server's host name. It never sees a token, mail or file content. The relay processes the IP address of the request in transit.</li>

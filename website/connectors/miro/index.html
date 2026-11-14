@@ -55,15 +55,16 @@
     <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
       <div class="section-heading">
         <p class="kicker">Set it up</p>
-        <h2 id="setup-heading">Sign in with your organization's Miro app.</h2>
+        <h2 id="setup-heading">PrivacyFence's Miro app, or your organization's own.</h2>
       </div>
       <ol class="steps page-copy">
-        <li>An administrator registers a PrivacyFence app in Miro once and puts its client id and secret in your organization's PrivacyFence configuration.</li>
+        <li>On an organization server or the Docker image, Miro works at once with PrivacyFence's built-in Miro app; the sign-in redirect goes through the PrivacyFence relay. Miro sends no PKCE, so that one-time code passes through the relay without it.</li>
+        <li>An organization may register its own app in Miro instead and upload it on the Admin page; it does not touch the relay.</li>
         <li>You sign in on Miro's own page. Miro asks which team to install the app in, and the connection covers that one Miro team.</li>
         <li>To use another team, connect again and choose it; the new connection replaces the first.</li>
       </ol>
       <p class="actions cluster">
-        <a class="button primary" href="https://github.com/privacyfence/privacyfence/blob/main/docs/miro-setup.md">Set it up</a>
+        <a class="button primary" href="/docs/miro-setup/">Set it up</a>
         <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
       </p>
     </section>
@@ -78,7 +79,7 @@
           <p>Install PrivacyFence on macOS, Windows or Linux and connect Miro with your organization's app.</p>
         </div>
         <div class="actions vertical cluster">
-          <a class="button primary" href="/download/">Download PrivacyFence</a>
+          <a class="button primary" href="/install/">Install PrivacyFence</a>
           <a class="button secondary" href="/connectors/">All connectors</a>
         </div>
       </div>

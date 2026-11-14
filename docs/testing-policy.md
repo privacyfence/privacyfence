@@ -33,7 +33,7 @@ every module in layer 6, `test_org_ubuntu_release_smoke.py` included; `browser` 
 drives Chromium (`test_browser_smoke.py`, `test_settings_grist_modal_browser.py`,
 `test_settings_edit_verbs_browser.py`, `test_settings_scoped_token_form_browser.py`,
 `test_settings_scoped_token_proposal_browser.py`,
-`test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_releases_page.py`,
+`test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_install_page.py`, `test_releases_page.py`,
 `test_website_layout.py`, `test_website_consent.py`, `test_website_csp.py`); `live` on nothing, since layer 5 is a
 script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
 `tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit
@@ -59,7 +59,8 @@ and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout
 |---|---|
 | `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; `npm ci --prefix tests/integration/ai_clients` (the pinned AI-client CLIs); the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
 | `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest`; the Windows job then runs `check_coverage_floor.py --platform windows`, which holds the Windows-only modules at `WINDOWS_MODULE_FLOORS` |
-| `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
+| `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py` and `test_n8n_node_contract.py`); one check per version |
+| `n8n-node` | The n8n community node in `n8n/`: `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`, then `npm pack`, uploading the tarball as `n8n-nodes-privacyfence-tgz` |
 | `sync` (Python 3.11, 3.13) | `privacyfence-sync` alone: `pip install -e "./sync[test]"`, `pytest sync/tests` at 100 % branch coverage, `mypy sync/src`, `bandit -r sync/src`; one `Sync client (Python 3.x)` check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
 | `org-docker-image` | Builds the organization-mode Docker image (amd64) from the checkout's wheel and runs `test_org_docker_image.py` against it; the per-PR leg of `build.yml`'s `build-org-image`, deliberately not a required check |
@@ -102,6 +103,8 @@ Key modules in the suite:
   by the official `mcp` client over TCP.
 - `tests/integration/test_shim_mcp_contract.py` — the built `mcpb/shim/dist/shim.js` against that
   server, over MCP-over-stdio. Skips without Node.
+- `tests/integration/test_n8n_node_contract.py` — the n8n node's sources against the same server, over
+  the node's own MCP client. Skips without Node and npm; the `test` job installs `n8n/` first so the install stays out of the timed test step.
 - `tests/integration/test_claude_code_contract.py` — the pinned Claude Code CLI against that
   server; see "AI-client contract tests (T3)" below.
 - `tests/system/test_local_mode_system.py` — `python -m privacyfence.daemon_main` as a separate
@@ -118,6 +121,7 @@ Key modules in the suite:
   "Always allow", live SSE refresh, idempotency), PDF preview, CSP (including every native form post), org-mode WebAuthn, PII banners,
   three viewports, light/dark structure. `test_download_page.py` covers `website/download/` and
   `test_releases_page.py` covers `website/releases/`, both with the Worker's API stubbed.
+  `test_install_page.py` covers `website/install/`: the picker and its eight results, with and without JavaScript.
 - Each connector's `TestLiveFixtureParsing` replays a committed fixture from
   `tests/fixtures/live/<connector>/` through the real parser; it skips if no fixture is recorded.
 
@@ -171,7 +175,7 @@ variable removed: these tests need no vendor account or credential, and must kee
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
   `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
-  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py`, `test_install_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
   sites and the layout screenshots.
 
 ### The shared design system
@@ -221,6 +225,10 @@ Run it when a PR touches `web_shell.py`, `approval_list_html.py`, the JS emitted
 Paste the report into the PR description under `## Web smoke check`.
 
 ## Layer 5: live connector
+
+A connector with no external provider, the upstream MCP connector, has no live fixture and is not in
+`CONNECTOR_CHECKS`: the reference server `scripts/upstream_mcp_reference_server.py` covers it ([ADR
+0285](adr/0285-upstream-mcp-servers-are-declared-connectors.md)).
 
 Live provider credentials exist only on the project's self-hosted runner, `runner.privacyfence.eu`
 (label `privacyfence-live`), as local files — never as GitHub Actions secrets, never on a
@@ -300,7 +308,7 @@ Manual release checks, and the rule for what may stay manual, are in
 
 ## Running the gate yourself
 
-- **`/dod`** (from the devflow toolkit; its rows are `verify` in `.claude/toolkit.yaml`) — runs the blocking gate of
+- **`/dod`** (from the devflow toolkit; its rows are `verify` in `.tld/toolkit.yaml`) — runs the blocking gate of
   [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)
   (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy src/privacyfence`/`mypy_strict_modules.py`, the shim's
   `npm test`/`typecheck`), then checks the diff for the conditional items (live `--check` report,

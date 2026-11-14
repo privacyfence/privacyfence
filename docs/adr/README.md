@@ -145,7 +145,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md) | One route layer per surface (approvals, settings), with an auth adapter per mode, not a second module | Accepted |
 | [0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md) | Sensitive settings writes require WebAuthn step-up in both local and org mode | Accepted |
 | [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted; amended by 0224; decision 3 superseded by 0225 |
-| [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive) |
+| [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive); amended by 0286 |
 | [0037](0037-a-local-override-is-a-relabel-and-never-attests.md) | A local `agent_overrides:` match is a relabel recorded as claimed on every install; local mode has no attested source | Accepted |
 | [0038](0038-gmail-draft-signature-is-shown-but-not-write-scanned.md) | A Gmail draft's appended signature is shown in the approval popup but not write-scanned | Accepted |
 | [0039](0039-installers-refuse-an-os-below-the-support-matrix.md) | Every installer refuses an OS below the support matrix's floor | Accepted |
@@ -208,7 +208,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0096](0096-gmail-get-message-returns-html-only-when-asked.md) | `gmail_get_message` returns the HTML body only when asked, under the same `body` policy | Accepted |
 | [0097](0097-a-download-link-needs-a-client-that-can-reach-the-server.md) | A download link needs a client that can reach the server; `drive_get_file_content` returns a document's text | Accepted |
 | [0098](0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md) | Each AI agent has its own setup doc and its own website page, counted as the `ai-agent` content group | Accepted (retroactive) |
-| [0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md) | An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc | Accepted (retroactive) |
+| [0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md) | An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc | Accepted (retroactive); amended by 0276 |
 | [0100](0100-unverified-client-setup-instructions-never-merge-to-main.md) | Unverified AI-client setup instructions never merge to `main` | Accepted (retroactive) |
 | [0101](0101-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |
 | [0102](0102-an-upload-slot-is-consumed-after-the-gate-not-before.md) | An upload slot is consumed after the gate, not before it | Accepted |
@@ -255,8 +255,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted; amended by 0207 |
 | [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
-| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236; related: 0250 |
-| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072 |
+| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236; related: 0250; amended by 0283; amended by 0287 |
+| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072; amended by 0278; amended by 0283 |
 | [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148; amended by 0174, 0236 |
 | [0167](0167-a-card-number-must-have-a-length-its-first-digit-allows.md) | A card number must have a length its first digit allows | Accepted |
 | [0168](0168-earlier-drive-file-versions-are-read-under-the-file-read-rule.md) | Earlier Drive file versions are read under the file-read rule | Accepted |
@@ -327,7 +327,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0233](0233-a-miro-write-covers-a-batch-of-up-to-twenty-under-one-card.md) | A Miro write covers a batch of up to twenty items or connector lines under one approval card | Accepted; relates to 0231 |
 | [0234](0234-slack-reads-report-the-users-own-read-state.md) | Slack message reads report the user's own read state from Slack's read markers | Accepted; relates to 0226, 0227 |
 | [0235](0235-a-separate-auto-approved-tool-checks-the-read-state-of-named-messages.md) | A separate, auto-approved tool checks the read state of named Slack messages | Accepted; relates to 0234 |
-| [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198 |
+| [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198; amended by 0287 |
 | [0237](0237-the-wheel-bundles-the-changelog-through-a-setup-py-build-hook.md) | The wheel bundles `CHANGELOG.md` through a `setup.py` build hook | Accepted; relates to 0023 |
 | [0238](0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md) | Org mode shows each person the changes since the version they last saw | Accepted; relates to 0014, 0023, 0237 |
 | [0239](0239-the-peek-connector-uses-peeks-visibilities-and-new-pages-are-restricted.md) | The Peek connector uses Peek's own visibilities, and new pages are restricted | Accepted; relates to 0158 |
@@ -341,7 +341,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0247](0247-grist-provisioning-needs-a-verified-email.md) | Grist provisioning needs a verified email | Accepted; relates to 0142, 0143 |
 | [0248](0248-a-managed-grist-key-expires-90-days-after-it-was-issued.md) | A managed Grist key expires 90 days after it was issued | Accepted; relates to 0142, 0143 |
 | [0249](0249-a-timed-out-google-request-discards-its-pooled-connection.md) | A timed-out Google request discards its pooled connection | Accepted; amends 0105 |
-| [0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) | An AI client can propose a scoped token; only a person creates it, after a narrowing-only review and a typed-name confirmation | Accepted; relates to 0013, 0034, 0104, 0164, 0165, 0195, 0220, 0236 |
+| [0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) | An AI client can propose a scoped token; only a person creates it, after a narrowing-only review and a typed-name confirmation | Accepted; relates to 0013, 0034, 0104, 0164, 0165, 0195, 0220, 0236; amended by 0278, 0280 |
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
 | [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165 |
@@ -367,3 +367,21 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272 |
 | [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |
 | [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
+| [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
+| [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted |
+| [0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md) | A scoped token can be delivered into an agent runtime, n8n first, as a credential PrivacyFence writes itself | Accepted; amends 0165, 0250; amended by 0290, 0291; relates to 0164, 0220 |
+| [0279](0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md) | The n8n address and API key come only from the server environment | Accepted; relates to 0241, 0257 |
+| [0280](0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md) | `privacyfence_runtime_credential_status` reports a delivered proposal's credential to the client that proposed it | Accepted; amends 0250; amended by 0284, 0290 |
+| [0281](0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md) | A sweeper deletes the runtime credential of a revoked, expired or undelivered token | Accepted; relates to 0164, 0165; amended by 0284 |
+| [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261 |
+| [0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md) | Only a person can extend a scoped token, from today and capped by max_days | Accepted; amends 0164, 0165 |
+| [0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md) | An expired token's n8n credential is kept until the token is revoked | Accepted; amends 0280, 0281; relates to 0283 |
+| [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196; amended by 0288 |
+| [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274 |
+| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288 |
+| [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287 |
+| [0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md) | The n8n node ships from this repository as an npm package and is published with provenance on stable tags | Accepted; relates to 0278 |
+| [0290](0290-the-delivered-credential-type-is-an-administrators-choice.md) | The delivered credential type is an administrator's choice, and the new type is checked against n8n before a token is minted | Accepted; amends 0278, 0280 |
+| [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md) | The privacyFenceApi credential holds the address and the token, and has no authenticate block | Accepted; amends 0278 |
+| [0292](0292-the-n8n-node-carries-its-own-handshake-only-mcp-client.md) | The n8n node carries its own handshake-only MCP client with no dependencies | Accepted; relates to 0289 |
+| [0293](0293-the-n8n-node-never-follows-redirects-or-builds-errors-from-caught-values.md) | The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value | Accepted; relates to 0291 |
