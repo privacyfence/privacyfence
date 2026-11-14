@@ -427,13 +427,13 @@ one case where a token's secret leaves PrivacyFence.
   ([ADR 0279](adr/0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md)). On n8n Enterprise
   give it only `credential:create` and `credential:delete`; other editions cannot limit a key.
 - **The status tool.** `privacyfence_runtime_credential_status` tells an AI client whether the person
-  accepted, the credential's id, name and the MCP address, and when the token expires; a later revoke or expiry
-  turns the answer into `not_delivered`. It never returns the token, a token id or the n8n host, and answers only
+  accepted, the credential's id, name and the MCP address, and when the token expires; a later revoke
+  turns the answer into `not_delivered`, and an expiry into `expired`, carrying `token_expired_at` and a message asking the person to extend. It never returns the token, a token id or the n8n host, and answers only
   for the signed-in person's own proposals, so any AI client signed in as that person can read it ([ADR 0280](adr/0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md)).
 - **Workflow data stays in n8n.** What a workflow reads through PrivacyFence is kept in n8n's execution history,
   under n8n's retention settings.
 - **Fail fast.** A call no token rule covers is denied at once, so a workflow never waits for an approval.
-- **Offboarding.** Revoking the token, or letting it expire, deletes the n8n credential within 5 minutes; a
+- **Offboarding.** Revoking the token deletes the n8n credential within 5 minutes; an expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it; a
   sweeper reconciles the records against the token store, so `privacyfence-app --revoke-scoped-tokens` is
   covered too ([ADR 0281](adr/0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md)).
   If the n8n address is changed, the old credentials are not deleted: their tokens are revoked and the audit log

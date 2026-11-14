@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-13. Implemented.
 Relates to [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) and [ADR 0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md).
+Amended by [ADR 0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md).
 
 ## Context
 
