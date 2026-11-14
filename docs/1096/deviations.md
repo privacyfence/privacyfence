@@ -56,7 +56,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p06-local-cli
 
-- pending
+- worker: _last_startup_error and its reset in tests/conftest.py stay, because the surviving TestMain tests read last_startup_error(); only comments were reworded.
+- worker: Also deleted test_a_malformed_admin_config_makes_the_cli_exit_non_zero, which called main(["--slack-oauth"]); and the seven TestWindowsServiceHost tests with their _run_isolated helper in tests/unit/test_privilege_separation.py (the installer-script tests in that class stay).
+- worker: src/_launcher_entry.py did not exist (p02 deleted it). Still referencing the deleted modules and left for later phases: the three PrivacyFenceApp spec files, scripts/pyinstaller_common.py, scripts/check_coverage_floor.py, scripts/windows_privilege_separation.ps1, .github/workflows/tests.yml and tests/unit/test_check_coverage_floor.py.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p07-server-local
 
