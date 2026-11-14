@@ -68,6 +68,18 @@ class TestPrincipalFromAccessToken:
         token = AccessToken(token="t", client_id="some-oauth-client-id", scopes=[])
         assert principal_from_access_token(token) == Principal(id="some-oauth-client-id")
 
+    def test_email_verified_is_true_only_for_the_boolean_true(self):
+        def principal(value):
+            return principal_from_access_token(AccessToken(
+                token="t", client_id="c", scopes=[], subject="u", claims={"email_verified": value},
+            ))
+        assert principal(True).email_verified is True
+        assert principal("true").email_verified is False
+        assert principal(None).email_verified is False
+        assert principal_from_access_token(
+            AccessToken(token="t", client_id="c", scopes=[], subject="u", claims={}),
+        ).email_verified is False
+
     def test_subject_is_preferred_over_client_id(self):
         # client_id identifies *which Claude installation* registered via
         # DCR, not *which human* is using it -- subject is the org IdP's
