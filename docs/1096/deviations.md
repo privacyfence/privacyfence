@@ -162,6 +162,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - scope: scope: tests/unit/test_website_claims.py
 - scope: scope: tests/unit/test_website_pages.py
 - retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
+- review: tests/integration/test_website_layout.py::test_docs_navigation_drawer_opens_on_screen[320] fails with Chromium 1243 in the orchestrator container on the commit before this phase as well; the other 316 website guardrail browser tests pass. Check it in CI at the final review.
 
 ## p18c-website-agents
 
