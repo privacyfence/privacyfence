@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 from urllib.parse import quote, urlsplit
 
-from . import admin_config, app_credentials, connector_configs
+from . import admin_config, agent_runtimes, app_credentials, connector_configs
 from .grist_auth import GristClientError, normalize_server_url
 from .org_mode import ConfigurationError, Mode, provisioning_key
 from .peek_client import PeekClientError, normalize_base_url
@@ -403,6 +403,8 @@ def effective_org_config(
     for key in admin_config.OPERATIONAL_SECTIONS:
         if key in admin:
             result[key] = copy.deepcopy(admin[key])
+    if mode == "org":
+        agent_runtimes.apply_environment(result)
     return result
 
 

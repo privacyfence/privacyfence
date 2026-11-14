@@ -532,7 +532,7 @@ repository holds the workflows and the QA server's host files
   has merged. Fork pull requests from outside collaborators also require approval before any workflow
   runs. It is installed as a service in persistent (non-ephemeral) mode, because an `--ephemeral`
   registration deregisters itself after one job.
-- Python 3.11 or newer as `python3`, with a working `venv` module (on Debian/Ubuntu, the
+- Python 3.11.5 or newer as `python3`, with a working `venv` module (on Debian/Ubuntu, the
   `pythonX.Y-venv` package matching `python3 --version`), and the build prerequisites of
   PrivacyFence's dependencies.
 
