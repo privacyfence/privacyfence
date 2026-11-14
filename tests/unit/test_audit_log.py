@@ -39,6 +39,16 @@ def make_entry(**overrides) -> AuditEntry:
         decision="approved",
         auto_accept_rule="",
         latency_seconds=1.23,
+        # Non-default values for the schema 8 claim fields, so the chain tests prove each
+        # one is covered by the hash (a dict and a list included).
+        claim_jti="jti-1",
+        claim_sub="sub-1",
+        claim_principal_type="claude_client",
+        claim_audiences=["all", "mgmt"],
+        claim_act={"sub": "client-1"},
+        claim_req="req-hash",
+        upstream_status="ok",
+        metadata={"upstream": "hub"},
     )
     defaults.update(overrides)
     return AuditEntry(**defaults)
@@ -1212,15 +1222,15 @@ class TestApprovalLinkageFields:
     approval no call collected, and the Excel export carries request_id, the
     field that ties a pending row to its release and the file served."""
 
-    def test_schema_version_is_seven(self):
-        assert CURRENT_SCHEMA_VERSION == 7
+    def test_schema_version_is_at_least_seven(self):
+        assert CURRENT_SCHEMA_VERSION >= 7
 
     def test_expired_decision_defaults_to_empty(self, tmp_path):
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry())
         line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
         assert line["expired_decision"] == ""
-        assert line["schema_version"] == 7
+        assert line["schema_version"] == CURRENT_SCHEMA_VERSION
 
     @freeze_time("2026-07-06")
     def test_v6_entries_without_it_load_with_the_default(self, tmp_path):
@@ -1241,6 +1251,82 @@ class TestApprovalLinkageFields:
 
         ws = openpyxl.load_workbook(logger.export_week_to_excel("2026-W28"))["Decisions"]
         headers = [c.value for c in ws[1]]
-        assert headers[26:] == ["Deny Intent", "Deny Note Length (chars)", "Request ID", "Expired Decision"]
-        assert [c.value for c in ws[2]][28:] == ["req-1", "approved"]
-        assert [c.value for c in ws[3]][28:] == ["req-1", None]
+        assert headers[26:30] == ["Deny Intent", "Deny Note Length (chars)", "Request ID", "Expired Decision"]
+        assert [c.value for c in ws[2]][28:30] == ["req-1", "approved"]
+        assert [c.value for c in ws[3]][28:30] == ["req-1", None]
+
+
+class TestUpstreamClaimFields:
+    """Schema 8 (ADR 0288): the claim_* fields, upstream_status and metadata describe one
+    forwarded upstream call."""
+
+    _KEYS = (
+        "claim_jti", "claim_sub", "claim_principal_type", "claim_audiences",
+        "claim_act", "claim_req", "upstream_status", "metadata",
+    )
+
+    def test_schema_version_is_eight(self):
+        assert CURRENT_SCHEMA_VERSION == 8
+
+    def test_new_entry_is_recorded_as_schema_eight(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="upstream_forwarded"))
+        line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
+        assert line["schema_version"] == 8
+        assert line["claim_audiences"] == ["all", "mgmt"]
+        assert line["claim_act"] == {"sub": "client-1"}
+        assert line["metadata"] == {"upstream": "hub"}
+
+    def test_defaults_are_empty(self):
+        entry = AuditEntry(
+            timestamp="t", week="2026-W28", request_id="", connector="c", tool="t",
+            tool_name="n", summary="s", sender="", decision="approved",
+            auto_accept_rule="", latency_seconds=0.0,
+        )
+        assert (entry.claim_jti, entry.claim_sub, entry.claim_principal_type) == ("", "", "")
+        assert (entry.claim_req, entry.upstream_status) == ("", "")
+        assert entry.claim_audiences == [] and entry.claim_act == {} and entry.metadata == {}
+
+    @freeze_time("2026-07-06")
+    def test_v7_entries_without_the_fields_load_with_defaults(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        v7 = {k: v for k, v in make_entry(week=current_week(), schema_version=7).__dict__.items()
+              if k not in self._KEYS}
+        (tmp_path / f"{current_week()}.jsonl").write_text(json.dumps(v7) + "\n", encoding="utf-8")
+
+        [entry] = logger.recent_entries()
+        assert entry.schema_version == 7
+        assert entry.claim_jti == "" and entry.claim_audiences == [] and entry.metadata == {}
+
+    def test_verify_chain_accepts_mixed_v7_and_v8_log(self, tmp_path):
+        from dataclasses import asdict
+
+        logger = AuditLogger(str(tmp_path))
+        v7 = {k: v for k, v in asdict(make_entry()).items() if k not in self._KEYS}
+        v7.update(schema_version=7, event_id="legacy-v7", prev_hash=logger._last_hash)
+        v7["entry_hash"] = logger._hash_canonical(v7)
+        with open(tmp_path / "2026-W28.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(v7) + "\n")
+        logger._last_hash = v7["entry_hash"]
+
+        logger.record(make_entry(decision="upstream_forwarded"))
+
+        lines = [json.loads(x) for x in (tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [x["schema_version"] for x in lines] == [7, 8]
+        assert "claim_jti" not in lines[0]
+        assert logger.verify_chain("2026-W28").ok is True
+
+    def test_excel_export_appends_the_five_claim_columns(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="upstream_forwarded"))
+        logger.record(make_entry(
+            claim_jti="", claim_sub="", claim_principal_type="", claim_audiences=[],
+            upstream_status="",
+        ))
+
+        ws = openpyxl.load_workbook(logger.export_week_to_excel("2026-W28"))["Decisions"]
+        assert [c.value for c in ws[1]][30:] == [
+            "Claim jti", "Claim sub", "Principal type", "Audiences", "Upstream status",
+        ]
+        assert [c.value for c in ws[2]][30:] == ["jti-1", "sub-1", "claude_client", "all, mgmt", "ok"]
+        assert [c.value for c in ws[3]][30:] == [None] * 5

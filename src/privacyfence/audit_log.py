@@ -70,7 +70,9 @@ logger = logging.getLogger(__name__)
 #   6 -- deny feedback (ADR 0084): + deny_intent, deny_note_chars
 #   7 -- approval linkage (ADR 0093): + expired_decision; bridge_download_served /
 #        staged_download_served rows carry the releasing request's request_id and agent
-CURRENT_SCHEMA_VERSION = 7
+#   8 -- upstream identity claim (ADR 0288): + claim_jti, claim_sub, claim_principal_type,
+#        claim_audiences, claim_act, claim_req, upstream_status, metadata
+CURRENT_SCHEMA_VERSION = 8
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -157,10 +159,19 @@ class AuditEntry:
                             # "scoped_token_proposal_declined" | "scoped_token_proposal_expired" |
                             # "runtime_credential_delivered" | "runtime_credential_delivery_failed" |
                             # "runtime_credential_deleted" | "runtime_credential_delete_failed" |
-                            # "runtime_credential_orphaned" | "runtime_credential_status_read"
+                            # "runtime_credential_orphaned" | "runtime_credential_status_read" |
+                            # "upstream_forwarded" |
+                            # "group_membership_applied" | "group_membership_rejected" |
+                            # "group_membership_denied" | "group_membership_approved" |
+                            # "group_membership_declined"
                             # (the runtime_credential_* decisions record a scoped token's delivery
                             #  into an agent runtime and its cleanup, ADR 0278 and ADR 0281; they
-                            #  render as plain entries and none counts as an approval)
+                            #  render as plain entries and none counts as an approval.
+                            #  "upstream_forwarded" is the execution record of one call forwarded
+                            #  to an upstream MCP server, ADR 0288, and carries the claim_* fields
+                            #  and upstream_status; the group_membership_* decisions record the
+                            #  membership sync tool and the admin's approvals, ADR 0290; none of
+                            #  them counts as an approval either)
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
                             #  web/routes_security.py's register_verify/delete_credential,
                             #  recorded for either mode's own passkey enrollment surface. Tamper-
@@ -434,6 +445,18 @@ class AuditEntry:
                               # "auto_accepted"), with decided_at set to when it was made. "" on a
                               # card nobody answered, on every other decision, and on every entry
                               # recorded before this field existed.
+    # ---- Upstream identity claim (schema 8, ADR 0288) ----
+    # Set on an "upstream_forwarded" entry; "" / [] / {} on every other entry and on every
+    # entry recorded before these fields existed. The claim string itself is never recorded.
+    claim_jti: str = ""       # the jti of the claim minted for the tools/call request
+    claim_sub: str = ""       # the claim's sub (a principal id, "n8n-token:<id>" or "privacyfence")
+    claim_principal_type: str = ""  # claude_client | n8n_workflow | service
+    claim_audiences: list[str] = field(default_factory=list)  # the audiences the claim carried
+    claim_act: dict[str, str] = field(default_factory=dict)   # the claim's act (OAuth client, agent)
+    claim_req: str = ""       # the claim's req: the hash binding it to one tool call
+    upstream_status: str = ""  # ok | tool_error | unreachable | too_large | refused | claim_failed
+    metadata: dict[str, str] = field(default_factory=dict)  # upstream, claim_version, identity_claim,
+                              # token_id, approved_by only; never argument values or upstream text
 
     # ---- Hash-chain and provenance fields ----
     # All six below default to a value meaning "not yet stamped" and are
@@ -811,10 +834,13 @@ class AuditLogger:
             # row to the approved row and the served file it led to
             # (ADR 0093).
             "Request ID", "Expired Decision",
+            # Upstream identity claim (schema 8): appended last, same reason again.
+            "Claim jti", "Claim sub", "Principal type", "Audiences", "Upstream status",
         ]
         COL_WIDTHS = [
             22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30, 14,
             24, 24, 16, 22, 18, 14, 16, 22,
+            38, 30, 16, 30, 16,
         ]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
@@ -871,6 +897,9 @@ class AuditLogger:
                 _excel_literal(entry.agent_version or ""), entry.agent_source or "",
                 entry.deny_intent or "", entry.deny_note_chars or "",
                 entry.request_id or "", entry.expired_decision or "",
+                _excel_literal(entry.claim_jti or ""), _excel_literal(entry.claim_sub or ""),
+                entry.claim_principal_type or "",
+                _excel_literal(", ".join(entry.claim_audiences)), entry.upstream_status or "",
             ])
             fill = decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):
