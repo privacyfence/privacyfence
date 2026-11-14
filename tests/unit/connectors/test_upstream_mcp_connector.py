@@ -11,12 +11,13 @@ from privacyfence import upstream_mcp_registry
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import upstream_mcp as module
 from privacyfence.connectors.upstream_mcp import (
+    UpstreamCallRefusedError,
     UpstreamMcpConnector,
     UpstreamToolError,
     UpstreamUnavailableError,
 )
 from privacyfence.safe_errors import public_message
-from privacyfence.upstream_claims import CallerClaim
+from privacyfence.identity_claim import CallerNotAllowedError, IdentityCaller
 from privacyfence.upstream_mcp_client import CallResult, UpstreamMcpClientError, UpstreamToolCatalog
 from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer
 
@@ -24,9 +25,8 @@ from ...helpers import assert_all_tools_leave_an_audit_trail, assert_tool_defini
 
 pytestmark = pytest.mark.unit
 
-CALLER = CallerClaim(
-    sub="u1", email="a@b.example", email_verified=True, domains=("general",),
-    act={"type": "ai_client", "attested": False, "name": "", "claimed_name": ""},
+CALLER = IdentityCaller(
+    sub="u1", principal_type="claude_client", email="a@b.example", audiences=("general",), tools=("search",),
 )
 
 
@@ -252,6 +252,8 @@ class TestErrors:
              "The Knowledge hub result is larger than 1 MB; ask for less."),
             (UpstreamMcpClientError("tool_error", "no such page"), UpstreamToolError,
              "The Knowledge hub server returned an error: no such page"),
+            (UpstreamMcpClientError("claim_failed"), UpstreamUnavailableError,
+             "The Knowledge hub call was not sent: PrivacyFence could not sign the caller claim."),
         ],
     )
     async def test_each_client_error_kind_maps_to_its_type_and_message(self, error, kind, message):
@@ -274,7 +276,32 @@ class TestErrors:
         assert len(detail) == 500
         assert not any(ord(char) < 32 for char in detail)
 
+    async def test_a_caller_type_that_is_not_allowed_is_refused_before_any_request(self):
+        connector, client, caller = make_connector()
+        caller.side_effect = CallerNotAllowedError("n8n_workflow")
+        with pytest.raises(UpstreamCallRefusedError) as excinfo:
+            await connector.call("kh_search", {"query": "x"})
+        assert str(excinfo.value) == "PrivacyFence does not allow this caller to use the Knowledge hub server."
+        assert public_message(excinfo.value) == str(excinfo.value)
+        client.call_tool.assert_not_called()
+
+    async def test_identity_claim_off_never_resolves_the_caller(self):
+        off = UpstreamServer(
+            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
+            tools=UPSTREAM.tools, identity_claim="off",
+        )
+        catalog = UpstreamToolCatalog(off)
+        catalog.update([_listed(tool.name) for tool in off.tools])
+        client = MagicMock()
+        client.call_tool = AsyncMock(return_value=CallResult(text="hello", structured=None, dropped_blocks=0))
+        caller = MagicMock(return_value=CALLER)
+        connector = UpstreamMcpConnector(off, catalog, client, caller)
+        assert await connector.call("kh_search", {"query": "x"}) == "hello"
+        caller.assert_not_called()
+        assert client.call_tool.await_args.args[2] is None
+
     def test_error_types_are_named_runtime_errors(self):
+        assert issubclass(UpstreamCallRefusedError, RuntimeError)
         assert issubclass(UpstreamUnavailableError, RuntimeError)
         assert issubclass(UpstreamToolError, RuntimeError)
         assert UpstreamToolError is not RuntimeError

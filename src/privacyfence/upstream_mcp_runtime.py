@@ -19,12 +19,12 @@ from dataclasses import dataclass
 
 import httpx2
 
-from . import upstream_claims
+from .agent_identity import current_agent, current_client_id
 from .group_membership import MembershipResolver
 from .connectors.upstream_mcp import UpstreamMcpConnector
 from .principal import Principal, current_principal
 from .scoped_tokens import current_token_scope
-from .upstream_claims import CallerClaim, ClaimSigner
+from .identity_claim import CallerNotAllowedError, ClaimSigner, IdentityCaller
 from .upstream_mcp_client import UpstreamMcpClient, UpstreamToolCatalog
 from .upstream_mcp_config import GroupMapStore, UpstreamServer
 
@@ -109,26 +109,53 @@ def audiences_for_email(upstream_id: str, email: str, verified: bool) -> frozens
     return _runtime.resolver.audiences_for(address, _runtime.groups.group_audiences(upstream_id))
 
 
-def caller_for(upstream: UpstreamServer) -> CallerClaim:
-    """Who is calling ``upstream`` right now, and which of its audiences they may see."""
+def _native_tool_names(upstream: UpstreamServer, entry: _Entry | None, allowed: frozenset[str] | None) -> tuple[str, ...]:
+    """The upstream's own names of the exposed tools (the declared name, without the ``<id>_`` prefix)."""
+    if entry is None:
+        return ()
+    exposed = {spec.name for spec in entry.catalog.specs()}
+    return tuple(sorted(
+        declared.name for declared in upstream.tools
+        if declared.exposed_name in exposed and (allowed is None or declared.exposed_name in allowed)
+    ))
+
+
+def caller_for(upstream: UpstreamServer) -> IdentityCaller:
+    """Who is calling ``upstream`` right now, and which of its audiences they may see (plan 3.1, 3.3)."""
     assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
     principal = current_principal()
     scope = current_token_scope()
+    entry = _runtime.entries.get(upstream.id)
     if scope is None:
-        verified = principal.email_verified
-        audiences = audiences_for_email(upstream.id, principal.email, verified)
+        principal_type = "claude_client"
+        audiences = audiences_for_email(upstream.id, principal.email, principal.email_verified)
+        act: dict[str, str] = {}
+        client_id = current_client_id()
+        if client_id:
+            act["sub"] = client_id
+        agent = current_agent()
+        if agent.is_attested():
+            act["agent"] = agent.id
+        caller = IdentityCaller(
+            sub=principal.id, principal_type=principal_type,
+            email=principal.email if principal.email_verified else None,
+            audiences=tuple(sorted(audiences)), tools=_native_tool_names(upstream, entry, None),
+            act=act or None,
+        )
     else:
+        principal_type = "n8n_workflow"
         verified = bool(getattr(scope, "principal_email_verified", False))
         held = audiences_for_email(upstream.id, scope.principal_email, verified)
         chosen = getattr(scope, "upstream_audiences", {}).get(upstream.id, ())
-        audiences = held & frozenset(chosen)
-    return CallerClaim(
-        sub=principal.id,
-        email=principal.email if verified else "",
-        email_verified=verified,
-        domains=tuple(sorted(audiences)),
-        act=upstream_claims.actor_from_context(),
-    )
+        caller = IdentityCaller(
+            sub=f"n8n-token:{scope.id}", principal_type=principal_type,
+            audiences=tuple(sorted(held & frozenset(chosen))),
+            tools=_native_tool_names(upstream, entry, frozenset(scope.tools)),
+            approved_by=scope.principal_id, token_id=scope.id,
+        )
+    if principal_type not in upstream.allowed_principal_types:
+        raise CallerNotAllowedError(principal_type)
+    return caller
 
 
 def held_audiences(principal: Principal, email_verified: bool) -> dict[str, frozenset[str]]:

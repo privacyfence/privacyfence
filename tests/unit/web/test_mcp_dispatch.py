@@ -986,8 +986,9 @@ class TestStatus:
 
     @pytest.mark.parametrize("authenticated", [False, True])
     def test_status_lists_the_upstreams_when_configured(self, tmp_path, authenticated):
-        from privacyfence import oidc_provider, upstream_mcp_runtime
-        from privacyfence.upstream_claims import ClaimSigner
+        from privacyfence import upstream_mcp_runtime
+        from privacyfence.identity_claim import ClaimSigner
+        from privacyfence.upstream_claim_keys import KeySet
         from privacyfence.group_membership import StaticFileResolver
         from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
@@ -1000,10 +1001,7 @@ class TestStatus:
         }, source="test")
         upstream_mcp_runtime.configure(
             upstreams=upstreams,
-            signer=ClaimSigner(
-                issuer="https://pf.example/upstream-mcp",
-                key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
-            ),
+            signer=ClaimSigner(issuer="https://pf.example", keys=KeySet(tmp_path / "keys.json")),
             groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
             resolver=StaticFileResolver(tmp_path / "members.json"),
         )

@@ -1,7 +1,7 @@
-"""The key set for the claims PrivacyFence signs onto upstream MCP requests (ADR 0286).
+"""The Ed25519 key set for the claims PrivacyFence signs onto upstream MCP requests (ADR 0288, amends 0286).
 
 ``/upstream-mcp/jwks`` needs no sign-in: an upstream fetches it server-side to verify a claim. The
-key is separate from the OIDC provider's, so a claim can never be confused with an ID token.
+keys are separate from the OIDC provider's, so a claim can never be confused with an ID token.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ..upstream_claims import ClaimSigner
+from ..identity_claim import ClaimSigner
 
 JWKS_PATH = "/upstream-mcp/jwks"
 

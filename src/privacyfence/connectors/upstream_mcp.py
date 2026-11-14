@@ -12,13 +12,13 @@ operator declared for it:
   approval reaches the upstream. A denial raises before the client is touched.
 
 Connector code never reads the caller (ADR 0036, amended by ADR 0286). Who is calling, and which
-data domains they hold, is resolved beside the transport: the ``caller`` callable this connector is
-given (supplied by ``upstream_mcp_runtime``) returns the ``CallerClaim`` that ``UpstreamMcpClient``
-signs onto the request. This module imports no caller context.
+audiences they hold, is resolved beside the transport: the ``caller`` callable this connector is
+given (supplied by ``upstream_mcp_runtime``) returns the ``IdentityCaller`` that ``UpstreamMcpClient``
+signs onto the request (not called at all when the upstream's ``identity_claim`` is ``off``). This module imports no caller context.
 
 Approval previews name the arguments but never their values. An upstream's error text reaches the AI
 client (cut to 500 characters, control characters removed), like its results; the two error types
-below are named ``RuntimeError`` subclasses, so ``safe_errors.public_message`` passes them.
+below are named ``RuntimeError`` subclasses (three here), so ``safe_errors.public_message`` passes them.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from typing import Any, Callable
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolSpec
 from ..gate import current_reason, gated_call
-from ..upstream_claims import CallerClaim
+from ..identity_claim import CallerNotAllowedError, IdentityCaller
 from ..upstream_mcp_client import CallResult, UpstreamMcpClient, UpstreamMcpClientError, UpstreamToolCatalog
 from ..upstream_mcp_config import DeclaredTool, UpstreamServer
 
@@ -43,6 +43,10 @@ MAX_ERROR_DETAIL_CHARS = 500
 
 class UpstreamUnavailableError(RuntimeError):
     """The upstream could not be reached, or its result was too large. Text is written here."""
+
+
+class UpstreamCallRefusedError(RuntimeError):
+    """PrivacyFence does not let this kind of caller use the upstream. Text is written here."""
 
 
 class UpstreamToolError(RuntimeError):
@@ -59,7 +63,7 @@ class UpstreamMcpConnector(Connector):
         upstream: UpstreamServer | None = None,
         catalog: UpstreamToolCatalog | None = None,
         client: UpstreamMcpClient | None = None,
-        caller: Callable[[], CallerClaim] | None = None,
+        caller: Callable[[], IdentityCaller] | None = None,
     ) -> None:
         # Only stores its arguments: the tool catalog builds ``cls(None)`` and ``cls(MagicMock())``.
         self._upstream = upstream
@@ -156,13 +160,26 @@ class UpstreamMcpConnector(Connector):
         upstream = self._require_upstream()
         if self._client is None or self._caller is None:
             raise RuntimeError("This upstream connector is not configured.")
+        caller: IdentityCaller | None = None
+        if upstream.identity_claim == "required":
+            try:
+                caller = self._caller()
+            except CallerNotAllowedError:
+                logger.warning("Upstream %s call to %s refused: caller type not allowed", upstream.id, declared.name)
+                raise UpstreamCallRefusedError(
+                    f"PrivacyFence does not allow this caller to use the {upstream.label} server."
+                ) from None
         try:
-            return await self._client.call_tool(declared.name, args, self._caller())
+            return await self._client.call_tool(declared.name, args, caller)
         except UpstreamMcpClientError as exc:
             logger.warning("Upstream %s call to %s failed: %s", upstream.id, declared.name, exc.kind)
             if exc.kind == "too_large":
                 raise UpstreamUnavailableError(
                     f"The {upstream.label} result is larger than 1 MB; ask for less."
+                ) from None
+            if exc.kind == "claim_failed":
+                raise UpstreamUnavailableError(
+                    f"The {upstream.label} call was not sent: PrivacyFence could not sign the caller claim."
                 ) from None
             if exc.kind == "tool_error":
                 detail = _clean(exc.detail)[:MAX_ERROR_DETAIL_CHARS]
