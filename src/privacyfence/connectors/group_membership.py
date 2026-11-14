@@ -27,7 +27,9 @@ _DESCRIPTION = (
     "Send the full membership snapshot of every Workspace group PrivacyFence maps to audiences. "
     "Removals apply at once; an addition to a group that grants a restricted audience is held for "
     "an administrator to approve on the Admin page, and a snapshot that adds too many people is "
-    "rejected whole. Works only with a scoped token an administrator created."
+    "rejected whole. Works only with a scoped token an administrator created. "
+    "Returns {status, added, removed, parked, ignored_groups, reason}. "
+    "Auto-approved: only a scoped token an administrator created may call it."
 )
 
 
