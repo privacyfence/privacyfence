@@ -12,7 +12,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-upstream-config
 
-- pending
+- worker: none from the design; parse_upstreams takes a source argument used as the error-message prefix and load_upstreams passes ENV_VAR
+- retry: worker stopped as blocked because the tld toolkit was missing in worker sessions; no roles are required for this phase; code merged unchanged after orchestrator checks (unit suite, daemon contract, 100 percent coverage of the new module)
 
 ## p3-verified-email
 
