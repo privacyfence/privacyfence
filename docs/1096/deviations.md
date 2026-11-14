@@ -155,7 +155,13 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p18b-website-copy
 
-- pending
+- worker: Outside touches: deleted test_desktop_mode_deprecation_notice in tests/unit/test_website_pages.py (it asserted the removed FAQ sentence), and dropped the "local mode" needle from test_security_has_the_limitations_section in tests/unit/test_website_claims.py (the limitation item is reworded).
+- worker: Removed the "Privilege separation" card from the security page and the "How do I verify a download?" entry from the FAQ; nothing linked to the card anchor. Kept .verify-commands in styles.css because the install page uses it.
+- worker: website/privacy/index.html still has a "Downloads and download counts" section and a mention of the download service at downloads.privacyfence.eu; the grep terms do not match it so it was left. It describes live infrastructure and needs rewriting once the Worker is retired.
+- worker: The worker did not run the stale-tag and v999.0.0 website builds nor the final website guardrail pytest step; the orchestrator ran the first, the stale-tag build and the guardrail tests, but could not run the v999.0.0 build because session guards forbid creating a git tag, even a local one.
+- scope: scope: tests/unit/test_website_claims.py
+- scope: scope: tests/unit/test_website_pages.py
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p18c-website-agents
 
