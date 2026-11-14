@@ -54,7 +54,7 @@ write through, card by card.
 | macOS (`.dmg`) | macOS 13 or newer, Apple silicon |
 | Windows (`-setup.exe`) | Windows 10 / Windows Server 2016 or newer, x64 |
 | Linux (`.deb`) | Ubuntu 24.04, Debian 13 or newer, amd64 |
-| Organization deployment | A Linux server with Python 3.11 or newer and systemd (`pip install privacyfence`) |
+| Organization deployment | A Linux server with Python 3.11.5 or newer and systemd (`pip install privacyfence`) |
 
 Tested with Claude Desktop and Claude Code on every install, with ChatGPT desktop on macOS, and
 with claude.ai, ChatGPT (Developer Mode) and Gemini Enterprise through an organization deployment; any

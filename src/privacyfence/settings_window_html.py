@@ -2553,9 +2553,20 @@ _JS = r"""
       'aria-label="' + esc(label || title) + '" value="' + esc(value) + '">');
   }
 
-  function textFieldRow(title, desc, name, value, label, type) {
+  function textFieldRow(title, desc, name, value, label, type, locked) {
     return rowHtml(title, desc, '<input class="field" type="' + (type || 'text') + '" autocomplete="off" spellcheck="false" ' +
-      'data-f="' + name + '" data-t="text" aria-label="' + esc(label || title) + '" value="' + esc(value) + '">');
+      'data-f="' + name + '" data-t="text"' + (locked ? ' disabled' : '') + ' aria-label="' + esc(label || title) + '" value="' + esc(value) + '">');
+  }
+
+  // A field the server's environment sets (state.environment_locks[section][field]): its value is
+  // shown instead of the stored one, disabled, and the description names the variable.
+  function envLock(state, section, field) {
+    var locks = (state.environment_locks || {})[section] || {};
+    return locks[field] || null;
+  }
+
+  function lockedDesc(desc, lock) {
+    return lock ? desc + ' Set by ' + lock.variable + ' on the server.' : desc;
   }
 
   function areaFieldRow(title, desc, name, items) {
@@ -2660,13 +2671,17 @@ _JS = r"""
 
   function renderTokens(state) {
     var t = sectionWithDefaults(state, 'scoped_tokens');
+    var lockOn = envLock(state, 'scoped_tokens', 'enabled');
+    var lockAi = envLock(state, 'scoped_tokens', 'allow_ai_proposals');
+    var enabled = lockOn ? lockOn.value : t.enabled;
     var rows = [
-      checkRow('Let people create scoped tokens for AI clients.', 'enabled', t.enabled, 'Turn on scoped tokens'),
+      checkRow(lockedDesc('Let people create scoped tokens for AI clients.', lockOn), 'enabled', enabled,
+        'Turn on scoped tokens', !!lockOn),
       numberFieldRow('Longest lifetime or extension (days)', 'From 1 to 365. A person can also extend a token by up to this many days from today.', 'max_days', t.max_days),
-      checkRow('Let AI clients propose a scoped token for a person to review and create.', 'allow_ai_proposals',
-        t.allow_ai_proposals, 'Allow AI token proposals'),
+      checkRow(lockedDesc('Let AI clients propose a scoped token for a person to review and create.', lockAi), 'allow_ai_proposals',
+        lockAi ? lockAi.value : t.allow_ai_proposals, 'Allow AI token proposals', !!lockAi),
     ];
-    if (!t.enabled) { rows.splice(3, 0, rowHtml('', 'Needs scoped tokens turned on.', '')); }
+    if (!enabled) { rows.splice(3, 0, rowHtml('', 'Needs scoped tokens turned on.', '')); }
     return '<div class="pf-page"><h1 class="pf-page-title">Scoped tokens</h1>' + formCardHtml('tokens', rows, 'scoped tokens') + '</div>';
   }
 
@@ -2679,10 +2694,16 @@ _JS = r"""
     var keyVar = status.key_variable || 'PRIVACYFENCE_N8N_API_KEY';
     var urlText = status.url || ('Not set: set ' + urlVar);
     if (status.url_error) { urlText = status.url_error; }
+    var lockOn = envLock(state, 'agent_runtimes', 'enabled');
+    var lockProject = envLock(state, 'agent_runtimes', 'project_id');
+    var lockMcp = envLock(state, 'agent_runtimes', 'mcp_url');
     var rows = [
-      checkRow('Let AI clients ask for a token to be delivered into n8n.', 'enabled', r.enabled, 'Turn on n8n delivery'),
-      textFieldRow('n8n project id', 'Leave empty to use the API key owner\u2019s personal space.', 'project_id', r.project_id || ''),
-      textFieldRow('PrivacyFence MCP address for n8n', 'Leave empty to use this server\u2019s address.', 'mcp_url', r.mcp_url || ''),
+      checkRow(lockedDesc('Let AI clients ask for a token to be delivered into n8n.', lockOn), 'enabled',
+        lockOn ? lockOn.value : r.enabled, 'Turn on n8n delivery', !!lockOn),
+      textFieldRow('n8n project id', lockedDesc('Leave empty to use the API key owner\u2019s personal space.', lockProject),
+        'project_id', lockProject ? lockProject.value : (r.project_id || ''), undefined, undefined, !!lockProject),
+      textFieldRow('PrivacyFence MCP address for n8n', lockedDesc('Leave empty to use this server\u2019s address.', lockMcp),
+        'mcp_url', lockMcp ? lockMcp.value : (r.mcp_url || ''), undefined, undefined, !!lockMcp),
       selectFieldRow('Credential type in n8n', 'credential_type', CREDENTIAL_TYPE_OPTIONS, r.credential_type || 'httpBearerAuth',
         'Credential type in n8n', 'The PrivacyFence node needs the community node n8n-nodes-privacyfence installed in n8n and a ' +
         'PrivacyFence MCP address above. The setting is server-wide: with it, an AI Agent in n8n uses one PrivacyFence node per call ' +

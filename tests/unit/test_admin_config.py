@@ -1001,6 +1001,32 @@ class TestPlainSections:
         assert _change("set_scoped_tokens", {"enabled": True, "max_days": days, "allow_ai_proposals": False})[0]
 
 
+class TestScopedTokensLocked:
+    PARAMS = {"enabled": True, "max_days": 30, "allow_ai_proposals": True}
+
+    @pytest.fixture(autouse=True)
+    def _delivery(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+
+    @pytest.mark.parametrize("field", ["enabled", "allow_ai_proposals"])
+    def test_a_changed_locked_field_is_refused(self, field):
+        with pytest.raises(admin_config.AdminConfigError, match="This is set by PRIVACYFENCE_N8N_DELIVERY on the server."):
+            _change("set_scoped_tokens", {**self.PARAMS, field: False})
+        assert admin_config.load() is None
+
+    def test_the_locked_value_saves_nothing_new(self):
+        _change("set_scoped_tokens", self.PARAMS)
+        stored = _stored()["scoped_tokens"]
+        assert "enabled" not in stored and "allow_ai_proposals" not in stored
+        assert _change("set_scoped_tokens", self.PARAMS) == ("", [])
+        assert _stored()["scoped_tokens"] == stored
+
+    def test_max_days_still_saves(self):
+        _change("set_scoped_tokens", self.PARAMS)
+        assert _change("set_scoped_tokens", {**self.PARAMS, "max_days": 7}) == ("Changed scoped tokens", ["scoped_tokens"])
+        assert _stored()["scoped_tokens"]["max_days"] == 7
+
+
 class TestAgentRuntimes:
     PARAMS = {
         "enabled": True, "project_id": "proj1", "mcp_url": "https://pf.example.com/mcp",
@@ -1032,6 +1058,40 @@ class TestAgentRuntimes:
             "the credential keeps this server's address."
         ) in str(exc.value)
         assert admin_config.load() is None
+
+    def test_a_changed_locked_field_is_refused(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        with pytest.raises(admin_config.AdminConfigError, match="This is set by PRIVACYFENCE_N8N_PROJECT_ID on the server."):
+            _change("set_agent_runtimes", {**self.PARAMS, "project_id": "other"})
+        assert admin_config.load() is None
+
+    def test_the_locked_value_saves_nothing_new(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        params = {**self.PARAMS, "project_id": "locked1", "enabled": True}
+        # The first save writes the unlocked fields; the locked ones keep the stored defaults.
+        assert _change("set_agent_runtimes", params)[1] == ["agent_runtimes"]
+        stored = _stored()["agent_runtimes"]["n8n"]
+        assert stored["project_id"] == "" and stored["enabled"] is False
+        assert _change("set_agent_runtimes", params) == ("", [])
+        assert _stored()["agent_runtimes"]["n8n"] == stored
+
+    def test_the_locked_value_keeps_the_stored_one(self, clean_env, monkeypatch):
+        _change("set_agent_runtimes", {**self.PARAMS, "project_id": "stored1", "enabled": False})
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        assert _change("set_agent_runtimes", {**self.PARAMS, "project_id": "locked1", "enabled": False}) == ("", [])
+        assert _stored()["agent_runtimes"]["n8n"]["project_id"] == "stored1"
+
+    def test_an_unlocked_field_still_saves(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        params = {**self.PARAMS, "project_id": "locked1", "mcp_url": "https://other.example.com/mcp"}
+        assert _change("set_agent_runtimes", params) == ("Changed agent runtimes", ["agent_runtimes"])
+        assert _stored()["agent_runtimes"]["n8n"]["mcp_url"] == "https://other.example.com/mcp"
+
+    def test_a_bad_variable_is_an_admin_error(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "false")
+        with pytest.raises(admin_config.AdminConfigError, match="must be true, or unset"):
+            _change("set_agent_runtimes", self.PARAMS)
 
     def test_a_change_saves_the_four_fields(self, clean_env):
         assert _change("set_agent_runtimes", self.PARAMS) == ("Changed agent runtimes", ["agent_runtimes"])
